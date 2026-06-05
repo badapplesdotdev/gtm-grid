@@ -1,0 +1,209 @@
+/**
+ * Seats entitlement domain logic for the Convex cloud (team) tier (T6).
+ *
+ * Autumn is the single source of truth for entitlement; the ONLY thing gated is
+ * `seats` (per-member). There are deliberately NO connector/table caps anywhere.
+ *
+ * This module is the pure, unit-tested heart of the seats gate. Inviting a
+ * member runs {@link SeatsService.checkInvite}: it asks Autumn whether the
+ * workspace's customer has a free seat (`check` on the `seats` feature); if so,
+ * the caller proceeds to create the membership; if not, the service produces a
+ * checkout URL (Autumn `attach` on the team/pro plan) for the upgrade modal
+ * instead of adding the member.
+ *
+ * Like the rest of @gtmgrid/cloud this file has NO Convex import. The one piece
+ * of environment it needs — "talk to Autumn" — is abstracted behind the
+ * {@link AutumnClient} Effect service. The Convex layer (convex/model/seats.ts)
+ * provides it backed by the real `autumn-js` SDK + `AUTUMN_SECRET_KEY`; the
+ * tests provide a deterministic in-memory fake. That keeps the gate logic
+ * exhaustively testable with zero mocking and no Convex codegen.
+ *
+ * Follows the canonical Effect pattern (docs/effect-conventions.md, mirrored in
+ * membership.ts): typed `Data.TaggedError`s in the error channel, the external
+ * dependency as a `Context.Tag` port, the service as an `Effect.Service` with a
+ * `.Default` Layer.
+ */
+
+import { Context, Data, Effect } from "effect";
+
+/**
+ * The Autumn feature id for the seat entitlement. The team/pro plan grants a
+ * `seats` balance; each member consumes one. Single source of truth for the id.
+ */
+export const SEATS_FEATURE_ID = "seats" as const;
+
+/**
+ * The plan a workspace upgrades to when it runs out of free seats. Used as the
+ * Autumn `attach` product id when producing the checkout URL.
+ */
+export const TEAM_PLAN_ID = "team" as const;
+
+/**
+ * Result of {@link SeatsService.checkInvite}.
+ *
+ * - `allowed: true`  — the workspace has a free seat; the caller proceeds to
+ *   create the membership.
+ * - `allowed: false` — over the seat limit; `checkoutUrl` is the Autumn billing
+ *   URL the UI opens (upgrade modal). The membership is NOT created.
+ *
+ * A discriminated union so the Convex handler can branch exhaustively without
+ * juggling a nullable url on the success path.
+ */
+export type SeatCheck =
+  | { readonly allowed: true }
+  | { readonly allowed: false; readonly checkoutUrl: string };
+
+/**
+ * Raised when an Autumn API call (check / attach / track) fails — network or
+ * transport error, or a malformed response. Carries the underlying cause so the
+ * Convex layer can surface it as a `ConvexError` without leaking the SDK type.
+ */
+export class AutumnError extends Data.TaggedError("AutumnError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+/**
+ * The port abstracting Autumn for the seats domain. Only the three operations
+ * the gate needs are exposed (NOT the whole SDK), so the fake test Layer is
+ * trivial and the domain never imports `autumn-js`.
+ *
+ * Backed by the real `autumn-js` `Autumn` client in convex/model/seats.ts; by an
+ * in-memory fake in seats.test.ts.
+ */
+export class AutumnClient extends Context.Tag("CloudAutumnClient")<
+  AutumnClient,
+  {
+    /**
+     * Does `customerId` have at least `requiredBalance` of the `seats` feature
+     * available? Maps to Autumn `check({ customerId, featureId: "seats",
+     * requiredBalance })` → `{ allowed }`.
+     */
+    readonly checkSeats: (args: {
+      readonly customerId: string;
+      readonly requiredBalance: number;
+    }) => Effect.Effect<{ readonly allowed: boolean }, AutumnError>;
+
+    /**
+     * Begin attaching `planId` to `customerId`, returning the checkout/payment
+     * URL the customer completes (or `null` when no payment is required). Maps
+     * to Autumn `billing.attach({ customerId, planId })` → `{ paymentUrl }`.
+     */
+    readonly attach: (args: {
+      readonly customerId: string;
+      readonly planId: string;
+    }) => Effect.Effect<{ readonly checkoutUrl: string | null }, AutumnError>;
+
+    /**
+     * Record consumption of `value` seats for `customerId` (called after a
+     * membership is actually created). Maps to Autumn `track({ customerId,
+     * featureId: "seats", value })`.
+     */
+    readonly trackSeats: (args: {
+      readonly customerId: string;
+      readonly value: number;
+    }) => Effect.Effect<void, AutumnError>;
+  }
+>() {}
+
+/**
+ * Raised when the seat gate would block an invite but Autumn returns no payment
+ * URL (e.g. the plan is misconfigured), so there is nothing for the UI to open.
+ * Distinct from {@link AutumnError} (a transport failure) — this is a billing
+ * config problem surfaced as a typed failure rather than a silent allow.
+ */
+export class NoCheckoutUrlError extends Data.TaggedError("NoCheckoutUrlError")<{
+  readonly message: string;
+  readonly customerId: string;
+  readonly planId: string;
+}> {}
+
+/**
+ * Seats entitlement service. The reusable gate the cloud `inviteMember`
+ * mutation runs before creating a membership.
+ */
+export class SeatsService extends Effect.Service<SeatsService>()(
+  "SeatsService",
+  {
+    effect: Effect.gen(function* () {
+      const autumn = yield* AutumnClient;
+
+      /**
+       * The seat gate for an invite. Checks whether `customerId` has a free
+       * seat; if so returns `{ allowed: true }` (caller creates the membership),
+       * otherwise attaches the upgrade plan and returns the checkout URL so the
+       * UI shows the upgrade modal instead of adding the member.
+       *
+       * @param customerId the Autumn customer id for the workspace.
+       * @param planId the plan to attach when over the limit (defaults to the
+       *   team plan).
+       */
+      const checkInvite = (
+        customerId: string,
+        planId: string = TEAM_PLAN_ID,
+      ): Effect.Effect<SeatCheck, AutumnError | NoCheckoutUrlError> =>
+        Effect.gen(function* () {
+          // One seat is required to add the prospective member.
+          const { allowed } = yield* autumn.checkSeats({
+            customerId,
+            requiredBalance: 1,
+          });
+          if (allowed) {
+            return { allowed: true } as const;
+          }
+
+          // Over the limit: produce the upgrade checkout URL instead of adding.
+          const { checkoutUrl } = yield* autumn.attach({ customerId, planId });
+          if (checkoutUrl === null) {
+            return yield* Effect.fail(
+              new NoCheckoutUrlError({
+                message:
+                  "Seat limit reached but Autumn returned no checkout URL " +
+                  `for plan ${planId}.`,
+                customerId,
+                planId,
+              }),
+            );
+          }
+          return { allowed: false, checkoutUrl } as const;
+        });
+
+      /**
+       * Begin a checkout/upgrade for `customerId` on `planId`, returning the
+       * billing URL. Backs the standalone `checkout` Convex action (the upgrade
+       * button). Fails with {@link NoCheckoutUrlError} when Autumn returns no
+       * URL (already on the plan / misconfigured).
+       */
+      const checkout = (
+        customerId: string,
+        planId: string = TEAM_PLAN_ID,
+      ): Effect.Effect<string, AutumnError | NoCheckoutUrlError> =>
+        Effect.gen(function* () {
+          const { checkoutUrl } = yield* autumn.attach({ customerId, planId });
+          if (checkoutUrl === null) {
+            return yield* Effect.fail(
+              new NoCheckoutUrlError({
+                message: `Autumn returned no checkout URL for plan ${planId}.`,
+                customerId,
+                planId,
+              }),
+            );
+          }
+          return checkoutUrl;
+        });
+
+      /**
+       * Record that one seat was consumed (call AFTER the membership is created
+       * on the allowed path). Kept separate from {@link checkInvite} so the
+       * Convex handler tracks only once the DB write actually succeeded.
+       */
+      const trackSeatUsed = (
+        customerId: string,
+      ): Effect.Effect<void, AutumnError> =>
+        autumn.trackSeats({ customerId, value: 1 });
+
+      return { checkInvite, checkout, trackSeatUsed } as const;
+    }),
+    dependencies: [],
+  },
+) {}

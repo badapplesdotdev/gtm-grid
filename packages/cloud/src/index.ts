@@ -36,3 +36,19 @@ export {
   type DeletePlan,
   type TableChildren,
 } from "./cascade.js";
+
+export {
+  AutumnClient,
+  AutumnError,
+  NoCheckoutUrlError,
+  SeatsService,
+  SEATS_FEATURE_ID,
+  TEAM_PLAN_ID,
+  type SeatCheck,
+} from "./seats.js";
+
+export {
+  type FakeAutumnConfig,
+  failingAutumnLayer,
+  fakeAutumnLayer,
+} from "./seats-test-layers.js";

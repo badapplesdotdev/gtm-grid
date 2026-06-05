@@ -17,8 +17,16 @@
 
 import { ConvexError, v } from "convex/values";
 import { getCurrentUser, getCurrentUserId, requireRole } from "./model/auth.js";
+import { checkInviteSeat, trackSeatUsed } from "./model/seats.js";
 import { memberRole } from "./schema.js";
-import { mutation, query } from "./_generated/server.js";
+import { internal } from "./_generated/api.js";
+import type { Id } from "./_generated/dataModel.js";
+import {
+  action,
+  internalMutation,
+  mutation,
+  query,
+} from "./_generated/server.js";
 
 /**
  * The current user + their workspaces + seat usage. Returns `null` when signed
@@ -97,14 +105,14 @@ export const createWorkspace = mutation({
 });
 
 /**
- * Invite (add) a user to a workspace with a role. Owner/admin only.
+ * Insert a workspace membership (the success-path write of {@link inviteMember}).
  *
- * SEAM FOR T6 (Autumn seats): before creating the membership, T6 will call the
- * Autumn `seats` `check`; if over the limit it returns a checkout URL instead of
- * inserting. The membership insert below stays the success path. Kept isolated
- * so that lane is a localized change here.
+ * Internal: only the `inviteMember` ACTION calls this, AFTER the Autumn seat
+ * gate allows the invite. Still enforces authz (owner/admin) and idempotency
+ * itself so the rule lives with the write. Returns `{ alreadyMember }` so the
+ * action can skip seat tracking for a no-op re-invite.
  */
-export const inviteMember = mutation({
+export const insertMember = internalMutation({
   args: {
     workspaceId: v.id("workspaces"),
     userId: v.string(),
@@ -121,15 +129,66 @@ export const inviteMember = mutation({
         q.eq("workspaceId", workspaceId).eq("userId", userId),
       )
       .unique();
-    if (existing !== null) return existing._id;
+    if (existing !== null) {
+      return { memberId: existing._id, alreadyMember: true };
+    }
 
-    // ── T6 Autumn seats check goes HERE (before the insert). ──
-
-    return await ctx.db.insert("members", {
+    const memberId = await ctx.db.insert("members", {
       workspaceId,
       userId,
       role,
       createdAt: Date.now(),
     });
+    return { memberId, alreadyMember: false };
+  },
+});
+
+/**
+ * The shape returned by {@link inviteMember}: either the new/existing member id
+ * (the seat was available and the membership exists) or a checkout URL to open
+ * the upgrade modal (over the seat limit — nothing was added).
+ */
+type InviteResult =
+  | { status: "added"; memberId: Id<"members"> }
+  | { status: "checkout"; checkoutUrl: string };
+
+/**
+ * Invite (add) a user to a workspace, gated on Autumn `seats` (T6).
+ *
+ * Runs as an ACTION (not a mutation) because the seat check makes an outbound
+ * HTTP call to Autumn, which mutations cannot. Flow:
+ *   1. {@link checkInviteSeat} — Autumn `check` on the `seats` feature for the
+ *      workspace customer.
+ *   2a. allowed  → call {@link insertMember} (which re-verifies authz +
+ *       idempotency), then Autumn `track` one seat; return the member id.
+ *   2b. over limit → return the Autumn `checkout` URL instead of adding anyone.
+ *
+ * The workspace id is the Autumn customer id. NO connector/table caps exist —
+ * `seats` is the only gate.
+ */
+export const inviteMember = action({
+  args: {
+    workspaceId: v.id("workspaces"),
+    userId: v.string(),
+    role: memberRole,
+  },
+  handler: async (ctx, { workspaceId, userId, role }): Promise<InviteResult> => {
+    // 1. Seat gate (Autumn). Over the limit → return checkout, add nobody.
+    const seat = await checkInviteSeat(workspaceId);
+    if (!seat.allowed) {
+      return { status: "checkout", checkoutUrl: seat.checkoutUrl };
+    }
+
+    // 2. Allowed: create the membership (authz re-checked inside the mutation).
+    const { memberId, alreadyMember } = await ctx.runMutation(
+      internal.workspaces.insertMember,
+      { workspaceId, userId, role },
+    );
+
+    // 3. Count the seat only for a genuinely new member.
+    if (!alreadyMember) {
+      await trackSeatUsed(workspaceId);
+    }
+    return { status: "added", memberId };
   },
 });
