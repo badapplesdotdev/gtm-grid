@@ -13,3 +13,7 @@ dist/
 packages/desktop/src-tauri/target/
 packages/desktop/src-tauri/sidecar/
 packages/desktop/src-tauri/gen/
+
+# Convex codegen + local deployment env (requires `npx convex dev` login)
+convex/_generated/
+.env.local
