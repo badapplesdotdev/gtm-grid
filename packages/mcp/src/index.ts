@@ -22,9 +22,11 @@ const tableOr = (ref: string) => {
 };
 
 // --- Discovery: what enrichments/functions exist ---
+// Three tiers: list_providers (lightweight catalog), search_functions (intent
+// search), list_functions (full schema — scoped to one provider, else huge).
 server.tool(
-  "list_functions",
-  "List all available connector functions (the catalog of enrichments/AI/HTTP methods) that a column can call via sdk.<provider>.<method>. Returns each method's description and input schema.",
+  "list_providers",
+  "FIRST CALL for discovery. Lightweight catalog: each connector's id, name, category and method count. Use this to find the right provider, then narrow with search_functions or list_functions(provider).",
   {},
   async () =>
     ok(
@@ -33,14 +35,60 @@ server.tool(
         name: c.name,
         category: c.category,
         requiresCredential: !!c.auth,
-        methods: c.methods.map((m) => ({
-          method: m.id,
-          label: m.label,
-          description: m.description,
-          credits: m.credits,
-          inputSchema: m.inputSchema,
-        })),
+        methodCount: c.methods.length,
       })),
+    ),
+);
+
+server.tool(
+  "search_functions",
+  "Search the function catalog by keyword (matches method id, label and description). Returns concise hits as 'provider.method — label — description'. Use this when you know WHAT you want (e.g. 'enrich linkedin profile', 'send slack message', 'find email') but not WHICH connector.",
+  {
+    query: z.string().describe("Free-text intent, e.g. 'enrich linkedin', 'find email', 'monitor twitter'"),
+    provider: z.string().optional().describe("Optional: restrict to one provider id"),
+    limit: z.number().optional().describe("Max hits (default 30)"),
+  },
+  async ({ query, provider, limit }) => {
+    const q = query.toLowerCase().trim();
+    const terms = q.split(/\s+/).filter(Boolean);
+    const hits: { fn: string; label: string; description: string; score: number }[] = [];
+    for (const c of engine.registry.list()) {
+      if (provider && c.id !== provider) continue;
+      for (const m of c.methods) {
+        const hay = `${m.id} ${m.label} ${m.description} ${c.id} ${c.name} ${c.category}`.toLowerCase();
+        let score = 0;
+        for (const t of terms) if (hay.includes(t)) score += 1;
+        if (score === 0) continue;
+        hits.push({ fn: `${c.id}.${m.id}`, label: m.label, description: m.description.slice(0, 160), score });
+      }
+    }
+    hits.sort((a, b) => b.score - a.score);
+    return ok({ query, matches: hits.slice(0, limit ?? 30) });
+  },
+);
+
+server.tool(
+  "list_functions",
+  "Full method list with INPUT SCHEMAS. WARNING: with many extensions installed this can be HUGE — prefer list_providers + search_functions first, then call this scoped to one provider (e.g. provider:'trigify') to get just its methods.",
+  { provider: z.string().optional().describe("Restrict to one provider id (recommended)") },
+  async ({ provider }) =>
+    ok(
+      engine.registry
+        .list()
+        .filter((c) => !provider || c.id === provider)
+        .map((c) => ({
+          provider: c.id,
+          name: c.name,
+          category: c.category,
+          requiresCredential: !!c.auth,
+          methods: c.methods.map((m) => ({
+            method: m.id,
+            label: m.label,
+            description: m.description,
+            credits: m.credits,
+            inputSchema: m.inputSchema,
+          })),
+        })),
     ),
 );
 

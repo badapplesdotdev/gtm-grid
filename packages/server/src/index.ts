@@ -542,7 +542,16 @@ const server = createServer(async (req, res) => {
     const message = String(body?.message ?? "");
     if (!message) return send(res, 400, { error: "message required" });
     try {
-      const context = body?.context;
+      // Snapshot the live connector registry so the skill's "Connectors
+      // currently installed" section reflects whatever extensions the user
+      // has registered, including ones added since the last app launch.
+      const providers = current.engine.registry.list().map((c) => ({
+        id: c.id,
+        name: c.name,
+        category: c.category,
+        methodCount: c.methods.length,
+      }));
+      const context = { ...(body?.context ?? {}), providers };
       if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context });
       else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context });
     } catch (e) {

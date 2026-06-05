@@ -20,6 +20,9 @@ const SearchIcon = (
 const Check = (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
 );
+const FnGlyph = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>
+);
 
 // Category glyphs for built-in functions (no brand favicon). Stroke-based, inherit color.
 const I = (d: string, extra?: ReactNode) => (
@@ -95,14 +98,16 @@ export function AddColumnPopover({
   onUseFunction: () => void;
 }) {
   const [name, setName] = useState("");
-  const [type, setType] = useState("text");
   const [saving, setSaving] = useState(false);
 
-  const add = async () => {
-    if (!name.trim()) return;
+  // Add a manual column of the chosen type. Name is optional — falls back to
+  // the type label so a single click on a type row always works.
+  const add = async (type: string) => {
+    if (saving) return;
+    const colName = name.trim() || TYPES.find((t) => t.id === type)?.label || "Column";
     setSaving(true);
     try {
-      await api.addColumn(tableId, { name: name.trim(), type });
+      await api.addColumn(tableId, { name: colName, type });
       onAdded();
       onClose();
     } catch {
@@ -111,49 +116,59 @@ export function AddColumnPopover({
   };
 
   // Position the popover just below the "+" button, clamped to the viewport.
-  const W = 380;
+  const W = 300;
   const style: CSSProperties = anchor
     ? {
         position: "fixed",
-        top: Math.min(anchor.top + 6, window.innerHeight - 360),
+        top: Math.min(anchor.top + 6, window.innerHeight - 440),
         left: Math.max(12, Math.min(anchor.left, window.innerWidth - W - 12)),
       }
     : { position: "fixed", top: "14vh", left: "50%", transform: "translateX(-50%)" };
 
   return (
     <div className="popover-scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="addcol" style={style} onMouseDown={(e) => e.stopPropagation()}>
+      <div className="addcol acx" style={style} onMouseDown={(e) => e.stopPropagation()}>
         <input
-          className="addcol-name"
-          placeholder="Column name"
+          className="acx-name"
+          placeholder="Column name…"
           value={name}
           autoFocus
           onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && add()}
+          onKeyDown={(e) => e.key === "Enter" && add("text")}
         />
 
-        <div className="addcol-types">
+        {/* Actions — enrichment / AI route to the Functions browser */}
+        <div className="acx-group">
+          <div className="acx-group-label">Enrichment &amp; AI</div>
+          <button className="acx-item" onClick={onUseFunction}>
+            <span className="acx-item-icon acx-icon-accent">{CATEGORY_ICON.AI}</span>
+            <span className="acx-item-text">
+              <span className="acx-item-title">Use AI</span>
+              <span className="acx-item-sub">Generate with any connected model</span>
+            </span>
+            <span className="acx-item-caret">{Chevron}</span>
+          </button>
+          <button className="acx-item" onClick={onUseFunction}>
+            <span className="acx-item-icon">{FnGlyph}</span>
+            <span className="acx-item-text">
+              <span className="acx-item-title">Browse functions</span>
+              <span className="acx-item-sub">Enrich, score, scrape, verify…</span>
+            </span>
+            <span className="acx-item-caret">{Chevron}</span>
+          </button>
+        </div>
+
+        {/* Basic column types — single click adds */}
+        <div className="acx-group">
+          <div className="acx-group-label">Column type</div>
           {TYPES.map((t) => (
-            <button key={t.id} className={`addcol-type${type === t.id ? " active" : ""}`} onClick={() => setType(t.id)}>
-              <span className="addcol-type-icon">{TYPE_ICONS[t.id]}</span>
-              <span className="addcol-type-label">{t.label}</span>
+            <button key={t.id} className="acx-item acx-type" onClick={() => add(t.id)} disabled={saving}>
+              <span className="acx-item-icon">{TYPE_ICONS[t.id]}</span>
+              <span className="acx-item-title">{t.label}</span>
+              <span className="acx-type-add">Add</span>
             </button>
           ))}
         </div>
-
-        <button className="btn btn-primary addcol-submit" onClick={add} disabled={saving || !name.trim()}>
-          {saving ? "Adding…" : "Add column"}
-        </button>
-
-        <div className="addcol-or"><span>OR</span></div>
-
-        <button className="addcol-fn" onClick={onUseFunction}>
-          <div className="addcol-fn-text">
-            <span className="addcol-fn-title">Use a function</span>
-            <span className="addcol-fn-sub">Browse enrichment, scoring, and more</span>
-          </div>
-          <span className="addcol-fn-caret">{Chevron}</span>
-        </button>
       </div>
     </div>
   );
