@@ -15,7 +15,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Cause, Effect, Exit, Layer } from "effect";
+import { Cause, Effect, Exit } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Db } from "./db.js";
 import { Engine } from "./execute.js";
@@ -195,6 +195,42 @@ describe("SqliteGridStore parity (runColumn over a real temp DB)", () => {
     await expect(engine.runColumn("does-not-exist")).rejects.toThrow(/not found/);
   });
 
+  it("marks a cell error (not silent done) when a param read throws (#23)", async () => {
+    // A store backed by the real Db, but whose param-resolution read (`rowCells`)
+    // fails. Before the fix, resolveParams swallowed this via orElseSucceed and
+    // the cell was written status:"done"; now the GridStoreError propagates into
+    // runColumn's per-row try/catch and the cell is recorded status:"error",
+    // restoring the prior LOCAL semantics.
+    const table = db.createTable("T");
+    const col = db.createColumn({
+      tableId: table.id,
+      name: "C",
+      kind: "function",
+      code: "function(inputs, sdk){ return { text: inputs.value }; }",
+      params: { value: "{{C}}" },
+    });
+    const row = db.createRow(table.id);
+
+    const failingStore: GridStoreShape = {
+      ...sqliteGridStoreShape(db),
+      rowCells: () =>
+        Effect.fail(
+          new GridStoreError({ message: "read blew up", operation: "rowCells" }),
+        ),
+    };
+
+    const engine = new Engine(db, {}, echoRegistry(), undefined, {
+      store: failingStore,
+    });
+    const res = await engine.runColumn(col.id);
+
+    expect(res).toEqual({ ran: 0, errors: 1 });
+    const cell = db.getCell(row.id, col.id);
+    expect(cell?.status).toBe("error");
+    expect(cell?.error).toContain("read blew up");
+    expect(cell?.value ?? null).toBeNull();
+  });
+
   it("routes credentials through a separate credsDb store", async () => {
     const projectDb = db;
     const credsDir = mkdtempSync(join(tmpdir(), "gridstore-creds-"));
@@ -311,17 +347,25 @@ describe("GridStore service (Layer + typed errors)", () => {
     expect(rows.map((r) => r.id)).toEqual([r1.id, r2.id]);
   });
 
-  it("resolves credentials with Db scope precedence", async () => {
-    db.saveCredential({ extensionId: "x", scope: "team", name: "t", secrets: { apiKey: "team" } });
-    db.saveCredential({ extensionId: "x", scope: "local", name: "l", secrets: { apiKey: "local" } });
+  it("resolves credentials with Db scope precedence (local > personal > team)", async () => {
+    const read = () =>
+      run(
+        Effect.gen(function* () {
+          const store = yield* GridStore;
+          return yield* store.getCredential("x");
+        }),
+      );
 
-    const cred = await run(
-      Effect.gen(function* () {
-        const store = yield* GridStore;
-        return yield* store.getCredential("x");
-      }),
-    );
-    expect(cred?.secrets.apiKey).toBe("local"); // local > personal > team
+    // Insert lowest precedence first; each higher tier must win in turn so all
+    // three rungs of local > personal > team are exercised, not just the ends.
+    db.saveCredential({ extensionId: "x", scope: "team", name: "t", secrets: { apiKey: "team" } });
+    expect((await read())?.secrets.apiKey).toBe("team");
+
+    db.saveCredential({ extensionId: "x", scope: "personal", name: "p", secrets: { apiKey: "personal" } });
+    expect((await read())?.secrets.apiKey).toBe("personal"); // personal > team
+
+    db.saveCredential({ extensionId: "x", scope: "local", name: "l", secrets: { apiKey: "local" } });
+    expect((await read())?.secrets.apiKey).toBe("local"); // local > personal > team
   });
 
   it("returns undefined for a missing cell / column / credential", async () => {
@@ -340,17 +384,15 @@ describe("GridStore service (Layer + typed errors)", () => {
     expect(result.cred).toBeUndefined();
   });
 
-  it("surfaces a typed GridStoreError when the underlying Db throws", async () => {
-    // A stub Layer (no mocking framework) whose getCell rejects, exercising the
-    // typed error channel that the SQLite fromSync wrapper produces on failure.
-    const failing: GridStoreShape = {
-      ...sqliteGridStoreShape(db),
-      getCell: () =>
-        Effect.fail(
-          new GridStoreError({ message: "db closed", operation: "getCell" }),
-        ),
-    };
-    const FailingLayer = Layer.succeed(GridStore, failing);
+  it("surfaces a typed GridStoreError from the real getCell path when the Db throws", async () => {
+    // Drive a REAL SqliteGridStore over a closed Db so getCell genuinely throws
+    // inside better-sqlite3. The assertion exercises the actual `fromSync`
+    // wrapper (not a stub that pre-returns the answer): it must tag the failure
+    // GridStoreError with operation "getCell" and capture the underlying cause,
+    // proving the error channel reflects where the failure really originated.
+    const tmp = new Db(join(dir, "getcell-throws.db"));
+    const FailingLayer = sqliteGridStore(tmp);
+    tmp.close(); // any subsequent query throws inside fromSync
 
     const exit = await Effect.runPromiseExit(
       Effect.gen(function* () {
@@ -365,7 +407,10 @@ describe("GridStore service (Layer + typed errors)", () => {
       expect(err._tag).toBe("Some");
       if (err._tag === "Some") {
         expect(err.value).toBeInstanceOf(GridStoreError);
+        // The operation label is produced by the real getCell wrapper, and the
+        // cause is the real driver error — neither is a value the test injected.
         expect(err.value.operation).toBe("getCell");
+        expect(err.value.cause).toBeInstanceOf(Error);
       }
     }
   });

@@ -76,6 +76,17 @@ export interface GridStoreShape {
   readonly getCredential: (
     provider: string,
   ) => Effect.Effect<Credential | undefined, GridStoreError>;
+  /**
+   * Optional: return a read-only snapshot of the store for the duration of one
+   * run. Stores whose granular reads are expensive to repeat (e.g. a Convex
+   * store that re-fetches the whole grid on every read) implement this to fetch
+   * once and serve all subsequent reads from memory, turning an N-row run from
+   * O(N^2) reads into O(N). The engine calls it once per `runColumn` and reads
+   * the column/rows/cells through the returned shape, while still WRITING
+   * through the live store. Cheap synchronous stores (SQLite) omit it and the
+   * engine reads directly, preserving their exact behaviour.
+   */
+  readonly snapshot?: () => Effect.Effect<GridStoreShape, GridStoreError>;
 }
 
 /**

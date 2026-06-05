@@ -6,7 +6,11 @@ import { Effect } from "effect";
 import { Db } from "./db.js";
 import { Registry, defaultRegistry } from "./registry.js";
 import { runFunction, type SandboxDispatch } from "./sandbox.js";
-import { sqliteGridStoreShape, type GridStoreShape } from "./store.js";
+import {
+  sqliteGridStoreShape,
+  type GridStoreError,
+  type GridStoreShape,
+} from "./store.js";
 import type { AiConfig, Column } from "./types.js";
 
 export interface EngineConfig {
@@ -89,14 +93,23 @@ export class Engine {
       }),
     );
 
-  /** Resolve a column's params for a row, interpolating {{Column Name}} from cells. */
+  /**
+   * Resolve a column's params for a row, interpolating {{Column Name}} from cells.
+   *
+   * A store read failure PROPAGATES as a `GridStoreError`: `runColumn`'s per-row
+   * try/catch then marks that cell `status:"error"`, restoring the prior LOCAL
+   * semantics where a failed read surfaced as a failed cell rather than a silent
+   * `done`. Missing-cell / null values still collapse their template to `""`
+   * inside `interp` — only an actual store error escapes.
+   */
   private resolveParams(
     col: Column,
     rowId: string,
-  ): Effect.Effect<Record<string, unknown>, never, never> {
+    store: GridStoreShape,
+  ): Effect.Effect<Record<string, unknown>, GridStoreError, never> {
     return Effect.gen(this, function* () {
-      const cells = yield* this.store.rowCells(rowId);
-      const columns = yield* this.store.listColumns(col.table_id);
+      const cells = yield* store.rowCells(rowId);
+      const columns = yield* store.listColumns(col.table_id);
       const byName = new Map(columns.map((c) => [c.name, c.id]));
       const interp = (s: string): string =>
         s.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, name: string) => {
@@ -108,17 +121,7 @@ export class Engine {
       const out: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(col.params)) out[k] = typeof v === "string" ? interp(v) : v;
       return out;
-    }).pipe(
-      // Param resolution never surfaces store errors to the caller: a failed
-      // read collapses templates to empty, matching the prior best-effort behaviour.
-      Effect.orElseSucceed(() => {
-        const out: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(col.params)) {
-          out[k] = typeof v === "string" ? v.replace(/\{\{\s*[^}]+?\s*\}\}/g, "") : v;
-        }
-        return out;
-      }),
-    );
+    });
   }
 
   /** The JS body for a column: custom code, or synthesized from provider/method. */
@@ -128,23 +131,34 @@ export class Engine {
   }
 
   async runColumn(columnId: string, opts: RunColumnOptions = {}): Promise<{ ran: number; errors: number }> {
-    const col = await Effect.runPromise(this.store.getColumn(columnId));
+    // Take one read snapshot for the whole run. For stores whose granular reads
+    // are expensive to repeat (ConvexGridStore re-fetches the full grid on every
+    // read), `snapshot()` fetches the grid ONCE and serves every per-row read
+    // from memory, so a run over N rows is O(N) store reads instead of O(N^2).
+    // Local SQLite has no `snapshot` (reads are cheap, synchronous) and falls
+    // back to the live store, preserving its exact behaviour. Writes still go to
+    // the live store so cell status streams to clients during the run.
+    const reads = this.store.snapshot
+      ? await Effect.runPromise(this.store.snapshot())
+      : this.store;
+
+    const col = await Effect.runPromise(reads.getColumn(columnId));
     if (!col) throw new Error(`column ${columnId} not found`);
     if (col.kind !== "function") return { ran: 0, errors: 0 };
 
     const rowIds =
-      opts.rowIds ?? (await Effect.runPromise(this.store.listRows(col.table_id))).map((r) => r.id);
+      opts.rowIds ?? (await Effect.runPromise(reads.listRows(col.table_id))).map((r) => r.id);
     const code = this.columnCode(col);
     const providers = this.registry.providerMap();
 
     let ran = 0;
     let errors = 0;
     await mapConcurrent(rowIds, opts.concurrency ?? 5, async (rowId) => {
-      const existing = await Effect.runPromise(this.store.getCell(rowId, columnId));
+      const existing = await Effect.runPromise(reads.getCell(rowId, columnId));
       if (!opts.force && existing?.status === "done") return;
       await Effect.runPromise(this.store.setCell(rowId, columnId, { status: "running", error: null }));
       try {
-        const inputs = await Effect.runPromise(this.resolveParams(col, rowId));
+        const inputs = await Effect.runPromise(this.resolveParams(col, rowId, reads));
         const result = await runFunction({ code, inputs, providers, dispatch: this.dispatch });
         await Effect.runPromise(
           this.store.setCell(rowId, columnId, { value: simplify(result), status: "done", error: null }),
