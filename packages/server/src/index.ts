@@ -173,43 +173,99 @@ route("GET", "/api/extensions/:id", (p) => {
 });
 
 // --- AI providers (bring-your-own-key for AI step functions) ---
+// `fallbackModels` is only used if the live /v1/models fetch fails (offline,
+// bad key). When connected, the real model list is pulled from the provider.
 const AI_PROVIDERS = [
   {
     id: "anthropic",
     name: "Anthropic",
     description: "Claude models for reasoning and generation.",
     domain: "anthropic.com",
-    models: ["claude-opus-4-1-20250805", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+    fallbackModels: ["claude-opus-4-1-20250805", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
   },
   {
     id: "openai",
     name: "OpenAI",
     description: "Industry-leading models for reasoning and generation.",
     domain: "openai.com",
-    models: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o3-mini"],
+    fallbackModels: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o3-mini"],
   },
 ] as const;
 
-route("GET", "/api/ai-providers", () => {
+type AiProviderId = (typeof AI_PROVIDERS)[number]["id"];
+
+// Live model lists, fetched from each provider's API with the connected key.
+// Cached per provider for a short TTL so we don't hit the API on every poll.
+const modelCache = new Map<string, { key: string; models: string[]; ts: number }>();
+const MODEL_TTL_MS = 10 * 60 * 1000;
+
+async function fetchModels(provider: AiProviderId, apiKey: string): Promise<string[] | null> {
+  const cached = modelCache.get(provider);
+  if (cached && cached.key === apiKey && Date.now() - cached.ts < MODEL_TTL_MS) return cached.models;
+  try {
+    let models: string[] = [];
+    if (provider === "anthropic") {
+      const r = await fetch("https://api.anthropic.com/v1/models?limit=1000", {
+        headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+      });
+      if (!r.ok) return null;
+      const data = (await r.json()) as { data: { id: string }[] };
+      // API returns newest-first; keep that order.
+      models = data.data.map((m) => m.id);
+    } else {
+      const r = await fetch("https://api.openai.com/v1/models", {
+        headers: { authorization: `Bearer ${apiKey}` },
+      });
+      if (!r.ok) return null;
+      const data = (await r.json()) as { data: { id: string }[] };
+      // Keep chat-capable text models; drop embeddings/audio/image/etc.
+      models = data.data
+        .map((m) => m.id)
+        .filter((id) => /^(gpt-|o\d|chatgpt-)/.test(id))
+        .filter((id) => !/(embedding|whisper|tts|audio|realtime|image|dall-e|moderation|transcribe|davinci|babbage|instruct)/.test(id))
+        .sort()
+        .reverse();
+    }
+    if (!models.length) return null;
+    modelCache.set(provider, { key: apiKey, models, ts: Date.now() });
+    return models;
+  } catch {
+    return null;
+  }
+}
+
+route("GET", "/api/ai-providers", async () => {
   // Each provider connects independently (per-provider credential slot), so any
   // number can be connected at once and all their models pull through.
   const connectedProviders = new Set((engine.config.aiProviders ?? []).map((a) => a.provider));
   const envProvider = process.env.ANTHROPIC_API_KEY ? "anthropic" : process.env.OPENAI_API_KEY ? "openai" : undefined;
-  return AI_PROVIDERS.map((p) => {
-    const hasKey = !!db.getCredential(`ai:${p.id}`);
-    const viaEnv = !hasKey && envProvider === p.id;
-    const connected = connectedProviders.has(p.id) || viaEnv;
-    return {
-      id: p.id,
-      name: p.name,
-      description: p.description,
-      logo: logoFor(p.domain),
-      models: p.models,
-      connected,
-      viaEnv,
-      connectedScopes: hasKey ? db.credentialScopes(`ai:${p.id}`) : [],
-    };
-  });
+  return Promise.all(
+    AI_PROVIDERS.map(async (p) => {
+      const cred = db.getCredential(`ai:${p.id}`);
+      const hasKey = !!cred;
+      const viaEnv = !hasKey && envProvider === p.id;
+      const connected = connectedProviders.has(p.id) || viaEnv;
+      const apiKey =
+        cred?.secrets.apiKey ??
+        (viaEnv ? (p.id === "anthropic" ? process.env.ANTHROPIC_API_KEY : process.env.OPENAI_API_KEY) : undefined);
+      // Pull the real model list when connected; fall back to the static list.
+      let models: string[] = [...p.fallbackModels];
+      if (connected && apiKey) {
+        const live = await fetchModels(p.id, apiKey);
+        if (live?.length) models = live;
+      }
+      return {
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        logo: logoFor(p.domain),
+        models,
+        connected,
+        viaEnv,
+        connectedScopes: hasKey ? db.credentialScopes(`ai:${p.id}`) : [],
+      };
+    }),
+  );
 });
 
 route("POST", "/api/ai-providers/:id/connect", (p, body) => {
