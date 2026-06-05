@@ -153,6 +153,21 @@ server.tool(
   },
 );
 
+server.tool(
+  "run_function",
+  "Call a connector function DIRECTLY and get its raw result — use this to SOURCE data (find people, run a search, enrich one input) then feed results into add_rows. Examples: trigify.discoverCreators {posted_about_keywords:['Trigify'], posted_about_days:30, page_size:25}; trigify.enrichProfile {profileUrl:'...'}; leadmagic.emailFinder {first_name, last_name, domain}. See list_functions for provider.method and inputs.",
+  {
+    provider: z.string().describe("Connector id, e.g. 'trigify', 'leadmagic', 'github'"),
+    method: z.string().describe("Method id, e.g. 'discoverCreators', 'enrichProfile'"),
+    input: z.record(z.string(), z.any()).optional().describe("Method inputs object"),
+  },
+  async ({ provider, method, input }) => {
+    if (!engine.registry.method(provider, method)) throw new Error(`Unknown function ${provider}.${method}. Use list_functions.`);
+    const result = await engine.dispatch(provider, method, input ?? {});
+    return ok(result);
+  },
+);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
 console.error(`gtmgrid MCP server connected (project: ${projectRef})`);

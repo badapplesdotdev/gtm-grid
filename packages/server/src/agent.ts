@@ -18,6 +18,7 @@ const GTM_TOOLS = [
   "add_rows",
   "run_column",
   "get_table",
+  "run_function",
   "upload_extension",
 ];
 const MUTATING = new Set(["create_table", "add_column", "add_rows", "run_column", "upload_extension"]);
@@ -193,6 +194,10 @@ export function streamClaude(
     "--verbose",
     "--mcp-config",
     mcpConfig(opts.repoRoot, opts.project),
+    // Use ONLY gtmgrid's MCP server — ignore the user's other Claude Code MCP
+    // servers (Trigify/Clay/etc.) so the agent drives gtmgrid's own tools and
+    // connectors instead of reaching for an external MCP (and hitting auth walls).
+    "--strict-mcp-config",
     "--allowedTools",
     ...GTM_TOOLS.map((t) => `mcp__gtmgrid__${t}`),
   ];
@@ -292,10 +297,10 @@ export function streamCodex(
     "--json",
     "--skip-git-repo-check",
     "--dangerously-bypass-approvals-and-sandbox",
+    // Replace Codex's whole MCP table with ONLY gtmgrid, so it ignores the
+    // user's other registered servers (Trigify/exa/etc.) and drives gtmgrid.
     "-c",
-    `mcp_servers.gtmgrid.command="${launcher}"`,
-    "-c",
-    `mcp_servers.gtmgrid.env={ GTMGRID_PROJECT = "${opts.project}" }`,
+    `mcp_servers={ gtmgrid = { command = "${launcher}", env = { GTMGRID_PROJECT = "${opts.project}" } } }`,
   ];
   const args = opts.threadId
     ? ["exec", "resume", opts.threadId, ...flags, opts.message]
