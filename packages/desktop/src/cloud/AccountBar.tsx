@@ -34,17 +34,6 @@ import {
 type HealthStatus = "loading" | "connected" | "offline";
 
 /**
- * Site URL the OAuth browser flow redirects back to. This is the app's own
- * origin (NOT the Convex `.convex.site` endpoint): the provider sends the user
- * back here, and the Tauri shell captures the loopback/deep-link. On the dev
- * deployment this is the Vite server (`http://localhost:5173`, the deployment's
- * `SITE_URL`). Overridable via `VITE_SITE_URL` for packaged builds.
- */
-const SITE_URL =
-  (import.meta.env.VITE_SITE_URL as string | undefined) ||
-  "http://localhost:5173";
-
-/**
  * Human-readable plan label for a workspace, derived from the seat limit the
  * `me` query reports (null limit = the free/local tier until Autumn fills it in).
  */
@@ -175,7 +164,7 @@ export function AccountBar(props: AccountBarProps) {
                   onSelect={(id) => setActiveWorkspaceId(id)}
                 />
               ) : (
-                <SignInSection siteUrl={SITE_URL} onDone={() => setOpen(false)} />
+                <SignInSection onDone={() => setOpen(false)} />
               ))}
 
             {/* Local project section — always present (local stays unchanged). */}
@@ -346,7 +335,7 @@ function WorkspaceSwitcher(props: {
 }
 
 /** Email + password sign-in / sign-up (the active provider on the backend). */
-function SignInSection(props: { siteUrl: string; onDone: () => void }) {
+function SignInSection(props: { onDone: () => void }) {
   const { signInWithPassword } = useAccountActions();
   const [flow, setFlow] = useState<"signIn" | "signUp">("signIn");
   const [email, setEmail] = useState("");

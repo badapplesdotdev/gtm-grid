@@ -5,8 +5,8 @@ import { defineConfig } from "vitest/config";
 // `projects` glob so `pnpm test` runs the desktop suites alongside the others.
 //
 // The React plugin compiles the JSX/TSX our cloud modules pull in transitively
-// (e.g. cloud/convex.tsx). Tests here cover client-side LOGIC only (the Effect
-// auth orchestration); React component rendering is not unit-tested.
+// (e.g. cloud/convex.tsx). Tests here cover client-side LOGIC only (e.g. the
+// active-workspace selection); React component rendering is not unit-tested.
 export default defineConfig({
   plugins: [react()],
   test: {
