@@ -128,34 +128,102 @@ The packaged app bundles its own Node runtime + engine, so it runs on a clean Ma
 
 > Unsigned builds are quarantined by Gatekeeper on other Macs — right-click → Open, or `xattr -dr com.apple.quarantine gtmgrid.app`. Code-signing/notarization is left to the distributor.
 
-## Cloud / Teams (commercial — in progress)
+## Cloud / Teams (commercial)
 
-The free app is **100% local and offline** — local solo projects use the bundled
-SQLite engine and never call the cloud. A commercial **multiplayer tier** is being
-added on top, where shared team projects live in a [Convex](https://convex.dev)
-backend (the cloud source of truth) so multiple members can edit the same grids
-live. Execution still runs locally; the cloud only stores/syncs data.
+gtmgrid is **open-core**. The free, MIT-licensed local app is **100% local and
+offline** — local solo projects use the bundled SQLite engine and never call the
+cloud. The commercial value is **multiplayer / team collaboration**, sold on top
+as a paid tier.
 
-The Convex backend is **scaffold-only** today:
+| | Free (local solo) | Paid (cloud team) |
+| --- | --- | --- |
+| **Storage** | local SQLite, one `.db` per project | [Convex](https://convex.dev) workspace (cloud source of truth) |
+| **Collaboration** | single machine | live multiplayer — members edit the same grids in real time |
+| **Connectors & tables** | unlimited | unlimited (nothing is capped) |
+| **Billing** | none | per-**seat** subscription, metered per workspace member |
+| **Execution** | local engine | **still local** — see below |
+| **Offline** | yes | online-first (cloud is the live source of truth) |
 
-- `convex/schema.ts` — workspace-scoped tables (`workspaces`, `members`,
-  `projects`, `tables`, `columns`, `rows`, `cells`, `extensions`, `credentials`)
-  mirroring the engine model, with indexes for reactive queries.
-- `convex/tsconfig.json` + `convex.json` — the `convex/` directory is
-  **self-contained** and intentionally **not** part of the root `tsc -b` graph
-  (Convex's `convex/_generated/` types only exist after a deployment login, so
-  keeping it separate keeps `pnpm typecheck` green before codegen).
+Key design points (all shipped across Waves 1–3 of the cloud build):
 
-**Setup (run later, when wiring the cloud tier):**
+- **No feature gating.** Capping connectors or tables would cripple an OSS local
+  tool and is unenforceable. The free local product stays fully capable forever.
+  The **only** thing the paid tier gates is **seats**.
+- **Seats billing.** Subscriptions are seat-based and metered per workspace via
+  [Autumn](https://useautumn.com) (Stripe underneath). Inviting a member runs an
+  Autumn `check` on the `seats` feature; over the limit returns an Autumn
+  `checkout` URL that the desktop opens as an upgrade modal. There are **no**
+  connector or table caps anywhere.
+- **Realtime multiplayer via Convex.** Cloud team projects live in Convex, whose
+  reactive database makes **every `useQuery` a live subscription** — so an edit,
+  add-row, or column run by any member appears in every other member's window
+  with no custom sync engine and no manual refresh. Account unit is the
+  **workspace (team)**: members, projects, and credentials all scope to it, and
+  billing is per workspace.
+- **Execution stays local.** The cloud only stores and syncs data. When you run
+  a column on a cloud project, your **local engine** reads the inputs from Convex,
+  runs the QuickJS sandbox + connector HTTP calls **on your machine**, and writes
+  cell status (`running` → `done`/`error`) back through Convex mutations — so
+  results stream live to every member while no engine ever runs in the cloud.
+- **Shared team credentials.** Workspace connector keys are stored in Convex,
+  encrypted at rest under a workspace-scoped key (envelope-wrapped by a backend
+  master secret). Plaintext is only ever decrypted in the trusted run path —
+  never exposed to other members' clients. Local projects keep the existing
+  machine-local `~/.gtmgrid/key` AES-256-GCM model, untouched.
+
+> See [`docs/cloud.md`](./docs/cloud.md) for the full architecture, the Convex
+> function surface, and the verification matrix.
+
+### Setup (cloud tier)
+
+The cloud tier needs a Convex deployment, an Autumn (billing) secret, and a
+backend master key for credential encryption. Configure these as **environment
+variables** — only the variable **names** are listed here; never commit secret
+values.
+
+| Variable | Where it lives | Purpose |
+| --- | --- | --- |
+| `CONVEX_DEPLOYMENT` | `.env.local` (dev) | the Convex dev/prod deployment `convex dev` is bound to |
+| `VITE_CONVEX_URL` | `.env.local` (desktop build) | the deploy URL the React/Convex client connects to |
+| `AUTUMN_SECRET_KEY` | Convex deployment env | server-side Autumn key for the seats `check` / `checkout` |
+| `CREDENTIALS_MASTER_KEY` | Convex deployment env | 32-byte backend master key (KEK) that wraps per-workspace credential keys |
+
+Run Convex codegen before typechecking the cloud code — the client imports
+`convex/_generated/*`, which only exists **after** a deployment login generates
+it:
 
 ```bash
 # Logs in / creates a Convex dev deployment and generates convex/_generated/.
 npx convex dev          # or: pnpm convex:dev
+# (codegen only, no long-running watcher:  npx convex codegen)
 ```
 
-`convex dev` writes a `CONVEX_DEPLOYMENT` to `.env.local` and a deploy URL you
-set as the client's `VITE_CONVEX_URL`. No keys or deployment are required to
-build or test this repo — `pnpm typecheck` and `pnpm test` pass without them.
+`convex dev` writes `CONVEX_DEPLOYMENT` to `.env.local` and a deploy URL you set
+as the client's `VITE_CONVEX_URL`. `AUTUMN_SECRET_KEY` and `CREDENTIALS_MASTER_KEY`
+are set on the **Convex deployment** (they are read server-side and never reach
+the client). The OSS build runs with **no** cloud env at all: `convex/` is kept
+out of the root `tsc -b` graph and the desktop client treats an absent
+`VITE_CONVEX_URL` as "cloud disabled", so the local-only path needs no Convex
+deployment to build or run.
+
+### Future Expansion
+
+These are deliberately **out of scope** for v1 (cloud is additive on top of the
+unchanged local tool) and tracked for later:
+
+- **Web app.** The same React UI can subscribe to Convex directly, so a browser
+  build is now cheap. The remaining gaps are execution (today's engine is local)
+  and the in-app agent (today it spawns the user's local `claude`/`codex` CLI).
+- **Cloud execution of grids.** Running columns in a cloud runtime instead of on
+  the user's machine — required for a true web build and for unattended runs.
+- **Native deep-link OAuth.** Today's desktop sign-in does not yet open the
+  system browser and handle a deep-link callback; that native OAuth flow is a
+  tracked follow-up (**task #17**).
+- **Proxied managed-key connectors.** Offering connectors (e.g. Trigify) through
+  *our* keys with Autumn credit metering, as an additional revenue lever — no
+  user-supplied key required.
+- **Offline editing of cloud projects** with later reconciliation. Convex is
+  online-first today; local projects remain the offline story until then.
 
 ## Status
 
@@ -163,6 +231,12 @@ build or test this repo — `pnpm typecheck` and `pnpm test` pass without them.
 - ✅ JSON-manifest extensions + LeadMagic (9) & Trigify (15) connectors — Trigify verified live
 - ✅ Desktop app: React grid UI + Tauri shell + **in-app Claude Code / Codex agent panel** (drives the grid live)
 - ✅ Self-contained `.dmg` — bundles node + engine; runs without a dev toolchain
+- ✅ Cloud / Teams tier (open-core): Convex backend (auth, workspace/project/table/cell
+  API, seats billing via Autumn, workspace-encrypted shared credentials), the
+  engine `GridStore` abstraction (`SqliteGridStore` + `ConvexGridStore`), and the
+  desktop cloud client (auth UI, workspace switcher, realtime grid, settings) — all
+  with Vitest coverage. Live two-window multiplayer needs a human Tauri run to
+  confirm visually; the data path is verified via `pnpm typecheck` + `pnpm test`.
 
 ## License
 
