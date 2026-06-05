@@ -52,3 +52,22 @@ export {
   failingAutumnLayer,
   fakeAutumnLayer,
 } from "./seats-test-layers.js";
+
+export {
+  CredentialCryptoService,
+  CryptoPrimitives,
+  type CredentialEnvelope,
+  DecryptError,
+  EncryptError,
+  IV_BYTES,
+  KEY_BYTES,
+  MasterKey,
+  type SecretMap,
+  TAG_BYTES,
+} from "./crypto.js";
+
+// NOTE: ./crypto-test-layers.js is deliberately NOT re-exported here. It imports
+// `node:crypto`, and the Convex bundler pulls this index into the (esbuild)
+// graph for convex/model/crypto.ts — re-exporting a node-only module would make
+// that bundle fail to resolve `node:crypto`. Tests import the crypto test layers
+// directly via the relative path instead.
