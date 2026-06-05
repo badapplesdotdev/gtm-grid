@@ -23,6 +23,7 @@ import {
 } from "@gtmgrid/engine";
 import { detectAgents, streamClaude, streamCodex, setAgentPath, rescanAgents, type AgentKind } from "./agent.js";
 import { runCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
+import { corsHeadersFor, isOriginAllowed } from "./cors.js";
 
 const PORT = Number(process.env.GTMGRID_PORT ?? 8787);
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
@@ -534,13 +535,14 @@ route("POST", "/api/agents/connect", (_p, body) => {
 });
 
 // --- server plumbing ---
-function send(res: ServerResponse, status: number, data: unknown) {
+// CORS is allowlisted, never `*` (#22): a disallowed browser Origin gets NO
+// `access-control-allow-origin`, so the calling page can't read the response.
+// `origin` is the request's `Origin` header (undefined for non-browser callers).
+function send(res: ServerResponse, status: number, data: unknown, origin?: string) {
   const json = JSON.stringify(data);
   res.writeHead(status, {
     "content-type": "application/json",
-    "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET,POST,OPTIONS",
-    "access-control-allow-headers": "content-type",
+    ...(corsHeadersFor(origin) ?? {}),
   });
   res.end(json);
 }
@@ -557,21 +559,25 @@ async function readBody(req: IncomingMessage): Promise<any> {
 }
 
 const server = createServer(async (req, res) => {
-  if (req.method === "OPTIONS") return send(res, 204, {});
+  const origin = req.headers.origin;
+  if (req.method === "OPTIONS") return send(res, 204, {}, origin);
   const url = new URL(req.url ?? "/", "http://localhost");
 
   // Agent chat is a long-lived SSE stream — handled outside the JSON router.
   if (req.method === "POST" && url.pathname === "/api/agent/chat") {
+    // PRIVILEGED route: it spawns the user's authenticated CLI. Reject a
+    // disallowed cross-origin browser caller BEFORE spawning anything (#22).
+    if (!isOriginAllowed(origin)) return send(res, 403, { error: "origin not allowed" }, origin);
     const body = await readBody(req);
     const agent = body?.agent ?? "claude";
     const message = String(body?.message ?? "");
-    if (!message) return send(res, 400, { error: "message required" });
+    if (!message) return send(res, 400, { error: "message required" }, origin);
     try {
       const context = body?.context;
-      if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context });
-      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context });
+      if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context, origin });
+      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin });
     } catch (e) {
-      send(res, 500, { error: e instanceof Error ? e.message : String(e) });
+      send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
     }
     return;
   }
@@ -585,12 +591,12 @@ const server = createServer(async (req, res) => {
     try {
       const body = req.method === "POST" ? await readBody(req) : undefined;
       const result = await r.handler(params, body);
-      return send(res, 200, result);
+      return send(res, 200, result, origin);
     } catch (e) {
-      return send(res, 500, { error: e instanceof Error ? e.message : String(e) });
+      return send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
     }
   }
-  send(res, 404, { error: "not found" });
+  send(res, 404, { error: "not found" }, origin);
 });
 
 server.on("error", (err: NodeJS.ErrnoException) => {
@@ -601,6 +607,10 @@ server.on("error", (err: NodeJS.ErrnoException) => {
   throw err;
 });
 
-server.listen(PORT, () => {
-  console.error(`gtmgrid server on http://localhost:${PORT} (project: ${current.name})`);
+// Bind to loopback (127.0.0.1) ONLY, never 0.0.0.0 (#22): the sidecar runs
+// connectors with the user's credentials and spawns their authenticated CLIs,
+// so it must be reachable only from this machine — not exposed on the LAN.
+const HOST = "127.0.0.1";
+server.listen(PORT, HOST, () => {
+  console.error(`gtmgrid server on http://${HOST}:${PORT} (project: ${current.name})`);
 });
