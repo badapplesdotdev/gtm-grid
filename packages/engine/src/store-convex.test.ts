@@ -59,12 +59,17 @@ function fakeClient(grid: {
           cells: grid.cells ?? [],
         };
       }
-      if (ref === REFS.getCredential) return grid.credential ?? null;
       throw new Error("unexpected query ref");
     },
     mutation: async (ref, args) => {
       calls.push({ ref, args });
       return "cell_id";
+    },
+    // The T7 decrypt-for-run path is an ACTION; the credential ref routes here.
+    action: async (ref, args) => {
+      calls.push({ ref, args });
+      if (ref === REFS.getCredential) return grid.credential ?? null;
+      throw new Error("unexpected action ref");
     },
   };
   return { client, calls };
@@ -278,45 +283,61 @@ describe("ConvexGridStore — writes (run-status mapping)", () => {
   });
 });
 
-describe("ConvexGridStore — credentials", () => {
-  it("maps a workspace credential doc back onto the engine team scope", async () => {
-    const { client } = fakeClient({
-      credential: {
-        _id: "cred_1",
-        extensionId: "ai:openai",
-        scope: "workspace",
-        name: "OpenAI",
-        secrets: { apiKey: "sk-test" },
-        createdAt: 10,
-      },
+describe("ConvexGridStore — credentials (T7 decrypt-for-run, #18)", () => {
+  const WORKSPACE_ID = "wks_1";
+
+  it("resolves the workspace-shared secret via the getCredentialForRun action", async () => {
+    // The action returns ONLY the decrypted secret map (no doc metadata).
+    const { client, calls } = fakeClient({
+      credential: { secrets: { apiKey: "sk-test" } },
     });
-    const store = await buildStore({ client, refs: REFS, tableId: TABLE_ID });
+    const store = await buildStore({
+      client,
+      refs: REFS,
+      tableId: TABLE_ID,
+      credentials: { workspaceId: WORKSPACE_ID, scope: "workspace" },
+    });
 
     const cred = await Effect.runPromise(store.getCredential("ai:openai"));
-    expect(cred).toEqual({
-      id: "cred_1",
-      extension_id: "ai:openai",
-      scope: "team",
-      name: "OpenAI",
-      secrets: { apiKey: "sk-test" },
-      created_at: 10,
+    // The engine consumes `secrets`; cloud `workspace` maps to engine `team`.
+    expect(cred?.secrets).toEqual({ apiKey: "sk-test" });
+    expect(cred?.scope).toBe("team");
+    expect(cred?.extension_id).toBe("ai:openai");
+
+    // It went through the ACTION channel (not query) with the decrypt-for-run
+    // args: workspace + connector + the workspace (shared) scope.
+    const credCall = calls.find((c) => c.ref === REFS.getCredential);
+    expect(credCall?.args).toEqual({
+      workspaceId: WORKSPACE_ID,
+      extensionId: "ai:openai",
+      scope: "workspace",
     });
   });
 
-  it("maps a personal credential scope through unchanged", async () => {
-    const { client } = fakeClient({
-      credential: {
-        _id: "cred_2",
-        extensionId: "apollo",
-        scope: "personal",
-        name: "Apollo",
-        secrets: { apiKey: "k" },
-        createdAt: 20,
-      },
+  it("returns undefined when the connector has no stored credential (action → null)", async () => {
+    const { client } = fakeClient({ credential: null });
+    const store = await buildStore({
+      client,
+      refs: REFS,
+      tableId: TABLE_ID,
+      credentials: { workspaceId: WORKSPACE_ID, scope: "workspace" },
+    });
+    expect(
+      await Effect.runPromise(store.getCredential("apollo")),
+    ).toBeUndefined();
+  });
+
+  it("is a no-op (undefined) when no credential resolution is configured", async () => {
+    // A data-only store (reads/writes) must never reach for secrets, even though
+    // the ref is wired — proving secrets resolve only on an explicit cloud run.
+    const { client, calls } = fakeClient({
+      credential: { secrets: { apiKey: "leak" } },
     });
     const store = await buildStore({ client, refs: REFS, tableId: TABLE_ID });
-    const cred = await Effect.runPromise(store.getCredential("apollo"));
-    expect(cred?.scope).toBe("personal");
+    expect(
+      await Effect.runPromise(store.getCredential("ai")),
+    ).toBeUndefined();
+    expect(calls.some((c) => c.ref === REFS.getCredential)).toBe(false);
   });
 
   it("is a no-op (undefined) when no credential ref is wired", async () => {
@@ -326,6 +347,7 @@ describe("ConvexGridStore — credentials", () => {
       client,
       refs: refsNoCred,
       tableId: TABLE_ID,
+      credentials: { workspaceId: WORKSPACE_ID, scope: "workspace" },
     });
     expect(
       await Effect.runPromise(store.getCredential("ai")),

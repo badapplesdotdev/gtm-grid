@@ -52,7 +52,8 @@ export {
   type ConvexClientLike,
   type ConvexFunctionRefs,
   type ConvexGridStoreConfig,
-  type ConvexCredentialDoc,
+  type ConvexCredentialResolution,
+  type ConvexCredentialForRunResult,
 } from "./store-convex.js";
 
 export interface OpenProjectResult {
