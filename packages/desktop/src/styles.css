@@ -2116,3 +2116,14 @@ html, body, #root {
 .account-menu-input::placeholder { color: var(--text-3); }
 .account-menu-error { font-size: 11.5px; color: var(--danger); padding: 0 2px; }
 .account-menu-link { font-size: 11.5px; color: var(--text-3); justify-content: center; }
+
+/* ── Workspace settings (members + seats + invite) — T10 ───────── */
+.ws-member-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.ws-member-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 10px; border-radius: 6px; background: var(--surface-2, rgba(127,127,127,0.06));
+}
+.ws-member-name { font-size: 13px; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-member-role { font-size: 11px; color: var(--text-3); text-transform: capitalize; }
+.ws-invite-row { display: flex; gap: 8px; align-items: center; }
+.ws-invite-row .form-input { flex: 1; }

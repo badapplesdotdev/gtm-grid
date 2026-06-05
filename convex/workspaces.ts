@@ -16,7 +16,12 @@
  */
 
 import { ConvexError, v } from "convex/values";
-import { getCurrentUser, getCurrentUserId, requireRole } from "./model/auth.js";
+import {
+  getCurrentUser,
+  getCurrentUserId,
+  requireMember,
+  requireRole,
+} from "./model/auth.js";
 import { checkInviteSeat, trackSeatUsed } from "./model/seats.js";
 import { memberRole } from "./schema.js";
 import { internal } from "./_generated/api.js";
@@ -71,6 +76,56 @@ export const me = query({
       user: { _id: user._id, name: user.name ?? null, email: user.email ?? null },
       workspaces: workspaces.filter((w) => w !== null),
     };
+  },
+});
+
+/**
+ * List the members of a workspace for the settings / seats view (T10).
+ *
+ * Reactive: the workspace settings panel subscribes to this so an invite (by any
+ * member) appears live. Authz: caller must be a member of the workspace
+ * ({@link requireMember}) — a user never sees a foreign workspace's roster.
+ *
+ * Each member is joined to their `users` row for a display name + email. Seat
+ * usage mirrors the {@link me} query's placeholder shape (`used` = real member
+ * count; `limit` deferred to Autumn/T8c), so the UI shows "seats used / limit"
+ * from one source.
+ */
+export const listMembers = query({
+  args: { workspaceId: v.id("workspaces") },
+  handler: async (ctx, { workspaceId }) => {
+    // Authz: only a member of this workspace may read its roster.
+    await requireMember(ctx, workspaceId);
+
+    const memberRows = await ctx.db
+      .query("members")
+      .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+      .collect();
+
+    const members = await Promise.all(
+      memberRows.map(async (m) => {
+        const user = ctx.db.normalizeId("users", m.userId);
+        const userDoc = user === null ? null : await ctx.db.get(user);
+        return {
+          _id: m._id,
+          userId: m.userId,
+          role: m.role,
+          createdAt: m.createdAt,
+          name: userDoc?.name ?? null,
+          email: userDoc?.email ?? null,
+        };
+      }),
+    );
+
+    // Stable ordering: oldest member (the owner) first.
+    members.sort((a, b) => a.createdAt - b.createdAt);
+
+    const seatUsage: { used: number; limit: number | null } = {
+      used: members.length,
+      limit: null,
+    };
+
+    return { members, seatUsage };
   },
 });
 

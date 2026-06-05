@@ -7,6 +7,7 @@ import { ExtensionPanel, AiProviderPanel, ExtensionsBrowse, BrandIcon } from "./
 import { AddColumnPopover, FunctionsModal } from "./AddColumn";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { AccountBar, PlanBadge } from "./cloud/AccountBar";
+import { WorkspaceSettings } from "./cloud/WorkspaceSettings";
 import { CloudGrid } from "./cloud/CloudGrid";
 import { useMe, useActiveWorkspace } from "./cloud/auth";
 import {
@@ -385,6 +386,7 @@ export default function App() {
   const [showFunctions, setShowFunctions] = useState(false);
   const [showNewTable, setShowNewTable] = useState(false);
   const [showProjects, setShowProjects] = useState(false);
+  const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
   const [currentProjectPath, setCurrentProjectPath] = useState<string | null>(null);
 
   // ── Cloud project mode (multiplayer via Convex) ──────────────
@@ -809,6 +811,16 @@ export default function App() {
           </button>
         ) : (
           <PlanBadge />
+        )}
+        {/* Workspace members / seats — only when signed into a workspace. */}
+        {activeWorkspace && (
+          <button
+            className="topbar-project"
+            onClick={() => setShowWorkspaceSettings(true)}
+            title="Workspace members & seats"
+          >
+            Members
+          </button>
         )}
       </header>
 
@@ -1325,6 +1337,14 @@ export default function App() {
       )}
 
       {/* ── Modals ──────────────────────── */}
+      {showWorkspaceSettings && activeWorkspace && (
+        <WorkspaceSettings
+          workspaceId={activeWorkspace._id}
+          workspaceName={activeWorkspace.name}
+          onClose={() => setShowWorkspaceSettings(false)}
+        />
+      )}
+
       {showAddCol && tableData && (
         <AddColumnPopover
           tableId={tableData.id}

@@ -52,6 +52,22 @@ export interface Me {
   readonly workspaces: readonly WorkspaceSummary[];
 }
 
+/** A single workspace member as returned by the `listMembers` query (T10). */
+export interface WorkspaceMember {
+  readonly _id: Id<"members">;
+  readonly userId: string;
+  readonly role: "owner" | "admin" | "member";
+  readonly createdAt: number;
+  readonly name: string | null;
+  readonly email: string | null;
+}
+
+/** The `listMembers` result: the roster + seat usage for the settings view. */
+export interface WorkspaceMembers {
+  readonly members: readonly WorkspaceMember[];
+  readonly seatUsage: SeatUsage;
+}
+
 // ─── React hooks ─────────────────────────────────────────────────────────────
 
 /**
@@ -65,6 +81,20 @@ export function useMe(): Me | null | undefined {
     | Me
     | null
     | undefined;
+}
+
+/**
+ * The reactive `listMembers` query result for a workspace: the roster + seat
+ * usage, or `undefined` while loading / when cloud is off / no workspace active.
+ * Backs the workspace settings (members + seats) view (T10).
+ */
+export function useMembers(
+  workspaceId: Id<"workspaces"> | null,
+): WorkspaceMembers | undefined {
+  return useQuery(
+    api.workspaces.listMembers,
+    cloudEnabled && workspaceId !== null ? { workspaceId } : "skip",
+  ) as WorkspaceMembers | undefined;
 }
 
 /** Convex auth state: whether we are signed in and whether it is still loading. */
