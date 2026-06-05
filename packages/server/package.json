@@ -5,6 +5,8 @@
   "type": "module",
   "bin": { "gtmgrid-server": "./src/index.ts" },
   "dependencies": {
-    "@gtmgrid/engine": "workspace:*"
+    "@gtmgrid/engine": "workspace:*",
+    "convex": "^1.40.0",
+    "effect": "^3.21.3"
   }
 }

@@ -45,6 +45,26 @@ async function getOrThrow<T extends "projects" | "tables" | "columns" | "rows">(
 }
 
 /**
+ * Reactive list of a project's tables (ordered by position, then creation).
+ * Members-only — the project's workspace gates access. Drives the cloud-project
+ * table list in the sidebar; the per-table grid loads via {@link getTable}.
+ */
+export const listTables = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, { projectId }) => {
+    const project = await getOrThrow(ctx, "projects", projectId);
+    await requireMember(ctx, project.workspaceId);
+    const tables = await ctx.db
+      .query("tables")
+      .withIndex("by_project", (q) => q.eq("projectId", projectId))
+      .collect();
+    return [...tables].sort(
+      (a, b) => a.position - b.position || a.createdAt - b.createdAt,
+    );
+  },
+});
+
+/**
  * The full grid for a table: the table, its columns + rows (ordered by
  * position), and every cell. Members-only.
  */

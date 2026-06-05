@@ -22,6 +22,7 @@ import {
   listProjects,
 } from "@gtmgrid/engine";
 import { detectAgents, streamClaude, streamCodex, setAgentPath, rescanAgents, type AgentKind } from "./agent.js";
+import { runCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
 
 const PORT = Number(process.env.GTMGRID_PORT ?? 8787);
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
@@ -469,6 +470,30 @@ route("POST", "/api/columns/:id/run", async (p, body) => {
   const rowIds = Array.isArray(body?.rowIds) && body.rowIds.length ? (body.rowIds as string[]) : undefined;
   const res = await current.engine.runColumn(p.id, { force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds });
   return res;
+});
+
+// --- cloud run path (T9) ---
+// Running a column on a CLOUD project: build an Engine whose store is the
+// Convex-backed ConvexGridStore (authed as the signed-in member), so inputs are
+// read from Convex and statuses/results stream back live to all members. LOCAL
+// projects keep the route above unchanged. The registry + AI config are the
+// sidecar's existing ones, so connectors/AI columns behave identically.
+route("POST", "/api/cloud/columns/run", async (_p, body) => {
+  const convexUrl = String(body?.convexUrl ?? "").trim();
+  const token = String(body?.token ?? "").trim();
+  const tableId = String(body?.tableId ?? "").trim();
+  const columnId = String(body?.columnId ?? "").trim();
+  if (!convexUrl || !token || !tableId || !columnId)
+    return { error: "convexUrl, token, tableId and columnId are required" };
+  const rowIds = Array.isArray(body?.rowIds) && body.rowIds.length ? (body.rowIds as string[]) : undefined;
+  const deps = defaultCloudRunDeps(registry, aiConfig());
+  // The engine constructor needs a Db for its (unused on this path) db fields;
+  // reuse the shared global db so no new SQLite file is created.
+  return runCloudColumn(
+    { convexUrl, token, tableId, columnId, force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds },
+    deps,
+    globalDb,
+  );
 });
 
 route("POST", "/api/columns/:id/update", (p, body) => {
