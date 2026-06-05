@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "gtmgrid",
+  "productName": "GTM Grid",
   "version": "0.0.1",
   "identifier": "app.gtmgrid.desktop",
   "build": {
