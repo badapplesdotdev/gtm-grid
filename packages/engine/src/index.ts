@@ -41,6 +41,19 @@ export {
   type GridStoreShape,
   type CellPatch,
 } from "./store.js";
+// ConvexGridStore — the cloud GridStore Layer (Convex-client-backed). A small
+// injected client interface keeps the engine's `tsc -b` build decoupled from
+// convex/_generated; the desktop/server lane passes the real ConvexHttpClient
+// plus the T4 function refs.
+export {
+  convexGridStore,
+  convexCredentialStore,
+  convexGridStoreShape,
+  type ConvexClientLike,
+  type ConvexFunctionRefs,
+  type ConvexGridStoreConfig,
+  type ConvexCredentialDoc,
+} from "./store-convex.js";
 
 export interface OpenProjectResult {
   db: Db;
