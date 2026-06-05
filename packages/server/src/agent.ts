@@ -9,6 +9,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 
 import { homedir } from "node:os";
 import type { ServerResponse } from "node:http";
 import { join, dirname } from "node:path";
+import { corsHeadersFor } from "./cors.js";
 
 const GTM_TOOLS = [
   "list_functions",
@@ -181,18 +182,27 @@ interface SseClient {
   end: () => void;
 }
 
-function sseClient(res: ServerResponse): SseClient {
+// The agent SSE stream is the most privileged route (it spawns the user's CLI),
+// so it carries the SAME allowlisted CORS as the JSON routes — NEVER `*` (#22).
+// A disallowed Origin gets no `access-control-allow-origin` header (and is
+// already 403'd before we get here); `origin` undefined = non-browser caller.
+function sseClient(res: ServerResponse, origin?: string): SseClient {
   res.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
     connection: "keep-alive",
-    "access-control-allow-origin": "*",
+    ...(corsHeadersFor(origin) ?? {}),
   });
   return {
     write: (event) => res.write(`data: ${JSON.stringify(event)}\n\n`),
     end: () => res.end(),
   };
 }
+
+/** Test-only handle to the real SSE writer so the #22 CORS tests exercise the
+ *  shipped header logic (allowlisted `access-control-allow-origin`, never `*`)
+ *  rather than a reconstruction. Not used by the server itself. */
+export const __sseClientForTest = sseClient;
 
 /** Path to the gtmgrid MCP launcher — bundled in the packaged app, repo/bin in dev. */
 function mcpLauncher(repoRoot: string): string {
@@ -210,9 +220,9 @@ function mcpConfig(repoRoot: string, project: string): string {
 /** Stream a Claude Code turn over SSE, driving gtmgrid via MCP. */
 export function streamClaude(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext },
+  opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext; origin?: string },
 ): void {
-  const sse = sseClient(res);
+  const sse = sseClient(res, opts.origin);
   const args = [
     "-p",
     opts.message,
@@ -318,9 +328,9 @@ function resultText(result: any): string {
  *  project) and bypasses approval prompts for headless tool use. */
 export function streamCodex(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; threadId?: string; context?: AgentContext },
+  opts: { message: string; project: string; repoRoot: string; threadId?: string; context?: AgentContext; origin?: string },
 ): void {
-  const sse = sseClient(res);
+  const sse = sseClient(res, opts.origin);
   const launcher = mcpLauncher(opts.repoRoot);
   const preamble = contextPreamble(opts.context);
   const message = preamble ? `${preamble}\n\n${opts.message}` : opts.message;
