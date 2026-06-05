@@ -1263,3 +1263,15 @@ html, body, #root {
   padding: 1px 5px;
   border-radius: var(--r-xs);
 }
+
+/* ─── Agent panel: active-table context chip ──────────────── */
+.agent-context-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 0;
+  font: 400 11.5px var(--font-sans);
+  color: #8a8a94;
+}
+.agent-context-chip strong { color: var(--accent); font-weight: 600; }
+.agent-context-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }

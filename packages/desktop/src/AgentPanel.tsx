@@ -85,7 +85,13 @@ function Markdown({ text }: { text: string }): ReactNode {
   return <>{out}</>;
 }
 
-export default function AgentPanel({ onGridChange }: { onGridChange: () => void }) {
+export default function AgentPanel({
+  onGridChange,
+  activeTable,
+}: {
+  onGridChange: () => void;
+  activeTable: { name: string; columns: string[] } | null;
+}) {
   const [agent, setAgent] = useState<AgentKind>("claude");
   const [status, setStatus] = useState<{ claude?: AgentStatus; codex?: AgentStatus }>({});
   const [threads, setThreads] = useState<Record<AgentKind, Message[]>>({ claude: [], codex: [] });
@@ -145,7 +151,12 @@ export default function AgentPanel({ onGridChange }: { onGridChange: () => void 
       const res = await fetch(`${API_BASE}/api/agent/chat`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ agent, message: text, sessionId: sessionRef.current[agent] }),
+        body: JSON.stringify({
+          agent,
+          message: text,
+          sessionId: sessionRef.current[agent],
+          context: activeTable ? { tableName: activeTable.name, columns: activeTable.columns } : undefined,
+        }),
         signal: controller.signal,
       });
       if (!res.body) throw new Error("no stream");
@@ -276,10 +287,19 @@ export default function AgentPanel({ onGridChange }: { onGridChange: () => void 
             ))}
           </div>
 
+          {activeTable && (
+            <div className="agent-context-chip" title="The agent operates on this table by default">
+              <span className="agent-context-dot" /> on <strong>{activeTable.name}</strong>
+            </div>
+          )}
           <div className="agent-input">
             <textarea
               value={input}
-              placeholder={`Ask ${AGENT_LABEL[agent]} to build or run your grid…`}
+              placeholder={
+                activeTable
+                  ? `Ask ${AGENT_LABEL[agent]} about "${activeTable.name}"…`
+                  : `Ask ${AGENT_LABEL[agent]} to build or run your grid…`
+              }
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {

@@ -23,6 +23,22 @@ const GTM_TOOLS = [
 ];
 const MUTATING = new Set(["create_table", "add_column", "add_rows", "run_column", "upload_extension"]);
 
+export interface AgentContext {
+  tableName?: string;
+  columns?: string[];
+}
+
+/** Context preamble so the agent operates on the table the user is viewing. */
+function contextPreamble(ctx?: AgentContext): string | null {
+  if (!ctx?.tableName) return null;
+  const cols = ctx.columns?.length ? ` Its columns are: ${ctx.columns.join(", ")}.` : "";
+  return (
+    `The user is currently viewing the gtmgrid table "${ctx.tableName}".${cols} ` +
+    `When they ask to add/update/enrich rows or columns, or run something, and do NOT name a different table, ` +
+    `operate on "${ctx.tableName}" by default. Call get_table on it first if you need its current contents.`
+  );
+}
+
 export type AgentKind = "claude" | "codex";
 
 // ── Locating the user's CLIs ──────────────────────────────────────────────
@@ -183,7 +199,7 @@ function mcpConfig(repoRoot: string, project: string): string {
 /** Stream a Claude Code turn over SSE, driving gtmgrid via MCP. */
 export function streamClaude(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; sessionId?: string },
+  opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext },
 ): void {
   const sse = sseClient(res);
   const args = [
@@ -201,6 +217,8 @@ export function streamClaude(
     "--allowedTools",
     ...GTM_TOOLS.map((t) => `mcp__gtmgrid__${t}`),
   ];
+  const preamble = contextPreamble(opts.context);
+  if (preamble) args.push("--append-system-prompt", preamble);
   if (opts.sessionId) args.push("--resume", opts.sessionId);
 
   const bin = resolveAgentPath("claude");
@@ -289,10 +307,12 @@ function resultText(result: any): string {
  *  project) and bypasses approval prompts for headless tool use. */
 export function streamCodex(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; threadId?: string },
+  opts: { message: string; project: string; repoRoot: string; threadId?: string; context?: AgentContext },
 ): void {
   const sse = sseClient(res);
   const launcher = mcpLauncher(opts.repoRoot);
+  const preamble = contextPreamble(opts.context);
+  const message = preamble ? `${preamble}\n\n${opts.message}` : opts.message;
   const flags = [
     "--json",
     "--skip-git-repo-check",
@@ -303,8 +323,8 @@ export function streamCodex(
     `mcp_servers={ gtmgrid = { command = "${launcher}", env = { GTMGRID_PROJECT = "${opts.project}" } } }`,
   ];
   const args = opts.threadId
-    ? ["exec", "resume", opts.threadId, ...flags, opts.message]
-    : ["exec", ...flags, opts.message];
+    ? ["exec", "resume", opts.threadId, ...flags, message]
+    : ["exec", ...flags, message];
 
   const bin = resolveAgentPath("codex");
   if (!bin) {

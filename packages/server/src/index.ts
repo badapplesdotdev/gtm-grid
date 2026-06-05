@@ -201,8 +201,9 @@ const server = createServer(async (req, res) => {
     const message = String(body?.message ?? "");
     if (!message) return send(res, 400, { error: "message required" });
     try {
-      if (agent === "codex") streamCodex(res, { message, project: PROJECT, repoRoot: REPO_ROOT, threadId: body?.sessionId });
-      else streamClaude(res, { message, project: PROJECT, repoRoot: REPO_ROOT, sessionId: body?.sessionId });
+      const context = body?.context;
+      if (agent === "codex") streamCodex(res, { message, project: PROJECT, repoRoot: REPO_ROOT, threadId: body?.sessionId, context });
+      else streamClaude(res, { message, project: PROJECT, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context });
     } catch (e) {
       send(res, 500, { error: e instanceof Error ? e.message : String(e) });
     }

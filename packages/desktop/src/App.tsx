@@ -726,7 +726,10 @@ export default function App() {
       </div>
 
       {/* ── Agent panel (Claude Code / Codex) ─ */}
-      <AgentPanel onGridChange={refreshAll} />
+      <AgentPanel
+        onGridChange={refreshAll}
+        activeTable={tableData ? { name: tableData.name, columns: tableData.columns.map((c) => c.name) } : null}
+      />
 
       {/* ── Modals ──────────────────────── */}
       {showAddCol && tableData && (
