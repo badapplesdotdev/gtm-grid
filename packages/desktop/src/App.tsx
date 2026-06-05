@@ -362,27 +362,31 @@ export default function App() {
   // ── Boot ───────────────────────────────────
 
   useEffect(() => {
-    Promise.all([api.health(), api.tables(), api.functions(), api.extensions()])
-      .then(([h, t, f, e]) => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    // The sidecar has a cold-start delay when the app launches, so poll until
+    // it's reachable instead of giving up on the first failed check.
+    const boot = async () => {
+      try {
+        const [h, t, f, e] = await Promise.all([api.health(), api.tables(), api.functions(), api.extensions()]);
+        if (cancelled) return;
         setHealthStatus("connected");
         setProjectName(h.project ?? "gtmgrid");
         setTables(t);
         setConnectors(f);
         setExtensions(e);
-        if (t.length > 0) setSelectedTableId(t[0].id);
-      })
-      .catch(() => {
+        setSelectedTableId((cur) => cur ?? (t.length > 0 ? t[0].id : null));
+      } catch {
+        if (cancelled) return;
         setHealthStatus("offline");
-        // still try to load tables without health
-        Promise.all([api.tables(), api.functions(), api.extensions()])
-          .then(([t, f, e]) => {
-            setTables(t);
-            setConnectors(f);
-            setExtensions(e);
-            if (t.length > 0) setSelectedTableId(t[0].id);
-          })
-          .catch(() => {});
-      });
+        timer = setTimeout(boot, 1500); // retry — server is probably still booting
+      }
+    };
+    boot();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, []);
 
   // ── Load selected table ────────────────────

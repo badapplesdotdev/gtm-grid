@@ -37,6 +37,16 @@ fn make_executable(path: &PathBuf) {
 #[cfg(not(unix))]
 fn make_executable(_path: &PathBuf) {}
 
+/// Resolve the user's real PATH from their login+interactive shell, so the
+/// sidecar (and the agent CLIs it spawns) can find nvm/homebrew-installed
+/// `claude` / `codex`. GUI apps otherwise launch with a minimal PATH.
+fn login_path() -> Option<String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let out = Command::new(&shell).args(["-lic", "echo \"$PATH\""]).output().ok()?;
+    let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if p.is_empty() { None } else { Some(p) }
+}
+
 fn spawn_sidecar(app: &tauri::App) -> Option<Child> {
     let dir = sidecar_dir(app)?;
     let node = dir.join("node");
@@ -53,8 +63,9 @@ fn spawn_sidecar(app: &tauri::App) -> Option<Child> {
     // panel can find the user's `claude` / `codex` CLIs.
     let home = std::env::var("HOME").unwrap_or_default();
     let base_path = std::env::var("PATH").unwrap_or_default();
+    let login = login_path().unwrap_or_default();
     let path = format!(
-        "/opt/homebrew/bin:/usr/local/bin:{home}/.local/bin:{home}/.npm-global/bin:{base_path}"
+        "{login}:/opt/homebrew/bin:/usr/local/bin:{home}/.local/bin:{home}/.npm-global/bin:{base_path}"
     );
 
     Command::new(&node)
