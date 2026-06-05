@@ -1301,3 +1301,78 @@ html, body, #root {
 }
 .agent-context-chip strong { color: var(--accent); font-weight: 600; }
 .agent-context-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+
+/* ─── Cell details drawer ─────────────────────────────────── */
+.cd-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.04); z-index: 60;
+}
+.cell-details {
+  position: fixed; top: 0; right: 0; bottom: 0; width: 380px;
+  background: var(--surface); border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-lg); z-index: 61;
+  display: flex; flex-direction: column;
+  animation: cdSlide .16s ease;
+}
+@keyframes cdSlide { from { transform: translateX(16px); opacity: .6; } to { transform: none; opacity: 1; } }
+.cd-header {
+  height: var(--toolbar-h); display: flex; align-items: center; justify-content: space-between;
+  padding: 0 14px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.cd-title { font: 600 13.5px var(--font-sans); color: var(--text); }
+.cd-close { border: none; background: transparent; color: var(--text-3); cursor: pointer; font-size: 13px; padding: 4px 6px; border-radius: var(--r-xs); }
+.cd-close:hover { background: var(--bg); color: var(--text); }
+.cd-source { padding: 10px 14px 0; font: 400 11.5px var(--font-sans); color: var(--text-3); }
+.cd-source strong { color: var(--accent); }
+.cd-search { padding: 8px 14px; }
+.cd-search input {
+  width: 100%; height: 32px; padding: 0 10px; border: 1px solid var(--border);
+  border-radius: var(--r-sm); background: var(--bg); font: 12px var(--font-sans); color: var(--text); outline: none;
+}
+.cd-search input:focus { border-color: var(--accent); background: var(--surface); }
+.cd-fields { flex: 1; overflow-y: auto; padding: 4px 10px 16px; display: flex; flex-direction: column; gap: 4px; }
+.cd-field {
+  border: 1px solid var(--border); border-radius: var(--r-sm); padding: 7px 9px;
+  display: flex; flex-direction: column; gap: 6px; background: var(--surface);
+}
+.cd-field:hover { border-color: var(--border-2); }
+.cd-field-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cd-type {
+  width: 18px; height: 18px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  font: 600 10px var(--font-mono); border-radius: var(--r-xs); background: var(--bg); color: var(--text-2);
+}
+.cd-type-number { color: #2563eb; } .cd-type-boolean { color: #16a34a; } .cd-type-array, .cd-type-object { color: var(--accent); }
+.cd-name { font: 600 12px var(--font-sans); color: var(--text); flex-shrink: 0; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cd-value { font: 11.5px var(--font-mono); color: var(--text-2); margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cd-actions { display: flex; gap: 6px; align-items: center; }
+.cd-add {
+  height: 26px; padding: 0 10px; border: none; border-radius: var(--r-sm);
+  background: var(--accent); color: #fff; font: 600 11.5px var(--font-sans); cursor: pointer;
+}
+.cd-add:disabled { opacity: .55; cursor: default; }
+.cd-map-wrap { position: relative; }
+.cd-map {
+  height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--text-2); font: 500 11.5px var(--font-sans); cursor: pointer;
+}
+.cd-map:hover { background: var(--bg); }
+.cd-map-menu {
+  position: absolute; top: 30px; left: 0; min-width: 150px; max-height: 220px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); box-shadow: var(--shadow-md); z-index: 5; padding: 4px;
+}
+.cd-map-menu button {
+  display: block; width: 100%; text-align: left; padding: 6px 8px; border: none; background: transparent;
+  font: 12px var(--font-sans); color: var(--text); border-radius: var(--r-xs); cursor: pointer;
+}
+.cd-map-menu button:hover { background: var(--accent-bg); color: var(--accent); }
+.cd-map-empty { padding: 6px 8px; font: 11.5px var(--font-sans); color: var(--text-3); }
+
+/* clickable JSON cell */
+.cell-json-clickable { cursor: pointer; }
+.cell-json-clickable:hover { background: var(--accent-bg); border-color: var(--accent); }
+
+/* column resize handle */
+.grid-th { position: relative; }
+.col-resize {
+  position: absolute; top: 0; right: -3px; width: 7px; height: 100%; cursor: col-resize; z-index: 2;
+}
+.col-resize:hover { background: linear-gradient(90deg, transparent 40%, var(--accent) 40%, var(--accent) 60%, transparent 60%); }

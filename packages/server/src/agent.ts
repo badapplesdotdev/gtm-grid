@@ -28,14 +28,22 @@ export interface AgentContext {
   columns?: string[];
 }
 
-/** Context preamble so the agent operates on the table the user is viewing. */
-function contextPreamble(ctx?: AgentContext): string | null {
-  if (!ctx?.tableName) return null;
+/** Operating context for the agent: how gtm grid works + the active table. */
+function contextPreamble(ctx?: AgentContext): string {
+  const base =
+    `You are operating gtm grid — a spreadsheet where every column is a function. ` +
+    `When an enrichment/function column returns a large JSON object, do NOT leave it as one raw blob: ` +
+    `surface the useful fields as their own columns by adding code columns that extract each field ` +
+    `(e.g. add_column with code function(inputs){ var v=JSON.parse(inputs.src); return v.data && v.data.email; } ` +
+    `and params { src: "{{Source Column Name}}" }), then run them. ` +
+    `If it's not obvious which fields matter, briefly ASK the user which fields they want shown before creating columns. ` +
+    `Prefer a few clean, human-readable columns over dumping everything.`;
+  if (!ctx?.tableName) return base;
   const cols = ctx.columns?.length ? ` Its columns are: ${ctx.columns.join(", ")}.` : "";
   return (
-    `The user is currently viewing the gtmgrid table "${ctx.tableName}".${cols} ` +
-    `When they ask to add/update/enrich rows or columns, or run something, and do NOT name a different table, ` +
-    `operate on "${ctx.tableName}" by default. Call get_table on it first if you need its current contents.`
+    base +
+    ` The user is currently viewing the table "${ctx.tableName}".${cols} ` +
+    `When they ask to add/update/enrich/run something and do NOT name a different table, operate on "${ctx.tableName}" by default.`
   );
 }
 

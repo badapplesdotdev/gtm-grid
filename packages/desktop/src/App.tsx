@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo } from "./api";
 import AgentPanel from "./AgentPanel";
 import { LogoMark } from "./Logo";
+import CellDetails, { extractCode } from "./CellDetails";
 import "./styles.css";
 
 // ─── Icons (inline SVG, no deps) ─────────────────────────
@@ -71,10 +72,11 @@ function isObjectOrArray(val: unknown): boolean {
 
 // ─── Cell renderer ───────────────────────────────────────
 
-function CellContent({ cell, col, onEdit }: {
+function CellContent({ cell, col, onEdit, onOpenDetails }: {
   cell: Cell | undefined;
   col: Column;
   onEdit: (value: string) => void;
+  onOpenDetails?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -140,7 +142,11 @@ function CellContent({ cell, col, onEdit }: {
   if (isObjectOrArray(cell.value)) {
     return (
       <div className="cell-wrap">
-        <span className="cell-json-chip" title={JSON.stringify(cell.value, null, 2)}>
+        <span
+          className="cell-json-chip cell-json-clickable"
+          title="Click to view fields"
+          onClick={onOpenDetails}
+        >
           {truncateJSON(cell.value)}
         </span>
       </div>
@@ -360,6 +366,27 @@ export default function App() {
   const [runProgress, setRunProgress] = useState<{ current: number; total: number } | null>(null);
   const [runningColId, setRunningColId] = useState<string | null>(null);
 
+  // Cell details drawer + column widths (resize)
+  const [detail, setDetail] = useState<{ columnName: string; value: unknown } | null>(null);
+  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("gtmgrid:colWidths") || "{}");
+    } catch {
+      return {};
+    }
+  });
+  const setColWidth = useCallback((colId: string, w: number) => {
+    setColWidths((prev) => {
+      const next = { ...prev, [colId]: Math.max(80, Math.round(w)) };
+      try {
+        localStorage.setItem("gtmgrid:colWidths", JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
+
   // ── Boot ───────────────────────────────────
 
   useEffect(() => {
@@ -453,6 +480,55 @@ export default function App() {
     if (!tableData) return;
     await api.addRow(tableData.id);
     await loadTable(tableData.id);
+  };
+
+  // ── Promote a JSON field to a column (from the Cell details drawer) ──
+
+  const uniqueColName = (base: string): string => {
+    const existing = new Set((tableData?.columns ?? []).map((c) => c.name.toLowerCase()));
+    if (!existing.has(base.toLowerCase())) return base;
+    let n = 2;
+    while (existing.has(`${base} ${n}`.toLowerCase())) n++;
+    return `${base} ${n}`;
+  };
+
+  const promoteCreate = async (path: string[], label: string) => {
+    if (!detail || !selectedTableId) return;
+    const res = await api.addColumn(selectedTableId, {
+      name: uniqueColName(label),
+      code: extractCode(path),
+      params: { src: `{{${detail.columnName}}}` },
+      type: "text",
+    });
+    await api.runColumn(res.id).catch(() => {});
+    await loadTable(selectedTableId);
+  };
+
+  const promoteMap = async (path: string[], targetId: string) => {
+    if (!detail || !selectedTableId) return;
+    await api.updateColumn(targetId, {
+      kind: "function",
+      provider: null,
+      method: null,
+      code: extractCode(path),
+      params: { src: `{{${detail.columnName}}}` },
+    });
+    await api.runColumn(targetId).catch(() => {});
+    await loadTable(selectedTableId);
+  };
+
+  // ── Column resize (drag the header edge) ──
+
+  const startResize = (colId: string, startX: number, startW: number) => {
+    const onMove = (e: MouseEvent) => setColWidth(colId, startW + (e.clientX - startX));
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+    };
+    document.body.style.cursor = "col-resize";
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
   };
 
   // ── Set cell ───────────────────────────────
@@ -663,7 +739,7 @@ export default function App() {
                   {/* Row-number gutter */}
                   <th className="grid-th row-num-th col-row-num" />
                   {tableData.columns.map(col => (
-                    <th key={col.id} className="grid-th" style={{ width: "var(--col-w)", minWidth: "var(--col-w-sm)" }}>
+                    <th key={col.id} className="grid-th" style={{ width: colWidths[col.id] ?? 180, minWidth: 80 }}>
                       <div className="th-inner">
                         <span className="th-name">{col.name}</span>
                         {col.kind === "function" && col.fn && (
@@ -682,6 +758,14 @@ export default function App() {
                           </button>
                         )}
                       </div>
+                      <div
+                        className="col-resize"
+                        title="Drag to resize"
+                        onMouseDown={e => {
+                          e.preventDefault();
+                          startResize(col.id, e.clientX, colWidths[col.id] ?? 180);
+                        }}
+                      />
                     </th>
                   ))}
                   {/* Add column */}
@@ -714,6 +798,7 @@ export default function App() {
                             cell={cell}
                             col={col}
                             onEdit={v => setCell(row.id, col.id, v)}
+                            onOpenDetails={() => setDetail({ columnName: col.name, value: cell?.value })}
                           />
                         </td>
                       );
@@ -732,6 +817,17 @@ export default function App() {
         onGridChange={refreshAll}
         activeTable={tableData ? { name: tableData.name, columns: tableData.columns.map((c) => c.name) } : null}
       />
+
+      {/* ── Cell details drawer ─ */}
+      {detail && (
+        <CellDetails
+          source={detail}
+          columns={(tableData?.columns ?? []).map((c) => ({ id: c.id, name: c.name }))}
+          onClose={() => setDetail(null)}
+          onCreate={promoteCreate}
+          onMapTo={promoteMap}
+        />
+      )}
 
       {/* ── Modals ──────────────────────── */}
       {showAddCol && tableData && (

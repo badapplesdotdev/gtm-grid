@@ -189,6 +189,37 @@ export class Db {
     return r ? this.hydrateColumn(r) : undefined;
   }
 
+  updateColumn(
+    id: string,
+    patch: Partial<{
+      name: string;
+      type: ColumnType;
+      kind: ColumnKind;
+      provider: string | null;
+      method: string | null;
+      code: string | null;
+      params: Record<string, unknown>;
+    }>,
+  ): Column | undefined {
+    const existing = this.getColumn(id);
+    if (!existing) return undefined;
+    const next = {
+      name: patch.name ?? existing.name,
+      type: patch.type ?? existing.type,
+      kind: patch.kind ?? existing.kind,
+      provider: patch.provider !== undefined ? patch.provider : existing.provider,
+      method: patch.method !== undefined ? patch.method : existing.method,
+      code: patch.code !== undefined ? patch.code : existing.code,
+      params: patch.params ?? existing.params,
+    };
+    this.raw
+      .prepare(
+        `UPDATE columns SET name=@name, type=@type, kind=@kind, provider=@provider, method=@method, code=@code, params=@params WHERE id=@id`,
+      )
+      .run({ id, ...next, params: JSON.stringify(next.params) });
+    return this.getColumn(id);
+  }
+
   private hydrateColumn(r: ColumnRow): Column {
     return {
       ...r,

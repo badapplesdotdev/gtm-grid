@@ -85,6 +85,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ force }),
     }),
+  updateColumn: (
+    columnId: string,
+    patch: { name?: string; type?: string; kind?: string; provider?: string | null; method?: string | null; code?: string | null; params?: Record<string, unknown> },
+  ) => http<{ ok: boolean; tableId?: string; id?: string }>(`/api/columns/${columnId}/update`, { method: "POST", body: JSON.stringify(patch) }),
   connect: (extId: string, secrets: Record<string, string>) =>
     http<{ ok: boolean }>(`/api/extensions/${extId}/connect`, { method: "POST", body: JSON.stringify({ secrets }) }),
   agents: () =>

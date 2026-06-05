@@ -150,6 +150,11 @@ route("POST", "/api/columns/:id/run", async (p, body) => {
   return res;
 });
 
+route("POST", "/api/columns/:id/update", (p, body) => {
+  const col = db.updateColumn(p.id, body ?? {});
+  return col ? { ok: true, tableId: col.table_id, id: col.id } : { error: "not found" };
+});
+
 route("POST", "/api/extensions/:id/connect", (p, body) => {
   db.saveCredential({ extensionId: p.id, scope: "local", name: "default", secrets: body?.secrets ?? {} });
   return { ok: true };
