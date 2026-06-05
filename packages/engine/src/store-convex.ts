@@ -1,0 +1,358 @@
+/**
+ * ConvexGridStore — a {@link GridStoreShape} backed by a Convex deployment, so
+ * the LOCAL engine can drive a cloud/team project: it reads a table's columns,
+ * rows, and cells from Convex and writes cell status/results back via the T4
+ * mutations (`cells.setCellStatus` / `cells.setCell`) during a run. Cell status
+ * (`running` → `done`/`error`) streams live to every workspace member through
+ * Convex reactivity.
+ *
+ * DECOUPLING (the load-bearing constraint): this module — and therefore the
+ * engine's `tsc -b` build — must NOT import `convex/_generated` or any generated
+ * deployment code, so the engine package never depends on codegen that only
+ * exists after `npx convex dev`. We achieve that by injecting a small typed
+ * client interface ({@link ConvexClientLike}) plus opaque function references
+ * ({@link ConvexFunctionRefs}). The real `ConvexHttpClient` from "convex/browser"
+ * structurally satisfies `ConvexClientLike`, and `api.tables.getTable` /
+ * `api.cells.setCell` / `api.cells.setCellStatus` satisfy the refs — the caller
+ * (desktop/server wiring lane) passes them in; this file imports neither.
+ *
+ * SCOPE: a run targets a single table (`Engine.runColumn` resolves rows from
+ * `col.table_id`). So a `ConvexGridStore` is constructed for ONE Convex table:
+ * the granular reads the engine makes (`getColumn`/`getCell`/`rowCells` — all
+ * keyed by column/row id with no table id) are served by fetching the table's
+ * full grid via `getTable(tableId)` and indexing it in memory. This reuses the
+ * one existing T4 reactive query rather than adding new Convex functions.
+ *
+ * Follows the canonical Effect service shape (docs/effect-conventions.md):
+ * typed errors via {@link GridStoreError}, methods returning `Effect.Effect`,
+ * and `Layer`s for the {@link GridStore} / {@link CredentialStore} tags. Status
+ * and credential-scope mapping reuse {@link CloudSchemaMapping} (cloud-schema.ts)
+ * so engine→cloud literal drift fails loudly with a typed error.
+ */
+
+import { Effect, Layer } from "effect";
+import {
+  CloudSchemaMapping,
+  type CloudCredentialScope,
+} from "./cloud-schema.js";
+import {
+  CredentialStore,
+  GridStore,
+  GridStoreError,
+  type CellPatch,
+  type GridStoreShape,
+} from "./store.js";
+import type {
+  Cell,
+  CellStatus,
+  Column,
+  Credential,
+  Row,
+} from "./types.js";
+
+/**
+ * The minimal Convex client surface ConvexGridStore needs. Structurally
+ * satisfied by `ConvexHttpClient` (from "convex/browser") and the reactive
+ * `ConvexReactClient`, so the caller injects the real client without this file
+ * importing any Convex code. `ref` is an opaque function reference (e.g.
+ * `api.tables.getTable`); typed as `unknown` precisely so the engine build never
+ * imports the generated `api`.
+ */
+export interface ConvexClientLike {
+  query(ref: unknown, args: Record<string, unknown>): Promise<unknown>;
+  mutation(ref: unknown, args: Record<string, unknown>): Promise<unknown>;
+}
+
+/**
+ * Opaque references to the T4 Convex functions this store calls. The caller
+ * passes `api.tables.getTable`, `api.cells.setCell`, `api.cells.setCellStatus`,
+ * and optionally a credential-read query. They are `unknown` to the engine —
+ * only the injected {@link ConvexClientLike} interprets them — which is what
+ * keeps the engine decoupled from `convex/_generated`.
+ */
+export interface ConvexFunctionRefs {
+  /** `api.tables.getTable` — returns `{ table, columns, rows, cells }`. */
+  readonly getTable: unknown;
+  /** `api.cells.setCell` — upsert value/status/error for a cell. */
+  readonly setCell: unknown;
+  /** `api.cells.setCellStatus` — status-only upsert (run lifecycle). */
+  readonly setCellStatus: unknown;
+  /**
+   * Optional query returning a workspace credential for a connector provider.
+   * T7 owns the decrypt-for-run path; until wired, credential lookups resolve to
+   * `undefined` (credentials are resolved through a separate store). When
+   * provided, it is called with `{ provider }` and expected to return a
+   * {@link ConvexCredentialDoc} (or null).
+   */
+  readonly getCredential?: unknown;
+}
+
+/** Config to build a table-scoped ConvexGridStore. */
+export interface ConvexGridStoreConfig {
+  readonly client: ConvexClientLike;
+  readonly refs: ConvexFunctionRefs;
+  /** The Convex `tables._id` (a string) this store reads/writes within. */
+  readonly tableId: string;
+}
+
+/** The shape `cells.setCell` / `cells.setCellStatus` are addressed by. */
+interface ConvexCellArgs {
+  readonly rowId: string;
+  readonly columnId: string;
+}
+
+/** A Convex column doc as returned by `getTable` (camelCase, string ids). */
+interface ConvexColumnDoc {
+  readonly _id: string;
+  readonly tableId: string;
+  readonly name: string;
+  readonly type: Column["type"];
+  readonly kind: Column["kind"];
+  readonly provider: string | null;
+  readonly method: string | null;
+  readonly code: string | null;
+  readonly params: Record<string, unknown>;
+  readonly position: number;
+  readonly createdAt: number;
+}
+
+/** A Convex row doc as returned by `getTable`. */
+interface ConvexRowDoc {
+  readonly _id: string;
+  readonly tableId: string;
+  readonly position: number;
+  readonly createdAt: number;
+}
+
+/** A Convex cell doc as returned by `getTable`. */
+interface ConvexCellDoc {
+  readonly rowId: string;
+  readonly columnId: string;
+  readonly value: unknown;
+  readonly status: CellStatus;
+  readonly error: string | null;
+  readonly updatedAt: number | null;
+}
+
+/** The payload shape of `tables.getTable`. */
+interface ConvexGetTableResult {
+  readonly columns: readonly ConvexColumnDoc[];
+  readonly rows: readonly ConvexRowDoc[];
+  readonly cells: readonly ConvexCellDoc[];
+}
+
+/** A Convex credential doc as returned by the (T7) credential query. */
+export interface ConvexCredentialDoc {
+  readonly _id: string;
+  readonly extensionId: string;
+  readonly scope: CloudCredentialScope;
+  readonly name: string;
+  /** Decrypted secret map — only the trusted run path ever sees plaintext. */
+  readonly secrets: Record<string, string>;
+  readonly createdAt: number;
+}
+
+/** Map a Convex column doc onto the engine {@link Column} (snake_case ids). */
+const toColumn = (c: ConvexColumnDoc): Column => ({
+  id: c._id,
+  table_id: c.tableId,
+  name: c.name,
+  type: c.type,
+  kind: c.kind,
+  provider: c.provider,
+  method: c.method,
+  code: c.code,
+  params: c.params,
+  position: c.position,
+  created_at: c.createdAt,
+});
+
+/** Map a Convex row doc onto the engine {@link Row}. */
+const toRow = (r: ConvexRowDoc): Row => ({
+  id: r._id,
+  table_id: r.tableId,
+  position: r.position,
+  created_at: r.createdAt,
+});
+
+/** Map a Convex cell doc onto the engine {@link Cell}. */
+const toCell = (c: ConvexCellDoc): Cell => ({
+  row_id: c.rowId,
+  column_id: c.columnId,
+  value: c.value,
+  status: c.status,
+  error: c.error,
+  updated_at: c.updatedAt,
+});
+
+/**
+ * Map a Convex credential doc onto the engine {@link Credential}. The cloud
+ * scope literal (`workspace`|`personal`) maps back onto the engine scope
+ * (`team`|`personal`) — the inverse of `CloudSchemaMapping.credentialScopeForCloud`.
+ */
+const toCredential = (c: ConvexCredentialDoc): Credential => ({
+  id: c._id,
+  extension_id: c.extensionId,
+  scope: c.scope === "workspace" ? "team" : "personal",
+  name: c.name,
+  secrets: c.secrets,
+  created_at: c.createdAt,
+});
+
+/** Wrap a Convex client promise, mapping any rejection to a typed error. */
+const fromClient = <A>(
+  operation: string,
+  thunk: () => Promise<A>,
+): Effect.Effect<A, GridStoreError> =>
+  Effect.tryPromise({
+    try: thunk,
+    catch: (cause) =>
+      new GridStoreError({
+        message: cause instanceof Error ? cause.message : String(cause),
+        operation,
+        cause,
+      }),
+  });
+
+/**
+ * Build a {@link GridStoreShape} backed by a Convex client, scoped to one
+ * table. Reads fetch the table's full grid via `getTable(tableId)` and index it;
+ * writes call the T4 `cells.setCell` / `cells.setCellStatus` mutations. The
+ * effect resolves {@link CloudSchemaMapping} so cell statuses are validated
+ * against the cloud literal union before they are written.
+ */
+export const convexGridStoreShape = (
+  config: ConvexGridStoreConfig,
+): Effect.Effect<GridStoreShape, never, CloudSchemaMapping> =>
+  Effect.gen(function* () {
+    const mapping = yield* CloudSchemaMapping;
+    const { client, refs, tableId } = config;
+
+    /** Fetch + map the table grid once (columns, rows, cells). */
+    const fetchGrid = (
+      operation: string,
+    ): Effect.Effect<ConvexGetTableResult, GridStoreError> =>
+      fromClient(operation, () =>
+        client.query(refs.getTable, { tableId }),
+      ).pipe(Effect.map((r) => r as ConvexGetTableResult));
+
+    /**
+     * Validate the patch's status against the cloud literal union (reusing
+     * CloudSchemaMapping), then call the matching mutation. A status-only patch
+     * uses `setCellStatus`; any patch carrying a value uses `setCell`.
+     */
+    const writeCell = (
+      rowId: string,
+      columnId: string,
+      patch: CellPatch,
+    ): Effect.Effect<void, GridStoreError> =>
+      Effect.gen(function* () {
+        const cellArgs: ConvexCellArgs = { rowId, columnId };
+        const status =
+          patch.status === undefined
+            ? undefined
+            : yield* mapping
+                .cellStatusForCloud(patch.status)
+                .pipe(
+                  Effect.mapError(
+                    (e) =>
+                      new GridStoreError({
+                        message: e.message,
+                        operation: "setCell",
+                        cause: e,
+                      }),
+                  ),
+                );
+
+        const hasValue = "value" in patch;
+        // Status-only updates take the lighter setCellStatus path (the run
+        // lifecycle's running→done/error), which preserves value via COALESCE.
+        if (!hasValue && status !== undefined) {
+          yield* fromClient("setCell", () =>
+            client.mutation(refs.setCellStatus, {
+              ...cellArgs,
+              status,
+              ...(patch.error !== undefined ? { error: patch.error } : {}),
+            }),
+          );
+          return;
+        }
+        yield* fromClient("setCell", () =>
+          client.mutation(refs.setCell, {
+            ...cellArgs,
+            ...(hasValue ? { value: patch.value } : {}),
+            ...(status !== undefined ? { status } : {}),
+            ...(patch.error !== undefined ? { error: patch.error } : {}),
+          }),
+        );
+      });
+
+    return {
+      getColumn: (columnId) =>
+        fetchGrid("getColumn").pipe(
+          Effect.map((grid) => {
+            const found = grid.columns.find((c) => c._id === columnId);
+            return found ? toColumn(found) : undefined;
+          }),
+        ),
+      listColumns: (_tableId) =>
+        fetchGrid("listColumns").pipe(
+          Effect.map((grid) => grid.columns.map(toColumn)),
+        ),
+      listRows: (_tableId) =>
+        fetchGrid("listRows").pipe(Effect.map((grid) => grid.rows.map(toRow))),
+      rowCells: (rowId) =>
+        fetchGrid("rowCells").pipe(
+          Effect.map((grid) => {
+            const out = new Map<string, Cell>();
+            for (const cell of grid.cells) {
+              if (cell.rowId === rowId) out.set(cell.columnId, toCell(cell));
+            }
+            return out;
+          }),
+        ),
+      getCell: (rowId, columnId) =>
+        fetchGrid("getCell").pipe(
+          Effect.map((grid) => {
+            const found = grid.cells.find(
+              (c) => c.rowId === rowId && c.columnId === columnId,
+            );
+            return found ? toCell(found) : undefined;
+          }),
+        ),
+      setCell: (rowId, columnId, patch) => writeCell(rowId, columnId, patch),
+      getCredential: (provider) => {
+        const ref = refs.getCredential;
+        if (ref === undefined) return Effect.succeed(undefined);
+        return fromClient("getCredential", () =>
+          client.query(ref, { provider }),
+        ).pipe(
+          Effect.map((doc) =>
+            doc == null
+              ? undefined
+              : toCredential(doc as ConvexCredentialDoc),
+          ),
+        );
+      },
+    } satisfies GridStoreShape;
+  });
+
+/**
+ * A {@link GridStore} `Layer` backed by a Convex client for one cloud table.
+ * Requires {@link CloudSchemaMapping} (provided via its `.Default` Layer); the
+ * caller composes `Layer.provide(CloudSchemaMapping.Default)`.
+ */
+export const convexGridStore = (
+  config: ConvexGridStoreConfig,
+): Layer.Layer<GridStore, never, CloudSchemaMapping> =>
+  Layer.effect(GridStore, convexGridStoreShape(config));
+
+/**
+ * A {@link CredentialStore} `Layer` backed by a Convex client. Used when a
+ * cloud run resolves connector secrets from the workspace's shared credentials
+ * (via the injected `getCredential` ref) rather than the local key store.
+ */
+export const convexCredentialStore = (
+  config: ConvexGridStoreConfig,
+): Layer.Layer<CredentialStore, never, CloudSchemaMapping> =>
+  Layer.effect(CredentialStore, convexGridStoreShape(config));
