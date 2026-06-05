@@ -4,6 +4,66 @@
 
 import { useState, useEffect, useCallback, ReactNode } from "react";
 import { api, ExtensionDetail, ExtensionInfo, AiProviderInfo, CredentialScope } from "./api";
+import { aiProviderCredId } from "./cloud/credentials";
+
+/**
+ * The scope a credential is saved under in the panels. Extends the local-only
+ * {@link CredentialScope} (`personal`/`team`/`local`, machine-encrypted via the
+ * sidecar) with `workspace` — a SHARED, server-encrypted key for cloud projects
+ * (saved via Convex `saveCredential`, T7). `workspace` is offered only when a
+ * workspace is active (signed in); the local scopes are always available and
+ * keep their existing behaviour.
+ */
+export type PanelScope = CredentialScope | "workspace";
+
+/**
+ * Workspace (cloud, shared) credential context for a panel. When present a
+ * "Workspace" scope tab is shown; saving under it calls {@link onSaveWorkspace}
+ * (the Convex encrypted-save path) instead of the local sidecar. Absent for a
+ * signed-out / local-only user, in which case panels behave exactly as before.
+ */
+export interface WorkspaceCredContext {
+  /** True when a shared workspace key already exists for this connector. */
+  readonly connected: boolean;
+  /**
+   * Save the plaintext key as a SHARED workspace credential (encrypted
+   * server-side). Throws on failure so the form can surface the message.
+   */
+  readonly onSaveWorkspace: (apiKey: string) => Promise<void>;
+}
+
+/**
+ * App-level source for shared workspace credentials, threaded into the panels.
+ * Present only when a workspace is active (signed in); each panel narrows it to a
+ * per-connector {@link WorkspaceCredContext} via {@link workspaceCtxFor}.
+ *
+ * `connectedExtensionIds` is the set of credential keys (see
+ * `aiProviderCredId` in ./cloud/credentials.ts for the AI namespacing) that
+ * already have a shared workspace key, derived from the Convex `listCredentials`
+ * query so the panel shows the connected indicator. `save` calls the Convex
+ * encrypted-save path.
+ */
+export interface WorkspaceCredSource {
+  readonly connectedExtensionIds: ReadonlySet<string>;
+  readonly save: (
+    extensionId: string,
+    name: string,
+    apiKey: string,
+  ) => Promise<void>;
+}
+
+/** Narrow an app-level {@link WorkspaceCredSource} to one connector's context. */
+function workspaceCtxFor(
+  source: WorkspaceCredSource | undefined,
+  extensionId: string,
+  name: string,
+): WorkspaceCredContext | undefined {
+  if (source === undefined) return undefined;
+  return {
+    connected: source.connectedExtensionIds.has(extensionId),
+    onSaveWorkspace: (apiKey) => source.save(extensionId, name, apiKey),
+  };
+}
 
 // ─── tiny inline icons ───────────────────────────────────
 
@@ -21,6 +81,11 @@ const I = {
   Home: () => (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" /><path d="M9 22V12h6v10" />
+    </svg>
+  ),
+  Users: () => (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" />
     </svg>
   ),
   Plus: () => (
@@ -50,6 +115,16 @@ const SCOPES: { id: CredentialScope; label: string; icon: ReactNode }[] = [
   { id: "team", label: "Team", icon: <I.Globe /> },
   { id: "local", label: "Local", icon: <I.Home /> },
 ];
+
+/**
+ * The shared (cloud) workspace scope tab, prepended to {@link SCOPES} only when a
+ * workspace is active. Saving under it routes to Convex `saveCredential`.
+ */
+const WORKSPACE_SCOPE: { id: "workspace"; label: string; icon: ReactNode } = {
+  id: "workspace",
+  label: "Workspace",
+  icon: <I.Users />,
+};
 
 function initials(name: string): string {
   return name.replace(/[^A-Za-z0-9]/g, "").slice(0, 2).toUpperCase() || "··";
@@ -82,10 +157,22 @@ function PanelHeader({ logo, title, description, meta }: { logo: string | null; 
   );
 }
 
-function ScopeTabs({ scope, onScope }: { scope: CredentialScope; onScope: (s: CredentialScope) => void }) {
+function ScopeTabs({
+  scope,
+  onScope,
+  showWorkspace,
+}: {
+  scope: PanelScope;
+  onScope: (s: PanelScope) => void;
+  /** When true, prepend the shared "Workspace" (cloud) scope tab. */
+  showWorkspace: boolean;
+}) {
+  const tabs: { id: PanelScope; label: string; icon: ReactNode }[] = showWorkspace
+    ? [WORKSPACE_SCOPE, ...SCOPES]
+    : SCOPES;
   return (
     <div className="scope-tabs">
-      {SCOPES.map((s) => (
+      {tabs.map((s) => (
         <button key={s.id} className={`scope-tab${scope === s.id ? " active" : ""}`} onClick={() => onScope(s.id)}>
           {s.icon}
           {s.label}
@@ -116,18 +203,31 @@ function ConnectionsSection({
   name,
   connectedScopes,
   onSave,
+  workspace,
 }: {
   name: string;
   connectedScopes: CredentialScope[];
   onSave: (apiKey: string, scope: CredentialScope) => Promise<void>;
+  /**
+   * Cloud context. When present a shared "Workspace" scope tab is shown and
+   * saving under it routes to the Convex encrypted-save path. Absent for a
+   * signed-out / local-only user (panels then behave exactly as before).
+   */
+  workspace?: WorkspaceCredContext;
 }) {
-  const [scope, setScope] = useState<CredentialScope>("personal");
+  const showWorkspace = workspace !== undefined;
+  // Default to the shared workspace tab when available (cloud sharing is the
+  // headline of T11); otherwise the existing local default.
+  const [scope, setScope] = useState<PanelScope>(showWorkspace ? "workspace" : "personal");
   const [adding, setAdding] = useState(false);
   const [keyDraft, setKeyDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
-  const connectedHere = connectedScopes.includes(scope);
+  const isWorkspace = scope === "workspace";
+  const connectedHere = isWorkspace
+    ? (workspace?.connected ?? false)
+    : connectedScopes.includes(scope);
 
   const reset = () => { setAdding(false); setKeyDraft(""); setErr(""); };
 
@@ -136,7 +236,12 @@ function ConnectionsSection({
     setSaving(true);
     setErr("");
     try {
-      await onSave(keyDraft.trim(), scope);
+      if (isWorkspace) {
+        // workspace !== undefined is guaranteed: the tab only shows when set.
+        await workspace!.onSaveWorkspace(keyDraft.trim());
+      } else {
+        await onSave(keyDraft.trim(), scope);
+      }
       reset();
     } catch (e: any) {
       setErr(e?.message ?? "Failed to connect");
@@ -147,7 +252,7 @@ function ConnectionsSection({
 
   return (
     <div className="detail-section">
-      <ScopeTabs scope={scope} onScope={(s) => { setScope(s); reset(); }} />
+      <ScopeTabs scope={scope} showWorkspace={showWorkspace} onScope={(s) => { setScope(s); reset(); }} />
       <div className="conn-label">Connections</div>
 
       <div className={`conn-card${adding ? " editing" : ""}`}>
@@ -176,7 +281,13 @@ function ConnectionsSection({
             <span className="conn-dot" />
             <div className="conn-text">
               <strong>{name} connected</strong>
-              <span>Key stored under <b>{scope}</b> · encrypted on this device.</span>
+              <span>
+                {isWorkspace ? (
+                  <>Shared with the <b>workspace</b> · encrypted server-side.</>
+                ) : (
+                  <>Key stored under <b>{scope}</b> · encrypted on this device.</>
+                )}
+              </span>
             </div>
             <button className="btn btn-outline btn-sm" onClick={() => setAdding(true)}>Replace key</button>
           </div>
@@ -197,7 +308,7 @@ function ConnectionsSection({
 
 // ─── Extension detail ────────────────────────────────────
 
-export function ExtensionPanel({ id, onConnected, onBack }: { id: string; onConnected: () => void; onBack?: () => void }) {
+export function ExtensionPanel({ id, onConnected, onBack, workspaceCreds }: { id: string; onConnected: () => void; onBack?: () => void; workspaceCreds?: WorkspaceCredSource }) {
   const [detail, setDetail] = useState<ExtensionDetail | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -244,7 +355,12 @@ export function ExtensionPanel({ id, onConnected, onBack }: { id: string; onConn
       <div className="detail">
       <PanelHeader logo={detail.logo} title={detail.name} description={description} meta={meta} />
 
-      <ConnectionsSection name={detail.name} connectedScopes={detail.connectedScopes} onSave={onSave} />
+      <ConnectionsSection
+        name={detail.name}
+        connectedScopes={detail.connectedScopes}
+        onSave={onSave}
+        workspace={workspaceCtxFor(workspaceCreds, detail.id, detail.name)}
+      />
 
       {/* Endpoints stay hidden until a key is connected. */}
       <Collapsible title={`Available methods · ${methodCount}`} defaultOpen={detail.connected}>
@@ -371,7 +487,7 @@ export function ExtensionsBrowse({
 
 // ─── AI Provider detail ──────────────────────────────────
 
-export function AiProviderPanel({ provider, onConnected }: { provider: AiProviderInfo; onConnected: () => void }) {
+export function AiProviderPanel({ provider, onConnected, workspaceCreds }: { provider: AiProviderInfo; onConnected: () => void; workspaceCreds?: WorkspaceCredSource }) {
   const meta = `AI Provider  ·  ${provider.models.length} model${provider.models.length !== 1 ? "s" : ""}`;
 
   const onSave = async (apiKey: string, scope: CredentialScope) => {
@@ -383,7 +499,12 @@ export function AiProviderPanel({ provider, onConnected }: { provider: AiProvide
     <div className="detail">
       <PanelHeader logo={provider.logo} title={provider.name} description={provider.description} meta={meta} />
 
-      <ConnectionsSection name={provider.name} connectedScopes={provider.connectedScopes} onSave={onSave} />
+      <ConnectionsSection
+        name={provider.name}
+        connectedScopes={provider.connectedScopes}
+        onSave={onSave}
+        workspace={workspaceCtxFor(workspaceCreds, aiProviderCredId(provider.id), provider.name)}
+      />
 
       <Collapsible title="Where each key is used">
         <p className="conn-hint" style={{ margin: 0 }}>

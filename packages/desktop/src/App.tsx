@@ -9,7 +9,8 @@ import { ProjectSwitcher } from "./ProjectSwitcher";
 import { AccountBar, PlanBadge } from "./cloud/AccountBar";
 import { WorkspaceSettings } from "./cloud/WorkspaceSettings";
 import { CloudGrid } from "./cloud/CloudGrid";
-import { useMe, useActiveWorkspace } from "./cloud/auth";
+import { useMe, useActiveWorkspace, useAuthState } from "./cloud/auth";
+import { useWorkspaceCredentials } from "./cloud/useWorkspaceCredentials";
 import {
   useCloudProjects,
   useCloudTables,
@@ -394,7 +395,14 @@ export default function App() {
   // area renders the live CloudGrid instead of the local sidecar grid. Local
   // state above is left intact so switching back is instant and unchanged.
   const me = useMe();
+  const { isAuthenticated } = useAuthState();
   const { activeWorkspace } = useActiveWorkspace(me ?? null);
+  // Shared (workspace-scoped) credential source for the connector / AI panels.
+  // `undefined` when signed out / local-only, so those panels behave as before.
+  const workspaceCreds = useWorkspaceCredentials(
+    activeWorkspace?._id ?? null,
+    isAuthenticated,
+  );
   const cloudProjects = useCloudProjects(activeWorkspace?._id ?? null);
   const [cloudProject, setCloudProject] = useState<CloudProject | null>(null);
   const [cloudTableId, setCloudTableId] = useState<Id<"tables"> | null>(null);
@@ -1079,11 +1087,12 @@ export default function App() {
             id={view.id}
             onConnected={refreshConnections}
             onBack={() => setView({ kind: "extensions" })}
+            workspaceCreds={workspaceCreds}
           />
         )}
         {!inCloud && view.kind === "ai" && (() => {
           const p = aiProviders.find(x => x.id === view.id);
-          return p ? <AiProviderPanel provider={p} onConnected={refreshConnections} /> : null;
+          return p ? <AiProviderPanel provider={p} onConnected={refreshConnections} workspaceCreds={workspaceCreds} /> : null;
         })()}
 
         {!inCloud && view.kind === "table" && <>
