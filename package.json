@@ -19,7 +19,11 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "convex": "^1.40.0"
+    "@auth/core": "0.37.0",
+    "@convex-dev/auth": "^0.0.87",
+    "@gtmgrid/cloud": "workspace:*",
+    "convex": "^1.40.0",
+    "effect": "^3.21.3"
   },
   "devDependencies": {
     "tsx": "^4.19.2",

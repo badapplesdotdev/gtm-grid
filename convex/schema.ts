@@ -20,6 +20,7 @@
  * before codegen runs.
  */
 
+import { authTables } from "@convex-dev/auth/server";
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
@@ -71,6 +72,16 @@ export const credentialScope = v.union(
 );
 
 export default defineSchema({
+  /**
+   * Convex Auth tables (T3): `users`, `authSessions`, `authAccounts`,
+   * `authRefreshTokens`, `authVerificationCodes`, `authVerifiers`,
+   * `authRateLimits`. Spreading `authTables` registers them so the password
+   * (and scaffolded OAuth) provider can persist users + sessions. The
+   * authenticated user id (`Id<"users">`) is what `members.userId` /
+   * `workspaces.ownerId` reference (stored as a string for index flexibility).
+   */
+  ...authTables,
+
   /** Top-level account unit. Billing and membership scope to a workspace. */
   workspaces: defineTable({
     name: v.string(),
