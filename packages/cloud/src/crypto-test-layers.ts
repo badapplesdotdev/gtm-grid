@@ -18,6 +18,7 @@ import {
   CryptoPrimitives,
   DecryptError,
   EncryptError,
+  IV_BYTES,
   KEY_BYTES,
   MasterKey,
   TAG_BYTES,
@@ -73,10 +74,15 @@ export const realCryptoPrimitivesLayer = (): Layer.Layer<CryptoPrimitives> =>
     decrypt: ({ key, iv, ciphertext, tag, aad }) =>
       Effect.try({
         try: () => {
-          const decipher = createDecipheriv("aes-256-gcm", key, iv);
+          // Mirror convex/model/crypto.ts: validate IV/nonce length BEFORE
+          // node:crypto so a malformed IV fails closed as a typed DecryptError.
+          if (iv.byteLength !== IV_BYTES) {
+            throw new Error("invalid IV length");
+          }
           if (tag.byteLength !== TAG_BYTES) {
             throw new Error("invalid auth tag length");
           }
+          const decipher = createDecipheriv("aes-256-gcm", key, iv);
           decipher.setAuthTag(tag);
           if (aad !== undefined) decipher.setAAD(aad);
           return new Uint8Array(

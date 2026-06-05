@@ -17,10 +17,34 @@ import {
   type CellFields,
   CellMerge,
   type CellPatch,
+  type DeletePlan,
 } from "@gtmgrid/cloud";
 import { Effect } from "effect";
-import type { Doc, Id } from "../_generated/dataModel.js";
+import type { DataModel, Doc, Id } from "../_generated/dataModel.js";
 import type { MutationCtx } from "../_generated/server.js";
+
+/** A document id for any table in the cloud schema. */
+type AnyId = Id<keyof DataModel & string>;
+
+/**
+ * Delete the documents in a {@link DeletePlan}, in the planner's children-first
+ * ORDER — the planner is the single source of truth for both WHAT and the order,
+ * so handlers no longer re-implement the delete sequence. `byId` maps each
+ * planned id string back to the strongly-typed document `Id` fetched from the
+ * schema indexes, so no string is cast across the Convex boundary; an id absent
+ * from the map (should never happen — the plan is built FROM these ids) is
+ * skipped defensively.
+ */
+async function executePlan(
+  ctx: MutationCtx,
+  plan: DeletePlan,
+  byId: ReadonlyMap<string, AnyId>,
+): Promise<void> {
+  for (const id of plan.ids) {
+    const typed = byId.get(id);
+    if (typed !== undefined) await ctx.db.delete(typed);
+  }
+}
 
 /**
  * Run the COALESCE cell merge (engine db.ts:303-327 semantics) for a `setCell`.
@@ -73,9 +97,10 @@ export async function deleteTableCascade(
     .withIndex("by_table", (q) => q.eq("tableId", tableId))
     .collect();
 
-  // Run the planner for the cascade decision (asserts the rule holds), then
-  // execute against the typed ids in children-first order.
-  await Effect.runPromise(
+  // Run the planner: it is the SINGLE source of truth for both WHAT cascades
+  // and the children-first ORDER. The handler executes its output verbatim
+  // rather than re-deriving the sequence.
+  const plan = await Effect.runPromise(
     Effect.gen(function* () {
       const svc = yield* CascadePlanner;
       return yield* svc.planDeleteTable(tableId, {
@@ -86,10 +111,13 @@ export async function deleteTableCascade(
     }).pipe(Effect.provide(CascadePlanner.Default)),
   );
 
-  for (const cell of cells) await ctx.db.delete(cell._id);
-  for (const row of rows) await ctx.db.delete(row._id);
-  for (const column of columns) await ctx.db.delete(column._id);
-  await ctx.db.delete(tableId);
+  const byId = new Map<string, AnyId>([
+    ...cells.map((c) => [c._id, c._id] as const),
+    ...rows.map((r) => [r._id, r._id] as const),
+    ...columns.map((c) => [c._id, c._id] as const),
+    [tableId, tableId],
+  ]);
+  await executePlan(ctx, plan, byId);
 }
 
 /** Cascade-delete a single column: every cell in that column, then the column. */
@@ -106,7 +134,7 @@ export async function deleteColumnCascade(
       .collect()
   ).filter((c) => c.columnId === column._id);
 
-  await Effect.runPromise(
+  const plan = await Effect.runPromise(
     Effect.gen(function* () {
       const svc = yield* CascadePlanner;
       return yield* svc.planDeleteColumn(
@@ -116,8 +144,11 @@ export async function deleteColumnCascade(
     }).pipe(Effect.provide(CascadePlanner.Default)),
   );
 
-  for (const cell of cells) await ctx.db.delete(cell._id);
-  await ctx.db.delete(column._id);
+  const byId = new Map<string, AnyId>([
+    ...cells.map((c) => [c._id, c._id] as const),
+    [column._id, column._id],
+  ]);
+  await executePlan(ctx, plan, byId);
 }
 
 /** Cascade-delete a single row: every cell in that row, then the row. */
@@ -130,7 +161,7 @@ export async function deleteRowCascade(
     .withIndex("by_row", (q) => q.eq("rowId", rowId))
     .collect();
 
-  await Effect.runPromise(
+  const plan = await Effect.runPromise(
     Effect.gen(function* () {
       const svc = yield* CascadePlanner;
       return yield* svc.planDeleteRow(
@@ -140,6 +171,9 @@ export async function deleteRowCascade(
     }).pipe(Effect.provide(CascadePlanner.Default)),
   );
 
-  for (const cell of cells) await ctx.db.delete(cell._id);
-  await ctx.db.delete(rowId);
+  const byId = new Map<string, AnyId>([
+    ...cells.map((c) => [c._id, c._id] as const),
+    [rowId, rowId],
+  ]);
+  await executePlan(ctx, plan, byId);
 }

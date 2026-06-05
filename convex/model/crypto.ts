@@ -37,9 +37,10 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import {
   CredentialCryptoService,
   CryptoPrimitives,
+  decodeMasterKeyBytes,
   DecryptError,
   EncryptError,
-  KEY_BYTES,
+  IV_BYTES,
   MasterKey,
   type SecretMap,
   TAG_BYTES,
@@ -48,39 +49,14 @@ import { ConvexError } from "convex/values";
 import { Cause, Effect, Exit, Layer, Option } from "effect";
 
 /**
- * Decode `CREDENTIALS_MASTER_KEY` from the deployment env into a raw 32-byte
- * key. Accepts a 64-char hex string or a base64 string; anything that does not
- * decode to exactly {@link KEY_BYTES} bytes is a misconfiguration and fails the
- * {@link MasterKey} port with {@link EncryptError} (fail-closed: we never
- * encrypt under, or decrypt with, a bad key).
+ * {@link MasterKey} Layer backed by the deployment env. The decode/validation
+ * rules (hex|base64 → exactly 32 bytes, fail-closed on missing/malformed) live
+ * in the pure, unit-tested {@link decodeMasterKeyBytes} (@gtmgrid/cloud); this
+ * adapter only feeds it the raw env value.
  */
-function decodeMasterKey(): Uint8Array {
-  const raw = process.env.CREDENTIALS_MASTER_KEY;
-  if (raw === undefined || raw === "") {
-    throw new EncryptError({
-      message: "CREDENTIALS_MASTER_KEY is not set on the Convex deployment.",
-    });
-  }
-  const trimmed = raw.trim();
-  // Prefer hex when the string is exactly 64 hex chars; else try base64.
-  const isHex = /^[0-9a-fA-F]{64}$/.test(trimmed);
-  const buf = isHex
-    ? Buffer.from(trimmed, "hex")
-    : Buffer.from(trimmed, "base64");
-  if (buf.byteLength !== KEY_BYTES) {
-    throw new EncryptError({
-      message:
-        `CREDENTIALS_MASTER_KEY must decode to ${KEY_BYTES} bytes ` +
-        `(got ${buf.byteLength}); use 64 hex chars or base64 of 32 bytes.`,
-    });
-  }
-  return new Uint8Array(buf);
-}
-
-/** {@link MasterKey} Layer backed by the deployment env. */
 const masterKeyLayer: Layer.Layer<MasterKey> = Layer.succeed(MasterKey, {
   bytes: Effect.try({
-    try: () => decodeMasterKey(),
+    try: () => decodeMasterKeyBytes(process.env.CREDENTIALS_MASTER_KEY),
     catch: (cause) =>
       cause instanceof EncryptError
         ? cause
@@ -112,10 +88,16 @@ const cryptoPrimitivesLayer: Layer.Layer<CryptoPrimitives> = Layer.succeed(
     decrypt: ({ key, iv, ciphertext, tag, aad }) =>
       Effect.try({
         try: () => {
-          const decipher = createDecipheriv("aes-256-gcm", key, iv);
+          // Validate the IV/nonce length BEFORE handing it to node:crypto: a
+          // malformed (tampered/truncated) IV must fail closed as a typed
+          // DecryptError, not provoke an opaque crash inside the cipher.
+          if (iv.byteLength !== IV_BYTES) {
+            throw new Error("invalid IV length");
+          }
           if (tag.byteLength !== TAG_BYTES) {
             throw new Error("invalid auth tag length");
           }
+          const decipher = createDecipheriv("aes-256-gcm", key, iv);
           decipher.setAuthTag(tag);
           if (aad !== undefined) decipher.setAAD(aad);
           return new Uint8Array(
@@ -154,10 +136,15 @@ async function runCrypto<A>(
 
   const failure = Cause.failureOption(exit.cause);
   if (Option.isSome(failure)) {
-    const err = failure.value as { _tag?: string; message?: string };
+    // The error channel is `EncryptError | DecryptError`; narrow via a typed
+    // guard rather than an `as` cast at the Convex seam.
+    const err = failure.value;
+    if (err instanceof EncryptError || err instanceof DecryptError) {
+      throw new ConvexError({ code: err._tag, message: err.message });
+    }
     throw new ConvexError({
-      code: err._tag ?? "CryptoError",
-      message: err.message ?? "Credential encryption failed.",
+      code: "CryptoError",
+      message: "Credential encryption failed.",
     });
   }
   throw new Error(Cause.pretty(exit.cause));

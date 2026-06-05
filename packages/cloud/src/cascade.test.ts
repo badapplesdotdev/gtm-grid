@@ -70,20 +70,28 @@ describe("CascadePlanner.planDeleteColumn", () => {
     const plan = await run(
       Effect.gen(function* () {
         const svc = yield* CascadePlanner;
-        return yield* svc.planDeleteColumn("c1", ["cell1", "cell2"]);
+        return yield* svc.planDeleteColumn("col", ["cellA", "cellB"]);
       }),
     );
-    expect(plan.ids).toEqual(["cell1", "cell2", "c1"]);
+    // Spec (cascade.ts): deleteColumn → every cell in that column, THEN the
+    // column itself (children-first). The expected order is written from that
+    // contract — distinct id names from the input so it cannot simply mirror the
+    // implementation's `[...cellIds, columnId]` literal.
+    expect(plan.ids).toEqual(["cellA", "cellB", "col"]);
+    // Re-assert the underlying spec invariants independent of the literal:
+    expect(plan.ids.at(-1)).toBe("col"); // parent deleted last
+    expect(plan.ids.indexOf("cellA")).toBeLessThan(plan.ids.indexOf("col"));
+    expect(plan.ids.indexOf("cellB")).toBeLessThan(plan.ids.indexOf("col"));
   });
 
   it("deletes only the column when it has no cells", async () => {
     const plan = await run(
       Effect.gen(function* () {
         const svc = yield* CascadePlanner;
-        return yield* svc.planDeleteColumn("c1", []);
+        return yield* svc.planDeleteColumn("col", []);
       }),
     );
-    expect(plan.ids).toEqual(["c1"]);
+    expect(plan.ids).toEqual(["col"]);
   });
 });
 
@@ -92,19 +100,24 @@ describe("CascadePlanner.planDeleteRow", () => {
     const plan = await run(
       Effect.gen(function* () {
         const svc = yield* CascadePlanner;
-        return yield* svc.planDeleteRow("r1", ["cell1", "cell2"]);
+        return yield* svc.planDeleteRow("row", ["cellA", "cellB"]);
       }),
     );
-    expect(plan.ids).toEqual(["cell1", "cell2", "r1"]);
+    // Spec (cascade.ts): deleteRow → every cell in that row, THEN the row itself
+    // (children-first). Expected order hardcoded from that contract.
+    expect(plan.ids).toEqual(["cellA", "cellB", "row"]);
+    expect(plan.ids.at(-1)).toBe("row"); // parent deleted last
+    expect(plan.ids.indexOf("cellA")).toBeLessThan(plan.ids.indexOf("row"));
+    expect(plan.ids.indexOf("cellB")).toBeLessThan(plan.ids.indexOf("row"));
   });
 
   it("de-duplicates if a cell id somehow repeats", async () => {
     const plan = await run(
       Effect.gen(function* () {
         const svc = yield* CascadePlanner;
-        return yield* svc.planDeleteRow("r1", ["cell1", "cell1"]);
+        return yield* svc.planDeleteRow("row", ["cellA", "cellA"]);
       }),
     );
-    expect(plan.ids).toEqual(["cell1", "r1"]);
+    expect(plan.ids).toEqual(["cellA", "row"]);
   });
 });

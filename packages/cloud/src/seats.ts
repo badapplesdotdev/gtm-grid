@@ -50,7 +50,17 @@ export const TEAM_PLAN_ID = "team" as const;
  * juggling a nullable url on the success path.
  */
 export type SeatCheck =
-  | { readonly allowed: true }
+  | {
+      readonly allowed: true;
+      /**
+       * The free-seat balance Autumn reported at check time, or `null` for an
+       * unlimited plan / unknown balance. The Convex action turns this into an
+       * absolute seat CEILING (current member count + balance) that the
+       * membership mutation re-verifies inside its own transaction, so two
+       * concurrent invites cannot both pass and exceed the limit.
+       */
+      readonly balance: number | null;
+    }
   | { readonly allowed: false; readonly checkoutUrl: string };
 
 /**
@@ -82,7 +92,19 @@ export class AutumnClient extends Context.Tag("CloudAutumnClient")<
     readonly checkSeats: (args: {
       readonly customerId: string;
       readonly requiredBalance: number;
-    }) => Effect.Effect<{ readonly allowed: boolean }, AutumnError>;
+    }) => Effect.Effect<
+      {
+        readonly allowed: boolean;
+        /**
+         * Remaining free seats Autumn reports for the customer (when known).
+         * Used to compute a hard seat CEILING the Convex mutation re-checks in
+         * its own transaction, closing the check-then-insert race. `null` when
+         * the plan grants unlimited seats or Autumn omits a balance.
+         */
+        readonly balance: number | null;
+      },
+      AutumnError
+    >;
 
     /**
      * Begin attaching `planId` to `customerId`, returning the checkout/payment
@@ -119,6 +141,23 @@ export class NoCheckoutUrlError extends Data.TaggedError("NoCheckoutUrlError")<{
 }> {}
 
 /**
+ * Raised when adding a member would exceed the workspace's seat ceiling.
+ *
+ * This is the TRANSACTIONAL guard distinct from {@link checkInvite}'s Autumn
+ * pre-check: the Convex membership mutation re-reads the live member count and
+ * runs {@link SeatsService.enforceSeatCeiling} inside its own transaction, so
+ * two concurrent invites that both passed the (non-transactional) Autumn check
+ * cannot both insert and overshoot the limit. The losing invite fails with this.
+ */
+export class SeatLimitExceededError extends Data.TaggedError(
+  "SeatLimitExceededError",
+)<{
+  readonly message: string;
+  readonly currentCount: number;
+  readonly ceiling: number;
+}> {}
+
+/**
  * Seats entitlement service. The reusable gate the cloud `inviteMember`
  * mutation runs before creating a membership.
  */
@@ -144,12 +183,12 @@ export class SeatsService extends Effect.Service<SeatsService>()(
       ): Effect.Effect<SeatCheck, AutumnError | NoCheckoutUrlError> =>
         Effect.gen(function* () {
           // One seat is required to add the prospective member.
-          const { allowed } = yield* autumn.checkSeats({
+          const { allowed, balance } = yield* autumn.checkSeats({
             customerId,
             requiredBalance: 1,
           });
           if (allowed) {
-            return { allowed: true } as const;
+            return { allowed: true, balance } as const;
           }
 
           // Over the limit: produce the upgrade checkout URL instead of adding.
@@ -202,7 +241,37 @@ export class SeatsService extends Effect.Service<SeatsService>()(
       ): Effect.Effect<void, AutumnError> =>
         autumn.trackSeats({ customerId, value: 1 });
 
-      return { checkInvite, checkout, trackSeatUsed } as const;
+      /**
+       * Transactional seat guard: assert the LIVE `currentCount` of members is
+       * still below `ceiling` before a new member is inserted. Called inside the
+       * Convex membership mutation (which re-reads the count in the same
+       * transaction) so concurrent invites cannot both pass and exceed the
+       * limit. A `null` ceiling means "unlimited" and always allows.
+       */
+      const enforceSeatCeiling = (
+        currentCount: number,
+        ceiling: number | null,
+      ): Effect.Effect<void, SeatLimitExceededError> => {
+        if (ceiling === null || currentCount < ceiling) {
+          return Effect.void;
+        }
+        return Effect.fail(
+          new SeatLimitExceededError({
+            message:
+              `Adding a member would exceed the seat limit ` +
+              `(${currentCount}/${ceiling}).`,
+            currentCount,
+            ceiling,
+          }),
+        );
+      };
+
+      return {
+        checkInvite,
+        checkout,
+        trackSeatUsed,
+        enforceSeatCeiling,
+      } as const;
     }),
     dependencies: [],
   },

@@ -200,11 +200,25 @@ export default defineSchema({
     /** The connector/extension these secrets authenticate, e.g. "ai:openai". */
     extensionId: v.string(),
     scope: credentialScope,
+    /**
+     * Owning member for a `personal`-scope row (the Convex Auth user id who saved
+     * it); `null` for shared `workspace`-scope rows. Binding personal keys to an
+     * owner stops two members colliding on (workspace, extension, scope) and
+     * stops one member reading/rotating another's personal key. Nullable so the
+     * field is set only on personal rows.
+     */
+    ownerUserId: v.union(v.string(), v.null()),
     name: v.string(),
     /** Ciphertext of the secret map (envelope-encrypted). Never plaintext. */
     secretsEnc: v.string(),
     createdAt: v.number(),
   })
     .index("by_workspace", ["workspaceId"])
-    .index("by_workspace_extension", ["workspaceId", "extensionId"]),
+    .index("by_workspace_extension", ["workspaceId", "extensionId"])
+    .index("by_workspace_extension_owner", [
+      "workspaceId",
+      "extensionId",
+      "scope",
+      "ownerUserId",
+    ]),
 });
