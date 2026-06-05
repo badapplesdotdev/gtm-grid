@@ -89,9 +89,15 @@ export const api = {
     http<{ ok: boolean }>(`/api/extensions/${extId}/connect`, { method: "POST", body: JSON.stringify({ secrets }) }),
   agents: () =>
     http<{ claude: AgentStatus; codex: AgentStatus }>("/api/agents"),
+  connectAgent: (agent: "claude" | "codex", path?: string) =>
+    http<{ claude: AgentStatus; codex: AgentStatus }>("/api/agents/connect", {
+      method: "POST",
+      body: JSON.stringify({ agent, path }),
+    }),
 };
 
 export interface AgentStatus {
   installed: boolean;
   version: string | null;
+  path?: string | null;
 }

@@ -1211,3 +1211,55 @@ html, body, #root {
 .agent-text .md-pre code { font: 12px var(--font-mono); color: #e4e4ea; white-space: pre; }
 .agent-text a { color: var(--accent); }
 .agent-stop { background: var(--danger) !important; }
+
+/* ─── Agent panel: connect / locate CLI ───────────────────── */
+.agent-connect-btn {
+  height: 34px;
+  padding: 0 18px;
+  border: none;
+  border-radius: var(--r-md);
+  background: var(--accent);
+  color: #fff;
+  font: 600 13px var(--font-sans);
+  cursor: pointer;
+}
+.agent-connect-btn:disabled { opacity: .55; cursor: default; }
+.agent-connect-divider {
+  margin: 6px 0 2px;
+  font: 400 11px var(--font-sans);
+  color: #a0a0aa;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.agent-connect-manual { display: flex; gap: 6px; width: 100%; max-width: 320px; }
+.agent-connect-manual input {
+  flex: 1;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  font: 12px var(--font-mono);
+  color: var(--text);
+  outline: none;
+}
+.agent-connect-manual input:focus { border-color: var(--accent); background: var(--surface); }
+.agent-connect-manual button {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  font: 500 12px var(--font-sans);
+  color: var(--text);
+  cursor: pointer;
+}
+.agent-connect-manual button:disabled { opacity: .5; cursor: default; }
+.agent-connect-hint { font-size: 11.5px !important; color: #a0a0aa; margin-top: 4px; }
+.agent-connect-hint code {
+  font: 11px var(--font-mono);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 1px 5px;
+  border-radius: var(--r-xs);
+}

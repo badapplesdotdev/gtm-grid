@@ -4,9 +4,11 @@
 // This is the Revcode "connect your Claude Code / Codex" mechanism: no OAuth,
 // no key storage — the app drives the CLI the user already logged into.
 
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
 import type { ServerResponse } from "node:http";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 
 const GTM_TOOLS = [
   "list_functions",
@@ -22,24 +24,128 @@ const MUTATING = new Set(["create_table", "add_column", "add_rows", "run_column"
 
 export type AgentKind = "claude" | "codex";
 
-function versionCheck(cmd: string): Promise<{ installed: boolean; version: string | null }> {
-  return new Promise((resolve) => {
-    const child = spawn(cmd, ["--version"], { env: process.env });
-    let out = "";
-    const done = (installed: boolean) => resolve({ installed, version: installed ? out.trim() || null : null });
-    child.stdout?.on("data", (d) => (out += d));
-    child.on("error", () => done(false));
-    child.on("close", (code) => done(code === 0));
-    setTimeout(() => {
-      child.kill();
-      done(out.length > 0);
-    }, 4000);
-  });
+// ── Locating the user's CLIs ──────────────────────────────────────────────
+// GUI apps launch with a minimal PATH and version managers (nvm) only set up
+// their PATH in *interactive* shells. So we resolve the binary three ways:
+// a saved manual override, the user's interactive login shell, then a scan of
+// common install locations.
+
+const CONFIG_DIR = join(homedir(), ".gtmgrid");
+const AGENTS_CONFIG = join(CONFIG_DIR, "agents.json");
+const resolveCache: Partial<Record<AgentKind, string | null>> = {};
+
+function loadOverrides(): Partial<Record<AgentKind, string>> {
+  try {
+    return JSON.parse(readFileSync(AGENTS_CONFIG, "utf8"));
+  } catch {
+    return {};
+  }
 }
 
-export async function detectAgents() {
-  const [claude, codex] = await Promise.all([versionCheck("claude"), versionCheck("codex")]);
-  return { claude, codex };
+export function setAgentPath(kind: AgentKind, path: string | null): void {
+  const cfg = loadOverrides();
+  if (path) cfg[kind] = path;
+  else delete cfg[kind];
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(AGENTS_CONFIG, JSON.stringify(cfg, null, 2));
+  resolveCache[kind] = undefined;
+}
+
+let cachedLoginPath: string | null | undefined;
+function loginPath(): string {
+  if (cachedLoginPath === undefined) {
+    const shell = process.env.SHELL || "/bin/zsh";
+    cachedLoginPath = (() => {
+      for (const flags of [["-lic", "echo $PATH"], ["-ic", "echo $PATH"], ["-lc", "echo $PATH"]]) {
+        try {
+          const out = execFileSync(shell, flags, { encoding: "utf8", timeout: 6000, stdio: ["ignore", "pipe", "ignore"] });
+          const line = out.split("\n").map((l) => l.trim()).filter((l) => l.includes("/"))[0];
+          if (line) return line;
+        } catch {
+          /* try next */
+        }
+      }
+      return null;
+    })();
+  }
+  return cachedLoginPath ?? "";
+}
+
+/** Common install locations, including all nvm node versions. */
+function candidateDirs(): string[] {
+  const home = homedir();
+  const dirs = ["/opt/homebrew/bin", "/usr/local/bin", join(home, ".local/bin"), join(home, ".npm-global/bin"), join(home, "Library/pnpm")];
+  const nvm = join(home, ".nvm/versions/node");
+  try {
+    for (const v of readdirSync(nvm)) dirs.push(join(nvm, v, "bin"));
+  } catch {
+    /* no nvm */
+  }
+  return dirs;
+}
+
+/** Resolve a CLI's absolute path (override → login shell → common dirs). */
+export function resolveAgentPath(kind: AgentKind): string | null {
+  if (resolveCache[kind] !== undefined) return resolveCache[kind]!;
+  let found: string | null = null;
+  const override = loadOverrides()[kind];
+  if (override && existsSync(override)) {
+    found = override;
+  } else {
+    // interactive login shell (matches the user's terminal)
+    const shell = process.env.SHELL || "/bin/zsh";
+    try {
+      const out = execFileSync(shell, ["-lic", `command -v ${kind} 2>/dev/null`], {
+        encoding: "utf8",
+        timeout: 6000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const p = out.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("/") && existsSync(l))[0];
+      if (p) found = p;
+    } catch {
+      /* fall through to scan */
+    }
+    if (!found) {
+      for (const dir of candidateDirs()) {
+        const p = join(dir, kind);
+        if (existsSync(p)) {
+          found = p;
+          break;
+        }
+      }
+    }
+  }
+  resolveCache[kind] = found;
+  return found;
+}
+
+/** Environment for spawning an agent: PATH includes the binary's dir (so its
+ *  sibling `node` is found) plus the user's login PATH. */
+function agentSpawnEnv(binPath: string): NodeJS.ProcessEnv {
+  const parts = [dirname(binPath), loginPath(), process.env.PATH ?? ""].filter(Boolean);
+  return { ...process.env, PATH: parts.join(":") };
+}
+
+function versionOf(kind: AgentKind): { installed: boolean; version: string | null; path: string | null } {
+  const path = resolveAgentPath(kind);
+  if (!path) return { installed: false, version: null, path: null };
+  try {
+    const v = execFileSync(path, ["--version"], { encoding: "utf8", timeout: 5000, env: agentSpawnEnv(path) }).trim();
+    return { installed: true, version: v || null, path };
+  } catch {
+    return { installed: false, version: null, path };
+  }
+}
+
+export function detectAgents() {
+  return { claude: versionOf("claude"), codex: versionOf("codex") };
+}
+
+/** Clear caches so the next detect re-resolves (after install / manual connect). */
+export function rescanAgents(): void {
+  resolveCache.claude = undefined;
+  resolveCache.codex = undefined;
+  cachedLoginPath = undefined;
 }
 
 interface SseClient {
@@ -92,7 +198,13 @@ export function streamClaude(
   ];
   if (opts.sessionId) args.push("--resume", opts.sessionId);
 
-  const child = spawn("claude", args, { env: process.env, cwd: opts.repoRoot });
+  const bin = resolveAgentPath("claude");
+  if (!bin) {
+    sse.write({ type: "error", message: "Claude Code not found. Connect it in the panel or install @anthropic-ai/claude-code." });
+    sse.write({ type: "end" });
+    return sse.end();
+  }
+  const child = spawn(bin, args, { env: agentSpawnEnv(bin), cwd: opts.repoRoot });
   let sessionId = opts.sessionId ?? null;
   let buf = "";
   let gridDirty = false;
@@ -189,7 +301,13 @@ export function streamCodex(
     ? ["exec", "resume", opts.threadId, ...flags, opts.message]
     : ["exec", ...flags, opts.message];
 
-  const child = spawn("codex", args, { env: process.env, cwd: opts.repoRoot });
+  const bin = resolveAgentPath("codex");
+  if (!bin) {
+    sse.write({ type: "error", message: "Codex not found. Connect it in the panel or install @openai/codex." });
+    sse.write({ type: "end" });
+    return sse.end();
+  }
+  const child = spawn(bin, args, { env: agentSpawnEnv(bin), cwd: opts.repoRoot });
   child.stdin?.end(); // codex exec otherwise waits on stdin
 
   let threadId = opts.threadId ?? null;

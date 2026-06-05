@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { openProject, parseManifest, connectorFromManifest } from "@gtmgrid/engine";
-import { detectAgents, streamClaude, streamCodex } from "./agent.js";
+import { detectAgents, streamClaude, streamCodex, setAgentPath, rescanAgents, type AgentKind } from "./agent.js";
 
 const PROJECT = process.env.GTMGRID_PROJECT ?? "default";
 const PORT = Number(process.env.GTMGRID_PORT ?? 8787);
@@ -155,7 +155,17 @@ route("POST", "/api/extensions/:id/connect", (p, body) => {
   return { ok: true };
 });
 
-route("GET", "/api/agents", async () => await detectAgents());
+route("GET", "/api/agents", () => detectAgents());
+
+// Manually connect a CLI (set its path) and/or rescan after install.
+route("POST", "/api/agents/connect", (_p, body) => {
+  const agent = body?.agent as AgentKind;
+  if ((agent === "claude" || agent === "codex") && typeof body?.path === "string" && body.path.trim()) {
+    setAgentPath(agent, body.path.trim());
+  }
+  rescanAgents();
+  return detectAgents();
+});
 
 // --- server plumbing ---
 function send(res: ServerResponse, status: number, data: unknown) {

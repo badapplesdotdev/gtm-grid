@@ -91,6 +91,8 @@ export default function AgentPanel({ onGridChange }: { onGridChange: () => void 
   const [threads, setThreads] = useState<Record<AgentKind, Message[]>>({ claude: [], codex: [] });
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pathInput, setPathInput] = useState("");
+  const [connecting, setConnecting] = useState(false);
   const sessionRef = useRef<Record<AgentKind, string | undefined>>({ claude: undefined, codex: undefined });
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -100,6 +102,19 @@ export default function AgentPanel({ onGridChange }: { onGridChange: () => void 
   useEffect(() => {
     api.agents().then(setStatus).catch(() => setStatus({}));
   }, []);
+
+  // Re-detect (after install) or connect a manually-specified CLI path.
+  async function connect(path?: string) {
+    setConnecting(true);
+    try {
+      setStatus(await api.connectAgent(agent, path));
+      setPathInput("");
+    } catch {
+      /* ignore */
+    } finally {
+      setConnecting(false);
+    }
+  }
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [threads, agent]);
@@ -203,10 +218,30 @@ export default function AgentPanel({ onGridChange }: { onGridChange: () => void 
         <div className="agent-empty">
           <div className="agent-empty-title">Connect {AGENT_LABEL[agent]}</div>
           <p>
-            {AGENT_LABEL[agent]} isn't detected on your PATH. Install it and sign in to your{" "}
-            {agent === "claude" ? "Max" : "Codex"} plan — gtmgrid drives the CLI you've already authed. No keys stored.
+            Sign in to your {agent === "claude" ? "Max" : "Codex"} plan in the {AGENT_LABEL[agent]} CLI — gtmgrid drives
+            the CLI you've already authed. No keys stored.
           </p>
-          <code>{agent === "claude" ? "npm i -g @anthropic-ai/claude-code" : "npm i -g @openai/codex"}</code>
+          <button className="agent-connect-btn" onClick={() => connect()} disabled={connecting}>
+            {connecting ? "Detecting…" : `Detect ${AGENT_LABEL[agent]}`}
+          </button>
+
+          <div className="agent-connect-divider">not found automatically?</div>
+          <div className="agent-connect-manual">
+            <input
+              value={pathInput}
+              placeholder={`Path to ${agent} binary`}
+              onChange={(e) => setPathInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && pathInput.trim() && connect(pathInput.trim())}
+              spellCheck={false}
+            />
+            <button onClick={() => connect(pathInput.trim())} disabled={connecting || !pathInput.trim()}>
+              Connect
+            </button>
+          </div>
+          <p className="agent-connect-hint">
+            Find it with <code>which {agent}</code> in your terminal. Or install:{" "}
+            <code>{agent === "claude" ? "npm i -g @anthropic-ai/claude-code" : "npm i -g @openai/codex"}</code>
+          </p>
         </div>
       ) : (
         <>
