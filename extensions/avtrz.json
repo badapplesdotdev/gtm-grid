@@ -1,0 +1,28 @@
+{
+  "id": "avtrz",
+  "name": "Avtrz",
+  "version": "1.0.0",
+  "category": "enrichment",
+  "description": "Profile-photo enrichment — resolve a person's real LinkedIn avatar image from their profile URL or handle.",
+  "baseUrl": "https://www.avtrz.dev/v1",
+  "logo": "https://www.google.com/s2/favicons?domain=avtrz.dev&sz=128",
+  "auth": { "type": "apiKey", "header": "x-api-key", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "getAvatar",
+      "label": "Get Avatar",
+      "description": "Resolve a person's profile photo from their LinkedIn URL or handle. Provide `linkedin_url` OR `username` (the slug after /in/). Returns the resolved CDN image URL (or empty if no photo was found). Use a secret 'sk_' key.",
+      "verb": "GET",
+      "path": "/avatar",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "properties": {
+          "linkedin_url": { "type": "string", "description": "Full LinkedIn profile URL" },
+          "username": { "type": "string", "description": "LinkedIn handle (the part after /in/)" },
+          "size": { "type": "integer", "description": "32 | 64 | 128 | 256 | 512 (default 128)" }
+        }
+      }
+    }
+  ]
+}

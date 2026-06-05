@@ -26,6 +26,12 @@ export const manifestSchema = z.object({
   name: z.string(),
   version: z.string().optional(),
   category: z.string().optional(),
+  /** Short description shown in the extensions gallery. */
+  description: z.string().optional(),
+  /** Surface this extension in the "Featured" row of the gallery. */
+  featured: z.boolean().optional(),
+  /** Optional brand logo URL; falls back to a derived favicon when absent. */
+  logo: z.string().url().optional(),
   baseUrl: z.string().url(),
   auth: z
     .object({
@@ -84,7 +90,7 @@ async function httpCall(
     }
   }
 
-  const init: RequestInit = { method: m.verb, headers };
+  const init: RequestInit = { method: m.verb, headers, redirect: "manual" };
   if (m.verb === "GET" || m.verb === "DELETE") {
     const fields = m.query ?? Object.keys(input).filter((k) => !pathParams.has(k));
     for (const k of fields) {
@@ -99,6 +105,16 @@ async function httpCall(
   }
 
   const resp = await fetch(url, init);
+  // Redirect responses (e.g. avatar/image endpoints) → return the resolved URL.
+  if (resp.status >= 300 && resp.status < 400) {
+    const loc = resp.headers.get("location");
+    if (loc) return loc;
+  }
+  // Binary/image responses carry no JSON to store.
+  if (/^(image\/|application\/octet-stream)/.test(resp.headers.get("content-type") ?? "")) {
+    if (!resp.ok) throw new Error(`${man.name} ${m.id} HTTP ${resp.status}`);
+    return null;
+  }
   const text = await resp.text();
   let data: unknown;
   try {

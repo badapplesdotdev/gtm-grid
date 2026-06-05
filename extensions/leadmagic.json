@@ -3,6 +3,7 @@
   "name": "LeadMagic",
   "version": "1.0.0",
   "category": "enrichment",
+  "description": "B2B data enrichment — email finder, mobile finder, and profile & company search.",
   "baseUrl": "https://api.leadmagic.io/v1",
   "auth": { "type": "apiKey", "header": "X-API-Key", "secretKey": "apiKey" },
   "methods": [

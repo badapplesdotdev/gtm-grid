@@ -1,0 +1,28 @@
+{
+  "id": "fireflies",
+  "name": "Fireflies",
+  "version": "1.0.0",
+  "category": "meetings",
+  "description": "Meeting transcripts, summaries & action items. GraphQL API — pass a query + variables.",
+  "baseUrl": "https://api.fireflies.ai",
+  "logo": "https://www.google.com/s2/favicons?domain=fireflies.ai&sz=128",
+  "auth": { "type": "apiKey", "header": "Authorization", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "graphql",
+      "label": "GraphQL Query",
+      "description": "Run a Fireflies GraphQL query. Pass `query` (a GraphQL string) and optional `variables`. Errors come back in a top-level `errors` array even on HTTP 200. Useful queries:\n• List recent meetings: query Transcripts($limit:Int){ transcripts(limit:$limit){ id title date transcript_url duration } }\n• Full transcript + summary: query Transcript($transcriptId:String!){ transcript(id:$transcriptId){ title sentences{ text speaker_name } summary{ overview action_items keywords } } }\n• Account: query{ users{ user_id name email num_transcripts minutes_consumed } }",
+      "verb": "POST",
+      "path": "/graphql",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "query": { "type": "string", "description": "GraphQL query string" },
+          "variables": { "type": "object", "description": "Variables object referenced by the query, e.g. { \"transcriptId\": \"...\" }" }
+        }
+      }
+    }
+  ]
+}

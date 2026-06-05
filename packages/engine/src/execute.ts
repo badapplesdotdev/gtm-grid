@@ -9,6 +9,8 @@ import type { AiConfig, Column } from "./types.js";
 
 export interface EngineConfig {
   ai?: AiConfig;
+  /** All connected AI providers (for model-based routing). */
+  aiProviders?: AiConfig[];
 }
 
 export interface RunColumnOptions {
@@ -34,7 +36,12 @@ export class Engine {
     const m = this.registry.method(provider, method);
     if (!m) throw new Error(`Unknown function ${provider}.${method}`);
     const cred = this.db.getCredential(provider);
-    return m.run(input, { secrets: cred?.secrets ?? {}, ai: this.config.ai });
+    const aiProviders = this.config.aiProviders?.length
+      ? this.config.aiProviders
+      : this.config.ai
+        ? [this.config.ai]
+        : [];
+    return m.run(input, { secrets: cred?.secrets ?? {}, ai: this.config.ai, aiProviders });
   };
 
   /** Resolve a column's params for a row, interpolating {{Column Name}} from cells. */

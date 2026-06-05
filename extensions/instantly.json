@@ -1,0 +1,109 @@
+{
+  "id": "instantly",
+  "name": "Instantly",
+  "version": "1.0.0",
+  "category": "outreach",
+  "description": "Cold email outreach — push leads into campaigns, verify emails, read analytics.",
+  "baseUrl": "https://api.instantly.ai/api/v2",
+  "logo": "https://www.google.com/s2/favicons?domain=instantly.ai&sz=128",
+  "auth": { "type": "apiKey", "header": "Authorization", "scheme": "Bearer ", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "listCampaigns",
+      "label": "List Campaigns",
+      "description": "List campaigns (cursor-paginated). Use next_starting_after to page.",
+      "verb": "GET",
+      "path": "/campaigns",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "description": "1-100 (default 100)" },
+          "starting_after": { "type": "string", "description": "Pagination cursor" },
+          "search": { "type": "string", "description": "Filter by campaign name" }
+        }
+      }
+    },
+    {
+      "id": "getCampaign",
+      "label": "Get Campaign",
+      "description": "Get a campaign by id (UUID).",
+      "verb": "GET",
+      "path": "/campaigns/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string", "description": "Campaign UUID" } }
+      }
+    },
+    {
+      "id": "createLead",
+      "label": "Add Lead to Campaign",
+      "description": "Add a contact to a campaign (or list). Only `email` is required; pass `campaign` (the campaign UUID — note: NOT campaign_id) to enroll them. Use skip_if_in_campaign to dedupe.",
+      "verb": "POST",
+      "path": "/leads",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["email"],
+        "properties": {
+          "email": { "type": "string", "description": "Contact email (required)" },
+          "campaign": { "type": "string", "description": "Campaign UUID to enroll into" },
+          "list_id": { "type": "string", "description": "Lead-list UUID (alternative target)" },
+          "first_name": { "type": "string" },
+          "last_name": { "type": "string" },
+          "company_name": { "type": "string" },
+          "phone": { "type": "string" },
+          "website": { "type": "string" },
+          "skip_if_in_campaign": { "type": "boolean", "description": "Skip if already in the campaign" }
+        }
+      }
+    },
+    {
+      "id": "verifyEmail",
+      "label": "Verify Email",
+      "description": "Validate an email address. Returns { verification_status: pending|verified|invalid, catch_all, credits }. May be async (re-poll if pending).",
+      "verb": "POST",
+      "path": "/email-verification",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["email"],
+        "properties": { "email": { "type": "string" } }
+      }
+    },
+    {
+      "id": "listAccounts",
+      "label": "List Sending Accounts",
+      "description": "List connected sending email accounts (cursor-paginated).",
+      "verb": "GET",
+      "path": "/accounts",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "description": "1-100" },
+          "starting_after": { "type": "string" },
+          "search": { "type": "string", "description": "Filter by email domain" }
+        }
+      }
+    },
+    {
+      "id": "campaignAnalytics",
+      "label": "Get Campaign Analytics",
+      "description": "Get analytics for a campaign (sent, opens, clicks, replies, bounces). Omit id for all campaigns.",
+      "verb": "GET",
+      "path": "/campaigns/analytics",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "description": "Campaign UUID (omit for all)" },
+          "start_date": { "type": "string", "description": "YYYY-MM-DD" },
+          "end_date": { "type": "string", "description": "YYYY-MM-DD" }
+        }
+      }
+    }
+  ]
+}

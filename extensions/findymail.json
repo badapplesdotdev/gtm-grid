@@ -1,0 +1,93 @@
+{
+  "id": "findymail",
+  "name": "FindyMail",
+  "version": "1.0.0",
+  "category": "enrichment",
+  "description": "Find verified work emails and phone numbers from names, domains or LinkedIn URLs.",
+  "baseUrl": "https://app.findymail.com/api",
+  "logo": "https://www.google.com/s2/favicons?domain=findymail.com&sz=128",
+  "auth": { "type": "apiKey", "header": "Authorization", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "findFromName",
+      "label": "Find Email (Name + Domain)",
+      "description": "Find a verified work email from a person's name and company domain. Returns { contact: { name, email, domain } }.",
+      "verb": "POST",
+      "path": "/search/name",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["name", "domain"],
+        "properties": {
+          "name": { "type": "string", "description": "Full name, e.g. 'Jane Doe'" },
+          "domain": { "type": "string", "description": "Company domain, e.g. 'acme.com'" }
+        }
+      }
+    },
+    {
+      "id": "findFromLinkedin",
+      "label": "Find Email (LinkedIn URL)",
+      "description": "Find a verified work email from a LinkedIn profile URL. Returns { contact: { name, email, domain, linkedin_url } }.",
+      "verb": "POST",
+      "path": "/search/linkedin",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["linkedin_url"],
+        "properties": {
+          "linkedin_url": { "type": "string", "description": "Full LinkedIn profile URL" }
+        }
+      }
+    },
+    {
+      "id": "findPhone",
+      "label": "Find Phone",
+      "description": "Find a direct phone number from a LinkedIn profile URL. Returns { phone }.",
+      "verb": "POST",
+      "path": "/search/phone",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["linkedin_url"],
+        "properties": {
+          "linkedin_url": { "type": "string", "description": "Full LinkedIn profile URL" }
+        }
+      }
+    },
+    {
+      "id": "reverseEmail",
+      "label": "Reverse Email Lookup",
+      "description": "Look up the person/company behind an email address. Returns { contact }.",
+      "verb": "POST",
+      "path": "/search/reverse-email",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["email"],
+        "properties": { "email": { "type": "string", "description": "Email to look up" } }
+      }
+    },
+    {
+      "id": "verify",
+      "label": "Verify Email",
+      "description": "Verify whether an email is deliverable. Returns { verified, provider }.",
+      "verb": "POST",
+      "path": "/verify",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["email"],
+        "properties": { "email": { "type": "string", "description": "Email to verify" } }
+      }
+    },
+    {
+      "id": "credits",
+      "label": "Get Credits",
+      "description": "Get remaining finder + verifier credits. Returns { credits, verifier_credits }.",
+      "verb": "GET",
+      "path": "/credits",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    }
+  ]
+}

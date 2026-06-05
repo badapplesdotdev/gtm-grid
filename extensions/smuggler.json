@@ -1,0 +1,155 @@
+{
+  "id": "smuggler",
+  "name": "Smuggler",
+  "version": "1.0.0",
+  "category": "social-intelligence",
+  "description": "LinkedIn outbound + engagement intelligence — search people/companies, find emails, and pull post engagers.",
+  "featured": true,
+  "baseUrl": "https://smuggler.dev/api/v1",
+  "logo": "https://www.google.com/s2/favicons?domain=smuggler.dev&sz=128",
+  "auth": { "type": "apiKey", "header": "x-api-key", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "searchPersons",
+      "label": "Search People",
+      "description": "Search Smuggler's people by free-text query, company, title, or location. Returns data[] of { id, fullName, headline, linkedinUrl, jobTitle, jobCompanyName, locationCountry, enrichmentStatus }. Use the returned id with findEmail.",
+      "verb": "GET",
+      "path": "/persons",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Free-text search (name/headline)" },
+          "company": { "type": "string" },
+          "title": { "type": "string" },
+          "location": { "type": "string" },
+          "limit": { "type": "integer", "description": "Max 100 (default 50)" },
+          "offset": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "getPerson",
+      "label": "Get Person",
+      "description": "Get a single person by Smuggler id. Returns { id, fullName, headline, linkedinUrl, jobTitle, jobCompanyName, seniority, jobFunction, locationCountry, enrichmentStatus }.",
+      "verb": "GET",
+      "path": "/persons/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string", "description": "Smuggler person id" } }
+      }
+    },
+    {
+      "id": "findEmail",
+      "label": "Find Email",
+      "description": "Find a person's email by Smuggler person id (synchronous waterfall via LeadMagic). Consumes credits. No request body needed — the id is in the path.",
+      "verb": "POST",
+      "path": "/persons/{id}/email",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string", "description": "Smuggler person id" } }
+      }
+    },
+    {
+      "id": "bulkFindEmail",
+      "label": "Bulk Find Email",
+      "description": "Queue email enrichment for up to 500 people by id (background). Already-enriched ids are skipped.",
+      "verb": "POST",
+      "path": "/persons/email/bulk",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["personIds"],
+        "properties": {
+          "personIds": { "type": "array", "items": { "type": "string" }, "description": "1-500 person ids" }
+        }
+      }
+    },
+    {
+      "id": "searchCompanies",
+      "label": "Search Companies",
+      "description": "Search companies by name. Returns data[] of { id, name, logoUrl, employeeCountRange, industry }.",
+      "verb": "GET",
+      "path": "/companies",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Company name" },
+          "limit": { "type": "integer", "description": "Max 100" },
+          "offset": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "getCompany",
+      "label": "Get Company",
+      "description": "Get a single company by Smuggler id.",
+      "verb": "GET",
+      "path": "/companies/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string" } }
+      }
+    },
+    {
+      "id": "listLeads",
+      "label": "List Leads",
+      "description": "List captured leads (people who engaged with monitored profiles/posts) with engagement counts and enrichment status. Filter by campaignId, profileId, or search.",
+      "verb": "GET",
+      "path": "/leads",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "description": "Max 100" },
+          "offset": { "type": "integer" },
+          "campaignId": { "type": "string" },
+          "profileId": { "type": "string" },
+          "search": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "postEngagements",
+      "label": "Get Post Engagements",
+      "description": "Get the people who engaged with a LinkedIn post (by Smuggler post id). Returns data[] of { id, type, engagerName, engagerHeadline, engagerLinkedinUrl, engagedAt }.",
+      "verb": "GET",
+      "path": "/posts/{id}/engagements",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string", "description": "Smuggler post id" } }
+      }
+    },
+    {
+      "id": "topEngagers",
+      "label": "Get Top Engagers",
+      "description": "Get the top engagers for a monitored profile (by Smuggler profile id). Returns data[] of { personId, fullName, headline, engagementCount, lastEngagedAt }.",
+      "verb": "GET",
+      "path": "/profiles/{id}/top-engagers",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string", "description": "Smuggler profile id" } }
+      }
+    },
+    {
+      "id": "credits",
+      "label": "Get Credit Balance",
+      "description": "Get the account credit balance and usage. Returns { allowed, balance, usage, included, unlimited, interval, nextResetAt }.",
+      "verb": "GET",
+      "path": "/billing/credits",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    }
+  ]
+}

@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
 import { Db } from "./db.js";
+import type { AiConfig } from "./types.js";
 import { Engine, aiConfigFromEnv, type EngineConfig } from "./execute.js";
 import { defaultRegistry, Registry } from "./registry.js";
 import { parseManifest, connectorFromManifest } from "./connectors/manifest.js";
@@ -36,7 +37,7 @@ export function openProject(
 ): OpenProjectResult {
   const path = pathOrName.endsWith(".db") || pathOrName.includes("/") ? pathOrName : projectPath(pathOrName);
   const db = new Db(path);
-  const config = opts.config ?? { ai: aiConfigFromEnv() ?? storedAiConfig(db) };
+  const config = opts.config ?? { ai: aiConfigFromEnv() ?? storedAiConfig(db), aiProviders: storedAiProviders(db) };
   const registry = opts.registry ?? defaultRegistry();
   // Load any uploaded JSON-manifest extensions into the registry.
   for (const manifest of db.listExtensions()) {
@@ -52,18 +53,48 @@ export function openProject(
 
 const DEFAULT_MODEL = { anthropic: "claude-haiku-4-5-20251001", openai: "gpt-4o-mini" } as const;
 
-/** Resolve a persisted AI config (provider/model in meta, key encrypted in credentials). */
+const AI_PROVIDER_IDS = ["anthropic", "openai"] as const;
+type AiProvider = (typeof AI_PROVIDER_IDS)[number];
+
+/** Resolve the stored key for one provider (new per-provider slot, with legacy fallback). */
+function storedKeyFor(db: Db, provider: AiProvider): string | undefined {
+  const cred = db.getCredential(`ai:${provider}`);
+  if (cred?.secrets.apiKey) return cred.secrets.apiKey;
+  // Legacy single-slot fallback: the old "ai" credential for the active provider.
+  if (db.getMeta("ai_provider") === provider) return db.getCredential("ai")?.secrets.apiKey;
+  return undefined;
+}
+
+/** Resolve the default/active AI config (provider/model in meta, key encrypted in credentials). */
 export function storedAiConfig(db: Db): EngineConfig["ai"] {
-  const provider = db.getMeta("ai_provider") as "anthropic" | "openai" | undefined;
+  const provider = db.getMeta("ai_provider") as AiProvider | undefined;
   if (!provider) return undefined;
-  const cred = db.getCredential("ai");
-  if (!cred?.secrets.apiKey) return undefined;
-  return { provider, apiKey: cred.secrets.apiKey, model: db.getMeta("ai_model") ?? DEFAULT_MODEL[provider] };
+  const apiKey = storedKeyFor(db, provider);
+  if (!apiKey) return undefined;
+  return { provider, apiKey, model: db.getMeta("ai_model") ?? DEFAULT_MODEL[provider] };
+}
+
+/** Resolve every connected AI provider (for model-based routing in AI Generate). */
+export function storedAiProviders(db: Db): AiConfig[] {
+  const out: AiConfig[] = [];
+  for (const provider of AI_PROVIDER_IDS) {
+    const apiKey = storedKeyFor(db, provider);
+    if (apiKey) out.push({ provider, apiKey, model: DEFAULT_MODEL[provider] });
+  }
+  return out;
 }
 
 /** Persist an AI provider key (encrypted) so the project works without env vars. */
-export function connectAi(db: Db, provider: "anthropic" | "openai", apiKey: string, model?: string): void {
+export function connectAi(
+  db: Db,
+  provider: AiProvider,
+  apiKey: string,
+  model?: string,
+  scope: "personal" | "team" | "local" = "local",
+): void {
+  // Track the most-recently-connected provider as the default active one.
   db.setMeta("ai_provider", provider);
   db.setMeta("ai_model", model ?? DEFAULT_MODEL[provider]);
-  db.saveCredential({ extensionId: "ai", scope: "local", name: provider, secrets: { apiKey } });
+  // Store under a per-provider slot so multiple providers can be connected at once.
+  db.saveCredential({ extensionId: `ai:${provider}`, scope, name: provider, secrets: { apiKey } });
 }

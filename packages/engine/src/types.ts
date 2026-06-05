@@ -65,14 +65,18 @@ export interface ConnectorMethod {
   inputSchema: Record<string, unknown>;
   batchSize: number;
   credits: number;
+  /** Optional human-readable source (shown in the function detail's Details tab). */
+  source?: string;
   /** Executes the method host-side. Receives validated inputs + a resolved credential (if any). */
   run: (inputs: Record<string, unknown>, ctx: MethodContext) => Promise<unknown>;
 }
 
 export interface MethodContext {
   secrets: Record<string, string>;
-  /** AI provider config resolved from connected AI providers. */
+  /** Default/active AI provider config resolved from connected AI providers. */
   ai?: AiConfig;
+  /** All connected AI providers — lets a method route by the requested model. */
+  aiProviders?: AiConfig[];
 }
 
 export interface AiConfig {

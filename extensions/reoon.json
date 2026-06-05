@@ -1,0 +1,37 @@
+{
+  "id": "reoon",
+  "name": "Reoon",
+  "version": "1.0.0",
+  "category": "enrichment",
+  "description": "Email verification — validate deliverability with quick or deep (power) checks.",
+  "baseUrl": "https://emailverifier.reoon.com/api/v1",
+  "logo": "https://www.google.com/s2/favicons?domain=reoon.com&sz=128",
+  "auth": { "type": "apiKey", "query": "key", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "verify",
+      "label": "Verify Email",
+      "description": "Verify a single email address. mode 'quick' is instant syntax/MX/disposable checks; mode 'power' does deep SMTP/inbox checks (slower, more accurate). Returns { status, is_deliverable, is_valid_syntax, is_disposable, is_role_account, mx_accepts_mail, ... }.",
+      "verb": "GET",
+      "path": "/verify",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["email"],
+        "properties": {
+          "email": { "type": "string", "description": "Email address to verify" },
+          "mode": { "type": "string", "description": "quick | power (default quick)" }
+        }
+      }
+    },
+    {
+      "id": "accountBalance",
+      "label": "Check Account Balance",
+      "description": "Get remaining verification credits. Returns account credit balance.",
+      "verb": "GET",
+      "path": "/check-account-balance/",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    }
+  ]
+}

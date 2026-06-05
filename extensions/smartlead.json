@@ -1,0 +1,117 @@
+{
+  "id": "smartlead",
+  "name": "Smartlead",
+  "version": "1.0.0",
+  "category": "outreach",
+  "description": "Cold email at scale — manage campaigns, push leads, read stats.",
+  "baseUrl": "https://server.smartlead.ai/api/v1",
+  "logo": "https://www.google.com/s2/favicons?domain=smartlead.ai&sz=128",
+  "auth": { "type": "apiKey", "query": "api_key", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "listCampaigns",
+      "label": "List Campaigns",
+      "description": "List all campaigns. Returns an array of campaign objects.",
+      "verb": "GET",
+      "path": "/campaigns/",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": { "include_tags": { "type": "boolean", "description": "Include campaign tags" } }
+      }
+    },
+    {
+      "id": "getCampaign",
+      "label": "Get Campaign",
+      "description": "Get a single campaign by id.",
+      "verb": "GET",
+      "path": "/campaigns/{campaign_id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["campaign_id"],
+        "properties": { "campaign_id": { "type": "integer", "description": "Smartlead campaign id" } }
+      }
+    },
+    {
+      "id": "addLeadsToCampaign",
+      "label": "Add Leads to Campaign",
+      "description": "Add contacts to a campaign (max 400). `lead_list` is an array of leads; only `email` is required per lead. Returns { added_count, skipped_count, skipped_leads }.",
+      "verb": "POST",
+      "path": "/campaigns/{campaign_id}/leads",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["campaign_id", "lead_list"],
+        "properties": {
+          "campaign_id": { "type": "integer", "description": "Target campaign id" },
+          "lead_list": {
+            "type": "array",
+            "description": "Up to 400 leads",
+            "items": {
+              "type": "object",
+              "required": ["email"],
+              "properties": {
+                "email": { "type": "string" },
+                "first_name": { "type": "string" },
+                "last_name": { "type": "string" },
+                "company_name": { "type": "string" },
+                "phone_number": { "type": "string" },
+                "website": { "type": "string" },
+                "location": { "type": "string" },
+                "linkedin_profile": { "type": "string" },
+                "custom_fields": { "type": "object" }
+              }
+            }
+          },
+          "settings": {
+            "type": "object",
+            "description": "Optional import settings (ignore_global_block_list, ignore_unsubscribe_list, ignore_duplicate_leads_in_other_campaign, etc.)"
+          }
+        }
+      }
+    },
+    {
+      "id": "fetchLeadByEmail",
+      "label": "Find Lead by Email",
+      "description": "Fetch a lead by email address. Returns the lead object, or {} if not found.",
+      "verb": "GET",
+      "path": "/leads/",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["email"],
+        "properties": { "email": { "type": "string" } }
+      }
+    },
+    {
+      "id": "campaignStatistics",
+      "label": "Get Campaign Statistics",
+      "description": "Per-lead/sequence activity for a campaign (sent, opened, clicked, replied, bounced).",
+      "verb": "GET",
+      "path": "/campaigns/{campaign_id}/statistics",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["campaign_id"],
+        "properties": {
+          "campaign_id": { "type": "integer" },
+          "offset": { "type": "integer" },
+          "limit": { "type": "integer", "description": "Max 1000" }
+        }
+      }
+    },
+    {
+      "id": "listEmailAccounts",
+      "label": "List Email Accounts",
+      "description": "List all connected sending email accounts (senders).",
+      "verb": "GET",
+      "path": "/email-accounts/",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": { "offset": { "type": "integer" }, "limit": { "type": "integer" } }
+      }
+    }
+  ]
+}

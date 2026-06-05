@@ -1,0 +1,69 @@
+{
+  "id": "apify",
+  "name": "Apify",
+  "version": "1.0.0",
+  "category": "scraping",
+  "description": "Run any Apify actor/scraper and get results back per row. Run-sync returns dataset items in one call.",
+  "baseUrl": "https://api.apify.com/v2",
+  "logo": "https://www.google.com/s2/favicons?domain=apify.com&sz=128",
+  "auth": { "type": "apiKey", "header": "Authorization", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "runActorSync",
+      "label": "Run Actor (sync, get items)",
+      "description": "Run an actor and get its dataset items back in a single call. `actorId` is the actor identifier in the form 'username~actorname' (e.g. 'apify~website-content-crawler'). EVERY OTHER field you pass becomes the actor's input JSON (the input schema is specific to each actor). Returns an array of result items directly. Note: 5-minute timeout — use the async runActor + getDatasetItems for long runs.",
+      "verb": "POST",
+      "path": "/acts/{actorId}/run-sync-get-dataset-items",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["actorId"],
+        "properties": {
+          "actorId": { "type": "string", "description": "Actor id, format 'username~actorname', e.g. 'apify~website-content-crawler'" }
+        }
+      }
+    },
+    {
+      "id": "runActor",
+      "label": "Run Actor (async start)",
+      "description": "Start an actor run asynchronously. `actorId` is 'username~actorname'; every other field is the actor input. Returns { data: { id, defaultDatasetId, status } } — fetch results later with Get Dataset Items using defaultDatasetId.",
+      "verb": "POST",
+      "path": "/acts/{actorId}/runs",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["actorId"],
+        "properties": {
+          "actorId": { "type": "string", "description": "Actor id, format 'username~actorname'" }
+        }
+      }
+    },
+    {
+      "id": "getDatasetItems",
+      "label": "Get Dataset Items",
+      "description": "Fetch items from a dataset (use defaultDatasetId from an async run). Returns an array of result items.",
+      "verb": "GET",
+      "path": "/datasets/{datasetId}/items",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["datasetId"],
+        "properties": {
+          "datasetId": { "type": "string", "description": "Dataset id (defaultDatasetId from a run)" },
+          "clean": { "type": "boolean" },
+          "limit": { "type": "integer" },
+          "offset": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "me",
+      "label": "Account Info",
+      "description": "Get the authenticated user (plan, usage). Returns { data: { id, username, plan } }.",
+      "verb": "GET",
+      "path": "/users/me",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    }
+  ]
+}

@@ -3,12 +3,14 @@ import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInf
 import AgentPanel from "./AgentPanel";
 import { LogoMark } from "./Logo";
 import CellDetails, { extractCode } from "./CellDetails";
-import { ExtensionPanel, AiProviderPanel } from "./Panels";
+import { ExtensionPanel, AiProviderPanel, ExtensionsBrowse, BrandIcon } from "./Panels";
+import { AddColumnPopover, FunctionsModal } from "./AddColumn";
 import "./styles.css";
 
 // What the main area is showing.
 type View =
   | { kind: "table" }
+  | { kind: "extensions" }
   | { kind: "extension"; id: string }
   | { kind: "ai"; id: string };
 
@@ -62,6 +64,16 @@ const Icon = {
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
       <path d="M10 11v6M14 11v6M9 6V4h6v2"/>
+    </svg>
+  ),
+  Star: ({ filled = false }: { filled?: boolean }) => (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+    </svg>
+  ),
+  More: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+      <circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>
     </svg>
   ),
 };
@@ -168,141 +180,6 @@ function CellContent({ cell, col, onEdit, onOpenDetails }: {
   );
 }
 
-// ─── Add Column Modal ────────────────────────────────────
-
-interface AddColModalProps {
-  tableId: string;
-  connectors: ConnectorInfo[];
-  onClose: () => void;
-  onAdded: () => void;
-}
-
-function AddColModal({ tableId, connectors, onClose, onAdded }: AddColModalProps) {
-  const [name, setName] = useState("");
-  const [type, setType] = useState("text");
-  const [mode, setMode] = useState<"manual" | "function">("manual");
-  const [fnKey, setFnKey] = useState("");
-  const [params, setParams] = useState<{ k: string; v: string }[]>([{ k: "", v: "" }]);
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState("");
-
-  const allMethods = connectors.flatMap(c =>
-    c.methods.map(m => ({ key: `${c.provider}.${m.method}`, label: `${c.name} · ${m.label}`, description: m.description }))
-  );
-
-  const handleSubmit = async () => {
-    if (!name.trim()) { setErr("Column name is required"); return; }
-    if (mode === "function" && !fnKey) { setErr("Select a function"); return; }
-    setSaving(true);
-    setErr("");
-    try {
-      const paramObj: Record<string, unknown> = {};
-      params.forEach(({ k, v }) => { if (k.trim()) paramObj[k.trim()] = v; });
-      await api.addColumn(tableId, {
-        name: name.trim(),
-        type,
-        fn: mode === "function" ? fnKey : undefined,
-        params: mode === "function" ? paramObj : undefined,
-      });
-      onAdded();
-      onClose();
-    } catch (e: any) {
-      setErr(e.message ?? "Failed to add column");
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
-        <div className="modal-header">
-          <span className="modal-title">Add column</span>
-          <button className="modal-close" onClick={onClose}><Icon.X /></button>
-        </div>
-        <div className="modal-body">
-          <div className="form-row">
-            <label className="form-label">Name</label>
-            <input className="form-input" value={name} onChange={e => setName(e.target.value)}
-              placeholder="e.g. Company name" autoFocus onKeyDown={e => e.key === "Enter" && handleSubmit()} />
-          </div>
-          <div className="form-row">
-            <label className="form-label">Type</label>
-            <select className="form-select" value={type} onChange={e => setType(e.target.value)}>
-              <option value="text">Text</option>
-              <option value="number">Number</option>
-              <option value="boolean">Boolean</option>
-              <option value="date">Date</option>
-              <option value="json">JSON</option>
-            </select>
-          </div>
-          <div className="form-row">
-            <label className="form-label">Source</label>
-            <div className="toggle-group">
-              <button className={`toggle-btn${mode === "manual" ? " active" : ""}`} onClick={() => setMode("manual")}>Manual</button>
-              <button className={`toggle-btn${mode === "function" ? " active" : ""}`} onClick={() => setMode("function")}>Function</button>
-            </div>
-          </div>
-
-          {mode === "function" && (
-            <>
-              <div className="form-row">
-                <label className="form-label">Function</label>
-                <select className="form-select" value={fnKey} onChange={e => setFnKey(e.target.value)}>
-                  <option value="">— choose a function —</option>
-                  {connectors.map(c => (
-                    <optgroup key={c.provider} label={c.name}>
-                      {c.methods.map(m => (
-                        <option key={`${c.provider}.${m.method}`} value={`${c.provider}.${m.method}`}>
-                          {m.label} — {m.description.slice(0, 48)}{m.description.length > 48 ? "…" : ""}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-              </div>
-              <div className="form-row">
-                <label className="form-label">Parameters</label>
-                <div className="params-list">
-                  {params.map((p, i) => (
-                    <div key={i} className="param-row">
-                      <input className="form-input" placeholder="key" value={p.k}
-                        onChange={e => setParams(ps => ps.map((x, j) => j === i ? { ...x, k: e.target.value } : x))} />
-                      <input className="form-input" placeholder="value or {{Column}}" value={p.v}
-                        onChange={e => setParams(ps => ps.map((x, j) => j === i ? { ...x, v: e.target.value } : x))} />
-                      <button className="param-del" onClick={() => setParams(ps => ps.filter((_, j) => j !== i))}>
-                        <Icon.Trash />
-                      </button>
-                    </div>
-                  ))}
-                  <button className="btn btn-ghost btn-sm" style={{ alignSelf: "flex-start" }}
-                    onClick={() => setParams(ps => [...ps, { k: "", v: "" }])}>
-                    <Icon.Plus size={11} /> Add param
-                  </button>
-                </div>
-                <p className="params-hint">
-                  Use <code>{"{{Column Name}}"}</code> to reference values from other columns in the same row.
-                </p>
-              </div>
-            </>
-          )}
-
-          {err && (
-            <div style={{ color: "var(--danger)", fontSize: 12, background: "var(--danger-bg)", padding: "6px 10px", borderRadius: "var(--r-sm)" }}>
-              {err}
-            </div>
-          )}
-        </div>
-        <div className="modal-footer">
-          <button className="btn btn-outline" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={handleSubmit} disabled={saving}>
-            {saving ? "Adding…" : "Add column"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── New Table Modal ──────────────────────────────────────
 
 function NewTableModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
@@ -358,6 +235,8 @@ export default function App() {
   const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
   const [tableData, setTableData] = useState<FullTable | null>(null);
   const [tableLoading, setTableLoading] = useState(false);
+  const [renamingTableId, setRenamingTableId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
 
   // Connectors / extensions / AI providers
   const [connectors, setConnectors] = useState<ConnectorInfo[]>([]);
@@ -365,13 +244,24 @@ export default function App() {
   const [aiProviders, setAiProviders] = useState<AiProviderInfo[]>([]);
   const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
   const [fnSectionOpen, setFnSectionOpen] = useState(false); // Functions section: collapsed by default
+  const [aiSectionOpen, setAiSectionOpen] = useState(true);
+  const [extSectionOpen, setExtSectionOpen] = useState(true);
 
   // Which detail (table grid / extension / AI provider) the main area shows.
   const [view, setView] = useState<View>({ kind: "table" });
 
   // Modals
   const [showAddCol, setShowAddCol] = useState(false);
+  const [addColAnchor, setAddColAnchor] = useState<{ left: number; top: number } | null>(null);
+  const [showFunctions, setShowFunctions] = useState(false);
   const [showNewTable, setShowNewTable] = useState(false);
+
+  // Open the add-column popover anchored just below the clicked "+" button.
+  const openAddCol = (e: React.MouseEvent) => {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setAddColAnchor({ left: r.left, top: r.bottom });
+    setShowAddCol(true);
+  };
 
   // Run state
   const [runProgress, setRunProgress] = useState<{ current: number; total: number } | null>(null);
@@ -397,6 +287,13 @@ export default function App() {
       return next;
     });
   }, []);
+
+  // Right-click context menu
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number;
+    y: number;
+    items: { label: string; danger?: boolean; onClick: () => void }[];
+  } | null>(null);
 
   // ── Boot ───────────────────────────────────
 
@@ -467,6 +364,47 @@ export default function App() {
       return t.length ? t[t.length - 1].id : null;
     });
   }, [loadTable]);
+
+  // ── Table management (rename / delete / favorite) ──
+
+  const reloadTables = useCallback(async () => {
+    const t = await api.tables().catch(() => null);
+    if (t) setTables(t);
+  }, []);
+
+  const toggleFavorite = async (id: string, favorite: boolean) => {
+    await api.favoriteTable(id, favorite).catch(() => {});
+    await reloadTables();
+  };
+
+  const commitRename = async (id: string, name: string) => {
+    setRenamingTableId(null);
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    await api.renameTable(id, trimmed).catch(() => {});
+    await reloadTables();
+  };
+
+  const deleteTable = async (id: string) => {
+    if (!window.confirm("Delete this table? This removes all of its columns and rows.")) return;
+    await api.deleteTable(id).catch(() => {});
+    const t = await api.tables().catch(() => []);
+    setTables(t);
+    if (selectedTableId === id) {
+      const next = t[0]?.id ?? null;
+      setSelectedTableId(next);
+      setView({ kind: "table" });
+    }
+  };
+
+  const tableMenuItems = (t: TableSummary) => [
+    {
+      label: t.favorite ? "Unpin from Favorites" : "Pin to Favorites",
+      onClick: () => toggleFavorite(t.id, !t.favorite),
+    },
+    { label: "Rename", onClick: () => { setRenameDraft(t.name); setRenamingTableId(t.id); } },
+    { label: "Delete", danger: true, onClick: () => deleteTable(t.id) },
+  ];
 
   // ── Run all function cols ──────────────────
 
@@ -549,6 +487,28 @@ export default function App() {
     window.addEventListener("mouseup", onUp);
   };
 
+  // ── Delete row / cell / column ─────────────
+
+  const reloadCurrent = () => {
+    if (selectedTableId) loadTable(selectedTableId);
+  };
+  const deleteRow = async (rowId: string) => {
+    await api.deleteRow(rowId).catch(() => {});
+    reloadCurrent();
+  };
+  const clearCell = async (rowId: string, columnId: string) => {
+    await api.clearCell(rowId, columnId).catch(() => {});
+    reloadCurrent();
+  };
+  const deleteColumn = async (columnId: string) => {
+    await api.deleteColumn(columnId).catch(() => {});
+    reloadCurrent();
+  };
+  const openCtx = (e: React.MouseEvent, items: { label: string; danger?: boolean; onClick: () => void }[]) => {
+    e.preventDefault();
+    setCtxMenu({ x: e.clientX, y: e.clientY, items });
+  };
+
   // ── Set cell ───────────────────────────────
 
   const setCell = async (rowId: string, colId: string, value: string) => {
@@ -603,16 +563,42 @@ export default function App() {
             </div>
             {tables.length === 0 ? (
               <div style={{ padding: "4px 16px", fontSize: 12, color: "var(--text-3)" }}>No tables yet</div>
-            ) : tables.map(t => (
+            ) : [...tables].sort((a, b) => Number(b.favorite) - Number(a.favorite)).map(t => (
+              renamingTableId === t.id ? (
+                <div key={t.id} className="sidebar-item" style={{ paddingTop: 2, paddingBottom: 2 }}>
+                  <span className="sidebar-item-icon"><Icon.Table /></span>
+                  <input
+                    className="sidebar-rename-input"
+                    value={renameDraft}
+                    autoFocus
+                    onChange={e => setRenameDraft(e.target.value)}
+                    onBlur={() => commitRename(t.id, renameDraft)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter") commitRename(t.id, renameDraft);
+                      if (e.key === "Escape") setRenamingTableId(null);
+                    }}
+                  />
+                </div>
+              ) : (
               <div
                 key={t.id}
                 className={`sidebar-item${t.id === selectedTableId && view.kind === "table" ? " active" : ""}`}
                 onClick={() => { setSelectedTableId(t.id); setView({ kind: "table" }); }}
+                onContextMenu={e => openCtx(e, tableMenuItems(t))}
               >
                 <span className="sidebar-item-icon"><Icon.Table /></span>
                 <span className="sidebar-item-name">{t.name}</span>
+                {t.favorite && <span className="sidebar-item-star"><Icon.Star filled /></span>}
+                <button
+                  className="sidebar-item-more"
+                  title="Table options"
+                  onClick={e => { e.stopPropagation(); openCtx(e, tableMenuItems(t)); }}
+                >
+                  <Icon.More />
+                </button>
                 <span className="sidebar-item-count">{t.rows}</span>
               </div>
+              )
             ))}
             <div className="sidebar-item" style={{ marginTop: 2 }} onClick={() => setShowNewTable(true)}>
               <span className="sidebar-item-icon" style={{ color: "var(--accent)" }}><Icon.Plus /></span>
@@ -620,10 +606,17 @@ export default function App() {
             </div>
           </div>
 
-          {/* AI Providers section */}
+          {/* AI Providers section — collapsible */}
           <div className="sidebar-section">
-            <div className="sidebar-section-label">AI Providers</div>
-            {aiProviders.length === 0 ? (
+            <div className="sidebar-section-label clickable" onClick={() => setAiSectionOpen(o => !o)}>
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span className={`connector-group-toggle${aiSectionOpen ? " open" : ""}`}>
+                  <Icon.ChevronRight />
+                </span>
+                AI Providers
+              </span>
+            </div>
+            {aiSectionOpen && (aiProviders.length === 0 ? (
               <div className="skeleton-row">
                 <div className="shimmer skeleton-bar" style={{ width: "65%", height: 13 }} />
               </div>
@@ -633,16 +626,30 @@ export default function App() {
                 className={`ext-item clickable${view.kind === "ai" && view.id === p.id ? " active" : ""}`}
                 onClick={() => setView({ kind: "ai", id: p.id })}
               >
+                <BrandIcon logo={p.logo} name={p.name} size={16} />
                 <span className="ext-item-name">{p.name}</span>
                 {p.connected && <span className="ext-badge connected">connected</span>}
               </div>
-            ))}
+            )))}
           </div>
 
-          {/* Extensions section */}
+          {/* Extensions section — collapsible, with Browse all in the header */}
           <div className="sidebar-section">
-            <div className="sidebar-section-label">Extensions</div>
-            {extensions.length === 0 ? (
+            <div className="sidebar-section-label clickable" onClick={() => setExtSectionOpen(o => !o)}>
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span className={`connector-group-toggle${extSectionOpen ? " open" : ""}`}>
+                  <Icon.ChevronRight />
+                </span>
+                Extensions
+              </span>
+              <button
+                className={`section-link${view.kind === "extensions" ? " active" : ""}`}
+                onClick={e => { e.stopPropagation(); setView({ kind: "extensions" }); }}
+              >
+                Browse all
+              </button>
+            </div>
+            {extSectionOpen && (extensions.length === 0 ? (
               <div className="skeleton-row">
                 <div className="shimmer skeleton-bar" style={{ width: "70%", height: 13 }} />
               </div>
@@ -652,12 +659,13 @@ export default function App() {
                 className={`ext-item clickable${view.kind === "extension" && view.id === e.id ? " active" : ""}`}
                 onClick={() => setView({ kind: "extension", id: e.id })}
               >
+                <BrandIcon logo={e.logo} name={e.name} size={16} />
                 <span className="ext-item-name">{e.name}</span>
                 <span className={`ext-badge ${e.connected ? "connected" : "no-key"}`}>
                   {e.connected ? "connected" : "no key"}
                 </span>
               </div>
-            ))}
+            )))}
           </div>
 
           {/* Functions section — collapsed by default */}
@@ -721,9 +729,19 @@ export default function App() {
           </div>
         )}
 
-        {/* Extension / AI Provider detail panels */}
+        {/* Extensions gallery + detail panels */}
+        {view.kind === "extensions" && (
+          <ExtensionsBrowse
+            extensions={extensions}
+            onOpen={(id) => setView({ kind: "extension", id })}
+          />
+        )}
         {view.kind === "extension" && (
-          <ExtensionPanel id={view.id} onConnected={refreshConnections} />
+          <ExtensionPanel
+            id={view.id}
+            onConnected={refreshConnections}
+            onBack={() => setView({ kind: "extensions" })}
+          />
         )}
         {view.kind === "ai" && (() => {
           const p = aiProviders.find(x => x.id === view.id);
@@ -795,7 +813,7 @@ export default function App() {
             <div className="empty-icon"><Icon.Zap /></div>
             <div className="empty-title">No columns yet</div>
             <p className="empty-sub">Add columns to define your data structure. Use function columns to enrich rows automatically.</p>
-            <button className="btn btn-primary" onClick={() => setShowAddCol(true)}>
+            <button className="btn btn-primary" onClick={openAddCol}>
               <Icon.Plus /> Add first column
             </button>
           </div>
@@ -807,7 +825,14 @@ export default function App() {
                   {/* Row-number gutter */}
                   <th className="grid-th row-num-th col-row-num" />
                   {tableData.columns.map(col => (
-                    <th key={col.id} className="grid-th" style={{ width: colWidths[col.id] ?? 180, minWidth: 80 }}>
+                    <th
+                      key={col.id}
+                      className="grid-th"
+                      style={{ width: colWidths[col.id] ?? 180, minWidth: 80 }}
+                      onContextMenu={(e) =>
+                        openCtx(e, [{ label: `Delete column “${col.name}”`, danger: true, onClick: () => deleteColumn(col.id) }])
+                      }
+                    >
                       <div className="th-inner">
                         <span className="th-name">{col.name}</span>
                         {col.kind === "function" && col.fn && (
@@ -838,7 +863,7 @@ export default function App() {
                   ))}
                   {/* Add column */}
                   <th className="grid-th add-col-th">
-                    <button className="add-col-btn" onClick={() => setShowAddCol(true)} title="Add column">
+                    <button className="add-col-btn" onClick={openAddCol} title="Add column">
                       <Icon.Plus size={16} />
                     </button>
                   </th>
@@ -857,11 +882,25 @@ export default function App() {
                   </tr>
                 ) : tableData.rows.map((row, idx) => (
                   <tr key={row.id} className="grid-tr">
-                    <td className="grid-td row-num-td">{idx + 1}</td>
+                    <td
+                      className="grid-td row-num-td"
+                      onContextMenu={(e) => openCtx(e, [{ label: "Delete row", danger: true, onClick: () => deleteRow(row.id) }])}
+                    >
+                      {idx + 1}
+                    </td>
                     {tableData.columns.map(col => {
                       const cell: Cell | undefined = row.cells[col.id];
                       return (
-                        <td key={col.id} className="grid-td">
+                        <td
+                          key={col.id}
+                          className="grid-td"
+                          onContextMenu={(e) =>
+                            openCtx(e, [
+                              { label: "Clear cell", onClick: () => clearCell(row.id, col.id) },
+                              { label: "Delete row", danger: true, onClick: () => deleteRow(row.id) },
+                            ])
+                          }
+                        >
                           <CellContent
                             cell={cell}
                             col={col}
@@ -903,13 +942,50 @@ export default function App() {
         />
       )}
 
+      {/* ── Right-click context menu ─ */}
+      {ctxMenu && (
+        <>
+          <div className="ctx-backdrop" onClick={() => setCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null); }} />
+          <div className="ctx-menu" style={{ left: ctxMenu.x, top: ctxMenu.y }}>
+            {ctxMenu.items.map((it, i) => (
+              <button
+                key={i}
+                className={`ctx-item ${it.danger ? "danger" : ""}`}
+                onClick={() => {
+                  setCtxMenu(null);
+                  it.onClick();
+                }}
+              >
+                {it.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
       {/* ── Modals ──────────────────────── */}
       {showAddCol && tableData && (
-        <AddColModal
+        <AddColumnPopover
           tableId={tableData.id}
-          connectors={connectors}
+          anchor={addColAnchor}
           onClose={() => setShowAddCol(false)}
           onAdded={() => loadTable(tableData.id)}
+          onUseFunction={() => { setShowAddCol(false); setShowFunctions(true); }}
+        />
+      )}
+
+      {showFunctions && tableData && (
+        <FunctionsModal
+          tableId={tableData.id}
+          connectors={connectors}
+          columns={tableData.columns.map((c) => c.name)}
+          onClose={() => setShowFunctions(false)}
+          onAdded={() => loadTable(tableData.id)}
+          onOpenAiSettings={() => {
+            setShowFunctions(false);
+            const target = aiProviders[0]?.id ?? "anthropic";
+            setView({ kind: "ai", id: target });
+          }}
         />
       )}
 

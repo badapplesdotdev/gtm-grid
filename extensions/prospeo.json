@@ -1,0 +1,53 @@
+{
+  "id": "prospeo",
+  "name": "Prospeo",
+  "version": "1.0.0",
+  "category": "enrichment",
+  "description": "Email & mobile finder — enrich a person to a verified work email and direct phone.",
+  "baseUrl": "https://api.prospeo.io",
+  "logo": "https://www.google.com/s2/favicons?domain=prospeo.io&sz=128",
+  "auth": { "type": "apiKey", "header": "X-KEY", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "enrichPerson",
+      "label": "Enrich Person",
+      "description": "Find a verified work email (and optional mobile) for a person. Put the identifiers inside `data`: either { linkedin_url } OR { email } OR { full_name, company } OR { first_name, last_name, company_name | company_website | company_linkedin_url }. Returns { person: { email: { status, revealed, email }, mobile } }. Set enrich_mobile to also reveal a phone (extra cost).",
+      "verb": "POST",
+      "path": "/enrich-person",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["data"],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Identifiers. e.g. { \"linkedin_url\": \"https://linkedin.com/in/...\" } or { \"first_name\": \"Jane\", \"last_name\": \"Doe\", \"company_website\": \"acme.com\" }",
+            "properties": {
+              "first_name": { "type": "string" },
+              "last_name": { "type": "string" },
+              "full_name": { "type": "string" },
+              "company": { "type": "string" },
+              "company_name": { "type": "string" },
+              "company_website": { "type": "string" },
+              "company_linkedin_url": { "type": "string" },
+              "linkedin_url": { "type": "string" },
+              "email": { "type": "string" },
+              "person_id": { "type": "string" }
+            }
+          },
+          "only_verified_email": { "type": "boolean", "description": "Only return the email if it is verified" },
+          "enrich_mobile": { "type": "boolean", "description": "Also attempt to reveal a direct mobile number" }
+        }
+      }
+    },
+    {
+      "id": "accountInformation",
+      "label": "Account Information",
+      "description": "Get remaining credits and account details. Returns { response: { remaining_credits, ... } }.",
+      "verb": "GET",
+      "path": "/account-information",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    }
+  ]
+}

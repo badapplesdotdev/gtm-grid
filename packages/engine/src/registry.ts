@@ -4,6 +4,7 @@
 import type { Connector, ConnectorMethod } from "./types.js";
 import { aiConnector } from "./connectors/ai.js";
 import { githubConnector } from "./connectors/github.js";
+import { formattingConnector } from "./connectors/formatting.js";
 
 export class Registry {
   private connectors = new Map<string, Connector>();
@@ -37,5 +38,5 @@ export class Registry {
 }
 
 export function defaultRegistry(): Registry {
-  return new Registry([aiConnector, githubConnector]);
+  return new Registry([aiConnector, formattingConnector, githubConnector]);
 }

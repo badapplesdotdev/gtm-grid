@@ -18,6 +18,7 @@ export interface TableSummary {
   name: string;
   columns: number;
   rows: number;
+  favorite: boolean;
 }
 export interface Column {
   id: string;
@@ -49,29 +50,77 @@ export interface FunctionMethod {
   label: string;
   description: string;
   credits: number;
+  input?: Record<string, unknown> | null;
+  source?: string | null;
+  batchSize?: number;
 }
 export interface ConnectorInfo {
   provider: string;
   name: string;
   category: string;
   requiresCredential: boolean;
+  logo?: string | null;
   methods: FunctionMethod[];
 }
 export interface ExtensionInfo {
   id: string;
   name: string;
   category: string;
+  description: string | null;
+  featured: boolean;
   methods: number;
   connected: boolean;
+  logo: string | null;
+}
+export interface ExtensionMethodDetail {
+  id: string;
+  label: string;
+  description: string;
+  credits: number;
+  verb: string | null;
+  path: string | null;
+}
+export type CredentialScope = "personal" | "team" | "local";
+export interface ExtensionDetail {
+  id: string;
+  name: string;
+  category: string;
+  description: string | null;
+  version: string | null;
+  baseUrl: string | null;
+  logo: string | null;
+  auth: { type: string; header: string | null; secretKey: string } | null;
+  connected: boolean;
+  connectedScopes: CredentialScope[];
+  methods: ExtensionMethodDetail[];
+}
+export interface AiProviderInfo {
+  id: string;
+  name: string;
+  description: string;
+  logo: string | null;
+  models: string[];
+  connected: boolean;
+  viaEnv: boolean;
+  connectedScopes: CredentialScope[];
 }
 
 export const api = {
   health: () => http<{ ok: boolean; project: string }>("/api/health"),
   functions: () => http<ConnectorInfo[]>("/api/functions"),
   extensions: () => http<ExtensionInfo[]>("/api/extensions"),
+  extension: (id: string) => http<ExtensionDetail>(`/api/extensions/${id}`),
+  aiProviders: () => http<AiProviderInfo[]>("/api/ai-providers"),
+  connectAiProvider: (id: string, body: { apiKey: string; scope?: CredentialScope }) =>
+    http<{ ok: boolean }>(`/api/ai-providers/${id}/connect`, { method: "POST", body: JSON.stringify(body) }),
   tables: () => http<TableSummary[]>("/api/tables"),
   createTable: (name: string) => http<TableSummary>("/api/tables", { method: "POST", body: JSON.stringify({ name }) }),
   table: (id: string) => http<FullTable>(`/api/tables/${id}`),
+  renameTable: (id: string, name: string) =>
+    http<{ ok: boolean }>(`/api/tables/${id}/update`, { method: "POST", body: JSON.stringify({ name }) }),
+  deleteTable: (id: string) => http<{ ok: boolean }>(`/api/tables/${id}/delete`, { method: "POST" }),
+  favoriteTable: (id: string, favorite: boolean) =>
+    http<{ ok: boolean; favorite: boolean }>(`/api/tables/${id}/favorite`, { method: "POST", body: JSON.stringify({ favorite }) }),
   addColumn: (
     tableId: string,
     body: { name: string; type?: string; fn?: string; code?: string; params?: Record<string, unknown> },
@@ -89,8 +138,12 @@ export const api = {
     columnId: string,
     patch: { name?: string; type?: string; kind?: string; provider?: string | null; method?: string | null; code?: string | null; params?: Record<string, unknown> },
   ) => http<{ ok: boolean; tableId?: string; id?: string }>(`/api/columns/${columnId}/update`, { method: "POST", body: JSON.stringify(patch) }),
-  connect: (extId: string, secrets: Record<string, string>) =>
-    http<{ ok: boolean }>(`/api/extensions/${extId}/connect`, { method: "POST", body: JSON.stringify({ secrets }) }),
+  deleteColumn: (columnId: string) => http<{ ok: boolean }>(`/api/columns/${columnId}/delete`, { method: "POST" }),
+  deleteRow: (rowId: string) => http<{ ok: boolean }>(`/api/rows/${rowId}/delete`, { method: "POST" }),
+  clearCell: (rowId: string, columnId: string) =>
+    http<{ ok: boolean }>("/api/cells/delete", { method: "POST", body: JSON.stringify({ rowId, columnId }) }),
+  connect: (extId: string, secrets: Record<string, string>, scope?: CredentialScope) =>
+    http<{ ok: boolean }>(`/api/extensions/${extId}/connect`, { method: "POST", body: JSON.stringify({ secrets, scope }) }),
   agents: () =>
     http<{ claude: AgentStatus; codex: AgentStatus }>("/api/agents"),
   connectAgent: (agent: "claude" | "codex", path?: string) =>

@@ -6,7 +6,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { openProject, parseManifest, connectorFromManifest } from "@gtmgrid/engine";
+import { openProject, parseManifest, connectorFromManifest, connectAi, storedAiConfig, storedAiProviders } from "@gtmgrid/engine";
 import { detectAgents, streamClaude, streamCodex, setAgentPath, rescanAgents, type AgentKind } from "./agent.js";
 
 const PROJECT = process.env.GTMGRID_PROJECT ?? "default";
@@ -52,11 +52,31 @@ function route(method: string, path: string, handler: Handler) {
 }
 
 // --- serialization helpers ---
+// Derive a brand logo from a domain via Google's favicon service (reliable,
+// no API key). Strips api./www. so we hit the marketing root domain.
+function logoFor(domainOrUrl?: string | null): string | null {
+  if (!domainOrUrl) return null;
+  let host = domainOrUrl;
+  try {
+    host = new URL(domainOrUrl.includes("://") ? domainOrUrl : `https://${domainOrUrl}`).hostname;
+  } catch {
+    /* treat as bare host */
+  }
+  host = host.replace(/^(www|api)\./, "");
+  return host ? `https://www.google.com/s2/favicons?domain=${host}&sz=128` : null;
+}
+
+// Credential scope from request body — Personal / Team / Local tabs in the UI.
+function normScope(s: unknown): "personal" | "team" | "local" {
+  return s === "team" || s === "local" || s === "personal" ? s : "personal";
+}
+
 const tableSummary = (t: { id: string; name: string }) => ({
   id: t.id,
   name: t.name,
   columns: db.listColumns(t.id).length,
   rows: db.listRows(t.id).length,
+  favorite: db.isFavorite(t.id),
 });
 
 function fullTable(tableId: string) {
@@ -90,13 +110,25 @@ function fullTable(tableId: string) {
 route("GET", "/api/health", () => ({ ok: true, project: PROJECT }));
 
 route("GET", "/api/functions", () =>
-  engine.registry.list().map((c) => ({
-    provider: c.id,
-    name: c.name,
-    category: c.category,
-    requiresCredential: !!c.auth,
-    methods: c.methods.map((m) => ({ method: m.id, label: m.label, description: m.description, credits: m.credits })),
-  })),
+  engine.registry.list().map((c) => {
+    const ext: any = db.getExtension(c.id);
+    return {
+      provider: c.id,
+      name: c.name,
+      category: c.category,
+      requiresCredential: !!c.auth,
+      logo: ext ? ext.logo ?? logoFor(ext.baseUrl) : null,
+      methods: c.methods.map((m) => ({
+        method: m.id,
+        label: m.label,
+        description: m.description,
+        credits: m.credits,
+        input: m.inputSchema ?? null,
+        source: m.source ?? null,
+        batchSize: m.batchSize ?? 1,
+      })),
+    };
+  }),
 );
 
 route("GET", "/api/extensions", () =>
@@ -104,14 +136,114 @@ route("GET", "/api/extensions", () =>
     id: e.id,
     name: e.name,
     category: e.category,
+    description: e.description ?? null,
+    featured: !!e.featured,
     methods: (e.methods ?? []).length,
     connected: !!db.getCredential(e.id),
+    logo: e.logo ?? logoFor(e.baseUrl),
   })),
 );
+
+// Full manifest for one extension — powers the extension detail panel.
+route("GET", "/api/extensions/:id", (p) => {
+  const m: any = db.getExtension(p.id);
+  if (!m) return { error: "not found" };
+  return {
+    id: m.id,
+    name: m.name,
+    category: m.category ?? "custom",
+    description: m.description ?? null,
+    version: m.version ?? null,
+    baseUrl: m.baseUrl ?? null,
+    logo: m.logo ?? logoFor(m.baseUrl),
+    auth: m.auth
+      ? { type: m.auth.type, header: m.auth.header ?? null, secretKey: m.auth.secretKey ?? "apiKey" }
+      : null,
+    connected: !!db.getCredential(m.id),
+    connectedScopes: db.credentialScopes(m.id),
+    methods: (m.methods ?? []).map((x: any) => ({
+      id: x.id,
+      label: x.label ?? x.id,
+      description: x.description ?? "",
+      credits: x.credits ?? 0,
+      verb: x.verb ?? null,
+      path: x.path ?? null,
+    })),
+  };
+});
+
+// --- AI providers (bring-your-own-key for AI step functions) ---
+const AI_PROVIDERS = [
+  {
+    id: "anthropic",
+    name: "Anthropic",
+    description: "Claude models for reasoning and generation.",
+    domain: "anthropic.com",
+    models: ["claude-opus-4-1-20250805", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+  },
+  {
+    id: "openai",
+    name: "OpenAI",
+    description: "Industry-leading models for reasoning and generation.",
+    domain: "openai.com",
+    models: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o3-mini"],
+  },
+] as const;
+
+route("GET", "/api/ai-providers", () => {
+  // Each provider connects independently (per-provider credential slot), so any
+  // number can be connected at once and all their models pull through.
+  const connectedProviders = new Set((engine.config.aiProviders ?? []).map((a) => a.provider));
+  const envProvider = process.env.ANTHROPIC_API_KEY ? "anthropic" : process.env.OPENAI_API_KEY ? "openai" : undefined;
+  return AI_PROVIDERS.map((p) => {
+    const hasKey = !!db.getCredential(`ai:${p.id}`);
+    const viaEnv = !hasKey && envProvider === p.id;
+    const connected = connectedProviders.has(p.id) || viaEnv;
+    return {
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      logo: logoFor(p.domain),
+      models: p.models,
+      connected,
+      viaEnv,
+      connectedScopes: hasKey ? db.credentialScopes(`ai:${p.id}`) : [],
+    };
+  });
+});
+
+route("POST", "/api/ai-providers/:id/connect", (p, body) => {
+  if (p.id !== "anthropic" && p.id !== "openai") return { error: "unsupported provider" };
+  const apiKey = String(body?.apiKey ?? "").trim();
+  if (!apiKey) return { error: "apiKey required" };
+  connectAi(db, p.id, apiKey, undefined, normScope(body?.scope));
+  // Refresh the live engine so AI columns work immediately — both the active
+  // provider and the full set used for model-based routing.
+  engine.config.ai = storedAiConfig(db);
+  engine.config.aiProviders = storedAiProviders(db);
+  return { ok: true };
+});
 
 route("GET", "/api/tables", () => db.listTables().map(tableSummary));
 route("POST", "/api/tables", (_p, body) => tableSummary(db.createTable(body?.name ?? "Untitled")));
 route("GET", "/api/tables/:id", (p) => fullTable(p.id) ?? { error: "not found" });
+
+route("POST", "/api/tables/:id/update", (p, body) => {
+  const name = typeof body?.name === "string" ? body.name.trim() : "";
+  if (!name) return { error: "name required" };
+  db.renameTable(p.id, name);
+  return { ok: true };
+});
+
+route("POST", "/api/tables/:id/delete", (p) => {
+  db.deleteTable(p.id);
+  return { ok: true };
+});
+
+route("POST", "/api/tables/:id/favorite", (p, body) => {
+  db.setFavorite(p.id, body?.favorite !== false);
+  return { ok: true, favorite: db.isFavorite(p.id) };
+});
 
 route("POST", "/api/tables/:id/columns", (p, body) => {
   const provider = body.fn ? String(body.fn).split(".")[0] : null;
@@ -155,8 +287,23 @@ route("POST", "/api/columns/:id/update", (p, body) => {
   return col ? { ok: true, tableId: col.table_id, id: col.id } : { error: "not found" };
 });
 
+route("POST", "/api/columns/:id/delete", (p) => {
+  db.deleteColumn(p.id);
+  return { ok: true };
+});
+
+route("POST", "/api/rows/:id/delete", (p) => {
+  db.deleteRow(p.id);
+  return { ok: true };
+});
+
+route("POST", "/api/cells/delete", (_p, body) => {
+  if (body?.rowId && body?.columnId) db.deleteCell(body.rowId, body.columnId);
+  return { ok: true };
+});
+
 route("POST", "/api/extensions/:id/connect", (p, body) => {
-  db.saveCredential({ extensionId: p.id, scope: "local", name: "default", secrets: body?.secrets ?? {} });
+  db.saveCredential({ extensionId: p.id, scope: normScope(body?.scope), name: "default", secrets: body?.secrets ?? {} });
   return { ok: true };
 });
 

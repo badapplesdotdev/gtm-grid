@@ -1,0 +1,55 @@
+{
+  "id": "fullenrich",
+  "name": "FullEnrich",
+  "version": "1.0.0",
+  "category": "enrichment",
+  "description": "Waterfall email & phone enrichment across 15+ vendors. Async: submit a bulk, then poll for the result.",
+  "baseUrl": "https://app.fullenrich.com/api/v1",
+  "logo": "https://www.google.com/s2/favicons?domain=fullenrich.com&sz=128",
+  "auth": { "type": "apiKey", "header": "Authorization", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "enrichBulk",
+      "label": "Enrich Bulk (submit)",
+      "description": "Submit up to 100 contacts for waterfall email/phone enrichment. `datas` is an array, each with firstname, lastname, domain, company_name, linkedin_url, and enrich_fields (e.g. [\"contact.emails\",\"contact.phones\"]). Returns { enrichment_id } — poll Get Result with it. ASYNC: results are not ready immediately.",
+      "verb": "POST",
+      "path": "/contact/enrich/bulk",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["name", "datas"],
+        "properties": {
+          "name": { "type": "string", "description": "Label for this bulk, e.g. 'Sales Ops London'" },
+          "webhook_url": { "type": "string", "description": "Optional webhook POSTed when finished" },
+          "datas": {
+            "type": "array",
+            "description": "Array of contacts (1-100). Each: { firstname, lastname, domain, company_name, linkedin_url, enrich_fields: [\"contact.emails\",\"contact.phones\"] }",
+            "items": { "type": "object" }
+          }
+        }
+      }
+    },
+    {
+      "id": "getResult",
+      "label": "Get Result (poll)",
+      "description": "Fetch enrichment results by enrichment_id (from Enrich Bulk). Returns { status, datas[] } where status is CREATED|IN_PROGRESS until done then FINISHED. Each item: datas[].contact { most_probable_email, emails[]{email,status}, phones[]{number,region} }.",
+      "verb": "GET",
+      "path": "/contact/enrich/bulk/{enrichment_id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["enrichment_id"],
+        "properties": { "enrichment_id": { "type": "string", "description": "The id returned by Enrich Bulk" } }
+      }
+    },
+    {
+      "id": "credits",
+      "label": "Get Credits",
+      "description": "Get remaining workspace credits. Returns { balance }.",
+      "verb": "GET",
+      "path": "/account/credits",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    }
+  ]
+}

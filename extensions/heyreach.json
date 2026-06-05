@@ -1,0 +1,168 @@
+{
+  "id": "heyreach",
+  "name": "HeyReach",
+  "version": "1.0.0",
+  "category": "outreach",
+  "description": "LinkedIn outreach automation — manage campaigns, push leads, and read your inbox.",
+  "baseUrl": "https://api.heyreach.io/api/public",
+  "logo": "https://www.google.com/s2/favicons?domain=heyreach.io&sz=128",
+  "auth": { "type": "apiKey", "header": "X-API-KEY", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "checkApiKey",
+      "label": "Check API Key",
+      "description": "Validate the connected HeyReach API key. Returns 200 if valid.",
+      "verb": "GET",
+      "path": "/auth/CheckApiKey",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "listCampaigns",
+      "label": "List Campaigns",
+      "description": "List campaigns with progress stats. Optional keyword/status filters.",
+      "verb": "POST",
+      "path": "/campaign/GetAll",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "offset": { "type": "integer", "description": "Pagination offset (default 0)" },
+          "limit": { "type": "integer", "description": "Max results, up to 100 (default 10)" },
+          "keyword": { "type": "string", "description": "Filter by campaign name" }
+        }
+      }
+    },
+    {
+      "id": "getCampaign",
+      "label": "Get Campaign",
+      "description": "Get a single campaign (incl. sequence + stats) by its id.",
+      "verb": "GET",
+      "path": "/campaign/GetById",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["campaignId"],
+        "properties": { "campaignId": { "type": "integer", "description": "HeyReach campaign id" } }
+      }
+    },
+    {
+      "id": "addLeadsToCampaign",
+      "label": "Add Leads to Campaign",
+      "description": "Push LinkedIn leads into a campaign (max 100). Each lead needs profileUrl + firstName + lastName. linkedInAccountId is optional (binds the lead to a specific sender already on the campaign).",
+      "verb": "POST",
+      "path": "/campaign/AddLeadsToCampaignV2",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["campaignId", "accountLeadPairs"],
+        "properties": {
+          "campaignId": { "type": "integer", "description": "Target campaign id" },
+          "accountLeadPairs": {
+            "type": "array",
+            "description": "Up to 100 pairs of { linkedInAccountId?, lead }",
+            "items": {
+              "type": "object",
+              "properties": {
+                "linkedInAccountId": { "type": "integer", "description": "Sender account id (optional)" },
+                "lead": {
+                  "type": "object",
+                  "required": ["profileUrl", "firstName", "lastName"],
+                  "properties": {
+                    "profileUrl": { "type": "string" },
+                    "firstName": { "type": "string" },
+                    "lastName": { "type": "string" },
+                    "companyName": { "type": "string" },
+                    "position": { "type": "string" },
+                    "emailAddress": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "listLists",
+      "label": "List Lead Lists",
+      "description": "List your lead/company lists.",
+      "verb": "POST",
+      "path": "/list/GetAll",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "offset": { "type": "integer" },
+          "limit": { "type": "integer", "description": "Up to 100" },
+          "keyword": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "addLeadsToList",
+      "label": "Add Leads to List",
+      "description": "Add LinkedIn leads to a list (max 100). Each lead needs profileUrl + firstName + lastName.",
+      "verb": "POST",
+      "path": "/list/AddLeadsToListV2",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["listId", "leads"],
+        "properties": {
+          "listId": { "type": "integer" },
+          "leads": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["profileUrl", "firstName", "lastName"],
+              "properties": {
+                "profileUrl": { "type": "string" },
+                "firstName": { "type": "string" },
+                "lastName": { "type": "string" },
+                "companyName": { "type": "string" },
+                "position": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "listSenders",
+      "label": "List LinkedIn Senders",
+      "description": "List connected LinkedIn sender accounts (their ids are the linkedInAccountId used elsewhere).",
+      "verb": "POST",
+      "path": "/li_account/GetAll",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": { "offset": { "type": "integer" }, "limit": { "type": "integer" }, "keyword": { "type": "string" } }
+      }
+    },
+    {
+      "id": "getConversations",
+      "label": "Get Conversations",
+      "description": "Read inbox conversations. Filter by sender account, campaign, or a specific lead's profile URL.",
+      "verb": "POST",
+      "path": "/inbox/GetConversationsV2",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "offset": { "type": "integer" },
+          "limit": { "type": "integer", "description": "Up to 100" },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "campaignIds": { "type": "array", "items": { "type": "integer" } },
+              "linkedInAccountIds": { "type": "array", "items": { "type": "integer" } },
+              "leadProfileUrl": { "type": "string" },
+              "searchString": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

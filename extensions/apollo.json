@@ -1,0 +1,116 @@
+{
+  "id": "apollo",
+  "name": "Apollo.io",
+  "version": "1.0.0",
+  "category": "enrichment",
+  "description": "Sales intelligence — enrich people & companies and search Apollo's B2B database.",
+  "baseUrl": "https://api.apollo.io/api/v1",
+  "logo": "https://www.google.com/s2/favicons?domain=apollo.io&sz=128",
+  "auth": { "type": "apiKey", "header": "X-Api-Key", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "enrichPerson",
+      "label": "Enrich Person",
+      "description": "Enrich a person from name + company (or email/LinkedIn). Returns { person } with title, email, email_status, linkedin_url, organization, etc. Set reveal_personal_emails to also return personal emails. 1 credit.",
+      "verb": "POST",
+      "path": "/people/match",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "properties": {
+          "first_name": { "type": "string" },
+          "last_name": { "type": "string" },
+          "name": { "type": "string", "description": "Full name (alternative to first+last)" },
+          "email": { "type": "string", "description": "Known email (best identifier)" },
+          "organization_name": { "type": "string", "description": "Employer company name" },
+          "domain": { "type": "string", "description": "Employer domain, e.g. 'stripe.com'" },
+          "linkedin_url": { "type": "string" },
+          "reveal_personal_emails": { "type": "boolean", "description": "Also return personal emails" }
+        }
+      }
+    },
+    {
+      "id": "bulkEnrichPeople",
+      "label": "Bulk Enrich People",
+      "description": "Enrich up to 10 people in one call. Provide `details` as an array of person objects (same fields as Enrich Person). Returns { matches: [...] }.",
+      "verb": "POST",
+      "path": "/people/bulk_match",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["details"],
+        "properties": {
+          "details": {
+            "type": "array",
+            "description": "Up to 10 person objects",
+            "items": {
+              "type": "object",
+              "properties": {
+                "first_name": { "type": "string" },
+                "last_name": { "type": "string" },
+                "organization_name": { "type": "string" },
+                "domain": { "type": "string" },
+                "email": { "type": "string" }
+              }
+            }
+          },
+          "reveal_personal_emails": { "type": "boolean" }
+        }
+      }
+    },
+    {
+      "id": "enrichOrganization",
+      "label": "Enrich Organization",
+      "description": "Enrich a company from its domain. Returns { organization } with name, industry, estimated_num_employees, linkedin_url, annual_revenue, founded_year, logo_url, etc. 1 credit.",
+      "verb": "GET",
+      "path": "/organizations/enrich",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["domain"],
+        "properties": { "domain": { "type": "string", "description": "Company domain, no http:// or www." } }
+      }
+    },
+    {
+      "id": "searchPeople",
+      "label": "Search People",
+      "description": "Search Apollo's people database by title, seniority, location, company. Returns { people, pagination }. Does NOT return emails — pipe results into Enrich Person. Requires a master API key.",
+      "verb": "POST",
+      "path": "/mixed_people/api_search",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "person_titles": { "type": "array", "items": { "type": "string" }, "description": "e.g. ['VP of Sales']" },
+          "person_seniorities": { "type": "array", "items": { "type": "string" }, "description": "e.g. ['c_suite','vp','director']" },
+          "person_locations": { "type": "array", "items": { "type": "string" } },
+          "organization_locations": { "type": "array", "items": { "type": "string" } },
+          "q_organization_domains_list": { "type": "array", "items": { "type": "string" } },
+          "organization_num_employees_ranges": { "type": "array", "items": { "type": "string" }, "description": "e.g. ['11,50','51,200']" },
+          "q_keywords": { "type": "string" },
+          "page": { "type": "integer" },
+          "per_page": { "type": "integer", "description": "Max 100" }
+        }
+      }
+    },
+    {
+      "id": "searchOrganizations",
+      "label": "Search Companies",
+      "description": "Search Apollo's company database by name, size, location, keywords. Returns { organizations, pagination }.",
+      "verb": "POST",
+      "path": "/mixed_companies/search",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "q_organization_name": { "type": "string" },
+          "organization_num_employees_ranges": { "type": "array", "items": { "type": "string" } },
+          "organization_locations": { "type": "array", "items": { "type": "string" } },
+          "q_organization_keyword_tags": { "type": "array", "items": { "type": "string" } },
+          "page": { "type": "integer" },
+          "per_page": { "type": "integer" }
+        }
+      }
+    }
+  ]
+}

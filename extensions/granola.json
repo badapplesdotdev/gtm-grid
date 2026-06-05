@@ -1,0 +1,43 @@
+{
+  "id": "granola",
+  "name": "Granola",
+  "version": "1.0.0",
+  "category": "meetings",
+  "description": "AI meeting notes — pull your summarized notes and full transcripts. Requires a Business-plan API key (grn_...).",
+  "baseUrl": "https://public-api.granola.ai/v1",
+  "logo": "https://www.google.com/s2/favicons?domain=granola.ai&sz=128",
+  "auth": { "type": "apiKey", "header": "Authorization", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "listNotes",
+      "label": "List Notes",
+      "description": "List meeting notes that have a generated AI summary. Supports pagination. Returns a list of notes (id, title, summary, date). Notes without a summary are excluded.",
+      "verb": "GET",
+      "path": "/notes",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "description": "Page size" },
+          "cursor": { "type": "string", "description": "Pagination cursor" }
+        }
+      }
+    },
+    {
+      "id": "getNote",
+      "label": "Get Note",
+      "description": "Get a single note by id. Pass include='transcript' to also return the full transcript. Returns the note detail (summary, attendees, optionally transcript).",
+      "verb": "GET",
+      "path": "/notes/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "description": "Note id" },
+          "include": { "type": "string", "description": "Set to 'transcript' to include the full transcript" }
+        }
+      }
+    }
+  ]
+}

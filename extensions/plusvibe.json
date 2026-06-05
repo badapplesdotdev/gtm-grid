@@ -1,0 +1,90 @@
+{
+  "id": "plusvibe",
+  "name": "PlusVibe",
+  "version": "1.0.0",
+  "category": "outreach",
+  "description": "Cold email at scale — manage campaigns, push leads, read stats. Most calls need workspace_id.",
+  "baseUrl": "https://api.plusvibe.ai/api/v1",
+  "logo": "https://www.google.com/s2/favicons?domain=plusvibe.ai&sz=128",
+  "auth": { "type": "apiKey", "header": "x-api-key", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "listCampaigns",
+      "label": "List Campaigns",
+      "description": "List campaigns in a workspace (newest first). Returns an array of campaigns. Requires workspace_id.",
+      "verb": "GET",
+      "path": "/campaign/list-all",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id"],
+        "properties": {
+          "workspace_id": { "type": "string", "description": "Workspace id (required on almost every call)" },
+          "status": { "type": "string", "description": "Filter by campaign status" },
+          "campaign_type": { "type": "string" },
+          "skip": { "type": "integer" },
+          "limit": { "type": "integer", "description": "Max 100" }
+        }
+      }
+    },
+    {
+      "id": "addLeads",
+      "label": "Add Leads to Campaign",
+      "description": "Add leads to a campaign. `leads` is an array; each lead supports email, first_name, last_name, company_name, company_website, linkedin_person_url, phone_number, custom_variables. Requires workspace_id + campaign_id. Returns the add result.",
+      "verb": "POST",
+      "path": "/lead/add",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id", "campaign_id", "leads"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "campaign_id": { "type": "string" },
+          "leads": {
+            "type": "array",
+            "description": "Array of leads. Each: { email, first_name, last_name, company_name, company_website, linkedin_person_url, phone_number, custom_variables }",
+            "items": { "type": "object" }
+          }
+        }
+      }
+    },
+    {
+      "id": "workspaceLeads",
+      "label": "List Workspace Leads",
+      "description": "List/search leads in a workspace. Filter by campaign_id, status, email, first_name, last_name. Returns paginated leads. Requires workspace_id.",
+      "verb": "GET",
+      "path": "/lead/workspace-leads",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "campaign_id": { "type": "string" },
+          "status": { "type": "string" },
+          "email": { "type": "string" },
+          "first_name": { "type": "string" },
+          "last_name": { "type": "string" },
+          "page": { "type": "integer" },
+          "limit": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "campaignStats",
+      "label": "Campaign Stats",
+      "description": "Get analytics for a campaign. Requires workspace_id (and campaign_id for a single campaign). Returns sent/open/reply/bounce stats.",
+      "verb": "GET",
+      "path": "/campaign/stats",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "campaign_id": { "type": "string" }
+        }
+      }
+    }
+  ]
+}

@@ -135,6 +135,36 @@ export class Db {
     );
   }
 
+  renameTable(id: string, name: string): void {
+    this.raw.prepare(`UPDATE tables SET name = ? WHERE id = ?`).run(name, id);
+  }
+
+  /** Delete a table; columns/rows/cells cascade via foreign keys. */
+  deleteTable(id: string): void {
+    this.raw.prepare(`DELETE FROM tables WHERE id = ?`).run(id);
+    this.setFavorite(id, false);
+  }
+
+  // ---- Favorites (pinned tables, stored in meta) ----
+  listFavorites(): string[] {
+    try {
+      return JSON.parse(this.getMeta("favorite_tables") || "[]");
+    } catch {
+      return [];
+    }
+  }
+
+  isFavorite(id: string): boolean {
+    return this.listFavorites().includes(id);
+  }
+
+  setFavorite(id: string, on: boolean): void {
+    const set = new Set(this.listFavorites());
+    if (on) set.add(id);
+    else set.delete(id);
+    this.setMeta("favorite_tables", JSON.stringify([...set]));
+  }
+
   // ---- Columns ----
   createColumn(input: {
     tableId: string;
@@ -220,6 +250,10 @@ export class Db {
     return this.getColumn(id);
   }
 
+  deleteColumn(id: string): void {
+    this.raw.prepare(`DELETE FROM columns WHERE id = ?`).run(id);
+  }
+
   private hydrateColumn(r: ColumnRow): Column {
     return {
       ...r,
@@ -247,6 +281,15 @@ export class Db {
     return this.raw
       .prepare(`SELECT * FROM rows WHERE table_id = ? ORDER BY position, created_at`)
       .all(tableId) as Row[];
+  }
+
+  deleteRow(rowId: string): void {
+    this.raw.prepare(`DELETE FROM rows WHERE id = ?`).run(rowId);
+  }
+
+  /** Clear a single cell (back to empty). */
+  deleteCell(rowId: string, columnId: string): void {
+    this.raw.prepare(`DELETE FROM cells WHERE row_id = ? AND column_id = ?`).run(rowId, columnId);
   }
 
   // ---- Cells ----
@@ -322,6 +365,14 @@ export class Db {
       )
       .run(cred.id, cred.extension_id, cred.scope, cred.name, encryptSecrets(cred.secrets), cred.created_at);
     return cred;
+  }
+
+  /** Distinct scopes that have a stored credential for an extension. */
+  credentialScopes(extensionId: string): CredentialScope[] {
+    const rows = this.raw
+      .prepare(`SELECT DISTINCT scope FROM credentials WHERE extension_id = ?`)
+      .all(extensionId) as { scope: string }[];
+    return rows.map((r) => r.scope as CredentialScope);
   }
 
   /** Most recent credential for an extension (scope precedence: local > personal > team). */

@@ -3,6 +3,8 @@
   "name": "Trigify",
   "version": "1.1.0",
   "category": "social-intelligence",
+  "description": "Social intelligence — enrich profiles & companies and track LinkedIn engagement signals.",
+  "featured": true,
   "baseUrl": "https://api.trigify.io",
   "auth": { "type": "apiKey", "header": "x-api-key", "secretKey": "apiKey" },
   "methods": [

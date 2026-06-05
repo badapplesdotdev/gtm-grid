@@ -1,0 +1,83 @@
+{
+  "id": "thecompaniesapi",
+  "name": "The Companies API",
+  "version": "1.0.0",
+  "category": "enrichment",
+  "description": "Company enrichment and search by domain, name, or attributes.",
+  "logo": "https://www.thecompaniesapi.com/images/favicons/apple-touch-icon.png",
+  "baseUrl": "https://api.thecompaniesapi.com/v2",
+  "auth": { "type": "apiKey", "header": "Authorization", "scheme": "Basic ", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "enrichByDomain",
+      "label": "Enrich Company by Domain",
+      "description": "Enrich a company from its domain (e.g. 'stripe.com'). Returns ~80 nested datapoints: about.name, about.industry, about.totalEmployees, domain.domain, locations.headquarters, socials, technologies.active, finances.revenue, descriptions.primary, assets.logoSquare, etc. 1 credit.",
+      "verb": "GET",
+      "path": "/companies/{domain}",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["domain"],
+        "properties": {
+          "domain": { "type": "string", "description": "Company website domain, e.g. 'stripe.com' (no http://)" },
+          "simplified": { "type": "boolean", "description": "Return a smaller payload (free, no extra credits)" },
+          "refresh": { "type": "boolean", "description": "Force a real-time recrawl (+10 credits)" }
+        }
+      }
+    },
+    {
+      "id": "searchByName",
+      "label": "Find Company by Name",
+      "description": "Look up a company by its name (e.g. 'Stripe'). Returns matching company object(s) — names aren't unique so multiple may return.",
+      "verb": "GET",
+      "path": "/companies/by-name",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "description": "Company name to search for" },
+          "exactMatch": { "type": "boolean", "description": "Require an exact name match (default true)" },
+          "countries": { "type": "string", "description": "Comma-separated country codes to filter, e.g. 'us,gb'" },
+          "size": { "type": "integer", "description": "Max results 1-25 (default 1)" },
+          "simplified": { "type": "boolean", "description": "Smaller payload" }
+        }
+      }
+    },
+    {
+      "id": "enrichBySocial",
+      "label": "Enrich Company by Social URL",
+      "description": "Enrich a company from one of its social network profile URLs. Pass whichever you have (linkedin is most useful for GTM). Returns the full company object. 1 credit.",
+      "verb": "GET",
+      "path": "/companies/by-social",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "properties": {
+          "linkedin": { "type": "string", "description": "LinkedIn company URL" },
+          "twitter": { "type": "string", "description": "Twitter/X profile URL" },
+          "facebook": { "type": "string", "description": "Facebook page URL" },
+          "github": { "type": "string", "description": "GitHub org URL" },
+          "instagram": { "type": "string", "description": "Instagram URL" },
+          "youtube": { "type": "string", "description": "YouTube channel URL" },
+          "refresh": { "type": "boolean", "description": "Force recrawl (+10 credits)" }
+        }
+      }
+    },
+    {
+      "id": "emailPatterns",
+      "label": "Get Company Email Patterns",
+      "description": "Get the email-format patterns a company uses (e.g. {first}.{last}@domain.com) with usage percentages. Returns the pattern, not specific people's emails. 1 credit.",
+      "verb": "GET",
+      "path": "/companies/{domain}/email-patterns",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["domain"],
+        "properties": {
+          "domain": { "type": "string", "description": "Company website domain, e.g. 'stripe.com'" }
+        }
+      }
+    }
+  ]
+}

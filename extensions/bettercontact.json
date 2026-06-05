@@ -1,0 +1,47 @@
+{
+  "id": "bettercontact",
+  "name": "BetterContact",
+  "version": "1.0.0",
+  "category": "enrichment",
+  "description": "Waterfall email & phone enrichment across 20+ providers. Async: enrich, then poll for the result.",
+  "baseUrl": "https://app.bettercontact.rocks/api/v2",
+  "logo": "https://www.google.com/s2/favicons?domain=bettercontact.rocks&sz=128",
+  "auth": { "type": "apiKey", "header": "X-API-Key", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "enrich",
+      "label": "Enrich (submit)",
+      "description": "Submit up to 100 leads for waterfall email/phone enrichment. `data` is an array of leads, each with first_name, last_name, company, company_domain, linkedin_url (and optional custom_fields). Set enrich_email_address and/or enrich_phone_number. Returns { success, id } where `id` is the request id — poll Get Result with it. ASYNC: results are not ready immediately.",
+      "verb": "POST",
+      "path": "/async",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["data"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "description": "Array of leads (1-100). Each: { first_name, last_name, company, company_domain, linkedin_url, custom_fields }",
+            "items": { "type": "object" }
+          },
+          "enrich_email_address": { "type": "boolean", "description": "Find a verified work email (default true)" },
+          "enrich_phone_number": { "type": "boolean", "description": "Find a direct phone number" },
+          "webhook": { "type": "string", "description": "Optional webhook URL POSTed when enrichment finishes" }
+        }
+      }
+    },
+    {
+      "id": "getResult",
+      "label": "Get Result (poll)",
+      "description": "Fetch enrichment results by request id (the `id` from Enrich). Returns { id, status, credits_consumed, credits_left, data[] } where status is 'pending' until done then 'terminated'. Each data item has contact_email_address, contact_email_address_status, contact_phone_number, contact_job_title, etc.",
+      "verb": "GET",
+      "path": "/async/{request_id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["request_id"],
+        "properties": { "request_id": { "type": "string", "description": "The id returned by Enrich" } }
+      }
+    }
+  ]
+}
