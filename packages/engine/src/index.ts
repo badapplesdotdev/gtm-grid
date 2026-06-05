@@ -17,6 +17,9 @@ export { runFunction, normalizeCode } from "./sandbox.js";
 export { defineHttpConnector } from "./connectors/http.js";
 export { parseManifest, connectorFromManifest, manifestSchema, type ExtensionManifest } from "./connectors/manifest.js";
 export * from "./types.js";
+// Canonical Effect-TS service pattern (see docs/effect-conventions.md). Later
+// business-logic services (e.g. GridStore) follow this same Service + typed-error + Layer shape.
+export { CellCoercionService, CellCoercionError, type CoercedValue } from "./sample-service.js";
 
 export interface OpenProjectResult {
   db: Db;

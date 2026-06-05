@@ -13,11 +13,14 @@
     "sidecar:build": "node packages/desktop/scripts/bundle-sidecar.mjs",
     "tauri:dev": "pnpm --filter @gtmgrid/desktop tauri dev",
     "tauri:build": "pnpm --filter @gtmgrid/desktop tauri build",
-    "typecheck": "tsc -b"
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "devDependencies": {
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
+    "vitest": "^3.2.6",
     "@types/node": "^22.10.2",
     "@types/better-sqlite3": "^7.6.12"
   },
