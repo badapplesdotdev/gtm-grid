@@ -61,6 +61,13 @@ import type {
 export interface ConvexClientLike {
   query(ref: unknown, args: Record<string, unknown>): Promise<unknown>;
   mutation(ref: unknown, args: Record<string, unknown>): Promise<unknown>;
+  /**
+   * Execute a Convex ACTION. Workspace-shared credentials are decrypted by the
+   * T7 `credentials:getCredentialForRun` action (Node runtime), so resolving a
+   * cloud run's secrets goes through here, not `query`. `ConvexHttpClient` from
+   * "convex/browser" structurally satisfies this.
+   */
+  action(ref: unknown, args: Record<string, unknown>): Promise<unknown>;
 }
 
 /**
@@ -78,13 +85,29 @@ export interface ConvexFunctionRefs {
   /** `api.cells.setCellStatus` — status-only upsert (run lifecycle). */
   readonly setCellStatus: unknown;
   /**
-   * Optional query returning a workspace credential for a connector provider.
-   * T7 owns the decrypt-for-run path; until wired, credential lookups resolve to
-   * `undefined` (credentials are resolved through a separate store). When
-   * provided, it is called with `{ provider }` and expected to return a
-   * {@link ConvexCredentialDoc} (or null).
+   * Optional ACTION resolving the decrypted secrets for a connector during a
+   * run — the T7 `credentials:getCredentialForRun` decrypt-for-run path, gated
+   * to an authorized workspace member. When wired (together with
+   * {@link ConvexCredentialResolution} on the config), it is called as an action
+   * with `{ workspaceId, extensionId, scope }` and is expected to return
+   * {@link ConvexCredentialForRunResult} (or null). When omitted, credential
+   * lookups resolve to `undefined` (matching a project with no connected keys).
    */
   readonly getCredential?: unknown;
+}
+
+/**
+ * How a cloud run resolves a connector's decrypted secrets from the workspace.
+ * The credential is keyed on the workspace and a scope: a CLOUD column run uses
+ * the `workspace` scope (the shared team key), per the F2 personal-vs-workspace
+ * ownership rules. The T7 `getCredentialForRun` action enforces membership +
+ * ownership before any plaintext is produced.
+ */
+export interface ConvexCredentialResolution {
+  /** The Convex `workspaces._id` the credential is scoped to. */
+  readonly workspaceId: string;
+  /** Which credential to read — `workspace` (shared) for a cloud column run. */
+  readonly scope: CloudCredentialScope;
 }
 
 /** Config to build a table-scoped ConvexGridStore. */
@@ -93,6 +116,13 @@ export interface ConvexGridStoreConfig {
   readonly refs: ConvexFunctionRefs;
   /** The Convex `tables._id` (a string) this store reads/writes within. */
   readonly tableId: string;
+  /**
+   * Optional credential resolution for the run. When present (and
+   * `refs.getCredential` is wired), `getCredential(provider)` decrypts the
+   * workspace's shared secret for that connector via the T7 action. Omitted for
+   * data-only stores (reads/writes), where credential lookups are a no-op.
+   */
+  readonly credentials?: ConvexCredentialResolution;
 }
 
 /** The shape `cells.setCell` / `cells.setCellStatus` are addressed by. */
@@ -141,15 +171,14 @@ interface ConvexGetTableResult {
   readonly cells: readonly ConvexCellDoc[];
 }
 
-/** A Convex credential doc as returned by the (T7) credential query. */
-export interface ConvexCredentialDoc {
-  readonly _id: string;
-  readonly extensionId: string;
-  readonly scope: CloudCredentialScope;
-  readonly name: string;
-  /** Decrypted secret map — only the trusted run path ever sees plaintext. */
+/**
+ * The result of the T7 `getCredentialForRun` action: the DECRYPTED secret map
+ * for an authorized member, or `null` when the connector has no stored
+ * credential. This is the ONLY shape that ever carries plaintext — listing
+ * queries return metadata only, so no plaintext is exposed to them.
+ */
+export interface ConvexCredentialForRunResult {
   readonly secrets: Record<string, string>;
-  readonly createdAt: number;
 }
 
 /** Map a Convex column doc onto the engine {@link Column} (snake_case ids). */
@@ -186,17 +215,24 @@ const toCell = (c: ConvexCellDoc): Cell => ({
 });
 
 /**
- * Map a Convex credential doc onto the engine {@link Credential}. The cloud
- * scope literal (`workspace`|`personal`) maps back onto the engine scope
+ * Build the engine {@link Credential} the run path consumes from the decrypted
+ * secrets the T7 action returns, for one connector + resolution scope. The
+ * cloud scope literal (`workspace`|`personal`) maps back onto the engine scope
  * (`team`|`personal`) — the inverse of `CloudSchemaMapping.credentialScopeForCloud`.
+ * The engine only reads `secrets` during dispatch; the other fields describe the
+ * connector this credential was resolved for.
  */
-const toCredential = (c: ConvexCredentialDoc): Credential => ({
-  id: c._id,
-  extension_id: c.extensionId,
-  scope: c.scope === "workspace" ? "team" : "personal",
-  name: c.name,
-  secrets: c.secrets,
-  created_at: c.createdAt,
+const toCredential = (
+  extensionId: string,
+  scope: CloudCredentialScope,
+  result: ConvexCredentialForRunResult,
+): Credential => ({
+  id: `${scope}:${extensionId}`,
+  extension_id: extensionId,
+  scope: scope === "workspace" ? "team" : "personal",
+  name: extensionId,
+  secrets: result.secrets,
+  created_at: 0,
 });
 
 /** Wrap a Convex client promise, mapping any rejection to a typed error. */
@@ -287,17 +323,37 @@ export const convexGridStoreShape = (
         );
       });
 
-    /** Resolve the workspace credential for a provider via the injected ref. */
+    /**
+     * Resolve the DECRYPTED workspace credential for a connector during a run.
+     * Calls the T7 `getCredentialForRun` ACTION with `{ workspaceId,
+     * extensionId, scope }` — the only path that yields plaintext, gated to an
+     * authorized member by the action itself. A no-op (`undefined`) unless BOTH
+     * a credential ref and a {@link ConvexCredentialResolution} are wired, so a
+     * data-only store never resolves secrets and a run with no stored credential
+     * behaves like a project with no connected keys.
+     */
     const getCredential = (
       provider: string,
     ): Effect.Effect<Credential | undefined, GridStoreError> => {
       const ref = refs.getCredential;
-      if (ref === undefined) return Effect.succeed(undefined);
+      const resolution = config.credentials;
+      if (ref === undefined || resolution === undefined)
+        return Effect.succeed(undefined);
       return fromClient("getCredential", () =>
-        client.query(ref, { provider }),
+        client.action(ref, {
+          workspaceId: resolution.workspaceId,
+          extensionId: provider,
+          scope: resolution.scope,
+        }),
       ).pipe(
-        Effect.map((doc) =>
-          doc == null ? undefined : toCredential(doc as ConvexCredentialDoc),
+        Effect.map((result) =>
+          result == null
+            ? undefined
+            : toCredential(
+                provider,
+                resolution.scope,
+                result as ConvexCredentialForRunResult,
+              ),
         ),
       );
     };

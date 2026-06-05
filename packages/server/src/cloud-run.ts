@@ -34,11 +34,19 @@ import {
   type GridStoreShape,
 } from "@gtmgrid/engine";
 
-/** The T4 Convex functions the cloud store/engine address, as opaque refs. */
+/**
+ * The Convex functions the cloud store/engine address, as opaque refs. The T4
+ * data functions plus the T7 `credentials:getCredentialForRun` ACTION, which
+ * decrypts a workspace's shared connector secret for an authorized member — so a
+ * cloud run dispatches connectors with the workspace's real credentials (#18).
+ */
 const CLOUD_REFS: ConvexFunctionRefs = {
   getTable: makeFunctionReference<"query">("tables:getTable"),
   setCell: makeFunctionReference<"mutation">("cells:setCell"),
   setCellStatus: makeFunctionReference<"mutation">("cells:setCellStatus"),
+  getCredential: makeFunctionReference<"action">(
+    "credentials:getCredentialForRun",
+  ),
 };
 
 /** Inputs the desktop forwards to run a column on a cloud project. */
@@ -88,29 +96,60 @@ export function defaultCloudRunDeps(
   };
 }
 
+/** The (subset of the) `tables:getTable` payload we read the workspace id from. */
+interface CloudTablePayload {
+  readonly table: { readonly workspaceId: string };
+}
+
+/**
+ * Resolve the workspace id a table belongs to, via `tables:getTable`. A cloud
+ * run resolves the workspace's SHARED connector credentials, so the run must
+ * know which workspace to decrypt them for; that binding lives on the table doc.
+ */
+export async function resolveWorkspaceId(
+  client: ConvexClientLike,
+  tableId: string,
+): Promise<string> {
+  const payload = (await client.query(CLOUD_REFS.getTable, {
+    tableId,
+  })) as CloudTablePayload;
+  return payload.table.workspaceId;
+}
+
 /**
  * Build the Convex-backed {@link GridStoreShape} for one cloud table. The store
  * needs {@link CloudSchemaMapping}; we provide its `.Default` Layer and resolve
- * the shape eagerly so the rest of the run is plain `Engine` code.
+ * the shape eagerly so the rest of the run is plain `Engine` code. When a
+ * `workspaceId` is given, the store resolves the workspace's SHARED (scope
+ * `workspace`) connector credentials through the T7 decrypt-for-run action (#18).
  */
 export async function buildConvexStore(
   client: ConvexClientLike,
   tableId: string,
+  workspaceId?: string,
 ): Promise<GridStoreShape> {
   return Effect.runPromise(
-    convexGridStoreShape({ client, refs: CLOUD_REFS, tableId }).pipe(
-      Effect.provide(CloudSchemaMapping.Default),
-    ),
+    convexGridStoreShape({
+      client,
+      refs: CLOUD_REFS,
+      tableId,
+      credentials:
+        workspaceId === undefined
+          ? undefined
+          : { workspaceId, scope: "workspace" },
+    }).pipe(Effect.provide(CloudSchemaMapping.Default)),
   );
 }
 
 /**
- * Run a column on a cloud project. Builds an authed Convex client, a
- * Convex-backed GridStore for the table, and an {@link Engine} that uses that
- * store for BOTH project data and credentials (workspace-shared cloud
- * credentials resolve through the same store; until T7's read path is wired they
- * resolve to none, matching a project with no connected keys). Returns the
- * engine's `{ ran, errors }` summary.
+ * Run a column on a cloud project. Builds an authed Convex client, resolves the
+ * table's workspace, then a Convex-backed GridStore for the table, and an
+ * {@link Engine} that uses that store for BOTH project data and credentials.
+ * Workspace-shared connector credentials resolve through the same store: it
+ * calls the T7 `getCredentialForRun` action (gated to an authorized member) to
+ * decrypt the workspace's shared secret for each connector the run dispatches
+ * (#18). A connector with no stored credential resolves to none, matching a
+ * project with no connected keys. Returns the engine's `{ ran, errors }` summary.
  *
  * The engine constructor still takes a `Db` for its (unused-on-the-cloud-path)
  * `db`/`credsDb` fields; the caller passes the sidecar's existing global db so
@@ -123,7 +162,8 @@ export async function runCloudColumn(
   db: ConstructorParameters<typeof Engine>[0],
 ): Promise<{ ran: number; errors: number }> {
   const client = deps.makeClient(req.convexUrl, req.token);
-  const store = await buildConvexStore(client, req.tableId);
+  const workspaceId = await resolveWorkspaceId(client, req.tableId);
+  const store = await buildConvexStore(client, req.tableId, workspaceId);
   const engine = new Engine(db, deps.config, deps.registry, undefined, {
     store,
     creds: store,
