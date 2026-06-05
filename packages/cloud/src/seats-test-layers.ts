@@ -21,6 +21,11 @@ import { AutumnClient, AutumnError } from "./seats.js";
 export interface FakeAutumnConfig {
   /** Whether `checkSeats` reports a free seat (default: under the limit). */
   readonly allowed?: boolean;
+  /**
+   * The free-seat balance `checkSeats` reports (default: `null` = unlimited /
+   * unknown). Drives the transactional seat-ceiling guard.
+   */
+  readonly balance?: number | null;
   /** The URL `attach` returns; `null` models a misconfigured plan. */
   readonly checkoutUrl?: string | null;
   /** Records each `trackSeats` call (consumed-seat audit) for assertions. */
@@ -36,12 +41,13 @@ export const fakeAutumnLayer = (
   config: FakeAutumnConfig = {},
 ): Layer.Layer<AutumnClient> => {
   const allowed = config.allowed ?? true;
+  const balance = config.balance ?? null;
   const checkoutUrl =
     config.checkoutUrl === undefined
       ? "https://billing.example.com/checkout/test"
       : config.checkoutUrl;
   return Layer.succeed(AutumnClient, {
-    checkSeats: () => Effect.succeed({ allowed }),
+    checkSeats: () => Effect.succeed({ allowed, balance }),
     attach: () => Effect.succeed({ checkoutUrl }),
     trackSeats: ({ customerId, value }) =>
       Effect.sync(() => {
@@ -67,7 +73,7 @@ export const failingAutumnLayer = (
     checkSeats: () =>
       failOn === "check"
         ? fail
-        : Effect.succeed({ allowed: failOn !== "attach" }),
+        : Effect.succeed({ allowed: failOn !== "attach", balance: null }),
     attach: () =>
       failOn === "attach"
         ? fail

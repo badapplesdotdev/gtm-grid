@@ -165,6 +165,20 @@ describe("tamper + malformed handling", () => {
     expect(error).toBeInstanceOf(DecryptError);
   });
 
+  it("fails typed on a malformed (wrong-length) IV", async () => {
+    const enc = await run(encrypt(WORKSPACE, SECRETS));
+    const env = JSON.parse(enc) as { iv: string };
+    // Truncate the secret-map IV to an invalid length. The IV-length guard must
+    // reject it as a typed DecryptError BEFORE node:crypto is invoked, rather
+    // than crashing inside the cipher.
+    const tampered = JSON.stringify({
+      ...env,
+      iv: Buffer.from(new Uint8Array(4)).toString("base64"),
+    });
+    const error = await failureOf(decrypt(WORKSPACE, tampered));
+    expect(error).toBeInstanceOf(DecryptError);
+  });
+
   it("fails typed (not a crash) on a non-JSON envelope", async () => {
     const error = await failureOf(decrypt(WORKSPACE, "not-an-envelope"));
     expect(error).toBeInstanceOf(DecryptError);

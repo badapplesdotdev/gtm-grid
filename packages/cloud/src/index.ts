@@ -41,6 +41,7 @@ export {
   AutumnClient,
   AutumnError,
   NoCheckoutUrlError,
+  SeatLimitExceededError,
   SeatsService,
   SEATS_FEATURE_ID,
   TEAM_PLAN_ID,
@@ -65,6 +66,18 @@ export {
   type SecretMap,
   TAG_BYTES,
 } from "./crypto.js";
+
+export {
+  CredentialOwnershipError,
+  CredentialOwnershipService,
+  type CredentialScope,
+} from "./credential-ownership.js";
+
+export {
+  decodeMasterKeyBytes,
+  MissingSecretError,
+  requireSecret,
+} from "./live-config.js";
 
 // NOTE: ./crypto-test-layers.js is deliberately NOT re-exported here. It imports
 // `node:crypto`, and the Convex bundler pulls this index into the (esbuild)

@@ -23,7 +23,10 @@
 import {
   AutumnClient,
   AutumnError,
+  MissingSecretError,
+  requireSecret,
   type SeatCheck,
+  SeatLimitExceededError,
   SeatsService,
   SEATS_FEATURE_ID,
 } from "@gtmgrid/cloud";
@@ -37,14 +40,20 @@ import { Cause, Effect, Exit, Layer, Option } from "effect";
  * legible at the Convex boundary.
  */
 function autumnSdk(): Autumn {
-  const secretKey = process.env.AUTUMN_SECRET_KEY;
-  if (secretKey === undefined || secretKey === "") {
-    throw new ConvexError({
-      code: "AutumnConfigError",
-      message: "AUTUMN_SECRET_KEY is not set on the Convex deployment.",
-    });
+  try {
+    // Presence check lives in the pure, unit-tested `requireSecret`
+    // (@gtmgrid/cloud); a missing key fails closed before the SDK is built.
+    const secretKey = requireSecret(
+      "AUTUMN_SECRET_KEY",
+      process.env.AUTUMN_SECRET_KEY,
+    );
+    return new Autumn({ secretKey });
+  } catch (cause) {
+    if (cause instanceof MissingSecretError) {
+      throw new ConvexError({ code: "AutumnConfigError", message: cause.message });
+    }
+    throw cause;
   }
-  return new Autumn({ secretKey });
 }
 
 /**
@@ -65,7 +74,17 @@ const autumnClientLayer = (client: Autumn): Layer.Layer<AutumnClient> =>
             featureId: SEATS_FEATURE_ID,
             requiredBalance,
           });
-          return { allowed: res.allowed === true };
+          // Surface the remaining-seat balance (when Autumn reports a finite,
+          // non-unlimited number) so the caller can derive a transactional seat
+          // ceiling; an unlimited / absent balance maps to null ("no ceiling").
+          const bal = res.balance;
+          const balance =
+            bal !== null &&
+            bal.unlimited !== true &&
+            typeof bal.remaining === "number"
+              ? bal.remaining
+              : null;
+          return { allowed: res.allowed === true, balance };
         },
         catch: (cause) =>
           new AutumnError({ message: autumnMessage(cause, "check"), cause }),
@@ -159,6 +178,56 @@ export function trackSeatUsed(customerId: string): Promise<void> {
       return yield* svc.trackSeatUsed(customerId);
     }),
   );
+}
+
+/**
+ * A {@link SeatsService} layer with a stub {@link AutumnClient} that is NEVER
+ * called — used to run the PURE `enforceSeatCeiling` guard inside a Convex
+ * MUTATION (which cannot make Autumn's outbound HTTP). Constructing the real SDK
+ * is skipped so this works in the query/mutation runtime with no env.
+ */
+const pureSeatsLayer: Layer.Layer<SeatsService> = SeatsService.Default.pipe(
+  Layer.provide(
+    Layer.succeed(AutumnClient, {
+      checkSeats: () =>
+        Effect.die("AutumnClient.checkSeats must not be called in a mutation"),
+      attach: () =>
+        Effect.die("AutumnClient.attach must not be called in a mutation"),
+      trackSeats: () =>
+        Effect.die("AutumnClient.trackSeats must not be called in a mutation"),
+    }),
+  ),
+);
+
+/**
+ * Transactional seat guard for the membership mutation. Re-checks the LIVE
+ * `currentCount` against `ceiling` (the absolute seat cap the invite action
+ * derived from Autumn) INSIDE the mutation transaction, so two concurrent
+ * invites cannot both pass and exceed the limit. Throws a
+ * `ConvexError({ code: "SeatLimitExceededError" })` when the cap is reached; a
+ * `null` ceiling means unlimited. Pure: no Autumn call, so it runs in the
+ * mutation runtime.
+ */
+export async function enforceSeatCeiling(
+  currentCount: number,
+  ceiling: number | null,
+): Promise<void> {
+  const exit = await Effect.runPromiseExit(
+    Effect.gen(function* () {
+      const svc = yield* SeatsService;
+      return yield* svc.enforceSeatCeiling(currentCount, ceiling);
+    }).pipe(Effect.provide(pureSeatsLayer)),
+  );
+  if (Exit.isSuccess(exit)) return;
+
+  const failure = Cause.failureOption(exit.cause);
+  if (Option.isSome(failure) && failure.value instanceof SeatLimitExceededError) {
+    throw new ConvexError({
+      code: failure.value._tag,
+      message: failure.value.message,
+    });
+  }
+  throw new Error(Cause.pretty(exit.cause));
 }
 
 /**

@@ -22,13 +22,18 @@ import {
   requireMember,
   requireRole,
 } from "./model/auth.js";
-import { checkInviteSeat, trackSeatUsed } from "./model/seats.js";
+import {
+  checkInviteSeat,
+  enforceSeatCeiling,
+  trackSeatUsed,
+} from "./model/seats.js";
 import { memberRole } from "./schema.js";
 import { internal } from "./_generated/api.js";
 import type { Id } from "./_generated/dataModel.js";
 import {
   action,
   internalMutation,
+  internalQuery,
   mutation,
   query,
 } from "./_generated/server.js";
@@ -51,30 +56,40 @@ export const me = query({
       .withIndex("by_user", (q) => q.eq("userId", user._id))
       .collect();
 
-    const workspaces = await Promise.all(
-      memberships.map(async (m) => {
-        const ws = await ctx.db.get(m.workspaceId);
-        if (ws === null) return null;
-        // Seat usage placeholder: real member count, limit deferred to Autumn.
-        const memberCount = (
-          await ctx.db
+    // Batch the per-workspace lookups instead of awaiting them sequentially
+    // inside the map (the previous N+1 waterfall): fetch every workspace doc and
+    // every workspace's member rows concurrently, keyed by workspace id, then
+    // derive the seat-usage count from the already-fetched rows in memory.
+    const workspaceIds = memberships.map((m) => m.workspaceId);
+    const [workspaceDocs, memberCounts] = await Promise.all([
+      Promise.all(workspaceIds.map((id) => ctx.db.get(id))),
+      Promise.all(
+        workspaceIds.map((id) =>
+          ctx.db
             .query("members")
-            .withIndex("by_workspace", (q) =>
-              q.eq("workspaceId", ws._id),
-            )
+            .withIndex("by_workspace", (q) => q.eq("workspaceId", id))
             .collect()
-        ).length;
+            .then((rows) => rows.length),
+        ),
+      ),
+    ]);
+
+    const workspaces = memberships
+      .map((m, i) => {
+        const ws = workspaceDocs[i];
+        if (ws === null || ws === undefined) return null;
+        // Seat usage: real member count, limit deferred to Autumn.
         const seatUsage: { used: number; limit: number | null } = {
-          used: memberCount,
+          used: memberCounts[i] ?? 0,
           limit: null,
         };
         return { _id: ws._id, name: ws.name, role: m.role, seatUsage };
-      }),
-    );
+      })
+      .filter((w) => w !== null);
 
     return {
       user: { _id: user._id, name: user.name ?? null, email: user.email ?? null },
-      workspaces: workspaces.filter((w) => w !== null),
+      workspaces,
     };
   },
 });
@@ -172,21 +187,35 @@ export const insertMember = internalMutation({
     workspaceId: v.id("workspaces"),
     userId: v.string(),
     role: memberRole,
+    /**
+     * Absolute seat CEILING the invite action derived from Autumn
+     * (members-at-check-time + free balance), or `null` for unlimited. The
+     * mutation re-reads the LIVE member count and enforces this inside its own
+     * transaction so two concurrent invites cannot both pass and exceed it.
+     */
+    seatCeiling: v.union(v.number(), v.null()),
   },
-  handler: async (ctx, { workspaceId, userId, role }) => {
+  handler: async (ctx, { workspaceId, userId, role, seatCeiling }) => {
     // Authz: only owner/admin can invite members.
     await requireRole(ctx, workspaceId, ["owner", "admin"]);
 
-    // Idempotent: don't create a duplicate membership for an existing member.
-    const existing = await ctx.db
+    // Re-read the live members inside THIS transaction. Convex's optimistic
+    // concurrency tracks this read range, so a concurrent invite that inserts a
+    // member invalidates it and one of the two mutations re-runs — making the
+    // seat check below atomic with the insert (closes the over-seat race).
+    const members = await ctx.db
       .query("members")
-      .withIndex("by_workspace_user", (q) =>
-        q.eq("workspaceId", workspaceId).eq("userId", userId),
-      )
-      .unique();
+      .withIndex("by_workspace_user", (q) => q.eq("workspaceId", workspaceId))
+      .collect();
+
+    // Idempotent: don't create a duplicate membership for an existing member.
+    const existing = members.find((m) => m.userId === userId) ?? null;
     if (existing !== null) {
       return { memberId: existing._id, alreadyMember: true };
     }
+
+    // Transactional seat guard: reject if adding would exceed the ceiling.
+    await enforceSeatCeiling(members.length, seatCeiling);
 
     const memberId = await ctx.db.insert("members", {
       workspaceId,
@@ -234,16 +263,45 @@ export const inviteMember = action({
       return { status: "checkout", checkoutUrl: seat.checkoutUrl };
     }
 
-    // 2. Allowed: create the membership (authz re-checked inside the mutation).
+    // 2. Derive an ABSOLUTE seat ceiling = members-at-check-time + free balance
+    //    (null = unlimited). The mutation re-checks this against the live count
+    //    in its own transaction, so the Autumn pre-check + insert are atomic and
+    //    concurrent invites can't overshoot the limit.
+    const currentCount = await ctx.runQuery(
+      internal.workspaces.countMembers,
+      { workspaceId },
+    );
+    const seatCeiling =
+      seat.balance === null ? null : currentCount + seat.balance;
+
+    // 3. Create the membership (authz + the transactional seat guard live inside
+    //    the mutation). A losing concurrent invite throws SeatLimitExceededError.
     const { memberId, alreadyMember } = await ctx.runMutation(
       internal.workspaces.insertMember,
-      { workspaceId, userId, role },
+      { workspaceId, userId, role, seatCeiling },
     );
 
-    // 3. Count the seat only for a genuinely new member.
+    // 4. Count the seat only for a genuinely new member.
     if (!alreadyMember) {
       await trackSeatUsed(workspaceId);
     }
     return { status: "added", memberId };
+  },
+});
+
+/**
+ * The live member count for a workspace, read in a single indexed scan.
+ * Internal: only the `inviteMember` action calls it, to derive the seat ceiling
+ * the membership mutation then re-verifies transactionally. Authz is enforced by
+ * the mutation that consumes the ceiling, so this read stays a thin count.
+ */
+export const countMembers = internalQuery({
+  args: { workspaceId: v.id("workspaces") },
+  handler: async (ctx, { workspaceId }): Promise<number> => {
+    const members = await ctx.db
+      .query("members")
+      .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
+      .collect();
+    return members.length;
   },
 });

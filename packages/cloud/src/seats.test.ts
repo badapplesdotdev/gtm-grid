@@ -18,6 +18,7 @@ import {
   AutumnClient,
   AutumnError,
   NoCheckoutUrlError,
+  SeatLimitExceededError,
   SeatsService,
 } from "./seats.js";
 import { failingAutumnLayer, fakeAutumnLayer } from "./seats-test-layers.js";
@@ -135,6 +136,56 @@ describe("checkout (standalone upgrade action)", () => {
   it("propagates an AutumnError when attach fails", async () => {
     const error = await failureOf(checkout(), failingAutumnLayer("attach"));
     expect(error).toBeInstanceOf(AutumnError);
+  });
+});
+
+describe("enforceSeatCeiling (transactional over-seat race guard)", () => {
+  // The Autumn client is irrelevant to this pure guard; any fake works.
+  const enforce = (currentCount: number, ceiling: number | null) =>
+    Effect.gen(function* () {
+      const svc = yield* SeatsService;
+      return yield* svc.enforceSeatCeiling(currentCount, ceiling);
+    });
+
+  it("allows adding a member while under the ceiling", async () => {
+    await run(enforce(2, 3), fakeAutumnLayer());
+    // No failure → the insert may proceed.
+  });
+
+  it("prevents the over-seat race: rejects once the ceiling is reached", async () => {
+    // Two concurrent invites both derive ceiling = 3 from a 2-member workspace
+    // with 1 free seat. The first insert makes the live count 3; the second
+    // mutation re-reads count = 3 and the guard must reject it (would be the 4th
+    // member against a 3-seat ceiling), so seats cannot be exceeded.
+    const error = await failureOf(enforce(3, 3), fakeAutumnLayer());
+    expect(error).toBeInstanceOf(SeatLimitExceededError);
+    if (error instanceof SeatLimitExceededError) {
+      expect(error.currentCount).toBe(3);
+      expect(error.ceiling).toBe(3);
+    }
+  });
+
+  it("rejects when the live count already exceeds the ceiling", async () => {
+    const error = await failureOf(enforce(5, 3), fakeAutumnLayer());
+    expect(error).toBeInstanceOf(SeatLimitExceededError);
+  });
+
+  it("always allows when the ceiling is null (unlimited plan)", async () => {
+    await run(enforce(9999, null), fakeAutumnLayer());
+    // No failure → an unlimited plan is never gated.
+  });
+});
+
+describe("checkInvite surfaces the seat balance for the ceiling", () => {
+  it("carries the free-seat balance on the allowed result", async () => {
+    const result = await run(
+      checkInvite(),
+      fakeAutumnLayer({ allowed: true, balance: 4 }),
+    );
+    expect(result.allowed).toBe(true);
+    if (result.allowed) {
+      expect(result.balance).toBe(4);
+    }
   });
 });
 
