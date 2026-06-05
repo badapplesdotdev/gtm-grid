@@ -23,3 +23,16 @@ export {
   identityLayer,
   memberRepoLayer,
 } from "./test-layers.js";
+
+export {
+  CellMerge,
+  type CellFields,
+  type CellPatch,
+  type CloudCellStatus,
+} from "./cells.js";
+
+export {
+  CascadePlanner,
+  type DeletePlan,
+  type TableChildren,
+} from "./cascade.js";
