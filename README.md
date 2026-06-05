@@ -4,6 +4,48 @@ A local-first, programmable GTM spreadsheet — a Clay/Revcode-style tool where 
 
 No remote job queue, no pricing gate. Bring your own AI key and your own Claude Code subscription.
 
+## Getting started
+
+Clone the repo and install dependencies — everything that powers the app lives in this repo.
+
+**Prerequisites**
+- [Node.js](https://nodejs.org) ≥ 20 and [pnpm](https://pnpm.io) (`npm i -g pnpm`)
+- For building the native desktop app only: [Rust](https://rustup.rs) (`rustup` or `brew install rust`)
+- For the in-app agent panel only: your own `claude` and/or `codex` CLI on `PATH` (uses your Max / Codex plan)
+
+```bash
+git clone https://github.com/maxtrigify/gtm-grid.git
+cd gtm-grid
+pnpm install          # one-time; builds better-sqlite3 natively
+```
+
+**Run it (dev — two terminals, fastest for hacking):**
+
+```bash
+# terminal 1 — the engine sidecar (HTTP API on :8787)
+GTMGRID_PROJECT=default pnpm server
+
+# terminal 2 — the React UI on http://localhost:5173
+pnpm desktop
+```
+
+**Or run the native window** (spawns the sidecar for you):
+
+```bash
+PATH="/opt/homebrew/bin:$PATH" pnpm tauri:dev
+```
+
+**Build a distributable `.app` / `.dmg`:**
+
+```bash
+pnpm sidecar:build                                 # bundle the self-contained Node sidecar
+PATH="/opt/homebrew/bin:$PATH" pnpm tauri:build    # → packages/desktop/src-tauri/target/release/bundle/
+```
+
+**Connect your keys (in-app):** open **AI Providers** in the sidebar to add an Anthropic / OpenAI / OpenRouter key, and **Extensions → Browse all** to connect enrichment providers. Keys are stored encrypted on *your* machine — see below.
+
+> **Your data & keys stay local.** Projects live at `~/gtmgrid/<name>.db` and API keys are stored there encrypted (AES-256-GCM) — *outside this repo*. A fresh clone starts as a blank slate with no tables and no keys; each person connects their own. `node_modules/`, build output, and `*.db` files are git-ignored by design.
+
 ## Architecture
 
 ```
