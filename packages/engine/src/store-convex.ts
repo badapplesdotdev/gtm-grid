@@ -287,53 +287,86 @@ export const convexGridStoreShape = (
         );
       });
 
+    /** Resolve the workspace credential for a provider via the injected ref. */
+    const getCredential = (
+      provider: string,
+    ): Effect.Effect<Credential | undefined, GridStoreError> => {
+      const ref = refs.getCredential;
+      if (ref === undefined) return Effect.succeed(undefined);
+      return fromClient("getCredential", () =>
+        client.query(ref, { provider }),
+      ).pipe(
+        Effect.map((doc) =>
+          doc == null ? undefined : toCredential(doc as ConvexCredentialDoc),
+        ),
+      );
+    };
+
+    /** Index a fetched grid into the engine read surface (pure, no I/O). */
+    const readsFromGrid = (grid: ConvexGetTableResult) => ({
+      getColumn: (columnId: string) =>
+        Effect.sync(() => {
+          const found = grid.columns.find((c) => c._id === columnId);
+          return found ? toColumn(found) : undefined;
+        }),
+      listColumns: (_tableId: string) =>
+        Effect.sync(() => grid.columns.map(toColumn)),
+      listRows: (_tableId: string) => Effect.sync(() => grid.rows.map(toRow)),
+      rowCells: (rowId: string) =>
+        Effect.sync(() => {
+          const out = new Map<string, Cell>();
+          for (const cell of grid.cells) {
+            if (cell.rowId === rowId) out.set(cell.columnId, toCell(cell));
+          }
+          return out;
+        }),
+      getCell: (rowId: string, columnId: string) =>
+        Effect.sync(() => {
+          const found = grid.cells.find(
+            (c) => c.rowId === rowId && c.columnId === columnId,
+          );
+          return found ? toCell(found) : undefined;
+        }),
+    });
+
     return {
       getColumn: (columnId) =>
         fetchGrid("getColumn").pipe(
-          Effect.map((grid) => {
-            const found = grid.columns.find((c) => c._id === columnId);
-            return found ? toColumn(found) : undefined;
-          }),
+          Effect.flatMap((grid) => readsFromGrid(grid).getColumn(columnId)),
         ),
-      listColumns: (_tableId) =>
+      listColumns: (tableId) =>
         fetchGrid("listColumns").pipe(
-          Effect.map((grid) => grid.columns.map(toColumn)),
+          Effect.flatMap((grid) => readsFromGrid(grid).listColumns(tableId)),
         ),
-      listRows: (_tableId) =>
-        fetchGrid("listRows").pipe(Effect.map((grid) => grid.rows.map(toRow))),
+      listRows: (tableId) =>
+        fetchGrid("listRows").pipe(
+          Effect.flatMap((grid) => readsFromGrid(grid).listRows(tableId)),
+        ),
       rowCells: (rowId) =>
         fetchGrid("rowCells").pipe(
-          Effect.map((grid) => {
-            const out = new Map<string, Cell>();
-            for (const cell of grid.cells) {
-              if (cell.rowId === rowId) out.set(cell.columnId, toCell(cell));
-            }
-            return out;
-          }),
+          Effect.flatMap((grid) => readsFromGrid(grid).rowCells(rowId)),
         ),
       getCell: (rowId, columnId) =>
         fetchGrid("getCell").pipe(
-          Effect.map((grid) => {
-            const found = grid.cells.find(
-              (c) => c.rowId === rowId && c.columnId === columnId,
-            );
-            return found ? toCell(found) : undefined;
-          }),
+          Effect.flatMap((grid) => readsFromGrid(grid).getCell(rowId, columnId)),
         ),
       setCell: (rowId, columnId, patch) => writeCell(rowId, columnId, patch),
-      getCredential: (provider) => {
-        const ref = refs.getCredential;
-        if (ref === undefined) return Effect.succeed(undefined);
-        return fromClient("getCredential", () =>
-          client.query(ref, { provider }),
-        ).pipe(
-          Effect.map((doc) =>
-            doc == null
-              ? undefined
-              : toCredential(doc as ConvexCredentialDoc),
+      getCredential,
+      // Snapshot the grid ONCE for a run: every per-row read below is served
+      // from this in-memory grid, so an N-row `runColumn` issues one getTable
+      // query instead of one-per-read (O(N) total, not O(N^2)). Writes and
+      // credential reads stay live so cell status streams during the run.
+      snapshot: () =>
+        fetchGrid("snapshot").pipe(
+          Effect.map(
+            (grid): GridStoreShape => ({
+              ...readsFromGrid(grid),
+              setCell: (rowId, columnId, patch) =>
+                writeCell(rowId, columnId, patch),
+              getCredential,
+            }),
           ),
-        );
-      },
+        ),
     } satisfies GridStoreShape;
   });
 

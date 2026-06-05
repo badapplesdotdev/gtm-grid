@@ -13,6 +13,8 @@
 import { Cause, Effect, Exit } from "effect";
 import { describe, expect, it } from "vitest";
 import { CloudSchemaMapping } from "./cloud-schema.js";
+import { Engine } from "./execute.js";
+import { Registry } from "./registry.js";
 import {
   convexGridStoreShape,
   type ConvexClientLike,
@@ -20,6 +22,7 @@ import {
   type ConvexGridStoreConfig,
 } from "./store-convex.js";
 import type { GridStoreError, GridStoreShape } from "./store.js";
+import type { Connector } from "./types.js";
 
 // Opaque refs — the engine never interprets these; the fake client compares by
 // identity to decide which "function" was called.
@@ -327,5 +330,107 @@ describe("ConvexGridStore — credentials", () => {
     expect(
       await Effect.runPromise(store.getCredential("ai")),
     ).toBeUndefined();
+  });
+});
+
+describe("ConvexGridStore — read scaling (#24)", () => {
+  /** A registry whose single connector echoes its input back (no network/AI). */
+  const echoRegistry = (): Registry => {
+    const connector: Connector = {
+      id: "test",
+      name: "Test",
+      category: "test",
+      auth: null,
+      methods: [
+        {
+          id: "echo",
+          label: "Echo",
+          description: "Returns { text } from the input.",
+          inputSchema: {},
+          batchSize: 1,
+          credits: 0,
+          run: async (inputs) => ({ text: String(inputs.value ?? "") }),
+        },
+      ],
+    };
+    return new Registry([connector]);
+  };
+
+  /** Build a grid of N rows with one function column referencing a manual one. */
+  const grid = (n: number) => {
+    const manual = {
+      _id: "col_manual",
+      tableId: TABLE_ID,
+      name: "Name",
+      type: "text",
+      kind: "manual",
+      provider: null,
+      method: null,
+      code: null,
+      params: {},
+      position: 0,
+      createdAt: 1,
+    };
+    const fn = {
+      _id: "col_fn",
+      tableId: TABLE_ID,
+      name: "Out",
+      type: "text",
+      kind: "function",
+      provider: "test",
+      method: "echo",
+      code: null,
+      params: { value: "{{Name}}" },
+      position: 1,
+      createdAt: 2,
+    };
+    const rows = Array.from({ length: n }, (_, i) => ({
+      _id: `row_${i}`,
+      tableId: TABLE_ID,
+      position: i,
+      createdAt: 10 + i,
+    }));
+    const cells = rows.map((r) => ({
+      rowId: r._id,
+      columnId: manual._id,
+      value: `v${r.position}`,
+      status: "done" as const,
+      error: null,
+      updatedAt: 100,
+    }));
+    return { columns: [manual, fn], rows, cells };
+  };
+
+  /** Run `col_fn` over an N-row grid; return the getTable query count. */
+  const getTableCallsFor = async (n: number): Promise<number> => {
+    const { client, calls } = fakeClient(grid(n));
+    const store = await buildStore({ client, refs: REFS, tableId: TABLE_ID });
+    const engine = new Engine(
+      // db/credsDb are unused: the cloud store is injected for both reads/creds.
+      undefined as never,
+      {},
+      echoRegistry(),
+      undefined,
+      { store, creds: store },
+    );
+    const res = await engine.runColumn("col_fn");
+    expect(res).toEqual({ ran: n, errors: 0 });
+    return calls.filter((c) => c.ref === REFS.getTable).length;
+  };
+
+  it("issues O(N) getTable reads (a per-run snapshot), not O(N^2)", async () => {
+    const small = await getTableCallsFor(3);
+    const large = await getTableCallsFor(30);
+
+    // The snapshot fetches the grid once per run regardless of row count, so the
+    // count is flat. The load-bearing guarantee is sub-quadratic: doubling rows
+    // 10x must NOT multiply reads ~100x (the old per-read refetch did exactly
+    // that). Assert the count does not grow with N at all (constant per run).
+    expect(small).toBe(1);
+    expect(large).toBe(1);
+    // Hard upper bound that the pre-fix O(N^2) behaviour would blow through:
+    // 30 rows × (getColumn + listRows + per-row getCell/rowCells/listColumns)
+    // was well over 100 getTable queries.
+    expect(large).toBeLessThan(30);
   });
 });
