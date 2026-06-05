@@ -6,6 +6,7 @@ import CellDetails, { extractCode } from "./CellDetails";
 import { ExtensionPanel, AiProviderPanel, ExtensionsBrowse, BrandIcon } from "./Panels";
 import { AddColumnPopover, FunctionsModal } from "./AddColumn";
 import { ProjectSwitcher } from "./ProjectSwitcher";
+import { AccountBar, PlanBadge } from "./cloud/AccountBar";
 import "./styles.css";
 
 // What the main area is showing.
@@ -375,7 +376,6 @@ export default function App() {
   const [showFunctions, setShowFunctions] = useState(false);
   const [showNewTable, setShowNewTable] = useState(false);
   const [showProjects, setShowProjects] = useState(false);
-  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [currentProjectPath, setCurrentProjectPath] = useState<string | null>(null);
 
   // Open the add-column popover anchored just below the clicked "+" button.
@@ -525,8 +525,8 @@ export default function App() {
     if (ai) setAiProviders(ai);
   }, []);
 
+  // Refresh the current local project path; the AccountBar owns its open state.
   const openAccountMenu = useCallback(async () => {
-    setAccountMenuOpen(true);
     const ps = await api.projects().catch(() => []);
     setCurrentProjectPath(ps.find((p) => p.current)?.path ?? null);
   }, []);
@@ -734,7 +734,7 @@ export default function App() {
           <span className="topbar-project-name">{projectName}</span>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
         </button>
-        <span className="free-badge">FREE</span>
+        <PlanBadge />
       </header>
 
       <div className="app">
@@ -904,51 +904,14 @@ export default function App() {
           </div>
         </div>
 
-        {/* Footer: account / project menu */}
-        <div className="account-bar">
-          <button className="account-btn" onClick={() => (accountMenuOpen ? setAccountMenuOpen(false) : openAccountMenu())}>
-            <span className="account-avatar">{projectName.slice(0, 1).toUpperCase()}</span>
-            <span className="account-text">
-              <span className="account-name">{projectName}</span>
-              <span className="account-sub">
-                <span className={`status-dot ${healthStatus}`} />
-                {healthStatus === "connected" ? "Local workspace" : healthStatus === "offline" ? "Offline" : "Connecting…"}
-              </span>
-            </span>
-            <svg className="account-chevrons" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="7 15 12 20 17 15" /><polyline points="7 9 12 4 17 9" />
-            </svg>
-          </button>
-
-          {accountMenuOpen && (
-            <>
-              <div className="account-backdrop" onClick={() => setAccountMenuOpen(false)} />
-              <div className="account-menu">
-                <div className="account-menu-head">
-                  <span className="account-avatar">{projectName.slice(0, 1).toUpperCase()}</span>
-                  <div className="account-menu-head-text">
-                    <strong>Local workspace</strong>
-                    <span>All projects on this device</span>
-                  </div>
-                </div>
-                <div className="account-menu-sec">
-                  <div className="account-menu-label">Project</div>
-                  <div className="account-menu-current">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
-                    <div className="account-menu-current-text">
-                      <span className="account-menu-current-name">{projectName}</span>
-                      {currentProjectPath && <span className="account-menu-current-path">{currentProjectPath}</span>}
-                    </div>
-                  </div>
-                  <button className="account-menu-item" onClick={() => { setAccountMenuOpen(false); setShowProjects(true); }}>
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="17 1 21 5 17 9" /><path d="M3 11V9a4 4 0 0 1 4-4h14" /><polyline points="7 23 3 19 7 15" /><path d="M21 13v2a4 4 0 0 1-4 4H3" /></svg>
-                    Switch project
-                  </button>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
+        {/* Footer: account / project menu (cloud auth + workspace switcher). */}
+        <AccountBar
+          projectName={projectName}
+          healthStatus={healthStatus}
+          currentProjectPath={currentProjectPath}
+          onSwitchProject={() => setShowProjects(true)}
+          onOpenMenu={openAccountMenu}
+        />
       </aside>
 
       {/* ── Main area ───────────────────── */}

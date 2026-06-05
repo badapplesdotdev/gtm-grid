@@ -2102,4 +2102,17 @@ html, body, #root {
   padding: 8px; border-radius: var(--r-sm); font-size: 13px; color: var(--text);
 }
 .account-menu-item:hover { background: var(--surface-2); }
+.account-menu-item:disabled { opacity: 0.6; cursor: default; }
 .account-menu-item svg { color: var(--text-3); flex-shrink: 0; }
+
+/* ── Account menu: sign-in / create-workspace forms (T8) ──────────── */
+.account-menu-create { display: flex; flex-direction: column; gap: 6px; padding: 2px 0; }
+.account-menu-input {
+  box-sizing: border-box; width: 100%; padding: 7px 8px; border: 1px solid var(--border);
+  border-radius: var(--r-sm); background: var(--surface); color: var(--text); font: 400 13px var(--font-sans);
+  outline: none;
+}
+.account-menu-input:focus { border-color: var(--accent); }
+.account-menu-input::placeholder { color: var(--text-3); }
+.account-menu-error { font-size: 11.5px; color: var(--danger); padding: 0 2px; }
+.account-menu-link { font-size: 11.5px; color: var(--text-3); justify-content: center; }
