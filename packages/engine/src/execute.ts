@@ -22,6 +22,22 @@ export interface RunColumnOptions {
   force?: boolean;
 }
 
+/**
+ * Optional store injection for the {@link Engine}.
+ *
+ * Local projects leave these unset: the engine builds a `SqliteGridStore` over
+ * the constructor `db`/`credsDb`, exactly as before (behaviour unchanged). Cloud
+ * projects pass a `ConvexGridStore`-backed shape so the SAME engine reads inputs
+ * from Convex and writes cell status/results back via the T4 mutations — the run
+ * path is identical; only where reads/writes go changes.
+ */
+export interface EngineStores {
+  /** The project store the run path reads/writes through. */
+  readonly store?: GridStoreShape;
+  /** The credential store `dispatch` resolves connector secrets through. */
+  readonly creds?: GridStoreShape;
+}
+
 export class Engine {
   readonly db: Db;
   /** Where credentials live — the shared global db when running multi-project. */
@@ -34,18 +50,25 @@ export class Engine {
   /** The credentials store `dispatch` resolves connector secrets through. */
   private readonly creds: GridStoreShape;
 
-  constructor(db: Db, config: EngineConfig = {}, registry: Registry = defaultRegistry(), credsDb?: Db) {
+  constructor(
+    db: Db,
+    config: EngineConfig = {},
+    registry: Registry = defaultRegistry(),
+    credsDb?: Db,
+    stores: EngineStores = {},
+  ) {
     this.db = db;
     this.credsDb = credsDb ?? db;
     this.registry = registry;
     this.config = config;
     // The engine drives a GridStore abstraction, not the concrete Db. For local
-    // projects that store is a thin SqliteGridStore over the same Db, so
-    // behaviour is unchanged; cloud projects swap in a ConvexGridStore (provided
-    // via the GridStore Layer in the cloud lane). Credentials may live in a
-    // separate (shared/global) store when running multi-project.
-    this.store = sqliteGridStoreShape(db);
-    this.creds = sqliteGridStoreShape(this.credsDb);
+    // projects that store defaults to a thin SqliteGridStore over the same Db, so
+    // behaviour is unchanged; cloud projects inject a ConvexGridStore (built by
+    // the server cloud-run lane) so the same run path reads/writes Convex.
+    // Credentials may live in a separate (shared/global) store when running
+    // multi-project, or be injected (e.g. workspace-shared cloud credentials).
+    this.store = stores.store ?? sqliteGridStoreShape(db);
+    this.creds = stores.creds ?? sqliteGridStoreShape(this.credsDb);
   }
 
   /** Host-side dispatcher exposed to the sandbox as `sdk.<provider>.<method>`. */

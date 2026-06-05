@@ -7,6 +7,15 @@ import { ExtensionPanel, AiProviderPanel, ExtensionsBrowse, BrandIcon } from "./
 import { AddColumnPopover, FunctionsModal } from "./AddColumn";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { AccountBar, PlanBadge } from "./cloud/AccountBar";
+import { CloudGrid } from "./cloud/CloudGrid";
+import { useMe, useActiveWorkspace } from "./cloud/auth";
+import {
+  useCloudProjects,
+  useCloudTables,
+  useCloudProjectMutations,
+  type CloudProject,
+} from "./cloud/useCloudGrid";
+import type { Id } from "../../../convex/_generated/dataModel";
 import "./styles.css";
 
 // What the main area is showing.
@@ -18,7 +27,7 @@ type View =
 
 // ─── Icons (inline SVG, no deps) ─────────────────────────
 
-const Icon = {
+export const Icon = {
   Table: () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="3" width="18" height="18" rx="2"/>
@@ -106,7 +115,7 @@ const ExpandIcon = () => (
   </svg>
 );
 
-function CellContent({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running }: {
+export function CellContent({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running }: {
   cell: Cell | undefined;
   col: Column;
   onEdit: (value: string) => void;
@@ -378,6 +387,21 @@ export default function App() {
   const [showProjects, setShowProjects] = useState(false);
   const [currentProjectPath, setCurrentProjectPath] = useState<string | null>(null);
 
+  // ── Cloud project mode (multiplayer via Convex) ──────────────
+  // A cloud project is selected from the switcher; while one is active the main
+  // area renders the live CloudGrid instead of the local sidecar grid. Local
+  // state above is left intact so switching back is instant and unchanged.
+  const me = useMe();
+  const { activeWorkspace } = useActiveWorkspace(me ?? null);
+  const cloudProjects = useCloudProjects(activeWorkspace?._id ?? null);
+  const [cloudProject, setCloudProject] = useState<CloudProject | null>(null);
+  const [cloudTableId, setCloudTableId] = useState<Id<"tables"> | null>(null);
+  const cloudTables = useCloudTables(cloudProject?._id ?? null);
+  const { createProject: createCloudProject, createTable: createCloudTable } =
+    useCloudProjectMutations();
+  // Whether the app is currently viewing a cloud project (vs. local).
+  const inCloud = cloudProject !== null;
+
   // Open the add-column popover anchored just below the clicked "+" button.
   const openAddCol = (e: React.MouseEvent) => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -509,9 +533,54 @@ export default function App() {
     if (t) setTables(t);
   }, []);
 
-  // Switch to a different project: tables change; global creds/extensions stay.
+  // ── Cloud project selection ──────────────
+  // Open a cloud project: leave the local sidecar untouched, switch the main
+  // area to the live CloudGrid, and default to its first table once they load.
+  const onCloudProjectSelected = useCallback((project: CloudProject) => {
+    setShowProjects(false);
+    setCloudProject(project);
+    setCloudTableId(null);
+    setView({ kind: "table" });
+  }, []);
+
+  // Create a cloud project in the active workspace, then open it.
+  const onCreateCloudProject = useCallback(
+    async (name: string) => {
+      if (!activeWorkspace) return;
+      const id = await createCloudProject(activeWorkspace._id, name);
+      setShowProjects(false);
+      setCloudProject({
+        _id: id,
+        workspaceId: activeWorkspace._id,
+        name,
+        createdAt: Date.now(),
+      });
+      setCloudTableId(null);
+    },
+    [activeWorkspace, createCloudProject],
+  );
+
+  // Leave cloud mode → back to the local project the sidecar already has open.
+  const exitCloud = useCallback(() => {
+    setCloudProject(null);
+    setCloudTableId(null);
+    setView({ kind: "table" });
+  }, []);
+
+  // Default the active cloud table to the first one once the list loads.
+  useEffect(() => {
+    if (!inCloud) return;
+    if (cloudTables && cloudTables.length > 0 && cloudTableId === null) {
+      setCloudTableId(cloudTables[0]._id);
+    }
+  }, [inCloud, cloudTables, cloudTableId]);
+
+  // Switch to a different LOCAL project: also exit cloud mode so the sidecar
+  // grid is shown. Tables change; global creds/extensions stay.
   const onProjectSwitched = useCallback(async (name: string) => {
     setShowProjects(false);
+    setCloudProject(null);
+    setCloudTableId(null);
     setProjectName(name);
     setView({ kind: "table" });
     const [t, e, ai] = await Promise.all([
@@ -731,10 +800,16 @@ export default function App() {
       <header className="topbar">
         <LogoMark size={22} />
         <button className="topbar-project" onClick={() => setShowProjects(true)} title="Switch project">
-          <span className="topbar-project-name">{projectName}</span>
+          <span className="topbar-project-name">{inCloud ? cloudProject!.name : projectName}</span>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
         </button>
-        <PlanBadge />
+        {inCloud ? (
+          <button className="free-badge" onClick={exitCloud} title="Back to local project">
+            CLOUD · exit
+          </button>
+        ) : (
+          <PlanBadge />
+        )}
       </header>
 
       <div className="app">
@@ -748,7 +823,57 @@ export default function App() {
         </div>
 
         <div className="sidebar-scroll">
-          {/* Tables section */}
+          {/* Cloud tables section — shown only while a cloud project is open. */}
+          {inCloud && (
+            <div className="sidebar-section">
+              <div className="sidebar-section-label">
+                Tables (cloud)
+                <button
+                  title="New cloud table"
+                  onClick={async () => {
+                    if (!cloudProject) return;
+                    const id = await createCloudTable(cloudProject._id, "Untitled");
+                    setCloudTableId(id);
+                  }}
+                >
+                  <Icon.Plus />
+                </button>
+              </div>
+              {cloudTables === undefined ? (
+                <div className="skeleton-row">
+                  <div className="shimmer skeleton-bar" style={{ width: "65%", height: 13 }} />
+                </div>
+              ) : cloudTables.length === 0 ? (
+                <div style={{ padding: "4px 16px", fontSize: 12, color: "var(--text-3)" }}>No tables yet</div>
+              ) : (
+                cloudTables.map((t) => (
+                  <div
+                    key={t._id}
+                    className={`sidebar-item${t._id === cloudTableId ? " active" : ""}`}
+                    onClick={() => setCloudTableId(t._id)}
+                  >
+                    <span className="sidebar-item-icon"><Icon.Table /></span>
+                    <span className="sidebar-item-name">{t.name}</span>
+                  </div>
+                ))
+              )}
+              <div
+                className="sidebar-item"
+                style={{ marginTop: 2 }}
+                onClick={async () => {
+                  if (!cloudProject) return;
+                  const id = await createCloudTable(cloudProject._id, "Untitled");
+                  setCloudTableId(id);
+                }}
+              >
+                <span className="sidebar-item-icon" style={{ color: "var(--accent)" }}><Icon.Plus /></span>
+                <span className="sidebar-item-name" style={{ color: "var(--accent)" }}>New table</span>
+              </div>
+            </div>
+          )}
+
+          {/* Tables section (local) — hidden while a cloud project is open. */}
+          {!inCloud && <>
           <div className="sidebar-section">
             <div className="sidebar-section-label">
               Tables
@@ -800,6 +925,7 @@ export default function App() {
               <span className="sidebar-item-name" style={{ color: "var(--accent)" }}>New table</span>
             </div>
           </div>
+          </>}
 
           {/* AI Providers section — collapsible */}
           <div className="sidebar-section">
@@ -925,26 +1051,30 @@ export default function App() {
           </div>
         )}
 
+        {/* Cloud project: the LIVE multiplayer grid (Convex). Replaces the local
+            sidecar grid entirely while a cloud project is open. */}
+        {inCloud && <CloudGrid tableId={cloudTableId} />}
+
         {/* Extensions gallery + detail panels */}
-        {view.kind === "extensions" && (
+        {!inCloud && view.kind === "extensions" && (
           <ExtensionsBrowse
             extensions={extensions}
             onOpen={(id) => setView({ kind: "extension", id })}
           />
         )}
-        {view.kind === "extension" && (
+        {!inCloud && view.kind === "extension" && (
           <ExtensionPanel
             id={view.id}
             onConnected={refreshConnections}
             onBack={() => setView({ kind: "extensions" })}
           />
         )}
-        {view.kind === "ai" && (() => {
+        {!inCloud && view.kind === "ai" && (() => {
           const p = aiProviders.find(x => x.id === view.id);
           return p ? <AiProviderPanel provider={p} onConnected={refreshConnections} /> : null;
         })()}
 
-        {view.kind === "table" && <>
+        {!inCloud && view.kind === "table" && <>
         {/* Toolbar */}
         <div className="toolbar">
           {tableData ? (
@@ -1263,6 +1393,16 @@ export default function App() {
           current={projectName}
           onClose={() => setShowProjects(false)}
           onSwitched={onProjectSwitched}
+          cloud={
+            activeWorkspace
+              ? {
+                  projects: cloudProjects,
+                  activeId: cloudProject?._id ?? null,
+                  onSelect: onCloudProjectSelected,
+                  onCreate: onCreateCloudProject,
+                }
+              : undefined
+          }
         />
       )}
       </div>
