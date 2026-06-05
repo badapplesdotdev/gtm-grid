@@ -1,9 +1,16 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo } from "./api";
+import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo } from "./api";
 import AgentPanel from "./AgentPanel";
 import { LogoMark } from "./Logo";
 import CellDetails, { extractCode } from "./CellDetails";
+import { ExtensionPanel, AiProviderPanel } from "./Panels";
 import "./styles.css";
+
+// What the main area is showing.
+type View =
+  | { kind: "table" }
+  | { kind: "extension"; id: string }
+  | { kind: "ai"; id: string };
 
 // ─── Icons (inline SVG, no deps) ─────────────────────────
 
@@ -131,23 +138,22 @@ function CellContent({ cell, col, onEdit, onOpenDetails }: {
   }
 
   if (cell.status === "error") {
+    const code = cell.error?.match(/\b(\d{3})\b/)?.[1];
     return (
-      <div className="cell-wrap" title={cell.error ?? undefined}>
-        <span className="cell-error">{cell.error ?? "error"}</span>
+      <div className="cell-wrap" title={cell.error ?? "error"}>
+        <span className="cell-status err" onClick={onOpenDetails}>
+          {code ? `Status Code: ${code}` : "Error"}
+        </span>
       </div>
     );
   }
 
-  // done / has value
+  // done / has value — objects collapse to a status pill (click to open fields)
   if (isObjectOrArray(cell.value)) {
     return (
       <div className="cell-wrap">
-        <span
-          className="cell-json-chip cell-json-clickable"
-          title="Click to view fields"
-          onClick={onOpenDetails}
-        >
-          {truncateJSON(cell.value)}
+        <span className="cell-status ok" title="Click to view fields" onClick={onOpenDetails}>
+          Status Code: 200
         </span>
       </div>
     );
@@ -353,10 +359,15 @@ export default function App() {
   const [tableData, setTableData] = useState<FullTable | null>(null);
   const [tableLoading, setTableLoading] = useState(false);
 
-  // Connectors / extensions
+  // Connectors / extensions / AI providers
   const [connectors, setConnectors] = useState<ConnectorInfo[]>([]);
   const [extensions, setExtensions] = useState<ExtensionInfo[]>([]);
+  const [aiProviders, setAiProviders] = useState<AiProviderInfo[]>([]);
   const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
+  const [fnSectionOpen, setFnSectionOpen] = useState(false); // Functions section: collapsed by default
+
+  // Which detail (table grid / extension / AI provider) the main area shows.
+  const [view, setView] = useState<View>({ kind: "table" });
 
   // Modals
   const [showAddCol, setShowAddCol] = useState(false);
@@ -396,13 +407,20 @@ export default function App() {
     // it's reachable instead of giving up on the first failed check.
     const boot = async () => {
       try {
-        const [h, t, f, e] = await Promise.all([api.health(), api.tables(), api.functions(), api.extensions()]);
+        const [h, t, f, e, ai] = await Promise.all([
+          api.health(),
+          api.tables(),
+          api.functions(),
+          api.extensions(),
+          api.aiProviders(),
+        ]);
         if (cancelled) return;
         setHealthStatus("connected");
         setProjectName(h.project ?? "gtmgrid");
         setTables(t);
         setConnectors(f);
         setExtensions(e);
+        setAiProviders(ai);
         setSelectedTableId((cur) => cur ?? (t.length > 0 ? t[0].id : null));
       } catch {
         if (cancelled) return;
@@ -546,6 +564,16 @@ export default function App() {
   const toggleProvider = (p: string) =>
     setExpandedProviders(prev => ({ ...prev, [p]: !prev[p] }));
 
+  // Refresh connection state after a key is added in a detail panel.
+  const refreshConnections = useCallback(async () => {
+    const [e, ai] = await Promise.all([
+      api.extensions().catch(() => null),
+      api.aiProviders().catch(() => null),
+    ]);
+    if (e) setExtensions(e);
+    if (ai) setAiProviders(ai);
+  }, []);
+
   // ─────────────────────────────────────────
   // RENDER
   // ─────────────────────────────────────────
@@ -578,8 +606,8 @@ export default function App() {
             ) : tables.map(t => (
               <div
                 key={t.id}
-                className={`sidebar-item${t.id === selectedTableId ? " active" : ""}`}
-                onClick={() => setSelectedTableId(t.id)}
+                className={`sidebar-item${t.id === selectedTableId && view.kind === "table" ? " active" : ""}`}
+                onClick={() => { setSelectedTableId(t.id); setView({ kind: "table" }); }}
               >
                 <span className="sidebar-item-icon"><Icon.Table /></span>
                 <span className="sidebar-item-name">{t.name}</span>
@@ -592,12 +620,61 @@ export default function App() {
             </div>
           </div>
 
-          {/* Functions section */}
+          {/* AI Providers section */}
           <div className="sidebar-section">
-            <div className="sidebar-section-label">
-              <span>Functions</span>
+            <div className="sidebar-section-label">AI Providers</div>
+            {aiProviders.length === 0 ? (
+              <div className="skeleton-row">
+                <div className="shimmer skeleton-bar" style={{ width: "65%", height: 13 }} />
+              </div>
+            ) : aiProviders.map(p => (
+              <div
+                key={p.id}
+                className={`ext-item clickable${view.kind === "ai" && view.id === p.id ? " active" : ""}`}
+                onClick={() => setView({ kind: "ai", id: p.id })}
+              >
+                <span className="ext-item-name">{p.name}</span>
+                {p.connected && <span className="ext-badge connected">connected</span>}
+              </div>
+            ))}
+          </div>
+
+          {/* Extensions section */}
+          <div className="sidebar-section">
+            <div className="sidebar-section-label">Extensions</div>
+            {extensions.length === 0 ? (
+              <div className="skeleton-row">
+                <div className="shimmer skeleton-bar" style={{ width: "70%", height: 13 }} />
+              </div>
+            ) : extensions.map(e => (
+              <div
+                key={e.id}
+                className={`ext-item clickable${view.kind === "extension" && view.id === e.id ? " active" : ""}`}
+                onClick={() => setView({ kind: "extension", id: e.id })}
+              >
+                <span className="ext-item-name">{e.name}</span>
+                <span className={`ext-badge ${e.connected ? "connected" : "no-key"}`}>
+                  {e.connected ? "connected" : "no key"}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {/* Functions section — collapsed by default */}
+          <div className="sidebar-section">
+            <div
+              className="sidebar-section-label clickable"
+              onClick={() => setFnSectionOpen(o => !o)}
+            >
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span className={`connector-group-toggle${fnSectionOpen ? " open" : ""}`}>
+                  <Icon.ChevronRight />
+                </span>
+                Functions
+              </span>
+              <span className="connector-method-count">{connectors.reduce((n, c) => n + c.methods.length, 0)}</span>
             </div>
-            {connectors.length === 0 ? (
+            {fnSectionOpen && (connectors.length === 0 ? (
               <div className="skeleton-row">
                 <div className="shimmer skeleton-bar" style={{ width: "60%", height: 13 }} />
               </div>
@@ -620,26 +697,7 @@ export default function App() {
                   </div>
                 )}
               </div>
-            ))}
-          </div>
-
-          {/* Extensions section */}
-          <div className="sidebar-section">
-            <div className="sidebar-section-label">Extensions</div>
-            {extensions.length === 0 ? (
-              <div className="skeleton-row">
-                <div className="shimmer skeleton-bar" style={{ width: "70%", height: 13 }} />
-              </div>
-            ) : extensions.map(e => (
-              <div key={e.id} className="ext-item">
-                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {e.name}
-                </span>
-                <span className={`ext-badge ${e.connected ? "connected" : "no-key"}`}>
-                  {e.connected ? "connected" : "no key"}
-                </span>
-              </div>
-            ))}
+            )))}
           </div>
         </div>
 
@@ -663,6 +721,16 @@ export default function App() {
           </div>
         )}
 
+        {/* Extension / AI Provider detail panels */}
+        {view.kind === "extension" && (
+          <ExtensionPanel id={view.id} onConnected={refreshConnections} />
+        )}
+        {view.kind === "ai" && (() => {
+          const p = aiProviders.find(x => x.id === view.id);
+          return p ? <AiProviderPanel provider={p} onConnected={refreshConnections} /> : null;
+        })()}
+
+        {view.kind === "table" && <>
         {/* Toolbar */}
         <div className="toolbar">
           {tableData ? (
@@ -798,7 +866,12 @@ export default function App() {
                             cell={cell}
                             col={col}
                             onEdit={v => setCell(row.id, col.id, v)}
-                            onOpenDetails={() => setDetail({ columnName: col.name, value: cell?.value })}
+                            onOpenDetails={() =>
+                              setDetail({
+                                columnName: col.name,
+                                value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
+                              })
+                            }
                           />
                         </td>
                       );
@@ -810,6 +883,7 @@ export default function App() {
             </table>
           </div>
         ) : null}
+        </>}
       </div>
 
       {/* ── Agent panel (Claude Code / Codex) ─ */}

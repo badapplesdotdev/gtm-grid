@@ -1,6 +1,7 @@
-// Cell details drawer — click a cell holding JSON to see every field flattened
-// and mapped, then promote a field to a new column or map it onto an existing
-// one (Revcode's "Cell details" panel).
+// Cell details panel — click a cell holding JSON to see every field flattened
+// into pills. Click a field to add it as a new column or map it onto an existing
+// one. Lives in the right rail (over the agent panel), so the grid stays visible
+// and newly-created columns are immediately on screen.
 
 import { useMemo, useState } from "react";
 
@@ -30,11 +31,12 @@ function flatten(value: unknown, prefix: string[] = [], out: FlatField[] = [], d
 }
 function preview(v: unknown): string {
   if (v === null || v === undefined) return "—";
-  if (Array.isArray(v)) return `[${v.length} item${v.length === 1 ? "" : "s"}]`;
+  if (Array.isArray(v)) return `[${v.length}]`;
   if (typeof v === "object") return "{…}";
   const s = String(v);
-  return s.length > 90 ? s.slice(0, 90) + "…" : s;
+  return s.length > 60 ? s.slice(0, 60) + "…" : s;
 }
+const leafName = (f: FlatField) => f.path[f.path.length - 1] ?? "value";
 
 export default function CellDetails({
   source,
@@ -50,99 +52,107 @@ export default function CellDetails({
   onMapTo: (path: string[], targetId: string) => Promise<void> | void;
 }) {
   const [q, setQ] = useState("");
-  const [mapOpen, setMapOpen] = useState<number | null>(null);
-  const [busy, setBusy] = useState<number | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [draftName, setDraftName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [doneMsg, setDoneMsg] = useState<string | null>(null);
 
   const fields = useMemo(() => flatten(source.value), [source.value]);
-  const filtered = fields.filter((f, i) => {
-    void i;
-    if (!q) return true;
-    const hay = (f.path.join(".") + " " + preview(f.value)).toLowerCase();
-    return hay.includes(q.toLowerCase());
-  });
-  const leafName = (f: FlatField) => f.path[f.path.length - 1] ?? "value";
+  const visible = fields
+    .map((f, i) => ({ f, i }))
+    .filter(({ f }) => !q || (f.path.join(".") + " " + preview(f.value)).toLowerCase().includes(q.toLowerCase()));
+
+  const copyJson = () => navigator.clipboard?.writeText(JSON.stringify(source.value, null, 2)).catch(() => {});
+
+  const select = (i: number) => {
+    setSelected(selected === i ? null : i);
+    setDraftName(leafName(fields[i]));
+    setDoneMsg(null);
+  };
+  const create = async (f: FlatField, name: string) => {
+    setBusy(true);
+    try {
+      await onCreate(f.path, name.trim() || leafName(f));
+      setDoneMsg(`Added “${name.trim() || leafName(f)}” to the table`);
+      setSelected(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const map = async (f: FlatField, targetId: string, targetName: string) => {
+    setBusy(true);
+    try {
+      await onMapTo(f.path, targetId);
+      setDoneMsg(`Mapped onto “${targetName}”`);
+      setSelected(null);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
-    <>
-      <div className="cd-backdrop" onClick={onClose} />
-      <aside className="cell-details">
-        <div className="cd-header">
-          <span className="cd-title">⚡ Cell details</span>
-          <button className="cd-close" onClick={onClose} title="Close">
-            ✕
-          </button>
+    <aside className="cell-details">
+      <div className="cd-header">
+        <span className="cd-title">⚡ Cell details</span>
+        <div className="cd-header-actions">
+          <button className="cd-icon-btn" title="Copy JSON" onClick={copyJson}>⧉</button>
+          <button className="cd-icon-btn" title="Close" onClick={onClose}>✕</button>
         </div>
-        <div className="cd-source">
-          from <strong>{source.columnName}</strong> · {fields.length} fields
-        </div>
+      </div>
+
+      <div className="cd-body">
         <div className="cd-search">
-          <input placeholder="Search fields…" value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false} />
+          <input placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false} />
         </div>
+        {doneMsg && <div className="cd-done">✓ {doneMsg}</div>}
+
         <div className="cd-fields">
-          {filtered.map((f, i) => {
-            const idx = fields.indexOf(f);
-            return (
-              <div className="cd-field" key={idx}>
-                <div className="cd-field-row">
-                  <span className={`cd-type cd-type-${f.type}`}>{typeIcon(f.type)}</span>
-                  <span className="cd-name" title={f.path.join(".")}>
-                    {leafName(f)}
-                  </span>
-                  <span
-                    className="cd-value"
-                    title={typeof f.value === "object" ? JSON.stringify(f.value, null, 2) : String(f.value)}
-                  >
-                    {preview(f.value)}
-                  </span>
-                </div>
-                <div className="cd-actions">
-                  <button
-                    className="cd-add"
-                    disabled={busy === idx}
-                    onClick={async () => {
-                      setBusy(idx);
-                      try {
-                        await onCreate(f.path, leafName(f));
-                      } finally {
-                        setBusy(null);
-                      }
-                    }}
-                  >
-                    {busy === idx ? "…" : "+ Column"}
-                  </button>
-                  <div className="cd-map-wrap">
-                    <button className="cd-map" onClick={() => setMapOpen(mapOpen === idx ? null : idx)}>
-                      Map to ▾
+          {visible.map(({ f, i }) => (
+            <div key={i} className={`cd-pill-wrap ${selected === i ? "open" : ""}`}>
+              <button className="cd-pill" onClick={() => select(i)} title={f.path.join(".")}>
+                <span className={`cd-type cd-type-${f.type}`}>{typeIcon(f.type)}</span>
+                <span className="cd-name">{leafName(f)}</span>
+                <span className="cd-value">{preview(f.value)}</span>
+              </button>
+
+              {selected === i && (
+                <div className="cd-action">
+                  <div className="cd-action-title">Add “{leafName(f)}” as new column</div>
+                  <div className="cd-create-row">
+                    <input
+                      value={draftName}
+                      onChange={(e) => setDraftName(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && create(f, draftName)}
+                      spellCheck={false}
+                      autoFocus
+                    />
+                    <button className="cd-create-btn" disabled={busy} onClick={() => create(f, draftName)}>
+                      {busy ? "…" : "Create column"}
                     </button>
-                    {mapOpen === idx && (
-                      <div className="cd-map-menu">
-                        {columns.length === 0 && <div className="cd-map-empty">No columns yet</div>}
+                  </div>
+                  {columns.length > 0 && (
+                    <>
+                      <div className="cd-or">or map to an existing column</div>
+                      <div className="cd-map-list">
                         {columns.map((c) => (
-                          <button
-                            key={c.id}
-                            onClick={async () => {
-                              setMapOpen(null);
-                              setBusy(idx);
-                              try {
-                                await onMapTo(f.path, c.id);
-                              } finally {
-                                setBusy(null);
-                              }
-                            }}
-                          >
+                          <button key={c.id} disabled={busy} onClick={() => map(f, c.id, c.name)}>
                             {c.name}
                           </button>
                         ))}
                       </div>
-                    )}
-                  </div>
+                    </>
+                  )}
                 </div>
-              </div>
-            );
-          })}
+              )}
+            </div>
+          ))}
         </div>
-      </aside>
-    </>
+      </div>
+
+      <div className="cd-footer">
+        from <strong>{source.columnName}</strong> · {fields.length} fields
+      </div>
+    </aside>
   );
 }
 
