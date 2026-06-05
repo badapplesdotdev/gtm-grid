@@ -28,6 +28,19 @@ export {
   type CloudCellStatus,
   type CloudCredentialScope,
 } from "./cloud-schema.js";
+// GridStore — the engine's async storage abstraction (Effect service + typed
+// errors + Layer). SqliteGridStore is the local implementation; the cloud lane
+// adds a ConvexGridStore Layer for the same tag.
+export {
+  GridStore,
+  CredentialStore,
+  GridStoreError,
+  sqliteGridStore,
+  sqliteCredentialStore,
+  sqliteGridStoreShape,
+  type GridStoreShape,
+  type CellPatch,
+} from "./store.js";
 
 export interface OpenProjectResult {
   db: Db;
