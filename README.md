@@ -128,6 +128,35 @@ The packaged app bundles its own Node runtime + engine, so it runs on a clean Ma
 
 > Unsigned builds are quarantined by Gatekeeper on other Macs — right-click → Open, or `xattr -dr com.apple.quarantine gtmgrid.app`. Code-signing/notarization is left to the distributor.
 
+## Cloud / Teams (commercial — in progress)
+
+The free app is **100% local and offline** — local solo projects use the bundled
+SQLite engine and never call the cloud. A commercial **multiplayer tier** is being
+added on top, where shared team projects live in a [Convex](https://convex.dev)
+backend (the cloud source of truth) so multiple members can edit the same grids
+live. Execution still runs locally; the cloud only stores/syncs data.
+
+The Convex backend is **scaffold-only** today:
+
+- `convex/schema.ts` — workspace-scoped tables (`workspaces`, `members`,
+  `projects`, `tables`, `columns`, `rows`, `cells`, `extensions`, `credentials`)
+  mirroring the engine model, with indexes for reactive queries.
+- `convex/tsconfig.json` + `convex.json` — the `convex/` directory is
+  **self-contained** and intentionally **not** part of the root `tsc -b` graph
+  (Convex's `convex/_generated/` types only exist after a deployment login, so
+  keeping it separate keeps `pnpm typecheck` green before codegen).
+
+**Setup (run later, when wiring the cloud tier):**
+
+```bash
+# Logs in / creates a Convex dev deployment and generates convex/_generated/.
+npx convex dev          # or: pnpm convex:dev
+```
+
+`convex dev` writes a `CONVEX_DEPLOYMENT` to `.env.local` and a deploy URL you
+set as the client's `VITE_CONVEX_URL`. No keys or deployment are required to
+build or test this repo — `pnpm typecheck` and `pnpm test` pass without them.
+
 ## Status
 
 - ✅ Engine, sandbox, connectors, CLI, MCP (connect from terminal Claude Code)

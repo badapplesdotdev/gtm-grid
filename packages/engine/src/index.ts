@@ -20,6 +20,14 @@ export * from "./types.js";
 // Canonical Effect-TS service pattern (see docs/effect-conventions.md). Later
 // business-logic services (e.g. GridStore) follow this same Service + typed-error + Layer shape.
 export { CellCoercionService, CellCoercionError, type CoercedValue } from "./sample-service.js";
+// Cloud schema mapping/validation (engine domain <-> convex/schema.ts literals).
+export {
+  CloudSchemaMapping,
+  UnknownCellStatusError,
+  UnmappableCredentialScopeError,
+  type CloudCellStatus,
+  type CloudCredentialScope,
+} from "./cloud-schema.js";
 
 export interface OpenProjectResult {
   db: Db;
