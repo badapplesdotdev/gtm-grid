@@ -1,0 +1,147 @@
+{
+  "id": "leadmagic",
+  "name": "LeadMagic",
+  "version": "1.0.0",
+  "category": "enrichment",
+  "baseUrl": "https://api.leadmagic.io/v1",
+  "auth": { "type": "apiKey", "header": "X-API-Key", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "emailFinder",
+      "label": "Find Email",
+      "description": "Find a person's work email from their name and company. Needs a name (first_name+last_name OR full_name) AND a company (domain OR company_name). Returns { email, status, employment_verified, company_name }. 1 credit per valid email; free if not found.",
+      "verb": "POST",
+      "path": "/people/email-finder",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "properties": {
+          "first_name": { "type": "string", "description": "First name" },
+          "last_name": { "type": "string", "description": "Last name" },
+          "full_name": { "type": "string", "description": "Full name (alternative to first+last)" },
+          "domain": { "type": "string", "description": "Company website domain, e.g. 'stripe.com'" },
+          "company_name": { "type": "string", "description": "Company name (alternative to domain)" }
+        }
+      }
+    },
+    {
+      "id": "emailValidation",
+      "label": "Validate Email",
+      "description": "Validate an email address and return deliverability + company data. Returns { email, email_status, is_domain_catch_all, company_name, company_industry }. 0.25 credit for definitive valid/invalid.",
+      "verb": "POST",
+      "path": "/people/email-validation",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["email"],
+        "properties": { "email": { "type": "string", "description": "Email address to validate" } }
+      }
+    },
+    {
+      "id": "mobileFinder",
+      "label": "Find Mobile",
+      "description": "Find a person's mobile phone number. Provide at least one of profile_url, work_email, personal_email. Returns { mobile_number, profile_url, email }. 5 credits on success; free if none found.",
+      "verb": "POST",
+      "path": "/people/mobile-finder",
+      "credits": 5,
+      "input": {
+        "type": "object",
+        "properties": {
+          "profile_url": { "type": "string", "description": "LinkedIn profile URL" },
+          "work_email": { "type": "string", "description": "Work email" },
+          "personal_email": { "type": "string", "description": "Personal email" }
+        }
+      }
+    },
+    {
+      "id": "profileSearch",
+      "label": "Enrich LinkedIn Profile",
+      "description": "Enrich a LinkedIn profile from its URL. Returns { full_name, professional_title, bio, location, company_name, company_industry, work_experience[], education[] }. 1 credit on success.",
+      "verb": "POST",
+      "path": "/people/profile-search",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["profile_url"],
+        "properties": {
+          "profile_url": { "type": "string", "description": "LinkedIn profile URL or username" },
+          "extended_response": { "type": "boolean", "description": "Return extended fields (default false)" }
+        }
+      }
+    },
+    {
+      "id": "b2bProfile",
+      "label": "Email to LinkedIn Profile",
+      "description": "Reverse-lookup a LinkedIn profile from a work or personal email. Returns { profile_url }. 10 credits on success; free if no match.",
+      "verb": "POST",
+      "path": "/people/b2b-profile",
+      "credits": 10,
+      "input": {
+        "type": "object",
+        "properties": {
+          "work_email": { "type": "string", "description": "Work email (preferred)" },
+          "personal_email": { "type": "string", "description": "Personal email" }
+        }
+      }
+    },
+    {
+      "id": "companySearch",
+      "label": "Enrich Company",
+      "description": "Enrich a company from its domain, name, or LinkedIn URL. Returns camelCase fields: { companyName, industry, employeeCount, employeeRange, founded, headquarters, revenue, description, specialties[] }. 1 credit on success.",
+      "verb": "POST",
+      "path": "/companies/company-search",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "properties": {
+          "company_domain": { "type": "string", "description": "Company website domain" },
+          "company_name": { "type": "string", "description": "Company name" },
+          "profile_url": { "type": "string", "description": "Company LinkedIn URL" }
+        }
+      }
+    },
+    {
+      "id": "roleFinder",
+      "label": "Find Person by Role",
+      "description": "Find a person holding a given job title at a company. Provide job_title plus company_domain OR company_name. Returns { full_name, profile_url, job_title, company_name }. 2 credits on success.",
+      "verb": "POST",
+      "path": "/people/role-finder",
+      "credits": 2,
+      "input": {
+        "type": "object",
+        "required": ["job_title"],
+        "properties": {
+          "job_title": { "type": "string", "description": "Target job title, e.g. 'VP of Sales'" },
+          "company_domain": { "type": "string", "description": "Company website domain" },
+          "company_name": { "type": "string", "description": "Company name" }
+        }
+      }
+    },
+    {
+      "id": "jobChangeDetector",
+      "label": "Detect Job Change",
+      "description": "Check whether a person has changed jobs from a known company. Provide profile_url plus the expected company_domain OR company_name. Returns { job_changed, still_employed, current_company, current_title }. 3 credits per call.",
+      "verb": "POST",
+      "path": "/people/job-change-detector",
+      "credits": 3,
+      "input": {
+        "type": "object",
+        "required": ["profile_url"],
+        "properties": {
+          "profile_url": { "type": "string", "description": "LinkedIn profile URL" },
+          "company_domain": { "type": "string", "description": "Expected (known) company domain" },
+          "company_name": { "type": "string", "description": "Expected (known) company name" }
+        }
+      }
+    },
+    {
+      "id": "checkCredits",
+      "label": "Check Credits",
+      "description": "Get the current LeadMagic credit balance. Returns { credits }. Free.",
+      "verb": "GET",
+      "path": "/credits",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    }
+  ]
+}

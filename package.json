@@ -1,0 +1,27 @@
+{
+  "name": "gtmgrid",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Local-first programmable GTM spreadsheet. Columns are functions.",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "cli": "tsx packages/cli/src/index.ts",
+    "mcp": "tsx packages/mcp/src/index.ts",
+    "server": "tsx packages/server/src/index.ts",
+    "desktop": "pnpm --filter @gtmgrid/desktop dev",
+    "sidecar:build": "node packages/desktop/scripts/bundle-sidecar.mjs",
+    "tauri:dev": "pnpm --filter @gtmgrid/desktop tauri dev",
+    "tauri:build": "pnpm --filter @gtmgrid/desktop tauri build",
+    "typecheck": "tsc -b"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "@types/node": "^22.10.2",
+    "@types/better-sqlite3": "^7.6.12"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["better-sqlite3", "esbuild"]
+  }
+}

@@ -1,0 +1,241 @@
+{
+  "id": "trigify",
+  "name": "Trigify",
+  "version": "1.1.0",
+  "category": "social-intelligence",
+  "baseUrl": "https://api.trigify.io",
+  "auth": { "type": "apiKey", "header": "x-api-key", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "enrichProfile",
+      "label": "Enrich LinkedIn Profile",
+      "description": "Enrich a LinkedIn profile with detailed prospect data (name, title, company, experience, seniority) from its URL.",
+      "verb": "POST",
+      "path": "/v1/profile/enrich",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["profileUrl"],
+        "properties": { "profileUrl": { "type": "string", "description": "LinkedIn profile URL, e.g. 'https://www.linkedin.com/in/satyanadella'" } }
+      }
+    },
+    {
+      "id": "enrichCompany",
+      "label": "Enrich LinkedIn Company",
+      "description": "Enrich a LinkedIn company page with firmographics (name, domain, size, industry, location) from its URL.",
+      "verb": "POST",
+      "path": "/v1/company/enrich",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["companyUrl"],
+        "properties": { "companyUrl": { "type": "string", "description": "LinkedIn company URL, e.g. 'https://www.linkedin.com/company/microsoft'" } }
+      }
+    },
+    {
+      "id": "profilePosts",
+      "label": "Get Profile Posts",
+      "description": "Get recent posts from a LinkedIn profile. Paginate with page.",
+      "verb": "POST",
+      "path": "/v1/profile/posts",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["profileUrl"],
+        "properties": {
+          "profileUrl": { "type": "string", "description": "LinkedIn profile URL" },
+          "page": { "type": "integer", "description": "Page number (optional)" }
+        }
+      }
+    },
+    {
+      "id": "companyPosts",
+      "label": "Get Company Posts",
+      "description": "Get recent posts from a LinkedIn company page.",
+      "verb": "POST",
+      "path": "/v1/company/posts",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["companyUrl"],
+        "properties": { "companyUrl": { "type": "string", "description": "LinkedIn company URL" } }
+      }
+    },
+    {
+      "id": "postByUrl",
+      "label": "Get Post by URL",
+      "description": "Fetch a single LinkedIn post's data (text, author, metrics) by its URL.",
+      "verb": "POST",
+      "path": "/v1/post/by-url",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["postUrl"],
+        "properties": { "postUrl": { "type": "string", "description": "LinkedIn post URL" } }
+      }
+    },
+    {
+      "id": "postEngagements",
+      "label": "Get Post Engagements (likers)",
+      "description": "Get the people who liked/engaged a LinkedIn post by its URL. Paginate with page.",
+      "verb": "POST",
+      "path": "/v1/post/engagements",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["postUrl"],
+        "properties": {
+          "postUrl": { "type": "string", "description": "LinkedIn post URL" },
+          "page": { "type": "integer", "description": "Page number (optional)" }
+        }
+      }
+    },
+    {
+      "id": "postComments",
+      "label": "Get Post Comments",
+      "description": "Get comments on a LinkedIn post. Identify the post by its URN (not URL). Paginate with page.",
+      "verb": "POST",
+      "path": "/v1/post/comments",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["postUrn"],
+        "properties": {
+          "postUrn": { "type": "string", "description": "LinkedIn post URN (e.g. 'urn:li:activity:...')" },
+          "page": { "type": "integer", "description": "Page number (optional)" }
+        }
+      }
+    },
+    {
+      "id": "postCommentReplies",
+      "label": "Get Comment Replies",
+      "description": "Get replies to a specific comment on a LinkedIn post.",
+      "verb": "POST",
+      "path": "/v1/post/comments/replies",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["postUrn", "commentUrn"],
+        "properties": {
+          "postUrn": { "type": "string", "description": "LinkedIn post URN" },
+          "commentUrn": { "type": "string", "description": "The comment's URN" },
+          "previousCursor": { "type": "string", "description": "Pagination cursor (optional)" }
+        }
+      }
+    },
+    {
+      "id": "companyComments",
+      "label": "Get Company Post Comments",
+      "description": "Get comments on a LinkedIn company post. Identify the post by its URN. Paginate with page.",
+      "verb": "POST",
+      "path": "/v1/company/comments",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["postUrn"],
+        "properties": {
+          "postUrn": { "type": "string", "description": "LinkedIn company post URN" },
+          "page": { "type": "integer", "description": "Page number (optional)" }
+        }
+      }
+    },
+    {
+      "id": "discoverCreators",
+      "label": "Discover Creators",
+      "description": "Find LinkedIn creators who post about given topics, filtered by job title, followers, location, industry, and company size. posted_about_keywords and posted_about_days are required.",
+      "verb": "POST",
+      "path": "/v1/discover/creators",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["posted_about_keywords", "posted_about_days"],
+        "properties": {
+          "posted_about_keywords": { "type": "array", "items": { "type": "string" }, "description": "Topics/keywords creators posted about, e.g. ['social listening','GTM']" },
+          "posted_about_days": { "type": "integer", "description": "Look-back window in days (e.g. 30)" },
+          "job_titles": { "type": "array", "items": { "type": "string" }, "description": "Filter to these job titles" },
+          "followers": { "type": "string", "description": "Follower range filter (e.g. '1000-10000')" },
+          "location_country": { "type": "string", "description": "Country filter" },
+          "industries": { "type": "array", "items": { "type": "string" }, "description": "Industry filters" },
+          "company_sizes": { "type": "array", "items": { "type": "string" }, "description": "Company size buckets" },
+          "page": { "type": "integer" },
+          "page_size": { "type": "integer", "enum": [10, 25, 50], "description": "Results per page — must be 10, 25, or 50" }
+        }
+      }
+    },
+    {
+      "id": "profileEngagementResults",
+      "label": "Tracked Profile Engagement Results",
+      "description": "Get engagement results for a tracked LinkedIn profile (who engaged with their posts). Paginate with page/page_size.",
+      "verb": "POST",
+      "path": "/v1/profile/engagement/results",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["profile_url"],
+        "properties": {
+          "profile_url": { "type": "string", "description": "Tracked LinkedIn profile URL" },
+          "page": { "type": "integer" },
+          "page_size": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "enrichXUser",
+      "label": "Enrich X/Twitter User",
+      "description": "Enrich an X (Twitter) user by username. Returns profile data.",
+      "verb": "POST",
+      "path": "/v1/x-user/enrich",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["username"],
+        "properties": { "username": { "type": "string", "description": "X/Twitter username/handle (without @)" } }
+      }
+    },
+    {
+      "id": "lookupXUser",
+      "label": "Lookup X/Twitter User",
+      "description": "Look up basic X (Twitter) user info by username.",
+      "verb": "POST",
+      "path": "/v1/x/lookup-user",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["username"],
+        "properties": { "username": { "type": "string", "description": "X/Twitter username/handle (without @)" } }
+      }
+    },
+    {
+      "id": "searchResults",
+      "label": "Get Saved Search Results",
+      "description": "Pull results (leads/posts) from a saved Trigify search by its id. Optional filters: job_title, company, industry, country, seniority; paginate with from/limit/cursor.",
+      "verb": "GET",
+      "path": "/v1/searches/{id}/results",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "description": "Saved search id" },
+          "from": { "type": "integer", "description": "Offset (optional)" },
+          "limit": { "type": "integer", "description": "Max results (optional)" },
+          "cursor": { "type": "string", "description": "Pagination cursor (optional)" },
+          "job_title": { "type": "string" },
+          "company": { "type": "string" },
+          "industry": { "type": "string" },
+          "country": { "type": "string" },
+          "seniority": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "creditsBalance",
+      "label": "Get Credit Balance",
+      "description": "Get the current Trigify credit balance for the org.",
+      "verb": "GET",
+      "path": "/v1/credits/balance",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    }
+  ]
+}

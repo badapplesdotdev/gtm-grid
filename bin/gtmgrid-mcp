@@ -1,0 +1,5 @@
+#!/bin/bash
+# Launcher: run the gtmgrid MCP server with the repo as cwd so tsx + relative
+# paths resolve regardless of who spawns it. Project via GTMGRID_PROJECT.
+cd "$(dirname "$0")/.." || exit 1
+exec node --import tsx packages/mcp/src/index.ts "$@"

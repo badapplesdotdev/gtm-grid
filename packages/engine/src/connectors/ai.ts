@@ -1,0 +1,63 @@
+// Built-in AI Generate connector. Bring-your-own-key (Anthropic or OpenAI),
+// resolved from the engine's AI provider config — never leaves the machine.
+
+import { z } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
+import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
+import type { Connector, MethodContext } from "../types.js";
+
+const generateInput = z.object({
+  prompt: z.string().describe("The prompt. Use {{Column Name}} in the column mapping to inject row values."),
+  system: z.string().optional().describe("Optional system instruction."),
+  maxTokens: z.number().optional().describe("Max output tokens (default 512)."),
+});
+
+export const aiConnector: Connector = {
+  id: "ai",
+  name: "AI",
+  category: "ai",
+  auth: null,
+  methods: [
+    {
+      id: "generate",
+      label: "AI Generate",
+      description: "Generate text with the connected AI model from a prompt. Returns { text }.",
+      inputSchema: zodToJsonSchema(generateInput, "generate") as Record<string, unknown>,
+      batchSize: 1,
+      credits: 1,
+      run: async (raw: Record<string, unknown>, ctx: MethodContext) => {
+        const input = generateInput.parse(raw);
+        const ai = ctx.ai;
+        if (!ai) throw new Error("No AI provider connected. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.");
+        const maxTokens = input.maxTokens ?? 512;
+
+        if (ai.provider === "anthropic") {
+          const client = new Anthropic({ apiKey: ai.apiKey });
+          const msg = await client.messages.create({
+            model: ai.model,
+            max_tokens: maxTokens,
+            system: input.system,
+            messages: [{ role: "user", content: input.prompt }],
+          });
+          const text = msg.content
+            .filter((b): b is Anthropic.TextBlock => b.type === "text")
+            .map((b) => b.text)
+            .join("");
+          return { text };
+        }
+
+        const client = new OpenAI({ apiKey: ai.apiKey });
+        const r = await client.chat.completions.create({
+          model: ai.model,
+          max_tokens: maxTokens,
+          messages: [
+            ...(input.system ? [{ role: "system" as const, content: input.system }] : []),
+            { role: "user" as const, content: input.prompt },
+          ],
+        });
+        return { text: r.choices[0]?.message?.content ?? "" };
+      },
+    },
+  ],
+};

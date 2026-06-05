@@ -1,0 +1,15 @@
+[package]
+name = "gtmgrid"
+version = "0.0.1"
+description = "gtmgrid desktop"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[[bin]]
+name = "gtmgrid"
+path = "src/main.rs"

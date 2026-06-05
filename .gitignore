@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.gtmgrid/
+.DS_Store
+*.log
+
+# Tauri / sidecar build artifacts
+packages/desktop/src-tauri/target/
+packages/desktop/src-tauri/sidecar/
+packages/desktop/src-tauri/gen/

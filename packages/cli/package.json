@@ -1,0 +1,10 @@
+{
+  "name": "@gtmgrid/cli",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "bin": { "gtmgrid": "./src/index.ts" },
+  "dependencies": {
+    "@gtmgrid/engine": "workspace:*"
+  }
+}
