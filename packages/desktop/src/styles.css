@@ -1,7 +1,7 @@
 /* ─────────────────────────────────────────────
-   gtmgrid · design system
-   Font: Berkeley Mono (mono) + Geist (sans)
-   Accent: indigo #6366f1  Surface: near-white
+   gtm grid · design system
+   Font: Berkeley Mono (mono) + DM Sans
+   Accent: brand red #E60006  Surface: near-white
 ───────────────────────────────────────────── */
 
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,300&display=swap');
@@ -17,10 +17,18 @@
   --text:        #111118;
   --text-2:      #5a5a6e;
   --text-3:      #9696a8;
-  --accent:      #6366f1;
-  --accent-2:    #818cf8;
-  --accent-bg:   #eef0ff;
-  --accent-soft: rgba(99,102,241,.08);
+  /* brand red ramp */
+  --red-700: #B00004;
+  --red-600: #B30005;
+  --red-500: #E60006;
+  --red-300: #FF4D51;
+  --red-200: #FF8083;
+  --red-100: #FFB3B5;
+
+  --accent:      #E60006;
+  --accent-2:    #FF4D51;
+  --accent-bg:   #ffecec;
+  --accent-soft: rgba(230,0,6,.08);
   --danger:      #ef4444;
   --danger-bg:   #fef2f2;
   --success:     #22c55e;
@@ -89,14 +97,32 @@ html, body, #root {
 }
 
 .sidebar-header {
-  height: 52px;
+  height: 56px;
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 0 16px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  color: var(--text);
 }
+.sidebar-header > svg { flex-shrink: 0; }
+.sidebar-brand {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  min-width: 0;
+}
+.brand-name {
+  font: 700 14px var(--font-sans);
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.sidebar-brand .sidebar-project {
+  font: 500 11px var(--font-sans);
+  color: var(--text-3);
+}
+.brand-wordmark { display: inline-flex; align-items: center; gap: 8px; font: 700 16px var(--font-sans); color: var(--text); }
 
 .sidebar-logo {
   width: 24px;
@@ -445,12 +471,12 @@ html, body, #root {
 .btn-primary {
   background: var(--accent);
   color: white;
-  box-shadow: 0 1px 3px rgba(99,102,241,.35);
+  box-shadow: 0 1px 3px rgba(230,0,6,.35);
 }
 
 .btn-primary:hover {
   background: #5254e8;
-  box-shadow: 0 2px 8px rgba(99,102,241,.4);
+  box-shadow: 0 2px 8px rgba(230,0,6,.4);
 }
 
 .btn-primary:disabled {
@@ -919,7 +945,7 @@ html, body, #root {
 .form-select:focus,
 .form-textarea:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(99,102,241,.15);
+  box-shadow: 0 0 0 3px rgba(230,0,6,.15);
   outline: none;
 }
 

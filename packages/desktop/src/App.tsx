@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo } from "./api";
 import AgentPanel from "./AgentPanel";
+import { LogoMark } from "./Logo";
 import "./styles.css";
 
 // ─── Icons (inline SVG, no deps) ─────────────────────────
@@ -480,10 +481,11 @@ export default function App() {
       {/* ── Sidebar ─────────────────────── */}
       <aside className="sidebar">
         <div className="sidebar-header">
-          <div className="sidebar-logo">
-            <Icon.Grid />
+          <LogoMark size={26} />
+          <div className="sidebar-brand">
+            <span className="brand-name">gtm grid</span>
+            <span className="sidebar-project">{projectName}</span>
           </div>
-          <span className="sidebar-project">{projectName}</span>
         </div>
 
         <div className="sidebar-scroll">
