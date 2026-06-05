@@ -17,6 +17,47 @@ const Chevron = (
 const SearchIcon = (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
 );
+const Check = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+);
+
+// Category glyphs for built-in functions (no brand favicon). Stroke-based, inherit color.
+const I = (d: string, extra?: ReactNode) => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    {d.split("|").map((p, i) => <path key={i} d={p} />)}
+    {extra}
+  </svg>
+);
+const CATEGORY_ICON: Record<string, ReactNode> = {
+  AI: (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z" />
+      <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z" />
+    </svg>
+  ),
+  Formatting: <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 13, lineHeight: 1 }}>Aa</span>,
+  Scoring: I("M3 3v18h18|m19 9-5 5-4-4-3 3"),
+  Verification: I("M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z|m9 12 2 2 4-4"),
+  Scraping: I("M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z|M2 12h20|M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20z"),
+  Extraction: I("m12 2 9 5-9 5-9-5 9-5z|m3 12 9 5 9-5|m3 17 9 5 9-5"),
+  "Find email": I("M4 4h16v16H4z|m4 6 8 6 8-6"),
+  "Verify email": I("M4 4h16v16H4z|m4 6 8 6 8-6"),
+  "Find phone": I("M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L16 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"),
+  "Enrich people": I("M16 21v-2a4 4 0 0 0-8 0v2|M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"),
+  "Enrich company": I("M3 21h18|M5 21V7l7-4 7 4v14|M9 9h0M9 13h0M9 17h0M15 9h0M15 13h0M15 17h0"),
+  Search: I("M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z|m21 21-4.3-4.3"),
+  Ads: I("M3 11v2a1 1 0 0 0 1 1h3l5 4V6L7 10H4a1 1 0 0 0-1 1z|M16 9a3 3 0 0 1 0 6"),
+  Jobs: I("M3 7h18v13H3z|M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"),
+  Signals: I("M4 11a9 9 0 0 1 9 9|M4 4a16 16 0 0 1 16 16|M5 19a1 1 0 1 0 0 .01z"),
+};
+
+// Function icon: brand favicon when present, otherwise a category glyph in a tinted box.
+function FnIcon({ fn, size = 18 }: { fn: { logo: string | null; providerName: string; category: string }; size?: number }) {
+  if (fn.logo) return <BrandIcon logo={fn.logo} name={fn.providerName} size={size} />;
+  const glyph = CATEGORY_ICON[fn.category];
+  if (!glyph) return <BrandIcon logo={null} name={fn.providerName} size={size} />;
+  return <span className="fn-cat-icon" style={{ width: size, height: size }}>{glyph}</span>;
+}
 
 // Column-type tiles.
 const TYPE_ICONS: Record<string, ReactNode> = {
@@ -131,6 +172,7 @@ interface Fn {
   input: Record<string, unknown> | null;
   source: string | null;
   batchSize: number;
+  output: string;
   category: string;
 }
 
@@ -160,6 +202,15 @@ const CATEGORY_ORDER = [
   "Ads",
   "Jobs",
   "Signals",
+];
+
+// Nav clusters — categories grouped with a divider line between each group.
+// "All" is rendered first and sits with the AI cluster (no line in between).
+const NAV_CLUSTERS: string[][] = [
+  ["AI"],
+  ["Enrich people", "Enrich company", "Find email", "Verify email", "Find phone", "Search"],
+  ["Formatting", "Scoring", "Verification", "Scraping", "Extraction"],
+  ["Ads", "Jobs", "Signals"],
 ];
 
 function categorize(provider: string, connectorCategory: string, label: string, description: string): string {
@@ -213,6 +264,7 @@ export function FunctionsModal({
           input: m.input ?? null,
           source: m.source ?? null,
           batchSize: m.batchSize ?? 1,
+          output: m.output ?? "text",
           category: categorize(c.provider, c.category, m.label, m.description),
         })),
       ),
@@ -272,12 +324,23 @@ export function FunctionsModal({
         </div>
 
         <div className="fnx-body">
-          {/* left nav */}
+          {/* left nav — categories grouped into clusters, separated by a line */}
           <div className="fnx-nav">
             <button className={`fnx-nav-item${nav === "All" ? " active" : ""}`} onClick={() => setNav("All")}>All</button>
-            {presentCats.map((cat) => (
-              <button key={cat} className={`fnx-nav-item${nav === cat ? " active" : ""}`} onClick={() => setNav(cat)}>{cat}</button>
-            ))}
+            {(() => {
+              const out: ReactNode[] = [];
+              NAV_CLUSTERS.forEach((cluster, ci) => {
+                const present = cluster.filter((cat) => presentCats.includes(cat));
+                if (!present.length) return;
+                if (ci > 0 && out.length) out.push(<div key={`sep-${ci}`} className="fnx-nav-sep" />);
+                for (const cat of present) {
+                  out.push(
+                    <button key={cat} className={`fnx-nav-item${nav === cat ? " active" : ""}`} onClick={() => setNav(cat)}>{cat}</button>,
+                  );
+                }
+              });
+              return out;
+            })()}
             <div className="fnx-nav-sep" />
             <button className={`fnx-nav-item${nav === "__provider" ? " active" : ""}`} onClick={() => setNav("__provider")}>By provider</button>
           </div>
@@ -297,7 +360,7 @@ export function FunctionsModal({
                       onClick={() => setSelected(f)}
                     >
                       <span className="fnx-row-label">{f.label}</span>
-                      <span className="fnx-row-logo"><BrandIcon logo={f.logo} name={f.providerName} size={18} /></span>
+                      <span className="fnx-row-logo"><FnIcon fn={f} size={18} /></span>
                     </button>
                   ))}
                 </div>
@@ -378,11 +441,11 @@ function FunctionDetail({
   return (
     <div className="fnx-cfg">
       <div className="fnx-cfg-head">
-        <div className="fnx-cfg-icon"><BrandIcon logo={fn.logo} name={fn.providerName} size={26} /></div>
+        <div className="fnx-cfg-icon"><FnIcon fn={fn} size={26} /></div>
         <div style={{ minWidth: 0 }}>
           <div className="fnx-cfg-title">{fn.label}</div>
           <div className="fnx-cfg-sub">
-            {inputCount} input{inputCount !== 1 ? "s" : ""} · outputs text
+            {inputCount} input{inputCount !== 1 ? "s" : ""} · outputs {fn.output}
             {fn.credits > 0 && <> · {fn.credits} credit{fn.credits !== 1 ? "s" : ""}</>}
           </div>
         </div>
@@ -417,7 +480,7 @@ function FunctionDetail({
           <div className="fnx-cfg-section">Output</div>
           <div className="fnx-io-box fnx-io-inline">
             <span className="fnx-io-name">Returns</span>
-            <span className="fnx-io-type">text</span>
+            <span className="fnx-io-type">{fn.output}</span>
             <span className="fnx-io-batch">batch size {fn.batchSize}</span>
           </div>
 
@@ -509,6 +572,18 @@ function AiGenerateDetail({
   // "/" column-insertion menu: index of the slash + the typed query after it.
   const [slash, setSlash] = useState<{ index: number; query: string } | null>(null);
 
+  // Custom in-app model dropdown (replaces the native <select> popup).
+  const [modelOpen, setModelOpen] = useState(false);
+  const modelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!modelOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (modelRef.current && !modelRef.current.contains(e.target as Node)) setModelOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [modelOpen]);
+
   useEffect(() => {
     api.aiProviders().then(setProviders).catch(() => setProviders([]));
   }, []);
@@ -583,19 +658,37 @@ function AiGenerateDetail({
       <input className="form-input" value={colName} onChange={(e) => setColName(e.target.value)} placeholder="Column name" />
 
       <label className="form-label">Model</label>
-      <select
-        className="form-input ai-model-select"
-        value={model}
-        onChange={(e) => setModel(e.target.value)}
-        disabled={!hasProvider}
-      >
-        {!hasProvider && <option value="">Select model…</option>}
-        {connected.map((p) => (
-          <optgroup key={p.id} label={p.name}>
-            {p.models.map((m) => <option key={m} value={m}>{m}</option>)}
-          </optgroup>
-        ))}
-      </select>
+      <div className="ai-select" ref={modelRef}>
+        <button
+          type="button"
+          className="form-input ai-select-btn"
+          onClick={() => hasProvider && setModelOpen((o) => !o)}
+          disabled={!hasProvider}
+        >
+          <span className={model ? "" : "ai-select-placeholder"}>{model || "Select model…"}</span>
+          <span className={`ai-select-caret${modelOpen ? " open" : ""}`}>{Chevron}</span>
+        </button>
+        {modelOpen && hasProvider && (
+          <div className="ai-select-menu">
+            {connected.map((p) => (
+              <div key={p.id} className="ai-select-group">
+                <div className="ai-select-group-label">{p.name}</div>
+                {p.models.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    className={`ai-select-item${model === m ? " active" : ""}`}
+                    onClick={() => { setModel(m); setModelOpen(false); }}
+                  >
+                    <span className="ai-select-check">{model === m ? Check : null}</span>
+                    <span className="ai-select-item-label">{m}</span>
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
       {!hasProvider && (
         <div className="ai-no-provider">
           No AI providers connected.{" "}

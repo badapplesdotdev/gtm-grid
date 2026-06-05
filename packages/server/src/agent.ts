@@ -37,7 +37,10 @@ function contextPreamble(ctx?: AgentContext): string {
     `(e.g. add_column with code function(inputs){ var v=JSON.parse(inputs.src); return v.data && v.data.email; } ` +
     `and params { src: "{{Source Column Name}}" }), then run them. ` +
     `If it's not obvious which fields matter, briefly ASK the user which fields they want shown before creating columns. ` +
-    `Prefer a few clean, human-readable columns over dumping everything.`;
+    `Prefer a few clean, human-readable columns over dumping everything. ` +
+    `IMPORTANT: when a source has many possible fields (e.g. a meeting transcript with title, date, summary, action items, full transcript text, …), do NOT create a column for every field by default. ` +
+    `First ask the user which columns they want, suggesting a short sensible default set (e.g. Title, Date, Summary, Action Items). ` +
+    `Very long text (full transcripts, long summaries) is fine to store — the grid clips cells to the column width and the user can click to expand — but don't add such columns unless asked.`;
   if (!ctx?.tableName) return base;
   const cols = ctx.columns?.length ? ` Its columns are: ${ctx.columns.join(", ")}.` : "";
   return (

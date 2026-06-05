@@ -1,8 +1,8 @@
 // Public API for the gtmgrid engine.
 
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { mkdirSync } from "node:fs";
+import { join, basename } from "node:path";
+import { mkdirSync, existsSync, readdirSync, statSync } from "node:fs";
 import { Db } from "./db.js";
 import type { AiConfig } from "./types.js";
 import { Engine, aiConfigFromEnv, type EngineConfig } from "./execute.js";
@@ -23,11 +23,76 @@ export interface OpenProjectResult {
   engine: Engine;
 }
 
-/** Default location for project .db files: ~/gtmgrid/<name>.db */
-export function projectPath(name: string): string {
+/** Root directory for all project + global .db files. */
+export function gtmgridDir(): string {
   const dir = join(homedir(), "gtmgrid");
   mkdirSync(dir, { recursive: true });
-  return join(dir, `${name}.db`);
+  return dir;
+}
+
+/** Default location for project .db files: ~/gtmgrid/<name>.db */
+export function projectPath(name: string): string {
+  return join(gtmgridDir(), `${name}.db`);
+}
+
+/** The shared global db holding credentials, extensions, and AI config. */
+export function globalDbPath(): string {
+  return join(gtmgridDir(), "global.db");
+}
+
+export interface ProjectInfo {
+  name: string;
+  path: string;
+  mtimeMs: number;
+}
+
+/** List projects in ~/gtmgrid (every *.db except the shared global.db), newest first. */
+export function listProjects(): ProjectInfo[] {
+  const dir = gtmgridDir();
+  const out: ProjectInfo[] = [];
+  for (const file of readdirSync(dir)) {
+    if (!file.endsWith(".db") || file === "global.db") continue;
+    const path = join(dir, file);
+    try {
+      out.push({ name: basename(file, ".db"), path, mtimeMs: statSync(path).mtimeMs });
+    } catch {
+      /* skip unreadable */
+    }
+  }
+  return out.sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
+/**
+ * One-time migration: copy credentials, extensions, and AI meta from a legacy
+ * single-file project into the shared global db, so existing connected keys
+ * survive the split. No-op if the global db already has any credentials/AI key.
+ */
+export function migrateGlobals(globalDb: Db, legacyPath: string): void {
+  if (!existsSync(legacyPath)) return;
+  const alreadySeeded =
+    (globalDb.raw.prepare(`SELECT COUNT(*) AS n FROM credentials`).get() as { n: number }).n > 0 ||
+    !!globalDb.getMeta("ai_provider");
+  if (alreadySeeded) return;
+  const legacy = new Db(legacyPath);
+  try {
+    const creds = legacy.raw.prepare(`SELECT * FROM credentials`).all() as Record<string, unknown>[];
+    const insCred = globalDb.raw.prepare(
+      `INSERT OR IGNORE INTO credentials (id, extension_id, scope, name, credentials_enc, created_at)
+       VALUES (@id, @extension_id, @scope, @name, @credentials_enc, @created_at)`,
+    );
+    for (const c of creds) insCred.run(c);
+    const exts = legacy.raw.prepare(`SELECT * FROM extensions`).all() as Record<string, unknown>[];
+    const insExt = globalDb.raw.prepare(
+      `INSERT OR IGNORE INTO extensions (id, name, category, manifest) VALUES (@id, @name, @category, @manifest)`,
+    );
+    for (const e of exts) insExt.run(e);
+    for (const key of ["ai_provider", "ai_model"]) {
+      const v = legacy.getMeta(key);
+      if (v != null) globalDb.setMeta(key, v);
+    }
+  } finally {
+    legacy.close();
+  }
 }
 
 /** Open (or create) a project and return a wired engine. AI config: env first, then stored (encrypted). */
@@ -51,9 +116,13 @@ export function openProject(
   return { db, engine };
 }
 
-const DEFAULT_MODEL = { anthropic: "claude-haiku-4-5-20251001", openai: "gpt-4o-mini" } as const;
+const DEFAULT_MODEL = {
+  anthropic: "claude-haiku-4-5-20251001",
+  openai: "gpt-4o-mini",
+  openrouter: "openai/gpt-4o-mini",
+} as const;
 
-const AI_PROVIDER_IDS = ["anthropic", "openai"] as const;
+const AI_PROVIDER_IDS = ["anthropic", "openai", "openrouter"] as const;
 type AiProvider = (typeof AI_PROVIDER_IDS)[number];
 
 /** Resolve the stored key for one provider (new per-provider slot, with legacy fallback). */

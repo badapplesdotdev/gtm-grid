@@ -6,17 +6,36 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { openProject, parseManifest, connectorFromManifest, connectAi, storedAiConfig, storedAiProviders } from "@gtmgrid/engine";
+import {
+  Db,
+  Engine,
+  defaultRegistry,
+  parseManifest,
+  connectorFromManifest,
+  connectAi,
+  storedAiConfig,
+  storedAiProviders,
+  aiConfigFromEnv,
+  globalDbPath,
+  projectPath,
+  migrateGlobals,
+  listProjects,
+} from "@gtmgrid/engine";
 import { detectAgents, streamClaude, streamCodex, setAgentPath, rescanAgents, type AgentKind } from "./agent.js";
 
-const PROJECT = process.env.GTMGRID_PROJECT ?? "default";
 const PORT = Number(process.env.GTMGRID_PORT ?? 8787);
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(SERVER_DIR, "..", "..", "..");
-const { db, engine } = openProject(PROJECT);
 
-// Seed bundled connector manifests (extensions/*.json shipped next to the
-// server in the packaged app, or repo/extensions in dev) into the project.
+// ── Shared global db: credentials, extensions, AI config (across all projects).
+const globalDb = new Db(globalDbPath());
+migrateGlobals(globalDb, projectPath("default")); // one-time: pull legacy keys in
+
+// Registry of callable functions (built-ins + uploaded manifests in globalDb).
+const registry = defaultRegistry();
+
+// Seed bundled connector manifests (extensions/*.json shipped next to the server
+// in the packaged app, or repo/extensions in dev) into the GLOBAL db + registry.
 function seedExtensions() {
   const dirs = [process.env.GTMGRID_EXT_DIR, join(SERVER_DIR, "extensions"), join(REPO_ROOT, "extensions")].filter(
     (d): d is string => !!d && existsSync(d),
@@ -26,14 +45,54 @@ function seedExtensions() {
   for (const file of readdirSync(dir).filter((f) => f.endsWith(".json"))) {
     try {
       const manifest = parseManifest(readFileSync(join(dir, file), "utf8"));
-      db.saveExtension(manifest as any);
-      engine.registry.add(connectorFromManifest(manifest));
+      globalDb.saveExtension(manifest as any);
+      registry.add(connectorFromManifest(manifest));
     } catch (err) {
       console.error(`seed extension ${file} failed:`, err instanceof Error ? err.message : err);
     }
   }
 }
 seedExtensions();
+// Load any custom (uploaded) manifests already stored in the global db.
+for (const manifest of globalDb.listExtensions()) {
+  try {
+    registry.add(connectorFromManifest(parseManifest(manifest)));
+  } catch {
+    /* skip invalid */
+  }
+}
+
+// AI config resolved from the global db (env wins for the active provider).
+function aiConfig() {
+  return { ai: aiConfigFromEnv() ?? storedAiConfig(globalDb), aiProviders: storedAiProviders(globalDb) };
+}
+
+// ── Current project (swappable in-process, no sidecar restart).
+interface Current {
+  name: string;
+  path: string;
+  projectDb: Db;
+  engine: Engine;
+}
+let current!: Current;
+
+function switchTo(name: string): Current {
+  const path = projectPath(name);
+  const projectDb = new Db(path);
+  const engine = new Engine(projectDb, aiConfig(), registry, globalDb);
+  current = { name, path, projectDb, engine };
+  globalDb.setMeta("current_project", name);
+  let recents: string[] = [];
+  try {
+    recents = JSON.parse(globalDb.getMeta("recent_projects") || "[]");
+  } catch {
+    /* ignore */
+  }
+  globalDb.setMeta("recent_projects", JSON.stringify([name, ...recents.filter((r) => r !== name)].slice(0, 12)));
+  return current;
+}
+
+switchTo(process.env.GTMGRID_PROJECT ?? globalDb.getMeta("current_project") ?? "default");
 
 type Handler = (params: Record<string, string>, body: any) => Promise<unknown> | unknown;
 interface Route {
@@ -74,15 +133,15 @@ function normScope(s: unknown): "personal" | "team" | "local" {
 const tableSummary = (t: { id: string; name: string }) => ({
   id: t.id,
   name: t.name,
-  columns: db.listColumns(t.id).length,
-  rows: db.listRows(t.id).length,
-  favorite: db.isFavorite(t.id),
+  columns: current.projectDb.listColumns(t.id).length,
+  rows: current.projectDb.listRows(t.id).length,
+  favorite: current.projectDb.isFavorite(t.id),
 });
 
 function fullTable(tableId: string) {
-  const t = db.getTable(tableId);
+  const t = current.projectDb.getTable(tableId);
   if (!t) return null;
-  const columns = db.listColumns(t.id).map((c) => ({
+  const columns = current.projectDb.listColumns(t.id).map((c) => ({
     id: c.id,
     name: c.name,
     type: c.type,
@@ -92,8 +151,8 @@ function fullTable(tableId: string) {
     fn: c.provider ? `${c.provider}.${c.method}` : c.code ? "code" : null,
     params: c.params,
   }));
-  const rows = db.listRows(t.id).map((r) => {
-    const cells = db.rowCells(r.id);
+  const rows = current.projectDb.listRows(t.id).map((r) => {
+    const cells = current.projectDb.rowCells(r.id);
     const out: Record<string, { value: unknown; status: string; error: string | null }> = {};
     for (const c of columns) {
       const cell = cells.get(c.id);
@@ -107,11 +166,44 @@ function fullTable(tableId: string) {
 }
 
 // --- routes ---
-route("GET", "/api/health", () => ({ ok: true, project: PROJECT }));
+route("GET", "/api/health", () => ({ ok: true, project: current.name }));
+
+// --- projects ---
+route("GET", "/api/projects", () => {
+  let recents: string[] = [];
+  try {
+    recents = JSON.parse(globalDb.getMeta("recent_projects") || "[]");
+  } catch {
+    /* ignore */
+  }
+  const projects = listProjects();
+  // ensure the current project shows even if its file was just created
+  if (!projects.some((p) => p.name === current.name)) {
+    projects.unshift({ name: current.name, path: current.path, mtimeMs: Date.now() });
+  }
+  const rank = (n: string) => { const i = recents.indexOf(n); return i === -1 ? 1e9 : i; };
+  return projects
+    .map((p) => ({ ...p, current: p.name === current.name }))
+    .sort((a, b) => rank(a.name) - rank(b.name));
+});
+
+route("POST", "/api/projects", (_p, body) => {
+  const name = String(body?.name ?? "").trim().replace(/[/\\]/g, "");
+  if (!name) return { error: "name required" };
+  switchTo(name);
+  return { ok: true, project: current.name };
+});
+
+route("POST", "/api/projects/switch", (_p, body) => {
+  const name = String(body?.name ?? "").trim().replace(/[/\\]/g, "");
+  if (!name) return { error: "name required" };
+  switchTo(name);
+  return { ok: true, project: current.name };
+});
 
 route("GET", "/api/functions", () =>
-  engine.registry.list().map((c) => {
-    const ext: any = db.getExtension(c.id);
+  registry.list().map((c) => {
+    const ext: any = globalDb.getExtension(c.id);
     return {
       provider: c.id,
       name: c.name,
@@ -126,27 +218,28 @@ route("GET", "/api/functions", () =>
         input: m.inputSchema ?? null,
         source: m.source ?? null,
         batchSize: m.batchSize ?? 1,
+        output: m.output ?? "text",
       })),
     };
   }),
 );
 
 route("GET", "/api/extensions", () =>
-  db.listExtensions().map((e: any) => ({
+  globalDb.listExtensions().map((e: any) => ({
     id: e.id,
     name: e.name,
     category: e.category,
     description: e.description ?? null,
     featured: !!e.featured,
     methods: (e.methods ?? []).length,
-    connected: !!db.getCredential(e.id),
+    connected: !!globalDb.getCredential(e.id),
     logo: e.logo ?? logoFor(e.baseUrl),
   })),
 );
 
 // Full manifest for one extension — powers the extension detail panel.
 route("GET", "/api/extensions/:id", (p) => {
-  const m: any = db.getExtension(p.id);
+  const m: any = globalDb.getExtension(p.id);
   if (!m) return { error: "not found" };
   return {
     id: m.id,
@@ -159,8 +252,8 @@ route("GET", "/api/extensions/:id", (p) => {
     auth: m.auth
       ? { type: m.auth.type, header: m.auth.header ?? null, secretKey: m.auth.secretKey ?? "apiKey" }
       : null,
-    connected: !!db.getCredential(m.id),
-    connectedScopes: db.credentialScopes(m.id),
+    connected: !!globalDb.getCredential(m.id),
+    connectedScopes: globalDb.credentialScopes(m.id),
     methods: (m.methods ?? []).map((x: any) => ({
       id: x.id,
       label: x.label ?? x.id,
@@ -190,6 +283,19 @@ const AI_PROVIDERS = [
     domain: "openai.com",
     fallbackModels: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o3-mini"],
   },
+  {
+    id: "openrouter",
+    name: "OpenRouter",
+    description: "One key for hundreds of models across providers.",
+    domain: "openrouter.ai",
+    fallbackModels: [
+      "openai/gpt-4o",
+      "openai/gpt-4o-mini",
+      "anthropic/claude-3.5-sonnet",
+      "google/gemini-2.0-flash-001",
+      "meta-llama/llama-3.3-70b-instruct",
+    ],
+  },
 ] as const;
 
 type AiProviderId = (typeof AI_PROVIDERS)[number]["id"];
@@ -212,6 +318,14 @@ async function fetchModels(provider: AiProviderId, apiKey: string): Promise<stri
       const data = (await r.json()) as { data: { id: string }[] };
       // API returns newest-first; keep that order.
       models = data.data.map((m) => m.id);
+    } else if (provider === "openrouter") {
+      const r = await fetch("https://openrouter.ai/api/v1/models", {
+        headers: { authorization: `Bearer ${apiKey}` },
+      });
+      if (!r.ok) return null;
+      const data = (await r.json()) as { data: { id: string }[] };
+      // Namespaced ids ("vendor/model"); sort alphabetically for a stable list.
+      models = data.data.map((m) => m.id).sort();
     } else {
       const r = await fetch("https://api.openai.com/v1/models", {
         headers: { authorization: `Bearer ${apiKey}` },
@@ -237,17 +351,34 @@ async function fetchModels(provider: AiProviderId, apiKey: string): Promise<stri
 route("GET", "/api/ai-providers", async () => {
   // Each provider connects independently (per-provider credential slot), so any
   // number can be connected at once and all their models pull through.
-  const connectedProviders = new Set((engine.config.aiProviders ?? []).map((a) => a.provider));
-  const envProvider = process.env.ANTHROPIC_API_KEY ? "anthropic" : process.env.OPENAI_API_KEY ? "openai" : undefined;
+  const connectedProviders = new Set((current.engine.config.aiProviders ?? []).map((a) => a.provider));
+  const envProvider = process.env.ANTHROPIC_API_KEY
+    ? "anthropic"
+    : process.env.OPENAI_API_KEY
+      ? "openai"
+      : process.env.OPENROUTER_API_KEY
+        ? "openrouter"
+        : undefined;
+  const envKeyFor = (id: string) =>
+    id === "anthropic"
+      ? process.env.ANTHROPIC_API_KEY
+      : id === "openai"
+        ? process.env.OPENAI_API_KEY
+        : id === "openrouter"
+          ? process.env.OPENROUTER_API_KEY
+          : undefined;
   return Promise.all(
     AI_PROVIDERS.map(async (p) => {
-      const cred = db.getCredential(`ai:${p.id}`);
+      const cred = globalDb.getCredential(`ai:${p.id}`);
       const hasKey = !!cred;
       const viaEnv = !hasKey && envProvider === p.id;
       const connected = connectedProviders.has(p.id) || viaEnv;
+      // Prefer the engine-resolved key (handles the legacy single-slot credential
+      // for keys connected before per-provider storage existed).
       const apiKey =
+        (current.engine.config.aiProviders ?? []).find((a) => a.provider === p.id)?.apiKey ??
         cred?.secrets.apiKey ??
-        (viaEnv ? (p.id === "anthropic" ? process.env.ANTHROPIC_API_KEY : process.env.OPENAI_API_KEY) : undefined);
+        (viaEnv ? envKeyFor(p.id) : undefined);
       // Pull the real model list when connected; fall back to the static list.
       let models: string[] = [...p.fallbackModels];
       if (connected && apiKey) {
@@ -262,50 +393,51 @@ route("GET", "/api/ai-providers", async () => {
         models,
         connected,
         viaEnv,
-        connectedScopes: hasKey ? db.credentialScopes(`ai:${p.id}`) : [],
+        connectedScopes: hasKey ? globalDb.credentialScopes(`ai:${p.id}`) : [],
       };
     }),
   );
 });
 
 route("POST", "/api/ai-providers/:id/connect", (p, body) => {
-  if (p.id !== "anthropic" && p.id !== "openai") return { error: "unsupported provider" };
+  if (p.id !== "anthropic" && p.id !== "openai" && p.id !== "openrouter")
+    return { error: "unsupported provider" };
   const apiKey = String(body?.apiKey ?? "").trim();
   if (!apiKey) return { error: "apiKey required" };
-  connectAi(db, p.id, apiKey, undefined, normScope(body?.scope));
+  connectAi(globalDb, p.id, apiKey, undefined, normScope(body?.scope));
   // Refresh the live engine so AI columns work immediately — both the active
   // provider and the full set used for model-based routing.
-  engine.config.ai = storedAiConfig(db);
-  engine.config.aiProviders = storedAiProviders(db);
+  current.engine.config.ai = storedAiConfig(globalDb);
+  current.engine.config.aiProviders = storedAiProviders(globalDb);
   return { ok: true };
 });
 
-route("GET", "/api/tables", () => db.listTables().map(tableSummary));
-route("POST", "/api/tables", (_p, body) => tableSummary(db.createTable(body?.name ?? "Untitled")));
+route("GET", "/api/tables", () => current.projectDb.listTables().map(tableSummary));
+route("POST", "/api/tables", (_p, body) => tableSummary(current.projectDb.createTable(body?.name ?? "Untitled")));
 route("GET", "/api/tables/:id", (p) => fullTable(p.id) ?? { error: "not found" });
 
 route("POST", "/api/tables/:id/update", (p, body) => {
   const name = typeof body?.name === "string" ? body.name.trim() : "";
   if (!name) return { error: "name required" };
-  db.renameTable(p.id, name);
+  current.projectDb.renameTable(p.id, name);
   return { ok: true };
 });
 
 route("POST", "/api/tables/:id/delete", (p) => {
-  db.deleteTable(p.id);
+  current.projectDb.deleteTable(p.id);
   return { ok: true };
 });
 
 route("POST", "/api/tables/:id/favorite", (p, body) => {
-  db.setFavorite(p.id, body?.favorite !== false);
-  return { ok: true, favorite: db.isFavorite(p.id) };
+  current.projectDb.setFavorite(p.id, body?.favorite !== false);
+  return { ok: true, favorite: current.projectDb.isFavorite(p.id) };
 });
 
 route("POST", "/api/tables/:id/columns", (p, body) => {
   const provider = body.fn ? String(body.fn).split(".")[0] : null;
   const method = body.fn ? String(body.fn).split(".")[1] : null;
   const kind = provider || body.code ? "function" : "manual";
-  const col = db.createColumn({
+  const col = current.projectDb.createColumn({
     tableId: p.id,
     name: body.name ?? "Column",
     type: body.type ?? "text",
@@ -319,47 +451,48 @@ route("POST", "/api/tables/:id/columns", (p, body) => {
 });
 
 route("POST", "/api/tables/:id/rows", (p, body) => {
-  const row = db.createRow(p.id);
+  const row = current.projectDb.createRow(p.id);
   if (body?.cells) {
     for (const [colId, value] of Object.entries(body.cells)) {
-      db.setCell(row.id, colId, { value, status: "done" });
+      current.projectDb.setCell(row.id, colId, { value, status: "done" });
     }
   }
   return { id: row.id };
 });
 
 route("POST", "/api/cells", (_p, body) => {
-  db.setCell(body.rowId, body.columnId, { value: body.value, status: "done" });
+  current.projectDb.setCell(body.rowId, body.columnId, { value: body.value, status: "done" });
   return { ok: true };
 });
 
 route("POST", "/api/columns/:id/run", async (p, body) => {
-  const res = await engine.runColumn(p.id, { force: !!body?.force, concurrency: body?.concurrency ?? 5 });
+  const rowIds = Array.isArray(body?.rowIds) && body.rowIds.length ? (body.rowIds as string[]) : undefined;
+  const res = await current.engine.runColumn(p.id, { force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds });
   return res;
 });
 
 route("POST", "/api/columns/:id/update", (p, body) => {
-  const col = db.updateColumn(p.id, body ?? {});
+  const col = current.projectDb.updateColumn(p.id, body ?? {});
   return col ? { ok: true, tableId: col.table_id, id: col.id } : { error: "not found" };
 });
 
 route("POST", "/api/columns/:id/delete", (p) => {
-  db.deleteColumn(p.id);
+  current.projectDb.deleteColumn(p.id);
   return { ok: true };
 });
 
 route("POST", "/api/rows/:id/delete", (p) => {
-  db.deleteRow(p.id);
+  current.projectDb.deleteRow(p.id);
   return { ok: true };
 });
 
 route("POST", "/api/cells/delete", (_p, body) => {
-  if (body?.rowId && body?.columnId) db.deleteCell(body.rowId, body.columnId);
+  if (body?.rowId && body?.columnId) current.projectDb.deleteCell(body.rowId, body.columnId);
   return { ok: true };
 });
 
 route("POST", "/api/extensions/:id/connect", (p, body) => {
-  db.saveCredential({ extensionId: p.id, scope: normScope(body?.scope), name: "default", secrets: body?.secrets ?? {} });
+  globalDb.saveCredential({ extensionId: p.id, scope: normScope(body?.scope), name: "default", secrets: body?.secrets ?? {} });
   return { ok: true };
 });
 
@@ -410,8 +543,8 @@ const server = createServer(async (req, res) => {
     if (!message) return send(res, 400, { error: "message required" });
     try {
       const context = body?.context;
-      if (agent === "codex") streamCodex(res, { message, project: PROJECT, repoRoot: REPO_ROOT, threadId: body?.sessionId, context });
-      else streamClaude(res, { message, project: PROJECT, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context });
+      if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context });
+      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context });
     } catch (e) {
       send(res, 500, { error: e instanceof Error ? e.message : String(e) });
     }
@@ -444,5 +577,5 @@ server.on("error", (err: NodeJS.ErrnoException) => {
 });
 
 server.listen(PORT, () => {
-  console.error(`gtmgrid server on http://localhost:${PORT} (project: ${PROJECT})`);
+  console.error(`gtmgrid server on http://localhost:${PORT} (project: ${current.name})`);
 });

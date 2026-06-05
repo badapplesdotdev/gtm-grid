@@ -22,11 +22,14 @@ export interface RunColumnOptions {
 
 export class Engine {
   readonly db: Db;
+  /** Where credentials live — the shared global db when running multi-project. */
+  readonly credsDb: Db;
   readonly registry: Registry;
   config: EngineConfig;
 
-  constructor(db: Db, config: EngineConfig = {}, registry: Registry = defaultRegistry()) {
+  constructor(db: Db, config: EngineConfig = {}, registry: Registry = defaultRegistry(), credsDb?: Db) {
     this.db = db;
+    this.credsDb = credsDb ?? db;
     this.registry = registry;
     this.config = config;
   }
@@ -35,7 +38,7 @@ export class Engine {
   dispatch: SandboxDispatch = async (provider, method, input) => {
     const m = this.registry.method(provider, method);
     if (!m) throw new Error(`Unknown function ${provider}.${method}`);
-    const cred = this.db.getCredential(provider);
+    const cred = this.credsDb.getCredential(provider);
     const aiProviders = this.config.aiProviders?.length
       ? this.config.aiProviders
       : this.config.ai
@@ -132,6 +135,13 @@ export function aiConfigFromEnv(): AiConfig | undefined {
   }
   if (process.env.OPENAI_API_KEY) {
     return { provider: "openai", apiKey: process.env.OPENAI_API_KEY, model: process.env.GTMGRID_AI_MODEL ?? "gpt-4o-mini" };
+  }
+  if (process.env.OPENROUTER_API_KEY) {
+    return {
+      provider: "openrouter",
+      apiKey: process.env.OPENROUTER_API_KEY,
+      model: process.env.GTMGRID_AI_MODEL ?? "openai/gpt-4o-mini",
+    };
   }
   return undefined;
 }

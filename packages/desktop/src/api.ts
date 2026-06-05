@@ -13,6 +13,12 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
 
 export type CellStatus = "empty" | "pending" | "running" | "done" | "error";
 
+export interface ProjectInfo {
+  name: string;
+  path: string;
+  mtimeMs: number;
+  current: boolean;
+}
 export interface TableSummary {
   id: string;
   name: string;
@@ -53,6 +59,7 @@ export interface FunctionMethod {
   input?: Record<string, unknown> | null;
   source?: string | null;
   batchSize?: number;
+  output?: string;
 }
 export interface ConnectorInfo {
   provider: string;
@@ -113,6 +120,11 @@ export const api = {
   aiProviders: () => http<AiProviderInfo[]>("/api/ai-providers"),
   connectAiProvider: (id: string, body: { apiKey: string; scope?: CredentialScope }) =>
     http<{ ok: boolean }>(`/api/ai-providers/${id}/connect`, { method: "POST", body: JSON.stringify(body) }),
+  projects: () => http<ProjectInfo[]>("/api/projects"),
+  createProject: (name: string) =>
+    http<{ ok: boolean; project: string }>("/api/projects", { method: "POST", body: JSON.stringify({ name }) }),
+  switchProject: (name: string) =>
+    http<{ ok: boolean; project: string }>("/api/projects/switch", { method: "POST", body: JSON.stringify({ name }) }),
   tables: () => http<TableSummary[]>("/api/tables"),
   createTable: (name: string) => http<TableSummary>("/api/tables", { method: "POST", body: JSON.stringify({ name }) }),
   table: (id: string) => http<FullTable>(`/api/tables/${id}`),
@@ -129,10 +141,10 @@ export const api = {
     http<{ id: string }>(`/api/tables/${tableId}/rows`, { method: "POST", body: JSON.stringify({ cells }) }),
   setCell: (rowId: string, columnId: string, value: unknown) =>
     http<{ ok: boolean }>("/api/cells", { method: "POST", body: JSON.stringify({ rowId, columnId, value }) }),
-  runColumn: (columnId: string, force = false) =>
+  runColumn: (columnId: string, opts: { force?: boolean; rowIds?: string[] } = {}) =>
     http<{ ran: number; errors: number }>(`/api/columns/${columnId}/run`, {
       method: "POST",
-      body: JSON.stringify({ force }),
+      body: JSON.stringify({ force: opts.force ?? false, rowIds: opts.rowIds }),
     }),
   updateColumn: (
     columnId: string,

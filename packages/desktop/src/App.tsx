@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type CSSProperties } from "react";
 import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo } from "./api";
 import AgentPanel from "./AgentPanel";
 import { LogoMark } from "./Logo";
 import CellDetails, { extractCode } from "./CellDetails";
 import { ExtensionPanel, AiProviderPanel, ExtensionsBrowse, BrandIcon } from "./Panels";
 import { AddColumnPopover, FunctionsModal } from "./AddColumn";
+import { ProjectSwitcher } from "./ProjectSwitcher";
 import "./styles.css";
 
 // What the main area is showing.
@@ -89,13 +90,29 @@ function isObjectOrArray(val: unknown): boolean {
   return val !== null && typeof val === "object";
 }
 
+// True if any of a function column's params reference {{columnName}}.
+function columnDependsOn(col: Column, columnName: string): boolean {
+  const re = new RegExp(`\\{\\{\\s*${columnName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\}\\}`);
+  return Object.values(col.params ?? {}).some((v) => typeof v === "string" && re.test(v));
+}
+
 // ─── Cell renderer ───────────────────────────────────────
 
-function CellContent({ cell, col, onEdit, onOpenDetails }: {
+const ExpandIcon = () => (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="15 3 21 3 21 9" /><polyline points="9 21 3 21 3 15" />
+    <line x1="21" y1="3" x2="14" y2="10" /><line x1="3" y1="21" x2="10" y2="14" />
+  </svg>
+);
+
+function CellContent({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running }: {
   cell: Cell | undefined;
   col: Column;
   onEdit: (value: string) => void;
   onOpenDetails?: () => void;
+  onExpand?: (anchor: { left: number; top: number; width: number }) => void;
+  onRunCell?: () => void;
+  running?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -114,6 +131,32 @@ function CellContent({ cell, col, onEdit, onOpenDetails }: {
     onEdit(draft);
   };
 
+  // Per-cell run button (function cells only) — runs just this row × column.
+  const runBtn = col.kind === "function" && onRunCell ? (
+    <button
+      className="cell-run"
+      title="Run this cell"
+      onClick={e => { e.stopPropagation(); onRunCell(); }}
+    >
+      <Icon.Play size={9} />
+    </button>
+  ) : null;
+
+  // Expand button → opens the full-content editor (for long text / transcripts).
+  const expandBtn = onExpand ? (
+    <button
+      className="cell-expand"
+      title="Expand"
+      onClick={e => {
+        e.stopPropagation();
+        const r = (e.currentTarget.closest("td") as HTMLElement | null)?.getBoundingClientRect();
+        onExpand({ left: r?.left ?? 80, top: r?.top ?? 80, width: r?.width ?? 280 });
+      }}
+    >
+      <ExpandIcon />
+    </button>
+  ) : null;
+
   if (editing) {
     return (
       <input
@@ -131,14 +174,7 @@ function CellContent({ cell, col, onEdit, onOpenDetails }: {
     );
   }
 
-  if (!cell || cell.status === "empty" || cell.status === "pending") {
-    if (col.kind === "function") {
-      return <div className="cell-wrap"><span className="cell-empty">—</span></div>;
-    }
-    return <div className="cell-wrap cell-editable" onClick={startEdit}><span className="cell-empty">empty</span></div>;
-  }
-
-  if (cell.status === "running") {
+  if (running || cell?.status === "running") {
     return (
       <div className="cell-wrap">
         <span className="cell-running">
@@ -149,10 +185,18 @@ function CellContent({ cell, col, onEdit, onOpenDetails }: {
     );
   }
 
+  if (!cell || cell.status === "empty" || cell.status === "pending") {
+    if (col.kind === "function") {
+      return <div className="cell-wrap">{runBtn}<span className="cell-empty">—</span></div>;
+    }
+    return <div className="cell-wrap cell-editable" onClick={startEdit}><span className="cell-empty">empty</span></div>;
+  }
+
   if (cell.status === "error") {
     const code = cell.error?.match(/\b(\d{3})\b/)?.[1];
     return (
       <div className="cell-wrap" title={cell.error ?? "error"}>
+        {runBtn}
         <span className="cell-status err" onClick={onOpenDetails}>
           {code ? `Status Code: ${code}` : "Error"}
         </span>
@@ -164,6 +208,7 @@ function CellContent({ cell, col, onEdit, onOpenDetails }: {
   if (isObjectOrArray(cell.value)) {
     return (
       <div className="cell-wrap">
+        {runBtn}
         <span className="cell-status ok" title="Click to view fields" onClick={onOpenDetails}>
           Status Code: 200
         </span>
@@ -176,6 +221,79 @@ function CellContent({ cell, col, onEdit, onOpenDetails }: {
     <div className="cell-wrap" onClick={col.kind === "manual" ? startEdit : undefined}
          style={col.kind === "manual" ? { cursor: "text" } : {}}>
       <span className="cell-value">{strVal}</span>
+      <div className="cell-actions">{expandBtn}{runBtn}</div>
+    </div>
+  );
+}
+
+// ─── Expanded cell editor ─────────────────────────────────
+// A popover for viewing / editing long cell content (transcripts, summaries…)
+// without ballooning the grid. Fixed width, with a maximize toggle.
+
+function ExpandedEditor({
+  columnName,
+  value,
+  editable,
+  anchor,
+  onSave,
+  onClose,
+}: {
+  columnName: string;
+  value: string;
+  editable: boolean;
+  anchor: { left: number; top: number; width: number };
+  onSave: (v: string) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const [big, setBig] = useState(false);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => { setTimeout(() => taRef.current?.focus(), 0); }, []);
+
+  const words = draft.trim() ? draft.trim().split(/\s+/).length : 0;
+  const chars = draft.length;
+
+  const W = big ? 720 : Math.max(440, Math.min(anchor.width, 560));
+  const style: CSSProperties = big
+    ? { position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: W }
+    : {
+        position: "fixed",
+        width: W,
+        left: Math.max(12, Math.min(anchor.left, window.innerWidth - W - 12)),
+        top: Math.max(12, Math.min(anchor.top, window.innerHeight - 360)),
+      };
+
+  const save = () => { if (editable) onSave(draft); onClose(); };
+
+  return (
+    <div className="popover-scrim" onMouseDown={e => e.target === e.currentTarget && onClose()}>
+      <div className="xcell" style={style} onMouseDown={e => e.stopPropagation()}>
+        <div className="xcell-head">
+          <div className="xcell-head-text">
+            <div className="xcell-title">{columnName}</div>
+            <div className="xcell-sub">Expanded editor</div>
+          </div>
+          <button className="xcell-max" title={big ? "Shrink" : "Maximize"} onClick={() => setBig(b => !b)}>
+            <ExpandIcon />
+          </button>
+        </div>
+        <textarea
+          ref={taRef}
+          className={`xcell-area${big ? " big" : ""}`}
+          value={draft}
+          readOnly={!editable}
+          spellCheck={false}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); save(); }
+            if (e.key === "Escape") onClose();
+          }}
+        />
+        <div className="xcell-foot">
+          <span>{editable ? "Cmd/Ctrl+Enter to save" : "Read only"}</span>
+          <span>{words} word{words !== 1 ? "s" : ""}, {chars} chars</span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -237,6 +355,7 @@ export default function App() {
   const [tableLoading, setTableLoading] = useState(false);
   const [renamingTableId, setRenamingTableId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [confirmDeleteTable, setConfirmDeleteTable] = useState<TableSummary | null>(null);
 
   // Connectors / extensions / AI providers
   const [connectors, setConnectors] = useState<ConnectorInfo[]>([]);
@@ -255,6 +374,9 @@ export default function App() {
   const [addColAnchor, setAddColAnchor] = useState<{ left: number; top: number } | null>(null);
   const [showFunctions, setShowFunctions] = useState(false);
   const [showNewTable, setShowNewTable] = useState(false);
+  const [showProjects, setShowProjects] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [currentProjectPath, setCurrentProjectPath] = useState<string | null>(null);
 
   // Open the add-column popover anchored just below the clicked "+" button.
   const openAddCol = (e: React.MouseEvent) => {
@@ -266,9 +388,24 @@ export default function App() {
   // Run state
   const [runProgress, setRunProgress] = useState<{ current: number; total: number } | null>(null);
   const [runningColId, setRunningColId] = useState<string | null>(null);
+  const [runningCells, setRunningCells] = useState<Set<string>>(new Set()); // `${rowId}:${colId}`
+  // Auto-run: recompute dependent function columns when an input cell changes.
+  const [autoRun, setAutoRun] = useState<boolean>(() => {
+    try { return localStorage.getItem("gtmgrid:autoRun") !== "off"; } catch { return true; }
+  });
+  const toggleAutoRun = useCallback(() => {
+    setAutoRun((v) => {
+      const next = !v;
+      try { localStorage.setItem("gtmgrid:autoRun", next ? "on" : "off"); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
 
   // Cell details drawer + column widths (resize)
   const [detail, setDetail] = useState<{ columnName: string; value: unknown } | null>(null);
+  const [expandCell, setExpandCell] = useState<
+    { rowId: string; colId: string; columnName: string; value: string; editable: boolean; anchor: { left: number; top: number; width: number } } | null
+  >(null);
   const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
     try {
       return JSON.parse(localStorage.getItem("gtmgrid:colWidths") || "{}");
@@ -372,6 +509,28 @@ export default function App() {
     if (t) setTables(t);
   }, []);
 
+  // Switch to a different project: tables change; global creds/extensions stay.
+  const onProjectSwitched = useCallback(async (name: string) => {
+    setShowProjects(false);
+    setProjectName(name);
+    setView({ kind: "table" });
+    const [t, e, ai] = await Promise.all([
+      api.tables().catch(() => [] as TableSummary[]),
+      api.extensions().catch(() => null),
+      api.aiProviders().catch(() => null),
+    ]);
+    setTables(t);
+    setSelectedTableId(t.length ? t[0].id : null);
+    if (e) setExtensions(e);
+    if (ai) setAiProviders(ai);
+  }, []);
+
+  const openAccountMenu = useCallback(async () => {
+    setAccountMenuOpen(true);
+    const ps = await api.projects().catch(() => []);
+    setCurrentProjectPath(ps.find((p) => p.current)?.path ?? null);
+  }, []);
+
   const toggleFavorite = async (id: string, favorite: boolean) => {
     await api.favoriteTable(id, favorite).catch(() => {});
     await reloadTables();
@@ -385,8 +544,8 @@ export default function App() {
     await reloadTables();
   };
 
+  // window.confirm() is a no-op in Tauri's webview, so we use an in-app modal.
   const deleteTable = async (id: string) => {
-    if (!window.confirm("Delete this table? This removes all of its columns and rows.")) return;
     await api.deleteTable(id).catch(() => {});
     const t = await api.tables().catch(() => []);
     setTables(t);
@@ -403,7 +562,7 @@ export default function App() {
       onClick: () => toggleFavorite(t.id, !t.favorite),
     },
     { label: "Rename", onClick: () => { setRenameDraft(t.name); setRenamingTableId(t.id); } },
-    { label: "Delete", danger: true, onClick: () => deleteTable(t.id) },
+    { label: "Delete", danger: true, onClick: () => setConfirmDeleteTable(t) },
   ];
 
   // ── Run all function cols ──────────────────
@@ -428,6 +587,18 @@ export default function App() {
     try { await api.runColumn(colId); } catch { /* ignore */ }
     setRunningColId(null);
     if (selectedTableId) await loadTable(selectedTableId);
+  };
+
+  // ── Run a single cell (this row × this function column) ──
+  const runCell = async (rowId: string, colId: string) => {
+    const key = `${rowId}:${colId}`;
+    setRunningCells(s => new Set(s).add(key));
+    try { await api.runColumn(colId, { force: true, rowIds: [rowId] }); } catch { /* ignore */ }
+    if (selectedTableId) {
+      const updated = await api.table(selectedTableId);
+      setTableData(updated);
+    }
+    setRunningCells(s => { const n = new Set(s); n.delete(key); return n; });
   };
 
   // ── Add row ────────────────────────────────
@@ -513,9 +684,23 @@ export default function App() {
 
   const setCell = async (rowId: string, colId: string, value: string) => {
     await api.setCell(rowId, colId, value);
-    if (selectedTableId) {
-      const updated = await api.table(selectedTableId);
-      setTableData(updated);
+    if (!selectedTableId) return;
+    let updated = await api.table(selectedTableId);
+    setTableData(updated);
+
+    // Auto-run: re-run function columns that reference the edited column, for this row.
+    if (autoRun) {
+      const changed = updated.columns.find((c) => c.id === colId);
+      if (changed) {
+        const deps = updated.columns.filter((c) => c.kind === "function" && columnDependsOn(c, changed.name));
+        if (deps.length) {
+          for (const dc of deps) {
+            await api.runColumn(dc.id, { force: true, rowIds: [rowId] }).catch(() => {});
+          }
+          updated = await api.table(selectedTableId);
+          setTableData(updated);
+        }
+      }
     }
   };
 
@@ -541,14 +726,24 @@ export default function App() {
   const fnColCount = tableData?.columns.filter(c => c.kind === "function").length ?? 0;
 
   return (
-    <div className="app">
+    <div className="app-shell">
+      {/* ── Top bar (project switcher) ──── */}
+      <header className="topbar">
+        <LogoMark size={22} />
+        <button className="topbar-project" onClick={() => setShowProjects(true)} title="Switch project">
+          <span className="topbar-project-name">{projectName}</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+        </button>
+        <span className="free-badge">FREE</span>
+      </header>
+
+      <div className="app">
       {/* ── Sidebar ─────────────────────── */}
       <aside className="sidebar">
         <div className="sidebar-header">
           <LogoMark size={26} />
           <div className="sidebar-brand">
             <span className="brand-name">gtm grid</span>
-            <span className="sidebar-project">{projectName}</span>
           </div>
         </div>
 
@@ -709,12 +904,50 @@ export default function App() {
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="sidebar-footer">
-          <span className={`status-dot ${healthStatus}`} />
-          {healthStatus === "loading" && "Connecting…"}
-          {healthStatus === "connected" && "Server online"}
-          {healthStatus === "offline" && "Server offline"}
+        {/* Footer: account / project menu */}
+        <div className="account-bar">
+          <button className="account-btn" onClick={() => (accountMenuOpen ? setAccountMenuOpen(false) : openAccountMenu())}>
+            <span className="account-avatar">{projectName.slice(0, 1).toUpperCase()}</span>
+            <span className="account-text">
+              <span className="account-name">{projectName}</span>
+              <span className="account-sub">
+                <span className={`status-dot ${healthStatus}`} />
+                {healthStatus === "connected" ? "Local workspace" : healthStatus === "offline" ? "Offline" : "Connecting…"}
+              </span>
+            </span>
+            <svg className="account-chevrons" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="7 15 12 20 17 15" /><polyline points="7 9 12 4 17 9" />
+            </svg>
+          </button>
+
+          {accountMenuOpen && (
+            <>
+              <div className="account-backdrop" onClick={() => setAccountMenuOpen(false)} />
+              <div className="account-menu">
+                <div className="account-menu-head">
+                  <span className="account-avatar">{projectName.slice(0, 1).toUpperCase()}</span>
+                  <div className="account-menu-head-text">
+                    <strong>Local workspace</strong>
+                    <span>All projects on this device</span>
+                  </div>
+                </div>
+                <div className="account-menu-sec">
+                  <div className="account-menu-label">Project</div>
+                  <div className="account-menu-current">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                    <div className="account-menu-current-text">
+                      <span className="account-menu-current-name">{projectName}</span>
+                      {currentProjectPath && <span className="account-menu-current-path">{currentProjectPath}</span>}
+                    </div>
+                  </div>
+                  <button className="account-menu-item" onClick={() => { setAccountMenuOpen(false); setShowProjects(true); }}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="17 1 21 5 17 9" /><path d="M3 11V9a4 4 0 0 1 4-4h14" /><polyline points="7 23 3 19 7 15" /><path d="M21 13v2a4 4 0 0 1-4 4H3" /></svg>
+                    Switch project
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </aside>
 
@@ -760,6 +993,17 @@ export default function App() {
             <span className="toolbar-title" style={{ color: "var(--text-3)" }}>
               {selectedTableId ? "Loading…" : "No table selected"}
             </span>
+          )}
+
+          {tableData && (
+            <button
+              className="autorun-toggle"
+              onClick={toggleAutoRun}
+              title="Computed fields auto-run when inputs change"
+            >
+              <span className="autorun-label">Auto-run</span>
+              <span className={`autorun-switch${autoRun ? " on" : ""}`}><span className="autorun-knob" /></span>
+            </button>
           )}
 
           <div className="toolbar-spacer" />
@@ -911,6 +1155,18 @@ export default function App() {
                                 value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
                               })
                             }
+                            onExpand={(anchor) =>
+                              setExpandCell({
+                                rowId: row.id,
+                                colId: col.id,
+                                columnName: col.name,
+                                value: cell?.value != null ? String(cell.value) : "",
+                                editable: col.kind === "manual",
+                                anchor,
+                              })
+                            }
+                            onRunCell={col.kind === "function" ? () => runCell(row.id, col.id) : undefined}
+                            running={runningCells.has(`${row.id}:${col.id}`)}
                           />
                         </td>
                       );
@@ -939,6 +1195,18 @@ export default function App() {
           onClose={() => setDetail(null)}
           onCreate={promoteCreate}
           onMapTo={promoteMap}
+        />
+      )}
+
+      {/* ── Expanded cell editor ─ */}
+      {expandCell && (
+        <ExpandedEditor
+          columnName={expandCell.columnName}
+          value={expandCell.value}
+          editable={expandCell.editable}
+          anchor={expandCell.anchor}
+          onSave={(v) => setCell(expandCell.rowId, expandCell.colId, v)}
+          onClose={() => setExpandCell(null)}
         />
       )}
 
@@ -1000,6 +1268,41 @@ export default function App() {
           }}
         />
       )}
+
+      {confirmDeleteTable && (
+        <div className="overlay" onMouseDown={e => e.target === e.currentTarget && setConfirmDeleteTable(null)}>
+          <div className="modal" style={{ width: 380 }}>
+            <div className="modal-header">
+              <span className="modal-title">Delete table</span>
+              <button className="modal-close" onClick={() => setConfirmDeleteTable(null)}><Icon.X /></button>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>
+                Delete <strong style={{ color: "var(--text)" }}>{confirmDeleteTable.name}</strong>? This permanently
+                removes the table and all of its columns and rows. This can't be undone.
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setConfirmDeleteTable(null)}>Cancel</button>
+              <button
+                className="btn btn-danger"
+                onClick={() => { const t = confirmDeleteTable; setConfirmDeleteTable(null); deleteTable(t.id); }}
+              >
+                Delete table
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showProjects && (
+        <ProjectSwitcher
+          current={projectName}
+          onClose={() => setShowProjects(false)}
+          onSwitched={onProjectSwitched}
+        />
+      )}
+      </div>
     </div>
   );
 }

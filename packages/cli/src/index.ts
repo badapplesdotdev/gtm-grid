@@ -76,7 +76,7 @@ async function main() {
   if (cmd === "connect-ai") {
     const name = sub!;
     const { db } = openProject(name);
-    const provider = String(flags.provider ?? "anthropic") as "anthropic" | "openai";
+    const provider = String(flags.provider ?? "anthropic") as "anthropic" | "openai" | "openrouter";
     const key = String(flags.key ?? "");
     if (!key) throw new Error("--key is required");
     connectAi(db, provider, key, flags.model ? String(flags.model) : undefined);

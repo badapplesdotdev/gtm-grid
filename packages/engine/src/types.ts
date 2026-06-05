@@ -65,6 +65,8 @@ export interface ConnectorMethod {
   inputSchema: Record<string, unknown>;
   batchSize: number;
   credits: number;
+  /** Output value type — surfaced in the function detail ("outputs json"). Default "text". */
+  output?: "text" | "json" | "number" | "boolean";
   /** Optional human-readable source (shown in the function detail's Details tab). */
   source?: string;
   /** Executes the method host-side. Receives validated inputs + a resolved credential (if any). */
@@ -80,7 +82,7 @@ export interface MethodContext {
 }
 
 export interface AiConfig {
-  provider: "anthropic" | "openai";
+  provider: "anthropic" | "openai" | "openrouter";
   apiKey: string;
   model: string;
 }
