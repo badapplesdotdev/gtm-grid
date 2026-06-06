@@ -285,8 +285,31 @@ export default defineSchema({
     name: v.optional(v.string()),
     /** High-entropy public token (the URL segment). Minted via Web Crypto. */
     token: v.string(),
+    /**
+     * HMAC-SHA256 signing secret (minted with the token). The Inngest worker
+     * (Wave 3) verifies the `X-GTMGrid-Signature` header against this. Optional
+     * for back-compat with rows minted before this field existed; new rows always
+     * set it. NEVER exposed to a non-member.
+     */
+    signingSecret: v.optional(v.string()),
     mapping: v.array(webhookFieldMapping),
     enabled: v.boolean(),
+    /**
+     * When false the worker INSERTS the row but skips auto-running this table's
+     * function columns (enrichment / AI). Default true. Optional for back-compat.
+     */
+    autoRun: v.optional(v.boolean()),
+    /**
+     * Receive behaviour. `"create"` appends every payload as a new row;
+     * `"upsert"` updates an existing row matched on `upsertKey`, else creates.
+     * Default "create". Optional for back-compat.
+     */
+    mode: v.optional(v.union(v.literal("create"), v.literal("upsert"))),
+    /**
+     * The column matched on for `mode: "upsert"` (must belong to the bound
+     * table); `null`/undefined when not upserting. Validated on write.
+     */
+    upsertKey: v.optional(v.union(v.id("columns"), v.null())),
     createdAt: v.number(),
     /** Epoch ms of the most recent received payload, or null if never hit. */
     lastReceivedAt: v.optional(v.union(v.number(), v.null())),

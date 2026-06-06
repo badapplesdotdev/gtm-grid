@@ -360,6 +360,92 @@ function NewTableModal({ onClose, onCreated }: { onClose: () => void; onCreated:
   );
 }
 
+// ─── New Table Chooser ────────────────────────────────────
+
+/**
+ * The "New table" chooser — three option tiles (Blank / CSV upload / Webhook)
+ * replacing the old straight-to-blank entry points. Reuses the centered
+ * `.overlay > .modal` surface and the `.acx-*` tile pattern. Webhook is
+ * CLOUD-ONLY: in local mode the tile is disabled with a "requires a cloud
+ * workspace" hint (the design's paid/cloud gate).
+ */
+function NewTableChooser({
+  inCloud,
+  onClose,
+  onBlank,
+  onCsv,
+  onWebhook,
+}: {
+  inCloud: boolean;
+  onClose: () => void;
+  onBlank: () => void;
+  onCsv: () => void;
+  onWebhook: () => void;
+}) {
+  const Caret = (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+  );
+  const UploadIcon = (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
+  );
+  const WebhookIcon = (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17a4 4 0 0 1 3.6-3.98" /><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06" /><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8" /></svg>
+  );
+  const LockIcon = (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+  );
+
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ width: 440 }}>
+        <div className="modal-header">
+          <span className="modal-title">New table</span>
+          <button className="modal-close" onClick={onClose}><Icon.X /></button>
+        </div>
+        <div className="modal-body">
+          <div className="acx-group" style={{ margin: 0 }}>
+            <button className="acx-item" onClick={() => { onBlank(); onClose(); }}>
+              <span className="acx-item-icon acx-icon-accent"><Icon.Table /></span>
+              <span className="acx-item-text">
+                <span className="acx-item-title">Start empty</span>
+                <span className="acx-item-sub">A blank grid you fill in yourself.</span>
+              </span>
+              <span className="acx-item-caret">{Caret}</span>
+            </button>
+            <button className="acx-item" onClick={() => { onCsv(); onClose(); }}>
+              <span className="acx-item-icon">{UploadIcon}</span>
+              <span className="acx-item-text">
+                <span className="acx-item-title">Import a CSV</span>
+                <span className="acx-item-sub">Drop a file; map columns; populate rows.</span>
+              </span>
+              <span className="acx-item-caret">{Caret}</span>
+            </button>
+            {inCloud ? (
+              <button className="acx-item" onClick={() => { onWebhook(); onClose(); }}>
+                <span className="acx-item-icon">{WebhookIcon}</span>
+                <span className="acx-item-text">
+                  <span className="acx-item-title">Driven by a webhook</span>
+                  <span className="acx-item-sub">POST JSON to populate rows automatically.</span>
+                </span>
+                <span className="acx-item-caret">{Caret}</span>
+              </button>
+            ) : (
+              <button className="acx-item acx-disabled" disabled title="Requires a cloud workspace">
+                <span className="acx-item-icon">{WebhookIcon}</span>
+                <span className="acx-item-text">
+                  <span className="acx-item-title">Driven by a webhook</span>
+                  <span className="acx-item-sub">Requires a cloud workspace.</span>
+                </span>
+                <span className="acx-item-caret" style={{ color: "var(--text-3)" }}>{LockIcon}</span>
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────
 
 export default function App() {
@@ -393,6 +479,12 @@ export default function App() {
   const [addColAnchor, setAddColAnchor] = useState<{ left: number; top: number } | null>(null);
   const [showFunctions, setShowFunctions] = useState(false);
   const [showNewTable, setShowNewTable] = useState(false);
+  // The "New table" chooser (Blank / CSV / Webhook) replaces the old
+  // straight-to-blank entry points.
+  const [showNewTableChooser, setShowNewTableChooser] = useState(false);
+  // Bumped to ask the CloudGrid to auto-open the webhook setup form (the chooser's
+  // Webhook flow). A monotonic token so each request re-triggers cleanly.
+  const [openWebhookToken, setOpenWebhookToken] = useState(0);
   const [showProjects, setShowProjects] = useState(false);
   const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
   const [currentProjectPath, setCurrentProjectPath] = useState<string | null>(null);
@@ -721,6 +813,26 @@ export default function App() {
     }
   }, [cloudProject, createCloudTable, cloudCreating]);
 
+  // Chooser → Webhook (cloud-only): create + select a cloud table, then ask the
+  // CloudGrid to auto-open the webhook setup form for it. The mapping starts
+  // empty; the user maps payload paths → columns they add via the normal UI.
+  const onChooseWebhook = useCallback(async () => {
+    if (!cloudProject || cloudCreating) return;
+    setCloudCreating(true);
+    setCloudCreateError(null);
+    try {
+      const id = await createCloudTable(cloudProject._id, "Webhook table");
+      setCloudTableId(id);
+      setOpenWebhookToken((n) => n + 1);
+    } catch (e) {
+      setCloudCreateError(
+        e instanceof Error ? e.message : "Could not create table.",
+      );
+    } finally {
+      setCloudCreating(false);
+    }
+  }, [cloudProject, createCloudTable, cloudCreating]);
+
   // Leave cloud mode → back to the local project the sidecar already has open.
   const exitCloud = useCallback(() => {
     setCloudProject(null);
@@ -1017,7 +1129,7 @@ export default function App() {
                 <button
                   title="New cloud table"
                   disabled={cloudCreating}
-                  onClick={() => { void onCreateCloudTable(); }}
+                  onClick={() => setShowNewTableChooser(true)}
                 >
                   <Icon.Plus />
                 </button>
@@ -1043,7 +1155,7 @@ export default function App() {
               <div
                 className="sidebar-item"
                 style={{ marginTop: 2, opacity: cloudCreating ? 0.6 : 1 }}
-                onClick={() => { void onCreateCloudTable(); }}
+                onClick={() => setShowNewTableChooser(true)}
               >
                 <span className="sidebar-item-icon" style={{ color: "var(--accent)" }}><Icon.Plus /></span>
                 <span className="sidebar-item-name" style={{ color: "var(--accent)" }}>
@@ -1071,7 +1183,7 @@ export default function App() {
           <div className="sidebar-section">
             <div className="sidebar-section-label">
               Tables
-              <button onClick={() => setShowNewTable(true)} title="New table">
+              <button onClick={() => setShowNewTableChooser(true)} title="New table">
                 <Icon.Plus />
               </button>
             </div>
@@ -1114,7 +1226,7 @@ export default function App() {
               </div>
               )
             ))}
-            <div className="sidebar-item" style={{ marginTop: 2 }} onClick={() => setShowNewTable(true)}>
+            <div className="sidebar-item" style={{ marginTop: 2 }} onClick={() => setShowNewTableChooser(true)}>
               <span className="sidebar-item-icon" style={{ color: "var(--accent)" }}><Icon.Plus /></span>
               <span className="sidebar-item-name" style={{ color: "var(--accent)" }}>New table</span>
             </div>
@@ -1265,7 +1377,7 @@ export default function App() {
 
         {/* Cloud project: the LIVE multiplayer grid (Convex). Replaces the local
             sidecar grid entirely while a cloud project is open. */}
-        {inCloud && <CloudGrid tableId={cloudTableId} />}
+        {inCloud && <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} />}
 
         {/* Extensions gallery + detail panels */}
         {!inCloud && view.kind === "extensions" && (
@@ -1351,7 +1463,7 @@ export default function App() {
             <div className="empty-title">No table selected</div>
             <p className="empty-sub">Create your first table to start building your GTM data grid.</p>
             <div style={{ display: "flex", gap: 8 }}>
-              <button className="btn btn-primary" onClick={() => setShowNewTable(true)}>
+              <button className="btn btn-primary" onClick={() => setShowNewTableChooser(true)}>
                 <Icon.Plus /> Create table
               </button>
               <button className="btn btn-outline" onClick={() => setImportMode("local")}>
@@ -1589,6 +1701,19 @@ export default function App() {
             const target = aiProviders[0]?.id ?? "anthropic";
             setView({ kind: "ai", id: target });
           }}
+        />
+      )}
+
+      {showNewTableChooser && (
+        <NewTableChooser
+          inCloud={inCloud}
+          onClose={() => setShowNewTableChooser(false)}
+          onBlank={() => {
+            if (inCloud) void onCreateCloudTable();
+            else setShowNewTable(true);
+          }}
+          onCsv={() => setImportMode(inCloud ? "cloud" : "local")}
+          onWebhook={() => { void onChooseWebhook(); }}
         />
       )}
 
