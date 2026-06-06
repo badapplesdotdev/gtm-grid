@@ -3,7 +3,7 @@
 // calls host-side, and writing cells with pending/running/done/error status.
 
 import { Effect } from "effect";
-import { Db } from "./db.js";
+import type { Db } from "./db.js";
 import { Registry, defaultRegistry } from "./registry.js";
 import { runFunction, type SandboxDispatch } from "./sandbox.js";
 import {
@@ -43,9 +43,14 @@ export interface EngineStores {
 }
 
 export class Engine {
-  readonly db: Db;
+  /**
+   * The local SQLite db, when running a LOCAL project. Undefined on the cloud
+   * path, where the store + credentials are injected and no Db exists. Read it
+   * through {@link requireDb} when a Db is genuinely required.
+   */
+  readonly db?: Db;
   /** Where credentials live — the shared global db when running multi-project. */
-  readonly credsDb: Db;
+  readonly credsDb?: Db;
   readonly registry: Registry;
   config: EngineConfig;
 
@@ -55,7 +60,7 @@ export class Engine {
   private readonly creds: GridStoreShape;
 
   constructor(
-    db: Db,
+    db: Db | undefined,
     config: EngineConfig = {},
     registry: Registry = defaultRegistry(),
     credsDb?: Db,
@@ -68,11 +73,18 @@ export class Engine {
     // The engine drives a GridStore abstraction, not the concrete Db. For local
     // projects that store defaults to a thin SqliteGridStore over the same Db, so
     // behaviour is unchanged; cloud projects inject a ConvexGridStore (built by
-    // the server cloud-run lane) so the same run path reads/writes Convex.
-    // Credentials may live in a separate (shared/global) store when running
-    // multi-project, or be injected (e.g. workspace-shared cloud credentials).
-    this.store = stores.store ?? sqliteGridStoreShape(db);
-    this.creds = stores.creds ?? sqliteGridStoreShape(this.credsDb);
+    // the server cloud-run lane) so the same run path reads/writes Convex — there
+    // a Db is never constructed, so the SQLite fallback is only built when a store
+    // is NOT injected. Credentials may live in a separate (shared/global) store
+    // when running multi-project, or be injected (workspace-shared cloud creds).
+    this.store = stores.store ?? sqliteGridStoreShape(requireDb(db, "store"));
+    this.creds =
+      stores.creds ?? sqliteGridStoreShape(requireDb(this.credsDb, "credentials"));
+  }
+
+  /** The local SQLite db, or throw if the engine was built without one (cloud). */
+  requireDb(): Db {
+    return requireDb(this.db, "db");
   }
 
   /** Host-side dispatcher exposed to the sandbox as `sdk.<provider>.<method>`. */
@@ -172,6 +184,21 @@ export class Engine {
     });
     return { ran, errors };
   }
+}
+
+/**
+ * Assert a `Db` is present (the LOCAL path), throwing a clear error otherwise.
+ * The CLOUD path injects `stores.store`/`stores.creds`, so no Db is required —
+ * but if neither a Db nor an injected store is supplied for a given purpose the
+ * engine cannot read/write, and this surfaces that as an explicit failure rather
+ * than a `Cannot read properties of undefined` later in the run.
+ */
+function requireDb(db: Db | undefined, purpose: string): Db {
+  if (!db)
+    throw new Error(
+      `Engine requires a Db for ${purpose}: pass a Db (local path) or inject stores.${purpose === "credentials" ? "creds" : "store"} (cloud path).`,
+    );
+  return db;
 }
 
 /** Unwrap a sole `{ text }` result so AI columns store the plain string. */

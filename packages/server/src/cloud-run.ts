@@ -151,20 +151,19 @@ export async function buildConvexStore(
  * (#18). A connector with no stored credential resolves to none, matching a
  * project with no connected keys. Returns the engine's `{ ran, errors }` summary.
  *
- * The engine constructor still takes a `Db` for its (unused-on-the-cloud-path)
- * `db`/`credsDb` fields; the caller passes the sidecar's existing global db so
- * no new SQLite file is created. The run path itself reads/writes only the
- * injected Convex store.
+ * The cloud path is fully Db-free: the engine is built with NO `Db` and the
+ * injected Convex store backs BOTH project data and credentials, so no SQLite
+ * file is opened (and the native better-sqlite3 addon is never loaded). The run
+ * path reads/writes only the injected Convex store.
  */
 export async function runCloudColumn(
   req: CloudRunRequest,
   deps: CloudRunDeps,
-  db: ConstructorParameters<typeof Engine>[0],
 ): Promise<{ ran: number; errors: number }> {
   const client = deps.makeClient(req.convexUrl, req.token);
   const workspaceId = await resolveWorkspaceId(client, req.tableId);
   const store = await buildConvexStore(client, req.tableId, workspaceId);
-  const engine = new Engine(db, deps.config, deps.registry, undefined, {
+  const engine = new Engine(undefined, deps.config, deps.registry, undefined, {
     store,
     creds: store,
   });

@@ -71,6 +71,18 @@ export const credentialScope = v.union(
   v.literal("personal"),
 );
 
+/**
+ * One field of an inbound webhook payload mapped onto a grid column. `path` is a
+ * dotted JSON path into the received payload (e.g. `"person.email"`) and
+ * `columnId` is the destination column in the webhook's bound table. The headless
+ * worker (convex/webhooks.ts `insertWebhookRow`) walks this mapping to project a
+ * payload into a row's cells.
+ */
+export const webhookFieldMapping = v.object({
+  path: v.string(),
+  columnId: v.id("columns"),
+});
+
 export default defineSchema({
   /**
    * Convex Auth tables (T3): `users`, `authSessions`, `authAccounts`,
@@ -255,4 +267,33 @@ export default defineSchema({
       "scope",
       "ownerUserId",
     ]),
+
+  /**
+   * Inbound webhook endpoints that drop received payloads into a bound table as
+   * rows. Each webhook owns a high-entropy `token` (the public URL segment) and a
+   * `mapping` projecting payload JSON paths onto the table's columns. A headless
+   * worker (apps/inngest) resolves the token, validates the secret, and inserts
+   * rows via the internal worker functions in convex/webhooks.ts.
+   *
+   * by_workspace lists a workspace's webhooks (config UI); by_table lists the
+   * webhooks bound to one table; by_token resolves an inbound request's token to
+   * its webhook (the worker's hot path).
+   */
+  webhooks: defineTable({
+    workspaceId: v.id("workspaces"),
+    tableId: v.id("tables"),
+    name: v.optional(v.string()),
+    /** High-entropy public token (the URL segment). Minted via Web Crypto. */
+    token: v.string(),
+    mapping: v.array(webhookFieldMapping),
+    enabled: v.boolean(),
+    createdAt: v.number(),
+    /** Epoch ms of the most recent received payload, or null if never hit. */
+    lastReceivedAt: v.optional(v.union(v.number(), v.null())),
+    /** Total payloads received (incremented by the worker on each insert). */
+    receivedCount: v.optional(v.number()),
+  })
+    .index("by_workspace", ["workspaceId"])
+    .index("by_table", ["tableId"])
+    .index("by_token", ["token"]),
 });

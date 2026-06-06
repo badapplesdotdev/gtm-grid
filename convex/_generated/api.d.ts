@@ -25,6 +25,7 @@ import type * as model_usage from "../model/usage.js";
 import type * as projects from "../projects.js";
 import type * as tables from "../tables.js";
 import type * as usage from "../usage.js";
+import type * as webhooks from "../webhooks.js";
 import type * as workspaces from "../workspaces.js";
 
 import type {
@@ -51,6 +52,7 @@ declare const fullApi: ApiFromModules<{
   projects: typeof projects;
   tables: typeof tables;
   usage: typeof usage;
+  webhooks: typeof webhooks;
   workspaces: typeof workspaces;
 }>;
 
