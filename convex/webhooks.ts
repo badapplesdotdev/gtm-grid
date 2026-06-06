@@ -105,6 +105,16 @@ function mintToken(): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+/**
+ * Mint an HMAC signing secret, prefixed `whsec_` so it reads like a Stripe-style
+ * webhook secret in the UI. Same 256-bit entropy + base64url body as the token,
+ * minted in the DEFAULT V8 runtime (no `"use node"`). The Inngest worker (Wave 3)
+ * uses the raw bytes after the prefix to verify the `X-GTMGrid-Signature` header.
+ */
+function mintSigningSecret(): string {
+  return `whsec_${mintToken()}`;
+}
+
 // ---------------------------------------------------------------------------
 // Member-gated config CRUD (public). NOT metered — config is metadata.
 // ---------------------------------------------------------------------------
@@ -148,12 +158,70 @@ export const createWebhook = mutation({
       tableId,
       name,
       token: mintToken(),
+      signingSecret: mintSigningSecret(),
       mapping: resolvedMapping,
       enabled: true,
+      autoRun: true,
+      mode: "create",
+      upsertKey: null,
       createdAt: Date.now(),
       lastReceivedAt: null,
       receivedCount: 0,
     });
+  },
+});
+
+/**
+ * Patch a webhook's receive behaviour — `autoRun`, `mode`, and the `upsertKey`
+ * column. Members-only; NOT metered (config metadata). When `mode` resolves to
+ * `"upsert"` an `upsertKey` MUST be supplied and MUST be a column of the bound
+ * table (validated via the same column-id Set as the mapping guard); when it
+ * resolves to `"create"` the key is cleared to `null`. Each field is optional so
+ * the UI can patch one control at a time.
+ */
+export const updateWebhookConfig = mutation({
+  args: {
+    webhookId: v.id("webhooks"),
+    autoRun: v.optional(v.boolean()),
+    mode: v.optional(v.union(v.literal("create"), v.literal("upsert"))),
+    upsertKey: v.optional(v.union(v.id("columns"), v.null())),
+  },
+  handler: async (ctx, { webhookId, autoRun, mode, upsertKey }) => {
+    const webhook = await getOrThrow(ctx, "webhooks", webhookId);
+    await requireMember(ctx, webhook.workspaceId);
+
+    const patch: Partial<Doc<"webhooks">> = {};
+    if (autoRun !== undefined) patch.autoRun = autoRun;
+
+    // The effective mode after this patch (existing mode when not changing it).
+    const nextMode = mode ?? webhook.mode ?? "create";
+    if (mode !== undefined) patch.mode = mode;
+
+    // The effective upsert key after this patch.
+    const nextKey =
+      upsertKey !== undefined ? upsertKey : (webhook.upsertKey ?? null);
+
+    if (nextMode === "upsert") {
+      if (nextKey === null) {
+        throw new ConvexError({
+          code: "InvalidConfigError",
+          message: "Upsert mode requires a column to match on.",
+        });
+      }
+      const valid = await tableColumnIds(ctx, webhook.tableId);
+      if (!valid.has(nextKey)) {
+        throw new ConvexError({
+          code: "InvalidConfigError",
+          message: `Column ${nextKey} does not belong to table ${webhook.tableId}.`,
+        });
+      }
+      if (upsertKey !== undefined) patch.upsertKey = nextKey;
+    } else {
+      // Creating: clear any stale upsert key so the worker never upserts.
+      patch.upsertKey = null;
+    }
+
+    await ctx.db.patch(webhookId, patch);
   },
 });
 
@@ -186,8 +254,10 @@ export const toggleEnabled = mutation({
 });
 
 /**
- * Rotate a webhook's secret token, invalidating the old URL. Members-only.
- * Mints a fresh high-entropy token via Web Crypto. NOT metered.
+ * Rotate a webhook's secrets, invalidating the old URL AND the old signing
+ * secret. Members-only. Mints a fresh high-entropy token + HMAC signing secret
+ * via Web Crypto so a leaked URL/secret pair can be revoked atomically. NOT
+ * metered.
  */
 export const rotateSecret = mutation({
   args: { webhookId: v.id("webhooks") },
@@ -195,8 +265,9 @@ export const rotateSecret = mutation({
     const webhook = await getOrThrow(ctx, "webhooks", webhookId);
     await requireMember(ctx, webhook.workspaceId);
     const token = mintToken();
-    await ctx.db.patch(webhookId, { token });
-    return { token };
+    const signingSecret = mintSigningSecret();
+    await ctx.db.patch(webhookId, { token, signingSecret });
+    return { token, signingSecret };
   },
 });
 
@@ -234,6 +305,12 @@ export const resolveWebhookToken = internalQuery({
       workspaceId: webhook.workspaceId,
       tableId: webhook.tableId,
       mapping: webhook.mapping,
+      // Config the Wave-3 worker needs to verify the signature, honour
+      // auto-run, and perform an upsert. Defaults applied for back-compat rows.
+      signingSecret: webhook.signingSecret ?? null,
+      autoRun: webhook.autoRun ?? true,
+      mode: webhook.mode ?? "create",
+      upsertKey: webhook.upsertKey ?? null,
     };
   },
 });

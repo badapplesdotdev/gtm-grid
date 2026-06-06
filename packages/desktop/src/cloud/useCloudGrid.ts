@@ -264,3 +264,103 @@ export function useCloudGridMutations() {
 
   return { setCell, addRow, addRowsWithCells, addColumn, deleteRow, deleteColumn };
 }
+
+// ───────────────────────────── Webhooks (cloud-only) ────────────────────────
+
+/** One payload-path → column mapping entry, as persisted on the webhook. */
+export interface WebhookMappingEntry {
+  readonly path: string;
+  readonly columnId: Id<"columns">;
+}
+
+/** A webhook config doc as returned by `listWebhooks` (the panel's data shape). */
+export interface CloudWebhook {
+  readonly _id: Id<"webhooks">;
+  readonly workspaceId: Id<"workspaces">;
+  readonly tableId: Id<"tables">;
+  readonly name?: string;
+  readonly token: string;
+  readonly signingSecret?: string;
+  readonly mapping: WebhookMappingEntry[];
+  readonly enabled: boolean;
+  readonly autoRun?: boolean;
+  readonly mode?: "create" | "upsert";
+  readonly upsertKey?: Id<"columns"> | null;
+  readonly createdAt: number;
+  readonly lastReceivedAt?: number | null;
+  readonly receivedCount?: number;
+}
+
+/**
+ * Reactive list of a table's webhooks (newest first). `skip`ped when cloud is
+ * off or no table is selected, so a local-only / signed-out app issues zero
+ * webhook queries. Mirrors {@link useCloudTables}.
+ */
+export function useWebhooks(
+  tableId: Id<"tables"> | null,
+): CloudWebhook[] | undefined {
+  return useQuery(
+    api.webhooks.listWebhooks,
+    cloudEnabled && tableId !== null ? { tableId } : "skip",
+  ) as CloudWebhook[] | undefined;
+}
+
+/**
+ * Mutation wrappers for the webhook config panel — create, enable/disable,
+ * rotate secrets, edit the field mapping, and patch receive behaviour. Each
+ * calls the member-gated Convex mutation directly so the change is reflected
+ * live in every member's {@link useWebhooks} subscription. Mirrors
+ * {@link useCloudGridMutations}.
+ */
+export function useWebhookMutations() {
+  const createMut = useMutation(api.webhooks.createWebhook);
+  const updateMappingMut = useMutation(api.webhooks.updateWebhookMapping);
+  const updateConfigMut = useMutation(api.webhooks.updateWebhookConfig);
+  const toggleEnabledMut = useMutation(api.webhooks.toggleEnabled);
+  const rotateSecretMut = useMutation(api.webhooks.rotateSecret);
+  const deleteWebhookMut = useMutation(api.webhooks.deleteWebhook);
+
+  const createWebhook = useCallback(
+    (tableId: Id<"tables">, name?: string) =>
+      createMut({ tableId, ...(name !== undefined ? { name } : {}) }),
+    [createMut],
+  );
+  const updateMapping = useCallback(
+    (webhookId: Id<"webhooks">, mapping: WebhookMappingEntry[]) =>
+      updateMappingMut({ webhookId, mapping }),
+    [updateMappingMut],
+  );
+  const updateConfig = useCallback(
+    (
+      webhookId: Id<"webhooks">,
+      patch: {
+        autoRun?: boolean;
+        mode?: "create" | "upsert";
+        upsertKey?: Id<"columns"> | null;
+      },
+    ) => updateConfigMut({ webhookId, ...patch }),
+    [updateConfigMut],
+  );
+  const toggleEnabled = useCallback(
+    (webhookId: Id<"webhooks">, enabled: boolean) =>
+      toggleEnabledMut({ webhookId, enabled }),
+    [toggleEnabledMut],
+  );
+  const rotateSecret = useCallback(
+    (webhookId: Id<"webhooks">) => rotateSecretMut({ webhookId }),
+    [rotateSecretMut],
+  );
+  const deleteWebhook = useCallback(
+    (webhookId: Id<"webhooks">) => deleteWebhookMut({ webhookId }),
+    [deleteWebhookMut],
+  );
+
+  return {
+    createWebhook,
+    updateMapping,
+    updateConfig,
+    toggleEnabled,
+    rotateSecret,
+    deleteWebhook,
+  };
+}

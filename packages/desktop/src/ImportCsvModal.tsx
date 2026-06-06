@@ -515,7 +515,9 @@ function PreviewGrid({
 }
 
 // ── Full-screen shell (header / body / footer) ──────────────────────────────
-function Shell({
+// Exported so the cloud Webhook setup form (cloud/WebhookModal.tsx) shares the
+// exact same full-screen surface as the CSV import flow.
+export function Shell({
   children,
   topRight,
   footer,
