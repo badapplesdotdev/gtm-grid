@@ -23,6 +23,7 @@
 import {
   AutumnClient,
   AutumnError,
+  CLOUD_ACTIONS_FEATURE_ID,
   MissingSecretError,
   requireSecret,
   type SeatCheck,
@@ -39,7 +40,7 @@ import { Cause, Effect, Exit, Layer, Option } from "effect";
  * `ConvexError` (not a raw crash) when the secret is missing so the failure is
  * legible at the Convex boundary.
  */
-function autumnSdk(): Autumn {
+export function autumnSdk(): Autumn {
   try {
     // Presence check lives in the pure, unit-tested `requireSecret`
     // (@gtmgrid/cloud); a missing key fails closed before the SDK is built.
@@ -64,7 +65,9 @@ function autumnSdk(): Autumn {
  *   - `attach`     → `client.billing.attach({ planId })` → `paymentUrl`,
  *   - `trackSeats` → `client.track({ featureId: "seats", value })`.
  */
-const autumnClientLayer = (client: Autumn): Layer.Layer<AutumnClient> =>
+export const autumnClientLayer = (
+  client: Autumn,
+): Layer.Layer<AutumnClient> =>
   Layer.succeed(AutumnClient, {
     checkSeats: ({ customerId, requiredBalance }) =>
       Effect.tryPromise({
@@ -109,6 +112,38 @@ const autumnClientLayer = (client: Autumn): Layer.Layer<AutumnClient> =>
         },
         catch: (cause) =>
           new AutumnError({ message: autumnMessage(cause, "track"), cause }),
+      }),
+    // Generic metered-usage track for the cloud-actions meter (C26): flushes a
+    // workspace's pending count under an arbitrary featureId.
+    trackUsage: ({ customerId, featureId, value }) =>
+      Effect.tryPromise({
+        try: async () => {
+          await client.track({ customerId, featureId, value });
+        },
+        catch: (cause) =>
+          new AutumnError({ message: autumnMessage(cause, "track"), cause }),
+      }),
+    // Read a metered feature's live usage/limit without consuming any, so the
+    // flush ACTION can snapshot `cloud_actions` for the `me` query (no HTTP from
+    // the query itself). `granted` is the plan cap; `unlimited` maps `limit` to
+    // null; `usage` is consumed units. A missing balance reads as 0 used.
+    checkUsage: ({ customerId, featureId }) =>
+      Effect.tryPromise({
+        try: async () => {
+          const res = await client.check({ customerId, featureId });
+          const bal = res.balance;
+          if (bal === null) {
+            return { used: 0, limit: null };
+          }
+          const used = typeof bal.usage === "number" ? bal.usage : 0;
+          const limit =
+            bal.unlimited === true || typeof bal.granted !== "number"
+              ? null
+              : bal.granted;
+          return { used, limit };
+        },
+        catch: (cause) =>
+          new AutumnError({ message: autumnMessage(cause, "check"), cause }),
       }),
   });
 
@@ -195,6 +230,10 @@ const pureSeatsLayer: Layer.Layer<SeatsService> = SeatsService.Default.pipe(
         Effect.die("AutumnClient.attach must not be called in a mutation"),
       trackSeats: () =>
         Effect.die("AutumnClient.trackSeats must not be called in a mutation"),
+      trackUsage: () =>
+        Effect.die("AutumnClient.trackUsage must not be called in a mutation"),
+      checkUsage: () =>
+        Effect.die("AutumnClient.checkUsage must not be called in a mutation"),
     }),
   ),
 );

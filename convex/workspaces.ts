@@ -83,7 +83,23 @@ export const me = query({
           used: memberCounts[i] ?? 0,
           limit: null,
         };
-        return { _id: ws._id, name: ws.name, role: m.role, seatUsage };
+        // CLOUD-actions usage (C26): the last snapshot the scheduled flush
+        // (convex/usage.ts) stored on the workspace, so the account bar can show
+        // "cloud actions used / limit" with NO outbound HTTP from this query.
+        // `used` is 0 and `limit` is null until the first flush runs. This counts
+        // CLOUD operations ONLY — LOCAL projects never increment it (they never
+        // call a Convex mutation), so local stays unlimited and unmetered.
+        const cloudActions: { used: number; limit: number | null } = {
+          used: ws.cloudActionsUsed ?? 0,
+          limit: ws.cloudActionsLimit ?? null,
+        };
+        return {
+          _id: ws._id,
+          name: ws.name,
+          role: m.role,
+          seatUsage,
+          cloudActions,
+        };
       })
       .filter((w) => w !== null);
 

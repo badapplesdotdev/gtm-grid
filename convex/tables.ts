@@ -24,6 +24,7 @@ import {
   deleteRowCascade,
   deleteTableCascade,
 } from "./model/grid.js";
+import { meterCloudAction } from "./model/meter.js";
 import { columnKind, columnType } from "./schema.js";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, type QueryCtx, query } from "./_generated/server.js";
@@ -119,6 +120,9 @@ export const createTable = mutation({
       .withIndex("by_project", (q) => q.eq("projectId", projectId))
       .collect();
 
+    // Billable CLOUD action (cloud-actions meter; LOCAL is never metered).
+    await meterCloudAction(ctx, project.workspaceId);
+
     return await ctx.db.insert("tables", {
       workspaceId: project.workspaceId,
       projectId,
@@ -150,6 +154,9 @@ export const addColumn = mutation({
       .withIndex("by_table", (q) => q.eq("tableId", args.tableId))
       .collect();
 
+    // Billable CLOUD action (cloud-actions meter; LOCAL is never metered).
+    await meterCloudAction(ctx, table.workspaceId);
+
     return await ctx.db.insert("columns", {
       workspaceId: table.workspaceId,
       tableId: args.tableId,
@@ -178,6 +185,9 @@ export const addRow = mutation({
       .withIndex("by_table", (q) => q.eq("tableId", tableId))
       .collect();
 
+    // Billable CLOUD action (cloud-actions meter; LOCAL is never metered).
+    await meterCloudAction(ctx, table.workspaceId);
+
     return await ctx.db.insert("rows", {
       workspaceId: table.workspaceId,
       tableId,
@@ -193,6 +203,8 @@ export const deleteTable = mutation({
   handler: async (ctx, { tableId }) => {
     const table = await getOrThrow(ctx, "tables", tableId);
     await requireMember(ctx, table.workspaceId);
+    // Billable CLOUD action (cloud-actions meter; LOCAL is never metered).
+    await meterCloudAction(ctx, table.workspaceId);
     await deleteTableCascade(ctx, tableId);
   },
 });
@@ -203,6 +215,8 @@ export const deleteColumn = mutation({
   handler: async (ctx, { columnId }) => {
     const column = await getOrThrow(ctx, "columns", columnId);
     await requireMember(ctx, column.workspaceId);
+    // Billable CLOUD action (cloud-actions meter; LOCAL is never metered).
+    await meterCloudAction(ctx, column.workspaceId);
     await deleteColumnCascade(ctx, column);
   },
 });
@@ -213,6 +227,8 @@ export const deleteRow = mutation({
   handler: async (ctx, { rowId }) => {
     const row = await getOrThrow(ctx, "rows", rowId);
     await requireMember(ctx, row.workspaceId);
+    // Billable CLOUD action (cloud-actions meter; LOCAL is never metered).
+    await meterCloudAction(ctx, row.workspaceId);
     await deleteRowCascade(ctx, rowId);
   },
 });

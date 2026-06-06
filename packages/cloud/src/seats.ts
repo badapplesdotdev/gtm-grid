@@ -125,6 +125,42 @@ export class AutumnClient extends Context.Tag("CloudAutumnClient")<
       readonly customerId: string;
       readonly value: number;
     }) => Effect.Effect<void, AutumnError>;
+
+    /**
+     * Record consumption of `value` units of an arbitrary metered feature for
+     * `customerId`. Generalises {@link trackSeats} so the cloud-actions meter
+     * (C26) can batch-flush its pending count to Autumn under
+     * `featureId: "cloud_actions"`. Maps to Autumn
+     * `track({ customerId, featureId, value })`.
+     *
+     * Used by the scheduled flush ACTION (NEVER a mutation — mutations can make
+     * no outbound HTTP), so a transport failure surfaces as the typed
+     * {@link AutumnError} and the caller can keep the pending count for retry.
+     */
+    readonly trackUsage: (args: {
+      readonly customerId: string;
+      readonly featureId: string;
+      readonly value: number;
+    }) => Effect.Effect<void, AutumnError>;
+
+    /**
+     * Read the current usage/limit of a metered feature for `customerId` without
+     * consuming any. Lets the cloud-actions flush ACTION snapshot the live
+     * `cloud_actions` balance so the `me` query can surface `{ used, limit }`
+     * with NO outbound HTTP of its own. Maps to Autumn
+     * `check({ customerId, featureId })` → its `balance` (usage / granted /
+     * unlimited).
+     *
+     * `limit` is `null` for an unlimited plan (or when Autumn reports no balance
+     * for the feature). `used` defaults to 0 when no balance exists yet.
+     */
+    readonly checkUsage: (args: {
+      readonly customerId: string;
+      readonly featureId: string;
+    }) => Effect.Effect<
+      { readonly used: number; readonly limit: number | null },
+      AutumnError
+    >;
   }
 >() {}
 

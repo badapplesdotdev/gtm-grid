@@ -168,6 +168,19 @@ function fullTable(tableId: string) {
 }
 
 // --- routes ---
+//
+// METERING (C26): these are the LOCAL sidecar routes — `/api/cells`,
+// `/api/columns/:id/run`, `/api/tables/:id/rows`, etc. They operate on the local
+// SQLite project (`current.projectDb` / `current.engine`) entirely on the user's
+// machine and NEVER touch Convex or our cost. They are INTENTIONALLY UNMETERED:
+// local actions are unlimited and unmetered on EVERY tier (free included) and
+// MUST NEVER increment the cloud_actions meter. The meter lives ONLY inside the
+// Convex CLOUD mutations (convex/cells.ts, convex/tables.ts), which local
+// projects never call — do NOT add any cloud_actions counting here or in the
+// local engine. The ONE exception below (`/api/cloud/columns/run`) drives a
+// CLOUD project: it writes via the Convex setCell/setCellStatus mutations, which
+// do the metering once on the Convex side — so it stays unmetered HERE too (no
+// double-count, and the sidecar holds no Autumn secret).
 route("GET", "/api/health", () => ({ ok: true, project: current.name }));
 
 // --- projects ---

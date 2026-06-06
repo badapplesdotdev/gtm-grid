@@ -49,6 +49,13 @@ export {
 } from "./seats.js";
 
 export {
+  CLOUD_ACTIONS_FEATURE_ID,
+  CloudActionsService,
+  type FlushResult,
+  type PendingWorkspace,
+} from "./cloud-actions.js";
+
+export {
   type FakeAutumnConfig,
   failingAutumnLayer,
   fakeAutumnLayer,
