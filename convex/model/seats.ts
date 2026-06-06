@@ -72,6 +72,9 @@ export const autumnClientLayer = (
     checkSeats: ({ customerId, requiredBalance }) =>
       Effect.tryPromise({
         try: async () => {
+          // Idempotent get-or-create so a brand-new workspace exists as an
+          // Autumn customer before its first check (keyed on our external id).
+          await client.customers.getOrCreate({ customerId });
           const res = await client.check({
             customerId,
             featureId: SEATS_FEATURE_ID,
@@ -95,6 +98,10 @@ export const autumnClientLayer = (
     attach: ({ customerId, planId }) =>
       Effect.tryPromise({
         try: async () => {
+          // Autumn `attach` does not auto-create the customer, and a workspace
+          // that skipped the seat check/track (e.g. skipped invite) won't exist
+          // as an Autumn customer yet. Idempotent get-or-create first.
+          await client.customers.getOrCreate({ customerId });
           const res = await client.billing.attach({ customerId, planId });
           return { checkoutUrl: res.paymentUrl ?? null };
         },
