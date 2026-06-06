@@ -708,7 +708,8 @@
   height: 460px;
   top: -120px;
   right: -120px;
-  background: radial-gradient(circle, rgba(230, 0, 6, 0.2), transparent 65%);
+  /* Follow the app accent (green by default) instead of a hardcoded red glow. */
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 20%, transparent), transparent 65%);
   pointer-events: none;
 }
 .ob-pp-quote {
