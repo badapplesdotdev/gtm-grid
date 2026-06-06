@@ -13,6 +13,9 @@
   "dependencies": {
     "@convex-dev/auth": "^0.0.87",
     "@gtmgrid/cloud": "workspace:*",
+    "@tauri-apps/api": "^2.1.1",
+    "@tauri-apps/plugin-deep-link": "^2.2.0",
+    "@tauri-apps/plugin-opener": "^2.2.6",
     "convex": "^1.40.0",
     "effect": "^3.21.3",
     "react": "^18.3.1",

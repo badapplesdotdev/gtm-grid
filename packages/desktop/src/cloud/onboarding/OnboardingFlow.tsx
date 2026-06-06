@@ -202,13 +202,16 @@ function StepRail({ step }: { step: 1 | 2 | 3 | 4 }) {
 }
 
 /**
- * OAuth row (C17) — one ENABLED button per provider configured on the backend,
- * using the standard Convex Auth web redirect flow. Renders nothing (so the
- * caller can also hide the "or with email" divider) when no provider is enabled,
- * keeping the screen clean before any OAuth app is configured.
+ * OAuth row (C17 / C29) — one ENABLED button per provider configured on the
+ * backend. Renders nothing (so the caller can also hide the "or with email"
+ * divider) when no provider is enabled, keeping the screen clean before any
+ * OAuth app is configured.
  *
- * NOTE: this is the web/browser redirect path. The native Tauri deep-link
- * callback for the packaged app is the remaining follow-up (task #17).
+ * `signInWithProvider` picks the flow by runtime: the standard Convex Auth web
+ * redirect on the web build, or the native Tauri deep-link flow (system browser
+ * → `gtmgrid://auth/callback`) in the packaged app (C29). Either way, completion
+ * happens out-of-band (a redirect or a deep link), so there is no inline success
+ * path here.
  */
 function OAuthRow(props: {
   verb: string;
@@ -225,8 +228,9 @@ function OAuthRow(props: {
     if (busy !== null) return;
     setBusy(provider);
     try {
-      // Redirects away to the provider and returns via the Convex callback, so
-      // there is no inline success path to handle here.
+      // Web: navigates away to the provider and returns via the Convex callback.
+      // Desktop (C29): opens the provider in the system browser and completes
+      // when the deep-link callback returns. No inline success path either way.
       await signInWithProvider(provider);
     } catch (e) {
       onError(e instanceof Error ? e.message : "OAuth sign-in failed.");

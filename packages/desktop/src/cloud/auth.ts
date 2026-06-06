@@ -14,8 +14,10 @@
  * (booleans only) so the UI shows a button per enabled provider and hides the
  * whole OAuth row when none are enabled.
  *
- * NOTE: the native Tauri deep-link callback for the PACKAGED app is a separate
- * follow-up (task #17). This lane wires only the web/browser redirect flow.
+ * The PACKAGED desktop app additionally supports the native Tauri deep-link
+ * OAuth flow (C29): `signInWithProvider` opens the provider in the system
+ * browser and the session is completed from the `gtmgrid://auth/callback` deep
+ * link. The runtime branch is selected by `isTauri()` (see ./desktop-oauth.ts).
  *
  * The local-only app is untouched: every hook degrades to a signed-out / null
  * shape when no Convex deployment is configured, and nothing here runs unless
@@ -28,6 +30,7 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { cloudEnabled } from "./convex";
+import { chooseOAuthFlow, isTauri, startDesktopOAuth } from "./desktop-oauth";
 
 // ─── Shared types (mirror the `me` query in convex/workspaces.ts) ───────────
 
@@ -331,19 +334,31 @@ export function useAccountActions() {
   );
 
   /**
-   * OAuth sign-in via the STANDARD Convex Auth web redirect (C17). Calling
-   * `signIn(provider)` redirects the browser to the provider, then back to the
-   * Convex callback (`<SITE>/api/auth/callback/<provider>`), then back to the
-   * app at `SITE_URL`. This is the web/browser path and needs no Tauri
-   * deep-link.
+   * OAuth sign-in, branching on the runtime (C29):
    *
-   * NOTE: the native deep-link callback for the PACKAGED Tauri app is a separate
-   * follow-up (task #17). Once that lands, this same call works under the custom
-   * URL scheme; no change is needed here.
+   *   - WEB build → the STANDARD Convex Auth web redirect (C17): `signIn(provider)`
+   *     navigates the browser to the provider, back to the Convex callback
+   *     (`<SITE>/api/auth/callback/<provider>`), then back to the app at
+   *     `SITE_URL`. The provider's `shouldHandleCode` auto-reads the returned
+   *     `code` from the URL.
+   *
+   *   - PACKAGED TAURI app → the native deep-link flow: ask Convex Auth for the
+   *     provider redirect URL (`redirectTo: gtmgrid://auth/callback`), open it in
+   *     the SYSTEM browser, and let {@link useDeepLinkOAuth} complete the session
+   *     when the `gtmgrid://auth/callback?code=…` deep link returns.
+   *
+   * The single {@link isTauri} helper selects the branch, so the web flow is
+   * unchanged. The opener plugin is imported lazily (Tauri-only) so the web
+   * bundle never loads it.
    */
   const signInWithProvider = useCallback(
     async (provider: OAuthProvider): Promise<void> => {
-      await signIn(provider);
+      if (chooseOAuthFlow(isTauri()) === "web") {
+        await signIn(provider);
+        return;
+      }
+      const { openUrl } = await import("@tauri-apps/plugin-opener");
+      await startDesktopOAuth(provider, signIn, openUrl);
     },
     [signIn],
   );

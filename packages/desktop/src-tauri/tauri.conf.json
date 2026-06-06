@@ -23,6 +23,13 @@
     ],
     "security": { "csp": null }
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["gtmgrid"]
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["dmg", "app"],
