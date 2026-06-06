@@ -18,8 +18,10 @@
  * shown so local-only usage is unchanged.
  */
 
-import { useCallback, useState } from "react";
-import { useMutation } from "convex/react";
+import { useCallback, useMemo, useState } from "react";
+import { useAction, useMutation } from "convex/react";
+import { Effect, Layer } from "effect";
+import { type BillingCycle, resolvePlanId } from "@gtmgrid/cloud";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { cloudEnabled } from "./convex";
@@ -33,6 +35,17 @@ import {
   type WorkspaceSummary,
 } from "./auth";
 import { GitHub, Google } from "./onboarding/icons";
+import { PlanGrid, BillingToggle } from "./onboarding/PlanGrid";
+import type { SelectablePlan } from "./onboarding/flow-logic";
+import { UrlOpenerLive } from "./invite";
+import {
+  CheckoutError,
+  CheckoutRunner,
+  CheckoutService,
+  CheckoutServiceLive,
+  runCheckout,
+  type CheckoutActionResult,
+} from "./checkout";
 
 type HealthStatus = "loading" | "connected" | "offline";
 
@@ -71,6 +84,12 @@ interface AccountBarProps {
   projectName: string;
   healthStatus: HealthStatus;
   currentProjectPath: string | null;
+  /** Whether the app is currently viewing a CLOUD project (vs. local). */
+  inCloud?: boolean;
+  /** The open cloud project's name (shown as the selected Environment item). */
+  cloudProjectName?: string | null;
+  /** Switch the app back to LOCAL mode (drop the open cloud project). */
+  onSwitchToLocal?: () => void;
   /** Open the local project switcher (unchanged local behaviour). */
   onSwitchProject: () => void;
   /** Refresh the current local project path when the menu opens. */
@@ -91,9 +110,21 @@ interface AccountBarProps {
  * always; layers cloud auth + workspace switching on top when signed in.
  */
 export function AccountBar(props: AccountBarProps) {
-  const { projectName, healthStatus, currentProjectPath, onSwitchProject, onOpenMenu, theme, onToggleTheme, onStartOnboarding } =
-    props;
+  const {
+    projectName,
+    healthStatus,
+    currentProjectPath,
+    inCloud = false,
+    cloudProjectName = null,
+    onSwitchToLocal,
+    onSwitchProject,
+    onOpenMenu,
+    theme,
+    onToggleTheme,
+    onStartOnboarding,
+  } = props;
   const [open, setOpen] = useState(false);
+  const [showPlan, setShowPlan] = useState(false);
   const me = useMe();
   const { isAuthenticated } = useAuthState();
   const { activeWorkspace, setActiveWorkspaceId } = useActiveWorkspace(me ?? null);
@@ -216,9 +247,13 @@ export function AccountBar(props: AccountBarProps) {
                 <SignInSection onDone={() => setOpen(false)} />
               ))}
 
-            {/* Local project section — always present (local stays unchanged). */}
+            {/* Environment section — which project the app is currently in. When
+                in CLOUD mode the open cloud project is the checked current item
+                and Local is offered as a switchable option; otherwise the local
+                project is current. Local usage (no cloud) is unchanged. */}
             <div className="account-menu-sec">
-              <div className="account-menu-label">Local project</div>
+              <div className="account-menu-label">Environment</div>
+              {/* Current selected environment (checkmark). */}
               <div className="account-menu-current">
                 <svg
                   width="14"
@@ -233,14 +268,44 @@ export function AccountBar(props: AccountBarProps) {
                   <polyline points="20 6 9 17 4 12" />
                 </svg>
                 <div className="account-menu-current-text">
-                  <span className="account-menu-current-name">{projectName}</span>
-                  {currentProjectPath && (
-                    <span className="account-menu-current-path">
-                      {currentProjectPath}
-                    </span>
-                  )}
+                  <span className="account-menu-current-name">
+                    {inCloud ? cloudProjectName ?? "Cloud project" : projectName}
+                  </span>
+                  <span className="account-menu-current-path">
+                    {inCloud
+                      ? "Cloud · live multiplayer"
+                      : currentProjectPath ?? "Local · this device"}
+                  </span>
                 </div>
               </div>
+
+              {/* When in cloud, offer switching back to the LOCAL project. */}
+              {inCloud && onSwitchToLocal && (
+                <button
+                  className="account-menu-item"
+                  onClick={() => {
+                    setOpen(false);
+                    onSwitchToLocal();
+                  }}
+                >
+                  <svg
+                    width="15"
+                    height="15"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                    <line x1="8" y1="21" x2="16" y2="21" />
+                    <line x1="12" y1="17" x2="12" y2="21" />
+                  </svg>
+                  Switch to local · {projectName}
+                </button>
+              )}
+
               <button
                 className="account-menu-item"
                 onClick={() => {
@@ -267,6 +332,37 @@ export function AccountBar(props: AccountBarProps) {
               </button>
             </div>
 
+            {/* Plan & billing — current plan name + cloud-actions usage + an
+                Upgrade/Change plan action (reuses the existing checkout). Cloud,
+                signed-in only. */}
+            {signedIn && activeWorkspace && (
+              <div className="account-menu-sec">
+                <div className="account-menu-label">Plan &amp; billing</div>
+                <button
+                  className="account-menu-item"
+                  onClick={() => {
+                    setOpen(false);
+                    setShowPlan(true);
+                  }}
+                >
+                  <svg
+                    width="15"
+                    height="15"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
+                    <line x1="1" y1="10" x2="23" y2="10" />
+                  </svg>
+                  {planLabel(activeWorkspace)} plan · manage
+                </button>
+              </div>
+            )}
+
             {/* Appearance — dark-mode toggle (the only user-adjustable option). */}
             {onToggleTheme && (
               <div className="account-menu-sec">
@@ -290,6 +386,201 @@ export function AccountBar(props: AccountBarProps) {
             )}
           </div>
         </>
+      )}
+
+      {/* Plan & billing settings panel (cloud, signed-in). Shows the plan name +
+          cloud-actions usage and an Upgrade/Change plan action that opens the
+          existing Autumn checkout. Lives outside the menu so it stays open after
+          the menu closes. */}
+      {showPlan && activeWorkspace && (
+        <PlanBillingModal
+          workspace={activeWorkspace}
+          isAuthenticated={isAuthenticated}
+          onClose={() => setShowPlan(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Plan & billing settings modal: current plan + cloud-actions usage + an
+ * Upgrade/Change plan action. Reuses the existing checkout infrastructure (the
+ * `billing.checkout` action via the Effect `CheckoutService`, opening the Autumn
+ * hosted URL in the system browser) and the shared {@link PlanGrid} card — it
+ * does NOT reimplement billing.
+ */
+function PlanBillingModal(props: {
+  workspace: WorkspaceSummary;
+  isAuthenticated: boolean;
+  onClose: () => void;
+}) {
+  const { workspace, isAuthenticated, onClose } = props;
+
+  const checkoutAction = useAction(api.billing.checkout);
+  const checkoutLayer = useMemo<Layer.Layer<CheckoutService>>(
+    () =>
+      CheckoutServiceLive.pipe(
+        Layer.provide(
+          Layer.succeed(CheckoutRunner, {
+            checkout: (args) =>
+              Effect.tryPromise({
+                try: () =>
+                  checkoutAction({
+                    workspaceId: args.workspaceId as Id<"workspaces">,
+                    planId: args.planId,
+                  }) as Promise<CheckoutActionResult>,
+                catch: (cause) =>
+                  new CheckoutError({
+                    message:
+                      cause instanceof Error ? cause.message : "Checkout failed.",
+                    cause,
+                  }),
+              }),
+          }),
+        ),
+        Layer.provide(UrlOpenerLive),
+      ),
+    [checkoutAction],
+  );
+
+  const [showUpgrade, setShowUpgrade] = useState(false);
+  const [selectedPlan, setSelectedPlan] = useState<SelectablePlan>("business");
+  const [billing, setBilling] = useState<BillingCycle>("monthly");
+  const [upgrading, setUpgrading] = useState(false);
+  const [upgradeError, setUpgradeError] = useState<string | null>(null);
+
+  const startUpgrade = useCallback(async () => {
+    if (upgrading || selectedPlan === "free") return;
+    setUpgrading(true);
+    setUpgradeError(null);
+    try {
+      const planId = resolvePlanId(selectedPlan, billing);
+      await runCheckout(
+        isAuthenticated,
+        { workspaceId: workspace._id, planId },
+        checkoutLayer,
+      );
+    } catch (e) {
+      setUpgradeError(e instanceof Error ? e.message : "Checkout failed.");
+    } finally {
+      setUpgrading(false);
+    }
+  }, [upgrading, selectedPlan, billing, isAuthenticated, workspace._id, checkoutLayer]);
+
+  const { used, limit } = workspace.cloudActions;
+  const usageLabel =
+    limit === null ? `${used}` : `${used} / ${limit}`;
+  const isFree = selectedPlan === "free";
+
+  return (
+    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ width: 460 }}>
+        <div className="modal-header">
+          <span className="modal-title">Plan &amp; billing</span>
+          <button className="modal-close" onClick={onClose} aria-label="Close">
+            ×
+          </button>
+        </div>
+        <div className="modal-body">
+          <div className="form-row">
+            <label className="form-label">Current plan</label>
+            <div className="account-menu-current">
+              <div className="account-menu-current-text">
+                <span className="account-menu-current-name">
+                  {planLabel(workspace)}
+                </span>
+                <span className="account-menu-current-path">
+                  {workspace.name}
+                </span>
+              </div>
+              <span className="free-badge" title={`${planLabel(workspace)} plan`}>
+                {planLabel(workspace).toUpperCase()}
+              </span>
+            </div>
+          </div>
+          <div className="form-row">
+            <label className="form-label">Cloud actions used</label>
+            <div style={{ fontSize: 13, color: "var(--text-2)" }}>
+              <span className="import-mono">{usageLabel}</span>{" "}
+              {limit === null ? "actions" : "actions this period"}
+            </div>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-outline" onClick={onClose}>
+            Close
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => {
+              setUpgradeError(null);
+              setShowUpgrade(true);
+            }}
+          >
+            Upgrade / change plan
+          </button>
+        </div>
+      </div>
+
+      {/* Plan-selection modal — the SHARED PlanGrid + the existing checkout. */}
+      {showUpgrade && (
+        <div
+          className="overlay"
+          onMouseDown={(e) =>
+            e.target === e.currentTarget && setShowUpgrade(false)
+          }
+        >
+          <div className="modal gtm-onboarding-modal" style={{ width: 900, maxWidth: "94vw" }}>
+            <div className="modal-header">
+              <span className="modal-title">Choose a plan</span>
+              <BillingToggle billing={billing} onChange={setBilling} />
+              <button
+                className="modal-close"
+                onClick={() => setShowUpgrade(false)}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <div className="modal-body gtm-onboarding">
+              <p style={{ margin: "0 0 14px", fontSize: 13, color: "var(--text-2)" }}>
+                Per-seat, for your whole team. Checkout opens in your browser;
+                complete it to unlock more cloud actions, multiplayer and sync.
+              </p>
+              <PlanGrid
+                billing={billing}
+                selected={selectedPlan}
+                onSelect={setSelectedPlan}
+              />
+              {upgradeError && (
+                <div className="account-menu-error" role="alert" style={{ marginTop: 12 }}>
+                  {upgradeError}
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button
+                className="btn btn-outline"
+                onClick={() => setShowUpgrade(false)}
+              >
+                Close
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={startUpgrade}
+                disabled={isFree || upgrading}
+                title={isFree ? "Free needs no checkout" : undefined}
+              >
+                {upgrading
+                  ? "Opening checkout…"
+                  : isFree
+                    ? "Free — no checkout"
+                    : "Continue to checkout"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
