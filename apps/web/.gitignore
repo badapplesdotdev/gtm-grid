@@ -1,0 +1,14 @@
+# next.js
+/.next/
+/out/
+
+# build
+/build
+
+# typescript
+next-env.d.ts
+*.tsbuildinfo
+
+# misc
+.DS_Store
+.env*.local
