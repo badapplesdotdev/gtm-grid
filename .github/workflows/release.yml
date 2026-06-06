@@ -4,10 +4,14 @@ name: Release
 # tag v<version>, then build the downloadable cross-platform desktop binaries and
 # attach them to a published GitHub Release.
 #
-# Platforms: macOS arm64 (macos-14) + macOS Intel (macos-13) + Linux (ubuntu).
-# Windows is intentionally NOT built yet — the Rust sidecar spawn (src-tauri) is
-# unix-only (expects a `node` binary + chmod + login shell); Windows needs a
-# `node.exe`-aware spawn path first. Tracked as a follow-up.
+# Platforms: macOS arm64 (macos-14) + Linux (ubuntu).
+# Deferred:
+#   - macOS Intel: GitHub's macos-13 Intel runners are scarce/being deprecated and
+#     queue for a very long time; a universal build would need cross-compiling the
+#     native sidecar (node + better-sqlite3). Revisit via a universal build.
+#   - Windows: the Rust sidecar spawn (src-tauri) is unix-only (expects a `node`
+#     binary + chmod + login shell); Windows needs a `node.exe`-aware spawn path.
+# Both tracked as a follow-up.
 
 on:
   workflow_dispatch:
@@ -81,9 +85,6 @@ jobs:
           - platform: macos-14 # Apple silicon
             rust_target: aarch64-apple-darwin
             args: "--target aarch64-apple-darwin"
-          - platform: macos-13 # Intel
-            rust_target: x86_64-apple-darwin
-            args: "--target x86_64-apple-darwin"
           - platform: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
             args: "--bundles deb,appimage"

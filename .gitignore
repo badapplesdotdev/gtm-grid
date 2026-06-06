@@ -22,3 +22,6 @@ packages/desktop/src-tauri/gen/
 
 # Claude Code session artifacts (skills, plans, workflow worktrees)
 .claude/
+
+# Turborepo cache
+.turbo/
