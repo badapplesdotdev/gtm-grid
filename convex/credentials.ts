@@ -31,7 +31,7 @@ import { decryptSecretsForRun, encryptSecrets } from "./model/crypto.js";
 import { credentialScope } from "./schema.js";
 import { internal } from "./_generated/api.js";
 import type { Id } from "./_generated/dataModel.js";
-import { action } from "./_generated/server.js";
+import { action, internalAction } from "./_generated/server.js";
 
 /**
  * Save (insert or rotate) a workspace/personal connector credential, encrypting
@@ -91,6 +91,41 @@ export const getCredentialForRun = action({
       extensionId,
       scope,
     });
+    if (row === null) return null;
+
+    const secrets = await decryptSecretsForRun(workspaceId, row.secretsEnc);
+    return { secrets };
+  },
+});
+
+/**
+ * Decrypt-for-WORKER: the headless sibling of {@link getCredentialForRun}.
+ *
+ * Returns the PLAINTEXT secret map for a WORKSPACE-scope connector to the
+ * headless webhook worker (apps/inngest), which is already gated upstream by the
+ * WEBHOOK_WORKER_SECRET at the HTTP boundary (convex/http.ts). It is `internal`
+ * (NOT publicly callable) and restricted to SHARED `workspace`-scope rows:
+ * authz + ciphertext fetch run in the internal query
+ * `credentialsData.getCredentialEncForWorker` (which has NO member identity check
+ * but ONLY returns `ownerUserId === null` shared rows), then decryption happens
+ * here in the Node runtime. A worker can therefore never reach a member's
+ * `personal` key. Returns `null` when no shared credential exists.
+ *
+ * `"use node"` (this whole module) because decryption uses `node:crypto`.
+ */
+export const getCredentialForWorker = internalAction({
+  args: {
+    workspaceId: v.id("workspaces"),
+    extensionId: v.string(),
+  },
+  handler: async (
+    ctx,
+    { workspaceId, extensionId },
+  ): Promise<{ secrets: Record<string, string> } | null> => {
+    const row = await ctx.runQuery(
+      internal.credentialsData.getCredentialEncForWorker,
+      { workspaceId, extensionId },
+    );
     if (row === null) return null;
 
     const secrets = await decryptSecretsForRun(workspaceId, row.secretsEnc);

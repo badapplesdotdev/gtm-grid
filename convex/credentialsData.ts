@@ -236,3 +236,37 @@ export const getCredentialEnc = internalQuery({
     return { secretsEnc: cred.secretsEnc };
   },
 });
+
+/**
+ * Fetch a WORKSPACE-scoped credential's ciphertext for the headless webhook
+ * worker. Internal: only the `getCredentialForWorker` action (convex/
+ * webhooks.ts) calls this, then decrypts in the Node runtime.
+ *
+ * Unlike {@link getCredentialEnc}, this performs NO `requireMember` /
+ * `requireCurrentUserId` — the worker is an unauthenticated headless caller
+ * already gated by the WEBHOOK_WORKER_SECRET at the HTTP boundary. It is
+ * therefore deliberately restricted to SHARED `workspace`-scope rows
+ * (`ownerUserId === null`): a headless worker has no member identity and must
+ * never reach a member's `personal` key. Returns `null` when no shared
+ * credential exists for the connector.
+ */
+export const getCredentialEncForWorker = internalQuery({
+  args: {
+    workspaceId: v.id("workspaces"),
+    extensionId: v.string(),
+  },
+  handler: async (ctx, { workspaceId, extensionId }) => {
+    const cred = await ctx.db
+      .query("credentials")
+      .withIndex("by_workspace_extension_owner", (q) =>
+        q
+          .eq("workspaceId", workspaceId)
+          .eq("extensionId", extensionId)
+          .eq("scope", "workspace")
+          .eq("ownerUserId", null),
+      )
+      .unique();
+    if (cred === null) return null;
+    return { secretsEnc: cred.secretsEnc };
+  },
+});
