@@ -60,6 +60,9 @@ importers:
       '@gtmgrid/engine':
         specifier: workspace:*
         version: link:../../packages/engine
+      '@jitl/quickjs-wasmfile-release-asyncify':
+        specifier: ^0.31.0
+        version: 0.31.0
       effect:
         specifier: ^3.21.3
         version: 3.21.3
@@ -69,6 +72,12 @@ importers:
       next:
         specifier: ^15.5.4
         version: 15.5.19(@opentelemetry/api@1.9.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      quickjs-emscripten:
+        specifier: ^0.31.0
+        version: 0.31.0
+      quickjs-emscripten-core:
+        specifier: ^0.31.0
+        version: 0.31.0
       react:
         specifier: ^19.1.0
         version: 19.2.7

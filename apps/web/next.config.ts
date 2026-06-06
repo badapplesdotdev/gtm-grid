@@ -23,6 +23,19 @@ const monorepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", ".."
  */
 const nextConfig: NextConfig = {
   outputFileTracingRoot: monorepoRoot,
+  // The QuickJS WASM variant is loaded by quickjs-emscripten-core via a DYNAMIC
+  // import, so Next's static file tracer never sees it and it (plus its .wasm) is
+  // missing from the deployed function. Force-include the variant + ffi-types for
+  // the API routes that run the engine. Paths are relative to this app dir; the
+  // pnpm store lives at the monorepo root.
+  outputFileTracingIncludes: {
+    "/api/**": [
+      "../../node_modules/.pnpm/@jitl+quickjs-wasmfile-release-asyncify@*/node_modules/@jitl/quickjs-wasmfile-release-asyncify/**",
+      "../../node_modules/.pnpm/@jitl+quickjs-ffi-types@*/node_modules/@jitl/quickjs-ffi-types/**",
+      "../../node_modules/.pnpm/quickjs-emscripten-core@*/node_modules/quickjs-emscripten-core/**",
+      "../../node_modules/.pnpm/quickjs-emscripten@*/node_modules/quickjs-emscripten/**",
+    ],
+  },
   transpilePackages: ["@gtmgrid/engine", "@gtmgrid/cloud"],
   // quickjs-emscripten loads a WASM *variant* at runtime (quickjs-emscripten-core
   // + @jitl/quickjs-wasmfile-release-asyncify) whose Emscripten-generated glue
