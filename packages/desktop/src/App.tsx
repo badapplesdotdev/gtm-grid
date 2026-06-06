@@ -1268,6 +1268,13 @@ export default function App() {
                 <span className="sidebar-item-name">{t.name}</span>
                 {t.favorite && <span className="sidebar-item-star"><Icon.Star filled /></span>}
                 <button
+                  className="sidebar-item-del"
+                  title="Delete table"
+                  onClick={e => { e.stopPropagation(); setConfirmDeleteTable(t); }}
+                >
+                  <Icon.Trash />
+                </button>
+                <button
                   className="sidebar-item-more"
                   title="Table options"
                   onClick={e => { e.stopPropagation(); openCtx(e, tableMenuItems(t)); }}
