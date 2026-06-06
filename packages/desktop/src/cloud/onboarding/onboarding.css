@@ -1033,12 +1033,20 @@
   padding: 22px max(40px, calc((100% - 1080px) / 2)) 18px;
 }
 .ob-form-card.bleed {
-  max-width: 1080px;
+  max-width: 1120px;
   width: 100%;
   margin: 0 auto;
 }
+/* The plan/checkout is a wizard step but must go WIDE — override the 420px
+   wizard card cap so the 4 plan cards get real width (else they cram + wrap). */
+.ob-flow-shell.wizard .ob-form-card.bleed {
+  max-width: 1120px;
+}
+.ob-form-body.bleed {
+  padding: 22px max(32px, calc((100% - 1120px) / 2)) 18px;
+}
 .ob-form-footer.bleed {
-  padding: 14px max(40px, calc((100% - 1080px) / 2));
+  padding: 14px max(32px, calc((100% - 1120px) / 2));
 }
 .ob-plan-head {
   display: flex;
@@ -1095,7 +1103,8 @@
 .ob-plan-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 13px;
+  gap: 16px;
+  align-items: stretch;
 }
 .ob-plan-card {
   position: relative;

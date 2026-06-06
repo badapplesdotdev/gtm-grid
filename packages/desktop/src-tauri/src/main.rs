@@ -8,9 +8,23 @@
 use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+use tauri_plugin_deep_link::DeepLinkExt;
 
 struct Sidecar(Mutex<Option<Child>>);
+
+/// Tauri event the webview listens for to complete the desktop OAuth flow: the
+/// payload is the incoming `gtmgrid://auth/callback?code=…` URL string. Emitted
+/// both for cold-start (the URL that launched the app) and warm deep links.
+const OAUTH_CALLBACK_EVENT: &str = "oauth-callback";
+
+/// Forward an incoming deep-link URL to the webview so the JS listener can pull
+/// the `code` out and call `signIn({ code })` to finish the session.
+fn emit_oauth_callback(app: &tauri::AppHandle, url: &str) {
+    if let Err(e) = app.emit(OAUTH_CALLBACK_EVENT, url.to_string()) {
+        eprintln!("gtmgrid: failed to emit {OAUTH_CALLBACK_EVENT}: {e}");
+    }
+}
 
 /// Locate the bundled sidecar dir: the source tree in dev, app resources when packaged.
 fn sidecar_dir(app: &tauri::App) -> Option<PathBuf> {
@@ -81,9 +95,42 @@ fn spawn_sidecar(app: &tauri::App) -> Option<Child> {
 
 fn main() {
     tauri::Builder::default()
+        // single-instance MUST be registered BEFORE the deep-link plugin on
+        // desktop: a second launch (the OS handing us a `gtmgrid://` URL) is
+        // routed into the already-running instance, whose handler forwards the
+        // deep-link argv to the webview instead of opening a new window.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            for arg in argv.iter().skip(1) {
+                if arg.starts_with("gtmgrid://") {
+                    emit_oauth_callback(app, arg);
+                }
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
+        // System-browser opener: the desktop OAuth flow opens the provider
+        // authorise URL here (not inside the webview).
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let child = spawn_sidecar(app);
             app.manage(Sidecar(Mutex::new(child)));
+
+            // Warm deep links (app already running): emit each incoming URL to
+            // the webview so the OAuth listener can complete the session.
+            let handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                for url in event.urls() {
+                    emit_oauth_callback(&handle, url.as_str());
+                }
+            });
+
+            // Cold start: if the app was launched BY a `gtmgrid://` deep link,
+            // replay it once the webview is ready to receive the event.
+            if let Ok(Some(urls)) = app.deep_link().get_current() {
+                let handle = app.handle().clone();
+                for url in urls {
+                    emit_oauth_callback(&handle, url.as_str());
+                }
+            }
             Ok(())
         })
         .on_window_event(|window, event| {

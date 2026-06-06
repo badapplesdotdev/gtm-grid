@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, type CSSProperties } from "react";
+import { useState, useEffect, useCallback, useRef, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo } from "./api";
 import AgentPanel from "./AgentPanel";
 import { LogoMark } from "./Logo";
@@ -6,7 +6,7 @@ import CellDetails, { extractCode } from "./CellDetails";
 import { ExtensionPanel, AiProviderPanel, ExtensionsBrowse, BrandIcon } from "./Panels";
 import { AddColumnPopover, FunctionsModal } from "./AddColumn";
 import { ProjectSwitcher } from "./ProjectSwitcher";
-import { AccountBar, PlanBadge } from "./cloud/AccountBar";
+import { AccountBar } from "./cloud/AccountBar";
 import { WorkspaceSettings } from "./cloud/WorkspaceSettings";
 import { OnboardingFlow } from "./cloud/onboarding/OnboardingFlow";
 import { cloudEnabled } from "./cloud/convex";
@@ -398,13 +398,37 @@ export default function App() {
   const [showProjects, setShowProjects] = useState(false);
   const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
   const [currentProjectPath, setCurrentProjectPath] = useState<string | null>(null);
+  // Resizable sidebar — width persisted to localStorage, clamped to a sane range.
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const v = Number(localStorage.getItem("gtmgrid:sidebarW"));
+    return v >= 200 && v <= 480 ? v : 240;
+  });
+  const startSidebarResize = (e: ReactMouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sidebarWidth;
+    document.body.style.cursor = "col-resize";
+    const onMove = (ev: MouseEvent) =>
+      setSidebarWidth(Math.min(480, Math.max(200, startW + ev.clientX - startX)));
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      setSidebarWidth((w) => {
+        try { localStorage.setItem("gtmgrid:sidebarW", String(w)); } catch { /* ignore */ }
+        return w;
+      });
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  };
 
   // ── Cloud project mode (multiplayer via Convex) ──────────────
   // A cloud project is selected from the switcher; while one is active the main
   // area renders the live CloudGrid instead of the local sidecar grid. Local
   // state above is left intact so switching back is instant and unchanged.
   const me = useMe();
-  const { isAuthenticated } = useAuthState();
+  const { isAuthenticated, isLoading: authLoading } = useAuthState();
   const { activeWorkspace, setActiveWorkspaceId } = useActiveWorkspace(me ?? null);
 
   // ── Cloud onboarding flow (C28) ──────────────────────────────
@@ -902,42 +926,57 @@ export default function App() {
 
   const fnColCount = tableData?.columns.filter(c => c.kind === "function").length ?? 0;
 
-  return (
-    <div className="app-shell">
-      {/* ── Top bar (project switcher) ──── */}
-      <header className="topbar">
-        <LogoMark size={22} />
-        <button className="topbar-project" onClick={() => setShowProjects(true)} title="Switch project">
-          <span className="topbar-project-name">{inCloud ? cloudProject!.name : projectName}</span>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
-        </button>
-        {inCloud ? (
-          <button className="free-badge" onClick={exitCloud} title="Back to local project">
-            CLOUD · exit
-          </button>
-        ) : (
-          <PlanBadge />
-        )}
-        {/* Workspace members / seats — only when signed into a workspace. */}
-        {activeWorkspace && (
-          <button
-            className="topbar-project"
-            onClick={() => setShowWorkspaceSettings(true)}
-            title="Workspace members & seats"
-          >
-            Members
-          </button>
-        )}
-      </header>
+  // ── Forced auth gate (pro build only) ────────────────────────
+  // In the commercial build (cloudEnabled), an account is REQUIRED to use the
+  // app at all — even local/solo. We block the entire shell behind sign-in until
+  // authenticated; the gate lifts automatically when `isAuthenticated` flips.
+  // OSS builds never set cloudEnabled, so this is a no-op there (local-first,
+  // no account needed).
+  if (cloudEnabled && authLoading) {
+    return (
+      <div className="app-shell auth-gate-splash">
+        <div className="auth-gate-spinner" aria-label="Loading" />
+      </div>
+    );
+  }
+  if (cloudEnabled && !isAuthenticated) {
+    return (
+      <OnboardingFlow
+        forced
+        initialScreen="signin"
+        hasSession={false}
+        onClose={() => {}}
+        onDone={() => {}}
+      />
+    );
+  }
 
+  return (
+    <div className="app-shell" style={{ ["--sidebar-w"]: `${sidebarWidth}px` } as CSSProperties}>
       <div className="app">
       {/* ── Sidebar ─────────────────────── */}
       <aside className="sidebar">
+        {/* Header — brand + project/workspace dropdown + plan badge (replaces the
+            old separate top bar). Same height as the main toolbar so the top
+            divider line is continuous across panes. */}
         <div className="sidebar-header">
-          <LogoMark size={26} />
-          <div className="sidebar-brand">
+          <LogoMark size={22} />
+          <button className="sidebar-proj" onClick={() => setShowProjects(true)} title="Switch project / workspace">
             <span className="brand-name">gtm grid</span>
-          </div>
+            <span className="sidebar-project">
+              {inCloud ? cloudProject!.name : projectName}
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+            </span>
+          </button>
+          <span className="sidebar-head-spacer" />
+          {inCloud && (
+            <button className="free-badge" onClick={exitCloud} title="Back to local project">CLOUD · exit</button>
+          )}
+          {activeWorkspace && (
+            <button className="sidebar-members" onClick={() => setShowWorkspaceSettings(true)} title="Workspace members & seats">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            </button>
+          )}
         </div>
 
         <div className="sidebar-scroll">
@@ -1172,6 +1211,8 @@ export default function App() {
               : undefined
           }
         />
+        {/* Drag handle on the right edge — resize the sidebar width. */}
+        <div className="sidebar-resize" onMouseDown={startSidebarResize} title="Drag to resize sidebar" />
       </aside>
 
       {/* ── Main area ───────────────────── */}

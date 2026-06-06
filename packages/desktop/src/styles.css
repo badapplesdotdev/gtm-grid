@@ -139,6 +139,7 @@ html, body, #root {
 /* ── Sidebar ──────────────────────────────── */
 
 .sidebar {
+  position: relative;
   width: var(--sidebar-w);
   min-width: var(--sidebar-w);
   background: var(--surface);
@@ -148,18 +149,41 @@ html, body, #root {
   overflow: hidden;
   z-index: 10;
 }
+/* Right-edge drag handle to resize the sidebar width. */
+.sidebar-resize {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 5px;
+  cursor: col-resize; z-index: 20;
+}
+.sidebar-resize:hover { background: var(--accent); opacity: 0.5; }
 
 .sidebar-header {
-  height: 56px;
+  height: var(--toolbar-h);
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 16px;
+  gap: 8px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   color: var(--text);
 }
 .sidebar-header > svg { flex-shrink: 0; }
+/* Brand + project/workspace dropdown trigger (folds in the old top bar). */
+.sidebar-proj {
+  all: unset; cursor: pointer; display: flex; flex-direction: column;
+  line-height: 1.12; min-width: 0; padding: 3px 6px; border-radius: var(--r-sm);
+}
+.sidebar-proj:hover { background: var(--surface-2); }
+.sidebar-proj .sidebar-project {
+  display: inline-flex; align-items: center; gap: 3px;
+  font: 500 11px var(--font-sans); color: var(--text-3); font-weight: 500;
+  letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sidebar-head-spacer { flex: 1; }
+.sidebar-members {
+  all: unset; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: var(--r-sm); color: var(--text-3); flex-shrink: 0;
+}
+.sidebar-members:hover { background: var(--surface-2); color: var(--text); }
 .sidebar-brand {
   display: flex;
   flex-direction: column;
@@ -167,9 +191,12 @@ html, body, #root {
   min-width: 0;
 }
 .brand-name {
-  font: 700 14px var(--font-sans);
+  font: 700 13.5px var(--font-sans);
   letter-spacing: -0.02em;
   color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sidebar-brand .sidebar-project {
   font: 500 11px var(--font-sans);
@@ -532,12 +559,12 @@ html, body, #root {
 .btn-primary {
   background: var(--accent);
   color: white;
-  box-shadow: 0 1px 3px rgba(230,0,6,.35);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 .btn-primary:hover {
-  background: #5254e8;
-  box-shadow: 0 2px 8px rgba(230,0,6,.4);
+  background: color-mix(in srgb, var(--accent) 88%, black);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 .btn-primary:disabled {
@@ -819,6 +846,24 @@ html, body, #root {
   to { transform: rotate(360deg); }
 }
 
+/* Forced-auth gate loading splash (pro build, while resolving session). */
+.auth-gate-splash {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  width: 100vw;
+  background: var(--bg);
+}
+.auth-gate-spinner {
+  width: 28px;
+  height: 28px;
+  border: 2.5px solid var(--border-2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
 .cell-error {
   color: var(--danger);
   font-size: 12px;
@@ -1047,6 +1092,7 @@ html, body, #root {
 .form-select,
 .form-textarea {
   all: unset;
+  box-sizing: border-box;
   display: block;
   width: 100%;
   background: var(--surface);
@@ -1064,13 +1110,12 @@ html, body, #root {
 .form-select:focus,
 .form-textarea:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(230,0,6,.15);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
   outline: none;
 }
 
 .form-select {
   cursor: pointer;
-  box-sizing: border-box;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239696a8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 10px center;
@@ -2199,6 +2244,10 @@ html, body, #root {
   padding: 7px 8px; border-radius: var(--r-md); transition: background 0.1s;
 }
 .account-btn:hover { background: var(--surface-2); }
+/* Plan/seat chip in the account footer — right-aligned before the chevrons. */
+.account-btn .free-badge { margin-left: auto; flex-shrink: 0; }
+.account-btn .account-text { min-width: 0; }
+.account-btn .account-name, .account-btn .account-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account-avatar {
   width: 28px; height: 28px; border-radius: var(--r-sm); flex-shrink: 0; display: flex; align-items: center; justify-content: center;
   background: var(--accent-soft); color: var(--accent); font: 700 13px var(--font-sans);

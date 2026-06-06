@@ -137,6 +137,8 @@ export function AccountBar(props: AccountBarProps) {
                   : "Connecting…"}
           </span>
         </span>
+        {/* Plan/seat chip lives here (moved out of the cramped sidebar header). */}
+        <PlanBadge />
         <svg
           className="account-chevrons"
           width="14"
@@ -398,8 +400,10 @@ function WorkspaceSwitcher(props: {
 }
 
 /**
- * The OAuth buttons (C17) — one per ENABLED provider (web redirect flow). Renders
- * nothing when no provider is enabled, so the caller can also hide the divider.
+ * The OAuth buttons (C17 / C29) — one per ENABLED provider. Renders nothing when
+ * no provider is enabled, so the caller can also hide the divider. The web build
+ * uses the Convex Auth redirect; the packaged Tauri app uses the native
+ * deep-link flow — `signInWithProvider` selects the branch by runtime.
  */
 function OAuthButtons(props: {
   providers: readonly OAuthProvider[];
@@ -414,9 +418,9 @@ function OAuthButtons(props: {
       if (busy !== null) return;
       setBusy(provider);
       try {
-        // Standard Convex Auth web redirect: this navigates away to the provider
-        // and returns via the Convex callback, so there is no success path to
-        // handle inline. (Native Tauri deep-link callback is follow-up #17.)
+        // Web: navigates away to the provider and returns via the Convex
+        // callback. Desktop (C29): opens the provider in the system browser and
+        // completes via the deep-link callback. No inline success path either way.
         await signInWithProvider(provider);
       } catch (e) {
         onError(e instanceof Error ? e.message : "OAuth sign-in failed");

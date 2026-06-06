@@ -145,9 +145,52 @@ https://capable-peccary-527.convex.site/api/auth/callback/<provider>
 
 The flow is: client calls `signIn(provider)` → browser redirects to the provider
 → provider redirects to the Convex callback above → Convex redirects back to
-`SITE_URL`. This is the **web/browser** path and needs no Tauri deep-link. The
-native deep-link callback for the **packaged Tauri app** is the remaining
-follow-up (task #17).
+`SITE_URL`, where the auth provider auto-reads the `code` from the URL. This is
+the **web/browser** path and needs no Tauri deep-link.
+
+## Packaged-desktop OAuth (native deep-link callback, C29)
+
+The web redirect cannot complete inside a packaged Tauri webview (no shared
+browser session, nowhere to land the redirect). The packaged app therefore uses
+the documented Convex Auth desktop/RN pattern over a **custom URL scheme**:
+
+1. The button calls `signIn(provider, { redirectTo: "gtmgrid://auth/callback" })`,
+   which returns a `{ redirect }` URL **without navigating**.
+2. The app opens that URL in the user's **system browser** (Tauri opener plugin).
+3. Provider → Convex callback → redirects to
+   `gtmgrid://auth/callback?code=<code>`, which the OS routes back to the running
+   app as a deep link.
+4. A listener (the Rust-emitted `oauth-callback` Tauri event **and**
+   `@tauri-apps/plugin-deep-link`'s `onOpenUrl`) extracts the `code` and calls
+   `signIn(provider, { code })` to complete the session.
+
+The runtime branch (web redirect vs. desktop deep-link) is chosen by a single
+`isTauri()` helper. `ConvexAuthProvider` is mounted with
+`shouldHandleCode={() => !isTauri()}` so the web build still auto-reads the code
+from `window.location` while the desktop path does **not** double-handle it.
+
+**Scheme + wiring (already configured):**
+
+| Piece | Where | Value |
+| --- | --- | --- |
+| Custom scheme | `src-tauri/tauri.conf.json` → `plugins.deep-link.desktop.schemes` | `["gtmgrid"]` |
+| Capabilities | `src-tauri/capabilities/default.json` | `deep-link:default`, `core:event:default`, `opener:default` |
+| Rust plugins | `src-tauri/src/main.rs` | single-instance (init **before** deep-link), deep-link, opener |
+| Allowed redirect | `convex/auth.ts` `callbacks.redirect` | permits `gtmgrid://` **in addition to** `SITE_URL` |
+
+**Provider OAuth-app callback URLs are unchanged** — they still point at the
+Convex callback (`https://<deployment>.convex.site/api/auth/callback/<provider>`);
+only the *final* `redirectTo` differs (`gtmgrid://auth/callback`), and that
+custom scheme is allow-listed by the `redirect` callback in `convex/auth.ts`.
+
+> **Not verified here:** the live OAuth round-trip is **not** exercised by this
+> change. It requires (a) real OAuth-app credentials set on the deployment
+> (`AUTH_GITHUB_*` / `AUTH_GOOGLE_*`), and (b) a packaged build or `tauri dev`
+> run so the OS can register and route the `gtmgrid://` scheme to a native
+> window. The automated gate (`pnpm typecheck` + `pnpm test` + `cargo check`)
+> covers the code-extraction parsing, the Tauri-vs-web branch selection, and that
+> the Rust shell compiles — but the end-to-end browser → deep-link handshake is a
+> manual check pending creds + a packaged run.
 
 ## Setup
 
@@ -194,9 +237,10 @@ automated gate.
   execution (local engine) and the in-app agent (local CLI).
 - **Cloud execution of grids** — run columns in a cloud runtime; prerequisite
   for a web build and unattended runs.
-- **Native deep-link OAuth** — web redirect OAuth (GitHub + Google) ships in the
-  browser path (see "Web OAuth sign-in"); the remaining work is the **native
-  Tauri deep-link callback** for the packaged app, tracked as **task #17**.
+- **Native deep-link OAuth** — both the web redirect (see "Web OAuth sign-in")
+  and the **packaged-desktop deep-link callback** (see "Packaged-desktop OAuth")
+  are implemented. The live round-trip still needs OAuth-app credentials + a
+  packaged / `tauri dev` run to verify end-to-end.
 - **Proxied managed-key connectors** — our keys + Autumn credit metering as an
   extra revenue lever.
 - **Offline editing of cloud projects** with later reconciliation (Convex is
