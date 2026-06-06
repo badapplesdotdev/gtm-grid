@@ -18,7 +18,12 @@
  */
 
 import { useAuthToken } from "@convex-dev/auth/react";
-import { useMutation, useQuery } from "convex/react";
+import {
+  type UsePaginatedQueryResult,
+  useMutation,
+  usePaginatedQuery,
+  useQuery,
+} from "convex/react";
 import { useCallback, useMemo } from "react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
@@ -305,7 +310,7 @@ export function useWebhooks(
   ) as CloudWebhook[] | undefined;
 }
 
-/** One per-event delivery as returned by `listDeliveries` (newest first). */
+/** One per-event delivery as returned by `listDeliveriesPaged` (newest first). */
 export interface CloudDelivery {
   readonly _id: Id<"webhookDeliveries">;
   readonly webhookId: Id<"webhooks">;
@@ -319,18 +324,22 @@ export interface CloudDelivery {
 }
 
 /**
- * Reactive list of a webhook's recent deliveries (newest first, member-gated).
- * `skip`ped when cloud is off or there is no webhook yet, so a local-only /
- * signed-out app (or a table with no webhook) issues zero delivery queries.
- * Mirrors {@link useWebhooks}.
+ * Cursor-paginated, reactive list of a webhook's deliveries (newest first,
+ * member-gated). Wraps `usePaginatedQuery` with an initial page of 20; the
+ * caller renders the accumulated `results` and shows a "Load more" control while
+ * `status === "CanLoadMore"`. `skip`ped (mirroring the old `useQuery` skip) when
+ * cloud is off or there is no webhook yet, so a local-only / signed-out app (or
+ * a table with no webhook) issues zero delivery queries. Mirrors
+ * {@link useWebhooks}.
  */
 export function useWebhookDeliveries(
   webhookId: Id<"webhooks"> | null | undefined,
-): CloudDelivery[] | undefined {
-  return useQuery(
-    api.webhooks.listDeliveries,
+): UsePaginatedQueryResult<CloudDelivery> {
+  return usePaginatedQuery(
+    api.webhooks.listDeliveriesPaged,
     cloudEnabled && webhookId != null ? { webhookId } : "skip",
-  ) as CloudDelivery[] | undefined;
+    { initialNumItems: 20 },
+  ) as UsePaginatedQueryResult<CloudDelivery>;
 }
 
 /**

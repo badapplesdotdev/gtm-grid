@@ -165,8 +165,13 @@ export function WebhookModal({
   // table has none yet, lazily create one the first time the panel needs it.
   const webhook: CloudWebhook | undefined = webhooks?.[0];
 
-  // Real, member-gated per-event delivery log for this webhook (newest first).
-  const deliveries = useWebhookDeliveries(webhook?._id);
+  // Real, member-gated per-event delivery log for this webhook (newest first),
+  // cursor-paginated: 20 to start, "Load more" pages 20 at a time.
+  const {
+    results: deliveries,
+    status: deliveriesStatus,
+    loadMore: loadMoreDeliveries,
+  } = useWebhookDeliveries(webhook?._id);
 
   const [creating, setCreating] = useState(false);
   const [revealSecret, setRevealSecret] = useState(false);
@@ -546,32 +551,44 @@ export function WebhookModal({
                 <div className="form-section-label" style={{ marginTop: 20 }}>
                   Recent deliveries
                 </div>
-                {!deliveries || deliveries.length === 0 ? (
+                {deliveries.length === 0 ? (
                   <div className="wh-empty">
                     No deliveries yet. POST to the endpoint to see them here.
                   </div>
                 ) : (
-                  <div className="wh-deliveries">
-                    {deliveries.map((d) => {
-                      const ok = d.status >= 200 && d.status < 300;
-                      return (
-                        <div className="wh-delivery" key={d._id}>
-                          <span className={`wd-pill ${ok ? "ok" : "err"}`}>
-                            <span className="wd-dot" />
-                            Status Code: {d.status}
-                          </span>
-                          <span className="wd-meta">
-                            POST · +{d.rowsAffected} row
-                          </span>
-                          <span className="wd-time import-mono">
-                            {new Date(d.receivedAt).toLocaleTimeString("en-US", {
-                              hour12: false,
-                            })}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
+                  <>
+                    <div className="wh-deliveries">
+                      {deliveries.map((d) => {
+                        const ok = d.status >= 200 && d.status < 300;
+                        return (
+                          <div className="wh-delivery" key={d._id}>
+                            <span className={`wd-pill ${ok ? "ok" : "err"}`}>
+                              <span className="wd-dot" />
+                              Status Code: {d.status}
+                            </span>
+                            <span className="wd-meta">
+                              POST · +{d.rowsAffected} row
+                            </span>
+                            <span className="wd-time import-mono">
+                              {new Date(d.receivedAt).toLocaleTimeString(
+                                "en-US",
+                                { hour12: false },
+                              )}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {deliveriesStatus === "CanLoadMore" && (
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-sm"
+                        onClick={() => loadMoreDeliveries(20)}
+                      >
+                        Load more
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
             </div>
