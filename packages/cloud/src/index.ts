@@ -32,6 +32,20 @@ export {
 } from "./cells.js";
 
 export {
+  CANDIDATE_DELIMITERS,
+  columnLabel,
+  CsvParseError,
+  CsvParser,
+  DEFAULT_MAX_ROWS,
+  inferColumnType,
+  normalizeHeaders,
+  type CsvColumnType,
+  type Delimiter,
+  type ParsedCsv,
+  type ParseOptions,
+} from "./csv.js";
+
+export {
   CascadePlanner,
   type DeletePlan,
   type TableChildren,

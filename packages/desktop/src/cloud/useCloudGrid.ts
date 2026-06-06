@@ -191,6 +191,7 @@ export function useCloudTable(
 export function useCloudGridMutations() {
   const setCellMut = useMutation(api.cells.setCell);
   const addRowMut = useMutation(api.tables.addRow);
+  const addRowsWithCellsMut = useMutation(api.tables.addRowsWithCells);
   const addColumnMut = useMutation(api.tables.addColumn);
   const deleteRowMut = useMutation(api.tables.deleteRow);
   const deleteColumnMut = useMutation(api.tables.deleteColumn);
@@ -206,6 +207,17 @@ export function useCloudGridMutations() {
   const addRow = useCallback(
     (tableId: Id<"tables">) => addRowMut({ tableId }),
     [addRowMut],
+  );
+
+  /**
+   * Bulk insert rows + cells for CSV import. Each row is a `{ columnId: value }`
+   * map; metered as one cloud action per row. Throws a ConvexError with code
+   * "CloudActionsLimitError" if the import would exceed the plan's quota.
+   */
+  const addRowsWithCells = useCallback(
+    (tableId: Id<"tables">, rows: Array<Record<string, unknown>>) =>
+      addRowsWithCellsMut({ tableId, rows }),
+    [addRowsWithCellsMut],
   );
 
   /**
@@ -250,5 +262,5 @@ export function useCloudGridMutations() {
     [deleteColumnMut],
   );
 
-  return { setCell, addRow, addColumn, deleteRow, deleteColumn };
+  return { setCell, addRow, addRowsWithCells, addColumn, deleteRow, deleteColumn };
 }
