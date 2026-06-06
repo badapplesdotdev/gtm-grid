@@ -27,6 +27,7 @@
  */
 
 import { Effect } from "effect";
+import { derivePaidPlanId, type PaidPlanId } from "./plans.js";
 import { type AutumnError, AutumnClient } from "./seats.js";
 
 /**
@@ -62,6 +63,11 @@ export interface PendingWorkspace {
  * `usage` (when present) is the live `{ used, limit }` Autumn reported AFTER the
  * track, which the caller stores on the workspace so the `me` query can surface
  * it with no HTTP.
+ *
+ * `planId` (C27) is the workspace's active PAID plan id (or `null` for the free
+ * tier), read from the same flush so the caller can cache the current plan on
+ * the workspace for the `me` query / plan badge — again with no HTTP from the
+ * query.
  */
 export type FlushResult =
   | {
@@ -69,6 +75,7 @@ export type FlushResult =
       readonly flushed: true;
       readonly tracked: number;
       readonly usage: { readonly used: number; readonly limit: number | null };
+      readonly planId: PaidPlanId | null;
     }
   | {
       readonly workspaceId: string;
@@ -133,12 +140,25 @@ export class CloudActionsService extends Effect.Service<CloudActionsService>()(
                 featureId: CLOUD_ACTIONS_FEATURE_ID,
               }),
             ),
+            // Read the active paid plan (C27) in the same successful flush so the
+            // caller can cache it for the `me` query. A plan-read failure does
+            // NOT fail the flush (usage already tracked) — it falls back to null,
+            // and the next flush re-reads it.
+            Effect.zip(
+              autumn
+                .getActivePlanIds({ customerId: ws.workspaceId })
+                .pipe(
+                  Effect.map(derivePaidPlanId),
+                  Effect.catchAll(() => Effect.succeed(null)),
+                ),
+            ),
             Effect.map(
-              (usage): FlushResult => ({
+              ([usage, planId]): FlushResult => ({
                 workspaceId: ws.workspaceId,
                 flushed: true,
                 tracked: ws.pending,
                 usage,
+                planId,
               }),
             ),
             // Capture a transport failure as a fail-closed FlushResult instead

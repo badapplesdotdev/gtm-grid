@@ -20,6 +20,7 @@ import {
   NoCheckoutUrlError,
   SeatLimitExceededError,
   SeatsService,
+  UnknownPlanError,
 } from "./seats.js";
 import { failingAutumnLayer, fakeAutumnLayer } from "./seats-test-layers.js";
 
@@ -117,12 +118,41 @@ describe("checkout (standalone upgrade action)", () => {
       return yield* svc.checkout(CUSTOMER, planId);
     });
 
-  it("returns the billing URL from Autumn attach", async () => {
+  it("returns the billing URL from Autumn attach (defaults to team)", async () => {
     const url = await run(
       checkout(),
       fakeAutumnLayer({ checkoutUrl: "https://billing.example.com/upgrade/1" }),
     );
     expect(url).toBe("https://billing.example.com/upgrade/1");
+  });
+
+  it("attaches each valid paid plan id (C27)", async () => {
+    for (const planId of ["team", "business", "unlimited"]) {
+      const url = await run(
+        checkout(planId),
+        fakeAutumnLayer({
+          checkoutUrl: `https://billing.example.com/${planId}`,
+        }),
+      );
+      expect(url).toBe(`https://billing.example.com/${planId}`);
+    }
+  });
+
+  it("rejects an unknown plan id with UnknownPlanError before any Autumn call (C27)", async () => {
+    const error = await failureOf(
+      checkout("enterprise"),
+      // attach would succeed if reached; the validation must fail first.
+      fakeAutumnLayer({ checkoutUrl: "https://billing.example.com/should-not" }),
+    );
+    expect(error).toBeInstanceOf(UnknownPlanError);
+    if (error instanceof UnknownPlanError) {
+      expect(error.planId).toBe("enterprise");
+    }
+  });
+
+  it("rejects the free plan id (not a paid, purchasable plan) (C27)", async () => {
+    const error = await failureOf(checkout("free"), fakeAutumnLayer());
+    expect(error).toBeInstanceOf(UnknownPlanError);
   });
 
   it("fails with NoCheckoutUrlError when Autumn returns no URL", async () => {
@@ -135,6 +165,48 @@ describe("checkout (standalone upgrade action)", () => {
 
   it("propagates an AutumnError when attach fails", async () => {
     const error = await failureOf(checkout(), failingAutumnLayer("attach"));
+    expect(error).toBeInstanceOf(AutumnError);
+  });
+});
+
+describe("currentPlan (derive the workspace's paid plan for the badge)", () => {
+  const currentPlan = () =>
+    Effect.gen(function* () {
+      const svc = yield* SeatsService;
+      return yield* svc.currentPlan(CUSTOMER);
+    });
+
+  it("returns null for a free-tier workspace", async () => {
+    const plan = await run(
+      currentPlan(),
+      fakeAutumnLayer({ activePlanIds: ["free"] }),
+    );
+    expect(plan).toBeNull();
+  });
+
+  it("returns the active paid plan id (highest tier wins)", async () => {
+    expect(
+      await run(currentPlan(), fakeAutumnLayer({ activePlanIds: ["free", "team"] })),
+    ).toBe("team");
+    expect(
+      await run(
+        currentPlan(),
+        fakeAutumnLayer({ activePlanIds: ["free", "business"] }),
+      ),
+    ).toBe("business");
+    expect(
+      await run(
+        currentPlan(),
+        fakeAutumnLayer({ activePlanIds: ["free", "team", "unlimited"] }),
+      ),
+    ).toBe("unlimited");
+  });
+
+  it("fails closed with AutumnError when the plan read errors", async () => {
+    const error = await failureOf(
+      currentPlan(),
+      failingAutumnLayer("getActivePlanIds"),
+    );
     expect(error).toBeInstanceOf(AutumnError);
   });
 });

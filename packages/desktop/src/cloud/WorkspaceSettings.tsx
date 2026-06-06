@@ -21,6 +21,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { useAction, useConvexAuth } from "convex/react";
 import { Effect, Layer } from "effect";
+import { PAID_PLANS, type PlanDisplay } from "@gtmgrid/cloud";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { cloudEnabled } from "./convex";
@@ -35,6 +36,14 @@ import {
   type InviteActionResult,
   type InviteInput,
 } from "./invite";
+import {
+  CheckoutError,
+  CheckoutRunner,
+  CheckoutService,
+  CheckoutServiceLive,
+  runCheckout,
+  type CheckoutActionResult,
+} from "./checkout";
 
 interface WorkspaceSettingsProps {
   /** The active workspace to manage, or `null` when none is selected. */
@@ -87,11 +96,42 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
     [inviteAction],
   );
 
+  // The Convex `billing.checkout` action, wrapped as the Effect `CheckoutRunner`
+  // port. Composes with the shared system-browser opener (UrlOpenerLive).
+  const checkoutAction = useAction(api.billing.checkout);
+  const checkoutLayer = useMemo<Layer.Layer<CheckoutService>>(
+    () =>
+      CheckoutServiceLive.pipe(
+        Layer.provide(
+          Layer.succeed(CheckoutRunner, {
+            checkout: (args) =>
+              Effect.tryPromise({
+                try: () =>
+                  checkoutAction({
+                    workspaceId: args.workspaceId as Id<"workspaces">,
+                    planId: args.planId,
+                  }) as Promise<CheckoutActionResult>,
+                catch: (cause) =>
+                  new CheckoutError({
+                    message:
+                      cause instanceof Error
+                        ? cause.message
+                        : "Checkout failed.",
+                    cause,
+                  }),
+              }),
+          }),
+        ),
+        Layer.provide(UrlOpenerLive),
+      ),
+    [checkoutAction],
+  );
+
   const [inviteUserId, setInviteUserId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // When set, the upgrade modal is shown with this checkout URL (already opened).
-  const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
+  // When true, the plan-selection upgrade modal is shown.
+  const [showUpgrade, setShowUpgrade] = useState(false);
 
   const submitInvite = useCallback(async () => {
     const userId = inviteUserId.trim();
@@ -105,9 +145,10 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
         inviteLayer,
       );
       if (outcome.status === "checkout") {
-        // Over the seat limit: the URL was opened in the system browser; show
-        // the upgrade modal too (with a manual open fallback).
-        setCheckoutUrl(outcome.checkoutUrl);
+        // Over the seat limit: present the plan-selection upgrade modal so the
+        // user can choose team / business / unlimited (C27), rather than only
+        // opening the default team checkout.
+        setShowUpgrade(true);
       } else {
         // Added: clear the field; the roster updates live via the query.
         setInviteUserId("");
@@ -118,6 +159,31 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
       setBusy(false);
     }
   }, [inviteUserId, busy, workspaceId, isAuthenticated, inviteLayer]);
+
+  // Start checkout for a chosen plan (C27): calls the billing action with the
+  // planId and opens the returned Autumn URL in the system browser. Errors
+  // surface in the modal; the modal stays open so a fallback link is available.
+  const [upgradeError, setUpgradeError] = useState<string | null>(null);
+  const [upgradingPlan, setUpgradingPlan] = useState<string | null>(null);
+  const selectPlan = useCallback(
+    async (planId: string) => {
+      if (workspaceId === null || upgradingPlan !== null) return;
+      setUpgradingPlan(planId);
+      setUpgradeError(null);
+      try {
+        await runCheckout(
+          isAuthenticated,
+          { workspaceId, planId },
+          checkoutLayer,
+        );
+      } catch (e) {
+        setUpgradeError(e instanceof Error ? e.message : "Checkout failed.");
+      } finally {
+        setUpgradingPlan(null);
+      }
+    },
+    [workspaceId, isAuthenticated, checkoutLayer, upgradingPlan],
+  );
 
   if (!cloudEnabled || workspaceId === null) return null;
 
@@ -199,52 +265,102 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
           <button className="btn btn-outline" onClick={onClose}>
             Done
           </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => {
+              setUpgradeError(null);
+              setShowUpgrade(true);
+            }}
+          >
+            Upgrade plan
+          </button>
         </div>
       </div>
 
-      {/* Upgrade modal — shown when an invite exceeds the seat limit. The Autumn
-          checkout URL was already opened in the system browser; this offers a
-          manual "Open checkout" fallback. Reuses the existing modal patterns. */}
-      {checkoutUrl !== null && (
+      {/* Plan-selection upgrade modal (C27) — shown when an invite exceeds the
+          seat limit OR via the explicit "Upgrade plan" button. Presents the paid
+          plans from the shared PLAN_CATALOG; choosing one starts checkout for
+          that plan and opens the Autumn URL in the system browser. */}
+      {showUpgrade && (
         <UpgradeModal
-          checkoutUrl={checkoutUrl}
-          onClose={() => setCheckoutUrl(null)}
+          plans={PAID_PLANS}
+          upgradingPlan={upgradingPlan}
+          error={upgradeError}
+          onSelect={selectPlan}
+          onClose={() => {
+            setShowUpgrade(false);
+            setUpgradeError(null);
+          }}
         />
       )}
     </div>
   );
 }
 
-/** The upgrade modal opened when a workspace is over its seat limit. */
-function UpgradeModal(props: { checkoutUrl: string; onClose: () => void }) {
-  const { checkoutUrl, onClose } = props;
+/**
+ * The plan-selection upgrade modal (C27). Presents each paid plan from
+ * {@link PAID_PLANS} as a selectable card — name, $/seat, and the
+ * overage-vs-unlimited note — and on click starts checkout for that plan. Reuses
+ * the existing `.overlay` / `.modal` / `.btn` styles.
+ */
+function UpgradeModal(props: {
+  plans: readonly PlanDisplay[];
+  upgradingPlan: string | null;
+  error: string | null;
+  onSelect: (planId: string) => void;
+  onClose: () => void;
+}) {
+  const { plans, upgradingPlan, error, onSelect, onClose } = props;
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ width: 420 }}>
+      <div className="modal" style={{ width: 460 }}>
         <div className="modal-header">
-          <span className="modal-title">Upgrade to add more seats</span>
+          <span className="modal-title">Choose a plan</span>
           <button className="modal-close" onClick={onClose} aria-label="Close">
             ×
           </button>
         </div>
         <div className="modal-body">
-          <p style={{ margin: 0, fontSize: 13, color: "var(--text-2)" }}>
-            This workspace is at its seat limit. Checkout opened in your browser —
-            complete it to unlock the seat, then invite again.
+          <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--text-2)" }}>
+            Pick a plan to upgrade this workspace. Checkout opens in your browser;
+            complete it to unlock more seats and cloud actions.
           </p>
+          <div className="ws-plan-list">
+            {plans.map((plan) => {
+              const busy = upgradingPlan === plan.id;
+              const disabled = upgradingPlan !== null;
+              return (
+                <button
+                  key={plan.id}
+                  className="ws-plan-card"
+                  onClick={() => onSelect(plan.id)}
+                  disabled={disabled}
+                >
+                  <span className="ws-plan-head">
+                    <span className="ws-plan-name">{plan.name}</span>
+                    <span className="ws-plan-price">${plan.perSeatUsd}/seat/mo</span>
+                  </span>
+                  <span className="ws-plan-note">
+                    {plan.cloudActions === "unlimited"
+                      ? "Unlimited cloud actions — no overage"
+                      : "Metered cloud actions with overage"}
+                  </span>
+                  <span className="ws-plan-tagline">{plan.tagline}</span>
+                  {busy && <span className="ws-plan-busy">Opening checkout…</span>}
+                </button>
+              );
+            })}
+          </div>
+          {error && (
+            <div className="account-menu-error" role="alert" style={{ marginTop: 10 }}>
+              {error}
+            </div>
+          )}
         </div>
         <div className="modal-footer">
           <button className="btn btn-outline" onClick={onClose}>
             Close
           </button>
-          <a
-            className="btn btn-primary"
-            href={checkoutUrl}
-            target="_blank"
-            rel="noreferrer"
-          >
-            Open checkout
-          </a>
         </div>
       </div>
     </div>

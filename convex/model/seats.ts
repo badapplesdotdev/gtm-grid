@@ -113,6 +113,22 @@ export const autumnClientLayer = (
         catch: (cause) =>
           new AutumnError({ message: autumnMessage(cause, "track"), cause }),
       }),
+    // Read the customer's active subscription plan ids (C27) so the cron can
+    // derive + cache which paid tier the workspace is on for the `me` query.
+    // Maps to `customers.get({ customerId })` → `subscriptions[]` planIds whose
+    // status is "active" (a cancelled/expired sub no longer grants the plan).
+    getActivePlanIds: ({ customerId }) =>
+      Effect.tryPromise({
+        try: async () => {
+          const res = await client.customers.get({ customerId });
+          const subs = res.subscriptions ?? [];
+          return subs
+            .filter((s) => s.status === "active")
+            .map((s) => s.planId);
+        },
+        catch: (cause) =>
+          new AutumnError({ message: autumnMessage(cause, "customers.get"), cause }),
+      }),
     // Generic metered-usage track for the cloud-actions meter (C26): flushes a
     // workspace's pending count under an arbitrary featureId.
     trackUsage: ({ customerId, featureId, value }) =>
@@ -230,6 +246,10 @@ const pureSeatsLayer: Layer.Layer<SeatsService> = SeatsService.Default.pipe(
         Effect.die("AutumnClient.attach must not be called in a mutation"),
       trackSeats: () =>
         Effect.die("AutumnClient.trackSeats must not be called in a mutation"),
+      getActivePlanIds: () =>
+        Effect.die(
+          "AutumnClient.getActivePlanIds must not be called in a mutation",
+        ),
       trackUsage: () =>
         Effect.die("AutumnClient.trackUsage must not be called in a mutation"),
       checkUsage: () =>

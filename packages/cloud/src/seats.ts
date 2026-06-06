@@ -25,6 +25,12 @@
  */
 
 import { Context, Data, Effect } from "effect";
+import {
+  derivePaidPlanId,
+  isPaidPlanId,
+  PAID_PLAN_IDS,
+  type PaidPlanId,
+} from "./plans.js";
 
 /**
  * The Autumn feature id for the seat entitlement. The team/pro plan grants a
@@ -127,6 +133,22 @@ export class AutumnClient extends Context.Tag("CloudAutumnClient")<
     }) => Effect.Effect<void, AutumnError>;
 
     /**
+     * Read the customer's ACTIVE plan ids — the `planId`s of their active
+     * (non-cancelled) recurring subscriptions, used to derive which paid tier the
+     * workspace is on for the `me` query / plan badge. Maps to Autumn
+     * `customers.get({ customerId })` → the `subscriptions[]` `planId`s whose
+     * status is active. Always includes the auto-enabled `free` plan; the caller
+     * derives the highest PAID tier via `derivePaidPlanId`.
+     *
+     * Returns an empty list when the customer has no plans / Autumn omits them.
+     * Used by the scheduled flush ACTION (NEVER a query — mutations/queries make
+     * no outbound HTTP), so a transport failure surfaces as {@link AutumnError}.
+     */
+    readonly getActivePlanIds: (args: {
+      readonly customerId: string;
+    }) => Effect.Effect<readonly string[], AutumnError>;
+
+    /**
      * Record consumption of `value` units of an arbitrary metered feature for
      * `customerId`. Generalises {@link trackSeats} so the cloud-actions meter
      * (C26) can batch-flush its pending count to Autumn under
@@ -173,6 +195,16 @@ export class AutumnClient extends Context.Tag("CloudAutumnClient")<
 export class NoCheckoutUrlError extends Data.TaggedError("NoCheckoutUrlError")<{
   readonly message: string;
   readonly customerId: string;
+  readonly planId: string;
+}> {}
+
+/**
+ * Raised when the explicit checkout path is asked to attach a plan id that is
+ * not in the paid-plan allow-list ({@link PAID_PLAN_IDS} in plans.ts). Fails
+ * closed BEFORE any Autumn call so a forged/unknown plan can never be attached.
+ */
+export class UnknownPlanError extends Data.TaggedError("UnknownPlanError")<{
+  readonly message: string;
   readonly planId: string;
 }> {}
 
@@ -246,14 +278,34 @@ export class SeatsService extends Effect.Service<SeatsService>()(
       /**
        * Begin a checkout/upgrade for `customerId` on `planId`, returning the
        * billing URL. Backs the standalone `checkout` Convex action (the upgrade
-       * button). Fails with {@link NoCheckoutUrlError} when Autumn returns no
-       * URL (already on the plan / misconfigured).
+       * button presents the paid plans and passes the chosen one here).
+       *
+       * The plan is VALIDATED against the paid-plan allow-list
+       * ({@link PAID_PLAN_IDS}) BEFORE any Autumn call: an unknown/forged plan
+       * fails closed with {@link UnknownPlanError} and never reaches `attach`.
+       * Defaults to the team plan (the entry upsell) when omitted.
+       *
+       * Fails with {@link NoCheckoutUrlError} when Autumn returns no URL (already
+       * on the plan / misconfigured).
        */
       const checkout = (
         customerId: string,
         planId: string = TEAM_PLAN_ID,
-      ): Effect.Effect<string, AutumnError | NoCheckoutUrlError> =>
+      ): Effect.Effect<
+        string,
+        AutumnError | NoCheckoutUrlError | UnknownPlanError
+      > =>
         Effect.gen(function* () {
+          if (!isPaidPlanId(planId)) {
+            return yield* Effect.fail(
+              new UnknownPlanError({
+                message:
+                  `Unknown plan "${planId}". Choose one of: ` +
+                  `${PAID_PLAN_IDS.join(", ")}.`,
+                planId,
+              }),
+            );
+          }
           const { checkoutUrl } = yield* autumn.attach({ customerId, planId });
           if (checkoutUrl === null) {
             return yield* Effect.fail(
@@ -276,6 +328,20 @@ export class SeatsService extends Effect.Service<SeatsService>()(
         customerId: string,
       ): Effect.Effect<void, AutumnError> =>
         autumn.trackSeats({ customerId, value: 1 });
+
+      /**
+       * The workspace's current PAID plan id, derived from the customer's active
+       * Autumn subscriptions, or `null` when on the free tier. Backs the cron's
+       * plan sync (convex/model/usage.ts) which caches it on the workspace so the
+       * `me` query can surface the plan with NO outbound HTTP. Makes the Autumn
+       * `customers.get` call, so it runs from an ACTION only.
+       */
+      const currentPlan = (
+        customerId: string,
+      ): Effect.Effect<PaidPlanId | null, AutumnError> =>
+        autumn
+          .getActivePlanIds({ customerId })
+          .pipe(Effect.map(derivePaidPlanId));
 
       /**
        * Transactional seat guard: assert the LIVE `currentCount` of members is
@@ -306,6 +372,7 @@ export class SeatsService extends Effect.Service<SeatsService>()(
         checkInvite,
         checkout,
         trackSeatUsed,
+        currentPlan,
         enforceSeatCeiling,
       } as const;
     }),

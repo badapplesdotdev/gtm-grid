@@ -44,6 +44,11 @@ export interface FakeAutumnConfig {
    * unlimited). Drives the snapshot the cloud-actions flush stores for `me`.
    */
   readonly usage?: { used: number; limit: number | null };
+  /**
+   * The active plan ids `getActivePlanIds` reports (default: `["free"]` — the
+   * auto-enabled free tier). Drives the plan the cron caches for the `me` query.
+   */
+  readonly activePlanIds?: readonly string[];
 }
 
 /**
@@ -61,6 +66,7 @@ export const fakeAutumnLayer = (
       ? "https://billing.example.com/checkout/test"
       : config.checkoutUrl;
   const usage = config.usage ?? { used: 0, limit: null };
+  const activePlanIds = config.activePlanIds ?? ["free"];
   return Layer.succeed(AutumnClient, {
     checkSeats: () => Effect.succeed({ allowed, balance }),
     attach: () => Effect.succeed({ checkoutUrl }),
@@ -68,6 +74,7 @@ export const fakeAutumnLayer = (
       Effect.sync(() => {
         config.trackCalls?.push({ customerId, value });
       }),
+    getActivePlanIds: () => Effect.succeed(activePlanIds),
     trackUsage: ({ customerId, featureId, value }) =>
       Effect.sync(() => {
         config.usageCalls?.push({ customerId, featureId, value });
@@ -82,7 +89,13 @@ export const fakeAutumnLayer = (
  * the typed error rather than silently allowing (fail-closed) the invite.
  */
 export const failingAutumnLayer = (
-  failOn: "check" | "attach" | "track" | "trackUsage" | "checkUsage",
+  failOn:
+    | "check"
+    | "attach"
+    | "track"
+    | "trackUsage"
+    | "checkUsage"
+    | "getActivePlanIds",
   message = "autumn unavailable",
 ): Layer.Layer<AutumnClient> => {
   const fail = Effect.fail(new AutumnError({ message }));
@@ -99,6 +112,8 @@ export const failingAutumnLayer = (
         ? fail
         : Effect.succeed({ checkoutUrl: "https://billing.example.com/x" }),
     trackSeats: () => (failOn === "track" ? fail : Effect.void),
+    getActivePlanIds: () =>
+      failOn === "getActivePlanIds" ? fail : Effect.succeed(["free"]),
     trackUsage: () => (failOn === "trackUsage" ? fail : Effect.void),
     // Default to a benign snapshot so a `trackUsage` failure can be exercised
     // without the (sequenced) `checkUsage` also being the thing that fails.

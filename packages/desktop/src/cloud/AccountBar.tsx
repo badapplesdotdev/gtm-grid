@@ -34,12 +34,13 @@ import {
 type HealthStatus = "loading" | "connected" | "offline";
 
 /**
- * Human-readable plan label for a workspace, derived from the seat limit the
- * `me` query reports (null limit = the free/local tier until Autumn fills it in).
+ * Human-readable plan label for a workspace (C27): the real plan name the `me`
+ * query surfaces from Autumn (Free / Team / Business / Unlimited), cached on the
+ * workspace by the usage cron. Falls back to "Free" when no workspace.
  */
 function planLabel(ws: WorkspaceSummary | null): string {
   if (ws === null) return "Free";
-  return ws.seatUsage.limit === null ? "Free" : "Team";
+  return ws.plan.name;
 }
 
 /**

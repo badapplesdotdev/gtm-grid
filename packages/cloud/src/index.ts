@@ -45,8 +45,21 @@ export {
   SeatsService,
   SEATS_FEATURE_ID,
   TEAM_PLAN_ID,
+  UnknownPlanError,
   type SeatCheck,
 } from "./seats.js";
+
+export {
+  derivePaidPlanId,
+  isPaidPlanId,
+  PAID_PLAN_IDS,
+  PAID_PLANS,
+  PLAN_CATALOG,
+  planName,
+  type CloudActionsMode,
+  type PaidPlanId,
+  type PlanDisplay,
+} from "./plans.js";
 
 export {
   CLOUD_ACTIONS_FEATURE_ID,

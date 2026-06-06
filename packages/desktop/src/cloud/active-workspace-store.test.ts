@@ -26,6 +26,7 @@ const ws = (id: string, name: string): WorkspaceSummary => ({
   name,
   role: "owner",
   seatUsage: { used: 1, limit: null },
+  plan: { id: null, name: "Free" },
 });
 
 // The store is a singleton; reset its observable value between tests so cases do

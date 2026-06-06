@@ -31,12 +31,22 @@ export interface SeatUsage {
   readonly limit: number | null;
 }
 
+/** The workspace's current plan (C27): the paid plan id + human name. */
+export interface WorkspacePlan {
+  /** "team" | "business" | "unlimited", or null for the free tier. */
+  readonly id: string | null;
+  /** Human name: "Free" | "Team" | "Business" | "Unlimited". */
+  readonly name: string;
+}
+
 /** A workspace the signed-in user belongs to, with their role + seat usage. */
 export interface WorkspaceSummary {
   readonly _id: Id<"workspaces">;
   readonly name: string;
   readonly role: "owner" | "admin" | "member";
   readonly seatUsage: SeatUsage;
+  /** The workspace's current plan (C27), for the plan badge + upgrade UI. */
+  readonly plan: WorkspacePlan;
 }
 
 /** The authenticated user as returned by the `me` query. */

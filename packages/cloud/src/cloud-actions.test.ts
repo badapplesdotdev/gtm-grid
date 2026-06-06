@@ -93,6 +93,44 @@ describe("flushWorkspace (track pending → Autumn, then snapshot usage)", () =>
     }
   });
 
+  it("carries the active PAID plan id in the flush result (C27)", async () => {
+    // The flush reads the customer's active plans alongside usage so the caller
+    // can cache the current plan for the `me` query. A team subscription (plus
+    // the always-present auto-enabled free plan) surfaces "team".
+    const result = await run(
+      flush({ workspaceId: WS_A, pending: 2 }),
+      fakeAutumnLayer({ activePlanIds: ["free", "team"] }),
+    );
+    expect(result.flushed).toBe(true);
+    if (result.flushed) {
+      expect(result.planId).toBe("team");
+    }
+  });
+
+  it("surfaces a null plan id for a free-tier workspace (C27)", async () => {
+    const result = await run(
+      flush({ workspaceId: WS_A, pending: 1 }),
+      fakeAutumnLayer({ activePlanIds: ["free"] }),
+    );
+    expect(result.flushed).toBe(true);
+    if (result.flushed) {
+      expect(result.planId).toBeNull();
+    }
+  });
+
+  it("does NOT fail the flush when the plan read errors (defaults plan to null)", async () => {
+    // Usage already tracked; a plan-read failure must not lose the usage flush.
+    const result = await run(
+      flush({ workspaceId: WS_A, pending: 4 }),
+      failingAutumnLayer("getActivePlanIds"),
+    );
+    expect(result.flushed).toBe(true);
+    if (result.flushed) {
+      expect(result.planId).toBeNull();
+      expect(result.tracked).toBe(4);
+    }
+  });
+
   it("surfaces an unlimited plan as a null limit in the usage snapshot", async () => {
     const result = await run(
       flush({ workspaceId: WS_A, pending: 1 }),
