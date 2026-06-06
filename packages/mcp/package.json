@@ -1,9 +1,11 @@
 {
   "name": "@gtmgrid/mcp",
-  "version": "0.0.1",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "bin": { "gtmgrid-mcp": "./src/index.ts" },
+  "bin": {
+    "gtmgrid-mcp": "./src/index.ts"
+  },
   "dependencies": {
     "@gtmgrid/engine": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.0.4",

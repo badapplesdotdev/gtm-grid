@@ -4,10 +4,12 @@ name: Release
 # tag v<version>, then build the downloadable cross-platform desktop binaries and
 # attach them to a published GitHub Release.
 #
-# Platforms: macOS arm64 (macos-14) + macOS Intel (macos-13) + Linux (ubuntu).
-# Windows is intentionally NOT built yet — the Rust sidecar spawn (src-tauri) is
-# unix-only (expects a `node` binary + chmod + login shell); Windows needs a
-# `node.exe`-aware spawn path first. Tracked as a follow-up.
+# Platforms (4): macOS arm64 + macOS Intel + Linux + Windows.
+# macOS Intel is CROSS-COMPILED on the arm64 runner (macos-13 Intel runners are
+# scarce and hung a release): the Rust target is x86_64-apple-darwin and the
+# sidecar bundler downloads the x64 node + x64 better-sqlite3 (GTMGRID_SIDECAR_ARCH).
+# Windows builds natively (windows-latest); the Rust sidecar spawn + bundler are
+# node.exe-aware.
 
 on:
   workflow_dispatch:
@@ -78,15 +80,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-14 # Apple silicon
+          - platform: macos-14 # Apple silicon (native)
             rust_target: aarch64-apple-darwin
+            sidecar_arch: ""
             args: "--target aarch64-apple-darwin"
-          - platform: macos-13 # Intel
+          - platform: macos-14 # Intel (cross-compiled on the arm runner)
             rust_target: x86_64-apple-darwin
+            sidecar_arch: "x64"
             args: "--target x86_64-apple-darwin"
           - platform: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
+            sidecar_arch: ""
             args: "--bundles deb,appimage"
+          - platform: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            sidecar_arch: ""
+            args: "--bundles nsis"
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -127,6 +136,9 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Tells scripts/bundle-sidecar.mjs which cpu to bundle the node runtime +
+          # better-sqlite3 for. Empty = host arch (native); "x64" = cross-build.
+          GTMGRID_SIDECAR_ARCH: ${{ matrix.sidecar_arch }}
         with:
           projectPath: packages/desktop
           tagName: ${{ needs.version.outputs.tag }}
