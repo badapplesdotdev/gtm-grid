@@ -48,17 +48,45 @@ PATH="/opt/homebrew/bin:$PATH" pnpm tauri:build    # → packages/desktop/src-ta
 
 ## Architecture
 
+A pnpm + Turborepo monorepo:
+
 ```
 packages/
   engine/   core: SQLite (better-sqlite3) + QuickJS sandbox + connectors + execution
+  server/   Node HTTP sidecar over the engine (local projects, :8787)
   cli/      gtmgrid CLI — build & run grids headlessly
   mcp/      MCP server — exposes the grid as tools for Claude Code / Codex
+  cloud/    shared cloud/domain logic (Effect: seats + cloud-actions metering, crypto)
+  desktop/  React + Tauri desktop app (the grid UI)
+apps/
+  web/      Next.js app (Vercel): marketing site + inbound-webhook receiver + Inngest worker
+convex/     Convex backend for the cloud tier (auth, workspaces, tables, webhooks, billing)
 ```
 
 - **Storage** — `better-sqlite3`, one `.db` file per project at `~/gtmgrid/<name>.db`. Schema: tables → columns → rows → cells, plus `extensions` and encrypted `credentials` (AES-256-GCM, scoped local/personal/team).
 - **Sandbox** — `quickjs-emscripten` (asyncify build). Each column's JS body runs isolated; `sdk.<provider>.<method>(...)` calls are blocking (asyncify) and marshalled to host-side async work. `process`/`require`/`fetch` are not reachable inside.
 - **Connectors** — one declarative manifest (verb + path + zod input) becomes an `sdk` call, an MCP tool, and (later) a UI form. Built-ins: `ai.generate`, `github.getUser`.
 - **Execution** — `engine.runColumn()` resolves `{{Column Name}}` templates, runs the column over rows with bounded concurrency (`mapConcurrent`), writes cells with `pending/running/done/error` status.
+
+## Inbound webhooks (cloud)
+
+Every **cloud** table can expose an inbound webhook so external systems can drive
+data *in*. Enable it from the table (the "new table" chooser offers **Blank / CSV
+upload / Webhook**, and any cloud table has a **Webhook** action), configure a
+JSON-path → column **field mapping**, and you get a signed POST endpoint.
+
+Flow: `POST` JSON → the receiver (`apps/web/api/webhooks/[token]`, on Vercel)
+verifies the `X-GTMGrid-Signature` HMAC against the webhook's signing secret →
+emits an **Inngest** event → the durable `processWebhookRecord` function inserts
+(or upserts) a row and, when **auto-run** is on, runs the table's function/AI
+columns to enrich it. The worker reaches Convex through **secret-gated
+`/webhook/*` HTTP actions** (the engine runs in the worker with a Convex-backed
+store — no `Db`/SQLite loaded). A per-event **delivery log** is recorded.
+
+Each processed record counts as **usage** via the existing `cloud_actions` meter
+(see below) — once for the insert, once per terminal enrichment cell. Enrichment
+runs **server-side** here (the Vercel worker), unlike normal grid runs which stay
+on the user's local engine.
 
 ## CLI
 
@@ -198,7 +226,14 @@ Key design points (all shipped across Waves 1–3 of the cloud build):
   [Autumn](https://useautumn.com) (Stripe underneath). Inviting a member runs an
   Autumn `check` on the `seats` feature; over the limit returns an Autumn
   `checkout` URL that the desktop opens as an upgrade modal. There are **no**
-  connector or table caps anywhere.
+  connector or table caps anywhere. The desktop has a **Plan & billing** settings
+  surface (current plan + usage + upgrade via the same Autumn checkout).
+- **Cloud-actions usage metering.** Billable cloud operations (cell writes,
+  structural inserts, and each webhook record processed) increment a per-workspace
+  `cloud_actions` counter; a 1-minute cron flushes it to Autumn's `cloud_actions`
+  meter (free tier caps at 2000, paid is metered overage). Local solo projects are
+  **never** metered — they never call Convex. New Autumn customers are created with
+  the workspace name + owner email.
 - **Realtime multiplayer via Convex.** Cloud team projects live in Convex, whose
   reactive database makes **every `useQuery` a live subscription** — so an edit,
   add-row, or column run by any member appears in every other member's window
@@ -230,8 +265,16 @@ values.
 | --- | --- | --- |
 | `CONVEX_DEPLOYMENT` | `.env.local` (dev) | the Convex dev/prod deployment `convex dev` is bound to |
 | `VITE_CONVEX_URL` | `.env.local` (desktop build) | the deploy URL the React/Convex client connects to |
-| `AUTUMN_SECRET_KEY` | Convex deployment env | server-side Autumn key for the seats `check` / `checkout` |
+| `VITE_INNGEST_URL` | `.env.local` (desktop build) | base URL of the webhook app, used to render a table's webhook endpoint |
+| `AUTUMN_SECRET_KEY` | Convex deployment env | server-side Autumn key for seats `check`/`checkout` + cloud-actions metering |
 | `CREDENTIALS_MASTER_KEY` | Convex deployment env | 32-byte backend master key (KEK) that wraps per-workspace credential keys |
+| `JWT_PRIVATE_KEY` + `JWKS` | Convex deployment env | Convex Auth signing keys (generate via `npx @convex-dev/auth`) |
+| `WEBHOOK_WORKER_SECRET` | Convex **and** the Vercel app | shared bearer the webhook worker uses to call the secret-gated `/webhook/*` actions (must match on both) |
+
+The webhook worker (`apps/web`, on Vercel) also needs, in its own project env:
+`CONVEX_URL` + `CONVEX_SITE_URL` (the target Convex deployment), `WEBHOOK_WORKER_SECRET`
+(same value as on Convex), and `INNGEST_EVENT_KEY` + `INNGEST_SIGNING_KEY` (Inngest).
+`SITE_URL` (the app's public URL) is set on the Convex deployment for auth redirects.
 
 Run Convex codegen before typechecking the cloud code — the client imports
 `convex/_generated/*`, which only exists **after** a deployment login generates
@@ -256,14 +299,15 @@ deployment to build or run.
 These are deliberately **out of scope** for v1 (cloud is additive on top of the
 unchanged local tool) and tracked for later:
 
-- **Web app.** The same React UI can subscribe to Convex directly, so a browser
-  build is now cheap. The remaining gaps are execution (today's engine is local)
-  and the in-app agent (today it spawns the user's local `claude`/`codex` CLI).
-- **Cloud execution of grids.** Running columns in a cloud runtime instead of on
-  the user's machine — required for a true web build and for unattended runs.
-- **Native deep-link OAuth.** Today's desktop sign-in does not yet open the
-  system browser and handle a deep-link callback; that native OAuth flow is a
-  tracked follow-up (**task #17**).
+- **Full grid-in-browser.** A Next.js web surface now ships (`apps/web` —
+  marketing site + webhook worker on Vercel), and native deep-link OAuth has
+  landed. A full *grid UI in the browser* (the React app subscribing to Convex
+  directly) is still future; the remaining gap is the in-app agent, which spawns
+  the user's local `claude`/`codex` CLI.
+- **Cloud execution of grids.** Partially realized: webhook record processing +
+  function-column enrichment already run **server-side** in the Vercel/Inngest
+  worker. Running *user-triggered* column runs in a cloud runtime (instead of the
+  local engine) is the remaining piece for unattended runs and a full web build.
 - **Proxied managed-key connectors.** Offering connectors (e.g. Trigify) through
   *our* keys with Autumn credit metering, as an additional revenue lever — no
   user-supplied key required.
@@ -282,6 +326,12 @@ unchanged local tool) and tracked for later:
   desktop cloud client (auth UI, workspace switcher, realtime grid, settings) — all
   with Vitest coverage. Live two-window multiplayer needs a human Tauri run to
   confirm visually; the data path is verified via `pnpm typecheck` + `pnpm test`.
+- ✅ Turborepo monorepo + `apps/web` (marketing site + Inngest webhook worker) deployed to Vercel
+- ✅ **Inbound webhooks** per cloud table: HMAC-verified receiver → Inngest durable
+  insert/upsert + auto-run enrichment, per-event delivery log, metered as cloud
+  actions — **verified end-to-end in production**
+- ✅ CSV import → table (drop / review / done) + new-table chooser (blank / CSV / webhook)
+- ✅ Cloud-actions usage metering (Autumn) + in-app **Plan & billing** settings; Convex Auth with native deep-link OAuth
 
 ## License
 
