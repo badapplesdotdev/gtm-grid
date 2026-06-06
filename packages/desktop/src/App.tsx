@@ -102,6 +102,13 @@ function isObjectOrArray(val: unknown): boolean {
   return val !== null && typeof val === "object";
 }
 
+// Column width: a modest default, hard min/max so cells stay readable & clipped.
+const DEFAULT_COL_W = 200;
+const MIN_COL_W = 80;
+const MAX_COL_W = 460;
+const GUTTER_W = 48; // row-number column
+const ADD_COL_W = 44; // trailing "+" column
+
 // True if any of a function column's params reference {{columnName}}.
 function columnDependsOn(col: Column, columnName: string): boolean {
   const re = new RegExp(`\\{\\{\\s*${columnName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\}\\}`);
@@ -430,6 +437,19 @@ export default function App() {
     setCloudTableId(null);
   }, [activeWorkspaceId]);
 
+  // Appearance: only the dark-mode toggle is user-controllable. Density and
+  // accent are fixed (compact + green) by product decision.
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    try { return (localStorage.getItem("gtmgrid:theme") as "light" | "dark") || "light"; } catch { return "light"; }
+  });
+  useEffect(() => {
+    const root = document.documentElement;
+    root.setAttribute("data-theme", theme);
+    root.setAttribute("data-density", "compact");
+    root.setAttribute("data-accent", "green");
+    try { localStorage.setItem("gtmgrid:theme", theme); } catch { /* ignore */ }
+  }, [theme]);
+
   // Open the add-column popover anchored just below the clicked "+" button.
   const openAddCol = (e: React.MouseEvent) => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -467,7 +487,7 @@ export default function App() {
   });
   const setColWidth = useCallback((colId: string, w: number) => {
     setColWidths((prev) => {
-      const next = { ...prev, [colId]: Math.max(80, Math.round(w)) };
+      const next = { ...prev, [colId]: Math.max(MIN_COL_W, Math.min(MAX_COL_W, Math.round(w))) };
       try {
         localStorage.setItem("gtmgrid:colWidths", JSON.stringify(next));
       } catch {
@@ -476,6 +496,11 @@ export default function App() {
       return next;
     });
   }, []);
+  // Effective rendered width for a column (clamped — old saved widths can be huge).
+  const colW = useCallback(
+    (id: string) => Math.max(MIN_COL_W, Math.min(MAX_COL_W, colWidths[id] ?? DEFAULT_COL_W)),
+    [colWidths],
+  );
 
   // Right-click context menu
   const [ctxMenu, setCtxMenu] = useState<{
@@ -1105,13 +1130,16 @@ export default function App() {
           </div>
         </div>
 
-        {/* Footer: account / project menu (cloud auth + workspace switcher). */}
+        {/* Footer: account / project menu (cloud auth + workspace switcher +
+            appearance/dark-mode toggle). */}
         <AccountBar
           projectName={projectName}
           healthStatus={healthStatus}
           currentProjectPath={currentProjectPath}
           onSwitchProject={() => setShowProjects(true)}
           onOpenMenu={openAccountMenu}
+          theme={theme}
+          onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
         />
       </aside>
 
@@ -1232,7 +1260,10 @@ export default function App() {
           </div>
         ) : tableData ? (
           <div className="grid-wrap">
-            <table className="grid-table">
+            <table
+              className="grid-table"
+              style={{ width: GUTTER_W + tableData.columns.reduce((s, c) => s + colW(c.id), 0) + ADD_COL_W }}
+            >
               <thead>
                 <tr>
                   {/* Row-number gutter */}
@@ -1241,7 +1272,7 @@ export default function App() {
                     <th
                       key={col.id}
                       className="grid-th"
-                      style={{ width: colWidths[col.id] ?? 180, minWidth: 80 }}
+                      style={{ width: colW(col.id), minWidth: MIN_COL_W, maxWidth: MAX_COL_W }}
                       onContextMenu={(e) =>
                         openCtx(e, [{ label: `Delete column “${col.name}”`, danger: true, onClick: () => deleteColumn(col.id) }])
                       }
@@ -1269,13 +1300,13 @@ export default function App() {
                         title="Drag to resize"
                         onMouseDown={e => {
                           e.preventDefault();
-                          startResize(col.id, e.clientX, colWidths[col.id] ?? 180);
+                          startResize(col.id, e.clientX, colW(col.id));
                         }}
                       />
                     </th>
                   ))}
                   {/* Add column */}
-                  <th className="grid-th add-col-th">
+                  <th className="grid-th add-col-th" style={{ width: ADD_COL_W }}>
                     <button className="add-col-btn" onClick={openAddCol} title="Add column">
                       <Icon.Plus size={16} />
                     </button>

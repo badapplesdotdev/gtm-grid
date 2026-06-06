@@ -1,242 +1,1383 @@
 {
   "id": "trigify",
   "name": "Trigify",
-  "version": "1.1.0",
-  "category": "social-intelligence",
-  "description": "Social intelligence — enrich profiles & companies and track LinkedIn engagement signals.",
-  "featured": true,
+  "version": "2.0.0",
+  "category": "social",
+  "description": "Social listening + engagement intelligence — monitor profiles, companies, posts and topics across LinkedIn, X/Twitter, Reddit, YouTube, TikTok, Substack, Bluesky, GitHub, Hacker News, Daily.dev, Podcasts and News.",
   "baseUrl": "https://api.trigify.io",
+  "logo": "https://www.google.com/s2/favicons?domain=trigify.io&sz=128",
   "auth": { "type": "apiKey", "header": "x-api-key", "secretKey": "apiKey" },
   "methods": [
     {
       "id": "enrichProfile",
       "label": "Enrich LinkedIn Profile",
-      "description": "Enrich a LinkedIn profile with detailed prospect data (name, title, company, experience, seniority) from its URL.",
-      "verb": "POST",
-      "path": "/v1/profile/enrich",
-      "credits": 1,
-      "input": {
-        "type": "object",
-        "required": ["profileUrl"],
-        "properties": { "profileUrl": { "type": "string", "description": "LinkedIn profile URL, e.g. 'https://www.linkedin.com/in/satyanadella'" } }
-      }
-    },
-    {
-      "id": "enrichCompany",
-      "label": "Enrich LinkedIn Company",
-      "description": "Enrich a LinkedIn company page with firmographics (name, domain, size, industry, location) from its URL.",
-      "verb": "POST",
-      "path": "/v1/company/enrich",
-      "credits": 1,
-      "input": {
-        "type": "object",
-        "required": ["companyUrl"],
-        "properties": { "companyUrl": { "type": "string", "description": "LinkedIn company URL, e.g. 'https://www.linkedin.com/company/microsoft'" } }
-      }
+      "description": "Enrich a LinkedIn profile URL into name, title, company, summary, follower count, location, industry, and full work experience. Returns { data: { prospect, experience[] } }.",
+      "verb": "POST", "path": "/v1/profile/enrich", "credits": 1,
+      "input": { "type": "object", "required": ["profileUrl"], "properties": {
+        "profileUrl": { "type": "string", "description": "Full LinkedIn profile URL (e.g. https://linkedin.com/in/jane-doe)" }
+      }}
     },
     {
       "id": "profilePosts",
       "label": "Get Profile Posts",
-      "description": "Get recent posts from a LinkedIn profile. Paginate with page.",
-      "verb": "POST",
-      "path": "/v1/profile/posts",
-      "credits": 1,
-      "input": {
-        "type": "object",
-        "required": ["profileUrl"],
-        "properties": {
-          "profileUrl": { "type": "string", "description": "LinkedIn profile URL" },
-          "page": { "type": "integer", "description": "Page number (optional)" }
-        }
-      }
+      "description": "List recent LinkedIn posts from a profile, with text, reactions, comments count, and media. Paginated.",
+      "verb": "POST", "path": "/v1/profile/posts", "credits": 1,
+      "input": { "type": "object", "required": ["profileUrl"], "properties": {
+        "profileUrl": { "type": "string", "description": "LinkedIn profile URL" },
+        "page": { "type": "integer", "description": "0-based page number" },
+        "after": { "type": "string", "description": "ISO date — only posts after this" },
+        "paginationToken": { "type": "string", "description": "Cursor from previous response" }
+      }}
+    },
+    {
+      "id": "profileEngagementBulk",
+      "label": "Bulk Track Profiles (Engagement Monitor)",
+      "description": "ENTERPRISE. Upload up to 100 LinkedIn profile URLs for engagement monitoring. Optionally attach a webhook per profile. Free upload; downstream collection costs 5 credits per new engagement result.",
+      "verb": "POST", "path": "/v1/profile/engagement/bulk", "credits": 0,
+      "input": { "type": "object", "required": ["profiles"], "properties": {
+        "profiles": { "type": "array", "description": "Array (1-100) of { profile_url, webhook_url? }", "items": { "type": "object" } }
+      }}
+    },
+    {
+      "id": "profileEngagementResults",
+      "label": "Get Profile Engagement Results",
+      "description": "ENTERPRISE. Paginated engagement results for a tracked LinkedIn profile, deduplicated by prospect across all their posts. Free.",
+      "verb": "POST", "path": "/v1/profile/engagement/results", "credits": 0,
+      "input": { "type": "object", "required": ["profile_url"], "properties": {
+        "profile_url": { "type": "string" },
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer", "description": "1-100, default 10" }
+      }}
+    },
+    {
+      "id": "profilePostEngagementResults",
+      "label": "Get Profile Post Engagement Results",
+      "description": "ENTERPRISE. Engagement results for a SPECIFIC tracked post of a monitored profile. Deduplicated per prospect within that post.",
+      "verb": "POST", "path": "/v1/profile/engagement/post-results", "credits": 0,
+      "input": { "type": "object", "required": ["profile_url", "post_url"], "properties": {
+        "profile_url": { "type": "string" },
+        "post_url": { "type": "string" },
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer" }
+      }}
+    },
+    {
+      "id": "profileEngagementRemove",
+      "label": "Stop Tracking Profile",
+      "description": "ENTERPRISE. Archive a tracked LinkedIn profile and remove its webhook. Free.",
+      "verb": "POST", "path": "/v1/profile/engagement/remove", "credits": 0,
+      "input": { "type": "object", "required": ["profile_url"], "properties": {
+        "profile_url": { "type": "string" }
+      }}
+    },
+    {
+      "id": "enrichCompany",
+      "label": "Enrich LinkedIn Company",
+      "description": "Enrich a LinkedIn company URL into name, domain, industry, size, location, employees count, revenue, funding, technologies, growth rate.",
+      "verb": "POST", "path": "/v1/company/enrich", "credits": 1,
+      "input": { "type": "object", "required": ["companyUrl"], "properties": {
+        "companyUrl": { "type": "string", "description": "LinkedIn company URL" }
+      }}
     },
     {
       "id": "companyPosts",
       "label": "Get Company Posts",
-      "description": "Get recent posts from a LinkedIn company page.",
-      "verb": "POST",
-      "path": "/v1/company/posts",
-      "credits": 1,
-      "input": {
-        "type": "object",
-        "required": ["companyUrl"],
-        "properties": { "companyUrl": { "type": "string", "description": "LinkedIn company URL" } }
-      }
-    },
-    {
-      "id": "postByUrl",
-      "label": "Get Post by URL",
-      "description": "Fetch a single LinkedIn post's data (text, author, metrics) by its URL.",
-      "verb": "POST",
-      "path": "/v1/post/by-url",
-      "credits": 1,
-      "input": {
-        "type": "object",
-        "required": ["postUrl"],
-        "properties": { "postUrl": { "type": "string", "description": "LinkedIn post URL" } }
-      }
-    },
-    {
-      "id": "postEngagements",
-      "label": "Get Post Engagements (likers)",
-      "description": "Get the people who liked/engaged a LinkedIn post by its URL. Paginate with page.",
-      "verb": "POST",
-      "path": "/v1/post/engagements",
-      "credits": 1,
-      "input": {
-        "type": "object",
-        "required": ["postUrl"],
-        "properties": {
-          "postUrl": { "type": "string", "description": "LinkedIn post URL" },
-          "page": { "type": "integer", "description": "Page number (optional)" }
-        }
-      }
-    },
-    {
-      "id": "postComments",
-      "label": "Get Post Comments",
-      "description": "Get comments on a LinkedIn post. Identify the post by its URN (not URL). Paginate with page.",
-      "verb": "POST",
-      "path": "/v1/post/comments",
-      "credits": 1,
-      "input": {
-        "type": "object",
-        "required": ["postUrn"],
-        "properties": {
-          "postUrn": { "type": "string", "description": "LinkedIn post URN (e.g. 'urn:li:activity:...')" },
-          "page": { "type": "integer", "description": "Page number (optional)" }
-        }
-      }
-    },
-    {
-      "id": "postCommentReplies",
-      "label": "Get Comment Replies",
-      "description": "Get replies to a specific comment on a LinkedIn post.",
-      "verb": "POST",
-      "path": "/v1/post/comments/replies",
-      "credits": 1,
-      "input": {
-        "type": "object",
-        "required": ["postUrn", "commentUrn"],
-        "properties": {
-          "postUrn": { "type": "string", "description": "LinkedIn post URN" },
-          "commentUrn": { "type": "string", "description": "The comment's URN" },
-          "previousCursor": { "type": "string", "description": "Pagination cursor (optional)" }
-        }
-      }
+      "description": "List recent posts from a LinkedIn company page with reactions, comments count and media.",
+      "verb": "POST", "path": "/v1/company/posts", "credits": 1,
+      "input": { "type": "object", "required": ["companyUrl"], "properties": {
+        "companyUrl": { "type": "string" }
+      }}
     },
     {
       "id": "companyComments",
       "label": "Get Company Post Comments",
-      "description": "Get comments on a LinkedIn company post. Identify the post by its URN. Paginate with page.",
-      "verb": "POST",
-      "path": "/v1/company/comments",
-      "credits": 1,
-      "input": {
-        "type": "object",
-        "required": ["postUrn"],
-        "properties": {
-          "postUrn": { "type": "string", "description": "LinkedIn company post URN" },
-          "page": { "type": "integer", "description": "Page number (optional)" }
-        }
-      }
+      "description": "Get comments on a LinkedIn company post (by URN), paginated. Returns { comments[], total, totalPage, currentPage }.",
+      "verb": "POST", "path": "/v1/company/comments", "credits": 1,
+      "input": { "type": "object", "required": ["postUrn"], "properties": {
+        "postUrn": { "type": "string", "description": "Company post URN, e.g. '7196224250288955393'" },
+        "page": { "type": "integer" }
+      }}
+    },
+    {
+      "id": "postEngagements",
+      "label": "Get Post Engagements",
+      "description": "Get the list of users who engaged (liked, etc.) with a LinkedIn post URL. Paginated.",
+      "verb": "POST", "path": "/v1/post/engagements", "credits": 1,
+      "input": { "type": "object", "required": ["postUrl"], "properties": {
+        "postUrl": { "type": "string" },
+        "page": { "type": "integer" }
+      }}
+    },
+    {
+      "id": "postComments",
+      "label": "Get Post Comments",
+      "description": "Get comments on a LinkedIn post by URN. Paginated. Use postCommentReplies to fetch replies of a specific comment.",
+      "verb": "POST", "path": "/v1/post/comments", "credits": 1,
+      "input": { "type": "object", "required": ["postUrn"], "properties": {
+        "postUrn": { "type": "string" },
+        "page": { "type": "integer" }
+      }}
+    },
+    {
+      "id": "postCommentReplies",
+      "label": "Get Post Comment Replies",
+      "description": "Get replies to a specific LinkedIn comment. Pass postUrn + commentUrn (returned by postComments). previousCursor paginates further pages.",
+      "verb": "POST", "path": "/v1/post/comments/replies", "credits": 1,
+      "input": { "type": "object", "required": ["postUrn", "commentUrn"], "properties": {
+        "postUrn": { "type": "string" },
+        "commentUrn": { "type": "string", "description": "Comment URN, e.g. 'urn:li:comment:(urn:li:ugcPost:...,...)'" },
+        "previousCursor": { "type": "string" }
+      }}
+    },
+    {
+      "id": "postByUrl",
+      "label": "Get Post by URL",
+      "description": "Resolve a LinkedIn post URL into its full detail: text, URN, posted date, reaction counts, author, company.",
+      "verb": "POST", "path": "/v1/post/by-url", "credits": 1,
+      "input": { "type": "object", "required": ["postUrl"], "properties": {
+        "postUrl": { "type": "string" }
+      }}
+    },
+    {
+      "id": "socialMapping",
+      "label": "Social Mapping (Engagement Graph)",
+      "description": "ENTERPRISE. Query Trigify's social engagement graph by keyword, firmographic and profile filters. Find prospects who engaged with specific topics. engaged_with_days = lookback (1-30).",
+      "verb": "POST", "path": "/v1/social/mapping", "credits": 1,
+      "input": { "type": "object", "required": ["engaged_with_keywords", "engaged_with_days"], "properties": {
+        "engaged_with_keywords": { "type": "array", "items": { "type": "string" } },
+        "engaged_with_days": { "type": "number", "description": "1-30" },
+        "engaged_with_topic_strength": { "type": "number", "description": "0-5, engagement frequency strength" },
+        "job_titles": { "type": "array", "items": { "type": "string" } },
+        "job_titles_excludes": { "type": "array", "items": { "type": "string" } },
+        "company_domain_includes": { "type": "array", "items": { "type": "string" } },
+        "company_domain_excludes": { "type": "array", "items": { "type": "string" } },
+        "location_country": { "type": "array", "items": { "type": "string" } },
+        "location_excludes": { "type": "array", "items": { "type": "string" } },
+        "industries": { "type": "array", "items": { "type": "string" } },
+        "industries_excludes": { "type": "array", "items": { "type": "string" } },
+        "company_sizes": { "type": "array", "items": { "type": "string" }, "description": "1-10, 11-50, 51-200, 201-500, 501-1000, 1001-5000, 5001-10000, 10001+" },
+        "followers": { "type": "array", "items": { "type": "string" } },
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer", "description": "10, 25 or 50" },
+        "includes": { "type": "array", "items": { "type": "string" }, "description": "Fields to return: first_name, last_name, linkedin_url, avatar, company, job_title, post.text, etc." }
+      }}
     },
     {
       "id": "discoverCreators",
       "label": "Discover Creators",
-      "description": "Find LinkedIn creators who post about given topics, filtered by job title, followers, location, industry, and company size. posted_about_keywords and posted_about_days are required.",
-      "verb": "POST",
-      "path": "/v1/discover/creators",
-      "credits": 1,
-      "input": {
-        "type": "object",
-        "required": ["posted_about_keywords", "posted_about_days"],
-        "properties": {
-          "posted_about_keywords": { "type": "array", "items": { "type": "string" }, "description": "Topics/keywords creators posted about, e.g. ['social listening','GTM']" },
-          "posted_about_days": { "type": "integer", "description": "Look-back window in days (e.g. 30)" },
-          "job_titles": { "type": "array", "items": { "type": "string" }, "description": "Filter to these job titles" },
-          "followers": { "type": "string", "description": "Follower range filter (e.g. '1000-10000')" },
-          "location_country": { "type": "string", "description": "Country filter" },
-          "industries": { "type": "array", "items": { "type": "string" }, "description": "Industry filters" },
-          "company_sizes": { "type": "array", "items": { "type": "string" }, "description": "Company size buckets" },
-          "page": { "type": "integer" },
-          "page_size": { "type": "integer", "enum": [10, 25, 50], "description": "Results per page — must be 10, 25, or 50" }
-        }
-      }
+      "description": "Find LinkedIn creators who POST about specific topics (vs. engage). Filter by job titles, firmographics, follower count, location. Returns prospect data + posting cadence + avg engagement.",
+      "verb": "POST", "path": "/v1/discover/creators", "credits": 1,
+      "input": { "type": "object", "required": ["posted_about_keywords", "posted_about_days"], "properties": {
+        "posted_about_keywords": { "type": "array", "items": { "type": "string" } },
+        "posted_about_days": { "type": "number", "description": "1-30" },
+        "posted_about_topic_strength": { "type": "number", "description": "0-5 posting frequency" },
+        "job_titles": { "type": "array", "items": { "type": "string" } },
+        "job_titles_excludes": { "type": "array", "items": { "type": "string" } },
+        "company_domain_includes": { "type": "array", "items": { "type": "string" } },
+        "company_domain_excludes": { "type": "array", "items": { "type": "string" } },
+        "location_country": { "type": "array", "items": { "type": "string" } },
+        "location_excludes": { "type": "array", "items": { "type": "string" } },
+        "industries": { "type": "array", "items": { "type": "string" } },
+        "industries_excludes": { "type": "array", "items": { "type": "string" } },
+        "company_sizes": { "type": "array", "items": { "type": "string" } },
+        "followers": { "type": "array", "items": { "type": "string" } },
+        "page": { "type": "number" },
+        "page_size": { "type": "integer", "description": "10, 25 or 50" }
+      }}
     },
     {
-      "id": "profileEngagementResults",
-      "label": "Tracked Profile Engagement Results",
-      "description": "Get engagement results for a tracked LinkedIn profile (who engaged with their posts). Paginate with page/page_size.",
-      "verb": "POST",
-      "path": "/v1/profile/engagement/results",
-      "credits": 1,
-      "input": {
-        "type": "object",
-        "required": ["profile_url"],
-        "properties": {
-          "profile_url": { "type": "string", "description": "Tracked LinkedIn profile URL" },
-          "page": { "type": "integer" },
-          "page_size": { "type": "integer" }
-        }
-      }
+      "id": "listSearches",
+      "label": "List Searches",
+      "description": "List all Social Listening searches for the authenticated org. Filter by status. Free.",
+      "verb": "GET", "path": "/v1/searches", "credits": 0,
+      "input": { "type": "object", "properties": {
+        "status": { "type": "string", "description": "active | paused" },
+        "limit": { "type": "integer", "description": "default 50, max 100" },
+        "cursor": { "type": "string" }
+      }}
     },
     {
-      "id": "enrichXUser",
-      "label": "Enrich X/Twitter User",
-      "description": "Enrich an X (Twitter) user by username. Returns profile data.",
-      "verb": "POST",
-      "path": "/v1/x-user/enrich",
-      "credits": 1,
-      "input": {
-        "type": "object",
-        "required": ["username"],
-        "properties": { "username": { "type": "string", "description": "X/Twitter username/handle (without @)" } }
-      }
+      "id": "getSearch",
+      "label": "Get Search",
+      "description": "Get details of one Social Listening search by ID. Free.",
+      "verb": "GET", "path": "/v1/searches/{id}", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string", "description": "Search ID" }
+      }}
     },
     {
-      "id": "lookupXUser",
-      "label": "Lookup X/Twitter User",
-      "description": "Look up basic X (Twitter) user info by username.",
-      "verb": "POST",
-      "path": "/v1/x/lookup-user",
-      "credits": 1,
-      "input": {
-        "type": "object",
-        "required": ["username"],
-        "properties": { "username": { "type": "string", "description": "X/Twitter username/handle (without @)" } }
-      }
+      "id": "updateSearch",
+      "label": "Update Search",
+      "description": "Update a Social Listening search's name, status (active/paused), or filters. Free.",
+      "verb": "PATCH", "path": "/v1/searches/{id}", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "status": { "type": "string", "description": "active | paused" },
+        "filters": { "type": "object" }
+      }}
+    },
+    {
+      "id": "deleteSearch",
+      "label": "Delete Search",
+      "description": "Permanently delete a Social Listening search. Free.",
+      "verb": "DELETE", "path": "/v1/searches/{id}", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" }
+      }}
     },
     {
       "id": "searchResults",
-      "label": "Get Saved Search Results",
-      "description": "Pull results (leads/posts) from a saved Trigify search by its id. Optional filters: job_title, company, industry, country, seniority; paginate with from/limit/cursor.",
-      "verb": "GET",
-      "path": "/v1/searches/{id}/results",
-      "credits": 0,
-      "input": {
-        "type": "object",
-        "required": ["id"],
-        "properties": {
-          "id": { "type": "string", "description": "Saved search id" },
-          "from": { "type": "integer", "description": "Offset (optional)" },
-          "limit": { "type": "integer", "description": "Max results (optional)" },
-          "cursor": { "type": "string", "description": "Pagination cursor (optional)" },
-          "job_title": { "type": "string" },
-          "company": { "type": "string" },
-          "industry": { "type": "string" },
-          "country": { "type": "string" },
-          "seniority": { "type": "string" }
-        }
-      }
+      "label": "Get Search Results",
+      "description": "Fetch results from a saved Social Listening search. Filter by date, job title, company, industry, country, seniority. Free.",
+      "verb": "GET", "path": "/v1/searches/{id}/results", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string", "description": "Search ID" },
+        "from": { "type": "string", "description": "ISO 8601 date" },
+        "limit": { "type": "integer", "description": "max 100" },
+        "cursor": { "type": "string" },
+        "job_title": { "type": "string" },
+        "company": { "type": "string" },
+        "industry": { "type": "string" },
+        "country": { "type": "string" },
+        "seniority": { "type": "string", "description": "director, vp, c_suite, etc." }
+      }}
+    },
+    {
+      "id": "searchPodcasts",
+      "label": "Search Podcasts",
+      "description": "Search for podcasts by name. Use the returned id as podcast_id when creating a podcast-episodes monitor. Free.",
+      "verb": "POST", "path": "/v1/searches/podcasts/search", "credits": 0,
+      "input": { "type": "object", "required": ["query"], "properties": {
+        "query": { "type": "string" },
+        "limit": { "type": "number", "description": "default 5, max 20" }
+      }}
+    },
+    {
+      "id": "createTwitterPostsSearch",
+      "label": "Create Twitter/X Posts Search",
+      "description": "Monitor X/Twitter posts by keywords. Supports advanced operators: from_users, to_user, list_id, verified_only, has_media, exclude_retweets, place_country. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/twitter/posts", "credits": 1,
+      "input": { "type": "object", "required": ["name"], "properties": {
+        "name": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" }, "description": "max 10" },
+        "keywords_and": { "type": "array", "items": { "type": "string" } },
+        "keywords_not": { "type": "array", "items": { "type": "string" } },
+        "time_frame": { "type": "string", "description": "past-24h | past-week | past-month | past-6-months | past-year | all-time" },
+        "max_results": { "type": "number", "description": "10-100" },
+        "frequency": { "type": "string", "description": "hourly | every-12h | daily | weekly | monthly | quarterly" },
+        "search_type": { "type": "string", "description": "Top | Latest | Videos | Photos" },
+        "twitter_language": { "type": "string" },
+        "exclude_retweets": { "type": "boolean" },
+        "exclude_replies": { "type": "boolean" },
+        "verified_only": { "type": "boolean" },
+        "has_media": { "type": "string", "description": "any | images | video" },
+        "has_links": { "type": "boolean" },
+        "from_users": { "type": "array", "items": { "type": "string" } },
+        "to_user": { "type": "string" },
+        "url_contains": { "type": "string" },
+        "place_country": { "type": "string" },
+        "retweets_of": { "type": "string" },
+        "list_id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "createLinkedInPostsSearch",
+      "label": "Create LinkedIn Posts Search",
+      "description": "Monitor LinkedIn posts by keywords. Filter by job_titles (max 6), content_type, member/org mentions. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/linkedin/posts", "credits": 1,
+      "input": { "type": "object", "required": ["name", "keywords"], "properties": {
+        "name": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" }, "description": "1-6 keywords" },
+        "keywords_and": { "type": "array", "items": { "type": "string" } },
+        "keywords_not": { "type": "array", "items": { "type": "string" } },
+        "time_frame": { "type": "string" },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" },
+        "job_titles": { "type": "array", "items": { "type": "string" }, "description": "max 6 job title filters" },
+        "content_type": { "type": "string", "description": "videos | photos | liveVideos | collaborativeArticles | documents" },
+        "linkedin_sort_by": { "type": "string", "description": "date_posted | relevance" },
+        "mentions_member": { "type": "array", "items": { "type": "string" } },
+        "mentions_organization": { "type": "array", "items": { "type": "integer" } }
+      }}
+    },
+    {
+      "id": "createRedditPostsSearch",
+      "label": "Create Reddit Posts Search",
+      "description": "Monitor Reddit posts AND comments across all of Reddit by keywords. Use createSubredditPostsSearch to monitor a specific subreddit instead. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/reddit/posts", "credits": 1,
+      "input": { "type": "object", "required": ["name", "keywords"], "properties": {
+        "name": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" }, "description": "1-10 keywords" },
+        "keywords_and": { "type": "array", "items": { "type": "string" } },
+        "keywords_not": { "type": "array", "items": { "type": "string" } },
+        "time_frame": { "type": "string" },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" }
+      }}
+    },
+    {
+      "id": "createSubredditPostsSearch",
+      "label": "Create Subreddit Monitor",
+      "description": "Monitor a SPECIFIC subreddit for new posts (no r/ prefix). Optionally filter by keywords. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/reddit/subreddit", "credits": 1,
+      "input": { "type": "object", "required": ["name", "subreddit"], "properties": {
+        "name": { "type": "string" },
+        "subreddit": { "type": "string", "description": "Without r/ prefix, e.g. 'machinelearning'" },
+        "keywords": { "type": "array", "items": { "type": "string" } },
+        "keywords_and": { "type": "array", "items": { "type": "string" } },
+        "keywords_not": { "type": "array", "items": { "type": "string" } },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" }
+      }}
+    },
+    {
+      "id": "createYouTubeVideosSearch",
+      "label": "Create YouTube Videos Search",
+      "description": "Monitor YouTube videos by keywords. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/youtube/videos", "credits": 1,
+      "input": { "type": "object", "required": ["name", "keywords"], "properties": {
+        "name": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" }, "description": "1-10 keywords" },
+        "keywords_and": { "type": "array", "items": { "type": "string" } },
+        "keywords_not": { "type": "array", "items": { "type": "string" } },
+        "time_frame": { "type": "string" },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" }
+      }}
+    },
+    {
+      "id": "createSubstackPostsSearch",
+      "label": "Create Substack Posts Search",
+      "description": "Monitor Substack posts by keywords and/or a specific publication. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/substack/posts", "credits": 1,
+      "input": { "type": "object", "required": ["name"], "properties": {
+        "name": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" }, "description": "max 10" },
+        "keywords_and": { "type": "array", "items": { "type": "string" } },
+        "keywords_not": { "type": "array", "items": { "type": "string" } },
+        "publication": { "type": "string", "description": "Publication name/subdomain/URL" },
+        "time_frame": { "type": "string" },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" }
+      }}
+    },
+    {
+      "id": "createSubstackNotesSearch",
+      "label": "Create Substack Notes Monitor",
+      "description": "Monitor a specific Substack author's notes by handle (@username or username). Optionally filter by keywords. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/substack/notes", "credits": 1,
+      "input": { "type": "object", "required": ["name", "author_handle"], "properties": {
+        "name": { "type": "string" },
+        "author_handle": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" } },
+        "keywords_and": { "type": "array", "items": { "type": "string" } },
+        "keywords_not": { "type": "array", "items": { "type": "string" } },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" }
+      }}
+    },
+    {
+      "id": "createPodcastKeywordsSearch",
+      "label": "Create Podcast Keywords Search",
+      "description": "Monitor podcast episode TRANSCRIPTS for keywords. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/podcast/keywords", "credits": 1,
+      "input": { "type": "object", "required": ["name", "keywords"], "properties": {
+        "name": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" }, "description": "1-10 keywords" },
+        "keywords_and": { "type": "array", "items": { "type": "string" } },
+        "keywords_not": { "type": "array", "items": { "type": "string" } },
+        "time_frame": { "type": "string" },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" }
+      }}
+    },
+    {
+      "id": "createHackerNewsStoriesSearch",
+      "label": "Create Hacker News Stories Search",
+      "description": "Monitor Hacker News stories and comments by keywords. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/hackernews/stories", "credits": 1,
+      "input": { "type": "object", "required": ["name", "keywords"], "properties": {
+        "name": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" }, "description": "1-6 keywords" },
+        "keywords_and": { "type": "array", "items": { "type": "string" } },
+        "keywords_not": { "type": "array", "items": { "type": "string" } },
+        "time_frame": { "type": "string" },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" }
+      }}
+    },
+    {
+      "id": "createNewsApiAiPostsSearch",
+      "label": "Create News Articles Monitor",
+      "description": "Monitor news articles by keywords (boolean OR/AND/NOT). Optionally restrict to specific publisher domains or country. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/newsapi-ai/posts", "credits": 1,
+      "input": { "type": "object", "required": ["name", "keywords"], "properties": {
+        "name": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" }, "description": "1-10 keywords" },
+        "keywords_and": { "type": "array", "items": { "type": "string" } },
+        "keywords_not": { "type": "array", "items": { "type": "string" } },
+        "time_frame": { "type": "string" },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" },
+        "source_uris": { "type": "array", "items": { "type": "string" }, "description": "Publisher domains, e.g. ['bbc.com']" },
+        "exclude_source_uris": { "type": "array", "items": { "type": "string" } },
+        "source_location_uri": { "type": "string", "description": "Wikidata-style country URI" }
+      }}
+    },
+    {
+      "id": "createDailyDevPostsSearch",
+      "label": "Create Daily.dev Posts Search",
+      "description": "Monitor Daily.dev developer posts. Multiple search modes: keyword-search, tag-based-feed, source-based-feed, smart-recommendations, most-discussed, popular-by-tags. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/dailydev/posts", "credits": 1,
+      "input": { "type": "object", "required": ["name"], "properties": {
+        "name": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" } },
+        "keywords_and": { "type": "array", "items": { "type": "string" } },
+        "keywords_not": { "type": "array", "items": { "type": "string" } },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "tags_block": { "type": "array", "items": { "type": "string" } },
+        "sources_follow": { "type": "array", "items": { "type": "string" } },
+        "sources_block": { "type": "array", "items": { "type": "string" } },
+        "search_mode": { "type": "string", "description": "keyword-search | smart-recommendations | tag-based-feed | source-based-feed | popular-by-tags | most-discussed" },
+        "source_id": { "type": "string", "description": "Required for source-based-feed" },
+        "order_by": { "type": "string", "description": "DATE | UPVOTES | DOWNVOTES | COMMENTS | CLICKS" },
+        "min_upvotes": { "type": "integer" },
+        "min_views": { "type": "integer" },
+        "disable_engagement_filter": { "type": "boolean" },
+        "blocked_words": { "type": "array", "items": { "type": "string" } },
+        "blocked_content_types": { "type": "array", "items": { "type": "string" } },
+        "discussed_period": { "type": "integer", "description": "Days, most-discussed mode only" },
+        "time_frame": { "type": "string" },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" }
+      }}
+    },
+    {
+      "id": "createTikTokVideosSearch",
+      "label": "Create TikTok Videos Search",
+      "description": "Monitor TikTok videos. TikTok has no boolean logic — each keyword runs as an independent search and results are merged. past-year is NOT supported. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/tiktok/videos", "credits": 1,
+      "input": { "type": "object", "required": ["name", "keywords"], "properties": {
+        "name": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" }, "description": "1-10 keywords" },
+        "keywords_not": { "type": "array", "items": { "type": "string" } },
+        "time_frame": { "type": "string", "description": "past-24h | past-week | past-month | past-6-months | all-time (no past-year)" },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" },
+        "country": { "type": "string", "description": "ISO 3166-1 alpha-2" },
+        "match_exactly": { "type": "boolean" },
+        "sorting": { "type": "string", "description": "0 (relevance) | 1 (most liked) | 2 (most recent)" }
+      }}
+    },
+    {
+      "id": "createGitHubIssuesSearch",
+      "label": "Create GitHub Issues Search",
+      "description": "Monitor GitHub issues by keywords. Optionally scope to specific repos (owner/repo format). Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/github/issues", "credits": 1,
+      "input": { "type": "object", "required": ["name"], "properties": {
+        "name": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" }, "description": "max 10" },
+        "keywords_and": { "type": "array", "items": { "type": "string" } },
+        "keywords_not": { "type": "array", "items": { "type": "string" } },
+        "github_repos": { "type": "array", "items": { "type": "string" }, "description": "owner/repo format" },
+        "time_frame": { "type": "string" },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" }
+      }}
+    },
+    {
+      "id": "createGitHubDiscussionsSearch",
+      "label": "Create GitHub Discussions Search",
+      "description": "Monitor GitHub discussions by keywords. Optionally scope to specific repos. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/github/discussions", "credits": 1,
+      "input": { "type": "object", "required": ["name"], "properties": {
+        "name": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" } },
+        "keywords_and": { "type": "array", "items": { "type": "string" } },
+        "keywords_not": { "type": "array", "items": { "type": "string" } },
+        "github_repos": { "type": "array", "items": { "type": "string" } },
+        "time_frame": { "type": "string" },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" }
+      }}
+    },
+    {
+      "id": "createBlueskyPostsSearch",
+      "label": "Create Bluesky Posts Search",
+      "description": "Monitor Bluesky posts by keywords. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/bluesky/posts", "credits": 1,
+      "input": { "type": "object", "required": ["name", "keywords"], "properties": {
+        "name": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" }, "description": "1-10 keywords" },
+        "keywords_and": { "type": "array", "items": { "type": "string" } },
+        "keywords_not": { "type": "array", "items": { "type": "string" } },
+        "time_frame": { "type": "string" },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" }
+      }}
+    },
+    {
+      "id": "createTwitterProfileSearch",
+      "label": "Monitor Twitter/X Profile",
+      "description": "Monitor new posts from a specific X/Twitter profile URL. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/twitter/profile", "credits": 1,
+      "input": { "type": "object", "required": ["name", "profile_url"], "properties": {
+        "name": { "type": "string" },
+        "profile_url": { "type": "string", "description": "https://x.com/username" },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" }
+      }}
+    },
+    {
+      "id": "createLinkedInProfileSearch",
+      "label": "Monitor LinkedIn Profile or Company",
+      "description": "Monitor new posts from a specific LinkedIn profile OR company page. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/linkedin/profile", "credits": 1,
+      "input": { "type": "object", "required": ["name", "profile_url"], "properties": {
+        "name": { "type": "string" },
+        "profile_url": { "type": "string", "description": "LinkedIn /in/ or /company/ URL" },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" },
+        "time_frame": { "type": "string" }
+      }}
+    },
+    {
+      "id": "createYouTubeChannelSearch",
+      "label": "Monitor YouTube Channel",
+      "description": "Monitor new videos from a YouTube channel URL. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/youtube/channel", "credits": 1,
+      "input": { "type": "object", "required": ["name", "profile_url"], "properties": {
+        "name": { "type": "string" },
+        "profile_url": { "type": "string", "description": "YouTube channel URL" },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" },
+        "time_frame": { "type": "string" }
+      }}
+    },
+    {
+      "id": "createSubstackProfileSearch",
+      "label": "Monitor Substack Publication",
+      "description": "Monitor new posts from a Substack publication. Provide profile_url OR publication (name/subdomain/URL). Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/substack/profile", "credits": 1,
+      "input": { "type": "object", "required": ["name"], "properties": {
+        "name": { "type": "string" },
+        "profile_url": { "type": "string" },
+        "publication": { "type": "string" },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" },
+        "time_frame": { "type": "string" }
+      }}
+    },
+    {
+      "id": "createTikTokProfileSearch",
+      "label": "Monitor TikTok Profile",
+      "description": "Monitor new videos from a TikTok creator. Accepts URL (https://tiktok.com/@handle) or @handle. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/tiktok/profile", "credits": 1,
+      "input": { "type": "object", "required": ["name", "profile_url"], "properties": {
+        "name": { "type": "string" },
+        "profile_url": { "type": "string" },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" }
+      }}
+    },
+    {
+      "id": "createBlueskyProfileSearch",
+      "label": "Monitor Bluesky Profile",
+      "description": "Monitor new posts from a Bluesky profile URL. Optionally filter by keywords. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/bluesky/profile", "credits": 1,
+      "input": { "type": "object", "required": ["name", "profile_url"], "properties": {
+        "name": { "type": "string" },
+        "profile_url": { "type": "string", "description": "https://bsky.app/profile/..." },
+        "keywords": { "type": "array", "items": { "type": "string" } },
+        "keywords_and": { "type": "array", "items": { "type": "string" } },
+        "keywords_not": { "type": "array", "items": { "type": "string" } },
+        "time_frame": { "type": "string" },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" }
+      }}
+    },
+    {
+      "id": "createPodcastEpisodesSearch",
+      "label": "Monitor Podcast Episodes",
+      "description": "Monitor new episodes from a specific podcast. Use searchPodcasts first to find the podcast_id. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/searches/podcast/episodes", "credits": 1,
+      "input": { "type": "object", "required": ["name", "podcast_id", "podcast_name"], "properties": {
+        "name": { "type": "string" },
+        "podcast_id": { "type": "string", "description": "Podscan podcast ID from searchPodcasts" },
+        "podcast_name": { "type": "string" },
+        "podcast_image_url": { "type": "string" },
+        "podcast_description": { "type": "string" },
+        "max_results": { "type": "number" },
+        "frequency": { "type": "string" }
+      }}
+    },
+    {
+      "id": "socialSignalsMetadata",
+      "label": "Social Signals Metadata",
+      "description": "Get supported Social Signals definitions, default config, statuses, and billing metadata.",
+      "verb": "GET", "path": "/v1/social-signals/metadata", "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "socialSignalsLimits",
+      "label": "Social Signals Limits",
+      "description": "Get tier-derived Social Signals limits and current usage for the authenticated org.",
+      "verb": "GET", "path": "/v1/social-signals/limits", "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "socialSignalsStatus",
+      "label": "Social Signals Status",
+      "description": "Get aggregate Social Signals subscription and enrichment status.",
+      "verb": "GET", "path": "/v1/social-signals/status", "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "createSocialSignalSubscriptions",
+      "label": "Create Social Signals Subscriptions",
+      "description": "Batch upsert LinkedIn profile or company URLs into Social Signals monitoring (max 100).",
+      "verb": "POST", "path": "/v1/social-signals/subscriptions", "credits": 0,
+      "input": { "type": "object", "required": ["subscriptions"], "properties": {
+        "subscriptions": { "type": "array", "items": { "type": "object" }, "description": "Array of { linkedin_url, config? }" }
+      }}
+    },
+    {
+      "id": "listSocialSignalSubscriptions",
+      "label": "List Social Signals Subscriptions",
+      "description": "List Social Signals subscriptions, optionally filtered by status.",
+      "verb": "GET", "path": "/v1/social-signals/subscriptions", "credits": 0,
+      "input": { "type": "object", "properties": {
+        "status": { "type": "string", "description": "ACTIVE | PAUSED | STOPPED" }
+      }}
+    },
+    {
+      "id": "bulkStopSocialSignalSubscriptions",
+      "label": "Bulk Stop Social Signals Subscriptions",
+      "description": "Stop multiple Social Signals subscriptions (max 100 IDs) without deleting historical results.",
+      "verb": "POST", "path": "/v1/social-signals/subscriptions/bulk-stop", "credits": 0,
+      "input": { "type": "object", "required": ["ids"], "properties": {
+        "ids": { "type": "array", "items": { "type": "string" } }
+      }}
+    },
+    {
+      "id": "getSocialSignalSubscription",
+      "label": "Get Social Signals Subscription",
+      "description": "Get one Social Signals subscription by ID.",
+      "verb": "GET", "path": "/v1/social-signals/subscriptions/{id}", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "updateSocialSignalSubscription",
+      "label": "Update Social Signals Subscription",
+      "description": "Update Social Signals signal config or pause/resume a subscription.",
+      "verb": "PATCH", "path": "/v1/social-signals/subscriptions/{id}", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" },
+        "config": { "type": "object" },
+        "status": { "type": "string", "description": "ACTIVE | PAUSED" }
+      }}
+    },
+    {
+      "id": "stopSocialSignalSubscription",
+      "label": "Stop Social Signals Subscription",
+      "description": "Stop one Social Signals subscription without deleting historical results.",
+      "verb": "DELETE", "path": "/v1/social-signals/subscriptions/{id}", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "estimateSocialSignals",
+      "label": "Estimate Social Signals Credits",
+      "description": "Estimate daily Social Signals credit usage for a subscription config. Provide either target_count or target_urls.",
+      "verb": "POST", "path": "/v1/social-signals/estimate", "credits": 0,
+      "input": { "type": "object", "required": ["config"], "properties": {
+        "config": { "type": "object" },
+        "target_count": { "type": "integer", "description": "1-1000" },
+        "target_urls": { "type": "array", "items": { "type": "string" } }
+      }}
+    },
+    {
+      "id": "listSocialSignalFeed",
+      "label": "List Social Signals Feed",
+      "description": "Activity feed of Social Signals events and generated insights. Filter by signal type, severity, target, date range.",
+      "verb": "GET", "path": "/v1/social-signals/feed", "credits": 0,
+      "input": { "type": "object", "properties": {
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer", "description": "max 100" },
+        "content_type": { "type": "string", "description": "all | signals | insights" },
+        "severity": { "type": "string", "description": "LOW | MEDIUM | HIGH" },
+        "signal_type": { "type": "string" },
+        "target_id": { "type": "string" },
+        "target_url": { "type": "string" },
+        "subscription_id": { "type": "string" },
+        "signal_date_from": { "type": "string" },
+        "signal_date_to": { "type": "string" },
+        "min_signals_per_target": { "type": "integer", "description": "1-10" }
+      }}
+    },
+    {
+      "id": "listSocialSignalTargets",
+      "label": "List Social Signals Targets",
+      "description": "List monitored Social Signals targets with their latest signal and enrichment status.",
+      "verb": "GET", "path": "/v1/social-signals/targets", "credits": 0,
+      "input": { "type": "object", "properties": {
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer", "description": "max 100" },
+        "severity": { "type": "string" },
+        "signal_type": { "type": "string" }
+      }}
+    },
+    {
+      "id": "getSocialSignalTargetProfile",
+      "label": "Get Social Signals Target Profile",
+      "description": "Get a monitored target's profile, enrichment status, and recent signal timeline.",
+      "verb": "GET", "path": "/v1/social-signals/targets/{id}/profile", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string", "description": "Target ID" },
+        "timeline_limit": { "type": "integer", "description": "1-100" }
+      }}
+    },
+    {
+      "id": "listSocialSignalTargetInsights",
+      "label": "List Social Signals Target Insights",
+      "description": "Generated AI insights for a monitored target.",
+      "verb": "GET", "path": "/v1/social-signals/targets/{id}/insights", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" },
+        "limit": { "type": "integer", "description": "1-20" }
+      }}
+    },
+    {
+      "id": "listSocialSignalTargetCheckRuns",
+      "label": "List Social Signals Target Check Runs",
+      "description": "Recent Social Signals check runs (provider calls) for a target.",
+      "verb": "GET", "path": "/v1/social-signals/targets/{id}/check-runs", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" },
+        "limit": { "type": "integer", "description": "1-50" }
+      }}
+    },
+    {
+      "id": "listSocialSignalResults",
+      "label": "List Social Signals Results",
+      "description": "List produced Social Signals results with filters by target, signal type, severity, subscription, date.",
+      "verb": "GET", "path": "/v1/social-signals/results", "credits": 0,
+      "input": { "type": "object", "properties": {
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer" },
+        "severity": { "type": "string" },
+        "signal_type": { "type": "string" },
+        "target_id": { "type": "string" },
+        "target_url": { "type": "string" },
+        "subscription_id": { "type": "string" },
+        "signal_date_from": { "type": "string" },
+        "signal_date_to": { "type": "string" }
+      }}
+    },
+    {
+      "id": "getSocialSignalResult",
+      "label": "Get Social Signals Result",
+      "description": "Get one produced Social Signals result by ID.",
+      "verb": "GET", "path": "/v1/social-signals/results/{id}", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "createTopic",
+      "label": "Create Topic Search",
+      "description": "ENTERPRISE. Create a Social Topic search for LinkedIn keyword monitoring. Active topics rediscover daily at 06:00 UTC; engagements backfill at Day 1, 3, 5. Free to create; credits charged per discovered post/engagement. Auto-expires after 30 days.",
+      "verb": "POST", "path": "/v1/topics", "credits": 0,
+      "input": { "type": "object", "required": ["name", "keywords"], "properties": {
+        "name": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" }, "description": "At least 1" },
+        "keywords_and": { "type": "array", "items": { "type": "string" } },
+        "keywords_not": { "type": "array", "items": { "type": "string" } },
+        "job_titles": { "type": "array", "items": { "type": "string" } },
+        "time_frame": { "type": "string" },
+        "max_results": { "type": "integer", "description": "1-500" },
+        "content_type": { "type": "string", "description": "posts | videos | photos | liveVideos | collaborativeArticles | documents" },
+        "sort_by": { "type": "string", "description": "date_posted | relevance" }
+      }}
+    },
+    {
+      "id": "listTopics",
+      "label": "List Topic Searches",
+      "description": "List all enterprise-only Social Topic searches for the org. Free.",
+      "verb": "GET", "path": "/v1/topics", "credits": 0,
+      "input": { "type": "object", "properties": {
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer" }
+      }}
+    },
+    {
+      "id": "getTopic",
+      "label": "Get Topic Search",
+      "description": "Get details for a Social Topic search. Free.",
+      "verb": "GET", "path": "/v1/topics/{id}", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "updateTopic",
+      "label": "Update Topic Search",
+      "description": "Update topic name or status (ACTIVE/PAUSED/STOPPED). Free.",
+      "verb": "PATCH", "path": "/v1/topics/{id}", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "status": { "type": "string" }
+      }}
+    },
+    {
+      "id": "deleteTopic",
+      "label": "Delete Topic Search",
+      "description": "Soft-delete a Social Topic search. Free.",
+      "verb": "DELETE", "path": "/v1/topics/{id}", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "getTopicCreditsSummary",
+      "label": "Get Topic Credit Summary",
+      "description": "Current billing-period credit allocation for a topic, split between new-post credits and engagement-backfill credits. Free.",
+      "verb": "GET", "path": "/v1/topics/{id}/credits-summary", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "getTopicEngagements",
+      "label": "Get Topic Engagements (Deduplicated)",
+      "description": "Paginated engagers for a topic, deduplicated by prospect. Each prospect appears once with their latest engagement. Free.",
+      "verb": "GET", "path": "/v1/topics/{id}/engagements", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" },
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer" }
+      }}
+    },
+    {
+      "id": "getTopicPostEngagements",
+      "label": "Get Topic Post Engagements",
+      "description": "All engagers for a specific LinkedIn post within a topic, with NO dedup. Free.",
+      "verb": "GET", "path": "/v1/topics/{id}/posts/{postId}/engagements", "credits": 0,
+      "input": { "type": "object", "required": ["id", "postId"], "properties": {
+        "id": { "type": "string", "description": "Topic ID" },
+        "postId": { "type": "string", "description": "LinkedIn post ID" },
+        "page": { "type": "integer" },
+        "page_size": { "type": "integer" }
+      }}
+    },
+    {
+      "id": "getUsage",
+      "label": "Get Usage Summary",
+      "description": "Usage metrics for the authenticated org: credits consumed (with breakdown by feature), active monitors, results collected. Free.",
+      "verb": "GET", "path": "/v1/usage", "credits": 0,
+      "input": { "type": "object", "properties": {
+        "from": { "type": "string", "description": "ISO 8601, defaults to start of billing month" },
+        "to": { "type": "string", "description": "ISO 8601, defaults to now" }
+      }}
+    },
+    {
+      "id": "xPostComments",
+      "label": "Get X Post Comments",
+      "description": "Fetch comments/replies on an X (Twitter) post URL. Up to 1000 comments per call.",
+      "verb": "POST", "path": "/v1/x-post/comments", "credits": 1,
+      "input": { "type": "object", "required": ["postUrl"], "properties": {
+        "postUrl": { "type": "string", "description": "https://x.com/user/status/..." },
+        "maxComments": { "type": "integer", "description": "default 50, max 1000" }
+      }}
+    },
+    {
+      "id": "xPostEngagements",
+      "label": "Get X Post Engagements (Likes)",
+      "description": "List users who LIKED a given X post. Requires a connected X account on the org. Costs 1 credit PER engagement returned.",
+      "verb": "POST", "path": "/v1/x-post/engagements", "credits": 1,
+      "input": { "type": "object", "required": ["postUrl"], "properties": {
+        "postUrl": { "type": "string" },
+        "maxEngagements": { "type": "integer", "description": "default 50, max 1000" }
+      }}
+    },
+    {
+      "id": "enrichXUser",
+      "label": "Enrich X User",
+      "description": "Enrich an X/Twitter user by handle (without @): bio, verified, follower/following/tweet counts, location, profile image, website.",
+      "verb": "POST", "path": "/v1/x-user/enrich", "credits": 1,
+      "input": { "type": "object", "required": ["username"], "properties": {
+        "username": { "type": "string", "description": "X handle WITHOUT @" }
+      }}
+    },
+    {
+      "id": "lookupXUser",
+      "label": "Lookup X User by Username",
+      "description": "Look up an X user's user_id, name, bio, and counts. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/x/lookup-user", "credits": 1,
+      "input": { "type": "object", "required": ["username"], "properties": {
+        "username": { "type": "string" }
+      }}
+    },
+    {
+      "id": "xLikePost",
+      "label": "Like X Post (Action)",
+      "description": "Like an X post using a connected X account. Costs 1 credit. Provide tweet_id; optionally specify which X account_id.",
+      "verb": "POST", "path": "/v1/x/like-post", "credits": 1,
+      "input": { "type": "object", "required": ["tweet_id"], "properties": {
+        "tweet_id": { "type": "string" },
+        "account_id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "xReply",
+      "label": "Reply to X Post (Action)",
+      "description": "Reply to an X post. text max 280 chars. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/x/reply", "credits": 1,
+      "input": { "type": "object", "required": ["tweet_id", "text"], "properties": {
+        "tweet_id": { "type": "string" },
+        "text": { "type": "string", "description": "max 280 chars" },
+        "account_id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "xRepost",
+      "label": "Repost X Post (Action)",
+      "description": "Repost (retweet) an X post. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/x/repost", "credits": 1,
+      "input": { "type": "object", "required": ["tweet_id"], "properties": {
+        "tweet_id": { "type": "string" },
+        "account_id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "xDeletePost",
+      "label": "Delete X Post (Action)",
+      "description": "Delete an X post you own. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/x/delete-post", "credits": 1,
+      "input": { "type": "object", "required": ["tweet_id"], "properties": {
+        "tweet_id": { "type": "string" },
+        "account_id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "xCreatePost",
+      "label": "Create X Post (Action)",
+      "description": "Create a new X post. Optionally include a poll (2-4 options, 5-10080 min duration) or media_ids (max 4). Costs 1 credit.",
+      "verb": "POST", "path": "/v1/x/create-post", "credits": 1,
+      "input": { "type": "object", "required": ["text"], "properties": {
+        "text": { "type": "string", "description": "max 280 chars" },
+        "poll_options": { "type": "array", "items": { "type": "string" }, "description": "2-4 options" },
+        "poll_duration_minutes": { "type": "integer", "description": "5-10080" },
+        "media_ids": { "type": "array", "items": { "type": "string" }, "description": "max 4" },
+        "account_id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "xFollow",
+      "label": "Follow X User (Action)",
+      "description": "Follow an X user by their user_id. Costs 1 credit.",
+      "verb": "POST", "path": "/v1/x/follow", "credits": 1,
+      "input": { "type": "object", "required": ["target_user_id"], "properties": {
+        "target_user_id": { "type": "string" },
+        "account_id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "xSendDm",
+      "label": "Send X Direct Message (Action)",
+      "description": "Send a DM on X. REQUIRES X Pro tier. Costs 2 credits. text max 10000 chars.",
+      "verb": "POST", "path": "/v1/x/send-dm", "credits": 2,
+      "input": { "type": "object", "required": ["user_id", "text"], "properties": {
+        "user_id": { "type": "string" },
+        "text": { "type": "string", "description": "max 10000 chars" },
+        "account_id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "listXAccounts",
+      "label": "List Connected X Accounts",
+      "description": "List all X accounts connected to the authenticated organisation. Free.",
+      "verb": "GET", "path": "/v1/x/accounts", "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "getXConnect",
+      "label": "Get X Account Connect URL",
+      "description": "Get the URL to connect a new X account, plus the current connection status. Free.",
+      "verb": "GET", "path": "/v1/x/connect", "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "listOrganisations",
+      "label": "List Organisations",
+      "description": "List all organisations the authenticated user has access to (owned + member).",
+      "verb": "GET", "path": "/v1/org/list", "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "getOrganisation",
+      "label": "Get Organisation",
+      "description": "Get the authenticated user's organisation including name, plan, subscription status, member count. Free.",
+      "verb": "GET", "path": "/v1/org", "credits": 0,
+      "input": { "type": "object", "properties": {} }
     },
     {
       "id": "creditsBalance",
       "label": "Get Credit Balance",
-      "description": "Get the current Trigify credit balance for the org.",
-      "verb": "GET",
-      "path": "/v1/credits/balance",
-      "credits": 0,
+      "description": "Current credit balance, subscription plan, and next reset date. Free.",
+      "verb": "GET", "path": "/v1/credits/balance", "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "creditsUsage",
+      "label": "Get Credit Usage History",
+      "description": "Individual credit consumption records for the last N days. Free.",
+      "verb": "GET", "path": "/v1/credits/usage", "credits": 0,
+      "input": { "type": "object", "properties": {
+        "days": { "type": "string", "description": "1-365, default 30" },
+        "limit": { "type": "string", "description": "1-500, default 100" },
+        "offset": { "type": "string" }
+      }}
+    },
+    {
+      "id": "creditsBreakdown",
+      "label": "Get Credit Usage Breakdown",
+      "description": "Credit usage aggregated by feature for the last N days. Free.",
+      "verb": "GET", "path": "/v1/credits/breakdown", "credits": 0,
+      "input": { "type": "object", "properties": {
+        "days": { "type": "string", "description": "1-365, default 30" }
+      }}
+    },
+    {
+      "id": "createWorkflowTable",
+      "label": "Create Workflow Table",
+      "description": "Create a new Workflow Table for storing agent memory. Free.",
+      "verb": "POST", "path": "/v1/workflow-tables", "credits": 0,
+      "input": { "type": "object", "required": ["name"], "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" }
+      }}
+    },
+    {
+      "id": "listWorkflowTables",
+      "label": "List Workflow Tables",
+      "description": "List all workflow tables for the org. Free.",
+      "verb": "GET", "path": "/v1/workflow-tables", "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "createWorkflow",
+      "label": "Create Workflow",
+      "description": "Create a new workflow from a JSON definition. Optionally link to a saved search. Free.",
+      "verb": "POST", "path": "/v1/workflows", "credits": 0,
+      "input": { "type": "object", "required": ["name", "workflow"], "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "workflow": { "type": "object", "description": "Workflow definition JSON" },
+        "search_id": { "type": "string" },
+        "enabled": { "type": "boolean" },
+        "status": { "type": "string", "description": "DRAFT | PUBLISHED" }
+      }}
+    },
+    {
+      "id": "listWorkflows",
+      "label": "List Workflows",
+      "description": "List workflows for the org, paginated. Free.",
+      "verb": "GET", "path": "/v1/workflows", "credits": 0,
+      "input": { "type": "object", "properties": {
+        "limit": { "type": "string" },
+        "offset": { "type": "string" },
+        "status": { "type": "string", "description": "DRAFT | PUBLISHED" }
+      }}
+    },
+    {
+      "id": "listWorkflowActions",
+      "label": "List Workflow Actions",
+      "description": "List all available workflow action kinds with inputs/outputs. Free. Useful for building workflow JSON.",
+      "verb": "GET", "path": "/v1/workflows/actions", "credits": 0,
+      "input": { "type": "object", "properties": {
+        "category": { "type": "string", "description": "ai | enrichment | crm | messaging | social | control_flow | utility | integration | other" }
+      }}
+    },
+    {
+      "id": "listWorkflowExamples",
+      "label": "List Workflow Examples",
+      "description": "Example workflow definitions for common patterns. Free.",
+      "verb": "GET", "path": "/v1/workflows/examples", "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "listWorkflowTriggers",
+      "label": "List Workflow Triggers",
+      "description": "Available workflow trigger kinds with inputs/outputs. Free.",
+      "verb": "GET", "path": "/v1/workflows/triggers", "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "getWorkflow",
+      "label": "Get Workflow",
+      "description": "Get a single workflow by ID. Free.",
+      "verb": "GET", "path": "/v1/workflows/{id}", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "updateWorkflow",
+      "label": "Update Workflow",
+      "description": "Partially update a workflow. Free.",
+      "verb": "PATCH", "path": "/v1/workflows/{id}", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "workflow": { "type": "object" },
+        "enabled": { "type": "boolean" },
+        "status": { "type": "string", "description": "DRAFT | PUBLISHED" }
+      }}
+    },
+    {
+      "id": "deleteWorkflow",
+      "label": "Delete Workflow",
+      "description": "Soft-delete a workflow. Free.",
+      "verb": "DELETE", "path": "/v1/workflows/{id}", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "upsertWorkflowDraft",
+      "label": "Upsert Workflow Draft",
+      "description": "Create or update the draft for a workflow. Free.",
+      "verb": "PUT", "path": "/v1/workflows/{id}/draft", "credits": 0,
+      "input": { "type": "object", "required": ["id", "name", "workflow"], "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "workflow": { "type": "object" }
+      }}
+    },
+    {
+      "id": "getWorkflowDraft",
+      "label": "Get Workflow Draft",
+      "description": "Get the current draft for a workflow. Free.",
+      "verb": "GET", "path": "/v1/workflows/{id}/draft", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "deleteWorkflowDraft",
+      "label": "Delete Workflow Draft",
+      "description": "Remove the draft for a workflow. Free.",
+      "verb": "DELETE", "path": "/v1/workflows/{id}/draft", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "testWorkflow",
+      "label": "Test Workflow",
+      "description": "Trigger a test execution of a workflow. Returns a test_run_id you can poll via getWorkflowExecution. Optionally pass overrides for the trigger data.",
+      "verb": "POST", "path": "/v1/workflows/{id}/test", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" },
+        "overrides": { "type": "object", "description": "Override trigger data: author_url, text, likes, comments, post_url, date_posted, source, signal_type, severity" },
+        "test_config": { "type": "object", "description": "{ mode, strict_data_validation, action_mocks }" }
+      }}
+    },
+    {
+      "id": "listWorkflowExecutions",
+      "label": "List Workflow Executions",
+      "description": "Paginated execution logs for a workflow. Free.",
+      "verb": "GET", "path": "/v1/workflows/{id}/executions", "credits": 0,
+      "input": { "type": "object", "required": ["id"], "properties": {
+        "id": { "type": "string" },
+        "page": { "type": "string" },
+        "page_size": { "type": "string" }
+      }}
+    },
+    {
+      "id": "getWorkflowExecution",
+      "label": "Get Workflow Execution",
+      "description": "Get a single workflow execution log with ordered step details (input, output, mapped_output, errors). Free.",
+      "verb": "GET", "path": "/v1/workflows/{id}/executions/{runId}", "credits": 0,
+      "input": { "type": "object", "required": ["id", "runId"], "properties": {
+        "id": { "type": "string", "description": "Workflow ID" },
+        "runId": { "type": "string", "description": "Execution run ID" }
+      }}
+    },
+    {
+      "id": "listIntegrations",
+      "label": "List Connected Integrations",
+      "description": "List all OAuth and API-key integrations connected to the workspace (Slack, HubSpot, Salesforce, Attio, Linear, Notion, Airtable, Google Sheets, Gmail, Instantly, Smartlead, HeyReach, LaGrowthMachine). Free.",
+      "verb": "GET", "path": "/v1/integrations", "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "integrationHealth",
+      "label": "Check Integration Health",
+      "description": "Validates OAuth token freshness for an integration. Optional crm-fields probe for HubSpot/Attio/Salesforce. Free.",
+      "verb": "GET", "path": "/v1/integrations/{type}/health", "credits": 0,
+      "input": { "type": "object", "required": ["type"], "properties": {
+        "type": { "type": "string", "description": "slack | hubspot | attio | salesforce | linear | notion | airtable | google_sheets | gmail" },
+        "probe": { "type": "string", "description": "none | crm-fields" }
+      }}
+    },
+    {
+      "id": "listSlackChannels",
+      "label": "List Slack Channels",
+      "description": "List channels in the connected Slack workspace, optionally filtered. Free.",
+      "verb": "GET", "path": "/v1/integrations/slack/channels", "credits": 0,
+      "input": { "type": "object", "properties": {
+        "search": { "type": "string" },
+        "member_only": { "type": "string" }
+      }}
+    },
+    {
+      "id": "listSlackUsers",
+      "label": "List Slack Users",
+      "description": "List users in the connected Slack workspace. Free.",
+      "verb": "GET", "path": "/v1/integrations/slack/users", "credits": 0,
+      "input": { "type": "object", "properties": {
+        "search": { "type": "string" }
+      }}
+    },
+    {
+      "id": "getCrmFields",
+      "label": "Get CRM Fields",
+      "description": "Get contacts + companies field schemas for HubSpot, Attio, or Salesforce. Free.",
+      "verb": "GET", "path": "/v1/integrations/{type}/crm-fields", "credits": 0,
+      "input": { "type": "object", "required": ["type"], "properties": {
+        "type": { "type": "string", "description": "hubspot | attio | salesforce" }
+      }}
+    },
+    {
+      "id": "getCrmFieldOptions",
+      "label": "Get CRM Field Options (Attio)",
+      "description": "Get select/multiselect options for an Attio field. Free.",
+      "verb": "GET", "path": "/v1/integrations/crm-field-options", "credits": 0,
+      "input": { "type": "object", "required": ["object_type", "field_slug"], "properties": {
+        "object_type": { "type": "string", "description": "contacts | companies" },
+        "field_slug": { "type": "string" }
+      }}
+    },
+    {
+      "id": "listLinearTeams",
+      "label": "List Linear Teams",
+      "description": "List all Linear teams. Free.",
+      "verb": "GET", "path": "/v1/integrations/linear/teams", "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "listLinearUsers",
+      "label": "List Linear Users",
+      "description": "List Linear users, optionally filtered by team or search. Free.",
+      "verb": "GET", "path": "/v1/integrations/linear/users", "credits": 0,
+      "input": { "type": "object", "properties": {
+        "team_id": { "type": "string" },
+        "search": { "type": "string" }
+      }}
+    },
+    {
+      "id": "listLinearStates",
+      "label": "List Linear Workflow States",
+      "description": "Workflow states for a Linear team. Free.",
+      "verb": "GET", "path": "/v1/integrations/linear/states", "credits": 0,
+      "input": { "type": "object", "required": ["team_id"], "properties": {
+        "team_id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "listNotionDatabases",
+      "label": "List Notion Databases",
+      "description": "List Notion databases, optionally filtered by title. Free.",
+      "verb": "GET", "path": "/v1/integrations/notion/databases", "credits": 0,
+      "input": { "type": "object", "properties": {
+        "query": { "type": "string" },
+        "page_size": { "type": "string", "description": "1-100, default 100" }
+      }}
+    },
+    {
+      "id": "getNotionSchema",
+      "label": "Get Notion Database Schema",
+      "description": "Properties/schema for a Notion database. Free.",
+      "verb": "GET", "path": "/v1/integrations/notion/databases/{database_id}/schema", "credits": 0,
+      "input": { "type": "object", "required": ["database_id"], "properties": {
+        "database_id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "listAirtableBases",
+      "label": "List Airtable Bases",
+      "description": "List all Airtable bases. Free.",
+      "verb": "GET", "path": "/v1/integrations/airtable/bases", "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "listAirtableTables",
+      "label": "List Airtable Tables",
+      "description": "List tables within an Airtable base. Free.",
+      "verb": "GET", "path": "/v1/integrations/airtable/bases/{base_id}/tables", "credits": 0,
+      "input": { "type": "object", "required": ["base_id"], "properties": {
+        "base_id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "getAirtableFields",
+      "label": "Get Airtable Table Fields",
+      "description": "Field/column definitions for an Airtable table. Free.",
+      "verb": "GET", "path": "/v1/integrations/airtable/fields", "credits": 0,
+      "input": { "type": "object", "required": ["base_id", "table_id"], "properties": {
+        "base_id": { "type": "string" },
+        "table_id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "listGoogleSheetsDocuments",
+      "label": "List Google Sheets Documents",
+      "description": "List Google Sheets spreadsheets. Free.",
+      "verb": "GET", "path": "/v1/integrations/google-sheets/documents", "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "listGoogleSheetsSheets",
+      "label": "List Sheets in a Google Sheets Doc",
+      "description": "List sheets/tabs within a Google Sheets spreadsheet. Free.",
+      "verb": "GET", "path": "/v1/integrations/google-sheets/documents/{document_id}/sheets", "credits": 0,
+      "input": { "type": "object", "required": ["document_id"], "properties": {
+        "document_id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "getGoogleSheetsColumns",
+      "label": "Get Google Sheets Columns",
+      "description": "Column headers for a Google Sheets sheet. Free.",
+      "verb": "GET", "path": "/v1/integrations/google-sheets/columns", "credits": 0,
+      "input": { "type": "object", "required": ["document_id", "sheet_id"], "properties": {
+        "document_id": { "type": "string" },
+        "sheet_id": { "type": "string" }
+      }}
+    },
+    {
+      "id": "listCampaigns",
+      "label": "List Campaigns (Instantly / Smartleads / HeyReach)",
+      "description": "List campaigns from the connected Instantly, Smartleads, or HeyReach integration. Free.",
+      "verb": "GET", "path": "/v1/integrations/{type}/campaigns", "credits": 0,
+      "input": { "type": "object", "required": ["type"], "properties": {
+        "type": { "type": "string", "description": "instantly | smartleads | heyreach" }
+      }}
+    },
+    {
+      "id": "listAudiences",
+      "label": "List LaGrowthMachine Audiences",
+      "description": "List LaGrowthMachine audiences. Free.",
+      "verb": "GET", "path": "/v1/integrations/audiences", "credits": 0,
       "input": { "type": "object", "properties": {} }
     }
   ]

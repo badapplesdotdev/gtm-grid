@@ -71,6 +71,10 @@ interface AccountBarProps {
   onSwitchProject: () => void;
   /** Refresh the current local project path when the menu opens. */
   onOpenMenu: () => void;
+  /** Current appearance theme (for the dark-mode toggle). */
+  theme?: "light" | "dark";
+  /** Toggle the appearance theme; when provided, the Appearance section shows. */
+  onToggleTheme?: () => void;
 }
 
 /**
@@ -78,7 +82,7 @@ interface AccountBarProps {
  * always; layers cloud auth + workspace switching on top when signed in.
  */
 export function AccountBar(props: AccountBarProps) {
-  const { projectName, healthStatus, currentProjectPath, onSwitchProject, onOpenMenu } =
+  const { projectName, healthStatus, currentProjectPath, onSwitchProject, onOpenMenu, theme, onToggleTheme } =
     props;
   const [open, setOpen] = useState(false);
   const me = useMe();
@@ -222,6 +226,22 @@ export function AccountBar(props: AccountBarProps) {
                 Switch project
               </button>
             </div>
+
+            {/* Appearance — dark-mode toggle (the only user-adjustable option). */}
+            {onToggleTheme && (
+              <div className="account-menu-sec">
+                <div className="account-menu-label">Appearance</div>
+                <button className="appearance-toggle" onClick={onToggleTheme}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                  </svg>
+                  <span>Dark mode</span>
+                  <span className={`appearance-switch ${theme === "dark" ? "on" : ""}`}>
+                    <span className="appearance-knob" />
+                  </span>
+                </button>
+              </div>
+            )}
 
             {signedIn && (
               <div className="account-menu-sec">

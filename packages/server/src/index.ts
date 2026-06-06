@@ -586,7 +586,18 @@ const server = createServer(async (req, res) => {
     const message = String(body?.message ?? "");
     if (!message) return send(res, 400, { error: "message required" }, origin);
     try {
-      const context = body?.context;
+      // Snapshot the live connector registry so the skill's "Connectors
+      // currently installed" section reflects whatever extensions the user
+      // has registered, including ones added since the last app launch.
+      const providers = current.engine.registry.list().map((c) => ({
+        id: c.id,
+        name: c.name,
+        category: c.category,
+        methodCount: c.methods.length,
+      }));
+      const context = { ...(body?.context ?? {}), providers };
+      // Pass `origin` through so the SSE stream emits the allowlisted CORS
+      // header on this privileged route (#22).
       if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context, origin });
       else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin });
     } catch (e) {
