@@ -98,11 +98,6 @@ export const Icon = {
 
 // ─── Helpers ─────────────────────────────────────────────
 
-function truncateJSON(val: unknown): string {
-  const s = JSON.stringify(val);
-  return s.length > 60 ? s.slice(0, 58) + "…" : s;
-}
-
 function isObjectOrArray(val: unknown): boolean {
   return val !== null && typeof val === "object";
 }

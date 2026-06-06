@@ -34,7 +34,7 @@ describe("decodeMasterKeyBytes (CREDENTIALS_MASTER_KEY adapter)", () => {
     );
     const key = decodeMasterKeyBytes(b64);
     expect(key.byteLength).toBe(KEY_BYTES);
-    expect([...key]).toEqual(new Array(KEY_BYTES).fill(7));
+    expect([...key]).toEqual(Array.from({ length: KEY_BYTES }, () => 7));
   });
 
   it("throws EncryptError when the key is missing (fail closed)", () => {

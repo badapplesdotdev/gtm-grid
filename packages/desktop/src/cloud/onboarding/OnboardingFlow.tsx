@@ -23,7 +23,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { useAction, useMutation } from "convex/react";
 import { Effect, Layer } from "effect";
-import { type BillingCycle, type PaidPlanId } from "@gtmgrid/cloud";
+import { type BillingCycle } from "@gtmgrid/cloud";
 import { api } from "../../../../../convex/_generated/api";
 import type { Id } from "../../../../../convex/_generated/dataModel";
 import { LogoMark } from "../../Logo";
@@ -35,7 +35,6 @@ import {
 import {
   CheckoutError,
   CheckoutRunner,
-  CheckoutService,
   CheckoutServiceLive,
   type CheckoutActionResult,
 } from "../checkout";
@@ -50,7 +49,6 @@ import {
 import { UrlOpenerLive } from "../invite";
 import {
   backScreen,
-  nextScreen,
   OnboardingCheckoutService,
   OnboardingCheckoutServiceLive,
   type OnboardingScreen,

@@ -582,7 +582,7 @@ function send(res: ServerResponse, status: number, data: unknown, origin?: strin
   const json = JSON.stringify(data);
   res.writeHead(status, {
     "content-type": "application/json",
-    ...(corsHeadersFor(origin) ?? {}),
+    ...corsHeadersFor(origin),
   });
   res.end(json);
 }
@@ -622,7 +622,7 @@ const server = createServer(async (req, res) => {
         category: c.category,
         methodCount: c.methods.length,
       }));
-      const context = { ...(body?.context ?? {}), providers };
+      const context = { ...body?.context, providers };
       // Pass `origin` through so the SSE stream emits the allowlisted CORS
       // header on this privileged route (#22).
       if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context, origin });

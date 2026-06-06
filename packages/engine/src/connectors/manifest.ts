@@ -76,7 +76,7 @@ async function httpCall(
   const headers: Record<string, string> = {
     accept: "application/json",
     "user-agent": "gtmgrid/0.1",
-    ...(man.headers ?? {}),
+    ...man.headers,
   };
 
   // Credential injection.

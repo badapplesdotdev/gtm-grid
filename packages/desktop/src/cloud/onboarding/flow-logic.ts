@@ -88,7 +88,7 @@ export function planContinue(plan: SelectablePlan): PlanContinue {
  */
 export function nextScreen(
   screen: OnboardingScreen,
-  plan: SelectablePlan = "free",
+  _plan: SelectablePlan = "free",
 ): OnboardingScreen {
   switch (screen) {
     case "signin":

@@ -113,7 +113,7 @@ export class CellCoercionService extends Effect.Service<CellCoercionService>()(
               }
               try {
                 return JSON.stringify(JSON.parse(raw));
-              } catch (cause) {
+              } catch {
                 return yield* Effect.fail(
                   new CellCoercionError({
                     message: `Cannot coerce ${JSON.stringify(raw)} to JSON`,
