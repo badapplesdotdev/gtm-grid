@@ -172,10 +172,13 @@ The packaged app bundles its own Node runtime + engine, so it runs on a clean Ma
 
 ## Cloud / Teams (commercial)
 
-gtmgrid is **open-core**. The free, MIT-licensed local app is **100% local and
-offline** — local solo projects use the bundled SQLite engine and never call the
-cloud. The commercial value is **multiplayer / team collaboration**, sold on top
-as a paid tier.
+gtmgrid is **source-available** under the
+[Functional Source License (FSL-1.1-MIT)](./LICENSE) — one repo, all the code,
+free to use/self-host/modify for any purpose **except** building a competing
+commercial product (each release converts to MIT two years after it ships). The
+free local app is **100% local and offline** — local solo projects use the
+bundled SQLite engine and never call the cloud. The commercial value is
+**multiplayer / team collaboration**, sold on top as a paid tier.
 
 | | Free (local solo) | Paid (cloud team) |
 | --- | --- | --- |
@@ -282,4 +285,12 @@ unchanged local tool) and tracked for later:
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+[**FSL-1.1-MIT**](./LICENSE) — the [Functional Source License](https://fsl.software).
+You may use, copy, modify, and redistribute gtmgrid for any **Permitted Purpose**
+(internal use, self-hosting, education, research, professional services). The one
+restriction is **Competing Use**: you may not use it to offer a commercial product
+or service that substitutes for gtmgrid. Two years after each version is published
+it automatically converts to the **MIT license**.
+
+This keeps the whole codebase public and contributable while preventing commercial
+resale — and every release becomes fully open source on a fixed schedule.
