@@ -76,6 +76,11 @@ interface AccountBarProps {
   theme?: "light" | "dark";
   /** Toggle the appearance theme; when provided, the Appearance section shows. */
   onToggleTheme?: () => void;
+  /**
+   * Open the full-screen cloud onboarding flow (C28). When provided, the
+   * signed-out menu's "Sign in" opens this flow instead of the inline form.
+   */
+  onStartOnboarding?: () => void;
 }
 
 /**
@@ -83,7 +88,7 @@ interface AccountBarProps {
  * always; layers cloud auth + workspace switching on top when signed in.
  */
 export function AccountBar(props: AccountBarProps) {
-  const { projectName, healthStatus, currentProjectPath, onSwitchProject, onOpenMenu, theme, onToggleTheme } =
+  const { projectName, healthStatus, currentProjectPath, onSwitchProject, onOpenMenu, theme, onToggleTheme, onStartOnboarding } =
     props;
   const [open, setOpen] = useState(false);
   const me = useMe();
@@ -173,6 +178,35 @@ export function AccountBar(props: AccountBarProps) {
                   activeId={activeWorkspace?._id ?? null}
                   onSelect={(id) => setActiveWorkspaceId(id)}
                 />
+              ) : onStartOnboarding ? (
+                // Full-screen onboarding (C28): the menu's "Sign in" launches the
+                // split-layout flow instead of the inline form.
+                <div className="account-menu-sec">
+                  <div className="account-menu-label">Cloud</div>
+                  <button
+                    className="account-menu-item"
+                    onClick={() => {
+                      setOpen(false);
+                      onStartOnboarding();
+                    }}
+                  >
+                    <svg
+                      width="15"
+                      height="15"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+                      <polyline points="10 17 15 12 10 7" />
+                      <line x1="15" y1="12" x2="3" y2="12" />
+                    </svg>
+                    Sign in to gtm grid cloud
+                  </button>
+                </div>
               ) : (
                 <SignInSection onDone={() => setOpen(false)} />
               ))}

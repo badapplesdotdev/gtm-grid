@@ -50,13 +50,25 @@ export {
 } from "./seats.js";
 
 export {
+  ALL_PAID_PLAN_IDS,
+  ANNUAL_PAID_PLAN_IDS,
+  baseTierOf,
   derivePaidPlanId,
+  FREE_PLAN,
+  isBasePaidPlanId,
   isPaidPlanId,
   PAID_PLAN_IDS,
   PAID_PLANS,
+  PLAN_BILLING_IDS,
   PLAN_CATALOG,
   planName,
+  perSeatUsdFor,
+  resolvePlanId,
+  type AnnualPaidPlanId,
+  type AnyPaidPlanId,
+  type BillingCycle,
   type CloudActionsMode,
+  type FreePlanDisplay,
   type PaidPlanId,
   type PlanDisplay,
 } from "./plans.js";
