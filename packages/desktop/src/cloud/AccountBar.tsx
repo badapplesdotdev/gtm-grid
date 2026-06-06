@@ -137,6 +137,8 @@ export function AccountBar(props: AccountBarProps) {
                   : "Connecting…"}
           </span>
         </span>
+        {/* Plan/seat chip lives here (moved out of the cramped sidebar header). */}
+        <PlanBadge />
         <svg
           className="account-chevrons"
           width="14"

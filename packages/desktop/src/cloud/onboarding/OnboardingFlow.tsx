@@ -131,6 +131,11 @@ interface OnboardingFlowProps {
   onClose: () => void;
   /** Called when setup completes; the app enters with this workspace selected. */
   onDone: (workspaceId: Id<"workspaces"> | null) => void;
+  /**
+   * Forced (pro) mode: auth is REQUIRED to use the app at all (even local), so
+   * the dismiss/"continue local only" escape is hidden. OSS builds never set this.
+   */
+  forced?: boolean;
 }
 
 /** The shared left-pane scaffold: wordmark topbar, body card, optional footer. */
@@ -259,7 +264,7 @@ function OAuthRow(props: {
 }
 
 export function OnboardingFlow(props: OnboardingFlowProps) {
-  const { initialScreen, hasSession, onClose, onDone } = props;
+  const { initialScreen, hasSession, onClose, onDone, forced = false } = props;
   const [screen, setScreen] = useState<OnboardingScreen>(initialScreen);
   const [state, setStateRaw] = useState<FlowState>(INITIAL);
   const [busy, setBusy] = useState(false);
@@ -484,15 +489,18 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
         }`}
       >
         <div className="ob-form-pane">
-          {/* Dismiss back to local — always available (local-first opt-out). */}
-          <button
-            className="ob-dismiss"
-            onClick={onClose}
-            title="Continue without an account (local only)"
-            aria-label="Close onboarding"
-          >
-            <X s={16} />
-          </button>
+          {/* Dismiss back to local — local-first opt-out. Hidden in forced (pro)
+              mode where an account is required even to use the app locally. */}
+          {!forced && (
+            <button
+              className="ob-dismiss"
+              onClick={onClose}
+              title="Continue without an account (local only)"
+              aria-label="Close onboarding"
+            >
+              <X s={16} />
+            </button>
+          )}
 
           {screen === "signin" && (
             <SignIn
@@ -505,6 +513,7 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
               onSubmit={() => void submitAuth("signIn")}
               onGoSignup={() => go("signup")}
               onSkip={onClose}
+              forced={forced}
             />
           )}
           {screen === "signup" && (
@@ -597,8 +606,9 @@ function SignIn(props: {
   onSubmit: () => void;
   onGoSignup: () => void;
   onSkip: () => void;
+  forced?: boolean;
 }) {
-  const { state, set, busy, error, providers, onError, onSubmit, onGoSignup, onSkip } =
+  const { state, set, busy, error, providers, onError, onSubmit, onGoSignup, onSkip, forced } =
     props;
   return (
     <Pane
@@ -651,11 +661,13 @@ function SignIn(props: {
         {busy ? "Signing in…" : "Sign in"} <ArrowRight s={15} />
       </button>
 
-      <p className="ob-fineprint">
-        Solo &amp; offline? You don't need an account —{" "}
-        <a onClick={onSkip}>just keep using the desktop app</a>. Sign in is for
-        cloud sync &amp; realtime teams.
-      </p>
+      {!forced && (
+        <p className="ob-fineprint">
+          Solo &amp; offline? You don't need an account —{" "}
+          <a onClick={onSkip}>just keep using the desktop app</a>. Sign in is for
+          cloud sync &amp; realtime teams.
+        </p>
+      )}
     </Pane>
   );
 }
