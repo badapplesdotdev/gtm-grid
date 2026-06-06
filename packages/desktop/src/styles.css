@@ -2431,7 +2431,21 @@ html, body, #root {
   display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2);
   cursor: pointer; padding-bottom: 8px;
 }
-.import-rb-header input { accent-color: var(--accent); width: 15px; height: 15px; }
+.import-input-wrap { position: relative; }
+.import-input-ico {
+  position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  color: var(--text-3); pointer-events: none; display: inline-flex;
+}
+.import-toggle {
+  all: unset; cursor: pointer; width: 34px; height: 20px; border-radius: 999px;
+  background: var(--border-2); position: relative; transition: background .15s; flex-shrink: 0;
+}
+.import-toggle.on { background: var(--accent); }
+.import-toggle-knob {
+  position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s;
+}
+.import-toggle.on .import-toggle-knob { transform: translateX(14px); }
 
 /* import grid (review + result) */
 .import-grid-wrap {

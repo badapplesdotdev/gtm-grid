@@ -392,10 +392,18 @@ export function ImportCsvModal({
       <div className="import-review-bar">
         <div className="import-rb-name">
           <label className="form-label" style={{ marginBottom: 4 }}>Table name</label>
-          <input className="form-input" value={tableName} onChange={(e) => setTableName(e.target.value)} />
+          <div className="import-input-wrap">
+            <span className="import-input-ico"><I.Table s={14} /></span>
+            <input className="form-input" style={{ paddingLeft: 32 }} value={tableName}
+              onChange={(e) => setTableName(e.target.value)} />
+          </div>
         </div>
         <label className="import-rb-header">
-          <input type="checkbox" checked={hasHeader} onChange={(e) => toggleHeader(e.target.checked)} />
+          <button type="button" role="switch" aria-checked={hasHeader}
+            className={`import-toggle${hasHeader ? " on" : ""}`}
+            onClick={() => toggleHeader(!hasHeader)}>
+            <span className="import-toggle-knob" />
+          </button>
           <span>First row is a header</span>
         </label>
       </div>
