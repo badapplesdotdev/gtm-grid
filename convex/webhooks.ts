@@ -30,6 +30,7 @@
  */
 
 import { findUpsertRowId } from "@gtmgrid/cloud";
+import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { requireMember } from "./model/auth.js";
 import { mergeCellPatch } from "./model/grid.js";
@@ -273,22 +274,26 @@ export const rotateSecret = mutation({
 });
 
 /**
- * List a webhook's recent deliveries (newest first). Members-only — the
- * webhook's workspace gates access (same getOrThrow + requireMember pattern as
- * {@link listWebhooks}). Drives the desktop "Recent deliveries" panel. Default
- * limit 20; the table is retention-capped at {@link DELIVERY_RETENTION}. NOT
- * metered (read of metadata).
+ * Cursor-paginated list of a webhook's deliveries (newest first). Members-only —
+ * the webhook's workspace gates access (same getOrThrow + requireMember pattern
+ * as {@link listWebhooks}). Drives the desktop "Recent deliveries" panel via
+ * `usePaginatedQuery` (initial 20, "Load more" pages 20 at a time). The table is
+ * retention-capped at {@link DELIVERY_RETENTION}, so total pageable rows are
+ * bounded. NOT metered (read of metadata).
  */
-export const listDeliveries = query({
-  args: { webhookId: v.id("webhooks"), limit: v.optional(v.number()) },
-  handler: async (ctx, { webhookId, limit }) => {
-    const webhook = await getOrThrow(ctx, "webhooks", webhookId);
+export const listDeliveriesPaged = query({
+  args: {
+    webhookId: v.id("webhooks"),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    const webhook = await getOrThrow(ctx, "webhooks", args.webhookId);
     await requireMember(ctx, webhook.workspaceId);
     return await ctx.db
       .query("webhookDeliveries")
-      .withIndex("by_webhook", (q) => q.eq("webhookId", webhookId))
+      .withIndex("by_webhook", (q) => q.eq("webhookId", args.webhookId))
       .order("desc")
-      .take(limit ?? 20);
+      .paginate(args.paginationOpts);
   },
 });
 
