@@ -94,39 +94,31 @@ async function fetchGrid(tableId: string): Promise<WorkerGrid> {
 }
 
 /**
- * Resolve the row this record targets, honouring `mode`. For "upsert" it finds an
- * existing row whose cell in the `upsertKey` column equals the incoming mapped
- * value and updates that row's mapped cells through `/webhook/setCell`; otherwise
- * (or for "create") it inserts a fresh row via `/webhook/insertRow`. Returns the
- * resolved `rowId`. Idempotency for the create path is provided by the event id
- * de-dupe + the unique step key wrapping this call.
+ * Resolve the row this record targets, honouring `mode`. Both paths write the
+ * row + cells in ONE server-side Convex mutation that meters EXACTLY ONCE per
+ * record (never per cell), returning the resolved `rowId`.
+ *
+ *  - "upsert": POST `/webhook/upsertRow` with the upsert key. Convex matches an
+ *    existing row server-side (atomic — no client read-then-write race) and
+ *    patches its cells, or inserts a fresh row when nothing matches. The worker
+ *    no longer fetches the grid or loops `setCell` per cell.
+ *  - "create" (or upsert with no key): POST `/webhook/insertRow` (unchanged).
+ *
+ * Idempotency is provided by the event id de-dupe + the unique step key wrapping
+ * this call, identically for both modes.
  */
 async function resolveRow(
   data: WebhookRecordData,
   webhookId: string,
 ): Promise<string> {
   if (data.mode === "upsert" && data.upsertKey !== null) {
-    const incoming = data.mappedCells[data.upsertKey];
-    if (incoming !== undefined && incoming !== null && incoming !== "") {
-      const grid = await fetchGrid(data.tableId);
-      const match = grid.cells.find(
-        (c) => c.columnId === data.upsertKey && c.value === incoming,
-      );
-      if (match !== undefined) {
-        // Update the matched row's mapped cells in place (skip empties; the
-        // worker route ignores cross-table columns).
-        for (const [columnId, value] of Object.entries(data.mappedCells)) {
-          if (value === undefined || value === null || value === "") continue;
-          await convexWorkerClient.mutation(WORKER_REFS.setCell, {
-            rowId: match.rowId,
-            columnId,
-            value,
-            status: "done",
-          });
-        }
-        return match.rowId;
-      }
-    }
+    // Server-side upsert: match + patch-or-insert in one metered-once mutation.
+    const result = (await convexWorkerClient.mutation("/webhook/upsertRow", {
+      webhookId,
+      upsertKey: data.upsertKey,
+      cells: data.mappedCells,
+    })) as { rowId: string };
+    return result.rowId;
   }
   // Create path: insert one row + its cells (metered once per record).
   const result = (await convexWorkerClient.mutation("/webhook/insertRow", {

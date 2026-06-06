@@ -29,6 +29,7 @@
  * queries/mutations in this file.
  */
 
+import { findUpsertRowId } from "@gtmgrid/cloud";
 import { ConvexError, v } from "convex/values";
 import { requireMember } from "./model/auth.js";
 import { mergeCellPatch } from "./model/grid.js";
@@ -386,6 +387,164 @@ export const insertWebhookRow = internalMutation({
     }
 
     // Exactly ONE billable cloud action per received record (not per cell).
+    await meterCloudAction(ctx, table.workspaceId);
+
+    // Telemetry: bump the webhook's received counters.
+    await ctx.db.patch(webhook._id, {
+      lastReceivedAt: now,
+      receivedCount: (webhook.receivedCount ?? 0) + 1,
+    });
+
+    return { rowId };
+  },
+});
+
+/**
+ * UPSERT one received record into the webhook's table, metered EXACTLY ONCE per
+ * record (one cloud action), mirroring {@link insertWebhookRow}'s invariant.
+ * Internal worker path (secret-gated upstream).
+ *
+ * This replaces the OLD client-side upsert (worker fetched the grid, matched the
+ * row in JS, then wrote each mapped cell via `setCellFromWorker` — which metered
+ * ONCE PER CELL, over-billing an N-field upsert N times). The match now runs
+ * server-side in ONE atomic mutation, eliminating the read-then-write race and
+ * the per-cell metering.
+ *
+ * Logic:
+ *   - Find an existing row in the table whose cell in the `upsertKey` column
+ *     equals the incoming value (scalar strict-equality — see @gtmgrid/cloud
+ *     `matchesUpsertKey`; object/array keys are unsupported and never match).
+ *   - If found, PATCH that row's mapped cells (status `done`).
+ *   - Else INSERT a fresh row + its mapped cells (same as the create path).
+ *   - Meter EXACTLY ONCE regardless of create-vs-update or cell count.
+ *
+ * `cells` is a `{ columnId: value }` map; empty values are skipped and values
+ * for columns not in this table are ignored (no cross-table writes). When the
+ * incoming `upsertKey` value is absent/empty/non-scalar, this falls back to an
+ * INSERT (a record with no usable key can't identify an existing row).
+ */
+export const upsertWebhookRow = internalMutation({
+  args: {
+    webhookId: v.id("webhooks"),
+    upsertKey: v.id("columns"),
+    cells: v.record(v.string(), v.any()),
+  },
+  handler: async (ctx, { webhookId, upsertKey, cells }) => {
+    const webhook = await getOrThrow(ctx, "webhooks", webhookId);
+    const table = await getOrThrow(ctx, "tables", webhook.tableId);
+
+    // Atomic quota pre-check against cached usage (one record = one cloud
+    // action, exactly like insertWebhookRow — never N for an N-field payload).
+    const workspace = await ctx.db.get(table.workspaceId);
+    const limit = workspace?.cloudActionsLimit;
+    if (typeof limit === "number") {
+      const used = workspace?.cloudActionsUsed ?? 0;
+      const pending = workspace?.cloudActionsPending ?? 0;
+      if (used + pending + 1 > limit) {
+        throw new ConvexError({
+          code: "CloudActionsLimitError",
+          message:
+            "This webhook delivery would exceed your plan's remaining cloud actions.",
+        });
+      }
+    }
+
+    // Only write cells for columns that actually belong to this table; the
+    // upsert key must also be one of them.
+    const validColumnIds = await tableColumnIds(ctx, table._id);
+    if (!validColumnIds.has(upsertKey)) {
+      throw new ConvexError({
+        code: "InvalidMappingError",
+        message: `Upsert key ${upsertKey} does not belong to table ${table._id}.`,
+      });
+    }
+
+    const now = Date.now();
+    const incoming = cells[upsertKey];
+
+    // Server-side match: scan the upsert-key column's cells for the incoming
+    // scalar value (no by_column index, so read the table's cells via by_table
+    // and pre-filter to the key column — same pattern as deleteColumnCascade).
+    const keyCells = (
+      await ctx.db
+        .query("cells")
+        .withIndex("by_table", (q) => q.eq("tableId", table._id))
+        .collect()
+    )
+      .filter((c) => c.columnId === upsertKey)
+      .map((c) => ({ rowId: c.rowId, value: c.value }));
+    const matchedRowId = findUpsertRowId(keyCells, incoming);
+
+    // Resolve the target row: PATCH the matched row's cells, or INSERT a new
+    // row. Either branch writes the SAME mapped cells and meters ONCE below.
+    let rowId: Id<"rows">;
+    if (matchedRowId !== null) {
+      rowId = matchedRowId;
+      // Existing cells for this row, keyed by columnId, so we patch-or-insert.
+      const existingByColumn = new Map<string, Id<"cells">>();
+      for (const c of await ctx.db
+        .query("cells")
+        .withIndex("by_row", (q) => q.eq("rowId", rowId))
+        .collect()) {
+        existingByColumn.set(c.columnId, c._id);
+      }
+      for (const [columnId, value] of Object.entries(cells)) {
+        if (value === "" || value === null || value === undefined) continue;
+        if (!validColumnIds.has(columnId)) continue;
+        const existingId = existingByColumn.get(columnId);
+        if (existingId !== undefined) {
+          await ctx.db.patch(existingId, {
+            value,
+            status: "done",
+            error: null,
+            updatedAt: now,
+          });
+        } else {
+          await ctx.db.insert("cells", {
+            workspaceId: table.workspaceId,
+            tableId: table._id,
+            rowId,
+            columnId: columnId as Id<"columns">,
+            value,
+            status: "done",
+            error: null,
+            updatedAt: now,
+          });
+        }
+      }
+    } else {
+      const siblings = await ctx.db
+        .query("rows")
+        .withIndex("by_table", (q) => q.eq("tableId", table._id))
+        .collect();
+      const position = siblings.reduce(
+        (max, s) => Math.max(max, s.position + 1),
+        0,
+      );
+      rowId = await ctx.db.insert("rows", {
+        workspaceId: table.workspaceId,
+        tableId: table._id,
+        position,
+        createdAt: now,
+      });
+      for (const [columnId, value] of Object.entries(cells)) {
+        if (value === "" || value === null || value === undefined) continue;
+        if (!validColumnIds.has(columnId)) continue;
+        await ctx.db.insert("cells", {
+          workspaceId: table.workspaceId,
+          tableId: table._id,
+          rowId,
+          columnId: columnId as Id<"columns">,
+          value,
+          status: "done",
+          error: null,
+          updatedAt: now,
+        });
+      }
+    }
+
+    // Exactly ONE billable cloud action per received record — for BOTH the
+    // matched-update and new-insert branches, and regardless of cell count.
     await meterCloudAction(ctx, table.workspaceId);
 
     // Telemetry: bump the webhook's received counters.

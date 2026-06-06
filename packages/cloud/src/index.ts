@@ -125,6 +125,13 @@ export {
   requireSecret,
 } from "./live-config.js";
 
+export {
+  findUpsertRowId,
+  isValidUpsertKeyValue,
+  matchesUpsertKey,
+  type UpsertScalar,
+} from "./webhook-upsert.js";
+
 // NOTE: ./crypto-test-layers.js is deliberately NOT re-exported here. It imports
 // `node:crypto`, and the Convex bundler pulls this index into the (esbuild)
 // graph for convex/model/crypto.ts — re-exporting a node-only module would make
