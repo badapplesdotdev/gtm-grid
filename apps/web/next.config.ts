@@ -1,13 +1,72 @@
-import type { NextConfig } from "next";
 import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+import type { NextConfig } from "next";
 
-// Marketing site is fully self-contained: it imports no workspace libraries,
-// so no `transpilePackages` is needed. Kept minimal on purpose.
+// The monorepo root (two levels up from apps/inngest). Pinning the tracing root
+// stops Next from inferring it from a stray lockfile and keeps the engine/cloud
+// workspace sources inside the traced file set.
+const monorepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/**
+ * Next.js config for the headless webhook/Inngest worker app.
+ *
+ * - `transpilePackages`: `@gtmgrid/engine` and `@gtmgrid/cloud` ship raw,
+ *   uncompiled TypeScript (their `main` points at `./src/index.ts`), so Next
+ *   must transpile them like first-party source rather than treat them as
+ *   pre-built node_modules.
+ * - `serverExternalPackages`: `better-sqlite3` (a native addon) and
+ *   `quickjs-emscripten` (a WASM module) must NOT be bundled by Next's server
+ *   compiler — they are `require()`d at runtime from node_modules. The engine's
+ *   cloud path never loads better-sqlite3 (it is built with NO `Db`; the native
+ *   addon is lazy), but keeping it external guarantees the bundler never tries
+ *   to inline the `.node` binary. quickjs-emscripten runs fine on Node as WASM.
+ */
 const nextConfig: NextConfig = {
-  reactStrictMode: true,
-  // Pin file tracing to this app so Next doesn't infer the monorepo root from
-  // sibling lockfiles (it is self-contained and imports no workspace libs).
-  outputFileTracingRoot: fileURLToPath(new URL(".", import.meta.url)),
+  outputFileTracingRoot: monorepoRoot,
+  transpilePackages: ["@gtmgrid/engine", "@gtmgrid/cloud"],
+  // quickjs-emscripten loads a WASM *variant* at runtime (quickjs-emscripten-core
+  // + @jitl/quickjs-wasmfile-release-asyncify) whose Emscripten-generated glue
+  // breaks when webpack bundles it ("a is not a function"). Every quickjs package
+  // (and the variant) must stay external and be require()d from node_modules.
+  serverExternalPackages: [
+    "better-sqlite3",
+    "quickjs-emscripten",
+    "quickjs-emscripten-core",
+    "@jitl/quickjs-wasmfile-release-asyncify",
+  ],
+  // @gtmgrid/engine + @gtmgrid/cloud are raw NodeNext TypeScript: their internal
+  // imports carry explicit `.js` extensions (e.g. `./execute.js`) that actually
+  // resolve to `.ts` sources. Teach webpack to try the `.ts`/`.tsx` source when a
+  // `.js` import has no real `.js` file, so the transpiled workspace packages
+  // resolve during `next build`.
+  webpack: (config, { isServer }) => {
+    config.resolve.extensionAlias = {
+      ...config.resolve.extensionAlias,
+      ".js": [".ts", ".tsx", ".js", ".jsx"],
+      ".mjs": [".mts", ".mjs"],
+    };
+    // serverExternalPackages alone does not externalize the quickjs WASM variant
+    // under the RSC server layer, so webpack bundles its Emscripten glue and
+    // breaks it ("a is not a function"). Force every quickjs / @jitl / native
+    // package to be require()d at runtime instead of bundled, on the server build.
+    if (isServer) {
+      const existing = config.externals || [];
+      const list = Array.isArray(existing) ? existing : [existing];
+      list.push(({ request }: { request?: string }, cb: (err?: unknown, result?: string) => void) => {
+        if (
+          request &&
+          (request.startsWith("quickjs-emscripten") ||
+            request.startsWith("@jitl/quickjs") ||
+            request === "better-sqlite3")
+        ) {
+          return cb(undefined, "commonjs " + request);
+        }
+        return cb();
+      });
+      config.externals = list;
+    }
+    return config;
+  },
 };
 
 export default nextConfig;
