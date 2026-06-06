@@ -14,9 +14,12 @@
   "dependencies": {
     "@gtmgrid/cloud": "workspace:*",
     "@gtmgrid/engine": "workspace:*",
+    "@jitl/quickjs-wasmfile-release-asyncify": "^0.31.0",
     "effect": "^3.21.3",
     "inngest": "^4.5.0",
     "next": "^15.5.4",
+    "quickjs-emscripten": "^0.31.0",
+    "quickjs-emscripten-core": "^0.31.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
