@@ -88,7 +88,32 @@ export default defineSchema({
     /** Convex Auth user id of the creator/owner (set by T3). */
     ownerId: v.string(),
     createdAt: v.number(),
-  }).index("by_owner", ["ownerId"]),
+    /**
+     * Pending CLOUD-actions meter (C26). Billable CLOUD mutations (cell writes,
+     * structural inserts/deletes) increment this by 1 — a cheap DB write, since
+     * Convex mutations CANNOT make the outbound HTTP a direct Autumn `track`
+     * would need. A scheduled internal ACTION (convex/usage.ts, driven by
+     * convex/crons.ts) batch-flushes pending counts to Autumn and resets this to
+     * 0 ONLY on a successful track (fail-closed: kept on error for retry).
+     *
+     * HARD RULE: this counts CLOUD operations ONLY. LOCAL projects run on the
+     * user machine (sidecar + local SQLite) and never call a Convex mutation, so
+     * they can never increment this — local is unlimited and unmetered on EVERY
+     * tier. Optional/undefined is treated as 0.
+     */
+    cloudActionsPending: v.optional(v.number()),
+    /**
+     * Last-known CLOUD-actions usage Autumn reported, snapshotted by the flush
+     * ACTION so the `me` query can surface `cloudActions { used, limit }` with NO
+     * outbound HTTP. `used` is consumed units this period; `limit` is the plan
+     * cap (free = 2000) or `null` for an unlimited plan. Undefined until the
+     * first flush.
+     */
+    cloudActionsUsed: v.optional(v.number()),
+    cloudActionsLimit: v.optional(v.union(v.number(), v.null())),
+  })
+    .index("by_owner", ["ownerId"])
+    .index("by_pending", ["cloudActionsPending"]),
 
   /**
    * Workspace membership: a user belongs to a workspace with a role.

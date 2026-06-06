@@ -17,6 +17,7 @@
 import { ConvexError, v } from "convex/values";
 import { requireMember } from "./model/auth.js";
 import { mergeCellPatch } from "./model/grid.js";
+import { meterCloudAction } from "./model/meter.js";
 import { cellStatus } from "./schema.js";
 import type { Id } from "./_generated/dataModel.js";
 import { type MutationCtx, mutation } from "./_generated/server.js";
@@ -82,6 +83,12 @@ export const setCell = mutation({
     };
     const merged = await mergeCellPatch(existing, patch, Date.now());
 
+    // Billable CLOUD action: count one toward the workspace's cloud-actions
+    // meter (cheap DB increment; flushed to Autumn by the scheduled action).
+    // Cloud runs write cells via this mutation, so they are counted here ONCE —
+    // the sidecar must NOT also count (no double-count, no Autumn secret on it).
+    await meterCloudAction(ctx, row.workspaceId);
+
     if (existing === null) {
       return await ctx.db.insert("cells", {
         workspaceId: row.workspaceId,
@@ -126,6 +133,11 @@ export const setCellStatus = mutation({
       },
       Date.now(),
     );
+
+    // Billable CLOUD action: the run path streams running→done via this
+    // mutation, so each status write counts ONE toward the cloud-actions meter
+    // here (never also in the sidecar — see setCell's note).
+    await meterCloudAction(ctx, row.workspaceId);
 
     if (existing === null) {
       return await ctx.db.insert("cells", {

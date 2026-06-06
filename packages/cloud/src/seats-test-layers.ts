@@ -30,6 +30,20 @@ export interface FakeAutumnConfig {
   readonly checkoutUrl?: string | null;
   /** Records each `trackSeats` call (consumed-seat audit) for assertions. */
   readonly trackCalls?: Array<{ customerId: string; value: number }>;
+  /**
+   * Records each `trackUsage` call (cloud-actions flush audit) for assertions.
+   * Captures the feature id too so a test can assert it tracked `cloud_actions`.
+   */
+  readonly usageCalls?: Array<{
+    customerId: string;
+    featureId: string;
+    value: number;
+  }>;
+  /**
+   * The live usage `checkUsage` reports for ANY feature (default: 0 used /
+   * unlimited). Drives the snapshot the cloud-actions flush stores for `me`.
+   */
+  readonly usage?: { used: number; limit: number | null };
 }
 
 /**
@@ -46,6 +60,7 @@ export const fakeAutumnLayer = (
     config.checkoutUrl === undefined
       ? "https://billing.example.com/checkout/test"
       : config.checkoutUrl;
+  const usage = config.usage ?? { used: 0, limit: null };
   return Layer.succeed(AutumnClient, {
     checkSeats: () => Effect.succeed({ allowed, balance }),
     attach: () => Effect.succeed({ checkoutUrl }),
@@ -53,6 +68,11 @@ export const fakeAutumnLayer = (
       Effect.sync(() => {
         config.trackCalls?.push({ customerId, value });
       }),
+    trackUsage: ({ customerId, featureId, value }) =>
+      Effect.sync(() => {
+        config.usageCalls?.push({ customerId, featureId, value });
+      }),
+    checkUsage: () => Effect.succeed(usage),
   });
 };
 
@@ -62,7 +82,7 @@ export const fakeAutumnLayer = (
  * the typed error rather than silently allowing (fail-closed) the invite.
  */
 export const failingAutumnLayer = (
-  failOn: "check" | "attach" | "track",
+  failOn: "check" | "attach" | "track" | "trackUsage" | "checkUsage",
   message = "autumn unavailable",
 ): Layer.Layer<AutumnClient> => {
   const fail = Effect.fail(new AutumnError({ message }));
@@ -79,5 +99,12 @@ export const failingAutumnLayer = (
         ? fail
         : Effect.succeed({ checkoutUrl: "https://billing.example.com/x" }),
     trackSeats: () => (failOn === "track" ? fail : Effect.void),
+    trackUsage: () => (failOn === "trackUsage" ? fail : Effect.void),
+    // Default to a benign snapshot so a `trackUsage` failure can be exercised
+    // without the (sequenced) `checkUsage` also being the thing that fails.
+    checkUsage: () =>
+      failOn === "checkUsage"
+        ? fail
+        : Effect.succeed({ used: 0, limit: null }),
   });
 };
