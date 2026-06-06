@@ -111,6 +111,15 @@ export default defineSchema({
      */
     cloudActionsUsed: v.optional(v.number()),
     cloudActionsLimit: v.optional(v.union(v.number(), v.null())),
+    /**
+     * The workspace's current PAID plan id (C27): "team" | "business" |
+     * "unlimited", or `null` for the free tier. Cached by the scheduled flush
+     * ACTION (convex/usage.ts), which reads it from Autumn alongside the
+     * cloud-actions usage so the `me` query can surface the plan name (Free /
+     * Team / Business / Unlimited) with NO outbound HTTP. Undefined until the
+     * first flush — treated as free/null by the query.
+     */
+    currentPlanId: v.optional(v.union(v.string(), v.null())),
   })
     .index("by_owner", ["ownerId"])
     .index("by_pending", ["cloudActionsPending"]),

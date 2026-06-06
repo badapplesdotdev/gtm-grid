@@ -42,6 +42,8 @@ const pureCloudActionsLayer: Layer.Layer<CloudActionsService> =
           Effect.die("AutumnClient must not be called in a mutation"),
         trackSeats: () =>
           Effect.die("AutumnClient must not be called in a mutation"),
+        getActivePlanIds: () =>
+          Effect.die("AutumnClient must not be called in a mutation"),
         trackUsage: () =>
           Effect.die("AutumnClient must not be called in a mutation"),
         checkUsage: () =>

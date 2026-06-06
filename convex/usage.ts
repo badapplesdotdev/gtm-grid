@@ -72,8 +72,11 @@ export const applyFlushResult = internalMutation({
     tracked: v.number(),
     used: v.number(),
     limit: v.union(v.number(), v.null()),
+    // The current PAID plan id Autumn reported in the same flush (C27), or null
+    // for the free tier — cached for the `me` query / plan badge.
+    planId: v.union(v.string(), v.null()),
   },
-  handler: async (ctx, { workspaceId, tracked, used, limit }) => {
+  handler: async (ctx, { workspaceId, tracked, used, limit, planId }) => {
     const id = ctx.db.normalizeId("workspaces", workspaceId);
     if (id === null) return;
     const ws = await ctx.db.get(id);
@@ -85,6 +88,7 @@ export const applyFlushResult = internalMutation({
       cloudActionsPending: remaining,
       cloudActionsUsed: used,
       cloudActionsLimit: limit,
+      currentPlanId: planId,
     });
   },
 });
@@ -120,6 +124,7 @@ export const flushCloudActions = internalAction({
           tracked: result.tracked,
           used: result.usage.used,
           limit: result.usage.limit,
+          planId: result.planId,
         });
         flushed += 1;
       } else {

@@ -18,6 +18,7 @@ const ws = (id: string, name: string): WorkspaceSummary => ({
   name,
   role: "owner",
   seatUsage: { used: 1, limit: null },
+  plan: { id: null, name: "Free" },
 });
 
 describe("resolveActiveWorkspace", () => {

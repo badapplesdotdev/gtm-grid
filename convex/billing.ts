@@ -36,9 +36,15 @@ export const assertBillingAdmin = internalQuery({
 });
 
 /**
- * Start a checkout/upgrade for the workspace, returning the Autumn billing URL
- * to open. Owner/admin only. The workspace id is the Autumn customer id; the
- * plan defaults to the team plan when omitted.
+ * Start a checkout/upgrade for the workspace on a CHOSEN plan, returning the
+ * Autumn billing URL to open. Owner/admin only. The workspace id is the Autumn
+ * customer id.
+ *
+ * `planId` is the paid plan the upgrade UI selected (team / business /
+ * unlimited). It is VALIDATED against the paid-plan allow-list inside the pure
+ * SeatsService (an unknown/forged plan fails with `UnknownPlanError` →
+ * `ConvexError` before any Autumn call). Defaults to the team plan (the entry
+ * upsell) when omitted.
  */
 export const checkout = action({
   args: {

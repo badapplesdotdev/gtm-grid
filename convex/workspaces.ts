@@ -15,6 +15,7 @@
  * `requireRole` helpers (convex/model/auth.ts).
  */
 
+import { planName } from "@gtmgrid/cloud";
 import { ConvexError, v } from "convex/values";
 import {
   getCurrentUser,
@@ -93,12 +94,22 @@ export const me = query({
           used: ws.cloudActionsUsed ?? 0,
           limit: ws.cloudActionsLimit ?? null,
         };
+        // Current plan (C27): the paid plan id the scheduled flush cached on the
+        // workspace (`null`/undefined = free tier), plus its human name derived
+        // from the shared PLAN_CATALOG. Read from the stored value — NO HTTP in
+        // this query. Lets PlanBadge show Free/Team/Business/Unlimited accurately.
+        const planId = ws.currentPlanId ?? null;
+        const plan: { id: string | null; name: string } = {
+          id: planId,
+          name: planName(planId),
+        };
         return {
           _id: ws._id,
           name: ws.name,
           role: m.role,
           seatUsage,
           cloudActions,
+          plan,
         };
       })
       .filter((w) => w !== null);
