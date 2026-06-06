@@ -115,9 +115,43 @@ handlers, running their business logic as Effect via `Effect.runPromise` with
 Workspace membership (`requireMember`) is enforced in every function, so a user
 only ever sees workspaces they belong to.
 
+## Web OAuth sign-in (GitHub + Google)
+
+Sign-in supports email + password (always on) and **OAuth via the standard
+Convex Auth web redirect flow** for GitHub and Google. Each provider is
+registered in `convex/auth.ts` **only when its credentials are present** on the
+deployment, so the deployment builds and `npx convex dev --once` stays green with
+no OAuth secrets set — an unconfigured provider is simply not registered.
+
+The client reads the public `auth.enabledProviders` query (booleans only, never
+secrets) and renders one OAuth button per enabled provider in both the onboarding
+flow and the AccountBar sign-in section; when no provider is enabled the OAuth row
+and its divider are hidden entirely.
+
+**Deployment env (set on the Convex deployment to enable a provider):**
+
+| Variable | Provider | Notes |
+| --- | --- | --- |
+| `AUTH_GITHUB_ID` + `AUTH_GITHUB_SECRET` | GitHub | both required; either missing → GitHub disabled |
+| `AUTH_GOOGLE_ID` + `AUTH_GOOGLE_SECRET` | Google | both required; either missing → Google disabled |
+| `SITE_URL` | (shared) | redirect return URL, e.g. `http://localhost:5173` in dev |
+
+**OAuth-app callback URL** — register this in each provider's OAuth app
+(substitute `<provider>` with `github` or `google`):
+
+```
+https://capable-peccary-527.convex.site/api/auth/callback/<provider>
+```
+
+The flow is: client calls `signIn(provider)` → browser redirects to the provider
+→ provider redirects to the Convex callback above → Convex redirects back to
+`SITE_URL`. This is the **web/browser** path and needs no Tauri deep-link. The
+native deep-link callback for the **packaged Tauri app** is the remaining
+follow-up (task #17).
+
 ## Setup
 
-The cloud tier reads four environment variables (names only — never commit
+The cloud tier reads these environment variables (names only — never commit
 secret values):
 
 | Variable | Where | Purpose |
@@ -126,6 +160,12 @@ secret values):
 | `VITE_CONVEX_URL` | `.env.local` (desktop) | deploy URL the client connects to |
 | `AUTUMN_SECRET_KEY` | Convex deployment env | server-side Autumn key for seats |
 | `CREDENTIALS_MASTER_KEY` | Convex deployment env | 32-byte KEK for credential encryption |
+| `AUTH_GITHUB_ID` / `AUTH_GITHUB_SECRET` | Convex deployment env | enable GitHub OAuth (optional) |
+| `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` | Convex deployment env | enable Google OAuth (optional) |
+| `SITE_URL` | Convex deployment env | OAuth redirect return URL |
+
+OAuth providers are **optional**: with none of the `AUTH_*` vars set the
+deployment still builds and deploys cleanly (the provider is not registered).
 
 Generate the Convex client bindings before typechecking the cloud code — the
 client imports `convex/_generated/*`, which only exists after a deployment login:
@@ -154,8 +194,9 @@ automated gate.
   execution (local engine) and the in-app agent (local CLI).
 - **Cloud execution of grids** — run columns in a cloud runtime; prerequisite
   for a web build and unattended runs.
-- **Native deep-link OAuth** — open the system browser and handle the callback;
-  tracked as **task #17**.
+- **Native deep-link OAuth** — web redirect OAuth (GitHub + Google) ships in the
+  browser path (see "Web OAuth sign-in"); the remaining work is the **native
+  Tauri deep-link callback** for the packaged app, tracked as **task #17**.
 - **Proxied managed-key connectors** — our keys + Autumn credit metering as an
   extra revenue lever.
 - **Offline editing of cloud projects** with later reconciliation (Convex is

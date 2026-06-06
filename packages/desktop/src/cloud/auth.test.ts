@@ -9,7 +9,11 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { resolveActiveWorkspace, type WorkspaceSummary } from "./auth";
+import {
+  enabledProviderList,
+  resolveActiveWorkspace,
+  type WorkspaceSummary,
+} from "./auth";
 
 const ws = (id: string, name: string): WorkspaceSummary => ({
   // Ids are opaque strings at runtime; the cast keeps the test honest to the
@@ -40,5 +44,37 @@ describe("resolveActiveWorkspace", () => {
   it("falls back to the first workspace when nothing is stored", () => {
     const list = [ws("a", "Alpha"), ws("b", "Beta")];
     expect(resolveActiveWorkspace(list, null)).toBe(list[0]);
+  });
+});
+
+// ─── OAuth provider gating (C17) ──────────────────────────────────────────────
+//
+// `enabledProviderList` decides which OAuth buttons render. The key AC outcome:
+// when no provider is enabled the list is empty, so the UI hides the OAuth row +
+// divider entirely — the screen stays clean before any OAuth app is configured.
+
+describe("enabledProviderList", () => {
+  it("returns no providers while the query is still loading (undefined)", () => {
+    expect(enabledProviderList(undefined)).toEqual([]);
+  });
+
+  it("returns no providers when neither is enabled (OAuth row stays hidden)", () => {
+    expect(enabledProviderList({ github: false, google: false })).toEqual([]);
+  });
+
+  it("returns only the enabled provider when one is configured", () => {
+    expect(enabledProviderList({ github: true, google: false })).toEqual([
+      "github",
+    ]);
+    expect(enabledProviderList({ github: false, google: true })).toEqual([
+      "google",
+    ]);
+  });
+
+  it("returns both in display order (google first) when both are enabled", () => {
+    expect(enabledProviderList({ github: true, google: true })).toEqual([
+      "google",
+      "github",
+    ]);
   });
 });
