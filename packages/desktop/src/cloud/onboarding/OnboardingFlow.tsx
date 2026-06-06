@@ -27,6 +27,7 @@ import { type BillingCycle } from "@gtmgrid/cloud";
 import { api } from "../../../../../convex/_generated/api";
 import type { Id } from "../../../../../convex/_generated/dataModel";
 import { LogoMark } from "../../Logo";
+import { friendlyAuthError } from "../authErrors";
 import {
   useAccountActions,
   useEnabledProviders,
@@ -236,7 +237,7 @@ function OAuthRow(props: {
       // when the deep-link callback returns. No inline success path either way.
       await signInWithProvider(provider);
     } catch (e) {
-      onError(e instanceof Error ? e.message : "OAuth sign-in failed.");
+      onError(friendlyAuthError(e, "signIn"));
       setBusy(null);
     }
   };
@@ -365,7 +366,7 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
         // would flash the workspace step for users who already have one.
         if (!forced) go("workspace");
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Authentication failed.");
+        setError(friendlyAuthError(e, flow));
       } finally {
         setBusy(false);
       }
