@@ -465,6 +465,7 @@ export default function App() {
   const [renamingTableId, setRenamingTableId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [confirmDeleteTable, setConfirmDeleteTable] = useState<TableSummary | null>(null);
+  const [confirmDeleteCloudTable, setConfirmDeleteCloudTable] = useState<{ _id: Id<"tables">; name: string } | null>(null);
 
   // Connectors / extensions / AI providers
   const [connectors, setConnectors] = useState<ConnectorInfo[]>([]);
@@ -554,7 +555,7 @@ export default function App() {
   const [cloudProject, setCloudProject] = useState<CloudProject | null>(null);
   const [cloudTableId, setCloudTableId] = useState<Id<"tables"> | null>(null);
   const cloudTables = useCloudTables(cloudProject?._id ?? null);
-  const { createProject: createCloudProject, createTable: createCloudTable } =
+  const { createProject: createCloudProject, createTable: createCloudTable, deleteTable: deleteCloudTable } =
     useCloudProjectMutations();
   const { addColumn: cloudAddColumn, addRowsWithCells: cloudAddRowsWithCells } =
     useCloudGridMutations();
@@ -607,6 +608,14 @@ export default function App() {
     setCloudProject(null);
     setCloudTableId(null);
   }, [activeWorkspaceId]);
+
+  // Navigating to any table or view (selecting/creating a table, switching to AI
+  // or extensions) exits the inline CSV import view. Opening "Import CSV" only
+  // sets importMode (it changes neither cloudTableId nor view), so this effect
+  // does NOT fire on open — it only clears the importer when the user moves away.
+  useEffect(() => {
+    setImportMode(null);
+  }, [cloudTableId, view]);
 
   // ── Default-to-cloud for signed-in users ─────────────────────────────────
   // Persist the last-selected cloud project id so a relaunch reopens it, and on
@@ -1185,6 +1194,13 @@ export default function App() {
                   >
                     <span className="sidebar-item-icon"><Icon.Table /></span>
                     <span className="sidebar-item-name">{t.name}</span>
+                    <button
+                      className="sidebar-item-del"
+                      title="Delete table"
+                      onClick={(e) => { e.stopPropagation(); setConfirmDeleteCloudTable({ _id: t._id, name: t.name }); }}
+                    >
+                      <Icon.Trash />
+                    </button>
                   </div>
                 ))
               )}
@@ -1819,6 +1835,37 @@ export default function App() {
               <button
                 className="btn btn-danger"
                 onClick={() => { const t = confirmDeleteTable; setConfirmDeleteTable(null); deleteTable(t.id); }}
+              >
+                Delete table
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmDeleteCloudTable && (
+        <div className="overlay" onMouseDown={e => e.target === e.currentTarget && setConfirmDeleteCloudTable(null)}>
+          <div className="modal">
+            <div className="modal-header">
+              <span className="modal-title">Delete table</span>
+              <button className="modal-close" onClick={() => setConfirmDeleteCloudTable(null)}><Icon.X /></button>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>
+                Delete <strong style={{ color: "var(--text)" }}>{confirmDeleteCloudTable.name}</strong>? This permanently
+                removes the cloud table and all of its columns and rows. This can't be undone.
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setConfirmDeleteCloudTable(null)}>Cancel</button>
+              <button
+                className="btn btn-danger"
+                onClick={() => {
+                  const t = confirmDeleteCloudTable;
+                  setConfirmDeleteCloudTable(null);
+                  if (cloudTableId === t._id) setCloudTableId(null);
+                  void deleteCloudTable(t._id).catch(() => {});
+                }}
               >
                 Delete table
               </button>

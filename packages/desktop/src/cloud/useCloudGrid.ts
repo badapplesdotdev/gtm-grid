@@ -99,6 +99,7 @@ export function useCloudTables(
 export function useCloudProjectMutations() {
   const createProjectMut = useMutation(api.projects.createProject);
   const createTableMut = useMutation(api.tables.createTable);
+  const deleteTableMut = useMutation(api.tables.deleteTable);
 
   const createProject = useCallback(
     (workspaceId: Id<"workspaces">, name: string) =>
@@ -110,8 +111,12 @@ export function useCloudProjectMutations() {
       createTableMut({ projectId, name }),
     [createTableMut],
   );
+  const deleteTable = useCallback(
+    (tableId: Id<"tables">) => deleteTableMut({ tableId }),
+    [deleteTableMut],
+  );
 
-  return { createProject, createTable };
+  return { createProject, createTable, deleteTable };
 }
 
 /** Map a Convex column doc (from `getTable`) onto the desktop `Column` shape. */

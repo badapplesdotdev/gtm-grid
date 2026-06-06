@@ -320,6 +320,25 @@ html, body, #root {
   white-space: nowrap;
 }
 
+/* Hover-revealed delete (trash) action on a table row. */
+.sidebar-item-del {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  border-radius: var(--r-xs);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.1s, background 0.1s, color 0.1s;
+}
+.sidebar-item:hover .sidebar-item-del { opacity: 1; }
+.sidebar-item-del:hover { background: var(--danger-bg); color: var(--danger); }
+
 .sidebar-item-count {
   font-size: 11px;
   color: var(--text-3);

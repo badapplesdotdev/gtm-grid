@@ -548,9 +548,7 @@ export function Shell({
     <div className={inline ? "import-inline" : "import-overlay"}>
       <div className="import-shell">
         <div className="import-topbar">
-          <div className="import-brand">
-            <span className="import-logo">G</span> gtm grid
-          </div>
+          <span style={{ flex: 1 }} />
           {topRight}
         </div>
         <div className="import-body">{children}</div>
