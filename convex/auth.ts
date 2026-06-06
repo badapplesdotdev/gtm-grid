@@ -45,12 +45,43 @@ const googleEnabled =
   Boolean(process.env.AUTH_GOOGLE_ID) &&
   Boolean(process.env.AUTH_GOOGLE_SECRET);
 
+/**
+ * The custom desktop URL scheme the packaged Tauri app registers for its OAuth
+ * deep-link callback (C29): `gtmgrid://auth/callback?code=…`. Must match
+ * `plugins.deep-link.desktop.schemes` in tauri.conf.json and the `redirectTo`
+ * the desktop client passes to `signIn`.
+ */
+const DESKTOP_DEEP_LINK_PREFIX = "gtmgrid://";
+
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
   providers: [
     Password,
     ...(githubEnabled ? [GitHub] : []),
     ...(googleEnabled ? [Google] : []),
   ],
+  callbacks: {
+    /**
+     * Allow the packaged-desktop deep-link redirect (C29) IN ADDITION to the
+     * default `SITE_URL` web flow. Convex Auth only runs this during OAuth
+     * sign-in: the web redirect passes a `SITE_URL`-based `redirectTo` (or
+     * none), while the Tauri client passes `gtmgrid://auth/callback`. We permit
+     * the custom scheme explicitly and otherwise reproduce the default
+     * `SITE_URL`-anchored behaviour so the existing web OAuth (#17) is unchanged.
+     */
+    async redirect({ redirectTo }) {
+      if (redirectTo.startsWith(DESKTOP_DEEP_LINK_PREFIX)) {
+        return redirectTo;
+      }
+      const siteUrl = process.env.SITE_URL;
+      if (
+        siteUrl !== undefined &&
+        (redirectTo.startsWith(siteUrl) || redirectTo.startsWith("/"))
+      ) {
+        return redirectTo;
+      }
+      throw new Error(`Invalid redirectTo ${redirectTo}`);
+    },
+  },
 });
 
 /**
