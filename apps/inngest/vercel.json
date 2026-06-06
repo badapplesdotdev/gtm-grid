@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["iad1"],
+  "functions": {
+    "app/api/inngest/route.ts": {
+      "maxDuration": 300
+    }
+  }
+}
