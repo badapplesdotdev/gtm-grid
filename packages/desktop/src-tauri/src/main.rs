@@ -51,9 +51,22 @@ fn make_executable(path: &PathBuf) {
 #[cfg(not(unix))]
 fn make_executable(_path: &PathBuf) {}
 
+/// The bundled node binary's filename (`node.exe` on Windows, `node` elsewhere).
+fn node_binary_name() -> &'static str {
+    #[cfg(windows)]
+    {
+        "node.exe"
+    }
+    #[cfg(not(windows))]
+    {
+        "node"
+    }
+}
+
 /// Resolve the user's real PATH from their login+interactive shell, so the
 /// sidecar (and the agent CLIs it spawns) can find nvm/homebrew-installed
-/// `claude` / `codex`. GUI apps otherwise launch with a minimal PATH.
+/// `claude` / `codex`. GUI apps otherwise launch with a minimal PATH. Unix only.
+#[cfg(unix)]
 fn login_path() -> Option<String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let out = Command::new(&shell).args(["-lic", "echo \"$PATH\""]).output().ok()?;
@@ -61,9 +74,27 @@ fn login_path() -> Option<String> {
     if p.is_empty() { None } else { Some(p) }
 }
 
+/// Build the PATH the sidecar is spawned with. On unix we augment the GUI's
+/// minimal PATH with the login shell's PATH + common CLI locations so the agent
+/// panel can find `claude` / `codex`. On Windows the process PATH already
+/// carries the user's installed CLIs, so we pass it through unchanged.
+#[cfg(unix)]
+fn sidecar_path() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let base_path = std::env::var("PATH").unwrap_or_default();
+    let login = login_path().unwrap_or_default();
+    format!(
+        "{login}:/opt/homebrew/bin:/usr/local/bin:{home}/.local/bin:{home}/.npm-global/bin:{base_path}"
+    )
+}
+#[cfg(not(unix))]
+fn sidecar_path() -> String {
+    std::env::var("PATH").unwrap_or_default()
+}
+
 fn spawn_sidecar(app: &tauri::App) -> Option<Child> {
     let dir = sidecar_dir(app)?;
-    let node = dir.join("node");
+    let node = dir.join(node_binary_name());
     let server = dir.join("server.mjs");
     let launcher = dir.join("gtmgrid-mcp");
     if !node.exists() || !server.exists() {
@@ -73,21 +104,12 @@ fn spawn_sidecar(app: &tauri::App) -> Option<Child> {
     make_executable(&node);
     make_executable(&launcher);
 
-    // GUI apps launch with a minimal PATH; prepend common locations so the agent
-    // panel can find the user's `claude` / `codex` CLIs.
-    let home = std::env::var("HOME").unwrap_or_default();
-    let base_path = std::env::var("PATH").unwrap_or_default();
-    let login = login_path().unwrap_or_default();
-    let path = format!(
-        "{login}:/opt/homebrew/bin:/usr/local/bin:{home}/.local/bin:{home}/.npm-global/bin:{base_path}"
-    );
-
     Command::new(&node)
         .arg(&server)
         .env("GTMGRID_PROJECT", std::env::var("GTMGRID_PROJECT").unwrap_or_else(|_| "default".into()))
         .env("GTMGRID_MCP_LAUNCHER", &launcher)
         .env("GTMGRID_EXT_DIR", dir.join("extensions"))
-        .env("PATH", path)
+        .env("PATH", sidecar_path())
         .spawn()
         .map_err(|e| eprintln!("gtmgrid: failed to spawn sidecar: {e}"))
         .ok()
