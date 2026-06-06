@@ -24,18 +24,47 @@ const monorepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", ".."
 const nextConfig: NextConfig = {
   outputFileTracingRoot: monorepoRoot,
   transpilePackages: ["@gtmgrid/engine", "@gtmgrid/cloud"],
-  serverExternalPackages: ["better-sqlite3", "quickjs-emscripten"],
+  // quickjs-emscripten loads a WASM *variant* at runtime (quickjs-emscripten-core
+  // + @jitl/quickjs-wasmfile-release-asyncify) whose Emscripten-generated glue
+  // breaks when webpack bundles it ("a is not a function"). Every quickjs package
+  // (and the variant) must stay external and be require()d from node_modules.
+  serverExternalPackages: [
+    "better-sqlite3",
+    "quickjs-emscripten",
+    "quickjs-emscripten-core",
+    "@jitl/quickjs-wasmfile-release-asyncify",
+  ],
   // @gtmgrid/engine + @gtmgrid/cloud are raw NodeNext TypeScript: their internal
   // imports carry explicit `.js` extensions (e.g. `./execute.js`) that actually
   // resolve to `.ts` sources. Teach webpack to try the `.ts`/`.tsx` source when a
   // `.js` import has no real `.js` file, so the transpiled workspace packages
   // resolve during `next build`.
-  webpack: (config) => {
+  webpack: (config, { isServer }) => {
     config.resolve.extensionAlias = {
       ...config.resolve.extensionAlias,
       ".js": [".ts", ".tsx", ".js", ".jsx"],
       ".mjs": [".mts", ".mjs"],
     };
+    // serverExternalPackages alone does not externalize the quickjs WASM variant
+    // under the RSC server layer, so webpack bundles its Emscripten glue and
+    // breaks it ("a is not a function"). Force every quickjs / @jitl / native
+    // package to be require()d at runtime instead of bundled, on the server build.
+    if (isServer) {
+      const existing = config.externals || [];
+      const list = Array.isArray(existing) ? existing : [existing];
+      list.push(({ request }: { request?: string }, cb: (err?: unknown, result?: string) => void) => {
+        if (
+          request &&
+          (request.startsWith("quickjs-emscripten") ||
+            request.startsWith("@jitl/quickjs") ||
+            request === "better-sqlite3")
+        ) {
+          return cb(undefined, "commonjs " + request);
+        }
+        return cb();
+      });
+      config.externals = list;
+    }
     return config;
   },
 };
