@@ -85,7 +85,7 @@ describe("corsHeadersFor / isOriginAllowed (HTTP-seam helpers)", () => {
  * `__sseClientForTest` (the sidecar's `sseClient`) gated by `isOriginAllowed`.
  */
 function send(res: ServerResponse, status: number, data: unknown, origin?: string) {
-  res.writeHead(status, { "content-type": "application/json", ...(corsHeadersFor(origin) ?? {}) });
+  res.writeHead(status, { "content-type": "application/json", ...corsHeadersFor(origin) });
   res.end(JSON.stringify(data));
 }
 

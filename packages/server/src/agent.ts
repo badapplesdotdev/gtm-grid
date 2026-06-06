@@ -33,7 +33,7 @@ export interface AgentContext {
 
 /** Render the installed-connectors section dynamically from the registry. */
 function renderConnectorsSection(providers?: AgentContext["providers"]): string {
-  if (!providers?.length) return "_(No connectors registered. Built-ins like \`ai\` and \`formatting\` should always be present — if this is empty, something is wrong.)_";
+  if (!providers?.length) return "_(No connectors registered. Built-ins like `ai` and `formatting` should always be present — if this is empty, something is wrong.)_";
   const byCategory = new Map<string, typeof providers>();
   for (const p of providers) {
     const cat = p.category || "other";
@@ -285,7 +285,7 @@ function sseClient(res: ServerResponse, origin?: string): SseClient {
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
     connection: "keep-alive",
-    ...(corsHeadersFor(origin) ?? {}),
+    ...corsHeadersFor(origin),
   });
   return {
     write: (event) => res.write(`data: ${JSON.stringify(event)}\n\n`),

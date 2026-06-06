@@ -16,8 +16,6 @@
  * backend share one set of identifiers.
  */
 
-import { TEAM_PLAN_ID } from "./seats.js";
-
 /**
  * Whether a paid plan's CLOUD-actions are metered (a per-1k overage applies once
  * the included allotment is used) or unlimited. Surfaced in the upgrade UI as

@@ -1,0 +1,149 @@
+name: Release
+
+# Cut a release from main: apply pending changesets (semver bump + CHANGELOG),
+# tag v<version>, then build the downloadable cross-platform desktop binaries and
+# attach them to a published GitHub Release.
+#
+# Platforms: macOS arm64 (macos-14) + macOS Intel (macos-13) + Linux (ubuntu).
+# Windows is intentionally NOT built yet — the Rust sidecar spawn (src-tauri) is
+# unix-only (expects a `node` binary + chmod + login shell); Windows needs a
+# `node.exe`-aware spawn path first. Tracked as a follow-up.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # ── 1. Version cut: consume changesets, bump, tag, push ──────────────────
+  version:
+    name: Cut version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.cut.outputs.version }}
+      tag: ${{ steps.cut.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Cut release (changeset version + sync + tag)
+        id: cut
+        run: |
+          # Require at least one pending changeset (ignore README/config).
+          pending=$(find .changeset -maxdepth 1 -name '*.md' ! -name 'README.md' | wc -l | tr -d ' ')
+          if [ "$pending" = "0" ]; then
+            echo "::error::No pending changesets — add one with 'pnpm changeset' before releasing."
+            exit 1
+          fi
+
+          pnpm version-packages
+
+          VERSION=$(node -p "require('./packages/desktop/package.json').version")
+          TAG="v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+          git add -A
+          git commit -m "release: ${TAG}"
+          git tag "${TAG}"
+          git push origin main
+          git push origin "${TAG}"
+
+  # ── 2. Build per-platform installers, upload to a draft release ──────────
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-14 # Apple silicon
+            rust_target: aarch64-apple-darwin
+            args: "--target aarch64-apple-darwin"
+          - platform: macos-13 # Intel
+            rust_target: x86_64-apple-darwin
+            args: "--target x86_64-apple-darwin"
+          - platform: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            args: "--bundles deb,appimage"
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+
+      - name: Install Linux build dependencies
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            build-essential curl wget file libxdo-dev libssl-dev libgtk-3-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/desktop/src-tauri -> target
+          key: ${{ matrix.rust_target }}
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # tauri-action runs the Tauri build (which runs beforeBuildCommand: build
+      # the frontend + bundle the sidecar — including this runner's native node +
+      # better-sqlite3), then uploads the installers to the release for this tag.
+      # The first matrix job creates the draft release; the others upload to it.
+      - name: Build & upload Tauri bundles
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: packages/desktop
+          tagName: ${{ needs.version.outputs.tag }}
+          releaseName: GTM Grid ${{ needs.version.outputs.tag }}
+          releaseBody: "Download the installer for your platform from the assets below."
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+  # ── 3. Publish the release once all platforms succeed ───────────────────
+  publish:
+    name: Publish release
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mark release published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ needs.version.outputs.tag }}" --draft=false --latest
