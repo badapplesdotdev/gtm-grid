@@ -18,7 +18,7 @@
 
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useConvexAuth, useQuery } from "convex/react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { cloudEnabled } from "./convex";
@@ -126,36 +126,119 @@ export function resolveActiveWorkspace(
   return workspaces.find((w) => w._id === storedId) ?? workspaces[0];
 }
 
+// ─── Active-workspace shared store (single source of truth) ────────────────────
+//
+// The selected workspace id is a SINGLE shared value, not per-hook state. Every
+// consumer (App, the plan badge, the dropdown) subscribes to the same module
+// store via `useSyncExternalStore`, so calling `setActiveWorkspaceId` anywhere
+// re-renders all of them consistently. The store wraps `localStorage` for
+// persistence and listens for cross-window `storage` events so a second app
+// window stays in sync. None of this runs any Convex calls; it is pure client
+// state, leaving the local-only path untouched.
+
+/** Read the persisted active-workspace id, tolerating storage being unavailable. */
+function readStoredWorkspaceId(): string | null {
+  try {
+    return localStorage.getItem(ACTIVE_WS_KEY);
+  } catch {
+    return null;
+  }
+}
+
 /**
- * The active workspace selection. Persisted in `localStorage` and validated
- * against the workspaces the user can actually access (so a stale id from a
- * removed workspace falls back to the first available one).
+ * The active-workspace id store: a tiny observable over `localStorage`. Exposed
+ * for direct (React-free) unit testing of the subscribe/snapshot/set contract.
+ */
+export const activeWorkspaceStore = (() => {
+  const listeners = new Set<() => void>();
+  // In-memory mirror of the persisted id so `getSnapshot` is stable (returns the
+  // same reference until an actual change), which `useSyncExternalStore` requires.
+  let current: string | null = readStoredWorkspaceId();
+
+  const emit = () => {
+    for (const listener of listeners) listener();
+  };
+
+  const handleStorage = (event: StorageEvent) => {
+    // A change in another window: re-sync from storage and notify subscribers.
+    if (event.key !== null && event.key !== ACTIVE_WS_KEY) return;
+    const next = readStoredWorkspaceId();
+    if (next === current) return;
+    current = next;
+    emit();
+  };
+
+  return {
+    subscribe(listener: () => void): () => void {
+      if (listeners.size === 0 && typeof window !== "undefined") {
+        window.addEventListener("storage", handleStorage);
+      }
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+        if (listeners.size === 0 && typeof window !== "undefined") {
+          window.removeEventListener("storage", handleStorage);
+        }
+      };
+    },
+    getSnapshot(): string | null {
+      return current;
+    },
+    set(id: string): void {
+      if (id === current) return;
+      current = id;
+      try {
+        localStorage.setItem(ACTIVE_WS_KEY, id);
+      } catch {
+        /* ignore storage failures (private mode, etc.) */
+      }
+      emit();
+    },
+  };
+})();
+
+/**
+ * The active workspace selection, backed by a single shared store so all
+ * consumers observe the same value and re-render together when it changes.
+ * Persisted in `localStorage` and validated against the workspaces the user can
+ * actually access (so a stale id from a removed workspace falls back to the
+ * first available one).
+ *
+ * Default selection: when signed in with no current (or stale) selection, this
+ * persists the first workspace's id so a freshly signed-in client — or a second
+ * window — shows that workspace immediately instead of "Local workspace".
  */
 export function useActiveWorkspace(me: Me | null | undefined): {
   activeWorkspace: WorkspaceSummary | null;
   setActiveWorkspaceId: (id: Id<"workspaces">) => void;
 } {
-  const [storedId, setStoredId] = useState<string | null>(() => {
-    try {
-      return localStorage.getItem(ACTIVE_WS_KEY);
-    } catch {
-      return null;
-    }
-  });
+  const storedId = useSyncExternalStore(
+    activeWorkspaceStore.subscribe,
+    activeWorkspaceStore.getSnapshot,
+    activeWorkspaceStore.getSnapshot,
+  );
 
   const setActiveWorkspaceId = useCallback((id: Id<"workspaces">) => {
-    setStoredId(id);
-    try {
-      localStorage.setItem(ACTIVE_WS_KEY, id);
-    } catch {
-      /* ignore storage failures (private mode, etc.) */
-    }
+    activeWorkspaceStore.set(id);
   }, []);
 
   const activeWorkspace = useMemo<WorkspaceSummary | null>(
     () => resolveActiveWorkspace(me?.workspaces ?? [], storedId),
     [me, storedId],
   );
+
+  // Persist the resolved default so the selection is shared and durable: once a
+  // workspace is resolved that differs from what is stored (no/stale selection),
+  // write it back. This makes a freshly signed-in client — or a second window —
+  // land on a real workspace rather than falling back to "Local workspace" until
+  // the user picks one manually. Done in an effect (not during render) so the
+  // store notification happens after commit, never mid-render.
+  const resolvedId = activeWorkspace?._id ?? null;
+  useEffect(() => {
+    if (resolvedId !== null && resolvedId !== storedId) {
+      activeWorkspaceStore.set(resolvedId);
+    }
+  }, [resolvedId, storedId]);
 
   return { activeWorkspace, setActiveWorkspaceId };
 }
