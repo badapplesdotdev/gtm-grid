@@ -42,7 +42,43 @@ export interface PlanDisplay {
   readonly cloudActions: CloudActionsMode;
   /** Short marketing one-liner for the upgrade option. */
   readonly tagline: string;
+  /**
+   * REAL feature differentiators for this tier (rendered as the card bullets in
+   * the onboarding plan step + the in-app upgrade modal). Describe only what we
+   * actually ship — cloud sync, realtime multiplayer, shared workspace
+   * credentials, the cloud-actions allowance/overage, per-seat seats — NOT
+   * SSO/SAML/audit-log/version-history we do not have.
+   */
+  readonly features: readonly string[];
 }
+
+/**
+ * Display metadata for the FREE (local-first, solo) tier. Free is NOT a paid plan
+ * id (no Autumn `attach`, no checkout) so it lives outside {@link PLAN_CATALOG};
+ * the onboarding/upgrade UIs render it alongside the paid cards as the "stay
+ * local" option. Bullets describe the real local-first product.
+ */
+export interface FreePlanDisplay {
+  readonly id: "free";
+  readonly name: string;
+  readonly perSeatUsd: 0;
+  readonly tagline: string;
+  readonly features: readonly string[];
+}
+
+/** The free tier card content (local & solo, forever — no card, no checkout). */
+export const FREE_PLAN: FreePlanDisplay = {
+  id: "free",
+  name: "Free",
+  perSeatUsd: 0,
+  tagline: "Local & solo, forever",
+  features: [
+    "100% local & offline execution",
+    "Unlimited rows, tables & functions",
+    "Bring-your-own AI key",
+    "Every connector, on your machine",
+  ],
+} as const;
 
 /**
  * The paid plan ids, in upsell order (cheapest first). These ARE the Autumn
@@ -56,6 +92,83 @@ export const PAID_PLAN_IDS = ["team", "business", "unlimited"] as const;
 export type PaidPlanId = (typeof PAID_PLAN_IDS)[number];
 
 /**
+ * The billing cycle a buyer picks at checkout. Monthly is the default; annual
+ * trades a 12-month commitment for "2 months free" (10× the monthly per-seat
+ * price) and maps to a SEPARATE Autumn plan id (the `_annual` variant).
+ */
+export type BillingCycle = "monthly" | "annual";
+
+/**
+ * The annual Autumn plan ids, one per paid tier, in the same upsell order as
+ * {@link PAID_PLAN_IDS}. These are DISTINCT Autumn products (already created):
+ * `team_annual` $200/yr, `business_annual` $400/yr, `unlimited_annual` $990/yr
+ * — i.e. 10× the monthly per-seat price (2 months free). Attaching one bills the
+ * customer annually instead of monthly for the same tier.
+ */
+export const ANNUAL_PAID_PLAN_IDS = [
+  "team_annual",
+  "business_annual",
+  "unlimited_annual",
+] as const;
+
+/** A valid ANNUAL paid plan id. */
+export type AnnualPaidPlanId = (typeof ANNUAL_PAID_PLAN_IDS)[number];
+
+/**
+ * Every plan id the checkout `attach` call may legitimately receive: the monthly
+ * tiers + their annual variants. This is the FULL allow-list the checkout path
+ * validates against ({@link isPaidPlanId}) so an annual selection is accepted
+ * while a forged/unknown id is still rejected. The base {@link PAID_PLAN_IDS}
+ * stays the catalog/upsell list used for display + plan derivation.
+ */
+export const ALL_PAID_PLAN_IDS = [
+  ...PAID_PLAN_IDS,
+  ...ANNUAL_PAID_PLAN_IDS,
+] as const;
+
+/** Any attachable paid plan id (monthly or annual). */
+export type AnyPaidPlanId = (typeof ALL_PAID_PLAN_IDS)[number];
+
+/**
+ * The (tier, billing) → Autumn plan id mapping — the SINGLE source of truth that
+ * resolves a chosen base tier + billing cycle to the concrete Autumn product id
+ * the checkout `attach` call uses. Monthly cycles map to the base id
+ * (team/business/unlimited); annual cycles map to the `_annual` variant. Keyed by
+ * base tier so the onboarding/upgrade UI never re-derives the id string.
+ */
+export const PLAN_BILLING_IDS: {
+  readonly [K in PaidPlanId]: { readonly [C in BillingCycle]: AnyPaidPlanId };
+} = {
+  team: { monthly: "team", annual: "team_annual" },
+  business: { monthly: "business", annual: "business_annual" },
+  unlimited: { monthly: "unlimited", annual: "unlimited_annual" },
+} as const;
+
+/**
+ * Resolve a chosen base tier + billing cycle to the concrete Autumn plan id the
+ * checkout action attaches. The single mapping the onboarding plan step + the
+ * in-app upgrade modal both call so the monthly/annual id derivation lives in one
+ * tested place.
+ */
+export function resolvePlanId(
+  tier: PaidPlanId,
+  billing: BillingCycle,
+): AnyPaidPlanId {
+  return PLAN_BILLING_IDS[tier][billing];
+}
+
+/**
+ * The per-seat monthly-equivalent price to DISPLAY for a tier on a billing cycle.
+ * Annual = 2 months free → `round(monthly × 10 / 12)` per seat/mo (the headline
+ * number on the annual card). Pure + tested so the UI never re-implements the
+ * annual math.
+ */
+export function perSeatUsdFor(tier: PaidPlanId, billing: BillingCycle): number {
+  const monthly = PLAN_CATALOG[tier].perSeatUsd;
+  return billing === "annual" ? Math.round((monthly * 10) / 12) : monthly;
+}
+
+/**
  * The catalog: display metadata per paid plan, keyed by id. Prices mirror the
  * Autumn plans (team $20, business $40, unlimited $99). team/business meter
  * cloud-actions (overage); unlimited does not.
@@ -67,6 +180,12 @@ export const PLAN_CATALOG: { readonly [K in PaidPlanId]: PlanDisplay } = {
     perSeatUsd: 20,
     cloudActions: "metered",
     tagline: "For small teams getting started with shared cloud grids.",
+    features: [
+      "Cloud sync & realtime multiplayer",
+      "Shared workspace credentials",
+      "Monthly cloud-actions allowance, then overage",
+      "Per-seat seats",
+    ],
   },
   business: {
     id: "business",
@@ -74,6 +193,12 @@ export const PLAN_CATALOG: { readonly [K in PaidPlanId]: PlanDisplay } = {
     perSeatUsd: 40,
     cloudActions: "metered",
     tagline: "More included cloud actions and a lower overage rate.",
+    features: [
+      "Larger monthly cloud-actions allowance",
+      "Lower per-action overage rate",
+      "Shared workspace credentials",
+      "Per-seat seats",
+    ],
   },
   unlimited: {
     id: "unlimited",
@@ -81,6 +206,12 @@ export const PLAN_CATALOG: { readonly [K in PaidPlanId]: PlanDisplay } = {
     perSeatUsd: 99,
     cloudActions: "unlimited",
     tagline: "Unlimited cloud actions — no overage, ever.",
+    features: [
+      "Unlimited cloud actions — no overage",
+      "Cloud sync & realtime multiplayer",
+      "Shared workspace credentials",
+      "Per-seat seats",
+    ],
   },
 } as const;
 
@@ -101,9 +232,21 @@ export const PAID_PLANS: readonly PlanDisplay[] = PAID_PLAN_IDS.map(
  * checkout path (service + Convex action) to reject an unknown/forged plan
  * before any Autumn `attach`. Narrows to {@link PaidPlanId} on success.
  */
-export function isPaidPlanId(id: string): id is PaidPlanId {
-  // `.some` keeps the comparison cast-free (each element narrows to PaidPlanId,
-  // compared against the wider `string` input).
+export function isPaidPlanId(id: string): id is AnyPaidPlanId {
+  // `.some` keeps the comparison cast-free (each element narrows to AnyPaidPlanId,
+  // compared against the wider `string` input). Accepts BOTH the monthly base
+  // tiers AND their annual variants, since both are legitimate `attach` targets.
+  return ALL_PAID_PLAN_IDS.some((paid) => paid === id);
+}
+
+/**
+ * Type guard for the BASE (monthly) catalog tiers only — the keys of
+ * {@link PLAN_CATALOG}. Distinct from {@link isPaidPlanId} (which also accepts the
+ * annual variants): this narrows to a {@link PaidPlanId} that can index the
+ * catalog for display name / price lookups. Used by {@link planName} and
+ * {@link derivePaidPlanId}, which describe the workspace's TIER, not its cycle.
+ */
+export function isBasePaidPlanId(id: string): id is PaidPlanId {
   return PAID_PLAN_IDS.some((paid) => paid === id);
 }
 
@@ -118,7 +261,25 @@ export function isPaidPlanId(id: string): id is PaidPlanId {
  */
 export function planName(planId: string | null): string {
   if (planId === null) return "Free";
-  return isPaidPlanId(planId) ? PLAN_CATALOG[planId].name : planId;
+  if (isBasePaidPlanId(planId)) return PLAN_CATALOG[planId].name;
+  // An annual variant ("team_annual" …) names the same TIER as its base.
+  const base = baseTierOf(planId);
+  if (base !== null) return PLAN_CATALOG[base].name;
+  return planId;
+}
+
+/**
+ * The base tier id for any attachable plan id: a base id maps to itself, an
+ * annual variant maps to its tier (`team_annual` → `team`), anything else →
+ * `null`. Lets the tier-oriented helpers ({@link planName},
+ * {@link derivePaidPlanId}) treat an annual subscription as its underlying tier.
+ */
+export function baseTierOf(planId: string): PaidPlanId | null {
+  if (isBasePaidPlanId(planId)) return planId;
+  for (const tier of PAID_PLAN_IDS) {
+    if (PLAN_BILLING_IDS[tier].annual === planId) return tier;
+  }
+  return null;
 }
 
 /**
@@ -135,11 +296,17 @@ export function planName(planId: string | null): string {
 export function derivePaidPlanId(
   activePlanIds: readonly string[],
 ): PaidPlanId | null {
-  const active = new Set(activePlanIds);
+  // Reduce every active id to its base tier first, so an ANNUAL subscription
+  // ("business_annual") counts as its tier ("business") rather than being missed.
+  const activeTiers = new Set(
+    activePlanIds
+      .map((id) => baseTierOf(id))
+      .filter((t): t is PaidPlanId => t !== null),
+  );
   // Walk highest tier → lowest so a customer on multiple tiers surfaces the top.
   for (let i = PAID_PLAN_IDS.length - 1; i >= 0; i--) {
     const id = PAID_PLAN_IDS[i];
-    if (active.has(id)) return id;
+    if (activeTiers.has(id)) return id;
   }
   return null;
 }

@@ -8,6 +8,8 @@ import { AddColumnPopover, FunctionsModal } from "./AddColumn";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { AccountBar, PlanBadge } from "./cloud/AccountBar";
 import { WorkspaceSettings } from "./cloud/WorkspaceSettings";
+import { OnboardingFlow } from "./cloud/onboarding/OnboardingFlow";
+import { cloudEnabled } from "./cloud/convex";
 import { CloudGrid } from "./cloud/CloudGrid";
 import { useMe, useActiveWorkspace, useAuthState } from "./cloud/auth";
 import { useWorkspaceCredentials } from "./cloud/useWorkspaceCredentials";
@@ -403,7 +405,27 @@ export default function App() {
   // state above is left intact so switching back is instant and unchanged.
   const me = useMe();
   const { isAuthenticated } = useAuthState();
-  const { activeWorkspace } = useActiveWorkspace(me ?? null);
+  const { activeWorkspace, setActiveWorkspaceId } = useActiveWorkspace(me ?? null);
+
+  // ── Cloud onboarding flow (C28) ──────────────────────────────
+  // The full-screen split-layout onboarding wizard. Opened from the AccountBar
+  // "Sign in" (auth entry) OR auto-started at the Create-workspace step when a
+  // signed-in user has no workspace yet (first-run). Fully dismissible back to
+  // the local app, so the local-first path is never blocked.
+  const [onboarding, setOnboarding] = useState<
+    { initialScreen: "signin" | "workspace"; hasSession: boolean } | null
+  >(null);
+  // Auto-start at "Create workspace" once: signed in, cloud on, zero workspaces,
+  // and not already showing the flow. A ref guards against re-opening it after
+  // the user dismisses it.
+  const autoStartedRef = useRef(false);
+  useEffect(() => {
+    if (!cloudEnabled || !isAuthenticated || me == null) return;
+    if (me.workspaces.length > 0) return;
+    if (autoStartedRef.current || onboarding !== null) return;
+    autoStartedRef.current = true;
+    setOnboarding({ initialScreen: "workspace", hasSession: true });
+  }, [isAuthenticated, me, onboarding]);
   // Shared (workspace-scoped) credential source for the connector / AI panels.
   // `undefined` when signed out / local-only, so those panels behave as before.
   const workspaceCreds = useWorkspaceCredentials(
@@ -1140,6 +1162,15 @@ export default function App() {
           onOpenMenu={openAccountMenu}
           theme={theme}
           onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+          onStartOnboarding={
+            cloudEnabled
+              ? () =>
+                  setOnboarding({
+                    initialScreen: isAuthenticated ? "workspace" : "signin",
+                    hasSession: isAuthenticated,
+                  })
+              : undefined
+          }
         />
       </aside>
 
@@ -1429,6 +1460,19 @@ export default function App() {
             ))}
           </div>
         </>
+      )}
+
+      {/* ── Cloud onboarding (full-screen, C28) ─────────────── */}
+      {onboarding && (
+        <OnboardingFlow
+          initialScreen={onboarding.initialScreen}
+          hasSession={onboarding.hasSession}
+          onClose={() => setOnboarding(null)}
+          onDone={(workspaceId) => {
+            if (workspaceId !== null) setActiveWorkspaceId(workspaceId);
+            setOnboarding(null);
+          }}
+        />
       )}
 
       {/* ── Modals ──────────────────────── */}

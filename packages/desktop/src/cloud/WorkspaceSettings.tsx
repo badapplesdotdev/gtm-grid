@@ -21,7 +21,9 @@
 import { useCallback, useMemo, useState } from "react";
 import { useAction, useConvexAuth } from "convex/react";
 import { Effect, Layer } from "effect";
-import { PAID_PLANS, type PlanDisplay } from "@gtmgrid/cloud";
+import { type BillingCycle, resolvePlanId } from "@gtmgrid/cloud";
+import { PlanGrid, BillingToggle } from "./onboarding/PlanGrid";
+import type { SelectablePlan } from "./onboarding/flow-logic";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { cloudEnabled } from "./convex";
@@ -164,26 +166,35 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
   // planId and opens the returned Autumn URL in the system browser. Errors
   // surface in the modal; the modal stays open so a fallback link is available.
   const [upgradeError, setUpgradeError] = useState<string | null>(null);
-  const [upgradingPlan, setUpgradingPlan] = useState<string | null>(null);
-  const selectPlan = useCallback(
-    async (planId: string) => {
-      if (workspaceId === null || upgradingPlan !== null) return;
-      setUpgradingPlan(planId);
-      setUpgradeError(null);
-      try {
-        await runCheckout(
-          isAuthenticated,
-          { workspaceId, planId },
-          checkoutLayer,
-        );
-      } catch (e) {
-        setUpgradeError(e instanceof Error ? e.message : "Checkout failed.");
-      } finally {
-        setUpgradingPlan(null);
-      }
-    },
-    [workspaceId, isAuthenticated, checkoutLayer, upgradingPlan],
-  );
+  const [upgrading, setUpgrading] = useState(false);
+  // Selected tier + billing cycle in the upgrade modal (default to the
+  // recommended Business tier, monthly).
+  const [selectedPlan, setSelectedPlan] = useState<SelectablePlan>("business");
+  const [billing, setBilling] = useState<BillingCycle>("monthly");
+  const startUpgrade = useCallback(async () => {
+    if (workspaceId === null || upgrading) return;
+    // Free is not a checkout target; the modal's CTA is disabled for it.
+    if (selectedPlan === "free") return;
+    setUpgrading(true);
+    setUpgradeError(null);
+    try {
+      // Resolve the concrete Autumn plan id from (tier, billing) via the shared
+      // catalog mapping — the same single-sourced resolution onboarding uses.
+      const planId = resolvePlanId(selectedPlan, billing);
+      await runCheckout(isAuthenticated, { workspaceId, planId }, checkoutLayer);
+    } catch (e) {
+      setUpgradeError(e instanceof Error ? e.message : "Checkout failed.");
+    } finally {
+      setUpgrading(false);
+    }
+  }, [
+    workspaceId,
+    isAuthenticated,
+    checkoutLayer,
+    upgrading,
+    selectedPlan,
+    billing,
+  ]);
 
   if (!cloudEnabled || workspaceId === null) return null;
 
@@ -283,10 +294,13 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
           that plan and opens the Autumn URL in the system browser. */}
       {showUpgrade && (
         <UpgradeModal
-          plans={PAID_PLANS}
-          upgradingPlan={upgradingPlan}
+          selectedPlan={selectedPlan}
+          billing={billing}
+          upgrading={upgrading}
           error={upgradeError}
-          onSelect={selectPlan}
+          onSelectPlan={setSelectedPlan}
+          onBilling={setBilling}
+          onConfirm={startUpgrade}
           onClose={() => {
             setShowUpgrade(false);
             setUpgradeError(null);
@@ -298,61 +312,57 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
 }
 
 /**
- * The plan-selection upgrade modal (C27). Presents each paid plan from
- * {@link PAID_PLANS} as a selectable card — name, $/seat, and the
- * overage-vs-unlimited note — and on click starts checkout for that plan. Reuses
- * the existing `.overlay` / `.modal` / `.btn` styles.
+ * The plan-selection upgrade modal (C27/C28). Renders the SHARED {@link PlanGrid}
+ * (the same card the onboarding plan step uses — no duplication) with a
+ * monthly/annual toggle. Choosing a paid tier + Continue resolves the (tier,
+ * billing) → Autumn plan id and starts checkout (the Stripe/Autumn hosted URL
+ * opens in the system browser). Free is shown as the "stay local" option but is
+ * not a checkout target. Reuses the existing `.overlay` / `.modal` / `.btn`
+ * styles and scopes the cards under `.gtm-onboarding` so the shared CSS applies.
  */
 function UpgradeModal(props: {
-  plans: readonly PlanDisplay[];
-  upgradingPlan: string | null;
+  selectedPlan: SelectablePlan;
+  billing: BillingCycle;
+  upgrading: boolean;
   error: string | null;
-  onSelect: (planId: string) => void;
+  onSelectPlan: (plan: SelectablePlan) => void;
+  onBilling: (billing: BillingCycle) => void;
+  onConfirm: () => void;
   onClose: () => void;
 }) {
-  const { plans, upgradingPlan, error, onSelect, onClose } = props;
+  const {
+    selectedPlan,
+    billing,
+    upgrading,
+    error,
+    onSelectPlan,
+    onBilling,
+    onConfirm,
+    onClose,
+  } = props;
+  const isFree = selectedPlan === "free";
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ width: 460 }}>
+      <div className="modal gtm-onboarding-modal" style={{ width: 900, maxWidth: "94vw" }}>
         <div className="modal-header">
           <span className="modal-title">Choose a plan</span>
+          <BillingToggle billing={billing} onChange={onBilling} />
           <button className="modal-close" onClick={onClose} aria-label="Close">
             ×
           </button>
         </div>
-        <div className="modal-body">
-          <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--text-2)" }}>
-            Pick a plan to upgrade this workspace. Checkout opens in your browser;
-            complete it to unlock more seats and cloud actions.
+        <div className="modal-body gtm-onboarding">
+          <p style={{ margin: "0 0 14px", fontSize: 13, color: "var(--text-2)" }}>
+            Per-seat, for your whole team. Checkout opens in your browser;
+            complete it to unlock cloud sync, multiplayer and more cloud actions.
           </p>
-          <div className="ws-plan-list">
-            {plans.map((plan) => {
-              const busy = upgradingPlan === plan.id;
-              const disabled = upgradingPlan !== null;
-              return (
-                <button
-                  key={plan.id}
-                  className="ws-plan-card"
-                  onClick={() => onSelect(plan.id)}
-                  disabled={disabled}
-                >
-                  <span className="ws-plan-head">
-                    <span className="ws-plan-name">{plan.name}</span>
-                    <span className="ws-plan-price">${plan.perSeatUsd}/seat/mo</span>
-                  </span>
-                  <span className="ws-plan-note">
-                    {plan.cloudActions === "unlimited"
-                      ? "Unlimited cloud actions — no overage"
-                      : "Metered cloud actions with overage"}
-                  </span>
-                  <span className="ws-plan-tagline">{plan.tagline}</span>
-                  {busy && <span className="ws-plan-busy">Opening checkout…</span>}
-                </button>
-              );
-            })}
-          </div>
+          <PlanGrid
+            billing={billing}
+            selected={selectedPlan}
+            onSelect={onSelectPlan}
+          />
           {error && (
-            <div className="account-menu-error" role="alert" style={{ marginTop: 10 }}>
+            <div className="account-menu-error" role="alert" style={{ marginTop: 12 }}>
               {error}
             </div>
           )}
@@ -360,6 +370,18 @@ function UpgradeModal(props: {
         <div className="modal-footer">
           <button className="btn btn-outline" onClick={onClose}>
             Close
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={onConfirm}
+            disabled={isFree || upgrading}
+            title={isFree ? "Free needs no checkout" : undefined}
+          >
+            {upgrading
+              ? "Opening checkout…"
+              : isFree
+                ? "Free — no checkout"
+                : "Continue to checkout"}
           </button>
         </div>
       </div>
