@@ -454,5 +454,8 @@ describe("ConvexGridStore — read scaling (#24)", () => {
     // 30 rows × (getColumn + listRows + per-row getCell/rowCells/listColumns)
     // was well over 100 getTable queries.
     expect(large).toBeLessThan(30);
-  });
+    // Generous timeout: this runs the QuickJS sandbox per row (×30) and can
+    // exceed the 5s default under full-suite concurrency — the assertion is
+    // about read COUNT, not speed, so a flake here is purely a timing artifact.
+  }, 30000);
 });
