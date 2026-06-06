@@ -175,7 +175,9 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
                 value={inviteUserId}
                 onChange={(e) => setInviteUserId(e.target.value)}
                 disabled={busy}
-                onKeyDown={(e) => e.key === "Enter" && submitInvite()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void submitInvite();
+                }}
               />
               <button
                 className="btn btn-primary"

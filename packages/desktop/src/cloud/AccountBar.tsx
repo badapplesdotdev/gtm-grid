@@ -109,7 +109,12 @@ export function AccountBar(props: AccountBarProps) {
               : projectName}
           </span>
           <span className="account-sub">
-            <span className={`status-dot ${healthStatus}`} />
+            {/* The status dot reflects the relevant connection: cloud session
+                state when signed in (the `me` query is live by then), vs. the
+                local sidecar's health otherwise. Without this scoping a signed-in
+                user would see a green/red dot driven by the LOCAL sidecar, which
+                says nothing about their cloud connectivity. */}
+            <span className={`status-dot ${signedIn ? "connected" : healthStatus}`} />
             {signedIn
               ? me!.user.email ?? "Signed in"
               : healthStatus === "connected"

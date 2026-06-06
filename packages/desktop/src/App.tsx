@@ -409,8 +409,26 @@ export default function App() {
   const cloudTables = useCloudTables(cloudProject?._id ?? null);
   const { createProject: createCloudProject, createTable: createCloudTable } =
     useCloudProjectMutations();
+  // Cloud create (project/table) UX: a busy flag to disable the trigger while the
+  // mutation is in flight, and a surfaced error so a failed create never hangs
+  // silently. Both are cleared on the next attempt / success.
+  const [cloudCreating, setCloudCreating] = useState(false);
+  const [cloudCreateError, setCloudCreateError] = useState<string | null>(null);
   // Whether the app is currently viewing a cloud project (vs. local).
   const inCloud = cloudProject !== null;
+
+  // Reset the open cloud project when the active workspace changes: a project
+  // belongs to exactly one workspace, so keeping it open across a switch would
+  // leak another workspace's project into the new one's view. The first render
+  // (no prior workspace) is a no-op so it does not disturb local mode.
+  const activeWorkspaceId = activeWorkspace?._id ?? null;
+  const prevWorkspaceIdRef = useRef<Id<"workspaces"> | null>(activeWorkspaceId);
+  useEffect(() => {
+    if (prevWorkspaceIdRef.current === activeWorkspaceId) return;
+    prevWorkspaceIdRef.current = activeWorkspaceId;
+    setCloudProject(null);
+    setCloudTableId(null);
+  }, [activeWorkspaceId]);
 
   // Open the add-column popover anchored just below the clicked "+" button.
   const openAddCol = (e: React.MouseEvent) => {
@@ -553,22 +571,55 @@ export default function App() {
     setView({ kind: "table" });
   }, []);
 
-  // Create a cloud project in the active workspace, then open it.
+  // Create a cloud project in the active workspace, then open it. Surfaces any
+  // failure (and always clears the busy flag) so the UI never hangs silently.
   const onCreateCloudProject = useCallback(
     async (name: string) => {
-      if (!activeWorkspace) return;
-      const id = await createCloudProject(activeWorkspace._id, name);
-      setShowProjects(false);
-      setCloudProject({
-        _id: id,
-        workspaceId: activeWorkspace._id,
-        name,
-        createdAt: Date.now(),
-      });
-      setCloudTableId(null);
+      if (!activeWorkspace || cloudCreating) return;
+      setCloudCreating(true);
+      setCloudCreateError(null);
+      try {
+        const id = await createCloudProject(activeWorkspace._id, name);
+        setShowProjects(false);
+        setCloudProject({
+          _id: id,
+          workspaceId: activeWorkspace._id,
+          name,
+          createdAt: Date.now(),
+        });
+        setCloudTableId(null);
+      } catch (e) {
+        const message =
+          e instanceof Error ? e.message : "Could not create project.";
+        setCloudCreateError(message);
+        // Re-throw so the project switcher (which owns the create form) can keep
+        // it open and show the failure instead of closing as if it succeeded.
+        throw e instanceof Error ? e : new Error(message);
+      } finally {
+        setCloudCreating(false);
+      }
     },
-    [activeWorkspace, createCloudProject],
+    [activeWorkspace, createCloudProject, cloudCreating],
   );
+
+  // Create a cloud table in the open project, then select it. Single helper for
+  // the (previously duplicated) "New table" affordances in the cloud sidebar.
+  // Surfaces any failure and always clears the busy flag so the UI never hangs.
+  const onCreateCloudTable = useCallback(async () => {
+    if (!cloudProject || cloudCreating) return;
+    setCloudCreating(true);
+    setCloudCreateError(null);
+    try {
+      const id = await createCloudTable(cloudProject._id, "Untitled");
+      setCloudTableId(id);
+    } catch (e) {
+      setCloudCreateError(
+        e instanceof Error ? e.message : "Could not create table.",
+      );
+    } finally {
+      setCloudCreating(false);
+    }
+  }, [cloudProject, createCloudTable, cloudCreating]);
 
   // Leave cloud mode → back to the local project the sidecar already has open.
   const exitCloud = useCallback(() => {
@@ -850,11 +901,8 @@ export default function App() {
                 Tables (cloud)
                 <button
                   title="New cloud table"
-                  onClick={async () => {
-                    if (!cloudProject) return;
-                    const id = await createCloudTable(cloudProject._id, "Untitled");
-                    setCloudTableId(id);
-                  }}
+                  disabled={cloudCreating}
+                  onClick={() => { void onCreateCloudTable(); }}
                 >
                   <Icon.Plus />
                 </button>
@@ -879,16 +927,23 @@ export default function App() {
               )}
               <div
                 className="sidebar-item"
-                style={{ marginTop: 2 }}
-                onClick={async () => {
-                  if (!cloudProject) return;
-                  const id = await createCloudTable(cloudProject._id, "Untitled");
-                  setCloudTableId(id);
-                }}
+                style={{ marginTop: 2, opacity: cloudCreating ? 0.6 : 1 }}
+                onClick={() => { void onCreateCloudTable(); }}
               >
                 <span className="sidebar-item-icon" style={{ color: "var(--accent)" }}><Icon.Plus /></span>
-                <span className="sidebar-item-name" style={{ color: "var(--accent)" }}>New table</span>
+                <span className="sidebar-item-name" style={{ color: "var(--accent)" }}>
+                  {cloudCreating ? "Creating…" : "New table"}
+                </span>
               </div>
+              {cloudCreateError && (
+                <div
+                  className="account-menu-error"
+                  role="alert"
+                  style={{ margin: "4px 16px" }}
+                >
+                  {cloudCreateError}
+                </div>
+              )}
             </div>
           )}
 

@@ -65,6 +65,7 @@ export function ProjectSwitcher({
   const [busy, setBusy] = useState(false);
   const [creatingCloud, setCreatingCloud] = useState(false);
   const [newCloudName, setNewCloudName] = useState("");
+  const [cloudError, setCloudError] = useState<string | null>(null);
 
   useEffect(() => {
     api.projects().then(setProjects).catch(() => setProjects([]));
@@ -113,10 +114,15 @@ export function ProjectSwitcher({
     const name = newCloudName.trim();
     if (!name || !cloud) return;
     setBusy(true);
+    setCloudError(null);
     try {
       await cloud.onCreate(name);
       setNewCloudName("");
       setCreatingCloud(false);
+    } catch (e) {
+      // Keep the create form open and show the failure instead of closing as
+      // if it had succeeded.
+      setCloudError(e instanceof Error ? e.message : "Could not create project.");
     } finally {
       setBusy(false);
     }
@@ -180,6 +186,7 @@ export function ProjectSwitcher({
                 ))
               )}
               {creatingCloud ? (
+                <>
                 <div className="palette-create">
                   <span className="palette-row-icon">{CloudIcon}</span>
                   <input
@@ -189,14 +196,20 @@ export function ProjectSwitcher({
                     autoFocus
                     onChange={(e) => setNewCloudName(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter") createCloud();
-                      if (e.key === "Escape") { setCreatingCloud(false); setNewCloudName(""); }
+                      if (e.key === "Enter") void createCloud();
+                      if (e.key === "Escape") { setCreatingCloud(false); setNewCloudName(""); setCloudError(null); }
                     }}
                   />
-                  <button className="btn btn-primary btn-sm" onClick={createCloud} disabled={busy || !newCloudName.trim()}>
+                  <button className="btn btn-primary btn-sm" onClick={() => void createCloud()} disabled={busy || !newCloudName.trim()}>
                     {busy ? "Creating…" : "Create"}
                   </button>
                 </div>
+                {cloudError && (
+                  <div className="account-menu-error" role="alert" style={{ margin: "4px 16px" }}>
+                    {cloudError}
+                  </div>
+                )}
+                </>
               ) : (
                 <button className="palette-row" onClick={() => setCreatingCloud(true)} disabled={busy}>
                   <span className="palette-row-icon">{PlusIcon}</span>
