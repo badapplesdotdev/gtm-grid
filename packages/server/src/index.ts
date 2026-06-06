@@ -528,12 +528,11 @@ route("POST", "/api/cloud/columns/run", async (_p, body) => {
     return { error: "convexUrl, token, tableId and columnId are required" };
   const rowIds = Array.isArray(body?.rowIds) && body.rowIds.length ? (body.rowIds as string[]) : undefined;
   const deps = defaultCloudRunDeps(registry, aiConfig());
-  // The engine constructor needs a Db for its (unused on this path) db fields;
-  // reuse the shared global db so no new SQLite file is created.
+  // The cloud path is Db-free: the engine is built with no Db and reads/writes
+  // through the injected Convex store, so no SQLite file is opened here.
   return runCloudColumn(
     { convexUrl, token, tableId, columnId, force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds },
     deps,
-    globalDb,
   );
 });
 

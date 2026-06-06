@@ -31,7 +31,9 @@ let db: Db;
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "cloud-run-test-"));
-  // The engine constructor needs a Db for its (unused on the cloud path) fields.
+  // The cloud path is Db-free, so `runCloudColumn` no longer takes a Db. We keep
+  // a local Db here ONLY as a witness: after a cloud run we assert it stayed
+  // empty, proving the run wrote through the injected Convex store, not SQLite.
   db = new Db(join(dir, "unused.db"));
 });
 
@@ -189,7 +191,6 @@ describe("runCloudColumn", () => {
     const res = await runCloudColumn(
       { convexUrl: "https://fake.convex.cloud", token: "jwt", tableId: "t1", columnId: "c_upper" },
       depsFor(client, upperRegistry()),
-      db,
     );
 
     expect(res).toEqual({ ran: 2, errors: 0 });
@@ -234,7 +235,6 @@ describe("runCloudColumn", () => {
     const res = await runCloudColumn(
       { convexUrl: "https://fake.convex.cloud", token: "jwt", tableId: "t1", columnId: "c_bad" },
       depsFor(client, upperRegistry()),
-      db,
     );
 
     expect(res).toEqual({ ran: 0, errors: 1 });
@@ -271,7 +271,6 @@ describe("runCloudColumn", () => {
     const res = await runCloudColumn(
       { convexUrl: "https://fake.convex.cloud", token: "jwt", tableId: "t1", columnId: "c_x", rowIds: ["r1"] },
       depsFor(client, upperRegistry()),
-      db,
     );
 
     expect(res).toEqual({ ran: 1, errors: 0 });
@@ -341,7 +340,6 @@ describe("runCloudColumn — workspace-shared credentials (#18)", () => {
     const res = await runCloudColumn(
       { convexUrl: "https://fake.convex.cloud", token: "jwt", tableId: "t1", columnId: "c_key" },
       depsFor(client, secretEchoRegistry()),
-      db,
     );
 
     expect(res).toEqual({ ran: 1, errors: 0 });
@@ -365,7 +363,6 @@ describe("runCloudColumn — workspace-shared credentials (#18)", () => {
     const res = await runCloudColumn(
       { convexUrl: "https://fake.convex.cloud", token: "jwt", tableId: "t1", columnId: "c_key" },
       depsFor(client, secretEchoRegistry()),
-      db,
     );
 
     expect(res).toEqual({ ran: 1, errors: 0 });

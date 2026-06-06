@@ -21,8 +21,8 @@ import {
   type ConvexFunctionRefs,
   type ConvexGridStoreConfig,
 } from "./store-convex.js";
-import type { GridStoreError, GridStoreShape } from "./store.js";
-import type { Connector } from "./types.js";
+import type { CellPatch, GridStoreError, GridStoreShape } from "./store.js";
+import type { Cell, Column, Connector, Row } from "./types.js";
 
 // Opaque refs — the engine never interprets these; the fake client compares by
 // identity to decide which "function" was called.
@@ -429,7 +429,7 @@ describe("ConvexGridStore — read scaling (#24)", () => {
     const store = await buildStore({ client, refs: REFS, tableId: TABLE_ID });
     const engine = new Engine(
       // db/credsDb are unused: the cloud store is injected for both reads/creds.
-      undefined as never,
+      undefined,
       {},
       echoRegistry(),
       undefined,
@@ -458,4 +458,120 @@ describe("ConvexGridStore — read scaling (#24)", () => {
     // exceed the 5s default under full-suite concurrency — the assertion is
     // about read COUNT, not speed, so a flake here is purely a timing artifact.
   }, 30000);
+});
+
+/**
+ * Engine Db-free construction (no better-sqlite3, no Convex) — the load-bearing
+ * acceptance criterion for the cloud path. We build an `Engine` with NO `Db` and
+ * a hand-written in-memory {@link GridStoreShape} (not even the Convex store) and
+ * prove `runColumn` runs end-to-end and writes a cell THROUGH the injected store.
+ * This guards the contract independently of Convex: the engine only needs a
+ * GridStore, never a Db.
+ */
+describe("Engine — Db-free construction over an injected fake store", () => {
+  /** A registry whose single connector upper-cases its `value` input. */
+  const upperRegistry = (): Registry => {
+    const connector: Connector = {
+      id: "test",
+      name: "Test",
+      category: "test",
+      auth: null,
+      methods: [
+        {
+          id: "upper",
+          label: "Upper",
+          description: "Uppercases the input value.",
+          inputSchema: {},
+          batchSize: 1,
+          credits: 0,
+          run: async (inputs) => ({ text: String(inputs.value ?? "").toUpperCase() }),
+        },
+      ],
+    };
+    return new Registry([connector]);
+  };
+
+  /**
+   * A minimal in-memory {@link GridStoreShape} over plain Maps. No SQLite, no
+   * Convex — purely the engine's storage contract, so a passing run proves the
+   * engine reads/writes only through the injected store.
+   */
+  function memoryStore(columns: Column[], rows: Row[]): {
+    store: GridStoreShape;
+    cells: Map<string, Cell>;
+  } {
+    const key = (rowId: string, columnId: string) => `${rowId}::${columnId}`;
+    const cells = new Map<string, Cell>();
+    const ok = <A>(value: A): Effect.Effect<A, GridStoreError> =>
+      Effect.succeed(value);
+    const store: GridStoreShape = {
+      getColumn: (id) => ok(columns.find((c) => c.id === id)),
+      listColumns: (tableId) =>
+        ok(columns.filter((c) => c.table_id === tableId)),
+      listRows: (tableId) => ok(rows.filter((r) => r.table_id === tableId)),
+      rowCells: (rowId) =>
+        ok(
+          new Map(
+            [...cells.values()]
+              .filter((c) => c.row_id === rowId)
+              .map((c) => [c.column_id, c]),
+          ),
+        ),
+      getCell: (rowId, columnId) => ok(cells.get(key(rowId, columnId))),
+      setCell: (rowId, columnId, patch: CellPatch) => {
+        const prev = cells.get(key(rowId, columnId));
+        cells.set(key(rowId, columnId), {
+          row_id: rowId,
+          column_id: columnId,
+          value: "value" in patch ? patch.value : prev?.value ?? null,
+          status: patch.status ?? prev?.status ?? "empty",
+          error: patch.error ?? null,
+          updated_at: Date.now(),
+        });
+        return ok(undefined);
+      },
+      getCredential: () => ok(undefined),
+    };
+    return { store, cells };
+  }
+
+  it("constructs with no Db and runColumn writes a cell via the injected store", async () => {
+    const nameCol: Column = {
+      id: "c_name", table_id: "t1", name: "Name", type: "text", kind: "manual",
+      provider: null, method: null, code: null, params: {}, position: 0, created_at: 1,
+    };
+    const upperCol: Column = {
+      id: "c_upper", table_id: "t1", name: "Upper", type: "text", kind: "function",
+      provider: "test", method: "upper", code: null, params: { value: "{{Name}}" },
+      position: 1, created_at: 2,
+    };
+    const row: Row = { id: "r1", table_id: "t1", position: 0, created_at: 1 };
+    const { store, cells } = memoryStore([nameCol, upperCol], [row]);
+    cells.set("r1::c_name", {
+      row_id: "r1", column_id: "c_name", value: "ada", status: "done", error: null, updated_at: 1,
+    });
+
+    // No Db is passed; the injected store backs BOTH project data and credentials.
+    const engine = new Engine(undefined, {}, upperRegistry(), undefined, {
+      store,
+      creds: store,
+    });
+    expect(engine.db).toBeUndefined();
+
+    const res = await engine.runColumn("c_upper");
+    expect(res).toEqual({ ran: 1, errors: 0 });
+
+    const written = cells.get("r1::c_upper");
+    expect(written?.value).toBe("ADA");
+    expect(written?.status).toBe("done");
+  });
+
+  it("requireDb() throws a clear error when the engine was built without a Db", () => {
+    const { store } = memoryStore([], []);
+    const engine = new Engine(undefined, {}, upperRegistry(), undefined, {
+      store,
+      creds: store,
+    });
+    expect(() => engine.requireDb()).toThrowError(/requires a Db/);
+  });
 });
