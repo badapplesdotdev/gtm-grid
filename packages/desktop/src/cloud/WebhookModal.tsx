@@ -14,10 +14,11 @@
  * the behaviour controls call `updateWebhookConfig`. "Save trigger" just closes —
  * there is nothing buffered to commit.
  *
- * Deliveries: there is no per-event delivery log table in the backend, so the
- * "Recent deliveries" section shows the webhook's `lastReceivedAt` / received
- * summary plus an OPTIMISTIC echo of a locally-sent test event. We never
- * fabricate historical delivery rows.
+ * Deliveries: the "Recent deliveries" section is bound to REAL data — the
+ * per-event `webhookDeliveries` log via `listDeliveries` (the
+ * {@link useWebhookDeliveries} hook). The "Send test event" button just posts a
+ * real event; the panel reflects it once the worker records the delivery. No
+ * fabricated/optimistic delivery rows.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -28,6 +29,7 @@ import { INNGEST_URL } from "./convex";
 import {
   type CloudWebhook,
   type WebhookMappingEntry,
+  useWebhookDeliveries,
   useWebhookMutations,
   useWebhooks,
 } from "./useCloudGrid";
@@ -130,14 +132,6 @@ function Switch({
   );
 }
 
-/** A locally-echoed test delivery (NEVER persisted; optimistic display only). */
-interface LocalDelivery {
-  id: number;
-  time: string;
-  status: number;
-  rows: number;
-}
-
 export interface WebhookModalProps {
   /** The cloud table this webhook drives. */
   tableId: Id<"tables">;
@@ -171,10 +165,12 @@ export function WebhookModal({
   // table has none yet, lazily create one the first time the panel needs it.
   const webhook: CloudWebhook | undefined = webhooks?.[0];
 
+  // Real, member-gated per-event delivery log for this webhook (newest first).
+  const deliveries = useWebhookDeliveries(webhook?._id);
+
   const [creating, setCreating] = useState(false);
   const [revealSecret, setRevealSecret] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [deliveries, setDeliveries] = useState<LocalDelivery[]>([]);
 
   // Editable mapping rows, seeded from the persisted mapping and flushed back to
   // Convex on change. Kept in local state so a path edit doesn't re-validate on
@@ -241,22 +237,6 @@ export function WebhookModal({
   -H "Content-Type: application/json" \\
   -H "X-GTMGrid-Signature: $SIG" \\
   -d '${sampleBody.replace(/\s+/g, " ")}'`;
-
-  // Optimistic test echo — display only; never written to the backend.
-  const sendTest = () => {
-    const now = new Date();
-    setDeliveries((d) =>
-      [
-        {
-          id: Date.now(),
-          time: now.toLocaleTimeString("en-US", { hour12: false }),
-          status: 200,
-          rows: 1,
-        },
-        ...d,
-      ].slice(0, 6),
-    );
-  };
 
   // ── Mapping editing (live-persisted on valid change) ──
   const persistMapping = useCallback(
@@ -562,37 +542,35 @@ export function WebhookModal({
                   </div>
                   <pre className="cb-pre">{curl}</pre>
                 </div>
-                <button
-                  className="btn btn-outline"
-                  style={{ marginTop: 10 }}
-                  onClick={sendTest}
-                >
-                  <WI.Zap s={13} /> Send test event
-                </button>
 
                 <div className="form-section-label" style={{ marginTop: 20 }}>
                   Recent deliveries
                 </div>
-                {deliveries.length === 0 ? (
+                {!deliveries || deliveries.length === 0 ? (
                   <div className="wh-empty">
-                    {webhook.lastReceivedAt
-                      ? `${webhook.receivedCount ?? 0} delivered · last ${new Date(
-                          webhook.lastReceivedAt,
-                        ).toLocaleString()}`
-                      : "No deliveries yet. Send a test event to see it here."}
+                    No deliveries yet. POST to the endpoint to see them here.
                   </div>
                 ) : (
                   <div className="wh-deliveries">
-                    {deliveries.map((d) => (
-                      <div className="wh-delivery" key={d.id}>
-                        <span className="wd-pill ok">
-                          <span className="wd-dot" />
-                          Status Code: {d.status}
-                        </span>
-                        <span className="wd-meta">POST · +{d.rows} row</span>
-                        <span className="wd-time import-mono">{d.time}</span>
-                      </div>
-                    ))}
+                    {deliveries.map((d) => {
+                      const ok = d.status >= 200 && d.status < 300;
+                      return (
+                        <div className="wh-delivery" key={d._id}>
+                          <span className={`wd-pill ${ok ? "ok" : "err"}`}>
+                            <span className="wd-dot" />
+                            Status Code: {d.status}
+                          </span>
+                          <span className="wd-meta">
+                            POST · +{d.rowsAffected} row
+                          </span>
+                          <span className="wd-time import-mono">
+                            {new Date(d.receivedAt).toLocaleTimeString("en-US", {
+                              hour12: false,
+                            })}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>

@@ -86,10 +86,11 @@ http.route({
   method: "POST",
   handler: httpAction(async (ctx, req) => {
     if (!isAuthorizedWorker(req)) return unauthorized();
-    const { webhookId, cells } = await req.json();
+    const { webhookId, cells, recordId } = await req.json();
     const result = await ctx.runMutation(internal.webhooks.insertWebhookRow, {
       webhookId,
       cells,
+      ...(recordId !== undefined ? { recordId } : {}),
     });
     return ok(result);
   }),
@@ -105,11 +106,12 @@ http.route({
   method: "POST",
   handler: httpAction(async (ctx, req) => {
     if (!isAuthorizedWorker(req)) return unauthorized();
-    const { webhookId, upsertKey, cells } = await req.json();
+    const { webhookId, upsertKey, cells, recordId } = await req.json();
     const result = await ctx.runMutation(internal.webhooks.upsertWebhookRow, {
       webhookId,
       upsertKey,
       cells,
+      ...(recordId !== undefined ? { recordId } : {}),
     });
     return ok(result);
   }),

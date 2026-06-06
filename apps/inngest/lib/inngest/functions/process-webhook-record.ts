@@ -117,6 +117,7 @@ async function resolveRow(
       webhookId,
       upsertKey: data.upsertKey,
       cells: data.mappedCells,
+      recordId: data.recordId,
     })) as { rowId: string };
     return result.rowId;
   }
@@ -124,6 +125,7 @@ async function resolveRow(
   const result = (await convexWorkerClient.mutation("/webhook/insertRow", {
     webhookId,
     cells: data.mappedCells,
+    recordId: data.recordId,
   })) as { rowId: string };
   return result.rowId;
 }

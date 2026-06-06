@@ -2720,7 +2720,9 @@ button.import-type:hover { background: var(--surface-3); }
   font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: var(--r-sm);
 }
 .wd-pill.ok { color: var(--success-ink); background: var(--success-bg); }
+.wd-pill.err { color: var(--danger); background: var(--danger-bg); }
 .wd-pill .wd-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+.wd-pill.err .wd-dot { background: var(--danger); }
 .wd-meta { font-size: 11.5px; color: var(--text-2); flex: 1; }
 .wd-time { font-size: 11px; color: var(--text-3); }
 
