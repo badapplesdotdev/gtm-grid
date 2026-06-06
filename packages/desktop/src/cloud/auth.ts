@@ -6,10 +6,16 @@
  * (`@convex-dev/auth/react`) + the reactive `me` query, and add an "active
  * workspace" selection persisted in `localStorage`.
  *
- * The v1 auth path is **email + password** against Convex Auth's Password
- * provider (configured in `convex/auth.ts`). Native deep-link OAuth via the
- * system browser is a tracked follow-up (task #17) and is intentionally not
- * wired here.
+ * The auth paths are **email + password** (Convex Auth's Password provider) and
+ * **OAuth web redirect** (GitHub + Google, configured in `convex/auth.ts`). The
+ * OAuth path uses the STANDARD Convex Auth browser redirect: `signIn(provider)`
+ * redirects to the provider, back to the Convex callback, then back to the app.
+ * Which providers are enabled is exposed by the `auth.enabledProviders` query
+ * (booleans only) so the UI shows a button per enabled provider and hides the
+ * whole OAuth row when none are enabled.
+ *
+ * NOTE: the native Tauri deep-link callback for the PACKAGED app is a separate
+ * follow-up (task #17). This lane wires only the web/browser redirect flow.
  *
  * The local-only app is untouched: every hook degrades to a signed-out / null
  * shape when no Convex deployment is configured, and nothing here runs unless
@@ -78,6 +84,40 @@ export interface WorkspaceMembers {
   readonly seatUsage: SeatUsage;
 }
 
+// ─── OAuth providers (C17, web redirect flow) ────────────────────────────────
+
+/** The OAuth providers we support, matching the ids registered in convex/auth.ts. */
+export type OAuthProvider = "github" | "google";
+
+/**
+ * Which OAuth providers are enabled on the deployment (mirrors the
+ * `auth.enabledProviders` query). Booleans only — never any secret.
+ */
+export interface EnabledProviders {
+  readonly github: boolean;
+  readonly google: boolean;
+}
+
+/** When the providers query is unavailable (loading / cloud off), nothing is enabled. */
+const NO_PROVIDERS: EnabledProviders = { github: false, google: false };
+
+/**
+ * The list of enabled OAuth providers, in display order, derived from the
+ * enabled-providers flags. Pure so the gating (which buttons render, and whether
+ * the OAuth row shows at all) is unit-testable without React:
+ *   - no flags / all false → `[]` (caller hides the OAuth row + divider)
+ *   - only one enabled     → just that provider
+ */
+export function enabledProviderList(
+  providers: EnabledProviders | undefined,
+): readonly OAuthProvider[] {
+  if (providers === undefined) return [];
+  const list: OAuthProvider[] = [];
+  if (providers.google) list.push("google");
+  if (providers.github) list.push("github");
+  return list;
+}
+
 // ─── React hooks ─────────────────────────────────────────────────────────────
 
 /**
@@ -91,6 +131,23 @@ export function useMe(): Me | null | undefined {
     | Me
     | null
     | undefined;
+}
+
+/**
+ * The OAuth providers enabled on the deployment (C17), as a stable list in
+ * display order. Reactively reads `auth.enabledProviders`; returns `[]` while
+ * loading or when cloud is off, so the OAuth row is hidden until we know a
+ * provider is actually configured. No secrets are ever read — booleans only.
+ */
+export function useEnabledProviders(): readonly OAuthProvider[] {
+  const providers = useQuery(
+    api.auth.enabledProviders,
+    cloudEnabled ? {} : "skip",
+  ) as EnabledProviders | undefined;
+  return useMemo(
+    () => enabledProviderList(cloudEnabled ? providers : NO_PROVIDERS),
+    [providers],
+  );
 }
 
 /**
@@ -254,9 +311,9 @@ export function useActiveWorkspace(me: Me | null | undefined): {
 }
 
 /**
- * Account actions for the UI: sign in (email + password), sign out, and create a
- * workspace. Wraps the Convex Auth actions + the `createWorkspace` mutation. All
- * no-ops when cloud is off.
+ * Account actions for the UI: sign in (email + password OR OAuth provider), sign
+ * out, and create a workspace. Wraps the Convex Auth actions + the
+ * `createWorkspace` mutation. All no-ops when cloud is off.
  */
 export function useAccountActions() {
   const { signIn, signOut } = useAuthActions();
@@ -273,5 +330,23 @@ export function useAccountActions() {
     [signIn],
   );
 
-  return { signInWithPassword, signOut };
+  /**
+   * OAuth sign-in via the STANDARD Convex Auth web redirect (C17). Calling
+   * `signIn(provider)` redirects the browser to the provider, then back to the
+   * Convex callback (`<SITE>/api/auth/callback/<provider>`), then back to the
+   * app at `SITE_URL`. This is the web/browser path and needs no Tauri
+   * deep-link.
+   *
+   * NOTE: the native deep-link callback for the PACKAGED Tauri app is a separate
+   * follow-up (task #17). Once that lands, this same call works under the custom
+   * URL scheme; no change is needed here.
+   */
+  const signInWithProvider = useCallback(
+    async (provider: OAuthProvider): Promise<void> => {
+      await signIn(provider);
+    },
+    [signIn],
+  );
+
+  return { signInWithPassword, signInWithProvider, signOut };
 }

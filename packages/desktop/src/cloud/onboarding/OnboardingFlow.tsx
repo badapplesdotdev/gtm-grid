@@ -27,7 +27,11 @@ import { type BillingCycle, type PaidPlanId } from "@gtmgrid/cloud";
 import { api } from "../../../../../convex/_generated/api";
 import type { Id } from "../../../../../convex/_generated/dataModel";
 import { LogoMark } from "../../Logo";
-import { useAccountActions } from "../auth";
+import {
+  useAccountActions,
+  useEnabledProviders,
+  type OAuthProvider,
+} from "../auth";
 import {
   CheckoutError,
   CheckoutRunner,
@@ -197,16 +201,55 @@ function StepRail({ step }: { step: 1 | 2 | 3 | 4 }) {
   );
 }
 
-/** OAuth row — rendered per the design but DISABLED (deferred to #17). */
-function OAuthRow({ verb }: { verb: string }) {
+/**
+ * OAuth row (C17) — one ENABLED button per provider configured on the backend,
+ * using the standard Convex Auth web redirect flow. Renders nothing (so the
+ * caller can also hide the "or with email" divider) when no provider is enabled,
+ * keeping the screen clean before any OAuth app is configured.
+ *
+ * NOTE: this is the web/browser redirect path. The native Tauri deep-link
+ * callback for the packaged app is the remaining follow-up (task #17).
+ */
+function OAuthRow(props: {
+  verb: string;
+  providers: readonly OAuthProvider[];
+  onError: (message: string) => void;
+}) {
+  const { verb, providers, onError } = props;
+  const { signInWithProvider } = useAccountActions();
+  const [busy, setBusy] = useState<OAuthProvider | null>(null);
+
+  if (providers.length === 0) return null;
+
+  const start = async (provider: OAuthProvider) => {
+    if (busy !== null) return;
+    setBusy(provider);
+    try {
+      // Redirects away to the provider and returns via the Convex callback, so
+      // there is no inline success path to handle here.
+      await signInWithProvider(provider);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "OAuth sign-in failed.");
+      setBusy(null);
+    }
+  };
+
   return (
     <div className="ob-oauth-row">
-      <button className="ob-oauth-btn" type="button" disabled title="Coming soon">
-        <Google s={16} /> {verb} with Google
-      </button>
-      <button className="ob-oauth-btn" type="button" disabled title="Coming soon">
-        <GitHub s={16} /> {verb} with GitHub
-      </button>
+      {providers.map((provider) => (
+        <button
+          key={provider}
+          className="ob-oauth-btn"
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void start(provider)}
+        >
+          {provider === "google" ? <Google s={16} /> : <GitHub s={16} />}{" "}
+          {busy === provider
+            ? "Redirecting…"
+            : `${verb} with ${provider === "google" ? "Google" : "GitHub"}`}
+        </button>
+      ))}
     </div>
   );
 }
@@ -228,6 +271,8 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
 
   // ── Real backend bindings ───────────────────────────────────────────────
   const { signInWithPassword } = useAccountActions();
+  // Enabled OAuth providers (C17): drives the OAuth row on the auth screens.
+  const providers = useEnabledProviders();
   const createWorkspace = useMutation(api.workspaces.createWorkspace);
   const inviteAction = useAction(api.workspaces.inviteMember);
   const checkoutAction = useAction(api.billing.checkout);
@@ -451,6 +496,8 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
               set={set}
               busy={busy}
               error={error}
+              providers={providers}
+              onError={setError}
               onSubmit={() => void submitAuth("signIn")}
               onGoSignup={() => go("signup")}
               onSkip={onClose}
@@ -462,6 +509,8 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
               set={set}
               busy={busy}
               error={error}
+              providers={providers}
+              onError={setError}
               onSubmit={() => void submitAuth("signUp")}
               onGoSignin={() => go("signin")}
             />
@@ -539,11 +588,14 @@ function SignIn(props: {
   set: (p: Partial<FlowState>) => void;
   busy: boolean;
   error: string | null;
+  providers: readonly OAuthProvider[];
+  onError: (message: string) => void;
   onSubmit: () => void;
   onGoSignup: () => void;
   onSkip: () => void;
 }) {
-  const { state, set, busy, error, onSubmit, onGoSignup, onSkip } = props;
+  const { state, set, busy, error, providers, onError, onSubmit, onGoSignup, onSkip } =
+    props;
   return (
     <Pane
       screenKey="signin"
@@ -560,8 +612,8 @@ function SignIn(props: {
         waiting.
       </p>
 
-      <OAuthRow verb="Continue" />
-      <div className="ob-divider">or with email</div>
+      <OAuthRow verb="Continue" providers={providers} onError={onError} />
+      {providers.length > 0 && <div className="ob-divider">or with email</div>}
 
       <div className="ob-field">
         <label className="ob-field-label">Work email</label>
@@ -610,10 +662,13 @@ function SignUp(props: {
   set: (p: Partial<FlowState>) => void;
   busy: boolean;
   error: string | null;
+  providers: readonly OAuthProvider[];
+  onError: (message: string) => void;
   onSubmit: () => void;
   onGoSignin: () => void;
 }) {
-  const { state, set, busy, error, onSubmit, onGoSignin } = props;
+  const { state, set, busy, error, providers, onError, onSubmit, onGoSignin } =
+    props;
   return (
     <Pane
       screenKey="signup"
@@ -630,8 +685,8 @@ function SignUp(props: {
         execution local.
       </p>
 
-      <OAuthRow verb="Sign up" />
-      <div className="ob-divider">or with email</div>
+      <OAuthRow verb="Sign up" providers={providers} onError={onError} />
+      {providers.length > 0 && <div className="ob-divider">or with email</div>}
 
       <div className="ob-field">
         <label className="ob-field-label">Full name</label>

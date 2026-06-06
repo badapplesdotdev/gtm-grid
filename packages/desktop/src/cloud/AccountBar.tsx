@@ -27,9 +27,12 @@ import {
   useAccountActions,
   useActiveWorkspace,
   useAuthState,
+  useEnabledProviders,
   useMe,
+  type OAuthProvider,
   type WorkspaceSummary,
 } from "./auth";
+import { GitHub, Google } from "./onboarding/icons";
 
 type HealthStatus = "loading" | "connected" | "offline";
 
@@ -394,9 +397,59 @@ function WorkspaceSwitcher(props: {
   );
 }
 
-/** Email + password sign-in / sign-up (the active provider on the backend). */
+/**
+ * The OAuth buttons (C17) — one per ENABLED provider (web redirect flow). Renders
+ * nothing when no provider is enabled, so the caller can also hide the divider.
+ */
+function OAuthButtons(props: {
+  providers: readonly OAuthProvider[];
+  onError: (message: string) => void;
+}) {
+  const { providers, onError } = props;
+  const { signInWithProvider } = useAccountActions();
+  const [busy, setBusy] = useState<OAuthProvider | null>(null);
+
+  const start = useCallback(
+    async (provider: OAuthProvider) => {
+      if (busy !== null) return;
+      setBusy(provider);
+      try {
+        // Standard Convex Auth web redirect: this navigates away to the provider
+        // and returns via the Convex callback, so there is no success path to
+        // handle inline. (Native Tauri deep-link callback is follow-up #17.)
+        await signInWithProvider(provider);
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "OAuth sign-in failed");
+        setBusy(null);
+      }
+    },
+    [busy, signInWithProvider, onError],
+  );
+
+  return (
+    <>
+      {providers.map((provider) => (
+        <button
+          key={provider}
+          className="account-menu-item"
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void start(provider)}
+        >
+          {provider === "google" ? <Google s={15} /> : <GitHub s={15} />}
+          {busy === provider
+            ? "Redirecting…"
+            : `Continue with ${provider === "google" ? "Google" : "GitHub"}`}
+        </button>
+      ))}
+    </>
+  );
+}
+
+/** Email + password sign-in / sign-up + OAuth (the providers on the backend). */
 function SignInSection(props: { onDone: () => void }) {
   const { signInWithPassword } = useAccountActions();
+  const providers = useEnabledProviders();
   const [flow, setFlow] = useState<"signIn" | "signUp">("signIn");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -422,6 +475,14 @@ function SignInSection(props: { onDone: () => void }) {
       <div className="account-menu-label">
         {flow === "signIn" ? "Sign in" : "Create account"}
       </div>
+      {/* OAuth (C17): only when a provider is enabled per the backend query;
+          otherwise the whole block (buttons + divider) is omitted. */}
+      {providers.length > 0 && (
+        <>
+          <OAuthButtons providers={providers} onError={setError} />
+          <div className="account-menu-oauth-divider">or with email</div>
+        </>
+      )}
       <form
         className="account-menu-create"
         onSubmit={(e) => {
