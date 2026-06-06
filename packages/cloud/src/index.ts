@@ -60,6 +60,7 @@ export {
   SEATS_FEATURE_ID,
   TEAM_PLAN_ID,
   UnknownPlanError,
+  type CustomerData,
   type SeatCheck,
 } from "./seats.js";
 

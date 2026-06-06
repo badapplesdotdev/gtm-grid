@@ -23,6 +23,7 @@
 import {
   AutumnClient,
   AutumnError,
+  type CustomerData,
   MissingSecretError,
   requireSecret,
   type SeatCheck,
@@ -68,12 +69,15 @@ export const autumnClientLayer = (
   client: Autumn,
 ): Layer.Layer<AutumnClient> =>
   Layer.succeed(AutumnClient, {
-    checkSeats: ({ customerId, requiredBalance }) =>
+    checkSeats: ({ customerId, requiredBalance, customerData }) =>
       Effect.tryPromise({
         try: async () => {
           // Idempotent get-or-create so a brand-new workspace exists as an
           // Autumn customer before its first check (keyed on our external id).
-          await client.customers.getOrCreate({ customerId });
+          // Passing name/email also backfills the customer's profile (upsert).
+          await client.customers.getOrCreate(
+            getOrCreateParams(customerId, customerData),
+          );
           const res = await client.check({
             customerId,
             featureId: SEATS_FEATURE_ID,
@@ -94,13 +98,16 @@ export const autumnClientLayer = (
         catch: (cause) =>
           new AutumnError({ message: autumnMessage(cause, "check"), cause }),
       }),
-    attach: ({ customerId, planId }) =>
+    attach: ({ customerId, planId, customerData }) =>
       Effect.tryPromise({
         try: async () => {
           // Autumn `attach` does not auto-create the customer, and a workspace
           // that skipped the seat check/track (e.g. skipped invite) won't exist
-          // as an Autumn customer yet. Idempotent get-or-create first.
-          await client.customers.getOrCreate({ customerId });
+          // as an Autumn customer yet. Idempotent get-or-create first; passing
+          // name/email also backfills the customer's profile (upsert).
+          await client.customers.getOrCreate(
+            getOrCreateParams(customerId, customerData),
+          );
           const res = await client.billing.attach({ customerId, planId });
           return { checkoutUrl: res.paymentUrl ?? null };
         },
@@ -137,9 +144,17 @@ export const autumnClientLayer = (
       }),
     // Generic metered-usage track for the cloud-actions meter (C26): flushes a
     // workspace's pending count under an arbitrary featureId.
-    trackUsage: ({ customerId, featureId, value }) =>
+    trackUsage: ({ customerId, featureId, value, customerData }) =>
       Effect.tryPromise({
         try: async () => {
+          // `track` CANNOT upsert customer data, so getOrCreate FIRST to
+          // materialise the customer WITH its name/email — this is the free-tier
+          // path that previously created the customer implicitly via `track`
+          // alone (profile blank). getOrCreate upserts by id, so this backfills
+          // existing blank free customers on the next flush.
+          await client.customers.getOrCreate(
+            getOrCreateParams(customerId, customerData),
+          );
           await client.track({ customerId, featureId, value });
         },
         catch: (cause) =>
@@ -168,6 +183,35 @@ export const autumnClientLayer = (
           new AutumnError({ message: autumnMessage(cause, "check"), cause }),
       }),
   });
+
+/**
+ * Build the params for Autumn `customers.getOrCreate` from a customer id plus
+ * OPTIONAL profile data. `getOrCreate` UPSERTS by id, so including `name` /
+ * `email` backfills them onto an existing (e.g. free-tier) customer that was
+ * created earlier with only an id.
+ *
+ * A blank value (`undefined` OR `null`) is OMITTED — we pass `undefined`, never
+ * `null`, into the SDK so a missing field never overwrites an existing value
+ * with null. With no usable profile this returns just `{ customerId }`, exactly
+ * the previous behaviour.
+ */
+function getOrCreateParams(
+  customerId: string,
+  customerData?: CustomerData,
+): { customerId: string; name?: string; email?: string } {
+  const params: { customerId: string; name?: string; email?: string } = {
+    customerId,
+  };
+  const name = customerData?.name;
+  if (name !== undefined && name !== null) {
+    params.name = name;
+  }
+  const email = customerData?.email;
+  if (email !== undefined && email !== null) {
+    params.email = email;
+  }
+  return params;
+}
 
 /** A legible message for an Autumn SDK rejection. */
 function autumnMessage(cause: unknown, op: string): string {
@@ -215,11 +259,12 @@ async function runSeats<A>(
 export function checkInviteSeat(
   customerId: string,
   planId?: string,
+  customerData?: CustomerData,
 ): Promise<SeatCheck> {
   return runSeats(
     Effect.gen(function* () {
       const svc = yield* SeatsService;
-      return yield* svc.checkInvite(customerId, planId);
+      return yield* svc.checkInvite(customerId, planId, customerData);
     }),
   );
 }
@@ -302,11 +347,12 @@ export async function enforceSeatCeiling(
 export function startCheckout(
   customerId: string,
   planId?: string,
+  customerData?: CustomerData,
 ): Promise<string> {
   return runSeats(
     Effect.gen(function* () {
       const svc = yield* SeatsService;
-      return yield* svc.checkout(customerId, planId);
+      return yield* svc.checkout(customerId, planId, customerData);
     }),
   );
 }
