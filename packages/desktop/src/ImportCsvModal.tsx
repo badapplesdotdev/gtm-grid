@@ -155,6 +155,11 @@ export interface ImportCsvModalProps {
   onImported?: (tableId: string) => void;
   /** Open the freshly imported table (select it + close). */
   onOpenTable: (tableId: string) => void;
+  /**
+   * Render inline (filling the center pane) instead of as a fixed full-screen
+   * overlay. The app mounts this inside `.main`, so it defaults to `true`.
+   */
+  inline?: boolean;
 }
 
 export function ImportCsvModal({
@@ -162,6 +167,7 @@ export function ImportCsvModal({
   onClose,
   onImported,
   onOpenTable,
+  inline = true,
 }: ImportCsvModalProps) {
   const [stage, setStage] = useState<"drop" | "review" | "done">("drop");
   const [dragOver, setDragOver] = useState(false);
@@ -273,7 +279,7 @@ export function ImportCsvModal({
   // ── DROP ──
   if (stage === "drop") {
     return (
-      <Shell topRight={<a className="import-link" onClick={onClose}>Cancel</a>}>
+      <Shell inline={inline} topRight={<a className="import-link" onClick={onClose}>Cancel</a>}>
         <div className="import-eyebrow">New table</div>
         <h1 className="import-title">Import a CSV</h1>
         <p className="import-sub">
@@ -330,6 +336,7 @@ export function ImportCsvModal({
     const vis = includedCols;
     return (
       <Shell
+        inline={inline}
         topRight={<a className="import-link" onClick={onClose}>Close</a>}
         footer={
           <>
@@ -360,6 +367,7 @@ export function ImportCsvModal({
   const previewRows = bodyRows.slice(0, 8);
   return (
     <Shell
+      inline={inline}
       topRight={<a className="import-link" onClick={reset}>Choose another file</a>}
       footer={
         <>
@@ -514,20 +522,30 @@ function PreviewGrid({
   );
 }
 
-// ── Full-screen shell (header / body / footer) ──────────────────────────────
+// ── Shell (header / body / footer) ──────────────────────────────────────────
 // Exported so the cloud Webhook setup form (cloud/WebhookModal.tsx) shares the
-// exact same full-screen surface as the CSV import flow.
+// exact same surface as the CSV import flow.
+//
+// Two surfaces, same chrome:
+//   - default (`inline` false/omitted): a fixed full-screen overlay
+//     (`.import-overlay`) — kept for any standalone usage.
+//   - `inline`: a plain filling container (`.import-inline`, no fixed/inset) so
+//     the flow renders INSIDE the center `.main` pane between the two sidebars,
+//     replacing the grid rather than covering the whole window.
 export function Shell({
   children,
   topRight,
   footer,
+  inline = false,
 }: {
   children: React.ReactNode;
   topRight?: React.ReactNode;
   footer?: React.ReactNode;
+  /** Render inline (filling the parent pane) instead of as a fixed overlay. */
+  inline?: boolean;
 }) {
   return (
-    <div className="import-overlay">
+    <div className={inline ? "import-inline" : "import-overlay"}>
       <div className="import-shell">
         <div className="import-topbar">
           <div className="import-brand">

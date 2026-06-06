@@ -160,9 +160,36 @@ export function ProjectSwitcher({
             </button>
           ))}
 
+          {/* New LOCAL project — lives with the local rows it creates. */}
+          {creating ? (
+            <div className="palette-create">
+              <span className="palette-row-icon">{PlusIcon}</span>
+              <input
+                className="palette-create-input"
+                placeholder="Local project name…"
+                value={newName}
+                autoFocus
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") create();
+                  if (e.key === "Escape") { setCreating(false); setNewName(""); }
+                }}
+              />
+              <button className="btn btn-primary btn-sm" onClick={create} disabled={busy || !newName.trim()}>
+                {busy ? "Creating…" : "Create"}
+              </button>
+            </div>
+          ) : (
+            <button className="palette-row" onClick={() => setCreating(true)} disabled={busy}>
+              <span className="palette-row-icon">{PlusIcon}</span>
+              <span className="palette-row-name">New local project…</span>
+            </button>
+          )}
+
           {/* Cloud projects (active workspace) — only when signed in. */}
           {cloud && (
             <>
+              <div className="palette-sep" />
               <div className="palette-label">Workspace (cloud)</div>
               {cloud.projects === undefined ? (
                 <div style={{ padding: "4px 16px", fontSize: 12, color: "var(--text-3)" }}>Loading…</div>
@@ -217,33 +244,6 @@ export function ProjectSwitcher({
                 </button>
               )}
             </>
-          )}
-
-          <div className="palette-sep" />
-
-          {creating ? (
-            <div className="palette-create">
-              <span className="palette-row-icon">{PlusIcon}</span>
-              <input
-                className="palette-create-input"
-                placeholder="Project name…"
-                value={newName}
-                autoFocus
-                onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") create();
-                  if (e.key === "Escape") { setCreating(false); setNewName(""); }
-                }}
-              />
-              <button className="btn btn-primary btn-sm" onClick={create} disabled={busy || !newName.trim()}>
-                {busy ? "Creating…" : "Create"}
-              </button>
-            </div>
-          ) : (
-            <button className="palette-row" onClick={() => setCreating(true)} disabled={busy}>
-              <span className="palette-row-icon">{PlusIcon}</span>
-              <span className="palette-row-name">New Project…</span>
-            </button>
           )}
         </div>
 

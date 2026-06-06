@@ -2354,6 +2354,12 @@ html, body, #root {
   position: fixed; inset: 0; z-index: 200; background: var(--bg);
   display: flex; flex-direction: column; animation: fade-in .15s ease;
 }
+/* Inline surface: fills the center .main pane (between the sidebars) instead of
+   covering the whole window — no fixed/inset, no z-index overlay. */
+.import-inline {
+  flex: 1; min-height: 0; min-width: 0; background: var(--bg);
+  display: flex; flex-direction: column; animation: fade-in .15s ease;
+}
 .import-shell { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .import-topbar {
   height: var(--toolbar-h); flex-shrink: 0; padding: 0 24px;

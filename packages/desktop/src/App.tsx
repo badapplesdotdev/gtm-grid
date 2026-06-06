@@ -109,6 +109,10 @@ const MAX_COL_W = 460;
 const GUTTER_W = 48; // row-number column
 const ADD_COL_W = 44; // trailing "+" column
 
+// Persisted id of the last cloud project the user had open, so a relaunch
+// reopens it (default-to-cloud for signed-in users).
+const LAST_CLOUD_PROJECT_KEY = "gtmgrid:lastCloudProject";
+
 // True if any of a function column's params reference {{columnName}}.
 function columnDependsOn(col: Column, columnName: string): boolean {
   const re = new RegExp(`\\{\\{\\s*${columnName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\}\\}`);
@@ -604,6 +608,40 @@ export default function App() {
     setCloudTableId(null);
   }, [activeWorkspaceId]);
 
+  // ── Default-to-cloud for signed-in users ─────────────────────────────────
+  // Persist the last-selected cloud project id so a relaunch reopens it, and on
+  // first load (when a workspace + its projects are ready and nothing is open
+  // yet) auto-select that project — or the most recent / first — so a signed-in
+  // user lands in CLOUD mode, not local. Guarded by a ref so it runs ONCE per
+  // workspace and never fights the workspace-change reset or an explicit user
+  // action. Signed-out users have no cloud projects, so they stay local.
+  const autoCloudWorkspaceRef = useRef<Id<"workspaces"> | null>(null);
+  useEffect(() => {
+    if (!activeWorkspaceId) return;
+    // Persist the selection so the next launch can rehydrate it.
+    if (cloudProject) {
+      try { localStorage.setItem(LAST_CLOUD_PROJECT_KEY, cloudProject._id); } catch { /* ignore */ }
+    }
+    // One-shot auto-select per workspace: only when nothing is open yet and the
+    // projects have loaded. An empty list (or a still-loading `undefined`) is a
+    // no-op, so a user with no cloud projects simply stays in local mode.
+    if (autoCloudWorkspaceRef.current === activeWorkspaceId) return;
+    if (cloudProject !== null) return;
+    if (!cloudProjects || cloudProjects.length === 0) return;
+    autoCloudWorkspaceRef.current = activeWorkspaceId;
+    let persisted: string | null = null;
+    try { persisted = localStorage.getItem(LAST_CLOUD_PROJECT_KEY); } catch { /* ignore */ }
+    const byId = persisted ? cloudProjects.find((p) => p._id === persisted) : undefined;
+    // Most recent by createdAt (fall back to the first) when no persisted match.
+    const mostRecent = [...cloudProjects].sort((a, b) => b.createdAt - a.createdAt)[0];
+    const target = byId ?? mostRecent ?? cloudProjects[0];
+    if (target) {
+      setCloudProject(target);
+      setCloudTableId(null);
+      setView({ kind: "table" });
+    }
+  }, [activeWorkspaceId, cloudProjects, cloudProject]);
+
   // Appearance: only the dark-mode toggle is user-controllable. Density and
   // accent are fixed (compact + green) by product decision.
   const [theme, setTheme] = useState<"light" | "dark">(() => {
@@ -833,8 +871,9 @@ export default function App() {
     }
   }, [cloudProject, createCloudTable, cloudCreating]);
 
-  // Leave cloud mode → back to the local project the sidecar already has open.
-  const exitCloud = useCallback(() => {
+  // Switch the app to LOCAL mode (used by the account menu's Environment
+  // switcher): drop the open cloud project so the sidecar grid is shown.
+  const switchToLocal = useCallback(() => {
     setCloudProject(null);
     setCloudTableId(null);
     setView({ kind: "table" });
@@ -1110,9 +1149,6 @@ export default function App() {
             </span>
           </button>
           <span className="sidebar-head-spacer" />
-          {inCloud && (
-            <button className="free-badge" onClick={exitCloud} title="Back to local project">CLOUD · exit</button>
-          )}
           {activeWorkspace && (
             <button className="sidebar-members" onClick={() => setShowWorkspaceSettings(true)} title="Workspace members & seats">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
@@ -1346,6 +1382,9 @@ export default function App() {
           projectName={projectName}
           healthStatus={healthStatus}
           currentProjectPath={currentProjectPath}
+          inCloud={inCloud}
+          cloudProjectName={cloudProject?.name ?? null}
+          onSwitchToLocal={switchToLocal}
           onSwitchProject={() => setShowProjects(true)}
           onOpenMenu={openAccountMenu}
           theme={theme}
@@ -1375,18 +1414,51 @@ export default function App() {
           </div>
         )}
 
+        {/* CSV import — rendered INLINE in this center pane (filling the area
+            between the two sidebars), replacing the grid/empty-state while open.
+            Closing returns to the grid. Local writes via the sidecar; cloud via
+            Convex. */}
+        {importMode === "local" && (
+          <ImportCsvModal
+            inline
+            writer={localImportWriter}
+            onClose={() => setImportMode(null)}
+            onImported={() => { api.tables().then(setTables); }}
+            onOpenTable={id => {
+              api.tables().then(t => {
+                setTables(t);
+                setSelectedTableId(id);
+                setView({ kind: "table" });
+              });
+              setImportMode(null);
+            }}
+          />
+        )}
+        {importMode === "cloud" && cloudImportWriter && (
+          <ImportCsvModal
+            inline
+            writer={cloudImportWriter}
+            onClose={() => setImportMode(null)}
+            onOpenTable={id => {
+              setCloudTableId(id as Id<"tables">);
+              setImportMode(null);
+            }}
+          />
+        )}
+
         {/* Cloud project: the LIVE multiplayer grid (Convex). Replaces the local
-            sidecar grid entirely while a cloud project is open. */}
-        {inCloud && <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} />}
+            sidecar grid entirely while a cloud project is open. Hidden while a
+            CSV import is open in this pane. */}
+        {!importMode && inCloud && <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} />}
 
         {/* Extensions gallery + detail panels */}
-        {!inCloud && view.kind === "extensions" && (
+        {!importMode && !inCloud && view.kind === "extensions" && (
           <ExtensionsBrowse
             extensions={extensions}
             onOpen={(id) => setView({ kind: "extension", id })}
           />
         )}
-        {!inCloud && view.kind === "extension" && (
+        {!importMode && !inCloud && view.kind === "extension" && (
           <ExtensionPanel
             id={view.id}
             onConnected={refreshConnections}
@@ -1394,12 +1466,12 @@ export default function App() {
             workspaceCreds={workspaceCreds}
           />
         )}
-        {!inCloud && view.kind === "ai" && (() => {
+        {!importMode && !inCloud && view.kind === "ai" && (() => {
           const p = aiProviders.find(x => x.id === view.id);
           return p ? <AiProviderPanel provider={p} onConnected={refreshConnections} workspaceCreds={workspaceCreds} /> : null;
         })()}
 
-        {!inCloud && view.kind === "table" && <>
+        {!importMode && !inCloud && view.kind === "table" && <>
         {/* Toolbar */}
         <div className="toolbar">
           {tableData ? (
@@ -1725,33 +1797,6 @@ export default function App() {
               setTables(t);
               setSelectedTableId(id);
             });
-          }}
-        />
-      )}
-
-      {/* CSV import (full-screen). Local writes via sidecar; cloud via Convex. */}
-      {importMode === "local" && (
-        <ImportCsvModal
-          writer={localImportWriter}
-          onClose={() => setImportMode(null)}
-          onImported={() => { api.tables().then(setTables); }}
-          onOpenTable={id => {
-            api.tables().then(t => {
-              setTables(t);
-              setSelectedTableId(id);
-              setView({ kind: "table" });
-            });
-            setImportMode(null);
-          }}
-        />
-      )}
-      {importMode === "cloud" && cloudImportWriter && (
-        <ImportCsvModal
-          writer={cloudImportWriter}
-          onClose={() => setImportMode(null)}
-          onOpenTable={id => {
-            setCloudTableId(id as Id<"tables">);
-            setImportMode(null);
           }}
         />
       )}

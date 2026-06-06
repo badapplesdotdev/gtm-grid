@@ -131,6 +131,21 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
 
   const fnColCount = data.columns.filter((c) => c.kind === "function").length;
 
+  // Webhook setup renders INLINE in this pane (replacing the grid), not as a
+  // fullscreen overlay — closing returns to the grid.
+  if (showWebhook) {
+    return (
+      <WebhookModal
+        inline
+        tableId={data.id as Id<"tables">}
+        columns={data.columns}
+        tableName={data.name}
+        rowCount={data.rows.length}
+        onClose={() => setShowWebhook(false)}
+      />
+    );
+  }
+
   return (
     <>
       <div className="toolbar">
@@ -299,16 +314,6 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
             </tbody>
           </table>
         </div>
-      )}
-
-      {showWebhook && (
-        <WebhookModal
-          tableId={data.id as Id<"tables">}
-          columns={data.columns}
-          tableName={data.name}
-          rowCount={data.rows.length}
-          onClose={() => setShowWebhook(false)}
-        />
       )}
     </>
   );

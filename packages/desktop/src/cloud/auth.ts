@@ -56,6 +56,12 @@ export interface WorkspaceSummary {
   readonly seatUsage: SeatUsage;
   /** The workspace's current plan (C27), for the plan badge + upgrade UI. */
   readonly plan: WorkspacePlan;
+  /**
+   * Cloud-actions usage (C26): metered cloud operations used vs. the plan limit
+   * (`limit` null = unlimited/unknown). Mirrors the `me` query so the Plan &
+   * billing view can show "actions used / limit".
+   */
+  readonly cloudActions: SeatUsage;
 }
 
 /** The authenticated user as returned by the `me` query. */

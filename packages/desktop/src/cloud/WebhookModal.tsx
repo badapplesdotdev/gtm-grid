@@ -142,6 +142,12 @@ export interface WebhookModalProps {
   rowCount: number;
   /** Close the form. */
   onClose: () => void;
+  /**
+   * Render inline (filling the center pane) instead of as a fixed full-screen
+   * overlay. CloudGrid mounts this inside its content area, so it defaults to
+   * `true`.
+   */
+  inline?: boolean;
 }
 
 export function WebhookModal({
@@ -150,6 +156,7 @@ export function WebhookModal({
   tableName,
   rowCount,
   onClose,
+  inline = true,
 }: WebhookModalProps) {
   const webhooks = useWebhooks(tableId);
   const {
@@ -298,6 +305,7 @@ export function WebhookModal({
 
   return (
     <Shell
+      inline={inline}
       topRight={
         <a className="import-link" onClick={onClose}>
           Done
