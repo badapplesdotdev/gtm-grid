@@ -39,6 +39,24 @@ import {
 export const SEATS_FEATURE_ID = "seats" as const;
 
 /**
+ * Optional customer profile fields forwarded to Autumn `customers.getOrCreate`
+ * whenever a customer is materialised. `getOrCreate` UPSERTS by id, so passing
+ * `name` / `email` on every customer-materialising call (seat check, checkout
+ * attach, usage flush) backfills the workspace's display name + owner email onto
+ * the Autumn customer — including free-tier customers that were previously
+ * created implicitly with only an id.
+ *
+ * Both fields are OPTIONAL so the threading is purely additive: stub layers and
+ * any caller that lacks the data omit it and behaviour is unchanged. `null` is
+ * treated the same as absent — the Convex seam passes `undefined` (never `null`)
+ * into the SDK so a blank value never overwrites an existing one with null.
+ */
+export interface CustomerData {
+  readonly name?: string | null;
+  readonly email?: string | null;
+}
+
+/**
  * The plan a workspace upgrades to when it runs out of free seats. Used as the
  * Autumn `attach` product id when producing the checkout URL.
  */
@@ -98,6 +116,12 @@ export class AutumnClient extends Context.Tag("CloudAutumnClient")<
     readonly checkSeats: (args: {
       readonly customerId: string;
       readonly requiredBalance: number;
+      /**
+       * Optional workspace name + owner email forwarded to the idempotent
+       * `customers.getOrCreate` this call performs, so the seat-check path also
+       * backfills the customer's profile. Omitted/`null` leaves it unchanged.
+       */
+      readonly customerData?: CustomerData;
     }) => Effect.Effect<
       {
         readonly allowed: boolean;
@@ -120,6 +144,12 @@ export class AutumnClient extends Context.Tag("CloudAutumnClient")<
     readonly attach: (args: {
       readonly customerId: string;
       readonly planId: string;
+      /**
+       * Optional workspace name + owner email forwarded to the idempotent
+       * `customers.getOrCreate` this call performs before `attach`, so the
+       * checkout path also backfills the customer's profile.
+       */
+      readonly customerData?: CustomerData;
     }) => Effect.Effect<{ readonly checkoutUrl: string | null }, AutumnError>;
 
     /**
@@ -163,6 +193,14 @@ export class AutumnClient extends Context.Tag("CloudAutumnClient")<
       readonly customerId: string;
       readonly featureId: string;
       readonly value: number;
+      /**
+       * Optional workspace name + owner email. Because Autumn `track` CANNOT
+       * upsert customer data, the Convex seam runs `customers.getOrCreate({
+       * customerId, name, email })` BEFORE `track` when this is present — so the
+       * FREE-tier usage flush (which formerly created the customer implicitly
+       * via `track` with no profile) now also materialises name + email.
+       */
+      readonly customerData?: CustomerData;
     }) => Effect.Effect<void, AutumnError>;
 
     /**
@@ -248,19 +286,27 @@ export class SeatsService extends Effect.Service<SeatsService>()(
       const checkInvite = (
         customerId: string,
         planId: string = TEAM_PLAN_ID,
+        customerData?: CustomerData,
       ): Effect.Effect<SeatCheck, AutumnError | NoCheckoutUrlError> =>
         Effect.gen(function* () {
-          // One seat is required to add the prospective member.
+          // One seat is required to add the prospective member. Forward the
+          // workspace name + owner email so the seat-check getOrCreate backfills
+          // the Autumn customer's profile.
           const { allowed, balance } = yield* autumn.checkSeats({
             customerId,
             requiredBalance: 1,
+            customerData,
           });
           if (allowed) {
             return { allowed: true, balance } as const;
           }
 
           // Over the limit: produce the upgrade checkout URL instead of adding.
-          const { checkoutUrl } = yield* autumn.attach({ customerId, planId });
+          const { checkoutUrl } = yield* autumn.attach({
+            customerId,
+            planId,
+            customerData,
+          });
           if (checkoutUrl === null) {
             return yield* Effect.fail(
               new NoCheckoutUrlError({
@@ -291,6 +337,7 @@ export class SeatsService extends Effect.Service<SeatsService>()(
       const checkout = (
         customerId: string,
         planId: string = TEAM_PLAN_ID,
+        customerData?: CustomerData,
       ): Effect.Effect<
         string,
         AutumnError | NoCheckoutUrlError | UnknownPlanError
@@ -306,7 +353,11 @@ export class SeatsService extends Effect.Service<SeatsService>()(
               }),
             );
           }
-          const { checkoutUrl } = yield* autumn.attach({ customerId, planId });
+          const { checkoutUrl } = yield* autumn.attach({
+            customerId,
+            planId,
+            customerData,
+          });
           if (checkoutUrl === null) {
             return yield* Effect.fail(
               new NoCheckoutUrlError({

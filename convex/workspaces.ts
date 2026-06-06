@@ -284,8 +284,15 @@ export const inviteMember = action({
     role: memberRole,
   },
   handler: async (ctx, { workspaceId, userId, role }): Promise<InviteResult> => {
+    // 0. Load the workspace name + owner email so the seat-check getOrCreate
+    //    materialises the Autumn customer with a profile (not just an id).
+    const customerData = await ctx.runQuery(
+      internal.workspaces.workspaceCustomerData,
+      { workspaceId },
+    );
+
     // 1. Seat gate (Autumn). Over the limit → return checkout, add nobody.
-    const seat = await checkInviteSeat(workspaceId);
+    const seat = await checkInviteSeat(workspaceId, undefined, customerData);
     if (!seat.allowed) {
       return { status: "checkout", checkoutUrl: seat.checkoutUrl };
     }
@@ -330,5 +337,29 @@ export const countMembers = internalQuery({
       .withIndex("by_workspace", (q) => q.eq("workspaceId", workspaceId))
       .collect();
     return members.length;
+  },
+});
+
+/**
+ * The workspace's (org) name + owner email — the customer profile forwarded to
+ * Autumn `customers.getOrCreate` so seat checks materialise the customer with a
+ * name + email, not just an id. Internal: only the `inviteMember` action calls
+ * it (and convex/billing.ts has its own). Loads the owner via the repo pattern
+ * (`normalizeId('users', ws.ownerId)` → `ctx.db.get(...).email`, as in `me` /
+ * `listMembers`). Returns `null`s for a missing workspace/owner.
+ */
+export const workspaceCustomerData = internalQuery({
+  args: { workspaceId: v.id("workspaces") },
+  handler: async (
+    ctx,
+    { workspaceId },
+  ): Promise<{ name: string | null; email: string | null }> => {
+    const ws = await ctx.db.get(workspaceId);
+    if (ws === null) {
+      return { name: null, email: null };
+    }
+    const ownerId = ctx.db.normalizeId("users", ws.ownerId);
+    const owner = ownerId === null ? null : await ctx.db.get(ownerId);
+    return { name: ws.name, email: owner?.email ?? null };
   },
 });

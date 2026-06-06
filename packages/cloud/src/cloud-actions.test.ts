@@ -76,6 +76,7 @@ describe("flushWorkspace (track pending → Autumn, then snapshot usage)", () =>
       customerId: string;
       featureId: string;
       value: number;
+      customerData?: { name?: string | null; email?: string | null };
     }> = [];
     const result = await run(
       flush({ workspaceId: WS_A, pending: 5 }),
@@ -84,13 +85,50 @@ describe("flushWorkspace (track pending → Autumn, then snapshot usage)", () =>
 
     expect(result.flushed).toBe(true);
     expect(usageCalls).toEqual([
-      { customerId: WS_A, featureId: CLOUD_ACTIONS_FEATURE_ID, value: 5 },
+      {
+        customerId: WS_A,
+        featureId: CLOUD_ACTIONS_FEATURE_ID,
+        value: 5,
+        // No name/email on this PendingWorkspace → forwarded as undefined.
+        customerData: { name: undefined, email: undefined },
+      },
     ]);
     if (result.flushed) {
       expect(result.tracked).toBe(5);
       // The live snapshot the caller stores for the `me` query.
       expect(result.usage).toEqual({ used: 5, limit: 2000 });
     }
+  });
+
+  it("forwards the workspace name + owner email so the seam getOrCreates the customer before track (free-tier backfill)", async () => {
+    // REGRESSION (wh-autumn-customer-data): the free-tier flush formerly created
+    // the Autumn customer implicitly via track() with NO profile. The flush must
+    // now forward name + owner email on the trackUsage call so the Convex seam
+    // can `customers.getOrCreate({ customerId, name, email })` BEFORE track,
+    // backfilling the customer's profile.
+    const customerDataCalls: Array<{
+      customerId: string;
+      op: "checkSeats" | "attach" | "trackUsage";
+      customerData?: { name?: string | null; email?: string | null };
+    }> = [];
+    const result = await run(
+      flush({
+        workspaceId: WS_A,
+        pending: 6,
+        name: "Acme Workspace",
+        ownerEmail: "owner@acme.io",
+      }),
+      fakeAutumnLayer({ customerDataCalls }),
+    );
+
+    expect(result.flushed).toBe(true);
+    expect(customerDataCalls).toEqual([
+      {
+        customerId: WS_A,
+        op: "trackUsage",
+        customerData: { name: "Acme Workspace", email: "owner@acme.io" },
+      },
+    ]);
   });
 
   it("carries the active PAID plan id in the flush result (C27)", async () => {
@@ -189,10 +227,11 @@ describe("flushBatch (reset only successes; one bad workspace can't abort)", () 
       customerId: string;
       featureId: string;
       value: number;
+      customerData?: { name?: string | null; email?: string | null };
     }> = [];
     const results = await run(
       flushBatch([
-        { workspaceId: WS_A, pending: 3 },
+        { workspaceId: WS_A, pending: 3, name: "Alpha", ownerEmail: "a@x.io" },
         { workspaceId: WS_B, pending: 10 },
       ]),
       fakeAutumnLayer({ usageCalls }),
@@ -201,8 +240,19 @@ describe("flushBatch (reset only successes; one bad workspace can't abort)", () 
     expect(results).toHaveLength(2);
     expect(results.every((r) => r.flushed)).toBe(true);
     expect(usageCalls).toEqual([
-      { customerId: WS_A, featureId: CLOUD_ACTIONS_FEATURE_ID, value: 3 },
-      { customerId: WS_B, featureId: CLOUD_ACTIONS_FEATURE_ID, value: 10 },
+      {
+        customerId: WS_A,
+        featureId: CLOUD_ACTIONS_FEATURE_ID,
+        value: 3,
+        // Name + owner email threaded from the PendingWorkspace.
+        customerData: { name: "Alpha", email: "a@x.io" },
+      },
+      {
+        customerId: WS_B,
+        featureId: CLOUD_ACTIONS_FEATURE_ID,
+        value: 10,
+        customerData: { name: undefined, email: undefined },
+      },
     ]);
   });
 
