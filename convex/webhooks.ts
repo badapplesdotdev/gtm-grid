@@ -29,6 +29,8 @@
  * queries/mutations in this file.
  */
 
+import { findUpsertRowId } from "@gtmgrid/cloud";
+import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { requireMember } from "./model/auth.js";
 import { mergeCellPatch } from "./model/grid.js";
@@ -105,6 +107,16 @@ function mintToken(): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+/**
+ * Mint an HMAC signing secret, prefixed `whsec_` so it reads like a Stripe-style
+ * webhook secret in the UI. Same 256-bit entropy + base64url body as the token,
+ * minted in the DEFAULT V8 runtime (no `"use node"`). The Inngest worker (Wave 3)
+ * uses the raw bytes after the prefix to verify the `X-GTMGrid-Signature` header.
+ */
+function mintSigningSecret(): string {
+  return `whsec_${mintToken()}`;
+}
+
 // ---------------------------------------------------------------------------
 // Member-gated config CRUD (public). NOT metered — config is metadata.
 // ---------------------------------------------------------------------------
@@ -148,12 +160,70 @@ export const createWebhook = mutation({
       tableId,
       name,
       token: mintToken(),
+      signingSecret: mintSigningSecret(),
       mapping: resolvedMapping,
       enabled: true,
+      autoRun: true,
+      mode: "create",
+      upsertKey: null,
       createdAt: Date.now(),
       lastReceivedAt: null,
       receivedCount: 0,
     });
+  },
+});
+
+/**
+ * Patch a webhook's receive behaviour — `autoRun`, `mode`, and the `upsertKey`
+ * column. Members-only; NOT metered (config metadata). When `mode` resolves to
+ * `"upsert"` an `upsertKey` MUST be supplied and MUST be a column of the bound
+ * table (validated via the same column-id Set as the mapping guard); when it
+ * resolves to `"create"` the key is cleared to `null`. Each field is optional so
+ * the UI can patch one control at a time.
+ */
+export const updateWebhookConfig = mutation({
+  args: {
+    webhookId: v.id("webhooks"),
+    autoRun: v.optional(v.boolean()),
+    mode: v.optional(v.union(v.literal("create"), v.literal("upsert"))),
+    upsertKey: v.optional(v.union(v.id("columns"), v.null())),
+  },
+  handler: async (ctx, { webhookId, autoRun, mode, upsertKey }) => {
+    const webhook = await getOrThrow(ctx, "webhooks", webhookId);
+    await requireMember(ctx, webhook.workspaceId);
+
+    const patch: Partial<Doc<"webhooks">> = {};
+    if (autoRun !== undefined) patch.autoRun = autoRun;
+
+    // The effective mode after this patch (existing mode when not changing it).
+    const nextMode = mode ?? webhook.mode ?? "create";
+    if (mode !== undefined) patch.mode = mode;
+
+    // The effective upsert key after this patch.
+    const nextKey =
+      upsertKey !== undefined ? upsertKey : (webhook.upsertKey ?? null);
+
+    if (nextMode === "upsert") {
+      if (nextKey === null) {
+        throw new ConvexError({
+          code: "InvalidConfigError",
+          message: "Upsert mode requires a column to match on.",
+        });
+      }
+      const valid = await tableColumnIds(ctx, webhook.tableId);
+      if (!valid.has(nextKey)) {
+        throw new ConvexError({
+          code: "InvalidConfigError",
+          message: `Column ${nextKey} does not belong to table ${webhook.tableId}.`,
+        });
+      }
+      if (upsertKey !== undefined) patch.upsertKey = nextKey;
+    } else {
+      // Creating: clear any stale upsert key so the worker never upserts.
+      patch.upsertKey = null;
+    }
+
+    await ctx.db.patch(webhookId, patch);
   },
 });
 
@@ -186,8 +256,10 @@ export const toggleEnabled = mutation({
 });
 
 /**
- * Rotate a webhook's secret token, invalidating the old URL. Members-only.
- * Mints a fresh high-entropy token via Web Crypto. NOT metered.
+ * Rotate a webhook's secrets, invalidating the old URL AND the old signing
+ * secret. Members-only. Mints a fresh high-entropy token + HMAC signing secret
+ * via Web Crypto so a leaked URL/secret pair can be revoked atomically. NOT
+ * metered.
  */
 export const rotateSecret = mutation({
   args: { webhookId: v.id("webhooks") },
@@ -195,8 +267,33 @@ export const rotateSecret = mutation({
     const webhook = await getOrThrow(ctx, "webhooks", webhookId);
     await requireMember(ctx, webhook.workspaceId);
     const token = mintToken();
-    await ctx.db.patch(webhookId, { token });
-    return { token };
+    const signingSecret = mintSigningSecret();
+    await ctx.db.patch(webhookId, { token, signingSecret });
+    return { token, signingSecret };
+  },
+});
+
+/**
+ * Cursor-paginated list of a webhook's deliveries (newest first). Members-only —
+ * the webhook's workspace gates access (same getOrThrow + requireMember pattern
+ * as {@link listWebhooks}). Drives the desktop "Recent deliveries" panel via
+ * `usePaginatedQuery` (initial 20, "Load more" pages 20 at a time). The table is
+ * retention-capped at {@link DELIVERY_RETENTION}, so total pageable rows are
+ * bounded. NOT metered (read of metadata).
+ */
+export const listDeliveriesPaged = query({
+  args: {
+    webhookId: v.id("webhooks"),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    const webhook = await getOrThrow(ctx, "webhooks", args.webhookId);
+    await requireMember(ctx, webhook.workspaceId);
+    return await ctx.db
+      .query("webhookDeliveries")
+      .withIndex("by_webhook", (q) => q.eq("webhookId", args.webhookId))
+      .order("desc")
+      .paginate(args.paginationOpts);
   },
 });
 
@@ -234,6 +331,12 @@ export const resolveWebhookToken = internalQuery({
       workspaceId: webhook.workspaceId,
       tableId: webhook.tableId,
       mapping: webhook.mapping,
+      // Config the Wave-3 worker needs to verify the signature, honour
+      // auto-run, and perform an upsert. Defaults applied for back-compat rows.
+      signingSecret: webhook.signingSecret ?? null,
+      autoRun: webhook.autoRun ?? true,
+      mode: webhook.mode ?? "create",
+      upsertKey: webhook.upsertKey ?? null,
     };
   },
 });
@@ -253,8 +356,10 @@ export const insertWebhookRow = internalMutation({
   args: {
     webhookId: v.id("webhooks"),
     cells: v.record(v.string(), v.any()),
+    /** Idempotent content hash of the source record, logged on the delivery. */
+    recordId: v.optional(v.string()),
   },
-  handler: async (ctx, { webhookId, cells }) => {
+  handler: async (ctx, { webhookId, cells, recordId }) => {
     const webhook = await getOrThrow(ctx, "webhooks", webhookId);
     const table = await getOrThrow(ctx, "tables", webhook.tableId);
 
@@ -308,14 +413,181 @@ export const insertWebhookRow = internalMutation({
       });
     }
 
+    // Record the delivery + bump telemetry + prune ATOMICALLY, BEFORE metering —
+    // the delivery log is NOT itself a billable cloud action.
+    await recordDelivery(ctx, webhook, {
+      mode: "create",
+      rowsAffected: 1,
+      ...(recordId !== undefined ? { recordId } : {}),
+      receivedAt: now,
+    });
+
     // Exactly ONE billable cloud action per received record (not per cell).
     await meterCloudAction(ctx, table.workspaceId);
 
-    // Telemetry: bump the webhook's received counters.
-    await ctx.db.patch(webhook._id, {
-      lastReceivedAt: now,
-      receivedCount: (webhook.receivedCount ?? 0) + 1,
+    return { rowId };
+  },
+});
+
+/**
+ * UPSERT one received record into the webhook's table, metered EXACTLY ONCE per
+ * record (one cloud action), mirroring {@link insertWebhookRow}'s invariant.
+ * Internal worker path (secret-gated upstream).
+ *
+ * This replaces the OLD client-side upsert (worker fetched the grid, matched the
+ * row in JS, then wrote each mapped cell via `setCellFromWorker` — which metered
+ * ONCE PER CELL, over-billing an N-field upsert N times). The match now runs
+ * server-side in ONE atomic mutation, eliminating the read-then-write race and
+ * the per-cell metering.
+ *
+ * Logic:
+ *   - Find an existing row in the table whose cell in the `upsertKey` column
+ *     equals the incoming value (scalar strict-equality — see @gtmgrid/cloud
+ *     `matchesUpsertKey`; object/array keys are unsupported and never match).
+ *   - If found, PATCH that row's mapped cells (status `done`).
+ *   - Else INSERT a fresh row + its mapped cells (same as the create path).
+ *   - Meter EXACTLY ONCE regardless of create-vs-update or cell count.
+ *
+ * `cells` is a `{ columnId: value }` map; empty values are skipped and values
+ * for columns not in this table are ignored (no cross-table writes). When the
+ * incoming `upsertKey` value is absent/empty/non-scalar, this falls back to an
+ * INSERT (a record with no usable key can't identify an existing row).
+ */
+export const upsertWebhookRow = internalMutation({
+  args: {
+    webhookId: v.id("webhooks"),
+    upsertKey: v.id("columns"),
+    cells: v.record(v.string(), v.any()),
+    /** Idempotent content hash of the source record, logged on the delivery. */
+    recordId: v.optional(v.string()),
+  },
+  handler: async (ctx, { webhookId, upsertKey, cells, recordId }) => {
+    const webhook = await getOrThrow(ctx, "webhooks", webhookId);
+    const table = await getOrThrow(ctx, "tables", webhook.tableId);
+
+    // Atomic quota pre-check against cached usage (one record = one cloud
+    // action, exactly like insertWebhookRow — never N for an N-field payload).
+    const workspace = await ctx.db.get(table.workspaceId);
+    const limit = workspace?.cloudActionsLimit;
+    if (typeof limit === "number") {
+      const used = workspace?.cloudActionsUsed ?? 0;
+      const pending = workspace?.cloudActionsPending ?? 0;
+      if (used + pending + 1 > limit) {
+        throw new ConvexError({
+          code: "CloudActionsLimitError",
+          message:
+            "This webhook delivery would exceed your plan's remaining cloud actions.",
+        });
+      }
+    }
+
+    // Only write cells for columns that actually belong to this table; the
+    // upsert key must also be one of them.
+    const validColumnIds = await tableColumnIds(ctx, table._id);
+    if (!validColumnIds.has(upsertKey)) {
+      throw new ConvexError({
+        code: "InvalidMappingError",
+        message: `Upsert key ${upsertKey} does not belong to table ${table._id}.`,
+      });
+    }
+
+    const now = Date.now();
+    const incoming = cells[upsertKey];
+
+    // Server-side match: scan the upsert-key column's cells for the incoming
+    // scalar value (no by_column index, so read the table's cells via by_table
+    // and pre-filter to the key column — same pattern as deleteColumnCascade).
+    const keyCells = (
+      await ctx.db
+        .query("cells")
+        .withIndex("by_table", (q) => q.eq("tableId", table._id))
+        .collect()
+    )
+      .filter((c) => c.columnId === upsertKey)
+      .map((c) => ({ rowId: c.rowId, value: c.value }));
+    const matchedRowId = findUpsertRowId(keyCells, incoming);
+
+    // Resolve the target row: PATCH the matched row's cells, or INSERT a new
+    // row. Either branch writes the SAME mapped cells and meters ONCE below.
+    let rowId: Id<"rows">;
+    if (matchedRowId !== null) {
+      rowId = matchedRowId;
+      // Existing cells for this row, keyed by columnId, so we patch-or-insert.
+      const existingByColumn = new Map<string, Id<"cells">>();
+      for (const c of await ctx.db
+        .query("cells")
+        .withIndex("by_row", (q) => q.eq("rowId", rowId))
+        .collect()) {
+        existingByColumn.set(c.columnId, c._id);
+      }
+      for (const [columnId, value] of Object.entries(cells)) {
+        if (value === "" || value === null || value === undefined) continue;
+        if (!validColumnIds.has(columnId)) continue;
+        const existingId = existingByColumn.get(columnId);
+        if (existingId !== undefined) {
+          await ctx.db.patch(existingId, {
+            value,
+            status: "done",
+            error: null,
+            updatedAt: now,
+          });
+        } else {
+          await ctx.db.insert("cells", {
+            workspaceId: table.workspaceId,
+            tableId: table._id,
+            rowId,
+            columnId: columnId as Id<"columns">,
+            value,
+            status: "done",
+            error: null,
+            updatedAt: now,
+          });
+        }
+      }
+    } else {
+      const siblings = await ctx.db
+        .query("rows")
+        .withIndex("by_table", (q) => q.eq("tableId", table._id))
+        .collect();
+      const position = siblings.reduce(
+        (max, s) => Math.max(max, s.position + 1),
+        0,
+      );
+      rowId = await ctx.db.insert("rows", {
+        workspaceId: table.workspaceId,
+        tableId: table._id,
+        position,
+        createdAt: now,
+      });
+      for (const [columnId, value] of Object.entries(cells)) {
+        if (value === "" || value === null || value === undefined) continue;
+        if (!validColumnIds.has(columnId)) continue;
+        await ctx.db.insert("cells", {
+          workspaceId: table.workspaceId,
+          tableId: table._id,
+          rowId,
+          columnId: columnId as Id<"columns">,
+          value,
+          status: "done",
+          error: null,
+          updatedAt: now,
+        });
+      }
+    }
+
+    // Record the delivery + bump telemetry + prune ATOMICALLY, BEFORE metering —
+    // the delivery log is NOT itself a billable cloud action. rowsAffected is 1
+    // for BOTH the matched-update and new-insert branches.
+    await recordDelivery(ctx, webhook, {
+      mode: "upsert",
+      rowsAffected: 1,
+      ...(recordId !== undefined ? { recordId } : {}),
+      receivedAt: now,
     });
+
+    // Exactly ONE billable cloud action per received record — for BOTH the
+    // matched-update and new-insert branches, and regardless of cell count.
+    await meterCloudAction(ctx, table.workspaceId);
 
     return { rowId };
   },
@@ -393,6 +665,63 @@ async function resolveCellForWorker(
     )
     .unique();
   return { row, column, existing };
+}
+
+/**
+ * Max delivery-log rows retained PER WEBHOOK. After recording a new delivery the
+ * worker mutations prune the oldest surplus in the SAME mutation, so a hot
+ * webhook's log stays bounded (the desktop panel only ever shows the most recent
+ * handful anyway). ~50 keeps a useful recent history without unbounded growth.
+ */
+const DELIVERY_RETENTION = 50;
+
+/**
+ * Record ONE webhook delivery (status 200) ATOMICALLY with the row write, bump
+ * the parent webhook's telemetry, and prune the oldest surplus past
+ * {@link DELIVERY_RETENTION}. Called from {@link insertWebhookRow} /
+ * {@link upsertWebhookRow} right before the single `meterCloudAction`, so the
+ * delivery is logged iff the row write commits and is itself NEVER metered.
+ */
+async function recordDelivery(
+  ctx: MutationCtx,
+  webhook: Doc<"webhooks">,
+  args: {
+    mode: "create" | "upsert";
+    rowsAffected: number;
+    recordId?: string;
+    receivedAt: number;
+  },
+): Promise<void> {
+  await ctx.db.insert("webhookDeliveries", {
+    workspaceId: webhook.workspaceId,
+    webhookId: webhook._id,
+    tableId: webhook.tableId,
+    status: 200,
+    rowsAffected: args.rowsAffected,
+    mode: args.mode,
+    ...(args.recordId !== undefined ? { recordId: args.recordId } : {}),
+    error: null,
+    receivedAt: args.receivedAt,
+  });
+
+  // Telemetry: bump the webhook's received counters.
+  await ctx.db.patch(webhook._id, {
+    lastReceivedAt: args.receivedAt,
+    receivedCount: (webhook.receivedCount ?? 0) + 1,
+  });
+
+  // Retention prune: keep only the most recent DELIVERY_RETENTION rows. Scan by
+  // index (oldest first by _creationTime) and delete the surplus head.
+  const all = await ctx.db
+    .query("webhookDeliveries")
+    .withIndex("by_webhook", (q) => q.eq("webhookId", webhook._id))
+    .collect();
+  if (all.length > DELIVERY_RETENTION) {
+    const surplus = [...all]
+      .sort((a, b) => a._creationTime - b._creationTime)
+      .slice(0, all.length - DELIVERY_RETENTION);
+    for (const d of surplus) await ctx.db.delete(d._id);
+  }
 }
 
 /** A terminal cell status (the only states that meter on the worker path). */

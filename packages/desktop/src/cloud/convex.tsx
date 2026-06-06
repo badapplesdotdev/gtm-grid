@@ -34,6 +34,17 @@ export const CONVEX_URL: string | undefined =
 export const cloudEnabled = CONVEX_URL !== undefined;
 
 /**
+ * Base URL of the inbound-webhook receiver (apps/inngest, Wave 3). The webhook
+ * setup form builds each table's endpoint as `${INNGEST_URL}/api/webhooks/:token`.
+ * Read once from Vite's `import.meta.env`; empty string is treated as unset.
+ * Falls back to a documentation placeholder host when no deployment is wired so
+ * the form still renders a copyable, clearly-non-live URL in OSS builds.
+ */
+export const INNGEST_URL: string =
+  (import.meta.env.VITE_INNGEST_URL as string | undefined) ||
+  "https://hooks.gtmgrid.app";
+
+/**
  * The shared Convex React client, or `null` when no deployment is configured.
  * A module-level singleton so every hook/component shares one client + one
  * websocket. `unsavedChangesWarning: false` because Tauri's webview has no

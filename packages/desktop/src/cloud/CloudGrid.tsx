@@ -13,11 +13,12 @@
  * The component stays plain React; the run LOGIC is the Effect service.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { CellContent, Icon } from "../App";
 import type { Cell } from "../api";
 import { runCloudColumn } from "./cloud-run";
+import { WebhookModal } from "./WebhookModal";
 import {
   useCloudGridMutations,
   useCloudSession,
@@ -27,6 +28,13 @@ import {
 interface CloudGridProps {
   /** The active cloud table to render, or `null` when none is selected. */
   tableId: Id<"tables"> | null;
+  /**
+   * A monotonically-increasing token that, when it changes to a truthy value,
+   * auto-opens the webhook setup form for the current table. Used by the
+   * "New table → Webhook" chooser flow to land directly on the webhook form
+   * after creating/selecting the cloud table. `0`/undefined = do nothing.
+   */
+  openWebhookToken?: number;
 }
 
 /**
@@ -34,7 +42,7 @@ interface CloudGridProps {
  * state (the live `running` cell status comes from Convex, so we only track the
  * in-flight request to disable the trigger).
  */
-export function CloudGrid({ tableId }: CloudGridProps) {
+export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
   const data = useCloudTable(tableId);
   const session = useCloudSession();
   const { setCell, addRow, addColumn, deleteRow, deleteColumn } =
@@ -42,6 +50,16 @@ export function CloudGrid({ tableId }: CloudGridProps) {
 
   const [runningColId, setRunningColId] = useState<string | null>(null);
   const [runningCells, setRunningCells] = useState<Set<string>>(new Set());
+  const [showWebhook, setShowWebhook] = useState(false);
+
+  // Auto-open the webhook form when the chooser's "Webhook" flow bumps the token
+  // (and a table is actually present to bind it to).
+  const lastTokenRef = useRef(0);
+  useEffect(() => {
+    if (!openWebhookToken || openWebhookToken === lastTokenRef.current) return;
+    lastTokenRef.current = openWebhookToken;
+    if (tableId !== null) setShowWebhook(true);
+  }, [openWebhookToken, tableId]);
 
   const runColumn = useCallback(
     async (columnId: string) => {
@@ -113,6 +131,21 @@ export function CloudGrid({ tableId }: CloudGridProps) {
 
   const fnColCount = data.columns.filter((c) => c.kind === "function").length;
 
+  // Webhook setup renders INLINE in this pane (replacing the grid), not as a
+  // fullscreen overlay — closing returns to the grid.
+  if (showWebhook) {
+    return (
+      <WebhookModal
+        inline
+        tableId={data.id as Id<"tables">}
+        columns={data.columns}
+        tableName={data.name}
+        rowCount={data.rows.length}
+        onClose={() => setShowWebhook(false)}
+      />
+    );
+  }
+
   return (
     <>
       <div className="toolbar">
@@ -127,6 +160,14 @@ export function CloudGrid({ tableId }: CloudGridProps) {
           onClick={() => addRow(data.id as Id<"tables">)}
         >
           <Icon.Plus size={11} /> Add row
+        </button>
+        <button
+          className="btn btn-outline btn-sm"
+          onClick={() => setShowWebhook(true)}
+          title="Configure this table's inbound webhook"
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17a4 4 0 0 1 3.6-3.98" /><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06" /><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8" /></svg>{" "}
+          Webhook
         </button>
         <div className="toolbar-sep" />
         <button

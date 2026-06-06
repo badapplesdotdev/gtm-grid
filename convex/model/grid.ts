@@ -118,6 +118,22 @@ export async function deleteTableCascade(
     [tableId, tableId],
   ]);
   await executePlan(ctx, plan, byId);
+
+  // Webhooks + their per-event delivery logs are table-scoped but live outside
+  // the cascade planner (added after it was written). Remove them here so
+  // deleting a table never orphans its webhook config or delivery history.
+  const webhooks = await ctx.db
+    .query("webhooks")
+    .withIndex("by_table", (q) => q.eq("tableId", tableId))
+    .collect();
+  for (const w of webhooks) {
+    const deliveries = await ctx.db
+      .query("webhookDeliveries")
+      .withIndex("by_webhook", (q) => q.eq("webhookId", w._id))
+      .collect();
+    for (const d of deliveries) await ctx.db.delete(d._id);
+    await ctx.db.delete(w._id);
+  }
 }
 
 /** Cascade-delete a single column: every cell in that column, then the column. */

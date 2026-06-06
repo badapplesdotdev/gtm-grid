@@ -86,10 +86,32 @@ http.route({
   method: "POST",
   handler: httpAction(async (ctx, req) => {
     if (!isAuthorizedWorker(req)) return unauthorized();
-    const { webhookId, cells } = await req.json();
+    const { webhookId, cells, recordId } = await req.json();
     const result = await ctx.runMutation(internal.webhooks.insertWebhookRow, {
       webhookId,
       cells,
+      ...(recordId !== undefined ? { recordId } : {}),
+    });
+    return ok(result);
+  }),
+});
+
+/**
+ * Upsert one received record: match an existing row server-side on the upsert
+ * key, then patch-or-insert its cells (metered once per record — never per
+ * cell). Mirrors /webhook/insertRow's secret gate + dispatch.
+ */
+http.route({
+  path: "/webhook/upsertRow",
+  method: "POST",
+  handler: httpAction(async (ctx, req) => {
+    if (!isAuthorizedWorker(req)) return unauthorized();
+    const { webhookId, upsertKey, cells, recordId } = await req.json();
+    const result = await ctx.runMutation(internal.webhooks.upsertWebhookRow, {
+      webhookId,
+      upsertKey,
+      cells,
+      ...(recordId !== undefined ? { recordId } : {}),
     });
     return ok(result);
   }),
