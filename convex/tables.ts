@@ -24,7 +24,7 @@ import {
   deleteRowCascade,
   deleteTableCascade,
 } from "./model/grid.js";
-import { meterCloudAction } from "./model/meter.js";
+import { meterCloudAction, meterCloudActions } from "./model/meter.js";
 import { columnKind, columnType } from "./schema.js";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, type QueryCtx, query } from "./_generated/server.js";
@@ -194,6 +194,90 @@ export const addRow = mutation({
       position: nextPosition(siblings),
       createdAt: Date.now(),
     });
+  },
+});
+
+/**
+ * Bulk insert rows + their cells for CSV import. Members-only.
+ *
+ * Each entry in `rows` is a `{ columnId: value }` map; empty values are skipped
+ * (the cell stays empty) and values for columns not in this table are ignored
+ * (no cross-table writes). Metered as ONE cloud action per row (not per cell).
+ *
+ * Atomic quota guard: before inserting anything, a best-effort check against the
+ * workspace's CACHED cloud-actions usage (`cloudActionsUsed` + pending) rejects
+ * an import that would exceed the plan limit — so a free workspace can't blow its
+ * cap mid-import and end up with a half-written table. Unlimited plans (limit
+ * null) always pass. The cache can lag a flush, so this is a guard, not exact
+ * accounting; the scheduled flush remains the source of truth for billing.
+ */
+export const addRowsWithCells = mutation({
+  args: {
+    tableId: v.id("tables"),
+    rows: v.array(v.record(v.string(), v.any())),
+  },
+  handler: async (ctx, { tableId, rows }) => {
+    const table = await getOrThrow(ctx, "tables", tableId);
+    await requireMember(ctx, table.workspaceId);
+
+    // Atomic quota pre-check against cached usage (free tier has a hard cap).
+    const workspace = await ctx.db.get(table.workspaceId);
+    const limit = workspace?.cloudActionsLimit;
+    if (typeof limit === "number") {
+      const used = workspace?.cloudActionsUsed ?? 0;
+      const pending = workspace?.cloudActionsPending ?? 0;
+      if (used + pending + rows.length > limit) {
+        throw new ConvexError({
+          code: "CloudActionsLimitError",
+          message:
+            "This import would exceed your plan's remaining cloud actions. Upgrade your plan or import fewer rows.",
+        });
+      }
+    }
+
+    // Only write cells for columns that actually belong to this table.
+    const columns = await ctx.db
+      .query("columns")
+      .withIndex("by_table", (q) => q.eq("tableId", tableId))
+      .collect();
+    const validColumnIds = new Set<string>(columns.map((c) => c._id));
+
+    const siblings = await ctx.db
+      .query("rows")
+      .withIndex("by_table", (q) => q.eq("tableId", tableId))
+      .collect();
+    let position = nextPosition(siblings);
+    const now = Date.now();
+
+    const rowIds: Id<"rows">[] = [];
+    for (const cells of rows) {
+      const rowId = await ctx.db.insert("rows", {
+        workspaceId: table.workspaceId,
+        tableId,
+        position: position++,
+        createdAt: now,
+      });
+      rowIds.push(rowId);
+      for (const [columnId, value] of Object.entries(cells)) {
+        if (value === "" || value === null || value === undefined) continue;
+        if (!validColumnIds.has(columnId)) continue;
+        await ctx.db.insert("cells", {
+          workspaceId: table.workspaceId,
+          tableId,
+          rowId,
+          columnId: columnId as Id<"columns">,
+          value,
+          status: "done",
+          error: null,
+          updatedAt: now,
+        });
+      }
+    }
+
+    // One billable cloud action per imported row (cells are not metered).
+    await meterCloudActions(ctx, table.workspaceId, rows.length);
+
+    return { rowIds };
   },
 });
 

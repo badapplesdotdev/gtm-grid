@@ -52,12 +52,12 @@ const pureCloudActionsLayer: Layer.Layer<CloudActionsService> =
     ),
   );
 
-/** Apply the pure +1 aggregation rule via the Effect service (no Autumn). */
-function nextPendingCount(current: number): Promise<number> {
+/** Apply the pure +N aggregation rule via the Effect service (no Autumn). */
+function nextPendingCount(current: number, by = 1): Promise<number> {
   return Effect.runPromise(
     Effect.gen(function* () {
       const svc = yield* CloudActionsService;
-      return svc.nextPendingCount(current);
+      return svc.nextPendingCount(current, by);
     }).pipe(Effect.provide(pureCloudActionsLayer)),
   );
 }
@@ -74,9 +74,24 @@ export async function meterCloudAction(
   ctx: MutationCtx,
   workspaceId: Id<"workspaces">,
 ): Promise<void> {
+  await meterCloudActions(ctx, workspaceId, 1);
+}
+
+/**
+ * Increment a workspace's pending cloud-actions counter by `count` in one DB
+ * write. Use for batched billable operations (e.g. a CSV import that creates N
+ * rows counts as N actions) so a bulk insert doesn't do N separate patches.
+ * Same rule, same fail-closed semantics as {@link meterCloudAction}.
+ */
+export async function meterCloudActions(
+  ctx: MutationCtx,
+  workspaceId: Id<"workspaces">,
+  count: number,
+): Promise<void> {
+  if (count <= 0) return;
   const workspace = await ctx.db.get(workspaceId);
   if (workspace === null) return;
   const current = workspace.cloudActionsPending ?? 0;
-  const next = await nextPendingCount(current);
+  const next = await nextPendingCount(current, count);
   await ctx.db.patch(workspaceId, { cloudActionsPending: next });
 }

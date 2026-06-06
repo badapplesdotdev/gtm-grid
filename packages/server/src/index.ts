@@ -475,6 +475,33 @@ route("POST", "/api/tables/:id/rows", (p, body) => {
   return { id: row.id };
 });
 
+// Bulk row insert for CSV import: create many rows + their cells in ONE
+// better-sqlite3 transaction (fast + atomic). Each row is a `{ columnId: value }`
+// map; empty values are skipped so the cell stays empty. LOCAL projects only —
+// never metered (local is unlimited on every tier).
+route("POST", "/api/tables/:id/rows/bulk", (p, body) => {
+  const inputRows: Array<Record<string, unknown>> = Array.isArray(body?.rows)
+    ? body.rows
+    : [];
+  const rowIds: string[] = [];
+  const insertAll = current.projectDb.raw.transaction(
+    (rows: Array<Record<string, unknown>>) => {
+      for (const cells of rows) {
+        const row = current.projectDb.createRow(p.id);
+        rowIds.push(row.id);
+        if (cells) {
+          for (const [colId, value] of Object.entries(cells)) {
+            if (value === "" || value === null || value === undefined) continue;
+            current.projectDb.setCell(row.id, colId, { value, status: "done" });
+          }
+        }
+      }
+    },
+  );
+  insertAll(inputRows);
+  return { rowIds };
+});
+
 route("POST", "/api/cells", (_p, body) => {
   current.projectDb.setCell(body.rowId, body.columnId, { value: body.value, status: "done" });
   return { ok: true };

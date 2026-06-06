@@ -139,6 +139,8 @@ export const api = {
   ) => http<{ id: string }>(`/api/tables/${tableId}/columns`, { method: "POST", body: JSON.stringify(body) }),
   addRow: (tableId: string, cells?: Record<string, unknown>) =>
     http<{ id: string }>(`/api/tables/${tableId}/rows`, { method: "POST", body: JSON.stringify({ cells }) }),
+  addRowsBulk: (tableId: string, rows: Array<Record<string, unknown>>) =>
+    http<{ rowIds: string[] }>(`/api/tables/${tableId}/rows/bulk`, { method: "POST", body: JSON.stringify({ rows }) }),
   setCell: (rowId: string, columnId: string, value: unknown) =>
     http<{ ok: boolean }>("/api/cells", { method: "POST", body: JSON.stringify({ rowId, columnId, value }) }),
   runColumn: (columnId: string, opts: { force?: boolean; rowIds?: string[] } = {}) =>

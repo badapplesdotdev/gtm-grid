@@ -103,13 +103,15 @@ export class CloudActionsService extends Effect.Service<CloudActionsService>()(
       const autumn = yield* AutumnClient;
 
       /**
-       * The pending count after one more billable CLOUD action. Each billable
-       * mutation calls this with the workspace's current pending (0 when the
-       * field is unset) and writes the result back — i.e. always +1. A pure
-       * function so the "one unit per billable op" rule is tested independently
-       * of Convex.
+       * The pending count after `by` more billable CLOUD actions (default 1).
+       * Each billable mutation calls this with the workspace's current pending (0
+       * when the field is unset) and writes the result back — single-op writes
+       * pass no `by` (+1); a batch (e.g. CSV import of N rows) passes `by = N` so
+       * one DB write covers the whole batch. A pure function so the "one unit per
+       * billable op" rule is tested independently of Convex.
        */
-      const nextPendingCount = (current: number): number => current + 1;
+      const nextPendingCount = (current: number, by = 1): number =>
+        current + Math.max(0, by);
 
       /**
        * Flush ONE workspace's pending cloud-actions to Autumn and read back its

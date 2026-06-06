@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo } from "./api";
 import AgentPanel from "./AgentPanel";
 import { LogoMark } from "./Logo";
@@ -17,8 +17,11 @@ import {
   useCloudProjects,
   useCloudTables,
   useCloudProjectMutations,
+  useCloudGridMutations,
   type CloudProject,
 } from "./cloud/useCloudGrid";
+import { ImportCsvModal } from "./ImportCsvModal";
+import type { ImportWriter } from "./csvImport";
 import type { Id } from "../../../convex/_generated/dataModel";
 import "./styles.css";
 
@@ -462,6 +465,37 @@ export default function App() {
   const cloudTables = useCloudTables(cloudProject?._id ?? null);
   const { createProject: createCloudProject, createTable: createCloudTable } =
     useCloudProjectMutations();
+  const { addColumn: cloudAddColumn, addRowsWithCells: cloudAddRowsWithCells } =
+    useCloudGridMutations();
+  // CSV import: which mode's modal is open (null = closed). Local writes via the
+  // sidecar; cloud writes via Convex (metered). Writers are built below.
+  const [importMode, setImportMode] = useState<null | "local" | "cloud">(null);
+
+  // Local import writer — sidecar HTTP (unmetered). Stable across renders.
+  const localImportWriter = useMemo<ImportWriter>(
+    () => ({
+      createTable: async (name) => (await api.createTable(name)).id,
+      addColumn: async (tableId, col) =>
+        (await api.addColumn(tableId, { name: col.name, type: col.type })).id,
+      addRowsChunk: async (tableId, rows) => {
+        await api.addRowsBulk(tableId, rows);
+      },
+    }),
+    [],
+  );
+  // Cloud import writer — Convex mutations (metered; quota-guarded). Null until a
+  // cloud project is open. Branded Convex ids are strings at runtime.
+  const cloudImportWriter = useMemo<ImportWriter | null>(() => {
+    if (!cloudProject) return null;
+    return {
+      createTable: (name) => createCloudTable(cloudProject._id, name),
+      addColumn: (tableId, col) =>
+        cloudAddColumn(tableId as Id<"tables">, { name: col.name, type: col.type }),
+      addRowsChunk: async (tableId, rows) => {
+        await cloudAddRowsWithCells(tableId as Id<"tables">, rows);
+      },
+    };
+  }, [cloudProject, createCloudTable, cloudAddColumn, cloudAddRowsWithCells]);
   // Cloud create (project/table) UX: a busy flag to disable the trigger while the
   // mutation is in flight, and a surfaced error so a failed create never hangs
   // silently. Both are cleared on the next attempt / success.
@@ -1021,6 +1055,10 @@ export default function App() {
                   {cloudCreating ? "Creating…" : "New table"}
                 </span>
               </div>
+              <div className="sidebar-item" onClick={() => setImportMode("cloud")}>
+                <span className="sidebar-item-icon"><Icon.Table /></span>
+                <span className="sidebar-item-name">Import CSV…</span>
+              </div>
               {cloudCreateError && (
                 <div
                   className="account-menu-error"
@@ -1084,6 +1122,10 @@ export default function App() {
             <div className="sidebar-item" style={{ marginTop: 2 }} onClick={() => setShowNewTable(true)}>
               <span className="sidebar-item-icon" style={{ color: "var(--accent)" }}><Icon.Plus /></span>
               <span className="sidebar-item-name" style={{ color: "var(--accent)" }}>New table</span>
+            </div>
+            <div className="sidebar-item" onClick={() => setImportMode("local")}>
+              <span className="sidebar-item-icon"><Icon.Table /></span>
+              <span className="sidebar-item-name">Import CSV…</span>
             </div>
           </div>
           </>}
@@ -1313,9 +1355,14 @@ export default function App() {
             <div className="empty-icon"><Icon.Grid /></div>
             <div className="empty-title">No table selected</div>
             <p className="empty-sub">Create your first table to start building your GTM data grid.</p>
-            <button className="btn btn-primary" onClick={() => setShowNewTable(true)}>
-              <Icon.Plus /> Create table
-            </button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-primary" onClick={() => setShowNewTable(true)}>
+                <Icon.Plus /> Create table
+              </button>
+              <button className="btn btn-outline" onClick={() => setImportMode("local")}>
+                <Icon.Table /> Import CSV
+              </button>
+            </div>
           </div>
         ) : tableLoading ? (
           <div className="empty-state">
@@ -1558,6 +1605,33 @@ export default function App() {
               setTables(t);
               setSelectedTableId(id);
             });
+          }}
+        />
+      )}
+
+      {/* CSV import (full-screen). Local writes via sidecar; cloud via Convex. */}
+      {importMode === "local" && (
+        <ImportCsvModal
+          writer={localImportWriter}
+          onClose={() => setImportMode(null)}
+          onImported={() => { api.tables().then(setTables); }}
+          onOpenTable={id => {
+            api.tables().then(t => {
+              setTables(t);
+              setSelectedTableId(id);
+              setView({ kind: "table" });
+            });
+            setImportMode(null);
+          }}
+        />
+      )}
+      {importMode === "cloud" && cloudImportWriter && (
+        <ImportCsvModal
+          writer={cloudImportWriter}
+          onClose={() => setImportMode(null)}
+          onOpenTable={id => {
+            setCloudTableId(id as Id<"tables">);
+            setImportMode(null);
           }}
         />
       )}
