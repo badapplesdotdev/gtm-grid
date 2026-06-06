@@ -15,10 +15,9 @@
  * there is nothing buffered to commit.
  *
  * Deliveries: the "Recent deliveries" section is bound to REAL data — the
- * per-event `webhookDeliveries` log via `listDeliveries` (the
- * {@link useWebhookDeliveries} hook). The "Send test event" button just posts a
- * real event; the panel reflects it once the worker records the delivery. No
- * fabricated/optimistic delivery rows.
+ * per-event `webhookDeliveries` log via `listDeliveriesPaged` (the
+ * {@link useWebhookDeliveries} hook, cursor-paginated with a "Load more"
+ * control). No fabricated/optimistic delivery rows.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
