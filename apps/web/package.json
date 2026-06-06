@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "gtm grid marketing site — local-first programmable GTM spreadsheet.",
+  "description": "gtm grid — marketing site + Inngest webhook worker (unified Next.js app).",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -12,6 +12,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@gtmgrid/cloud": "workspace:*",
+    "@gtmgrid/engine": "workspace:*",
+    "effect": "^3.21.3",
+    "inngest": "^4.5.0",
     "next": "^15.5.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
