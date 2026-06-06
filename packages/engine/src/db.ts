@@ -1,6 +1,12 @@
 // SQLite data layer (better-sqlite3). One .db file per project, mirroring Revcode.
 
-import Database from "better-sqlite3";
+// `better-sqlite3` is a native addon. We import only its TYPES at module scope so
+// that merely importing this file (and therefore `@gtmgrid/engine`) does NOT load
+// the native `.node` binary — the cloud path never touches SQLite. The runtime
+// constructor is lazily `require`d inside the `Db` constructor, the single place
+// that actually opens a database.
+import type DatabaseT from "better-sqlite3";
+import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { encryptSecrets, decryptSecrets } from "./crypto.js";
 import type {
@@ -97,9 +103,15 @@ interface CellRow {
 }
 
 export class Db {
-  readonly raw: Database.Database;
+  readonly raw: DatabaseT.Database;
 
   constructor(path: string) {
+    // Lazy-load the native better-sqlite3 addon here (the only place a database
+    // is opened) so importing this module doesn't pull the `.node` binary. A
+    // CJS `require` keeps the synchronous constructor synchronous (a dynamic
+    // `import()` would force this to become async and ripple through callers).
+    const require = createRequire(import.meta.url);
+    const Database = require("better-sqlite3") as typeof DatabaseT;
     this.raw = new Database(path);
     this.raw.pragma("journal_mode = WAL");
     this.raw.pragma("foreign_keys = ON");
