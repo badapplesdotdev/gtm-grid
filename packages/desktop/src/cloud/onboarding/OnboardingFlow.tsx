@@ -361,14 +361,18 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
       setError(null);
       try {
         await signInWithPassword(state.email.trim(), state.password, flow);
-        go("workspace");
+        // In forced (pro gate) mode the App owns post-login routing: once
+        // `isAuthenticated` flips it unmounts this flow and re-opens workspace
+        // creation only when the user has zero workspaces. Advancing here too
+        // would flash the workspace step for users who already have one.
+        if (!forced) go("workspace");
       } catch (e) {
         setError(e instanceof Error ? e.message : "Authentication failed.");
       } finally {
         setBusy(false);
       }
     },
-    [busy, state.email, state.password, signInWithPassword, go],
+    [busy, state.email, state.password, signInWithPassword, go, forced],
   );
 
   const submitWorkspace = useCallback(async () => {

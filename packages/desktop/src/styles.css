@@ -559,12 +559,12 @@ html, body, #root {
 .btn-primary {
   background: var(--accent);
   color: white;
-  box-shadow: 0 1px 3px rgba(230,0,6,.35);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 .btn-primary:hover {
-  background: #5254e8;
-  box-shadow: 0 2px 8px rgba(230,0,6,.4);
+  background: color-mix(in srgb, var(--accent) 88%, black);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 .btn-primary:disabled {
@@ -1092,6 +1092,7 @@ html, body, #root {
 .form-select,
 .form-textarea {
   all: unset;
+  box-sizing: border-box;
   display: block;
   width: 100%;
   background: var(--surface);
@@ -1109,13 +1110,12 @@ html, body, #root {
 .form-select:focus,
 .form-textarea:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(230,0,6,.15);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
   outline: none;
 }
 
 .form-select {
   cursor: pointer;
-  box-sizing: border-box;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239696a8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 10px center;
