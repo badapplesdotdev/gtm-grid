@@ -272,6 +272,26 @@ export const rotateSecret = mutation({
   },
 });
 
+/**
+ * List a webhook's recent deliveries (newest first). Members-only — the
+ * webhook's workspace gates access (same getOrThrow + requireMember pattern as
+ * {@link listWebhooks}). Drives the desktop "Recent deliveries" panel. Default
+ * limit 20; the table is retention-capped at {@link DELIVERY_RETENTION}. NOT
+ * metered (read of metadata).
+ */
+export const listDeliveries = query({
+  args: { webhookId: v.id("webhooks"), limit: v.optional(v.number()) },
+  handler: async (ctx, { webhookId, limit }) => {
+    const webhook = await getOrThrow(ctx, "webhooks", webhookId);
+    await requireMember(ctx, webhook.workspaceId);
+    return await ctx.db
+      .query("webhookDeliveries")
+      .withIndex("by_webhook", (q) => q.eq("webhookId", webhookId))
+      .order("desc")
+      .take(limit ?? 20);
+  },
+});
+
 /** Delete a webhook. Members-only. NOT metered. */
 export const deleteWebhook = mutation({
   args: { webhookId: v.id("webhooks") },
@@ -331,8 +351,10 @@ export const insertWebhookRow = internalMutation({
   args: {
     webhookId: v.id("webhooks"),
     cells: v.record(v.string(), v.any()),
+    /** Idempotent content hash of the source record, logged on the delivery. */
+    recordId: v.optional(v.string()),
   },
-  handler: async (ctx, { webhookId, cells }) => {
+  handler: async (ctx, { webhookId, cells, recordId }) => {
     const webhook = await getOrThrow(ctx, "webhooks", webhookId);
     const table = await getOrThrow(ctx, "tables", webhook.tableId);
 
@@ -386,14 +408,17 @@ export const insertWebhookRow = internalMutation({
       });
     }
 
+    // Record the delivery + bump telemetry + prune ATOMICALLY, BEFORE metering —
+    // the delivery log is NOT itself a billable cloud action.
+    await recordDelivery(ctx, webhook, {
+      mode: "create",
+      rowsAffected: 1,
+      ...(recordId !== undefined ? { recordId } : {}),
+      receivedAt: now,
+    });
+
     // Exactly ONE billable cloud action per received record (not per cell).
     await meterCloudAction(ctx, table.workspaceId);
-
-    // Telemetry: bump the webhook's received counters.
-    await ctx.db.patch(webhook._id, {
-      lastReceivedAt: now,
-      receivedCount: (webhook.receivedCount ?? 0) + 1,
-    });
 
     return { rowId };
   },
@@ -428,8 +453,10 @@ export const upsertWebhookRow = internalMutation({
     webhookId: v.id("webhooks"),
     upsertKey: v.id("columns"),
     cells: v.record(v.string(), v.any()),
+    /** Idempotent content hash of the source record, logged on the delivery. */
+    recordId: v.optional(v.string()),
   },
-  handler: async (ctx, { webhookId, upsertKey, cells }) => {
+  handler: async (ctx, { webhookId, upsertKey, cells, recordId }) => {
     const webhook = await getOrThrow(ctx, "webhooks", webhookId);
     const table = await getOrThrow(ctx, "tables", webhook.tableId);
 
@@ -543,15 +570,19 @@ export const upsertWebhookRow = internalMutation({
       }
     }
 
+    // Record the delivery + bump telemetry + prune ATOMICALLY, BEFORE metering —
+    // the delivery log is NOT itself a billable cloud action. rowsAffected is 1
+    // for BOTH the matched-update and new-insert branches.
+    await recordDelivery(ctx, webhook, {
+      mode: "upsert",
+      rowsAffected: 1,
+      ...(recordId !== undefined ? { recordId } : {}),
+      receivedAt: now,
+    });
+
     // Exactly ONE billable cloud action per received record — for BOTH the
     // matched-update and new-insert branches, and regardless of cell count.
     await meterCloudAction(ctx, table.workspaceId);
-
-    // Telemetry: bump the webhook's received counters.
-    await ctx.db.patch(webhook._id, {
-      lastReceivedAt: now,
-      receivedCount: (webhook.receivedCount ?? 0) + 1,
-    });
 
     return { rowId };
   },
@@ -629,6 +660,63 @@ async function resolveCellForWorker(
     )
     .unique();
   return { row, column, existing };
+}
+
+/**
+ * Max delivery-log rows retained PER WEBHOOK. After recording a new delivery the
+ * worker mutations prune the oldest surplus in the SAME mutation, so a hot
+ * webhook's log stays bounded (the desktop panel only ever shows the most recent
+ * handful anyway). ~50 keeps a useful recent history without unbounded growth.
+ */
+const DELIVERY_RETENTION = 50;
+
+/**
+ * Record ONE webhook delivery (status 200) ATOMICALLY with the row write, bump
+ * the parent webhook's telemetry, and prune the oldest surplus past
+ * {@link DELIVERY_RETENTION}. Called from {@link insertWebhookRow} /
+ * {@link upsertWebhookRow} right before the single `meterCloudAction`, so the
+ * delivery is logged iff the row write commits and is itself NEVER metered.
+ */
+async function recordDelivery(
+  ctx: MutationCtx,
+  webhook: Doc<"webhooks">,
+  args: {
+    mode: "create" | "upsert";
+    rowsAffected: number;
+    recordId?: string;
+    receivedAt: number;
+  },
+): Promise<void> {
+  await ctx.db.insert("webhookDeliveries", {
+    workspaceId: webhook.workspaceId,
+    webhookId: webhook._id,
+    tableId: webhook.tableId,
+    status: 200,
+    rowsAffected: args.rowsAffected,
+    mode: args.mode,
+    ...(args.recordId !== undefined ? { recordId: args.recordId } : {}),
+    error: null,
+    receivedAt: args.receivedAt,
+  });
+
+  // Telemetry: bump the webhook's received counters.
+  await ctx.db.patch(webhook._id, {
+    lastReceivedAt: args.receivedAt,
+    receivedCount: (webhook.receivedCount ?? 0) + 1,
+  });
+
+  // Retention prune: keep only the most recent DELIVERY_RETENTION rows. Scan by
+  // index (oldest first by _creationTime) and delete the surplus head.
+  const all = await ctx.db
+    .query("webhookDeliveries")
+    .withIndex("by_webhook", (q) => q.eq("webhookId", webhook._id))
+    .collect();
+  if (all.length > DELIVERY_RETENTION) {
+    const surplus = [...all]
+      .sort((a, b) => a._creationTime - b._creationTime)
+      .slice(0, all.length - DELIVERY_RETENTION);
+    for (const d of surplus) await ctx.db.delete(d._id);
+  }
 }
 
 /** A terminal cell status (the only states that meter on the worker path). */

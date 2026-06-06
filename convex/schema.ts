@@ -319,4 +319,38 @@ export default defineSchema({
     .index("by_workspace", ["workspaceId"])
     .index("by_table", ["tableId"])
     .index("by_token", ["token"]),
+
+  /**
+   * Per-event webhook delivery log — ONE row per received payload, written
+   * ATOMICALLY in the same mutation that inserts/upserts the record (so a
+   * delivery is logged iff the row write committed). Drives the desktop
+   * "Recent deliveries" panel; deliberately NOT a billable cloud action (the
+   * row/cell write it accompanies is already metered exactly once per record).
+   *
+   * RETENTION: the worker mutations cap this at ~50 deliveries PER WEBHOOK,
+   * pruning the oldest in the same mutation, so the log can never grow
+   * unbounded for a hot webhook.
+   *
+   * by_webhook backs the newest-first deliveries list for one webhook (the UI's
+   * hot path + the prune scan); by_workspace scopes a workspace's deliveries.
+   */
+  webhookDeliveries: defineTable({
+    workspaceId: v.id("workspaces"),
+    webhookId: v.id("webhooks"),
+    tableId: v.id("tables"),
+    /** HTTP-style status of the delivery (200 on a successful write). */
+    status: v.number(),
+    /** Rows created/updated by this delivery (1 for create, 1 for upsert). */
+    rowsAffected: v.number(),
+    /** Receive mode that handled this payload. */
+    mode: v.union(v.literal("create"), v.literal("upsert")),
+    /** Idempotent content hash of the source record, when the worker has one. */
+    recordId: v.optional(v.string()),
+    /** Error message on a failed delivery; null/absent on success. */
+    error: v.optional(v.union(v.string(), v.null())),
+    /** Epoch ms the payload was received/recorded. */
+    receivedAt: v.number(),
+  })
+    .index("by_webhook", ["webhookId"])
+    .index("by_workspace", ["workspaceId"]),
 });

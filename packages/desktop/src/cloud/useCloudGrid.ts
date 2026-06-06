@@ -305,6 +305,34 @@ export function useWebhooks(
   ) as CloudWebhook[] | undefined;
 }
 
+/** One per-event delivery as returned by `listDeliveries` (newest first). */
+export interface CloudDelivery {
+  readonly _id: Id<"webhookDeliveries">;
+  readonly webhookId: Id<"webhooks">;
+  readonly tableId: Id<"tables">;
+  readonly status: number;
+  readonly rowsAffected: number;
+  readonly mode: "create" | "upsert";
+  readonly recordId?: string;
+  readonly error?: string | null;
+  readonly receivedAt: number;
+}
+
+/**
+ * Reactive list of a webhook's recent deliveries (newest first, member-gated).
+ * `skip`ped when cloud is off or there is no webhook yet, so a local-only /
+ * signed-out app (or a table with no webhook) issues zero delivery queries.
+ * Mirrors {@link useWebhooks}.
+ */
+export function useWebhookDeliveries(
+  webhookId: Id<"webhooks"> | null | undefined,
+): CloudDelivery[] | undefined {
+  return useQuery(
+    api.webhooks.listDeliveries,
+    cloudEnabled && webhookId != null ? { webhookId } : "skip",
+  ) as CloudDelivery[] | undefined;
+}
+
 /**
  * Mutation wrappers for the webhook config panel — create, enable/disable,
  * rotate secrets, edit the field mapping, and patch receive behaviour. Each
