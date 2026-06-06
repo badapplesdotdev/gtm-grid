@@ -6,6 +6,20 @@ import CellDetails, { extractCode } from "./CellDetails";
 import { ExtensionPanel, AiProviderPanel, ExtensionsBrowse, BrandIcon } from "./Panels";
 import { AddColumnPopover, FunctionsModal } from "./AddColumn";
 import { ProjectSwitcher } from "./ProjectSwitcher";
+import { AccountBar, PlanBadge } from "./cloud/AccountBar";
+import { WorkspaceSettings } from "./cloud/WorkspaceSettings";
+import { OnboardingFlow } from "./cloud/onboarding/OnboardingFlow";
+import { cloudEnabled } from "./cloud/convex";
+import { CloudGrid } from "./cloud/CloudGrid";
+import { useMe, useActiveWorkspace, useAuthState } from "./cloud/auth";
+import { useWorkspaceCredentials } from "./cloud/useWorkspaceCredentials";
+import {
+  useCloudProjects,
+  useCloudTables,
+  useCloudProjectMutations,
+  type CloudProject,
+} from "./cloud/useCloudGrid";
+import type { Id } from "../../../convex/_generated/dataModel";
 import "./styles.css";
 
 // What the main area is showing.
@@ -17,7 +31,7 @@ type View =
 
 // ─── Icons (inline SVG, no deps) ─────────────────────────
 
-const Icon = {
+export const Icon = {
   Table: () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="3" width="18" height="18" rx="2"/>
@@ -112,7 +126,7 @@ const ExpandIcon = () => (
   </svg>
 );
 
-function CellContent({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running }: {
+export function CellContent({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running }: {
   cell: Cell | undefined;
   col: Column;
   onEdit: (value: string) => void;
@@ -382,8 +396,68 @@ export default function App() {
   const [showFunctions, setShowFunctions] = useState(false);
   const [showNewTable, setShowNewTable] = useState(false);
   const [showProjects, setShowProjects] = useState(false);
-  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
   const [currentProjectPath, setCurrentProjectPath] = useState<string | null>(null);
+
+  // ── Cloud project mode (multiplayer via Convex) ──────────────
+  // A cloud project is selected from the switcher; while one is active the main
+  // area renders the live CloudGrid instead of the local sidecar grid. Local
+  // state above is left intact so switching back is instant and unchanged.
+  const me = useMe();
+  const { isAuthenticated } = useAuthState();
+  const { activeWorkspace, setActiveWorkspaceId } = useActiveWorkspace(me ?? null);
+
+  // ── Cloud onboarding flow (C28) ──────────────────────────────
+  // The full-screen split-layout onboarding wizard. Opened from the AccountBar
+  // "Sign in" (auth entry) OR auto-started at the Create-workspace step when a
+  // signed-in user has no workspace yet (first-run). Fully dismissible back to
+  // the local app, so the local-first path is never blocked.
+  const [onboarding, setOnboarding] = useState<
+    { initialScreen: "signin" | "workspace"; hasSession: boolean } | null
+  >(null);
+  // Auto-start at "Create workspace" once: signed in, cloud on, zero workspaces,
+  // and not already showing the flow. A ref guards against re-opening it after
+  // the user dismisses it.
+  const autoStartedRef = useRef(false);
+  useEffect(() => {
+    if (!cloudEnabled || !isAuthenticated || me == null) return;
+    if (me.workspaces.length > 0) return;
+    if (autoStartedRef.current || onboarding !== null) return;
+    autoStartedRef.current = true;
+    setOnboarding({ initialScreen: "workspace", hasSession: true });
+  }, [isAuthenticated, me, onboarding]);
+  // Shared (workspace-scoped) credential source for the connector / AI panels.
+  // `undefined` when signed out / local-only, so those panels behave as before.
+  const workspaceCreds = useWorkspaceCredentials(
+    activeWorkspace?._id ?? null,
+    isAuthenticated,
+  );
+  const cloudProjects = useCloudProjects(activeWorkspace?._id ?? null);
+  const [cloudProject, setCloudProject] = useState<CloudProject | null>(null);
+  const [cloudTableId, setCloudTableId] = useState<Id<"tables"> | null>(null);
+  const cloudTables = useCloudTables(cloudProject?._id ?? null);
+  const { createProject: createCloudProject, createTable: createCloudTable } =
+    useCloudProjectMutations();
+  // Cloud create (project/table) UX: a busy flag to disable the trigger while the
+  // mutation is in flight, and a surfaced error so a failed create never hangs
+  // silently. Both are cleared on the next attempt / success.
+  const [cloudCreating, setCloudCreating] = useState(false);
+  const [cloudCreateError, setCloudCreateError] = useState<string | null>(null);
+  // Whether the app is currently viewing a cloud project (vs. local).
+  const inCloud = cloudProject !== null;
+
+  // Reset the open cloud project when the active workspace changes: a project
+  // belongs to exactly one workspace, so keeping it open across a switch would
+  // leak another workspace's project into the new one's view. The first render
+  // (no prior workspace) is a no-op so it does not disturb local mode.
+  const activeWorkspaceId = activeWorkspace?._id ?? null;
+  const prevWorkspaceIdRef = useRef<Id<"workspaces"> | null>(activeWorkspaceId);
+  useEffect(() => {
+    if (prevWorkspaceIdRef.current === activeWorkspaceId) return;
+    prevWorkspaceIdRef.current = activeWorkspaceId;
+    setCloudProject(null);
+    setCloudTableId(null);
+  }, [activeWorkspaceId]);
 
   // Appearance: only the dark-mode toggle is user-controllable. Density and
   // accent are fixed (compact + green) by product decision.
@@ -534,9 +608,87 @@ export default function App() {
     if (t) setTables(t);
   }, []);
 
-  // Switch to a different project: tables change; global creds/extensions stay.
+  // ── Cloud project selection ──────────────
+  // Open a cloud project: leave the local sidecar untouched, switch the main
+  // area to the live CloudGrid, and default to its first table once they load.
+  const onCloudProjectSelected = useCallback((project: CloudProject) => {
+    setShowProjects(false);
+    setCloudProject(project);
+    setCloudTableId(null);
+    setView({ kind: "table" });
+  }, []);
+
+  // Create a cloud project in the active workspace, then open it. Surfaces any
+  // failure (and always clears the busy flag) so the UI never hangs silently.
+  const onCreateCloudProject = useCallback(
+    async (name: string) => {
+      if (!activeWorkspace || cloudCreating) return;
+      setCloudCreating(true);
+      setCloudCreateError(null);
+      try {
+        const id = await createCloudProject(activeWorkspace._id, name);
+        setShowProjects(false);
+        setCloudProject({
+          _id: id,
+          workspaceId: activeWorkspace._id,
+          name,
+          createdAt: Date.now(),
+        });
+        setCloudTableId(null);
+      } catch (e) {
+        const message =
+          e instanceof Error ? e.message : "Could not create project.";
+        setCloudCreateError(message);
+        // Re-throw so the project switcher (which owns the create form) can keep
+        // it open and show the failure instead of closing as if it succeeded.
+        throw e instanceof Error ? e : new Error(message);
+      } finally {
+        setCloudCreating(false);
+      }
+    },
+    [activeWorkspace, createCloudProject, cloudCreating],
+  );
+
+  // Create a cloud table in the open project, then select it. Single helper for
+  // the (previously duplicated) "New table" affordances in the cloud sidebar.
+  // Surfaces any failure and always clears the busy flag so the UI never hangs.
+  const onCreateCloudTable = useCallback(async () => {
+    if (!cloudProject || cloudCreating) return;
+    setCloudCreating(true);
+    setCloudCreateError(null);
+    try {
+      const id = await createCloudTable(cloudProject._id, "Untitled");
+      setCloudTableId(id);
+    } catch (e) {
+      setCloudCreateError(
+        e instanceof Error ? e.message : "Could not create table.",
+      );
+    } finally {
+      setCloudCreating(false);
+    }
+  }, [cloudProject, createCloudTable, cloudCreating]);
+
+  // Leave cloud mode → back to the local project the sidecar already has open.
+  const exitCloud = useCallback(() => {
+    setCloudProject(null);
+    setCloudTableId(null);
+    setView({ kind: "table" });
+  }, []);
+
+  // Default the active cloud table to the first one once the list loads.
+  useEffect(() => {
+    if (!inCloud) return;
+    if (cloudTables && cloudTables.length > 0 && cloudTableId === null) {
+      setCloudTableId(cloudTables[0]._id);
+    }
+  }, [inCloud, cloudTables, cloudTableId]);
+
+  // Switch to a different LOCAL project: also exit cloud mode so the sidecar
+  // grid is shown. Tables change; global creds/extensions stay.
   const onProjectSwitched = useCallback(async (name: string) => {
     setShowProjects(false);
+    setCloudProject(null);
+    setCloudTableId(null);
     setProjectName(name);
     setView({ kind: "table" });
     const [t, e, ai] = await Promise.all([
@@ -550,8 +702,8 @@ export default function App() {
     if (ai) setAiProviders(ai);
   }, []);
 
+  // Refresh the current local project path; the AccountBar owns its open state.
   const openAccountMenu = useCallback(async () => {
-    setAccountMenuOpen(true);
     const ps = await api.projects().catch(() => []);
     setCurrentProjectPath(ps.find((p) => p.current)?.path ?? null);
   }, []);
@@ -756,10 +908,26 @@ export default function App() {
       <header className="topbar">
         <LogoMark size={22} />
         <button className="topbar-project" onClick={() => setShowProjects(true)} title="Switch project">
-          <span className="topbar-project-name">{projectName}</span>
+          <span className="topbar-project-name">{inCloud ? cloudProject!.name : projectName}</span>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
         </button>
-        <span className="free-badge">FREE</span>
+        {inCloud ? (
+          <button className="free-badge" onClick={exitCloud} title="Back to local project">
+            CLOUD · exit
+          </button>
+        ) : (
+          <PlanBadge />
+        )}
+        {/* Workspace members / seats — only when signed into a workspace. */}
+        {activeWorkspace && (
+          <button
+            className="topbar-project"
+            onClick={() => setShowWorkspaceSettings(true)}
+            title="Workspace members & seats"
+          >
+            Members
+          </button>
+        )}
       </header>
 
       <div className="app">
@@ -773,7 +941,61 @@ export default function App() {
         </div>
 
         <div className="sidebar-scroll">
-          {/* Tables section */}
+          {/* Cloud tables section — shown only while a cloud project is open. */}
+          {inCloud && (
+            <div className="sidebar-section">
+              <div className="sidebar-section-label">
+                Tables (cloud)
+                <button
+                  title="New cloud table"
+                  disabled={cloudCreating}
+                  onClick={() => { void onCreateCloudTable(); }}
+                >
+                  <Icon.Plus />
+                </button>
+              </div>
+              {cloudTables === undefined ? (
+                <div className="skeleton-row">
+                  <div className="shimmer skeleton-bar" style={{ width: "65%", height: 13 }} />
+                </div>
+              ) : cloudTables.length === 0 ? (
+                <div style={{ padding: "4px 16px", fontSize: 12, color: "var(--text-3)" }}>No tables yet</div>
+              ) : (
+                cloudTables.map((t) => (
+                  <div
+                    key={t._id}
+                    className={`sidebar-item${t._id === cloudTableId ? " active" : ""}`}
+                    onClick={() => setCloudTableId(t._id)}
+                  >
+                    <span className="sidebar-item-icon"><Icon.Table /></span>
+                    <span className="sidebar-item-name">{t.name}</span>
+                  </div>
+                ))
+              )}
+              <div
+                className="sidebar-item"
+                style={{ marginTop: 2, opacity: cloudCreating ? 0.6 : 1 }}
+                onClick={() => { void onCreateCloudTable(); }}
+              >
+                <span className="sidebar-item-icon" style={{ color: "var(--accent)" }}><Icon.Plus /></span>
+                <span className="sidebar-item-name" style={{ color: "var(--accent)" }}>
+                  {cloudCreating ? "Creating…" : "New table"}
+                </span>
+              </div>
+              {cloudCreateError && (
+                <div
+                  className="account-menu-error"
+                  role="alert"
+                  style={{ margin: "4px 16px" }}
+                >
+                  {cloudCreateError}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Tables section (local) — hidden while a cloud project is open. */}
+          {!inCloud && <>
           <div className="sidebar-section">
             <div className="sidebar-section-label">
               Tables
@@ -825,6 +1047,7 @@ export default function App() {
               <span className="sidebar-item-name" style={{ color: "var(--accent)" }}>New table</span>
             </div>
           </div>
+          </>}
 
           {/* AI Providers section — collapsible */}
           <div className="sidebar-section">
@@ -929,64 +1152,26 @@ export default function App() {
           </div>
         </div>
 
-        {/* Footer: account / project menu */}
-        <div className="account-bar">
-          <button className="account-btn" onClick={() => (accountMenuOpen ? setAccountMenuOpen(false) : openAccountMenu())}>
-            <span className="account-avatar">{projectName.slice(0, 1).toUpperCase()}</span>
-            <span className="account-text">
-              <span className="account-name">{projectName}</span>
-              <span className="account-sub">
-                <span className={`status-dot ${healthStatus}`} />
-                {healthStatus === "connected" ? "Local workspace" : healthStatus === "offline" ? "Offline" : "Connecting…"}
-              </span>
-            </span>
-            <svg className="account-chevrons" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="7 15 12 20 17 15" /><polyline points="7 9 12 4 17 9" />
-            </svg>
-          </button>
-
-          {accountMenuOpen && (
-            <>
-              <div className="account-backdrop" onClick={() => setAccountMenuOpen(false)} />
-              <div className="account-menu">
-                <div className="account-menu-head">
-                  <span className="account-avatar">{projectName.slice(0, 1).toUpperCase()}</span>
-                  <div className="account-menu-head-text">
-                    <strong>Local workspace</strong>
-                    <span>All projects on this device</span>
-                  </div>
-                </div>
-                <div className="account-menu-sec">
-                  <div className="account-menu-label">Project</div>
-                  <div className="account-menu-current">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
-                    <div className="account-menu-current-text">
-                      <span className="account-menu-current-name">{projectName}</span>
-                      {currentProjectPath && <span className="account-menu-current-path">{currentProjectPath}</span>}
-                    </div>
-                  </div>
-                  <button className="account-menu-item" onClick={() => { setAccountMenuOpen(false); setShowProjects(true); }}>
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="17 1 21 5 17 9" /><path d="M3 11V9a4 4 0 0 1 4-4h14" /><polyline points="7 23 3 19 7 15" /><path d="M21 13v2a4 4 0 0 1-4 4H3" /></svg>
-                    Switch project
-                  </button>
-                </div>
-
-                <div className="account-menu-sec">
-                  <div className="account-menu-label">Appearance</div>
-
-                  {/* Dark mode toggle (the only user-adjustable appearance option) */}
-                  <button className="appearance-toggle" onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}>
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                    </svg>
-                    <span>Dark mode</span>
-                    <span className={`appearance-switch ${theme === "dark" ? "on" : ""}`}><span className="appearance-knob" /></span>
-                  </button>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
+        {/* Footer: account / project menu (cloud auth + workspace switcher +
+            appearance/dark-mode toggle). */}
+        <AccountBar
+          projectName={projectName}
+          healthStatus={healthStatus}
+          currentProjectPath={currentProjectPath}
+          onSwitchProject={() => setShowProjects(true)}
+          onOpenMenu={openAccountMenu}
+          theme={theme}
+          onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+          onStartOnboarding={
+            cloudEnabled
+              ? () =>
+                  setOnboarding({
+                    initialScreen: isAuthenticated ? "workspace" : "signin",
+                    hasSession: isAuthenticated,
+                  })
+              : undefined
+          }
+        />
       </aside>
 
       {/* ── Main area ───────────────────── */}
@@ -1000,26 +1185,31 @@ export default function App() {
           </div>
         )}
 
+        {/* Cloud project: the LIVE multiplayer grid (Convex). Replaces the local
+            sidecar grid entirely while a cloud project is open. */}
+        {inCloud && <CloudGrid tableId={cloudTableId} />}
+
         {/* Extensions gallery + detail panels */}
-        {view.kind === "extensions" && (
+        {!inCloud && view.kind === "extensions" && (
           <ExtensionsBrowse
             extensions={extensions}
             onOpen={(id) => setView({ kind: "extension", id })}
           />
         )}
-        {view.kind === "extension" && (
+        {!inCloud && view.kind === "extension" && (
           <ExtensionPanel
             id={view.id}
             onConnected={refreshConnections}
             onBack={() => setView({ kind: "extensions" })}
+            workspaceCreds={workspaceCreds}
           />
         )}
-        {view.kind === "ai" && (() => {
+        {!inCloud && view.kind === "ai" && (() => {
           const p = aiProviders.find(x => x.id === view.id);
-          return p ? <AiProviderPanel provider={p} onConnected={refreshConnections} /> : null;
+          return p ? <AiProviderPanel provider={p} onConnected={refreshConnections} workspaceCreds={workspaceCreds} /> : null;
         })()}
 
-        {view.kind === "table" && <>
+        {!inCloud && view.kind === "table" && <>
         {/* Toolbar */}
         <div className="toolbar">
           {tableData ? (
@@ -1272,7 +1462,28 @@ export default function App() {
         </>
       )}
 
+      {/* ── Cloud onboarding (full-screen, C28) ─────────────── */}
+      {onboarding && (
+        <OnboardingFlow
+          initialScreen={onboarding.initialScreen}
+          hasSession={onboarding.hasSession}
+          onClose={() => setOnboarding(null)}
+          onDone={(workspaceId) => {
+            if (workspaceId !== null) setActiveWorkspaceId(workspaceId);
+            setOnboarding(null);
+          }}
+        />
+      )}
+
       {/* ── Modals ──────────────────────── */}
+      {showWorkspaceSettings && activeWorkspace && (
+        <WorkspaceSettings
+          workspaceId={activeWorkspace._id}
+          workspaceName={activeWorkspace.name}
+          onClose={() => setShowWorkspaceSettings(false)}
+        />
+      )}
+
       {showAddCol && tableData && (
         <AddColumnPopover
           tableId={tableData.id}
@@ -1341,6 +1552,16 @@ export default function App() {
           current={projectName}
           onClose={() => setShowProjects(false)}
           onSwitched={onProjectSwitched}
+          cloud={
+            activeWorkspace
+              ? {
+                  projects: cloudProjects,
+                  activeId: cloudProject?._id ?? null,
+                  onSelect: onCloudProjectSelected,
+                  onCreate: onCreateCloudProject,
+                }
+              : undefined
+          }
         />
       )}
       </div>

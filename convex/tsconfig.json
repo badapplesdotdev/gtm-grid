@@ -1,0 +1,28 @@
+{
+  // Self-contained tsconfig for the Convex backend.
+  //
+  // IMPORTANT: this is deliberately NOT referenced by the root tsconfig.json
+  // (the `tsc -b` solution graph). Convex generates `convex/_generated/` types
+  // only after a deployment login (`npx convex dev`), so wiring this into the
+  // root graph would make the root verify gate (`pnpm typecheck`) red before
+  // anyone runs codegen. Convex type-checks these files itself during
+  // `convex dev` / `convex deploy`; the root gate stays green pre-codegen.
+  //
+  // Mirrors the tsconfig Convex scaffolds with `npx convex dev`.
+  "compilerOptions": {
+    "allowJs": true,
+    "strict": true,
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "skipLibCheck": true,
+    "allowSyntheticDefaultImports": true,
+    "module": "ESNext",
+    "target": "ESNext",
+    "lib": ["ES2021", "dom"],
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "noEmit": true
+  },
+  "include": ["./**/*"],
+  "exclude": ["./_generated"]
+}

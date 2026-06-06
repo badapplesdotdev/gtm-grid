@@ -2,9 +2,15 @@
 // column over its rows, resolving {{Column Name}} templates, dispatching sdk
 // calls host-side, and writing cells with pending/running/done/error status.
 
+import { Effect } from "effect";
 import { Db } from "./db.js";
 import { Registry, defaultRegistry } from "./registry.js";
 import { runFunction, type SandboxDispatch } from "./sandbox.js";
+import {
+  sqliteGridStoreShape,
+  type GridStoreError,
+  type GridStoreShape,
+} from "./store.js";
 import type { AiConfig, Column } from "./types.js";
 
 export interface EngineConfig {
@@ -20,6 +26,22 @@ export interface RunColumnOptions {
   force?: boolean;
 }
 
+/**
+ * Optional store injection for the {@link Engine}.
+ *
+ * Local projects leave these unset: the engine builds a `SqliteGridStore` over
+ * the constructor `db`/`credsDb`, exactly as before (behaviour unchanged). Cloud
+ * projects pass a `ConvexGridStore`-backed shape so the SAME engine reads inputs
+ * from Convex and writes cell status/results back via the T4 mutations — the run
+ * path is identical; only where reads/writes go changes.
+ */
+export interface EngineStores {
+  /** The project store the run path reads/writes through. */
+  readonly store?: GridStoreShape;
+  /** The credential store `dispatch` resolves connector secrets through. */
+  readonly creds?: GridStoreShape;
+}
+
 export class Engine {
   readonly db: Db;
   /** Where credentials live — the shared global db when running multi-project. */
@@ -27,40 +49,79 @@ export class Engine {
   readonly registry: Registry;
   config: EngineConfig;
 
-  constructor(db: Db, config: EngineConfig = {}, registry: Registry = defaultRegistry(), credsDb?: Db) {
+  /** The project store the run path reads/writes through (local SQLite wrapper). */
+  private readonly store: GridStoreShape;
+  /** The credentials store `dispatch` resolves connector secrets through. */
+  private readonly creds: GridStoreShape;
+
+  constructor(
+    db: Db,
+    config: EngineConfig = {},
+    registry: Registry = defaultRegistry(),
+    credsDb?: Db,
+    stores: EngineStores = {},
+  ) {
     this.db = db;
     this.credsDb = credsDb ?? db;
     this.registry = registry;
     this.config = config;
+    // The engine drives a GridStore abstraction, not the concrete Db. For local
+    // projects that store defaults to a thin SqliteGridStore over the same Db, so
+    // behaviour is unchanged; cloud projects inject a ConvexGridStore (built by
+    // the server cloud-run lane) so the same run path reads/writes Convex.
+    // Credentials may live in a separate (shared/global) store when running
+    // multi-project, or be injected (e.g. workspace-shared cloud credentials).
+    this.store = stores.store ?? sqliteGridStoreShape(db);
+    this.creds = stores.creds ?? sqliteGridStoreShape(this.credsDb);
   }
 
   /** Host-side dispatcher exposed to the sandbox as `sdk.<provider>.<method>`. */
-  dispatch: SandboxDispatch = async (provider, method, input) => {
-    const m = this.registry.method(provider, method);
-    if (!m) throw new Error(`Unknown function ${provider}.${method}`);
-    const cred = this.credsDb.getCredential(provider);
-    const aiProviders = this.config.aiProviders?.length
-      ? this.config.aiProviders
-      : this.config.ai
-        ? [this.config.ai]
-        : [];
-    return m.run(input, { secrets: cred?.secrets ?? {}, ai: this.config.ai, aiProviders });
-  };
+  dispatch: SandboxDispatch = (provider, method, input) =>
+    Effect.runPromise(
+      Effect.gen(this, function* () {
+        const m = this.registry.method(provider, method);
+        if (!m) throw new Error(`Unknown function ${provider}.${method}`);
+        const cred = yield* this.creds.getCredential(provider);
+        const aiProviders = this.config.aiProviders?.length
+          ? this.config.aiProviders
+          : this.config.ai
+            ? [this.config.ai]
+            : [];
+        return yield* Effect.promise(() =>
+          m.run(input, { secrets: cred?.secrets ?? {}, ai: this.config.ai, aiProviders }),
+        );
+      }),
+    );
 
-  /** Resolve a column's params for a row, interpolating {{Column Name}} from cells. */
-  private resolveParams(col: Column, rowId: string): Record<string, unknown> {
-    const cells = this.db.rowCells(rowId);
-    const byName = new Map(this.db.listColumns(col.table_id).map((c) => [c.name, c.id]));
-    const interp = (s: string): string =>
-      s.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, name: string) => {
-        const cid = byName.get(name.trim());
-        if (!cid) return "";
-        const v = cells.get(cid)?.value;
-        return v == null ? "" : typeof v === "string" ? v : JSON.stringify(v);
-      });
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(col.params)) out[k] = typeof v === "string" ? interp(v) : v;
-    return out;
+  /**
+   * Resolve a column's params for a row, interpolating {{Column Name}} from cells.
+   *
+   * A store read failure PROPAGATES as a `GridStoreError`: `runColumn`'s per-row
+   * try/catch then marks that cell `status:"error"`, restoring the prior LOCAL
+   * semantics where a failed read surfaced as a failed cell rather than a silent
+   * `done`. Missing-cell / null values still collapse their template to `""`
+   * inside `interp` — only an actual store error escapes.
+   */
+  private resolveParams(
+    col: Column,
+    rowId: string,
+    store: GridStoreShape,
+  ): Effect.Effect<Record<string, unknown>, GridStoreError, never> {
+    return Effect.gen(this, function* () {
+      const cells = yield* store.rowCells(rowId);
+      const columns = yield* store.listColumns(col.table_id);
+      const byName = new Map(columns.map((c) => [c.name, c.id]));
+      const interp = (s: string): string =>
+        s.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, name: string) => {
+          const cid = byName.get(name.trim());
+          if (!cid) return "";
+          const v = cells.get(cid)?.value;
+          return v == null ? "" : typeof v === "string" ? v : JSON.stringify(v);
+        });
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(col.params)) out[k] = typeof v === "string" ? interp(v) : v;
+      return out;
+    });
   }
 
   /** The JS body for a column: custom code, or synthesized from provider/method. */
@@ -70,28 +131,42 @@ export class Engine {
   }
 
   async runColumn(columnId: string, opts: RunColumnOptions = {}): Promise<{ ran: number; errors: number }> {
-    const col = this.db.getColumn(columnId);
+    // Take one read snapshot for the whole run. For stores whose granular reads
+    // are expensive to repeat (ConvexGridStore re-fetches the full grid on every
+    // read), `snapshot()` fetches the grid ONCE and serves every per-row read
+    // from memory, so a run over N rows is O(N) store reads instead of O(N^2).
+    // Local SQLite has no `snapshot` (reads are cheap, synchronous) and falls
+    // back to the live store, preserving its exact behaviour. Writes still go to
+    // the live store so cell status streams to clients during the run.
+    const reads = this.store.snapshot
+      ? await Effect.runPromise(this.store.snapshot())
+      : this.store;
+
+    const col = await Effect.runPromise(reads.getColumn(columnId));
     if (!col) throw new Error(`column ${columnId} not found`);
     if (col.kind !== "function") return { ran: 0, errors: 0 };
 
-    const rowIds = opts.rowIds ?? this.db.listRows(col.table_id).map((r) => r.id);
+    const rowIds =
+      opts.rowIds ?? (await Effect.runPromise(reads.listRows(col.table_id))).map((r) => r.id);
     const code = this.columnCode(col);
     const providers = this.registry.providerMap();
 
     let ran = 0;
     let errors = 0;
     await mapConcurrent(rowIds, opts.concurrency ?? 5, async (rowId) => {
-      const existing = this.db.getCell(rowId, columnId);
+      const existing = await Effect.runPromise(reads.getCell(rowId, columnId));
       if (!opts.force && existing?.status === "done") return;
-      this.db.setCell(rowId, columnId, { status: "running", error: null });
+      await Effect.runPromise(this.store.setCell(rowId, columnId, { status: "running", error: null }));
       try {
-        const inputs = this.resolveParams(col, rowId);
+        const inputs = await Effect.runPromise(this.resolveParams(col, rowId, reads));
         const result = await runFunction({ code, inputs, providers, dispatch: this.dispatch });
-        this.db.setCell(rowId, columnId, { value: simplify(result), status: "done", error: null });
+        await Effect.runPromise(
+          this.store.setCell(rowId, columnId, { value: simplify(result), status: "done", error: null }),
+        );
         ran++;
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
-        this.db.setCell(rowId, columnId, { status: "error", error: message });
+        await Effect.runPromise(this.store.setCell(rowId, columnId, { status: "error", error: message }));
         errors++;
       }
     });

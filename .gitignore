@@ -1,5 +1,6 @@
 node_modules/
 dist/
+*.tsbuildinfo
 *.db
 *.db-journal
 *.db-wal
@@ -12,3 +13,10 @@ dist/
 packages/desktop/src-tauri/target/
 packages/desktop/src-tauri/sidecar/
 packages/desktop/src-tauri/gen/
+
+# Convex codegen + local deployment env (requires `npx convex dev` login)
+convex/_generated/
+.env.local
+
+# Claude Code session artifacts (skills, plans, workflow worktrees)
+.claude/

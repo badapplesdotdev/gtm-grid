@@ -22,6 +22,8 @@ import {
   listProjects,
 } from "@gtmgrid/engine";
 import { detectAgents, streamClaude, streamCodex, setAgentPath, rescanAgents, type AgentKind } from "./agent.js";
+import { runCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
+import { corsHeadersFor, isOriginAllowed } from "./cors.js";
 
 const PORT = Number(process.env.GTMGRID_PORT ?? 8787);
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
@@ -166,6 +168,19 @@ function fullTable(tableId: string) {
 }
 
 // --- routes ---
+//
+// METERING (C26): these are the LOCAL sidecar routes — `/api/cells`,
+// `/api/columns/:id/run`, `/api/tables/:id/rows`, etc. They operate on the local
+// SQLite project (`current.projectDb` / `current.engine`) entirely on the user's
+// machine and NEVER touch Convex or our cost. They are INTENTIONALLY UNMETERED:
+// local actions are unlimited and unmetered on EVERY tier (free included) and
+// MUST NEVER increment the cloud_actions meter. The meter lives ONLY inside the
+// Convex CLOUD mutations (convex/cells.ts, convex/tables.ts), which local
+// projects never call — do NOT add any cloud_actions counting here or in the
+// local engine. The ONE exception below (`/api/cloud/columns/run`) drives a
+// CLOUD project: it writes via the Convex setCell/setCellStatus mutations, which
+// do the metering once on the Convex side — so it stays unmetered HERE too (no
+// double-count, and the sidecar holds no Autumn secret).
 route("GET", "/api/health", () => ({ ok: true, project: current.name }));
 
 // --- projects ---
@@ -471,6 +486,30 @@ route("POST", "/api/columns/:id/run", async (p, body) => {
   return res;
 });
 
+// --- cloud run path (T9) ---
+// Running a column on a CLOUD project: build an Engine whose store is the
+// Convex-backed ConvexGridStore (authed as the signed-in member), so inputs are
+// read from Convex and statuses/results stream back live to all members. LOCAL
+// projects keep the route above unchanged. The registry + AI config are the
+// sidecar's existing ones, so connectors/AI columns behave identically.
+route("POST", "/api/cloud/columns/run", async (_p, body) => {
+  const convexUrl = String(body?.convexUrl ?? "").trim();
+  const token = String(body?.token ?? "").trim();
+  const tableId = String(body?.tableId ?? "").trim();
+  const columnId = String(body?.columnId ?? "").trim();
+  if (!convexUrl || !token || !tableId || !columnId)
+    return { error: "convexUrl, token, tableId and columnId are required" };
+  const rowIds = Array.isArray(body?.rowIds) && body.rowIds.length ? (body.rowIds as string[]) : undefined;
+  const deps = defaultCloudRunDeps(registry, aiConfig());
+  // The engine constructor needs a Db for its (unused on this path) db fields;
+  // reuse the shared global db so no new SQLite file is created.
+  return runCloudColumn(
+    { convexUrl, token, tableId, columnId, force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds },
+    deps,
+    globalDb,
+  );
+});
+
 route("POST", "/api/columns/:id/update", (p, body) => {
   const col = current.projectDb.updateColumn(p.id, body ?? {});
   return col ? { ok: true, tableId: col.table_id, id: col.id } : { error: "not found" };
@@ -509,13 +548,14 @@ route("POST", "/api/agents/connect", (_p, body) => {
 });
 
 // --- server plumbing ---
-function send(res: ServerResponse, status: number, data: unknown) {
+// CORS is allowlisted, never `*` (#22): a disallowed browser Origin gets NO
+// `access-control-allow-origin`, so the calling page can't read the response.
+// `origin` is the request's `Origin` header (undefined for non-browser callers).
+function send(res: ServerResponse, status: number, data: unknown, origin?: string) {
   const json = JSON.stringify(data);
   res.writeHead(status, {
     "content-type": "application/json",
-    "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET,POST,OPTIONS",
-    "access-control-allow-headers": "content-type",
+    ...(corsHeadersFor(origin) ?? {}),
   });
   res.end(json);
 }
@@ -532,15 +572,19 @@ async function readBody(req: IncomingMessage): Promise<any> {
 }
 
 const server = createServer(async (req, res) => {
-  if (req.method === "OPTIONS") return send(res, 204, {});
+  const origin = req.headers.origin;
+  if (req.method === "OPTIONS") return send(res, 204, {}, origin);
   const url = new URL(req.url ?? "/", "http://localhost");
 
   // Agent chat is a long-lived SSE stream — handled outside the JSON router.
   if (req.method === "POST" && url.pathname === "/api/agent/chat") {
+    // PRIVILEGED route: it spawns the user's authenticated CLI. Reject a
+    // disallowed cross-origin browser caller BEFORE spawning anything (#22).
+    if (!isOriginAllowed(origin)) return send(res, 403, { error: "origin not allowed" }, origin);
     const body = await readBody(req);
     const agent = body?.agent ?? "claude";
     const message = String(body?.message ?? "");
-    if (!message) return send(res, 400, { error: "message required" });
+    if (!message) return send(res, 400, { error: "message required" }, origin);
     try {
       // Snapshot the live connector registry so the skill's "Connectors
       // currently installed" section reflects whatever extensions the user
@@ -552,10 +596,12 @@ const server = createServer(async (req, res) => {
         methodCount: c.methods.length,
       }));
       const context = { ...(body?.context ?? {}), providers };
-      if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context });
-      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context });
+      // Pass `origin` through so the SSE stream emits the allowlisted CORS
+      // header on this privileged route (#22).
+      if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context, origin });
+      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin });
     } catch (e) {
-      send(res, 500, { error: e instanceof Error ? e.message : String(e) });
+      send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
     }
     return;
   }
@@ -569,12 +615,12 @@ const server = createServer(async (req, res) => {
     try {
       const body = req.method === "POST" ? await readBody(req) : undefined;
       const result = await r.handler(params, body);
-      return send(res, 200, result);
+      return send(res, 200, result, origin);
     } catch (e) {
-      return send(res, 500, { error: e instanceof Error ? e.message : String(e) });
+      return send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
     }
   }
-  send(res, 404, { error: "not found" });
+  send(res, 404, { error: "not found" }, origin);
 });
 
 server.on("error", (err: NodeJS.ErrnoException) => {
@@ -585,6 +631,10 @@ server.on("error", (err: NodeJS.ErrnoException) => {
   throw err;
 });
 
-server.listen(PORT, () => {
-  console.error(`gtmgrid server on http://localhost:${PORT} (project: ${current.name})`);
+// Bind to loopback (127.0.0.1) ONLY, never 0.0.0.0 (#22): the sidecar runs
+// connectors with the user's credentials and spawns their authenticated CLIs,
+// so it must be reachable only from this machine — not exposed on the LAN.
+const HOST = "127.0.0.1";
+server.listen(PORT, HOST, () => {
+  console.error(`gtmgrid server on http://${HOST}:${PORT} (project: ${current.name})`);
 });
