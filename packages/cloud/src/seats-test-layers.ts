@@ -12,7 +12,7 @@
  */
 
 import { Effect, Layer } from "effect";
-import { AutumnClient, AutumnError } from "./seats.js";
+import { AutumnClient, AutumnError, type CustomerData } from "./seats.js";
 
 /**
  * Configuration for the fake Autumn client. Every field has a sensible default
@@ -38,6 +38,17 @@ export interface FakeAutumnConfig {
     customerId: string;
     featureId: string;
     value: number;
+    customerData?: CustomerData;
+  }>;
+  /**
+   * Records the customer profile data forwarded on each customer-materialising
+   * call (`checkSeats`, `attach`, `trackUsage`), so a test can assert the
+   * workspace name + owner email reach the seam that calls `getOrCreate`.
+   */
+  readonly customerDataCalls?: Array<{
+    customerId: string;
+    op: "checkSeats" | "attach" | "trackUsage";
+    customerData?: CustomerData;
   }>;
   /**
    * The live usage `checkUsage` reports for ANY feature (default: 0 used /
@@ -68,16 +79,37 @@ export const fakeAutumnLayer = (
   const usage = config.usage ?? { used: 0, limit: null };
   const activePlanIds = config.activePlanIds ?? ["free"];
   return Layer.succeed(AutumnClient, {
-    checkSeats: () => Effect.succeed({ allowed, balance }),
-    attach: () => Effect.succeed({ checkoutUrl }),
+    checkSeats: ({ customerId, customerData }) =>
+      Effect.sync(() => {
+        config.customerDataCalls?.push({
+          customerId,
+          op: "checkSeats",
+          customerData,
+        });
+        return { allowed, balance };
+      }),
+    attach: ({ customerId, customerData }) =>
+      Effect.sync(() => {
+        config.customerDataCalls?.push({
+          customerId,
+          op: "attach",
+          customerData,
+        });
+        return { checkoutUrl };
+      }),
     trackSeats: ({ customerId, value }) =>
       Effect.sync(() => {
         config.trackCalls?.push({ customerId, value });
       }),
     getActivePlanIds: () => Effect.succeed(activePlanIds),
-    trackUsage: ({ customerId, featureId, value }) =>
+    trackUsage: ({ customerId, featureId, value, customerData }) =>
       Effect.sync(() => {
-        config.usageCalls?.push({ customerId, featureId, value });
+        config.usageCalls?.push({ customerId, featureId, value, customerData });
+        config.customerDataCalls?.push({
+          customerId,
+          op: "trackUsage",
+          customerData,
+        });
       }),
     checkUsage: () => Effect.succeed(usage),
   });

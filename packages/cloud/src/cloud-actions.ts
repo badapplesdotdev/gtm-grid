@@ -49,6 +49,19 @@ export interface PendingWorkspace {
   readonly workspaceId: string;
   /** Units accumulated since the last successful flush (always > 0 here). */
   readonly pending: number;
+  /**
+   * The workspace (org) display name, forwarded to `customers.getOrCreate`
+   * before the `track` so the FREE-tier flush backfills the Autumn customer's
+   * name (formerly the flush created the customer implicitly with only an id).
+   * Optional/`null` when unknown so the threading stays additive.
+   */
+  readonly name?: string | null;
+  /**
+   * The owner/admin user's email, forwarded to `customers.getOrCreate` before
+   * the `track` so the FREE-tier flush backfills the Autumn customer's email.
+   * Optional/`null` when unknown so the threading stays additive.
+   */
+  readonly ownerEmail?: string | null;
 }
 
 /**
@@ -132,6 +145,10 @@ export class CloudActionsService extends Effect.Service<CloudActionsService>()(
             customerId: ws.workspaceId,
             featureId: CLOUD_ACTIONS_FEATURE_ID,
             value: ws.pending,
+            // Forward name + owner email so the seam can getOrCreate the
+            // customer (with profile) BEFORE track — backfilling free-tier
+            // customers that were previously created implicitly via track.
+            customerData: { name: ws.name, email: ws.ownerEmail },
           })
           .pipe(
             // Only after the track lands do we read usage; if the read fails too

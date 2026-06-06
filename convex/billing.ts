@@ -23,15 +23,28 @@ import { internal } from "./_generated/api.js";
 import { action, internalQuery } from "./_generated/server.js";
 
 /**
- * Assert the caller is an owner/admin of the workspace (billing is privileged).
- * Internal query so the `checkout` action can run the DB-backed authz guard.
- * Reuses the T3 `requireRole` bridge; throws `ConvexError` when not allowed.
+ * Assert the caller is an owner/admin of the workspace (billing is privileged)
+ * and return the workspace's (org) name + owner email — the customer profile the
+ * checkout `attach` forwards to Autumn `customers.getOrCreate` so the customer is
+ * materialised with name + email, not just an id. Internal query so the
+ * `checkout` action can run the DB-backed authz guard. Reuses the T3
+ * `requireRole` bridge; throws `ConvexError` when not allowed. Loads the owner
+ * via the repo pattern (`normalizeId('users', ws.ownerId)`, as in `me`).
  */
 export const assertBillingAdmin = internalQuery({
   args: { workspaceId: v.id("workspaces") },
-  handler: async (ctx, { workspaceId }) => {
+  handler: async (
+    ctx,
+    { workspaceId },
+  ): Promise<{ name: string | null; email: string | null }> => {
     await requireRole(ctx, workspaceId, ["owner", "admin"]);
-    return null;
+    const ws = await ctx.db.get(workspaceId);
+    if (ws === null) {
+      return { name: null, email: null };
+    }
+    const ownerId = ctx.db.normalizeId("users", ws.ownerId);
+    const owner = ownerId === null ? null : await ctx.db.get(ownerId);
+    return { name: ws.name, email: owner?.email ?? null };
   },
 });
 
@@ -52,10 +65,15 @@ export const checkout = action({
     planId: v.optional(v.string()),
   },
   handler: async (ctx, { workspaceId, planId }): Promise<{ checkoutUrl: string }> => {
-    // Authz first: only owner/admin may start a billing checkout.
-    await ctx.runQuery(internal.billing.assertBillingAdmin, { workspaceId });
+    // Authz first: only owner/admin may start a billing checkout. The same
+    // query returns the customer profile (name + owner email) so the checkout
+    // attach materialises the Autumn customer with a name + email, not just id.
+    const customerData = await ctx.runQuery(
+      internal.billing.assertBillingAdmin,
+      { workspaceId },
+    );
 
-    const checkoutUrl = await startCheckout(workspaceId, planId);
+    const checkoutUrl = await startCheckout(workspaceId, planId, customerData);
     return { checkoutUrl };
   },
 });

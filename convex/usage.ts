@@ -50,10 +50,22 @@ export const listPendingWorkspaces = internalQuery({
       .query("workspaces")
       .withIndex("by_pending", (q) => q.gt("cloudActionsPending", 0))
       .collect();
-    return workspaces.map((ws) => ({
-      workspaceId: ws._id,
-      pending: ws.cloudActionsPending ?? 0,
-    }));
+    // Enrich each pending workspace with its (org) name + owner email so the
+    // flush can getOrCreate the Autumn customer WITH a profile before track
+    // (the free-tier path that previously created the customer profile-less).
+    // Mirrors the owner-email pattern in convex/workspaces.ts (me/listMembers).
+    return Promise.all(
+      workspaces.map(async (ws) => {
+        const ownerId = ctx.db.normalizeId("users", ws.ownerId);
+        const owner = ownerId === null ? null : await ctx.db.get(ownerId);
+        return {
+          workspaceId: ws._id,
+          pending: ws.cloudActionsPending ?? 0,
+          name: ws.name,
+          ownerEmail: owner?.email ?? null,
+        };
+      }),
+    );
   },
 });
 

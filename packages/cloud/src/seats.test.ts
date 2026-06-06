@@ -285,3 +285,88 @@ describe("trackSeatUsed (record consumption after membership)", () => {
     expect(error).toBeInstanceOf(AutumnError);
   });
 });
+
+describe("customer profile (name + email) forwarding (wh-autumn-customer-data)", () => {
+  it("forwards name + email on the allowed checkInvite path (checkSeats getOrCreate)", async () => {
+    // REGRESSION: the seat check formerly getOrCreated the customer with only an
+    // id. checkInvite must forward the workspace name + owner email so the
+    // checkSeats getOrCreate backfills the customer's profile.
+    const customerDataCalls: Array<{
+      customerId: string;
+      op: "checkSeats" | "attach" | "trackUsage";
+      customerData?: { name?: string | null; email?: string | null };
+    }> = [];
+    await run(
+      Effect.gen(function* () {
+        const svc = yield* SeatsService;
+        return yield* svc.checkInvite(CUSTOMER, undefined, {
+          name: "Acme",
+          email: "owner@acme.io",
+        });
+      }),
+      fakeAutumnLayer({ allowed: true, customerDataCalls }),
+    );
+    expect(customerDataCalls).toEqual([
+      {
+        customerId: CUSTOMER,
+        op: "checkSeats",
+        customerData: { name: "Acme", email: "owner@acme.io" },
+      },
+    ]);
+  });
+
+  it("forwards name + email on the over-limit checkInvite path (attach getOrCreate)", async () => {
+    const customerDataCalls: Array<{
+      customerId: string;
+      op: "checkSeats" | "attach" | "trackUsage";
+      customerData?: { name?: string | null; email?: string | null };
+    }> = [];
+    await run(
+      Effect.gen(function* () {
+        const svc = yield* SeatsService;
+        return yield* svc.checkInvite(CUSTOMER, undefined, {
+          name: "Acme",
+          email: "owner@acme.io",
+        });
+      }),
+      fakeAutumnLayer({
+        allowed: false,
+        checkoutUrl: "https://billing.example.com/x",
+        customerDataCalls,
+      }),
+    );
+    // Both the checkSeats AND the attach (over-limit) calls carry the profile.
+    expect(customerDataCalls.map((c) => c.op)).toEqual(["checkSeats", "attach"]);
+    expect(customerDataCalls.every((c) =>
+      c.customerData?.name === "Acme" && c.customerData?.email === "owner@acme.io",
+    )).toBe(true);
+  });
+
+  it("forwards name + email on the standalone checkout path (attach getOrCreate)", async () => {
+    const customerDataCalls: Array<{
+      customerId: string;
+      op: "checkSeats" | "attach" | "trackUsage";
+      customerData?: { name?: string | null; email?: string | null };
+    }> = [];
+    await run(
+      Effect.gen(function* () {
+        const svc = yield* SeatsService;
+        return yield* svc.checkout(CUSTOMER, "team", {
+          name: "Acme",
+          email: "owner@acme.io",
+        });
+      }),
+      fakeAutumnLayer({
+        checkoutUrl: "https://billing.example.com/upgrade",
+        customerDataCalls,
+      }),
+    );
+    expect(customerDataCalls).toEqual([
+      {
+        customerId: CUSTOMER,
+        op: "attach",
+        customerData: { name: "Acme", email: "owner@acme.io" },
+      },
+    ]);
+  });
+});
