@@ -25,6 +25,7 @@
 import {
   identityLayer as cloudIdentityLayer,
   memberRepoLayer as cloudMemberRepoLayer,
+  CredentialOwnershipService,
   Identity,
   type MemberRepo,
   type Membership,
@@ -33,6 +34,12 @@ import {
 import type { Db } from "@gtmgrid/db/client";
 import { Effect, Layer, Option } from "effect";
 import { dbClientLayer } from "./db-client.js";
+import {
+  type CredentialRow,
+  CredentialRepo,
+  CredentialRepoLive,
+  credentialRepoLayer,
+} from "./repositories/credential-repo.js";
 import { MemberRepoLive } from "./repositories/member-repo.js";
 import {
   type Workspace,
@@ -40,6 +47,12 @@ import {
   WorkspaceRepoLive,
   workspaceRepoLayer,
 } from "./repositories/workspace-repo.js";
+import { CredentialService } from "./services/credential-service.js";
+import {
+  CryptoService,
+  CryptoServiceLive,
+  cryptoServiceLayer,
+} from "./services/crypto-service.js";
 import { WorkspaceService } from "./services/workspace-service.js";
 
 /**
@@ -66,10 +79,18 @@ export const identityFromUserId = (
 export const appLayer = (params: {
   readonly db: Db;
   readonly userId: string | null;
-}): Layer.Layer<WorkspaceService | WorkspaceRepo | MembershipService> => {
+}): Layer.Layer<
+  | WorkspaceService
+  | WorkspaceRepo
+  | MembershipService
+  | CredentialService
+  | CredentialRepo
+  | CryptoService
+> => {
   const dbLayer = dbClientLayer(params.db);
   const memberRepo = MemberRepoLive.pipe(Layer.provide(dbLayer));
   const workspaceRepo = WorkspaceRepoLive.pipe(Layer.provide(dbLayer));
+  const credentialRepo = CredentialRepoLive.pipe(Layer.provide(dbLayer));
   const membershipService = MembershipService.Default.pipe(
     Layer.provide(identityFromUserId(params.userId)),
     Layer.provide(memberRepo),
@@ -78,9 +99,21 @@ export const appLayer = (params: {
     Layer.provide(workspaceRepo),
     Layer.provide(membershipService),
   );
-  // Merge so callers can resolve the repo, the membership service, or the
-  // composed workspace service from one Layer.
-  return Layer.mergeAll(workspaceService, workspaceRepo, membershipService);
+  const credentialService = CredentialService.Default.pipe(
+    Layer.provide(credentialRepo),
+    Layer.provide(CryptoServiceLive),
+    Layer.provide(membershipService),
+    Layer.provide(CredentialOwnershipService.Default),
+  );
+  // Merge so callers can resolve any repo or service from one Layer.
+  return Layer.mergeAll(
+    workspaceService,
+    workspaceRepo,
+    membershipService,
+    credentialService,
+    credentialRepo,
+    CryptoServiceLive,
+  );
 };
 
 /** Fixtures for {@link TestLayer}: the in-memory data the services read. */
@@ -89,6 +122,8 @@ export interface TestLayerFixtures {
   readonly workspaces?: readonly Workspace[];
   /** Membership rows visible to the authz core. */
   readonly memberships?: readonly Membership[];
+  /** Credential rows visible to {@link CredentialRepo} (incl. ciphertext). */
+  readonly credentials?: readonly CredentialRow[];
   /** The current caller's user id, or `null` for an unauthenticated request. */
   readonly currentUserId?: string | null;
 }
@@ -101,8 +136,16 @@ export interface TestLayerFixtures {
  */
 export const TestLayer = (
   fixtures: TestLayerFixtures = {},
-): Layer.Layer<WorkspaceService | WorkspaceRepo | MembershipService> => {
+): Layer.Layer<
+  | WorkspaceService
+  | WorkspaceRepo
+  | MembershipService
+  | CredentialService
+  | CredentialRepo
+  | CryptoService
+> => {
   const workspaceRepo = workspaceRepoLayer(fixtures.workspaces ?? []);
+  const credentialRepo = credentialRepoLayer(fixtures.credentials ?? []);
   const memberRepo: Layer.Layer<MemberRepo> = cloudMemberRepoLayer(
     fixtures.memberships ?? [],
   );
@@ -115,11 +158,30 @@ export const TestLayer = (
     Layer.provide(workspaceRepo),
     Layer.provide(membershipService),
   );
-  return Layer.mergeAll(workspaceService, workspaceRepo, membershipService);
+  // Real AES-256-GCM under a fixed test master key — round-trips run genuine
+  // crypto offline, no env, no DB.
+  const cryptoService = cryptoServiceLayer();
+  const credentialService = CredentialService.Default.pipe(
+    Layer.provide(credentialRepo),
+    Layer.provide(cryptoService),
+    Layer.provide(membershipService),
+    Layer.provide(CredentialOwnershipService.Default),
+  );
+  return Layer.mergeAll(
+    workspaceService,
+    workspaceRepo,
+    membershipService,
+    credentialService,
+    credentialRepo,
+    cryptoService,
+  );
 };
 
 /** The full set of services any Effect program in the cloud tier can resolve. */
 export type AppServices =
   | WorkspaceService
   | WorkspaceRepo
-  | MembershipService;
+  | MembershipService
+  | CredentialService
+  | CredentialRepo
+  | CryptoService;

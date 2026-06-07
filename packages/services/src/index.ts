@@ -24,6 +24,16 @@ export {
   workspaceRepoLayer,
 } from "./repositories/workspace-repo.js";
 export { MemberRepoLive } from "./repositories/member-repo.js";
+export {
+  type CredentialMetadata,
+  type CredentialRow,
+  CredentialRepo,
+  CredentialRepoError,
+  CredentialRepoLive,
+  credentialRepoLayer,
+  type CredentialUpsert,
+  type OwnerKey,
+} from "./repositories/credential-repo.js";
 
 // --- Domain services ---------------------------------------------------------
 export {
@@ -31,6 +41,20 @@ export {
   WorkspaceNotFoundError,
   WorkspaceService,
 } from "./services/workspace-service.js";
+export {
+  CryptoService,
+  CryptoServiceLive,
+  cryptoServiceLayer,
+  TEST_MASTER_KEY,
+} from "./services/crypto-service.js";
+export {
+  CredentialService,
+  type GetForRunError,
+  type GetForRunInput,
+  type ListCredentialsError,
+  type SaveCredentialError,
+  type SaveCredentialInput,
+} from "./services/credential-service.js";
 
 // --- Composed Layers (the DI wiring point) -----------------------------------
 export {
@@ -44,8 +68,13 @@ export {
 // --- Worker-secret boundary (W2) ---------------------------------------------
 export { isAuthorizedWorker, timingSafeEqual } from "./worker-secret.js";
 
-// --- Re-export the reused authz core so routers import from one place --------
+// --- Re-export the reused authz/crypto core so routers import from one place -
 export {
+  CredentialOwnershipError,
+  CredentialOwnershipService,
+  type CredentialScope,
+  DecryptError,
+  EncryptError,
   Identity,
   InsufficientRoleError,
   type Membership,
@@ -54,5 +83,6 @@ export {
   MemberRepoError,
   MembershipService,
   NotAMemberError,
+  type SecretMap,
   UnauthenticatedError,
 } from "@gtmgrid/cloud";

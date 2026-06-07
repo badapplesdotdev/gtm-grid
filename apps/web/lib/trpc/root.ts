@@ -15,6 +15,7 @@
 
 import { WorkspaceService } from "@gtmgrid/services";
 import { Effect } from "effect";
+import { credentialsRouter } from "./routers/credentials";
 import {
   publicProcedure,
   router,
@@ -50,12 +51,14 @@ export const appRouter = router({
 
   workspace: workspaceRouter,
 
+  /** Connector credentials — encrypt/save, member-gated decrypt, metadata list. */
+  credentials: credentialsRouter,
+
   // ── W2 router slots ──────────────────────────────────────────────────────
   // W2: projects: projectsRouter,
   // W2: tables: tablesRouter,
   // W2: columns: columnsRouter,
   // W2: rows: rowsRouter,
-  // W2: credentials: credentialsRouter,
 });
 
 /** The API type the typed client (W2) consumes. */
