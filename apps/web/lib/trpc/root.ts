@@ -15,6 +15,8 @@
 
 import { WorkspaceService } from "@gtmgrid/services";
 import { Effect } from "effect";
+import { extensionsRouter } from "./routers/extensions";
+import { webhooksRouter } from "./routers/webhooks";
 import {
   publicProcedure,
   router,
@@ -49,6 +51,11 @@ export const appRouter = router({
   })),
 
   workspace: workspaceRouter,
+
+  /** Member-gated webhook config CRUD (TRI-3250). */
+  webhooks: webhooksRouter,
+  /** Member-gated connector extensions (TRI-3250). */
+  extensions: extensionsRouter,
 
   // ── W2 router slots ──────────────────────────────────────────────────────
   // W2: projects: projectsRouter,

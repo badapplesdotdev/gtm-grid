@@ -23,8 +23,10 @@
  */
 
 import {
+  CellMerge,
   identityLayer as cloudIdentityLayer,
   memberRepoLayer as cloudMemberRepoLayer,
+  type CredentialCryptoService,
   Identity,
   type MemberRepo,
   type Membership,
@@ -32,8 +34,35 @@ import {
 } from "@gtmgrid/cloud";
 import type { Db } from "@gtmgrid/db/client";
 import { Effect, Layer, Option } from "effect";
+import { credentialCryptoLive } from "./credential-crypto.js";
+import { credentialCryptoTest } from "./credential-crypto-test.js";
 import { dbClientLayer } from "./db-client.js";
+import {
+  type Extension,
+  ExtensionRepo,
+  ExtensionRepoLive,
+  extensionRepoLayer,
+} from "./repositories/extension-repo.js";
 import { MemberRepoLive } from "./repositories/member-repo.js";
+import {
+  type WebhookDelivery,
+  WebhookDeliveryRepo,
+  WebhookDeliveryRepoLive,
+  webhookDeliveryRepoLayer,
+} from "./repositories/webhook-delivery-repo.js";
+import {
+  type GridCell,
+  type GridColumn,
+  type GridRow,
+  type GridTable,
+  type Webhook,
+  WebhookRepo,
+  WebhookRepoLive,
+  webhookRepoLayer,
+  type WorkspaceQuota,
+} from "./repositories/webhook-repo.js";
+import { ExtensionService } from "./services/extension-service.js";
+import { WebhookService } from "./services/webhook-service.js";
 import {
   type Workspace,
   WorkspaceRepo,
@@ -66,10 +95,15 @@ export const identityFromUserId = (
 export const appLayer = (params: {
   readonly db: Db;
   readonly userId: string | null;
-}): Layer.Layer<WorkspaceService | WorkspaceRepo | MembershipService> => {
+}): Layer.Layer<AppServices> => {
   const dbLayer = dbClientLayer(params.db);
   const memberRepo = MemberRepoLive.pipe(Layer.provide(dbLayer));
   const workspaceRepo = WorkspaceRepoLive.pipe(Layer.provide(dbLayer));
+  const webhookRepo = WebhookRepoLive.pipe(Layer.provide(dbLayer));
+  const webhookDeliveryRepo = WebhookDeliveryRepoLive.pipe(
+    Layer.provide(dbLayer),
+  );
+  const extensionRepo = ExtensionRepoLive.pipe(Layer.provide(dbLayer));
   const membershipService = MembershipService.Default.pipe(
     Layer.provide(identityFromUserId(params.userId)),
     Layer.provide(memberRepo),
@@ -78,9 +112,28 @@ export const appLayer = (params: {
     Layer.provide(workspaceRepo),
     Layer.provide(membershipService),
   );
-  // Merge so callers can resolve the repo, the membership service, or the
-  // composed workspace service from one Layer.
-  return Layer.mergeAll(workspaceService, workspaceRepo, membershipService);
+  const webhookService = WebhookService.Default.pipe(
+    Layer.provide(webhookRepo),
+    Layer.provide(webhookDeliveryRepo),
+    Layer.provide(membershipService),
+    Layer.provide(CellMerge.Default),
+    Layer.provide(credentialCryptoLive),
+  );
+  const extensionService = ExtensionService.Default.pipe(
+    Layer.provide(extensionRepo),
+    Layer.provide(membershipService),
+  );
+  // Merge so callers can resolve any repo or domain service from one Layer.
+  return Layer.mergeAll(
+    workspaceService,
+    workspaceRepo,
+    membershipService,
+    webhookService,
+    webhookRepo,
+    webhookDeliveryRepo,
+    extensionService,
+    extensionRepo,
+  );
 };
 
 /** Fixtures for {@link TestLayer}: the in-memory data the services read. */
@@ -91,6 +144,26 @@ export interface TestLayerFixtures {
   readonly memberships?: readonly Membership[];
   /** The current caller's user id, or `null` for an unauthenticated request. */
   readonly currentUserId?: string | null;
+  /** Webhooks visible to {@link WebhookRepo} (MUTATED by insert/patch/delete). */
+  readonly webhooks?: Webhook[];
+  /** Tables backing the webhook worker grid paths. */
+  readonly tables?: GridTable[];
+  /** Columns backing mapping validation + getTable. */
+  readonly columns?: GridColumn[];
+  /** Rows backing insert/upsert (MUTATED by the worker paths). */
+  readonly rows?: GridRow[];
+  /** Cells backing setCell/upsert (MUTATED by the worker paths). */
+  readonly cells?: GridCell[];
+  /** Per-workspace cloud-actions quota (MUTATED by the meter). */
+  readonly quotas?: Map<string, WorkspaceQuota>;
+  /** Shared-credential ciphertext keyed `${workspaceId}:${extensionId}`. */
+  readonly credentials?: Map<string, string>;
+  /** Delivery-log rows (MUTATED by recordDelivery + the 50-row prune). */
+  readonly deliveries?: WebhookDelivery[];
+  /** Installed extensions (MUTATED by saveExtension). */
+  readonly extensions?: Extension[];
+  /** Override the crypto service (defaults to the deterministic test layer). */
+  readonly crypto?: Layer.Layer<CredentialCryptoService>;
 }
 
 /**
@@ -101,8 +174,19 @@ export interface TestLayerFixtures {
  */
 export const TestLayer = (
   fixtures: TestLayerFixtures = {},
-): Layer.Layer<WorkspaceService | WorkspaceRepo | MembershipService> => {
+): Layer.Layer<AppServices> => {
   const workspaceRepo = workspaceRepoLayer(fixtures.workspaces ?? []);
+  const webhookRepo = webhookRepoLayer({
+    webhooks: fixtures.webhooks,
+    tables: fixtures.tables,
+    columns: fixtures.columns,
+    rows: fixtures.rows,
+    cells: fixtures.cells,
+    quotas: fixtures.quotas,
+    credentials: fixtures.credentials,
+  });
+  const webhookDeliveryRepo = webhookDeliveryRepoLayer(fixtures.deliveries ?? []);
+  const extensionRepo = extensionRepoLayer(fixtures.extensions ?? []);
   const memberRepo: Layer.Layer<MemberRepo> = cloudMemberRepoLayer(
     fixtures.memberships ?? [],
   );
@@ -115,11 +199,36 @@ export const TestLayer = (
     Layer.provide(workspaceRepo),
     Layer.provide(membershipService),
   );
-  return Layer.mergeAll(workspaceService, workspaceRepo, membershipService);
+  const webhookService = WebhookService.Default.pipe(
+    Layer.provide(webhookRepo),
+    Layer.provide(webhookDeliveryRepo),
+    Layer.provide(membershipService),
+    Layer.provide(CellMerge.Default),
+    Layer.provide(fixtures.crypto ?? credentialCryptoTest()),
+  );
+  const extensionService = ExtensionService.Default.pipe(
+    Layer.provide(extensionRepo),
+    Layer.provide(membershipService),
+  );
+  return Layer.mergeAll(
+    workspaceService,
+    workspaceRepo,
+    membershipService,
+    webhookService,
+    webhookRepo,
+    webhookDeliveryRepo,
+    extensionService,
+    extensionRepo,
+  );
 };
 
 /** The full set of services any Effect program in the cloud tier can resolve. */
 export type AppServices =
   | WorkspaceService
   | WorkspaceRepo
-  | MembershipService;
+  | MembershipService
+  | WebhookService
+  | WebhookRepo
+  | WebhookDeliveryRepo
+  | ExtensionService
+  | ExtensionRepo;

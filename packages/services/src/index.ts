@@ -24,6 +24,43 @@ export {
   workspaceRepoLayer,
 } from "./repositories/workspace-repo.js";
 export { MemberRepoLive } from "./repositories/member-repo.js";
+export {
+  type CellWrite,
+  type GridCell,
+  type GridColumn,
+  type GridRow,
+  type GridTable,
+  type Webhook,
+  type WebhookInsert,
+  type WebhookMappingEntry,
+  type WebhookMode,
+  type WebhookPatch,
+  WebhookRepo,
+  WebhookRepoError,
+  WebhookRepoLive,
+  webhookRepoLayer,
+  type WorkspaceQuota,
+} from "./repositories/webhook-repo.js";
+export {
+  type DeliveryCursor,
+  type DeliveryMode,
+  type DeliveryPage,
+  type WebhookDelivery,
+  type WebhookDeliveryInsert,
+  WebhookDeliveryRepo,
+  WebhookDeliveryRepoError,
+  WebhookDeliveryRepoLive,
+  webhookDeliveryRepoLayer,
+} from "./repositories/webhook-delivery-repo.js";
+export {
+  type Extension,
+  type ExtensionInsert,
+  type ExtensionPatch,
+  ExtensionRepo,
+  ExtensionRepoError,
+  ExtensionRepoLive,
+  extensionRepoLayer,
+} from "./repositories/extension-repo.js";
 
 // --- Domain services ---------------------------------------------------------
 export {
@@ -31,6 +68,28 @@ export {
   WorkspaceNotFoundError,
   WorkspaceService,
 } from "./services/workspace-service.js";
+export {
+  type CellMap,
+  CloudActionsLimitError,
+  DELIVERIES_PAGE_SIZE,
+  DELIVERY_RETENTION,
+  InvalidCellError,
+  InvalidConfigError,
+  InvalidMappingError,
+  type ResolvedWebhook,
+  WebhookNotFoundError,
+  WebhookService,
+  type WorkerGrid,
+} from "./services/webhook-service.js";
+export { ExtensionService } from "./services/extension-service.js";
+
+// --- Webhook token/secret minting + credential crypto ------------------------
+export { mintSigningSecret, mintToken } from "./webhook-mint.js";
+export { credentialCryptoLive } from "./credential-crypto.js";
+export {
+  credentialCryptoTest,
+  TEST_MASTER_KEY,
+} from "./credential-crypto-test.js";
 
 // --- Composed Layers (the DI wiring point) -----------------------------------
 export {
@@ -46,6 +105,9 @@ export { isAuthorizedWorker, timingSafeEqual } from "./worker-secret.js";
 
 // --- Re-export the reused authz core so routers import from one place --------
 export {
+  type CloudCellStatus,
+  CredentialCryptoService,
+  DecryptError,
   Identity,
   InsufficientRoleError,
   type Membership,
@@ -54,5 +116,6 @@ export {
   MemberRepoError,
   MembershipService,
   NotAMemberError,
+  type SecretMap,
   UnauthenticatedError,
 } from "@gtmgrid/cloud";

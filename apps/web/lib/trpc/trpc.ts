@@ -38,7 +38,14 @@ function toTrpcError(tag: string | undefined, message: string): TRPCError {
     case "CredentialOwnershipError":
       return new TRPCError({ code: "FORBIDDEN", message });
     case "WorkspaceNotFoundError":
+    case "WebhookNotFoundError":
       return new TRPCError({ code: "NOT_FOUND", message });
+    case "InvalidMappingError":
+    case "InvalidConfigError":
+    case "InvalidCellError":
+      return new TRPCError({ code: "BAD_REQUEST", message });
+    case "CloudActionsLimitError":
+      return new TRPCError({ code: "FORBIDDEN", message });
     default:
       return new TRPCError({ code: "INTERNAL_SERVER_ERROR", message });
   }
