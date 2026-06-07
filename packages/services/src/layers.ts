@@ -199,11 +199,18 @@ export const appLayer = (params: {
   const columnRepo = ColumnRepoLive.pipe(Layer.provide(dbLayer));
   const rowRepo = RowRepoLive.pipe(Layer.provide(dbLayer));
   const cellRepo = CellRepoLive.pipe(Layer.provide(dbLayer));
+  // Autumn (billing/seats) is an external SaaS. With AUTUMN_SECRET_KEY set we use
+  // the live SDK; without it (local dev / self-host without billing) we fall back
+  // to the in-memory fake (seats allowed, a dummy checkout URL, unlimited usage)
+  // so invite/seat/checkout flows work without a billing account.
+  const autumnLayer = process.env.AUTUMN_SECRET_KEY
+    ? AutumnClientLive
+    : fakeAutumnLayer({});
   // The metering WRITE path: a SEPARATE service (never bolted onto WorkspaceRepo)
   // that increments cloudActionsUsed via Drizzle + tracks usage to Autumn.
   const meterService = MeterServiceLive.pipe(
     Layer.provide(dbLayer),
-    Layer.provide(AutumnClientLive),
+    Layer.provide(autumnLayer),
   );
   // The live realtime broadcast port (TRI-3251): publishes grid change events to
   // Supabase Realtime, or a no-op when Supabase env is not configured.
@@ -216,7 +223,7 @@ export const appLayer = (params: {
   // ceiling on insertMember) and the billing service (checkout). One Autumn port
   // (the live, lazily-built SDK) backs it.
   const seatsService = SeatsService.Default.pipe(
-    Layer.provide(AutumnClientLive),
+    Layer.provide(autumnLayer),
   );
   const workspaceService = WorkspaceService.Default.pipe(
     Layer.provide(workspaceRepo),
@@ -289,7 +296,7 @@ export const appLayer = (params: {
     realtimePublisher,
     membershipService,
     seatsService,
-    AutumnClientLive,
+    autumnLayer,
     CryptoServiceLive,
   );
 };
