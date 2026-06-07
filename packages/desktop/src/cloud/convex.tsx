@@ -20,6 +20,7 @@
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import { ConvexReactClient } from "convex/react";
 import type { ReactNode } from "react";
+import { ApiCloudProvider, cloudViaApi } from "./client";
 import { isTauri } from "./desktop-oauth";
 import { useDeepLinkOAuth } from "./useDeepLinkOAuth";
 
@@ -30,7 +31,16 @@ import { useDeepLinkOAuth } from "./useDeepLinkOAuth";
 export const CONVEX_URL: string | undefined =
   (import.meta.env.VITE_CONVEX_URL as string | undefined) || undefined;
 
-/** Whether a Convex deployment is configured (i.e. the cloud layer is usable). */
+/**
+ * Whether the LEGACY Convex cloud layer is usable (a Convex deployment is
+ * configured). Deliberately UNCHANGED by the strangler migration: the existing
+ * Convex feature hooks (useCloudGrid.ts, auth.ts) gate on this, and this lane
+ * does NOT rewire them — so they must stay no-ops whenever Convex is unset, even
+ * when the NEW Postgres-tier path (`cloudViaApi`) is flipped on. The new path
+ * has its own gate (`cloudViaApi`, ./client.tsx); the OSS/local invariant — no
+ * provider, zero cloud calls when neither backend is set — is preserved by both
+ * gates being false together.
+ */
 export const cloudEnabled = CONVEX_URL !== undefined;
 
 /**
@@ -79,10 +89,23 @@ function DeepLinkOAuthBridge({ children }: { children: ReactNode }) {
 }
 
 /**
- * Wrap the app so cloud hooks work. A no-op pass-through when the cloud layer is
- * disabled, so the local-only app renders identically with zero Convex calls.
+ * Wrap the app so cloud hooks work. The STRANGLER branch (TRI-3252):
+ *
+ *   - `VITE_API_URL` set  → mount the NEW Postgres-tier providers (tRPC +
+ *     react-query + Better Auth) via {@link ApiCloudProvider}. The Convex
+ *     client/provider are NOT constructed on this path.
+ *   - else `VITE_CONVEX_URL` set → keep the legacy Convex path unchanged.
+ *   - else (neither set) → a no-op pass-through, so the local-only app renders
+ *     identically with zero cloud calls.
+ *
+ * Checking `cloudViaApi` FIRST means flipping the flag fully swaps the
+ * foundation while leaving the entire Convex path intact behind it (W5 deletes
+ * the Convex path; this lane only adds the flag).
  */
 export function CloudProvider({ children }: { children: ReactNode }) {
+  if (cloudViaApi) {
+    return <ApiCloudProvider>{children}</ApiCloudProvider>;
+  }
   if (convexClient === null) {
     return <>{children}</>;
   }
