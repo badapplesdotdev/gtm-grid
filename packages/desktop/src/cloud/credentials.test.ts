@@ -20,6 +20,7 @@ import { Cause, Effect, Exit, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   aiProviderCredId,
+  apiCredentialSaver,
   CredentialError,
   CredentialSaver,
   CredentialService,
@@ -154,5 +155,47 @@ describe("aiProviderCredId", () => {
     expect(aiProviderCredId("openai")).toBe("ai:openai");
     // An extension keeps its raw id, so the two never share a credential key.
     expect(aiProviderCredId("openai")).not.toBe("openai");
+  });
+});
+
+// ─── apiCredentialSaver — the NEW tRPC `credentials.save` branch (TRI-3255) ────
+//
+// The strangler-fig replacement for the inline Convex `useAction`-derived saver.
+// We inject a fake `mutate` (the tRPC call) to assert it forwards the EXACT input
+// (workspace scope + plaintext secrets) and resolves to `void` discarding the row
+// id, and maps a tRPC/transport failure to a typed CredentialError — no live
+// client. The session/empty-key guards are exercised by the CredentialService
+// tests above; here we prove the saver is a transparent transport.
+
+describe("apiCredentialSaver", () => {
+  it("forwards the input to the tRPC mutate and resolves to void", async () => {
+    const calls: SaveCredentialInput[] = [];
+    const saver = apiCredentialSaver(async (i) => {
+      calls.push(i as SaveCredentialInput);
+      // The tRPC mutation returns the saved row id; the saver discards it.
+      return "cred_123";
+    });
+
+    const got = await Effect.runPromise(saver.save(input));
+
+    expect(got).toBeUndefined();
+    expect(calls).toEqual([input]);
+  });
+
+  it("maps a tRPC/transport failure to a typed CredentialError", async () => {
+    const saver = apiCredentialSaver(async () => {
+      throw new Error("FORBIDDEN");
+    });
+
+    const exit = await Effect.runPromiseExit(saver.save(input));
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const err = Cause.failureOption(exit.cause);
+      expect(err._tag === "Some" && err.value instanceof CredentialError).toBe(
+        true,
+      );
+      if (err._tag === "Some") expect(err.value.message).toBe("FORBIDDEN");
+    }
   });
 });
