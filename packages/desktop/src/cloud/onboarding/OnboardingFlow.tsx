@@ -21,7 +21,7 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { useAction, useMutation } from "convex/react";
+import { useAction } from "convex/react";
 import { Effect, Layer } from "effect";
 import { type BillingCycle } from "@gtmgrid/cloud";
 import { api } from "../../../../../convex/_generated/api";
@@ -30,16 +30,12 @@ import { LogoMark } from "../../Logo";
 import { friendlyAuthError } from "../authErrors";
 import {
   useAccountActions,
+  useCreateWorkspace,
   useEmailAuthEnabled,
   useEnabledProviders,
   type OAuthProvider,
 } from "../auth";
-import {
-  CheckoutError,
-  CheckoutRunner,
-  CheckoutServiceLive,
-  type CheckoutActionResult,
-} from "../checkout";
+import { useCheckoutLayer } from "../checkout";
 import {
   CredentialError,
   CredentialSaver,
@@ -48,7 +44,6 @@ import {
   aiProviderCredId,
   runSaveCredential,
 } from "../credentials";
-import { UrlOpenerLive } from "../invite";
 import {
   backScreen,
   OnboardingCheckoutService,
@@ -303,44 +298,25 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
   const emailAuthEnabled = useEmailAuthEnabled();
   // Enabled OAuth providers (C17): drives the OAuth row on the auth screens.
   const providers = useEnabledProviders();
-  const createWorkspace = useMutation(api.workspaces.createWorkspace);
+  // createWorkspace via the strangler-branched hook (tRPC on the NEW path, Convex
+  // on the legacy path).
+  const createWorkspace = useCreateWorkspace();
   // Invite by EMAIL (creates a pending invitation + emails the accept link).
+  // LEFT on the Convex path — migrated by the next lane (3255).
   const inviteAction = useAction(api.invitations.inviteByEmail);
-  const checkoutAction = useAction(api.billing.checkout);
   const saveCredentialAction = useAction(api.credentials.saveCredential);
 
-  // Compose the onboarding checkout Layer once (reuses the C27 CheckoutService +
-  // shared system-browser opener). Stable across renders via useMemo.
+  // The C27 onboarding checkout Layer: wrap the strangler-branched
+  // `CheckoutService` (tRPC `billing.checkout` on the NEW path, the Convex action
+  // on the legacy path) in the onboarding plan-resolution orchestration. Stable
+  // across renders via useMemo.
+  const checkoutServiceLayer = useCheckoutLayer();
   const checkoutLayer = useMemo<Layer.Layer<OnboardingCheckoutService>>(
     () =>
       OnboardingCheckoutServiceLive.pipe(
-        Layer.provide(
-          CheckoutServiceLive.pipe(
-            Layer.provide(
-              Layer.succeed(CheckoutRunner, {
-                checkout: (args) =>
-                  Effect.tryPromise({
-                    try: () =>
-                      checkoutAction({
-                        workspaceId: args.workspaceId as Id<"workspaces">,
-                        planId: args.planId,
-                      }) as Promise<CheckoutActionResult>,
-                    catch: (cause) =>
-                      new CheckoutError({
-                        message:
-                          cause instanceof Error
-                            ? cause.message
-                            : "Checkout failed.",
-                        cause,
-                      }),
-                  }),
-              } satisfies typeof CheckoutRunner.Service),
-            ),
-            Layer.provide(UrlOpenerLive),
-          ),
-        ),
+        Layer.provide(checkoutServiceLayer),
       ),
-    [checkoutAction],
+    [checkoutServiceLayer],
   );
 
   // The cloud credential-save Layer (workspace-scoped BYO key, T11).
@@ -464,7 +440,7 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
     setBusy(true);
     setError(null);
     try {
-      const id = await createWorkspace({ name });
+      const id = await createWorkspace(name);
       set({ workspaceId: id });
       go("invite");
     } catch (e) {

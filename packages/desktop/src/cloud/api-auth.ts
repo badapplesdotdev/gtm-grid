@@ -96,3 +96,40 @@ export function sidecarTokenFromSession(
     ? token
     : null;
 }
+
+/**
+ * The `{ data, error }` envelope every Better Auth client method resolves to:
+ * unlike Convex Auth (which throws), the Better Auth client RETURNS errors
+ * instead of rejecting. We model only what we read — the optional `data` and a
+ * possible `error` carrying a message/code.
+ */
+export interface BetterAuthResult<T> {
+  readonly data?: T | null;
+  readonly error?:
+    | { readonly message?: string | null; readonly code?: string | null }
+    | null;
+}
+
+/**
+ * Normalize a Better Auth client result to the throw-on-failure contract the
+ * desktop UI already relies on (its handlers `try/catch` and run the message
+ * through {@link friendlyAuthError}). Better Auth resolves `{ error }` rather
+ * than rejecting, so this re-raises that error as a real `Error` (carrying the
+ * server message, or the code, or a generic fallback) and otherwise returns the
+ * `data`. Pure so the failure/success mapping is unit-testable without a live
+ * server:
+ *   - `{ error: { message } }` → throws `Error(message)`
+ *   - `{ error: { code } }` (no message) → throws `Error(code)`
+ *   - `{ error: {} }` → throws a generic `Error`
+ *   - `{ data }` → returns `data`
+ */
+export function unwrapAuthResult<T>(result: BetterAuthResult<T>): T | null {
+  if (result.error !== undefined && result.error !== null) {
+    const message =
+      (result.error.message ?? undefined) ||
+      (result.error.code ?? undefined) ||
+      "Authentication failed.";
+    throw new Error(message);
+  }
+  return result.data ?? null;
+}

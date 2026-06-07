@@ -15,6 +15,7 @@
 
 import { WorkspaceService } from "@gtmgrid/services";
 import { Effect } from "effect";
+import { authRouter } from "./routers/auth";
 import { billingRouter } from "./routers/billing";
 import { credentialsRouter } from "./routers/credentials";
 import { extensionsRouter } from "./routers/extensions";
@@ -57,6 +58,12 @@ export const appRouter = router({
   })),
 
   workspace: workspaceRouter,
+
+  /**
+   * Auth: `enabledProviders` — booleans-only OAuth/email-flow gating for the
+   * sign-in UI (ports the Convex public query convex/auth.ts:153). No secrets.
+   */
+  auth: authRouter,
 
   // ── W2 routers ─────────────────────────────────────────────────────────────
   /** Workspaces: `me`, `listMembers`, `createWorkspace` (ports convex/workspaces.ts). */

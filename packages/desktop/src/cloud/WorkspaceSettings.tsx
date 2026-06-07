@@ -22,7 +22,7 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { useAction, useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { Effect, Layer } from "effect";
 import { type BillingCycle, resolvePlanId } from "@gtmgrid/cloud";
 import { PlanGrid, BillingToggle } from "./onboarding/PlanGrid";
@@ -30,7 +30,7 @@ import type { SelectablePlan } from "./onboarding/flow-logic";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { cloudEnabled } from "./convex";
-import { useMembers } from "./auth";
+import { useAuthState, useMembers } from "./auth";
 import {
   InviteError,
   InviteRunner,
@@ -41,14 +41,7 @@ import {
   type InviteActionResult,
   type InviteInput,
 } from "./invite";
-import {
-  CheckoutError,
-  CheckoutRunner,
-  CheckoutService,
-  CheckoutServiceLive,
-  runCheckout,
-  type CheckoutActionResult,
-} from "./checkout";
+import { runCheckout, useCheckoutLayer } from "./checkout";
 
 interface WorkspaceSettingsProps {
   /** The active workspace to manage, or `null` when none is selected. */
@@ -66,7 +59,9 @@ interface WorkspaceSettingsProps {
  */
 export function WorkspaceSettings(props: WorkspaceSettingsProps) {
   const { workspaceId, workspaceName, onClose } = props;
-  const { isAuthenticated } = useConvexAuth();
+  // Auth state via the strangler-branched hook (Better Auth on the NEW path,
+  // Convex on the legacy path). Used to guard the billing checkout below.
+  const { isAuthenticated } = useAuthState();
   const members = useMembers(workspaceId);
 
   // The Convex `invitations.inviteByEmail` action, wrapped as the Effect
@@ -110,36 +105,10 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
     [inviteAction],
   );
 
-  // The Convex `billing.checkout` action, wrapped as the Effect `CheckoutRunner`
-  // port. Composes with the shared system-browser opener (UrlOpenerLive).
-  const checkoutAction = useAction(api.billing.checkout);
-  const checkoutLayer = useMemo<Layer.Layer<CheckoutService>>(
-    () =>
-      CheckoutServiceLive.pipe(
-        Layer.provide(
-          Layer.succeed(CheckoutRunner, {
-            checkout: (args) =>
-              Effect.tryPromise({
-                try: () =>
-                  checkoutAction({
-                    workspaceId: args.workspaceId as Id<"workspaces">,
-                    planId: args.planId,
-                  }) as Promise<CheckoutActionResult>,
-                catch: (cause) =>
-                  new CheckoutError({
-                    message:
-                      cause instanceof Error
-                        ? cause.message
-                        : "Checkout failed.",
-                    cause,
-                  }),
-              }),
-          }),
-        ),
-        Layer.provide(UrlOpenerLive),
-      ),
-    [checkoutAction],
-  );
+  // The billing `checkout` orchestration Layer, strangler-branched on the cloud
+  // path (tRPC `billing.checkout` on the NEW path, the Convex action on the
+  // legacy path), composed with the shared system-browser opener.
+  const checkoutLayer = useCheckoutLayer();
 
   const [inviteEmail, setInviteEmail] = useState("");
   const [busy, setBusy] = useState(false);

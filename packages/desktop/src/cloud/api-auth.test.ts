@@ -16,6 +16,7 @@ import {
   apiOAuthCallbackUrl,
   isApiOAuthCallback,
   sidecarTokenFromSession,
+  unwrapAuthResult,
 } from "./api-auth";
 
 describe("apiOAuthCallbackUrl", () => {
@@ -63,5 +64,44 @@ describe("sidecarTokenFromSession — useAuthToken() replacement", () => {
     expect(sidecarTokenFromSession({ session: { token: "" } })).toBeNull();
     expect(sidecarTokenFromSession({ session: { token: null } })).toBeNull();
     expect(sidecarTokenFromSession({ session: {} })).toBeNull();
+  });
+});
+
+// ─── unwrapAuthResult — the Better Auth → throw-on-error bridge (TRI-3253) ────
+//
+// The NEW account actions run every Better Auth client call through this so the
+// UI's existing try/catch + friendlyAuthError contract keeps working (Better
+// Auth RESOLVES `{ error }` rather than rejecting). The key outcomes: success
+// returns the data; any error is re-raised as a real Error carrying the best
+// available message.
+
+describe("unwrapAuthResult", () => {
+  it("returns the data on success", () => {
+    expect(unwrapAuthResult({ data: { token: "tok" } })).toEqual({
+      token: "tok",
+    });
+  });
+
+  it("returns null when data is null/absent but no error", () => {
+    expect(unwrapAuthResult({ data: null })).toBeNull();
+    expect(unwrapAuthResult({})).toBeNull();
+  });
+
+  it("throws with the server message when an error carries one", () => {
+    expect(() =>
+      unwrapAuthResult({ error: { message: "Invalid email or password" } }),
+    ).toThrow("Invalid email or password");
+  });
+
+  it("falls back to the error code when there is no message", () => {
+    expect(() =>
+      unwrapAuthResult({ error: { code: "INVALID_OTP" } }),
+    ).toThrow("INVALID_OTP");
+  });
+
+  it("throws a generic message when the error is empty", () => {
+    expect(() => unwrapAuthResult({ error: {} })).toThrow(
+      "Authentication failed.",
+    );
   });
 });

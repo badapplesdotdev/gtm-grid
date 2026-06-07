@@ -15,6 +15,7 @@ import { Cause, Effect, Exit, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { UrlOpener } from "./invite";
 import {
+  apiCheckoutRunner,
   CheckoutError,
   CheckoutRunner,
   CheckoutService,
@@ -139,6 +140,49 @@ describe("CheckoutService", () => {
         true,
       );
       if (err._tag === "Some") expect(err.value.message).toBe("backend error");
+    }
+  });
+});
+
+// ─── apiCheckoutRunner — the NEW tRPC `billing.checkout` branch (TRI-3253) ────
+//
+// The strangler-fig replacement for the inline Convex `useAction`-derived runner.
+// We inject a fake `mutate` (the tRPC call) to assert it forwards the args and
+// returns the URL on success, and maps a tRPC/transport failure to a typed
+// CheckoutError — no live client.
+
+describe("apiCheckoutRunner", () => {
+  it("forwards the args to the tRPC mutate and returns the URL", async () => {
+    const calls: Array<{ workspaceId: string; planId?: string }> = [];
+    const runner = apiCheckoutRunner(async (args) => {
+      calls.push(args);
+      return { checkoutUrl: "https://billing.example/up/9" };
+    });
+
+    const result = await Effect.runPromise(
+      runner.checkout({ workspaceId: "ws1", planId: "team" }),
+    );
+
+    expect(result).toEqual({ checkoutUrl: "https://billing.example/up/9" });
+    expect(calls).toEqual([{ workspaceId: "ws1", planId: "team" }]);
+  });
+
+  it("maps a tRPC/transport failure to a typed CheckoutError", async () => {
+    const runner = apiCheckoutRunner(async () => {
+      throw new Error("FORBIDDEN");
+    });
+
+    const exit = await Effect.runPromiseExit(
+      runner.checkout({ workspaceId: "ws1", planId: "team" }),
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const err = Cause.failureOption(exit.cause);
+      expect(err._tag === "Some" && err.value instanceof CheckoutError).toBe(
+        true,
+      );
+      if (err._tag === "Some") expect(err.value.message).toBe("FORBIDDEN");
     }
   });
 });

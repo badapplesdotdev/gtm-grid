@@ -23,8 +23,14 @@
  */
 
 import { isPaidPlanId } from "@gtmgrid/cloud";
+import { useAction } from "convex/react";
 import { Context, Data, Effect, Layer } from "effect";
-import { UrlOpener } from "./invite.js";
+import { useMemo } from "react";
+import { api } from "../../../../convex/_generated/api";
+import type { Id } from "../../../../convex/_generated/dataModel";
+import { cloudViaApi } from "./client";
+import { apiClient } from "./client";
+import { UrlOpener, UrlOpenerLive } from "./invite.js";
 
 /**
  * The Convex `billing.checkout` action result, mirrored from convex/billing.ts:
@@ -62,6 +68,46 @@ export class CheckoutRunner extends Context.Tag("CheckoutRunner")<
   CheckoutRunner,
   CheckoutRunnerShape
 >() {}
+
+/**
+ * The single tRPC call this runner makes: `billing.checkout.mutate`. Abstracted
+ * so the runner can be unit-tested with a fake mutate fn (no live client),
+ * defaulting to the module `apiClient` in the app.
+ */
+export type CheckoutMutate = (args: {
+  readonly workspaceId: string;
+  readonly planId?: string;
+}) => Promise<CheckoutActionResult>;
+
+/**
+ * Build a {@link CheckoutRunnerShape} backed by the NEW tRPC `billing.checkout`
+ * mutation (TRI-3253). This is the strangler-fig replacement for the Convex
+ * `useAction(api.billing.checkout)`-derived runner the UI built inline: the same
+ * port, fed by the vanilla tRPC client instead of Convex. Pure (no React) so the
+ * call site composes it into the Live Layer directly and tests can still inject a
+ * fake runner. A tRPC error is normalized to a typed {@link CheckoutError} so the
+ * orchestration's error channel is unchanged.
+ *
+ * `mutate` defaults to the module `apiClient`'s `billing.checkout.mutate` (which
+ * is non-null on the `cloudViaApi` path — the only path that builds this runner);
+ * tests pass a fake to exercise the call + error mapping without a live client.
+ */
+export function apiCheckoutRunner(
+  mutate: CheckoutMutate = (args) => apiClient!.billing.checkout.mutate(args),
+): CheckoutRunnerShape {
+  return {
+    checkout: (args) =>
+      Effect.tryPromise({
+        try: () =>
+          mutate({ workspaceId: args.workspaceId, planId: args.planId }),
+        catch: (cause) =>
+          new CheckoutError({
+            message: cause instanceof Error ? cause.message : "Checkout failed.",
+            cause,
+          }),
+      }),
+  };
+}
 
 /** The checkout orchestration the UI calls. */
 export interface CheckoutServiceShape {
@@ -147,5 +193,60 @@ export function runCheckout(
       const svc = yield* CheckoutService;
       return yield* svc.startCheckout(hasSession, args);
     }).pipe(Effect.provide(layer)),
+  );
+}
+
+/**
+ * Build the Live {@link CheckoutService} Layer for the running app, STRANGLER-
+ * branched on the cloud path (TRI-3253):
+ *   - NEW path  → the {@link CheckoutRunner} is {@link apiCheckoutRunner} (tRPC
+ *     `billing.checkout`); the Convex `useAction` is NOT called (its provider is
+ *     not mounted on this path).
+ *   - LEGACY path → the runner wraps the Convex `billing.checkout` action.
+ * Both compose with the shared system-browser {@link UrlOpenerLive}.
+ *
+ * Extracted here (a tiny hook) so AccountBar / WorkspaceSettings / OnboardingFlow
+ * share ONE branch instead of duplicating it three times. `cloudViaApi` is a
+ * module constant, so the hook order is stable across renders.
+ */
+export function useCheckoutLayer(): Layer.Layer<CheckoutService> {
+  if (cloudViaApi) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+    return useMemo(
+      () =>
+        CheckoutServiceLive.pipe(
+          Layer.provide(Layer.succeed(CheckoutRunner, apiCheckoutRunner())),
+          Layer.provide(UrlOpenerLive),
+        ),
+      [],
+    );
+  }
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+  const checkoutAction = useAction(api.billing.checkout);
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+  return useMemo(
+    () =>
+      CheckoutServiceLive.pipe(
+        Layer.provide(
+          Layer.succeed(CheckoutRunner, {
+            checkout: (args) =>
+              Effect.tryPromise({
+                try: () =>
+                  checkoutAction({
+                    workspaceId: args.workspaceId as Id<"workspaces">,
+                    planId: args.planId,
+                  }) as Promise<CheckoutActionResult>,
+                catch: (cause) =>
+                  new CheckoutError({
+                    message:
+                      cause instanceof Error ? cause.message : "Checkout failed.",
+                    cause,
+                  }),
+              }),
+          }),
+        ),
+        Layer.provide(UrlOpenerLive),
+      ),
+    [checkoutAction],
   );
 }
