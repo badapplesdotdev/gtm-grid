@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./packages/cloud" },
+    { "path": "./packages/db" },
     { "path": "./packages/engine" },
     { "path": "./packages/server" },
     { "path": "./packages/cli" },
