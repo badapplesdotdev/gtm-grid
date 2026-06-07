@@ -2,17 +2,9 @@
  * Invite-accept landing page — `/invite/<token>`.
  *
  * Where invited users land when they click the accept link in their invite email.
- * That link is minted server-side by `acceptUrlFor()` in convex/invitations.ts as
- * `${SITE_URL}/invite/<token>`.
+ * That link is minted server-side as `${SITE_URL}/invite/<token>`.
  *
- * The web app has no Convex client (we don't ship the `convex` npm package here),
- * so this server component previews the invitation over Convex's HTTP query API:
- *
- *   POST ${CONVEX_URL}/api/query
- *   { "path": "invitations:getInvitationByToken", "args": { "token": "<token>" },
- *     "format": "json" }
- *
- * The PUBLIC query `invitations:getInvitationByToken` returns either
+ * The PUBLIC `getInvitationByToken` preview returns either
  *   { valid: false }
  * or
  *   { valid: true, workspaceName, email, role, invitedByName }.
@@ -21,12 +13,22 @@
  * mutation), so this page is a hand-off: a primary deep link into the app
  * (`gtmgrid://invite/<token>`) plus a copyable code fallback. We render three
  * states — valid, invalid/expired, and a graceful "couldn't load" state when the
- * backend is unreachable or CONVEX_URL is unset (we still surface the deep link
- * and code so the flow isn't a dead end).
+ * backend is unreachable (we still surface the deep link and code so the flow
+ * isn't a dead end).
+ *
+ * Data source (TRI-3256): this previews the invitation via
+ * `loadInvitationPreview` (`apps/web/lib/invite-preview.ts`), which runs the
+ * PUBLIC `InvitationService.getInvitationByToken` Effect directly in-process
+ * against the live `appLayer` (Drizzle over `@gtmgrid/db`), with `userId: null` —
+ * the token IS the capability, so no auth is required. That is the same Effect
+ * the public tRPC `invitations.getByToken` procedure runs; calling the service
+ * avoids a needless HTTP hop from the server component back into our own API.
  *
  * Next 15: `params` is a Promise and must be awaited.
  */
 
+import type { InvitationPreview } from "@gtmgrid/services";
+import { loadInvitationPreview } from "../../../lib/invite-preview";
 import { CopyCode } from "./CopyCode";
 
 /** Brand wordmark — mirrors the marketing header (app/page.tsx). */
@@ -40,57 +42,8 @@ function Wordmark() {
   );
 }
 
-/** Shape of a successful `getInvitationByToken` preview. */
-type ValidInvitation = {
-  valid: true;
-  workspaceName: string;
-  email: string;
-  role: "owner" | "admin" | "member";
-  invitedByName: string | null;
-};
-
-/** Either the invite is valid, or it isn't (expired/revoked/unknown token). */
-type InvitationPreview = ValidInvitation | { valid: false };
-
-/**
- * Outcome of the server-side preview fetch:
- *  - `ok`        → we have a definitive preview from the backend
- *  - `unavailable` → CONVEX_URL missing or the request failed; degrade gracefully
- */
-type PreviewResult =
-  | { kind: "ok"; preview: InvitationPreview }
-  | { kind: "unavailable" };
-
-/** Fetch the invitation preview via the Convex HTTP query API. */
-async function fetchInvitation(token: string): Promise<PreviewResult> {
-  const convexUrl = process.env.CONVEX_URL;
-  if (!convexUrl) return { kind: "unavailable" };
-
-  try {
-    const res = await fetch(`${convexUrl.replace(/\/$/, "")}/api/query`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        path: "invitations:getInvitationByToken",
-        args: { token },
-        format: "json",
-      }),
-      cache: "no-store",
-    });
-    if (!res.ok) return { kind: "unavailable" };
-
-    const body = (await res.json()) as {
-      status?: string;
-      value?: InvitationPreview;
-    };
-    if (body.status !== "success" || body.value === undefined) {
-      return { kind: "unavailable" };
-    }
-    return { kind: "ok", preview: body.value };
-  } catch {
-    return { kind: "unavailable" };
-  }
-}
+/** The successful branch of the public {@link InvitationPreview}. */
+type ValidInvitation = Extract<InvitationPreview, { valid: true }>;
 
 /** Human-readable role label for the invited member. */
 function roleLabel(role: ValidInvitation["role"]): string {
@@ -124,7 +77,7 @@ export default async function InvitePage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  const result = await fetchInvitation(token);
+  const result = await loadInvitationPreview(token);
 
   const preview = result.kind === "ok" ? result.preview : null;
   const valid = preview?.valid === true ? preview : null;
