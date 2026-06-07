@@ -84,8 +84,8 @@ export const appRouter = router({
    */
   grid: gridRouter,
   /**
-   * Realtime: `token` mints the Supabase-compatible JWT the client uses to
-   * authorize a Supabase Realtime connection for live grid + presence (TRI-3251).
+   * Realtime: `token` mints a WORKSPACE-SCOPED token the client uses to open a
+   * server-gated PartyKit grid connection for live grid + presence (TRI-3261).
    */
   realtime: realtimeRouter,
 });

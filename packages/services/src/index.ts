@@ -249,6 +249,7 @@ export {
 // --- Realtime broadcast port + shared client event schema/reducer (TRI-3251) -
 export {
   noopRealtimePublisherLayer,
+  partyPublishUrl,
   RealtimePublisher,
   type RealtimePublisherConfig,
   RealtimePublisherError,
@@ -276,7 +277,9 @@ export {
 } from "./realtime/events.js";
 export { applyGridEvent } from "./realtime/reducer.js";
 export {
+  type GridPartyMessage,
   type GridPresenceState,
+  type GridPresenceUpdate,
   type GridSubscription,
   subscribeToGrid,
   type SubscribeToGridOptions,

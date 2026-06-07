@@ -1,0 +1,10 @@
+{
+  "$schema": "https://www.partykit.io/schema.json",
+  "name": "gtmgrid-party",
+  "main": "src/server.ts",
+  "compatibilityDate": "2025-01-01",
+  "parties": {
+    "grid": "src/server.ts"
+  },
+  "vars": {}
+}

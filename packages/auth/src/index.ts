@@ -10,8 +10,11 @@
  *   - {@link resolveSession} / {@link getSessionUserId} — session resolution for
  *     the tRPC context (replaces `getAuthUserId`).
  *   - {@link enabledProviders} — booleans-only provider/flow gating (no secrets).
- *   - {@link mintSupabaseJwt} — Supabase-compatible HS256 JWT carrying the user
- *     id, for W3 realtime.
+ *   - {@link mintPartyToken} / {@link verifyPartyToken} /
+ *     {@link authorizeGridConnection} — workspace-scoped HS256 tokens for the
+ *     server-gated PartyKit realtime provider (TRI-3261). The token binds a
+ *     connection to ONE workspace; the party authorizes by matching the claim to
+ *     the room, fixing the cross-tenant leak.
  *   - {@link generateOtp} — the 6-digit OTP generator the email flows use.
  *
  * Importing this barrel is side-effect-free: no Postgres connection is opened
@@ -36,8 +39,15 @@ export {
   type EnabledProviders,
 } from "./providers.js";
 export {
-  mintSupabaseJwt,
-  SUPABASE_JWT_TTL_SECONDS,
-  type MintSupabaseJwtOptions,
-} from "./jwt.js";
+  authorizeGridConnection,
+  type GridConnectionDecision,
+  type GridRejectReason,
+  gridRoomId,
+  mintPartyToken,
+  type MintPartyTokenOptions,
+  PARTY_TOKEN_TTL_SECONDS,
+  type PartyTokenClaims,
+  verifyPartyToken,
+  workspaceIdFromRoomId,
+} from "./party-token.js";
 export { generateOtp, OTP_LENGTH, OTP_EXPIRY_SECONDS } from "./otp.js";

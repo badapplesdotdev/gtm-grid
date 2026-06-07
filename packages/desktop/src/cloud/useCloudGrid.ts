@@ -30,25 +30,22 @@ import type { CloudSession } from "./cloud-run";
 import { useApiAuthToken } from "./useApiAuth";
 
 /**
- * The Supabase project URL + anon (publishable) key the W3 realtime client
- * (`subscribeToGrid`) connects with. Read once from Vite's `import.meta.env`;
- * empty strings are treated as unset. The realtime CONNECTION is authorized by
- * a server-minted JWT (`realtime.token`) — these only locate the project and
- * carry the publishable key; all reads/writes still go through tRPC.
+ * The PartyKit base URL the realtime client (`subscribeToGrid`) connects with.
+ * Read once from Vite's `import.meta.env`; empty strings are treated as unset.
+ * The realtime CONNECTION is authorized by a server-minted, WORKSPACE-SCOPED
+ * token (`realtime.token`) that the party validates against the room — all
+ * reads/writes still go through tRPC.
  */
-const SUPABASE_URL: string | undefined =
-  (import.meta.env.VITE_SUPABASE_URL as string | undefined) || undefined;
-const SUPABASE_ANON_KEY: string | undefined =
-  (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) || undefined;
+const PARTY_URL: string | undefined =
+  (import.meta.env.VITE_PARTY_URL as string | undefined) || undefined;
 
 /**
- * Whether the W3 live-grid realtime path is configured. The grid hooks always
- * SEED via tRPC; they additionally SUBSCRIBE via Supabase Realtime only when
- * both the URL and key are present, so a build without realtime config still
- * works (it just won't receive live patches). Pure boolean off module env.
+ * Whether the live-grid realtime path is configured. The grid hooks always
+ * SEED via tRPC; they additionally SUBSCRIBE via PartyKit only when the party
+ * URL is present, so a build without realtime config still works (it just won't
+ * receive live patches). Pure boolean off module env.
  */
-const realtimeConfigured: boolean =
-  SUPABASE_URL !== undefined && SUPABASE_ANON_KEY !== undefined;
+const realtimeConfigured: boolean = PARTY_URL !== undefined;
 
 /**
  * The cursor-paginated result shape the deliveries panel consumes: the loaded
@@ -114,9 +111,9 @@ type GridCacheSnapshot = Awaited<
  * if the cloud layer is disabled (callers guard on `apiClient` first). Extracted
  * so the realtime-token plumbing is a single named seam.
  */
-async function mintRealtimeToken(): Promise<string> {
+async function mintRealtimeToken(workspaceId: string): Promise<string> {
   if (apiClient === null) throw new Error("API client unavailable");
-  const { token } = await apiClient.realtime.token.mutate();
+  const { token } = await apiClient.realtime.token.mutate({ workspaceId });
   return token;
 }
 
@@ -394,8 +391,7 @@ function useGridRealtime(
       !realtimeConfigured ||
       tableId === null ||
       workspaceId === null ||
-      SUPABASE_URL === undefined ||
-      SUPABASE_ANON_KEY === undefined
+      PARTY_URL === undefined
     ) {
       return;
     }
@@ -403,11 +399,10 @@ function useGridRealtime(
     let teardown: (() => Promise<void>) | null = null;
 
     void (async () => {
-      const token = await mintRealtimeToken().catch(() => null);
+      const token = await mintRealtimeToken(workspaceId).catch(() => null);
       if (token === null || disposed) return;
       const sub = subscribeToGrid({
-        url: SUPABASE_URL,
-        anonKey: SUPABASE_ANON_KEY,
+        url: PARTY_URL,
         token,
         workspaceId,
         tableId,

@@ -212,8 +212,9 @@ export const appLayer = (params: {
     Layer.provide(dbLayer),
     Layer.provide(autumnLayer),
   );
-  // The live realtime broadcast port (TRI-3251): publishes grid change events to
-  // Supabase Realtime, or a no-op when Supabase env is not configured.
+  // The live realtime broadcast port (TRI-3251/TRI-3261): server-publishes grid
+  // change events to the PartyKit grid party (HTTP POST + PARTY_PUBLISH_SECRET),
+  // or a no-op when the PartyKit env is not configured.
   const realtimePublisher = realtimePublisherLayerFromEnv();
   const membershipService = MembershipService.Default.pipe(
     Layer.provide(identity),
