@@ -18,6 +18,7 @@ import { Effect } from "effect";
 import { billingRouter } from "./routers/billing";
 import { credentialsRouter } from "./routers/credentials";
 import { extensionsRouter } from "./routers/extensions";
+import { gridRouter } from "./routers/grid";
 import { invitationsRouter } from "./routers/invitations";
 import { webhooksRouter } from "./routers/webhooks";
 import { workspacesRouter } from "./routers/workspaces";
@@ -69,8 +70,11 @@ export const appRouter = router({
   webhooks: webhooksRouter,
   /** Member-gated connector extensions (TRI-3250). */
   extensions: extensionsRouter,
-
-  // W2 (other lanes): projects, tables, columns, rows.
+  /**
+   * Grid data: projects/tables/columns/rows/cells (TRI-3248). `getTable` returns
+   * the full grid in one read; mutations meter cloud actions on the write path.
+   */
+  grid: gridRouter,
 });
 
 /** The API type the typed client (W2) consumes. */

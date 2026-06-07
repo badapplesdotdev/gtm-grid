@@ -39,6 +39,8 @@ function toTrpcError(tag: string | undefined, message: string): TRPCError {
       return new TRPCError({ code: "FORBIDDEN", message });
     case "WorkspaceNotFoundError":
     case "WebhookNotFoundError":
+    // Grid domain (TRI-3248): a missing project/table/column/row is not found.
+    case "GridNotFoundError":
       return new TRPCError({ code: "NOT_FOUND", message });
     // Billing/seats domain (W2): a forged/unknown plan is a bad request; a
     // reached seat cap is a precondition failure; a misconfigured plan with no

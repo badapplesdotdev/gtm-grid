@@ -1,0 +1,196 @@
+/**
+ * `ColumnRepo` — the Effect <-> Drizzle adapter for the `columns` table.
+ *
+ * Ports the column reads/writes of `convex/tables.ts` (getTable's column load,
+ * addColumn :137, deleteColumn :297). `remove` relies on the Postgres
+ * `ON DELETE CASCADE` FK to drop the column's cells; the in-memory Layer mirrors
+ * that with {@link cascadeDeleteColumn}.
+ */
+
+import { schema } from "@gtmgrid/db";
+import { asc, eq } from "drizzle-orm";
+import { Context, Data, Effect, Layer, Option } from "effect";
+import { DbClient } from "../db-client.js";
+import { cascadeDeleteColumn, type GridStore } from "./grid-store.js";
+
+/** A column kind literal — manual cell or function column. */
+export type ColumnKind = "manual" | "function";
+
+/** The full column projection getTable returns to the desktop grid. */
+export interface Column {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly tableId: string;
+  readonly name: string;
+  readonly type: string;
+  readonly kind: ColumnKind;
+  readonly provider: string | null;
+  readonly method: string | null;
+  readonly code: string | null;
+  readonly params: unknown;
+  readonly position: number;
+  readonly createdAt: number;
+}
+
+/** Fields an `addColumn` insert supplies. */
+export interface NewColumn {
+  readonly workspaceId: string;
+  readonly tableId: string;
+  readonly name: string;
+  readonly type: string;
+  readonly kind: ColumnKind;
+  readonly provider: string | null;
+  readonly method: string | null;
+  readonly code: string | null;
+  readonly params: unknown;
+  readonly position: number;
+  readonly createdAt: number;
+}
+
+/** Raised when a column read/write fails (DB/transport error). */
+export class ColumnRepoError extends Data.TaggedError("ColumnRepoError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const fail = (op: string) => (cause: unknown) =>
+  new ColumnRepoError({
+    message: cause instanceof Error ? cause.message : `${op} failed`,
+    cause,
+  });
+
+/** Reads/writes the `columns` table. */
+export class ColumnRepo extends Context.Tag("ColumnRepo")<
+  ColumnRepo,
+  {
+    /** The column for `id`, or `None`. */
+    readonly findById: (
+      id: string,
+    ) => Effect.Effect<Option.Option<Column>, ColumnRepoError>;
+    /** A table's columns, ordered by position then creation. */
+    readonly listByTable: (
+      tableId: string,
+    ) => Effect.Effect<readonly Column[], ColumnRepoError>;
+    /** Insert a column and return its id. */
+    readonly insert: (
+      values: NewColumn,
+    ) => Effect.Effect<string, ColumnRepoError>;
+    /** Delete a column (FK cascade drops its cells). */
+    readonly remove: (id: string) => Effect.Effect<void, ColumnRepoError>;
+  }
+>() {}
+
+/** The Drizzle-backed `ColumnRepo` Layer. */
+export const ColumnRepoLive: Layer.Layer<ColumnRepo, never, DbClient> =
+  Layer.effect(
+    ColumnRepo,
+    Effect.gen(function* () {
+      const db = yield* DbClient;
+      const cols = {
+        id: schema.columns.id,
+        workspaceId: schema.columns.workspaceId,
+        tableId: schema.columns.tableId,
+        name: schema.columns.name,
+        type: schema.columns.type,
+        kind: schema.columns.kind,
+        provider: schema.columns.provider,
+        method: schema.columns.method,
+        code: schema.columns.code,
+        params: schema.columns.params,
+        position: schema.columns.position,
+        createdAt: schema.columns.createdAt,
+      } as const;
+      return {
+        findById: (id) =>
+          UUID_RE.test(id)
+            ? Effect.tryPromise({
+                try: async () => {
+                  const rows = await db
+                    .select(cols)
+                    .from(schema.columns)
+                    .where(eq(schema.columns.id, id))
+                    .limit(1);
+                  return Option.fromNullable(rows[0] ?? null);
+                },
+                catch: fail("column lookup"),
+              })
+            : Effect.succeed(Option.none<Column>()),
+        listByTable: (tableId) =>
+          UUID_RE.test(tableId)
+            ? Effect.tryPromise({
+                try: () =>
+                  db
+                    .select(cols)
+                    .from(schema.columns)
+                    .where(eq(schema.columns.tableId, tableId))
+                    .orderBy(
+                      asc(schema.columns.position),
+                      asc(schema.columns.createdAt),
+                    ),
+                catch: fail("column list"),
+              })
+            : Effect.succeed([] as readonly Column[]),
+        insert: (values) =>
+          Effect.tryPromise({
+            try: async () => {
+              const rows = await db
+                .insert(schema.columns)
+                .values({
+                  workspaceId: values.workspaceId,
+                  tableId: values.tableId,
+                  name: values.name,
+                  type: values.type as never,
+                  kind: values.kind,
+                  provider: values.provider,
+                  method: values.method,
+                  code: values.code,
+                  params: values.params,
+                  position: values.position,
+                  createdAt: values.createdAt,
+                })
+                .returning({ id: schema.columns.id });
+              const id = rows[0]?.id;
+              if (id === undefined) {
+                throw new Error("column insert returned no id");
+              }
+              return id;
+            },
+            catch: fail("column insert"),
+          }),
+        remove: (id) =>
+          Effect.tryPromise({
+            try: async () => {
+              await db.delete(schema.columns).where(eq(schema.columns.id, id));
+            },
+            catch: fail("column delete"),
+          }),
+      };
+    }),
+  );
+
+/** An in-memory `ColumnRepo` Layer over a shared {@link GridStore}. */
+export const columnRepoLayer = (store: GridStore): Layer.Layer<ColumnRepo> =>
+  Layer.succeed(ColumnRepo, {
+    findById: (id) =>
+      Effect.succeed(
+        Option.fromNullable(store.columns.find((c) => c.id === id)),
+      ),
+    listByTable: (tableId) =>
+      Effect.succeed(
+        [...store.columns]
+          .filter((c) => c.tableId === tableId)
+          .sort(
+            (a, b) => a.position - b.position || a.createdAt - b.createdAt,
+          ),
+      ),
+    insert: (values) =>
+      Effect.sync(() => {
+        const id = store.nextId("column");
+        store.columns.push({ id, ...values });
+        return id;
+      }),
+    remove: (id) => Effect.sync(() => cascadeDeleteColumn(store, id)),
+  });
