@@ -12,16 +12,24 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@gtmgrid/auth": "workspace:*",
     "@gtmgrid/cloud": "workspace:*",
+    "@gtmgrid/db": "workspace:*",
     "@gtmgrid/engine": "workspace:*",
+    "@gtmgrid/services": "workspace:*",
     "@jitl/quickjs-wasmfile-release-asyncify": "^0.31.0",
+    "@tanstack/react-query": "^5.62.0",
+    "@trpc/client": "^11.0.0",
+    "@trpc/react-query": "^11.0.0",
+    "@trpc/server": "^11.0.0",
     "effect": "^3.21.3",
     "inngest": "^4.5.0",
     "next": "^15.5.4",
     "quickjs-emscripten": "^0.31.0",
     "quickjs-emscripten-core": "^0.31.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

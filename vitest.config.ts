@@ -9,6 +9,6 @@ import { defineConfig } from "vitest/config";
 // long as they stay external. See packages/engine/vitest.config.ts.
 export default defineConfig({
   test: {
-    projects: ["packages/*/vitest.config.ts"],
+    projects: ["packages/*/vitest.config.ts", "apps/*/vitest.config.ts"],
   },
 });
