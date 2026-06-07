@@ -17,20 +17,51 @@ export { DbClient, DbClientLive, dbClientLayer } from "./db-client.js";
 
 // --- Repositories (Effect <-> Drizzle adapters) ------------------------------
 export {
+  type NewWorkspace,
   type Workspace,
+  type WorkspaceCustomerData,
   WorkspaceRepo,
   WorkspaceRepoError,
   WorkspaceRepoLive,
   workspaceRepoLayer,
+  type WorkspaceUser,
 } from "./repositories/workspace-repo.js";
 export { MemberRepoLive } from "./repositories/member-repo.js";
+export {
+  type MemberRow,
+  type MemberWithUser,
+  type NewMember,
+  WorkspaceMemberRepo,
+  WorkspaceMemberRepoError,
+  WorkspaceMemberRepoLive,
+  workspaceMemberRepoLayer,
+} from "./repositories/workspace-member-repo.js";
+
+// --- The Autumn billing port (LIVE) ------------------------------------------
+export { autumnClientLayer, AutumnClientLive } from "./autumn-client.js";
 
 // --- Domain services ---------------------------------------------------------
 export {
+  type CreateWorkspaceError,
   type GetWorkspaceError,
+  type InsertMemberError,
+  type InsertMemberResult,
+  type ListMembersError,
+  type Me,
+  type MeError,
+  type MeUser,
+  type MeWorkspace,
+  type SeatUsage,
+  type WorkspaceMember,
+  type WorkspaceMembersResult,
   WorkspaceNotFoundError,
+  type WorkspacePlan,
   WorkspaceService,
 } from "./services/workspace-service.js";
+export {
+  BillingService,
+  type CheckoutError,
+} from "./services/billing-service.js";
 
 // --- Composed Layers (the DI wiring point) -----------------------------------
 export {
@@ -44,8 +75,14 @@ export {
 // --- Worker-secret boundary (W2) ---------------------------------------------
 export { isAuthorizedWorker, timingSafeEqual } from "./worker-secret.js";
 
-// --- Re-export the reused authz core so routers import from one place --------
+// --- Re-export the reused authz + seats/billing core (one import surface) -----
 export {
+  AutumnClient,
+  AutumnError,
+  type CustomerData,
+  type FakeAutumnConfig,
+  fakeAutumnLayer,
+  failingAutumnLayer,
   Identity,
   InsufficientRoleError,
   type Membership,
@@ -53,6 +90,12 @@ export {
   MemberRepo,
   MemberRepoError,
   MembershipService,
+  NoCheckoutUrlError,
   NotAMemberError,
+  planName,
+  type SeatCheck,
+  SeatLimitExceededError,
+  SeatsService,
   UnauthenticatedError,
+  UnknownPlanError,
 } from "@gtmgrid/cloud";

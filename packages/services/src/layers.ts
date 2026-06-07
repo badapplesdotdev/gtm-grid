@@ -23,23 +23,34 @@
  */
 
 import {
+  type AutumnClient,
   identityLayer as cloudIdentityLayer,
-  memberRepoLayer as cloudMemberRepoLayer,
+  type FakeAutumnConfig,
+  fakeAutumnLayer,
   Identity,
-  type MemberRepo,
   type Membership,
   MembershipService,
+  SeatsService,
 } from "@gtmgrid/cloud";
 import type { Db } from "@gtmgrid/db/client";
 import { Effect, Layer, Option } from "effect";
+import { AutumnClientLive } from "./autumn-client.js";
 import { dbClientLayer } from "./db-client.js";
 import { MemberRepoLive } from "./repositories/member-repo.js";
+import {
+  memberStoreLayers,
+  type MemberWithUser,
+  WorkspaceMemberRepo,
+  WorkspaceMemberRepoLive,
+} from "./repositories/workspace-member-repo.js";
 import {
   type Workspace,
   WorkspaceRepo,
   WorkspaceRepoLive,
   workspaceRepoLayer,
+  type WorkspaceUser,
 } from "./repositories/workspace-repo.js";
+import { BillingService } from "./services/billing-service.js";
 import { WorkspaceService } from "./services/workspace-service.js";
 
 /**
@@ -66,32 +77,99 @@ export const identityFromUserId = (
 export const appLayer = (params: {
   readonly db: Db;
   readonly userId: string | null;
-}): Layer.Layer<WorkspaceService | WorkspaceRepo | MembershipService> => {
+}): Layer.Layer<
+  | WorkspaceService
+  | WorkspaceRepo
+  | WorkspaceMemberRepo
+  | MembershipService
+  | SeatsService
+  | BillingService
+  | AutumnClient
+> => {
   const dbLayer = dbClientLayer(params.db);
   const memberRepo = MemberRepoLive.pipe(Layer.provide(dbLayer));
   const workspaceRepo = WorkspaceRepoLive.pipe(Layer.provide(dbLayer));
+  const workspaceMemberRepo = WorkspaceMemberRepoLive.pipe(
+    Layer.provide(dbLayer),
+  );
   const membershipService = MembershipService.Default.pipe(
     Layer.provide(identityFromUserId(params.userId)),
     Layer.provide(memberRepo),
   );
+  // SeatsService is provided to BOTH the workspace service (transactional seat
+  // ceiling on insertMember) and the billing service (checkout). One Autumn port
+  // (the live, lazily-built SDK) backs it.
+  const seatsService = SeatsService.Default.pipe(
+    Layer.provide(AutumnClientLive),
+  );
   const workspaceService = WorkspaceService.Default.pipe(
     Layer.provide(workspaceRepo),
+    Layer.provide(workspaceMemberRepo),
     Layer.provide(membershipService),
+    Layer.provide(seatsService),
   );
-  // Merge so callers can resolve the repo, the membership service, or the
-  // composed workspace service from one Layer.
-  return Layer.mergeAll(workspaceService, workspaceRepo, membershipService);
+  const billingService = BillingService.Default.pipe(
+    Layer.provide(membershipService),
+    Layer.provide(workspaceRepo),
+    Layer.provide(seatsService),
+  );
+  // Merge so callers can resolve any repo or service from one Layer.
+  return Layer.mergeAll(
+    workspaceService,
+    billingService,
+    workspaceRepo,
+    workspaceMemberRepo,
+    membershipService,
+    seatsService,
+    AutumnClientLive,
+  );
 };
 
 /** Fixtures for {@link TestLayer}: the in-memory data the services read. */
 export interface TestLayerFixtures {
   /** Workspaces visible to {@link WorkspaceRepo}. */
   readonly workspaces?: readonly Workspace[];
-  /** Membership rows visible to the authz core. */
+  /** User rows visible to {@link WorkspaceRepo} (`me` user + owner email). */
+  readonly users?: readonly WorkspaceUser[];
+  /**
+   * Membership rows visible to the authz core (the cloud `MemberRepo`'s
+   * `findMembership`). The seat-guard / roster reads use {@link members} below.
+   */
   readonly memberships?: readonly Membership[];
+  /**
+   * Member rows (with optional name/email) visible to
+   * {@link WorkspaceMemberRepo} — the roster + counts the `me`/`listMembers`/
+   * `insertMember` paths read. Defaults to {@link memberships} promoted to rows
+   * (so a test that only sets `memberships` still gets a consistent roster).
+   */
+  readonly members?: readonly MemberWithUser[];
   /** The current caller's user id, or `null` for an unauthenticated request. */
   readonly currentUserId?: string | null;
+  /**
+   * Configures the fake Autumn port (@gtmgrid/cloud `fakeAutumnLayer`) backing
+   * SeatsService + BillingService, so checkout / seat-ceiling tests run with no
+   * SDK or HTTP. Defaults to the happy under-limit config.
+   */
+  readonly autumn?: FakeAutumnConfig;
 }
+
+/**
+ * Promote authz {@link Membership} fixtures to {@link MemberWithUser} rows when a
+ * test only configured `memberships`, so the roster/count reads agree with the
+ * membership guard. Synthesises a stable id + createdAt and null name/email.
+ */
+const membershipsToMemberRows = (
+  memberships: readonly Membership[],
+): readonly MemberWithUser[] =>
+  memberships.map((m, i) => ({
+    id: `mem_fixture_${i}`,
+    workspaceId: m.workspaceId,
+    userId: m.userId,
+    role: m.role,
+    createdAt: i,
+    name: null,
+    email: null,
+  }));
 
 /**
  * The in-memory composition. Wires every service to its Test Layer from the
@@ -101,25 +179,62 @@ export interface TestLayerFixtures {
  */
 export const TestLayer = (
   fixtures: TestLayerFixtures = {},
-): Layer.Layer<WorkspaceService | WorkspaceRepo | MembershipService> => {
-  const workspaceRepo = workspaceRepoLayer(fixtures.workspaces ?? []);
-  const memberRepo: Layer.Layer<MemberRepo> = cloudMemberRepoLayer(
-    fixtures.memberships ?? [],
+): Layer.Layer<
+  | WorkspaceService
+  | WorkspaceRepo
+  | WorkspaceMemberRepo
+  | MembershipService
+  | SeatsService
+  | BillingService
+  | AutumnClient
+> => {
+  const memberships = fixtures.memberships ?? [];
+  const memberRows = fixtures.members ?? membershipsToMemberRows(memberships);
+
+  const workspaceRepo = workspaceRepoLayer(
+    fixtures.workspaces ?? [],
+    fixtures.users ?? [],
   );
+  // ONE shared member store backs both the data repo and the authz guard, so a
+  // membership inserted via WorkspaceMemberRepo (e.g. createWorkspace's owner
+  // row) is immediately visible to MembershipService — as in the live table.
+  const { workspaceMemberRepo, memberRepo } = memberStoreLayers(memberRows);
   const identity = cloudIdentityLayer(fixtures.currentUserId ?? null);
+  const autumn = fakeAutumnLayer(fixtures.autumn ?? {});
+
   const membershipService = MembershipService.Default.pipe(
     Layer.provide(identity),
     Layer.provide(memberRepo),
   );
+  const seatsService = SeatsService.Default.pipe(Layer.provide(autumn));
   const workspaceService = WorkspaceService.Default.pipe(
     Layer.provide(workspaceRepo),
+    Layer.provide(workspaceMemberRepo),
     Layer.provide(membershipService),
+    Layer.provide(seatsService),
   );
-  return Layer.mergeAll(workspaceService, workspaceRepo, membershipService);
+  const billingService = BillingService.Default.pipe(
+    Layer.provide(membershipService),
+    Layer.provide(workspaceRepo),
+    Layer.provide(seatsService),
+  );
+  return Layer.mergeAll(
+    workspaceService,
+    billingService,
+    workspaceRepo,
+    workspaceMemberRepo,
+    membershipService,
+    seatsService,
+    autumn,
+  );
 };
 
 /** The full set of services any Effect program in the cloud tier can resolve. */
 export type AppServices =
   | WorkspaceService
   | WorkspaceRepo
-  | MembershipService;
+  | WorkspaceMemberRepo
+  | MembershipService
+  | SeatsService
+  | BillingService
+  | AutumnClient;
