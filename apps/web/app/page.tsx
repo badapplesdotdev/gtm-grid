@@ -2,6 +2,8 @@
 // Voice: lowercase wordmark, direct second person, technical precision, no emoji.
 // Icons are line-drawn SVG (currentColor), never emoji or unicode glyphs.
 
+import { DownloadButton } from "./DownloadButton";
+
 function Wordmark() {
   return (
     <span className="wordmark">
@@ -132,7 +134,7 @@ export default function Home() {
             <a href="#how">How it works</a>
             <a href="#local">Local-first</a>
             <a href="#pricing">Pricing</a>
-            <a href="https://github.com/maxtrigify/gtm-grid">GitHub</a>
+            <a href="https://github.com/badapplesdotdev/gtm-grid">GitHub</a>
           </nav>
         </div>
       </header>
@@ -153,15 +155,14 @@ export default function Home() {
                 pending → running → done.
               </p>
               <div className="hero__cta">
-                <a className="btn btn--primary" href="https://github.com/maxtrigify/gtm-grid">
-                  Get GTM Grid
-                </a>
+                <DownloadButton />
                 <a className="btn btn--ghost" href="#how">
                   See how it works
                 </a>
               </div>
               <p className="hero__note">
-                runs on your machine — SQLite engine, QuickJS sandbox, bring your own AI key.
+                runs on your machine — SQLite engine, QuickJS sandbox, bring your own AI key.{" "}
+                <a className="hero__note-link" href="/download">All platforms &amp; versions →</a>
               </p>
             </div>
             <MiniGrid />
@@ -317,7 +318,7 @@ table.rows        sync (pro)`}
             <a href="#how">How it works</a>
             <a href="#local">Local-first</a>
             <a href="#pricing">Pricing</a>
-            <a href="https://github.com/maxtrigify/gtm-grid">GitHub</a>
+            <a href="https://github.com/badapplesdotdev/gtm-grid">GitHub</a>
           </nav>
           <small>local-first programmable gtm spreadsheet</small>
         </div>

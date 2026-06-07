@@ -139,6 +139,12 @@ jobs:
           # Tells scripts/bundle-sidecar.mjs which cpu to bundle the node runtime +
           # better-sqlite3 for. Empty = host arch (native); "x64" = cross-build.
           GTMGRID_SIDECAR_ARCH: ${{ matrix.sidecar_arch }}
+          # Prod cloud endpoints baked into the desktop Vite build so the shipped
+          # app connects to the live tRPC API + PartyKit realtime + webhook host.
+          # Public URLs (not secrets); override via repo Variables if they change.
+          VITE_API_URL: ${{ vars.VITE_API_URL || 'https://www.gtmgrid.dev' }}
+          VITE_PARTY_URL: ${{ vars.VITE_PARTY_URL || 'https://gtmgrid-party.iammorganparry.partykit.dev' }}
+          VITE_INNGEST_URL: ${{ vars.VITE_INNGEST_URL || 'https://www.gtmgrid.dev' }}
         with:
           projectPath: packages/desktop
           tagName: ${{ needs.version.outputs.tag }}

@@ -14,7 +14,7 @@ Clone the repo and install dependencies — everything that powers the app lives
 - For the in-app agent panel only: your own `claude` and/or `codex` CLI on `PATH` (uses your Max / Codex plan)
 
 ```bash
-git clone https://github.com/maxtrigify/gtm-grid.git
+git clone https://github.com/badapplesdotdev/gtm-grid.git
 cd gtm-grid
 pnpm install          # one-time; builds better-sqlite3 natively
 ```
