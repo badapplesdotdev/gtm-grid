@@ -62,6 +62,43 @@ export {
   type CredentialUpsert,
   type OwnerKey,
 } from "./repositories/credential-repo.js";
+export {
+  type CellWrite,
+  type GridCell,
+  type GridColumn,
+  type GridRow,
+  type GridTable,
+  type Webhook,
+  type WebhookInsert,
+  type WebhookMappingEntry,
+  type WebhookMode,
+  type WebhookPatch,
+  WebhookRepo,
+  WebhookRepoError,
+  WebhookRepoLive,
+  webhookRepoLayer,
+  type WorkspaceQuota,
+} from "./repositories/webhook-repo.js";
+export {
+  type DeliveryCursor,
+  type DeliveryMode,
+  type DeliveryPage,
+  type WebhookDelivery,
+  type WebhookDeliveryInsert,
+  WebhookDeliveryRepo,
+  WebhookDeliveryRepoError,
+  WebhookDeliveryRepoLive,
+  webhookDeliveryRepoLayer,
+} from "./repositories/webhook-delivery-repo.js";
+export {
+  type Extension,
+  type ExtensionInsert,
+  type ExtensionPatch,
+  ExtensionRepo,
+  ExtensionRepoError,
+  ExtensionRepoLive,
+  extensionRepoLayer,
+} from "./repositories/extension-repo.js";
 
 // --- The Autumn billing port (LIVE) ------------------------------------------
 export { autumnClientLayer, AutumnClientLive } from "./autumn-client.js";
@@ -120,6 +157,29 @@ export {
   type SaveCredentialError,
   type SaveCredentialInput,
 } from "./services/credential-service.js";
+export {
+  type CellMap,
+  CloudActionsLimitError,
+  DELIVERIES_PAGE_SIZE,
+  DELIVERY_RETENTION,
+  InvalidCellError,
+  InvalidConfigError,
+  InvalidMappingError,
+  type ResolvedWebhook,
+  WebhookNotFoundError,
+  WebhookService,
+  type WorkerGrid,
+} from "./services/webhook-service.js";
+export { ExtensionService } from "./services/extension-service.js";
+
+// --- Webhook token/secret minting + credential crypto ------------------------
+// NB: webhook-mint also exports `mintToken`, but the invitation-service
+// `mintToken` already occupies that name on the barrel and the webhook signer
+// imports its own directly from ./webhook-mint.js, so only the non-colliding
+// `mintSigningSecret` + credential-crypto helpers are surfaced here.
+export { mintSigningSecret } from "./webhook-mint.js";
+export { credentialCryptoLive } from "./credential-crypto.js";
+export { credentialCryptoTest } from "./credential-crypto-test.js";
 
 // --- Composed Layers (the DI wiring point) -----------------------------------
 export {
@@ -137,6 +197,8 @@ export { isAuthorizedWorker, timingSafeEqual } from "./worker-secret.js";
 export {
   AutumnClient,
   AutumnError,
+  type CloudCellStatus,
+  CredentialCryptoService,
   CredentialOwnershipError,
   CredentialOwnershipService,
   type CredentialScope,

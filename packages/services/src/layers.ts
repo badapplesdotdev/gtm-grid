@@ -24,7 +24,9 @@
 
 import {
   type AutumnClient,
+  CellMerge,
   identityLayer as cloudIdentityLayer,
+  type CredentialCryptoService,
   CredentialOwnershipService,
   type FakeAutumnConfig,
   fakeAutumnLayer,
@@ -36,6 +38,8 @@ import {
 import type { Db } from "@gtmgrid/db/client";
 import { Effect, Layer, Option } from "effect";
 import { AutumnClientLive } from "./autumn-client.js";
+import { credentialCryptoLive } from "./credential-crypto.js";
+import { credentialCryptoTest } from "./credential-crypto-test.js";
 import { dbClientLayer } from "./db-client.js";
 import {
   type CredentialRow,
@@ -44,6 +48,12 @@ import {
   credentialRepoLayer,
 } from "./repositories/credential-repo.js";
 import {
+  type Extension,
+  ExtensionRepo,
+  ExtensionRepoLive,
+  extensionRepoLayer,
+} from "./repositories/extension-repo.js";
+import {
   type Invitation,
   type InMemoryWorkspace,
   InvitationRepo,
@@ -51,6 +61,23 @@ import {
   invitationRepoLayer,
 } from "./repositories/invitation-repo.js";
 import { MemberRepoLive } from "./repositories/member-repo.js";
+import {
+  type WebhookDelivery,
+  WebhookDeliveryRepo,
+  WebhookDeliveryRepoLive,
+  webhookDeliveryRepoLayer,
+} from "./repositories/webhook-delivery-repo.js";
+import {
+  type GridCell,
+  type GridColumn,
+  type GridRow,
+  type GridTable,
+  type Webhook,
+  WebhookRepo,
+  WebhookRepoLive,
+  webhookRepoLayer,
+  type WorkspaceQuota,
+} from "./repositories/webhook-repo.js";
 import {
   memberStoreLayers,
   type MemberWithUser,
@@ -63,6 +90,8 @@ import {
   WorkspaceRepoLive,
   workspaceRepoLayer,
 } from "./repositories/workspace-repo.js";
+import { ExtensionService } from "./services/extension-service.js";
+import { WebhookService } from "./services/webhook-service.js";
 import { BillingService } from "./services/billing-service.js";
 import { CredentialService } from "./services/credential-service.js";
 import {
@@ -103,20 +132,7 @@ export const identityFromUserId = (
 export const appLayer = (params: {
   readonly db: Db;
   readonly userId: string | null;
-}): Layer.Layer<
-  | WorkspaceService
-  | WorkspaceRepo
-  | WorkspaceMemberRepo
-  | MembershipService
-  | SeatsService
-  | BillingService
-  | AutumnClient
-  | InvitationService
-  | InvitationRepo
-  | CredentialService
-  | CredentialRepo
-  | CryptoService
-> => {
+}): Layer.Layer<AppServices> => {
   const dbLayer = dbClientLayer(params.db);
   const identity = identityFromUserId(params.userId);
   const memberRepo = MemberRepoLive.pipe(Layer.provide(dbLayer));
@@ -126,6 +142,11 @@ export const appLayer = (params: {
   );
   const invitationRepo = InvitationRepoLive.pipe(Layer.provide(dbLayer));
   const credentialRepo = CredentialRepoLive.pipe(Layer.provide(dbLayer));
+  const webhookRepo = WebhookRepoLive.pipe(Layer.provide(dbLayer));
+  const webhookDeliveryRepo = WebhookDeliveryRepoLive.pipe(
+    Layer.provide(dbLayer),
+  );
+  const extensionRepo = ExtensionRepoLive.pipe(Layer.provide(dbLayer));
   const membershipService = MembershipService.Default.pipe(
     Layer.provide(identity),
     Layer.provide(memberRepo),
@@ -160,16 +181,32 @@ export const appLayer = (params: {
     Layer.provide(membershipService),
     Layer.provide(CredentialOwnershipService.Default),
   );
+  const webhookService = WebhookService.Default.pipe(
+    Layer.provide(webhookRepo),
+    Layer.provide(webhookDeliveryRepo),
+    Layer.provide(membershipService),
+    Layer.provide(CellMerge.Default),
+    Layer.provide(credentialCryptoLive),
+  );
+  const extensionService = ExtensionService.Default.pipe(
+    Layer.provide(extensionRepo),
+    Layer.provide(membershipService),
+  );
   // Merge so callers can resolve any repo or service from one Layer.
   return Layer.mergeAll(
     workspaceService,
     billingService,
     invitationService,
     credentialService,
+    webhookService,
+    extensionService,
     workspaceRepo,
     workspaceMemberRepo,
     invitationRepo,
     credentialRepo,
+    webhookRepo,
+    webhookDeliveryRepo,
+    extensionRepo,
     membershipService,
     seatsService,
     AutumnClientLive,
@@ -227,6 +264,30 @@ export interface TestLayerFixtures {
   readonly emailsSent?: InviteEmailArgs[];
   /** Whether the in-memory email port reports delivery (default `true`). */
   readonly emailDelivered?: boolean;
+  /** Webhooks visible to {@link WebhookRepo} (MUTATED by insert/patch/delete). */
+  readonly webhooks?: Webhook[];
+  /** Tables backing the webhook worker grid paths. */
+  readonly tables?: GridTable[];
+  /** Columns backing mapping validation + getTable. */
+  readonly columns?: GridColumn[];
+  /** Rows backing insert/upsert (MUTATED by the worker paths). */
+  readonly rows?: GridRow[];
+  /** Cells backing setCell/upsert (MUTATED by the worker paths). */
+  readonly cells?: GridCell[];
+  /** Per-workspace cloud-actions quota (MUTATED by the meter). */
+  readonly quotas?: Map<string, WorkspaceQuota>;
+  /**
+   * Shared-credential ciphertext for the webhook worker grid keyed
+   * `${workspaceId}:${extensionId}`. Distinct from {@link credentials} above
+   * (the CredentialRepo rows) — this backs {@link WebhookRepo}'s worker reads.
+   */
+  readonly webhookCredentials?: Map<string, string>;
+  /** Delivery-log rows (MUTATED by recordDelivery + the 50-row prune). */
+  readonly deliveries?: WebhookDelivery[];
+  /** Installed extensions (MUTATED by saveExtension). */
+  readonly extensions?: Extension[];
+  /** Override the crypto service (defaults to the deterministic test layer). */
+  readonly crypto?: Layer.Layer<CredentialCryptoService>;
 }
 
 /**
@@ -255,20 +316,7 @@ const membershipsToMemberRows = (
  */
 export const TestLayer = (
   fixtures: TestLayerFixtures = {},
-): Layer.Layer<
-  | WorkspaceService
-  | WorkspaceRepo
-  | WorkspaceMemberRepo
-  | MembershipService
-  | SeatsService
-  | BillingService
-  | AutumnClient
-  | InvitationService
-  | InvitationRepo
-  | CredentialService
-  | CredentialRepo
-  | CryptoService
-> => {
+): Layer.Layer<AppServices> => {
   const memberships = fixtures.memberships ?? [];
   const memberRows = fixtures.members ?? membershipsToMemberRows(memberships);
   const fixtureUsers = fixtures.users ?? [];
@@ -281,6 +329,19 @@ export const TestLayer = (
       email: u.email ?? null,
     })),
   );
+  const webhookRepo = webhookRepoLayer({
+    webhooks: fixtures.webhooks,
+    tables: fixtures.tables,
+    columns: fixtures.columns,
+    rows: fixtures.rows,
+    cells: fixtures.cells,
+    quotas: fixtures.quotas,
+    credentials: fixtures.webhookCredentials,
+  });
+  const webhookDeliveryRepo = webhookDeliveryRepoLayer(
+    fixtures.deliveries ?? [],
+  );
+  const extensionRepo = extensionRepoLayer(fixtures.extensions ?? []);
   const credentialRepo = credentialRepoLayer(fixtures.credentials ?? []);
   // ONE shared member store backs both the data repo and the authz guard, so a
   // membership inserted via WorkspaceMemberRepo (e.g. createWorkspace's owner
@@ -342,15 +403,31 @@ export const TestLayer = (
     Layer.provide(membershipService),
     Layer.provide(CredentialOwnershipService.Default),
   );
+  const webhookService = WebhookService.Default.pipe(
+    Layer.provide(webhookRepo),
+    Layer.provide(webhookDeliveryRepo),
+    Layer.provide(membershipService),
+    Layer.provide(CellMerge.Default),
+    Layer.provide(fixtures.crypto ?? credentialCryptoTest()),
+  );
+  const extensionService = ExtensionService.Default.pipe(
+    Layer.provide(extensionRepo),
+    Layer.provide(membershipService),
+  );
   return Layer.mergeAll(
     workspaceService,
     billingService,
     invitationService,
     credentialService,
+    webhookService,
+    extensionService,
     workspaceRepo,
     workspaceMemberRepo,
     invitationRepo,
     credentialRepo,
+    webhookRepo,
+    webhookDeliveryRepo,
+    extensionRepo,
     membershipService,
     seatsService,
     autumn,
@@ -371,4 +448,9 @@ export type AppServices =
   | InvitationRepo
   | CredentialService
   | CredentialRepo
-  | CryptoService;
+  | CryptoService
+  | WebhookService
+  | WebhookRepo
+  | WebhookDeliveryRepo
+  | ExtensionService
+  | ExtensionRepo;

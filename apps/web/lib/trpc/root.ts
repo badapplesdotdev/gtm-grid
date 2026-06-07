@@ -17,7 +17,9 @@ import { WorkspaceService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { billingRouter } from "./routers/billing";
 import { credentialsRouter } from "./routers/credentials";
+import { extensionsRouter } from "./routers/extensions";
 import { invitationsRouter } from "./routers/invitations";
+import { webhooksRouter } from "./routers/webhooks";
 import { workspacesRouter } from "./routers/workspaces";
 import {
   publicProcedure,
@@ -63,6 +65,10 @@ export const appRouter = router({
   invitations: invitationsRouter,
   /** Connector credentials — encrypt/save, member-gated decrypt, metadata list. */
   credentials: credentialsRouter,
+  /** Member-gated webhook config CRUD (TRI-3250). */
+  webhooks: webhooksRouter,
+  /** Member-gated connector extensions (TRI-3250). */
+  extensions: extensionsRouter,
 
   // W2 (other lanes): projects, tables, columns, rows.
 });

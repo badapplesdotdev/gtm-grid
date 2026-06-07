@@ -38,6 +38,7 @@ function toTrpcError(tag: string | undefined, message: string): TRPCError {
     case "CredentialOwnershipError":
       return new TRPCError({ code: "FORBIDDEN", message });
     case "WorkspaceNotFoundError":
+    case "WebhookNotFoundError":
       return new TRPCError({ code: "NOT_FOUND", message });
     // Billing/seats domain (W2): a forged/unknown plan is a bad request; a
     // reached seat cap is a precondition failure; a misconfigured plan with no
@@ -54,7 +55,14 @@ function toTrpcError(tag: string | undefined, message: string): TRPCError {
     case "InvalidInvitationError":
       return new TRPCError({ code: "NOT_FOUND", message });
     case "InvalidEmailError":
+    // Webhooks domain (W2): malformed mapping/config/cell values are bad requests.
+    case "InvalidMappingError":
+    case "InvalidConfigError":
+    case "InvalidCellError":
       return new TRPCError({ code: "BAD_REQUEST", message });
+    // Webhooks domain (W2): exceeding the cloud-actions cap is a forbidden op.
+    case "CloudActionsLimitError":
+      return new TRPCError({ code: "FORBIDDEN", message });
     default:
       return new TRPCError({ code: "INTERNAL_SERVER_ERROR", message });
   }
