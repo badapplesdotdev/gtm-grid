@@ -270,11 +270,24 @@ values.
 | `CREDENTIALS_MASTER_KEY` | Convex deployment env | 32-byte backend master key (KEK) that wraps per-workspace credential keys |
 | `JWT_PRIVATE_KEY` + `JWKS` | Convex deployment env | Convex Auth signing keys (generate via `npx @convex-dev/auth`) |
 | `WEBHOOK_WORKER_SECRET` | Convex **and** the Vercel app | shared bearer the webhook worker uses to call the secret-gated `/webhook/*` actions (must match on both) |
+| `AUTH_RESEND_KEY` | Convex deployment env | Resend API key. When set, turns ON sign-up **email verification** + **password reset** and sends **invite** emails. Unset = those flows degrade gracefully (sign-up needs no code; invites still create a copyable accept link). |
+| `RESEND_FROM` | Convex deployment env (optional) | Verified sender, e.g. `gtm grid <noreply@gtmgrid.dev>`. Defaults to Resend's shared `onboarding@resend.dev` so email works before a domain is verified. |
+| `INVITE_BASE_URL` | Convex deployment env (optional) | Base URL of the web app that serves the `/invite/<token>` accept page (e.g. `https://gtmgrid.dev`). Falls back to `SITE_URL`; only used to build invite accept links. |
 
 The webhook worker (`apps/web`, on Vercel) also needs, in its own project env:
 `CONVEX_URL` + `CONVEX_SITE_URL` (the target Convex deployment), `WEBHOOK_WORKER_SECRET`
 (same value as on Convex), and `INNGEST_EVENT_KEY` + `INNGEST_SIGNING_KEY` (Inngest).
 `SITE_URL` (the app's public URL) is set on the Convex deployment for auth redirects.
+
+**Email & invites.** Account email verification + password reset use Convex Auth's
+`Password` provider with Resend-backed OTP providers (`convex/auth.ts`, gated on
+`AUTH_RESEND_KEY`). Team invites are **by email**: an owner/admin calls
+`invitations.inviteByEmail`, which seat-gates via Autumn, creates a pending
+`invitations` row, and emails an accept link (`https://<INVITE_BASE_URL>/invite/<token>`,
+served by `apps/web/app/invite/[token]`). The invitee accepts in-app via the
+email-matched banner (`invitations.myPendingInvitations`) or the link/`?invite=` token;
+acceptance re-checks seats and inserts the membership. All outbound mail funnels through
+`convex/email.ts`.
 
 Run Convex codegen before typechecking the cloud code — the client imports
 `convex/_generated/*`, which only exists **after** a deployment login generates

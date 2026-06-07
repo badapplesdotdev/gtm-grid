@@ -60,22 +60,23 @@ describe("enabledProviderList", () => {
   });
 
   it("returns no providers when neither is enabled (OAuth row stays hidden)", () => {
-    expect(enabledProviderList({ github: false, google: false })).toEqual([]);
+    expect(
+      enabledProviderList({ github: false, google: false, emailAuth: false }),
+    ).toEqual([]);
   });
 
   it("returns only the enabled provider when one is configured", () => {
-    expect(enabledProviderList({ github: true, google: false })).toEqual([
-      "github",
-    ]);
-    expect(enabledProviderList({ github: false, google: true })).toEqual([
-      "google",
-    ]);
+    expect(
+      enabledProviderList({ github: true, google: false, emailAuth: false }),
+    ).toEqual(["github"]);
+    expect(
+      enabledProviderList({ github: false, google: true, emailAuth: false }),
+    ).toEqual(["google"]);
   });
 
   it("returns both in display order (google first) when both are enabled", () => {
-    expect(enabledProviderList({ github: true, google: true })).toEqual([
-      "google",
-      "github",
-    ]);
+    expect(
+      enabledProviderList({ github: true, google: true, emailAuth: true }),
+    ).toEqual(["google", "github"]);
   });
 });

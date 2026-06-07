@@ -20,17 +20,32 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "gtm grid — every column is a function",
+  title: "GTM Grid — every column is a function",
   description:
     "A local-first, programmable spreadsheet for go-to-market teams. Every column is a function — a manual value, an AI prompt, or a connector call. Bring your own AI key; execution stays on your machine.",
-  applicationName: "gtm grid",
+  applicationName: "GTM Grid",
   metadataBase: new URL("https://gtmgrid.com"),
+  icons: {
+    icon: "/icon.png",
+    shortcut: "/favicon.ico",
+    apple: "/apple-icon.png",
+  },
   openGraph: {
-    title: "gtm grid — every column is a function",
+    title: "GTM Grid — every column is a function",
     description:
       "A local-first, programmable spreadsheet for go-to-market teams. Bring your own key; execution stays local.",
-    siteName: "gtm grid",
+    siteName: "GTM Grid",
     type: "website",
+    images: [
+      { url: "/brand/og-cover.jpg", width: 1849, height: 618, alt: "GTM Grid" },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "GTM Grid — every column is a function",
+    description:
+      "A local-first, programmable spreadsheet for go-to-market teams. Bring your own key; execution stays local.",
+    images: ["/brand/og-cover.jpg"],
   },
 };
 

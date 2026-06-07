@@ -152,6 +152,49 @@ export default defineSchema({
     .index("by_user", ["userId"])
     .index("by_workspace_user", ["workspaceId", "userId"]),
 
+  /**
+   * Pending workspace invitations (invite-by-EMAIL). Unlike a `members` row (a
+   * live membership), an invitation is a token + email a workspace owner/admin
+   * created; the invitee becomes a member only when they ACCEPT it while signed
+   * in with the matching email (convex/invitations.ts `acceptInvitation*`). This
+   * decouples inviting from the invitee already having an account.
+   *
+   * Seats are enforced again at accept time (the transactional ceiling in
+   * `insertMember`), so a pending invite never silently overshoots the plan.
+   *
+   * by_workspace lists a workspace's invites (settings UI + revoke); by_token
+   * resolves an accept link; by_email powers "invitations waiting for me" (the
+   * in-app banner keyed on the signed-in user's email); by_workspace_email
+   * enforces one live invite per (workspace, email).
+   */
+  invitations: defineTable({
+    workspaceId: v.id("workspaces"),
+    /** Invitee email, normalized to lowercase on write. */
+    email: v.string(),
+    /** Role granted on accept. */
+    role: memberRole,
+    /** High-entropy accept token (the link/code segment). Minted via Web Crypto. */
+    token: v.string(),
+    /** Lifecycle: pending until accepted or revoked. */
+    status: v.union(
+      v.literal("pending"),
+      v.literal("accepted"),
+      v.literal("revoked"),
+    ),
+    /** Convex Auth user id of the inviting owner/admin. */
+    invitedBy: v.string(),
+    createdAt: v.number(),
+    /** Epoch ms after which the invite can no longer be accepted. */
+    expiresAt: v.number(),
+    /** Convex Auth user id that accepted (null/absent until accepted). */
+    acceptedBy: v.optional(v.union(v.string(), v.null())),
+    acceptedAt: v.optional(v.union(v.number(), v.null())),
+  })
+    .index("by_workspace", ["workspaceId"])
+    .index("by_token", ["token"])
+    .index("by_email", ["email"])
+    .index("by_workspace_email", ["workspaceId", "email"]),
+
   /** A cloud project (a collection of tables) scoped to one workspace. */
   projects: defineTable({
     workspaceId: v.id("workspaces"),

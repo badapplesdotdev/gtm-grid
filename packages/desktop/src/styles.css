@@ -1,7 +1,8 @@
 /* ─────────────────────────────────────────────
-   gtm grid · design system
+   GTM Grid · design system
    Font: Berkeley Mono (mono) + DM Sans
-   Accent: brand red #E60006  Surface: near-white
+   Accent: brand green #22C55E  Surface: near-white
+   Brand palette + asset usage: see /DESIGN.md (Anymark brand kit).
 ───────────────────────────────────────────── */
 
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,300&display=swap');
@@ -17,16 +18,20 @@
   --text:        #111118;
   --text-2:      #5a5a6e;
   --text-3:      #9696a8;
-  /* brand red ramp */
-  --red-700: #B00004;
-  --red-600: #B30005;
-  --red-500: #E60006;
-  --red-300: #FF4D51;
-  --red-200: #FF8083;
-  --red-100: #FFB3B5;
+  /* brand green ramp (DESIGN.md) */
+  --green-800: #0B411F;
+  --green-700: #136D34;
+  --green-600: #1A9849;
+  --green-500: #22C55E; /* the brand primary */
+  --green-400: #3BDD77;
+  --green-300: #67E595;
+  --green-200: #92ECB3;
+  --green-100: #BEF4D2;
 
-  --accent:      #E60006;
-  --accent-2:    #FF4D51;
+  /* --accent drives solid fills with white text (buttons, run pills), so it
+     resolves to color-600 for legibility; --accent-2 is the lighter primary. */
+  --accent:      #1A9849;
+  --accent-2:    #22C55E;
   --accent-bg:   color-mix(in srgb, var(--accent) 11%, var(--surface));
   --accent-soft: color-mix(in srgb, var(--accent) 9%, transparent);
   --accent-ring:   color-mix(in srgb, var(--accent) 18%, transparent);
@@ -73,10 +78,11 @@
 /* ── Accent presets (data-accent on <html>) ───────────────────
    Only --accent / --accent-2 need overriding; the bg/soft/ring/
    shadow tokens are color-mixes that track --accent. */
-[data-accent="green"]  { --accent: #1f9d57; --accent-2: #34d27e; }
+[data-accent="green"]  { --accent: #1A9849; --accent-2: #22C55E; } /* brand default */
 [data-accent="blue"]   { --accent: #2563eb; --accent-2: #60a5fa; }
 [data-accent="purple"] { --accent: #7c3aed; --accent-2: #a78bfa; }
 [data-accent="orange"] { --accent: #ea580c; --accent-2: #fb923c; }
+[data-accent="red"]    { --accent: #E60006; --accent-2: #FF4D51; }
 
 /* ── Dark theme ───────────────────────────────────────────── */
 [data-theme="dark"] {
@@ -90,8 +96,8 @@
   --text:        #ecedf2;
   --text-2:      #9c9caa;
   --text-3:      #67677a;
-  --accent:      #ff3b3f;
-  --accent-2:    #ff6669;
+  --accent:      #22C55E;
+  --accent-2:    #3BDD77;
   --danger:      #ff5a5f;
   --danger-bg:   color-mix(in srgb, #ff5a5f 16%, var(--surface));
   --success:     #34d27e;
@@ -865,22 +871,66 @@ html, body, #root {
   to { transform: rotate(360deg); }
 }
 
-/* Forced-auth gate loading splash (pro build, while resolving session). */
-.auth-gate-splash {
+/* ── Full-page branded app loader (AppLoader.tsx) ──────────────
+   The canonical full-page loading screen: the brand chevrons pulse
+   in sequence over a soft breathing scale. Use anywhere the whole
+   view is blocked on a load. */
+.app-loader {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 18px;
   height: 100vh;
   width: 100vw;
   background: var(--bg);
+  color: var(--text-2);
 }
-.auth-gate-spinner {
-  width: 28px;
-  height: 28px;
-  border: 2.5px solid var(--border-2);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
+.brand-loader-mark {
+  display: block;
+  animation: brand-loader-breathe 2.4s ease-in-out infinite;
+}
+.brand-loader-chevron {
+  animation: brand-loader-pulse 1.4s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.brand-loader-chevron:nth-child(1) { animation-delay: 0s; }
+.brand-loader-chevron:nth-child(2) { animation-delay: 0.18s; }
+.brand-loader-chevron:nth-child(3) { animation-delay: 0.36s; }
+.app-loader-label {
+  margin: 0;
+  font: 500 13px var(--font-sans);
+  letter-spacing: -0.01em;
+  color: var(--text-3);
+}
+
+@keyframes brand-loader-pulse {
+  0%, 70%, 100% { opacity: 0.22; }
+  35%           { opacity: 1; }
+}
+@keyframes brand-loader-breathe {
+  0%, 100% { transform: scale(0.94); }
+  50%      { transform: scale(1.04); }
+}
+
+/* Respect reduced-motion: hold the mark steady and visible. */
+@media (prefers-reduced-motion: reduce) {
+  .brand-loader-mark { animation: none; }
+  .brand-loader-chevron { animation: none; opacity: 1; }
+}
+
+/* Visually-hidden text for screen readers. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .cell-error {
@@ -2343,6 +2393,11 @@ html, body, #root {
 .ws-member-role { font-size: 11px; color: var(--text-3); text-transform: capitalize; }
 .ws-invite-row { display: flex; gap: 8px; align-items: center; }
 .ws-invite-row .form-input { flex: 1; }
+/* Pending-invite rows reuse .ws-member-row but add gap + let the email grow so
+   the Copy link / Revoke buttons sit together at the right. */
+.ws-member-row { gap: 8px; }
+.ws-member-row .ws-member-name { flex: 1; }
+.ws-member-row .btn { padding: 2px 8px; font-size: 11px; }
 
 /* The plan-selection upgrade cards now reuse the shared onboarding PlanGrid
    (cloud/onboarding/onboarding.css), so the old .ws-plan-* card styles were
@@ -2754,3 +2809,29 @@ button.import-type:hover { background: var(--surface-3); }
 /* chooser: disabled (local) webhook tile */
 .acx-item.acx-disabled { cursor: not-allowed; opacity: 0.55; }
 .acx-item.acx-disabled:hover { background: transparent; }
+
+/* ── Pending-invitation accept banner ─────────────────────────────────────── */
+.pending-invites {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(560px, calc(100vw - 24px));
+}
+.pending-invite-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-ring);
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+  font-size: 13px;
+  color: var(--text-1);
+}
+.pending-invite-text { flex: 1; min-width: 0; }

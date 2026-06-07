@@ -27,8 +27,15 @@
 
 import GitHub from "@auth/core/providers/github";
 import Google from "@auth/core/providers/google";
+import { Email } from "@convex-dev/auth/providers/Email";
 import { Password } from "@convex-dev/auth/providers/Password";
 import { convexAuth } from "@convex-dev/auth/server";
+import {
+  emailEnabled,
+  passwordResetEmail,
+  sendEmail,
+  verificationEmail,
+} from "./email.js";
 import { query } from "./_generated/server.js";
 
 /**
@@ -53,9 +60,60 @@ const googleEnabled =
  */
 const DESKTOP_DEEP_LINK_PREFIX = "gtmgrid://";
 
+/**
+ * Whether email-backed account flows (sign-up VERIFICATION + password RESET) are
+ * active. Both require Resend; without `AUTH_RESEND_KEY` the Password provider is
+ * registered WITHOUT `verify`/`reset` so sign-up still works (no verification)
+ * and the deployment stays usable — exactly the OAuth-conditional pattern above.
+ */
+const emailAuthEnabled = emailEnabled();
+
+/**
+ * Generate a high-entropy 8-digit numeric OTP using Web Crypto (available in
+ * Convex's default runtime). Numeric so it's easy to type from an email; the
+ * verification/reset flows always also carry the `email`, so the OTP only needs
+ * to be unguessable within its 15-minute window.
+ */
+function generateOtp(): string {
+  const buf = new Uint32Array(8);
+  globalThis.crypto.getRandomValues(buf);
+  return Array.from(buf, (n) => (n % 10).toString()).join("");
+}
+
+/**
+ * OTP provider for SIGN-UP email verification. Mints a code, emails it via the
+ * shared Resend seam (convex/email.ts), and Convex Auth checks it against the
+ * `email` on the `email-verification` flow. 15-minute expiry.
+ */
+const ResendOtpVerification = Email({
+  id: "resend-otp",
+  maxAge: 60 * 15,
+  generateVerificationToken() {
+    return Promise.resolve(generateOtp());
+  },
+  async sendVerificationRequest({ identifier: email, token }) {
+    await sendEmail(verificationEmail(email, token));
+  },
+});
+
+/** OTP provider for PASSWORD RESET (the `reset` / `reset-verification` flows). */
+const ResendOtpPasswordReset = Email({
+  id: "resend-otp-password-reset",
+  maxAge: 60 * 15,
+  generateVerificationToken() {
+    return Promise.resolve(generateOtp());
+  },
+  async sendVerificationRequest({ identifier: email, token }) {
+    await sendEmail(passwordResetEmail(email, token));
+  },
+});
+
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
   providers: [
-    Password,
+    Password({
+      verify: emailAuthEnabled ? ResendOtpVerification : undefined,
+      reset: emailAuthEnabled ? ResendOtpPasswordReset : undefined,
+    }),
     ...(githubEnabled ? [GitHub] : []),
     ...(googleEnabled ? [Google] : []),
   ],
@@ -96,5 +154,12 @@ export const enabledProviders = query({
   handler: async () => ({
     github: githubEnabled,
     google: googleEnabled,
+    /**
+     * Whether email verification + password reset are active (Resend configured).
+     * The UI uses this to show the verification-code step after sign-up and the
+     * "Forgot password?" link; when false those flows are hidden because no email
+     * would ever arrive. Booleans only — never a secret.
+     */
+    emailAuth: emailAuthEnabled,
   }),
 });

@@ -2,24 +2,27 @@
  * Workspace settings — members + seats + invite/upgrade (T10), plain React.
  *
  * Renders the members roster for the active workspace, the seats used/limit
- * badge, and an "Invite member" action. The invite path is gated on seats by the
- * Convex `inviteMember` action (Autumn, T6): when the workspace is over its limit
- * the action returns an Autumn checkout URL instead of adding anyone — this
- * component opens that URL in the system browser and shows an upgrade modal
- * (reusing the existing `.overlay` / `.modal` patterns from App.tsx).
+ * badge, an invite-by-EMAIL action, and the list of pending invitations. The
+ * invite path is gated on seats by the Convex `invitations.inviteByEmail` action
+ * (Autumn, T6): when the workspace is over its limit the action returns an Autumn
+ * checkout URL instead of inviting anyone — this component opens that URL in the
+ * system browser and shows an upgrade modal (reusing the existing `.overlay` /
+ * `.modal` patterns from App.tsx). On success a PENDING invite is created; the
+ * pending list (copy accept link / revoke) updates live via `listInvitations`.
  *
  * Following the repo convention, this file is presentation + event wiring only.
  * The invite/upgrade LOGIC (session guard, branch on the action result, open the
  * checkout URL) lives in the Effect service in ./invite.ts and is unit-tested
- * there. The roster + seat usage come from the reactive `listMembers` query, so
- * an invite by any member appears live.
+ * there. The roster + seat usage come from the reactive `listMembers` query, and
+ * the pending invites from the reactive `listInvitations` query, so an invite or
+ * revoke by any member appears live.
  *
  * Entirely gated on a configured Convex deployment + a signed-in workspace: when
  * either is absent it renders nothing, so the local-only app is untouched.
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { useAction, useConvexAuth } from "convex/react";
+import { useAction, useConvexAuth, useMutation, useQuery } from "convex/react";
 import { Effect, Layer } from "effect";
 import { type BillingCycle, resolvePlanId } from "@gtmgrid/cloud";
 import { PlanGrid, BillingToggle } from "./onboarding/PlanGrid";
@@ -66,8 +69,17 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
   const { isAuthenticated } = useConvexAuth();
   const members = useMembers(workspaceId);
 
-  // The Convex `inviteMember` action, wrapped as the Effect `InviteRunner` port.
-  const inviteAction = useAction(api.workspaces.inviteMember);
+  // The Convex `invitations.inviteByEmail` action, wrapped as the Effect
+  // `InviteRunner` port.
+  const inviteAction = useAction(api.invitations.inviteByEmail);
+
+  // Pending invitations (reactive): drives the copy-link / revoke list, and
+  // updates live when an invite is created or revoked by any member.
+  const pendingInvites = useQuery(
+    api.invitations.listInvitations,
+    workspaceId ? { workspaceId } : "skip",
+  );
+  const revokeInvitation = useMutation(api.invitations.revokeInvitation);
 
   // Compose the Live invite Layer once: the React-bound runner + system-browser
   // opener feeding the orchestration. `useMemo` keeps it stable across renders.
@@ -81,7 +93,7 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
                 try: () =>
                   inviteAction({
                     workspaceId: input.workspaceId as Id<"workspaces">,
-                    userId: input.userId,
+                    email: input.email,
                     role: input.role,
                   }) as Promise<InviteActionResult>,
                 catch: (cause) =>
@@ -129,21 +141,24 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
     [checkoutAction],
   );
 
-  const [inviteUserId, setInviteUserId] = useState("");
+  const [inviteEmail, setInviteEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A brief, non-error confirmation under the invite row (e.g. "Invite sent…").
+  const [notice, setNotice] = useState<string | null>(null);
   // When true, the plan-selection upgrade modal is shown.
   const [showUpgrade, setShowUpgrade] = useState(false);
 
   const submitInvite = useCallback(async () => {
-    const userId = inviteUserId.trim();
-    if (!userId || busy || workspaceId === null) return;
+    const email = inviteEmail.trim();
+    if (!email || busy || workspaceId === null) return;
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       const outcome = await runInvite(
         isAuthenticated,
-        { workspaceId, userId, role: "member" },
+        { workspaceId, email, role: "member" },
         inviteLayer,
       );
       if (outcome.status === "checkout") {
@@ -151,16 +166,55 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
         // user can choose team / business / unlimited (C27), rather than only
         // opening the default team checkout.
         setShowUpgrade(true);
+      } else if (outcome.status === "already_member") {
+        // No-op on the backend; tell the user and leave the field as-is.
+        setNotice(`${outcome.email} is already a member.`);
       } else {
-        // Added: clear the field; the roster updates live via the query.
-        setInviteUserId("");
+        // Invited: clear the field; the pending list updates live via the query.
+        setInviteEmail("");
+        setNotice(
+          outcome.emailSent
+            ? `Invite sent to ${outcome.email}.`
+            : `Invite created for ${outcome.email}. Email isn't configured — copy the accept link from the pending list below.`,
+        );
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Invite failed.");
     } finally {
       setBusy(false);
     }
-  }, [inviteUserId, busy, workspaceId, isAuthenticated, inviteLayer]);
+  }, [inviteEmail, busy, workspaceId, isAuthenticated, inviteLayer]);
+
+  // Copy an accept link to the clipboard (best-effort) for the pending list.
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const copyAcceptLink = useCallback(
+    async (id: string, acceptUrl: string) => {
+      try {
+        await navigator.clipboard.writeText(acceptUrl);
+        setCopiedId(id);
+        // Reset the "Copied" label shortly after.
+        window.setTimeout(() => {
+          setCopiedId((prev) => (prev === id ? null : prev));
+        }, 1500);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not copy the link.");
+      }
+    },
+    [],
+  );
+
+  // Revoke a pending invite; the list updates live via the query.
+  const revoke = useCallback(
+    async (invitationId: Id<"invitations">) => {
+      setError(null);
+      try {
+        await revokeInvitation({ invitationId });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not revoke the invite.");
+      }
+    },
+    [revokeInvitation],
+  );
 
   // Start checkout for a chosen plan (C27): calls the billing action with the
   // planId and opens the returned Autumn URL in the system browser. Errors
@@ -242,15 +296,16 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
             )}
           </div>
 
-          {/* Invite action. The over-limit path opens the upgrade modal. */}
+          {/* Invite by email. The over-limit path opens the upgrade modal. */}
           <div className="form-row">
             <label className="form-label">Invite member</label>
             <div className="ws-invite-row">
               <input
                 className="form-input"
-                placeholder="User id to add"
-                value={inviteUserId}
-                onChange={(e) => setInviteUserId(e.target.value)}
+                type="email"
+                placeholder="teammate@company.com"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
                 disabled={busy}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") void submitInvite();
@@ -259,15 +314,55 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
               <button
                 className="btn btn-primary"
                 onClick={submitInvite}
-                disabled={busy || !inviteUserId.trim()}
+                disabled={busy || !inviteEmail.trim()}
               >
                 {busy ? "Inviting…" : "Invite"}
               </button>
             </div>
+            {notice && (
+              <div style={{ fontSize: 12, color: "var(--text-3)", padding: "0 2px" }}>
+                {notice}
+              </div>
+            )}
             {error && (
               <div className="account-menu-error" role="alert">
                 {error}
               </div>
+            )}
+          </div>
+
+          {/* Pending invitations (reactive): copy the accept link or revoke. */}
+          <div className="form-row">
+            <label className="form-label">Pending invitations</label>
+            {pendingInvites === undefined ? (
+              <div className="skeleton-row">
+                <div className="shimmer skeleton-bar" style={{ width: "60%", height: 13 }} />
+              </div>
+            ) : pendingInvites.length === 0 ? (
+              <div style={{ fontSize: 12, color: "var(--text-3)" }}>
+                No pending invitations
+              </div>
+            ) : (
+              <ul className="ws-member-list">
+                {pendingInvites.map((inv) => (
+                  <li key={inv._id} className="ws-member-row">
+                    <span className="ws-member-name">{inv.email}</span>
+                    <span className="ws-member-role">{inv.role}</span>
+                    <button
+                      className="btn btn-outline"
+                      onClick={() => void copyAcceptLink(inv._id, inv.acceptUrl)}
+                    >
+                      {copiedId === inv._id ? "Copied" : "Copy link"}
+                    </button>
+                    <button
+                      className="btn btn-outline"
+                      onClick={() => void revoke(inv._id)}
+                    >
+                      Revoke
+                    </button>
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         </div>

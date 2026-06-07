@@ -2,11 +2,13 @@ import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties, 
 import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo } from "./api";
 import AgentPanel from "./AgentPanel";
 import { LogoMark } from "./Logo";
+import { AppLoader } from "./AppLoader";
 import CellDetails, { extractCode } from "./CellDetails";
 import { ExtensionPanel, AiProviderPanel, ExtensionsBrowse, BrandIcon } from "./Panels";
 import { AddColumnPopover, FunctionsModal } from "./AddColumn";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { AccountBar } from "./cloud/AccountBar";
+import { PendingInvites } from "./cloud/PendingInvites";
 import { WorkspaceSettings } from "./cloud/WorkspaceSettings";
 import { OnboardingFlow } from "./cloud/onboarding/OnboardingFlow";
 import { cloudEnabled } from "./cloud/convex";
@@ -1122,11 +1124,7 @@ export default function App() {
   // OSS builds never set cloudEnabled, so this is a no-op there (local-first,
   // no account needed).
   if (cloudEnabled && authLoading) {
-    return (
-      <div className="app-shell auth-gate-splash">
-        <div className="auth-gate-spinner" aria-label="Loading" />
-      </div>
-    );
+    return <AppLoader inShell label="Signing you in…" />;
   }
   if (cloudEnabled && !isAuthenticated) {
     return (
@@ -1142,6 +1140,9 @@ export default function App() {
 
   return (
     <div className="app-shell" style={{ ["--sidebar-w"]: `${sidebarWidth}px` } as CSSProperties}>
+      {/* Workspace-invite accept banner (email-matched + ?invite= URL token).
+          Self-gates: renders nothing when signed out / no pending invites. */}
+      <PendingInvites onAccepted={setActiveWorkspaceId} />
       <div className="app">
       {/* ── Sidebar ─────────────────────── */}
       <aside className="sidebar">
@@ -1151,7 +1152,7 @@ export default function App() {
         <div className="sidebar-header">
           <LogoMark size={22} />
           <button className="sidebar-proj" onClick={() => setShowProjects(true)} title="Switch project / workspace">
-            <span className="brand-name">gtm grid</span>
+            <span className="brand-name">GTM Grid</span>
             <span className="sidebar-project">
               {inCloud ? cloudProject!.name : projectName}
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>

@@ -30,6 +30,7 @@ import { LogoMark } from "../../Logo";
 import { friendlyAuthError } from "../authErrors";
 import {
   useAccountActions,
+  useEmailAuthEnabled,
   useEnabledProviders,
   type OAuthProvider,
 } from "../auth";
@@ -151,7 +152,7 @@ function Pane(props: {
     <>
       <div className="ob-form-topbar">
         <LogoMark size={24} />
-        <span className="ob-wordmark">gtm grid</span>
+        <span className="ob-wordmark">GTM Grid</span>
         <span className="ob-spacer" />
         {topbarRight}
       </div>
@@ -268,6 +269,19 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
   const [state, setStateRaw] = useState<FlowState>(INITIAL);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * The email account SUB-flow, overlaid on the auth entry screens: the post
+   * sign-up verification step ("verify") and the password-reset request/confirm
+   * steps ("forgot" → "reset"). `null` = the normal screen flow. Kept separate
+   * from the wizard's {@link OnboardingScreen} state machine so the pure
+   * flow-logic transitions (and their tests) stay untouched.
+   */
+  const [authStep, setAuthStep] = useState<
+    "verify" | "forgot" | "reset" | null
+  >(null);
+  /** OTP code (verification / reset) + the new password (reset). */
+  const [code, setCode] = useState("");
+  const [newPassword, setNewPassword] = useState("");
 
   const set = useCallback((patch: Partial<FlowState>) => {
     setStateRaw((s) => ({ ...s, ...patch }));
@@ -278,11 +292,20 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
   }, []);
 
   // ── Real backend bindings ───────────────────────────────────────────────
-  const { signInWithPassword } = useAccountActions();
+  const {
+    signInWithPassword,
+    verifyEmailCode,
+    requestPasswordReset,
+    resetPasswordWithCode,
+  } = useAccountActions();
+  // Whether email verification + password reset are active (Resend configured).
+  // Gates the post-sign-up verification step and the "Forgot password?" link.
+  const emailAuthEnabled = useEmailAuthEnabled();
   // Enabled OAuth providers (C17): drives the OAuth row on the auth screens.
   const providers = useEnabledProviders();
   const createWorkspace = useMutation(api.workspaces.createWorkspace);
-  const inviteAction = useAction(api.workspaces.inviteMember);
+  // Invite by EMAIL (creates a pending invitation + emails the accept link).
+  const inviteAction = useAction(api.invitations.inviteByEmail);
   const checkoutAction = useAction(api.billing.checkout);
   const saveCredentialAction = useAction(api.credentials.saveCredential);
 
@@ -359,7 +382,19 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
       setBusy(true);
       setError(null);
       try {
-        await signInWithPassword(state.email.trim(), state.password, flow);
+        const { signingIn } = await signInWithPassword(
+          state.email.trim(),
+          state.password,
+          flow,
+        );
+        // With email verification enabled, a sign-up returns `signingIn: false`
+        // — the account exists but a code was emailed and must be verified
+        // before the session starts. Show the verification step.
+        if (!signingIn) {
+          setCode("");
+          setAuthStep("verify");
+          return;
+        }
         // In forced (pro gate) mode the App owns post-login routing: once
         // `isAuthenticated` flips it unmounts this flow and re-opens workspace
         // creation only when the user has zero workspaces. Advancing here too
@@ -373,6 +408,55 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
     },
     [busy, state.email, state.password, signInWithPassword, go, forced],
   );
+
+  /** Verify the OTP emailed on sign-up; on success the session starts. */
+  const submitVerify = useCallback(async () => {
+    if (busy || !code.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await verifyEmailCode(state.email.trim(), code.trim());
+      setAuthStep(null);
+      if (!forced) go("workspace");
+    } catch (e) {
+      setError(friendlyAuthError(e, "signUp"));
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, code, state.email, verifyEmailCode, forced, go]);
+
+  /** Request a password-reset code, then advance to the confirm step. */
+  const submitForgot = useCallback(async () => {
+    if (busy || !state.email.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await requestPasswordReset(state.email.trim());
+      setCode("");
+      setNewPassword("");
+      setAuthStep("reset");
+    } catch (e) {
+      setError(friendlyAuthError(e, "signIn"));
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, state.email, requestPasswordReset]);
+
+  /** Confirm the reset code + new password; on success the session starts. */
+  const submitReset = useCallback(async () => {
+    if (busy || !code.trim() || !newPassword) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await resetPasswordWithCode(state.email.trim(), code.trim(), newPassword);
+      setAuthStep(null);
+      if (!forced) go("workspace");
+    } catch (e) {
+      setError(friendlyAuthError(e, "signIn"));
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, code, newPassword, state.email, resetPasswordWithCode, forced, go]);
 
   const submitWorkspace = useCallback(async () => {
     const name = state.workspaceName.trim();
@@ -401,13 +485,13 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
     setBusy(true);
     setError(null);
     try {
-      // Invite each row against the REAL inviteMember action. The action gates on
-      // seats; an over-limit result returns a checkout URL we surface in the plan
-      // step rather than blocking onboarding here.
+      // Invite each row by EMAIL against inviteByEmail. The action gates on
+      // seats; an over-limit result returns a checkout URL surfaced in the plan
+      // step rather than blocking onboarding here, so we just advance.
       for (const row of rows) {
         await inviteAction({
           workspaceId: wid,
-          userId: row.value.trim(),
+          email: row.value.trim(),
           role: row.role,
         });
       }
@@ -505,7 +589,50 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
             </button>
           )}
 
-          {screen === "signin" && (
+          {authStep === "verify" ? (
+            <VerifyEmail
+              email={state.email}
+              code={code}
+              setCode={setCode}
+              busy={busy}
+              error={error}
+              onSubmit={() => void submitVerify()}
+              onBack={() => {
+                setAuthStep(null);
+                setError(null);
+              }}
+            />
+          ) : authStep === "forgot" ? (
+            <ForgotPassword
+              email={state.email}
+              setEmail={(v) => set({ email: v })}
+              busy={busy}
+              error={error}
+              onSubmit={() => void submitForgot()}
+              onBack={() => {
+                setAuthStep(null);
+                setError(null);
+              }}
+            />
+          ) : authStep === "reset" ? (
+            <ResetPassword
+              email={state.email}
+              code={code}
+              setCode={setCode}
+              newPassword={newPassword}
+              setNewPassword={setNewPassword}
+              busy={busy}
+              error={error}
+              onSubmit={() => void submitReset()}
+              onResend={() => void submitForgot()}
+              onBack={() => {
+                setAuthStep(null);
+                setError(null);
+              }}
+            />
+          ) : (
+            <>
+              {screen === "signin" && (
             <SignIn
               state={state}
               set={set}
@@ -516,6 +643,14 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
               onSubmit={() => void submitAuth("signIn")}
               onGoSignup={() => go("signup")}
               onSkip={onClose}
+              onForgot={
+                emailAuthEnabled
+                  ? () => {
+                      setError(null);
+                      setAuthStep("forgot");
+                    }
+                  : undefined
+              }
               forced={forced}
             />
           )}
@@ -581,6 +716,8 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
               onEnter={() => onDone(state.workspaceId)}
             />
           )}
+            </>
+          )}
         </div>
 
         {!bleed && (
@@ -609,10 +746,23 @@ function SignIn(props: {
   onSubmit: () => void;
   onGoSignup: () => void;
   onSkip: () => void;
+  /** Open the password-reset flow; absent when email auth is off. */
+  onForgot?: () => void;
   forced?: boolean;
 }) {
-  const { state, set, busy, error, providers, onError, onSubmit, onGoSignup, onSkip, forced } =
-    props;
+  const {
+    state,
+    set,
+    busy,
+    error,
+    providers,
+    onError,
+    onSubmit,
+    onGoSignup,
+    onSkip,
+    onForgot,
+    forced,
+  } = props;
   return (
     <Pane
       screenKey="signin"
@@ -623,7 +773,7 @@ function SignIn(props: {
       }
     >
       <div className="ob-eyebrow">Welcome back</div>
-      <h1 className="ob-screen-title">Sign in to gtm grid</h1>
+      <h1 className="ob-screen-title">Sign in to GTM Grid</h1>
       <p className="ob-screen-sub">
         Pick up where you left off — your tables, connections and runs are
         waiting.
@@ -652,6 +802,11 @@ function SignIn(props: {
           onChange={(v) => set({ password: v })}
           onEnter={onSubmit}
         />
+        {onForgot && (
+          <div className="ob-field-hint" style={{ textAlign: "right" }}>
+            <a onClick={onForgot}>Forgot password?</a>
+          </div>
+        )}
       </div>
 
       {error && <div className="ob-error">{error}</div>}
@@ -749,6 +904,178 @@ function SignUp(props: {
       >
         {busy ? "Creating…" : "Create account"} <ArrowRight s={15} />
       </button>
+    </Pane>
+  );
+}
+
+// ── Sub-screen · Verify email (post sign-up OTP) ────────────────────────────
+function VerifyEmail(props: {
+  email: string;
+  code: string;
+  setCode: (v: string) => void;
+  busy: boolean;
+  error: string | null;
+  onSubmit: () => void;
+  onBack: () => void;
+}) {
+  const { email, code, setCode, busy, error, onSubmit, onBack } = props;
+  return (
+    <Pane screenKey="verify">
+      <div className="ob-eyebrow">Almost there</div>
+      <h1 className="ob-screen-title">Verify your email</h1>
+      <p className="ob-screen-sub">
+        We sent a 6-digit code to{" "}
+        <span className="ob-mono">{email || "your email"}</span>. Enter it below
+        to finish creating your account.
+      </p>
+
+      <div className="ob-field">
+        <label className="ob-field-label">Verification code</label>
+        <TextInput
+          mono
+          placeholder="123456"
+          iconLeft={<Lock s={14} />}
+          value={code}
+          onChange={setCode}
+          onEnter={onSubmit}
+        />
+      </div>
+
+      {error && <div className="ob-error">{error}</div>}
+
+      <button
+        className="ob-btn ob-btn-primary ob-btn-lg ob-btn-block"
+        disabled={busy || !code.trim()}
+        onClick={onSubmit}
+      >
+        {busy ? "Verifying…" : "Verify & continue"} <ArrowRight s={15} />
+      </button>
+
+      <p className="ob-fineprint">
+        Wrong email or didn't get a code? <a onClick={onBack}>Go back</a>.
+      </p>
+    </Pane>
+  );
+}
+
+// ── Sub-screen · Forgot password (request reset code) ───────────────────────
+function ForgotPassword(props: {
+  email: string;
+  setEmail: (v: string) => void;
+  busy: boolean;
+  error: string | null;
+  onSubmit: () => void;
+  onBack: () => void;
+}) {
+  const { email, setEmail, busy, error, onSubmit, onBack } = props;
+  return (
+    <Pane screenKey="forgot">
+      <div className="ob-eyebrow">Reset password</div>
+      <h1 className="ob-screen-title">Forgot your password?</h1>
+      <p className="ob-screen-sub">
+        Enter your account email and we'll send a code to reset your password.
+      </p>
+
+      <div className="ob-field">
+        <label className="ob-field-label">Work email</label>
+        <TextInput
+          type="email"
+          placeholder="you@company.com"
+          iconLeft={<Mail s={15} />}
+          value={email}
+          onChange={setEmail}
+          onEnter={onSubmit}
+        />
+      </div>
+
+      {error && <div className="ob-error">{error}</div>}
+
+      <button
+        className="ob-btn ob-btn-primary ob-btn-lg ob-btn-block"
+        disabled={busy || !email.trim()}
+        onClick={onSubmit}
+      >
+        {busy ? "Sending…" : "Send reset code"} <ArrowRight s={15} />
+      </button>
+
+      <p className="ob-fineprint">
+        Remembered it? <a onClick={onBack}>Back to sign in</a>.
+      </p>
+    </Pane>
+  );
+}
+
+// ── Sub-screen · Reset password (confirm code + new password) ───────────────
+function ResetPassword(props: {
+  email: string;
+  code: string;
+  setCode: (v: string) => void;
+  newPassword: string;
+  setNewPassword: (v: string) => void;
+  busy: boolean;
+  error: string | null;
+  onSubmit: () => void;
+  onResend: () => void;
+  onBack: () => void;
+}) {
+  const {
+    email,
+    code,
+    setCode,
+    newPassword,
+    setNewPassword,
+    busy,
+    error,
+    onSubmit,
+    onResend,
+    onBack,
+  } = props;
+  return (
+    <Pane screenKey="reset">
+      <div className="ob-eyebrow">Reset password</div>
+      <h1 className="ob-screen-title">Set a new password</h1>
+      <p className="ob-screen-sub">
+        Enter the code we emailed to{" "}
+        <span className="ob-mono">{email || "your email"}</span> and choose a new
+        password.
+      </p>
+
+      <div className="ob-field">
+        <label className="ob-field-label">Reset code</label>
+        <TextInput
+          mono
+          placeholder="123456"
+          iconLeft={<Lock s={14} />}
+          value={code}
+          onChange={setCode}
+        />
+      </div>
+      <div className="ob-field">
+        <label className="ob-field-label">New password</label>
+        <TextInput
+          type="password"
+          placeholder="At least 8 characters"
+          iconLeft={<Lock s={14} />}
+          value={newPassword}
+          onChange={setNewPassword}
+          onEnter={onSubmit}
+        />
+      </div>
+
+      {error && <div className="ob-error">{error}</div>}
+
+      <button
+        className="ob-btn ob-btn-primary ob-btn-lg ob-btn-block"
+        disabled={busy || !code.trim() || !newPassword}
+        onClick={onSubmit}
+      >
+        {busy ? "Resetting…" : "Reset password"} <ArrowRight s={15} />
+      </button>
+
+      <p className="ob-fineprint">
+        Didn't get a code? <a onClick={onResend}>Resend</a> ·{" "}
+        <a onClick={onBack}>Back to sign in</a>.
+      </p>
     </Pane>
   );
 }
@@ -901,7 +1228,7 @@ function InviteTeam(props: {
       </div>
       <h1 className="ob-screen-title">Invite your team</h1>
       <p className="ob-screen-sub">
-        gtm grid is multiplayer — collaborators edit the same grid in realtime.
+        GTM Grid is multiplayer — collaborators edit the same grid in realtime.
         Execution still runs locally on each machine.
       </p>
 
@@ -910,7 +1237,9 @@ function InviteTeam(props: {
           <div className="ob-invite-row" key={i}>
             <div className="ob-email-wrap">
               <TextInput
-                placeholder="teammate user id"
+                type="email"
+                placeholder="teammate@company.com"
+                iconLeft={<Mail s={15} />}
                 value={inv.value}
                 onChange={(v) => setInvite(i, { value: v })}
               />
@@ -956,9 +1285,9 @@ function InviteTeam(props: {
           <Globe s={15} />
         </span>
         <span className="ob-note-text">
-          Invite teammates by their gtm grid user id — anyone with{" "}
-          <span className="ob-mono">@{state.slug || "your-team"}</span> can join
-          your workspace.
+          Invite teammates by email — they'll get a link to join{" "}
+          <span className="ob-mono">{state.workspaceName || "your workspace"}</span>.
+          You can also invite more people later from workspace settings.
         </span>
       </div>
     </Pane>
@@ -1086,7 +1415,7 @@ function ConnectKey(props: {
       </div>
       <h1 className="ob-screen-title">Connect your AI key</h1>
       <p className="ob-screen-sub">
-        Bring your own key — gtm grid never proxies your prompts. Calls go
+        Bring your own key — GTM Grid never proxies your prompts. Calls go
         straight from your machine to the provider.
       </p>
 
@@ -1216,7 +1545,7 @@ function Done(props: {
         className="ob-btn ob-btn-primary ob-btn-lg ob-btn-block"
         onClick={onEnter}
       >
-        Enter gtm grid <ArrowRight s={15} />
+        Enter GTM Grid <ArrowRight s={15} />
       </button>
 
       <p className="ob-fineprint">
