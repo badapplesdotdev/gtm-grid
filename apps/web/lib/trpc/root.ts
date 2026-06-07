@@ -15,6 +15,8 @@
 
 import { WorkspaceService } from "@gtmgrid/services";
 import { Effect } from "effect";
+import { billingRouter } from "./routers/billing";
+import { workspacesRouter } from "./routers/workspaces";
 import {
   publicProcedure,
   router,
@@ -50,12 +52,13 @@ export const appRouter = router({
 
   workspace: workspaceRouter,
 
-  // ── W2 router slots ──────────────────────────────────────────────────────
-  // W2: projects: projectsRouter,
-  // W2: tables: tablesRouter,
-  // W2: columns: columnsRouter,
-  // W2: rows: rowsRouter,
-  // W2: credentials: credentialsRouter,
+  // ── W2 routers ─────────────────────────────────────────────────────────────
+  /** Workspaces: `me`, `listMembers`, `createWorkspace` (ports convex/workspaces.ts). */
+  workspaces: workspacesRouter,
+  /** Billing: `checkout` (ports convex/billing.ts; Autumn upgrade URL). */
+  billing: billingRouter,
+
+  // W2 (other lanes): projects, tables, columns, rows, credentials.
 });
 
 /** The API type the typed client (W2) consumes. */

@@ -19,7 +19,7 @@
  */
 
 import { schema } from "@gtmgrid/db";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
 
@@ -27,12 +27,54 @@ import { DbClient } from "../db-client.js";
  * A workspace row projection the domain needs. Mirrors `workspaces`
  * (packages/db/src/schema.ts:217) but exposes only the fields callers use, so
  * the in-memory Test Layer stays small.
+ *
+ * The metering columns (`cloudActionsUsed` / `cloudActionsLimit`) and the cached
+ * paid plan (`currentPlanId`) are the snapshot the `me` query surfaces with NO
+ * outbound HTTP — the metering-simplification mandate KEEPS the
+ * `cloudActionsUsed/Limit` semantics (drops only the pending-cron). All three are
+ * nullable: a workspace that has never been metered reads as 0 used / unlimited /
+ * free tier.
  */
 export interface Workspace {
   readonly id: string;
   readonly name: string;
   /** Better Auth user id of the creator/owner. */
   readonly ownerId: string;
+  /** Last-known CLOUD-actions usage Autumn reported (null/undefined → 0 used). */
+  readonly cloudActionsUsed?: number | null;
+  /** Plan cap for cloud actions; null for an unlimited plan. */
+  readonly cloudActionsLimit?: number | null;
+  /** Current PAID plan id ("team"|"business"|"unlimited"), or null for free. */
+  readonly currentPlanId?: string | null;
+}
+
+/**
+ * The workspace customer profile forwarded to Autumn `customers.getOrCreate`:
+ * the org name + owner email. Ports `workspaceCustomerData`
+ * (convex/workspaces.ts:351) / `assertBillingAdmin` (convex/billing.ts:34) which
+ * loaded the owner's email so the checkout materialises the customer with a
+ * profile, not just an id. Both fields are nullable for a missing workspace/owner.
+ */
+export interface WorkspaceCustomerData {
+  readonly name: string | null;
+  readonly email: string | null;
+}
+
+/** A new-workspace insert: the name + the creator who becomes its owner. */
+export interface NewWorkspace {
+  readonly name: string;
+  readonly ownerId: string;
+  readonly createdAt: number;
+}
+
+/**
+ * The authenticated user's profile the `me` query returns (its `user` field —
+ * convex/workspaces.ts:118). `name`/`email` are nullable to mirror the source.
+ */
+export interface WorkspaceUser {
+  readonly id: string;
+  readonly name: string | null;
+  readonly email: string | null;
 }
 
 /** Raised when a workspace read/write fails (DB/transport error). */
@@ -58,6 +100,42 @@ export class WorkspaceRepo extends Context.Tag("WorkspaceRepo")<
     readonly findById: (
       workspaceId: string,
     ) => Effect.Effect<Option.Option<Workspace>, WorkspaceRepoError>;
+
+    /**
+     * The workspaces for the given ids, in ONE indexed query (the batched read
+     * that backs the no-N+1 `me` query — convex/workspaces.ts:65). Missing ids
+     * are simply absent from the result; the caller re-associates by id.
+     */
+    readonly findManyByIds: (
+      workspaceIds: readonly string[],
+    ) => Effect.Effect<readonly Workspace[], WorkspaceRepoError>;
+
+    /**
+     * Insert a workspace and return its generated id. Ports the workspace insert
+     * of `createWorkspace` (convex/workspaces.ts:189); the OWNER membership is
+     * inserted by the caller (the service) in the same operation.
+     */
+    readonly insert: (
+      workspace: NewWorkspace,
+    ) => Effect.Effect<string, WorkspaceRepoError>;
+
+    /**
+     * The workspace's customer profile (org name + owner email) for Autumn
+     * `customers.getOrCreate`. Ports `workspaceCustomerData`
+     * (convex/workspaces.ts:351): loads the workspace, then its owner's email.
+     * Returns `{ name: null, email: null }` for a missing workspace/owner.
+     */
+    readonly findCustomerData: (
+      workspaceId: string,
+    ) => Effect.Effect<WorkspaceCustomerData, WorkspaceRepoError>;
+
+    /**
+     * The user's profile ({@link WorkspaceUser}) for the `me` query's `user`
+     * field, or `None` when the user row is missing.
+     */
+    readonly findUser: (
+      userId: string,
+    ) => Effect.Effect<Option.Option<WorkspaceUser>, WorkspaceRepoError>;
   }
 >() {}
 
@@ -71,29 +149,106 @@ export const WorkspaceRepoLive: Layer.Layer<WorkspaceRepo, never, DbClient> =
     WorkspaceRepo,
     Effect.gen(function* () {
       const db = yield* DbClient;
+      /** Map a thrown rejection to the typed repo error. */
+      const fail = (op: string) => (cause: unknown) =>
+        new WorkspaceRepoError({
+          message: cause instanceof Error ? cause.message : `${op} failed`,
+          cause,
+        });
+      /** The full workspace projection (one place so reads agree on columns). */
+      const columns = {
+        id: schema.workspaces.id,
+        name: schema.workspaces.name,
+        ownerId: schema.workspaces.ownerId,
+        cloudActionsUsed: schema.workspaces.cloudActionsUsed,
+        cloudActionsLimit: schema.workspaces.cloudActionsLimit,
+        currentPlanId: schema.workspaces.currentPlanId,
+      } as const;
       return {
         findById: (workspaceId) =>
           Effect.tryPromise({
             try: async () => {
               const rows = await db
-                .select({
-                  id: schema.workspaces.id,
-                  name: schema.workspaces.name,
-                  ownerId: schema.workspaces.ownerId,
-                })
+                .select(columns)
                 .from(schema.workspaces)
                 .where(eq(schema.workspaces.id, workspaceId))
                 .limit(1);
               return Option.fromNullable(rows[0] ?? null);
             },
-            catch: (cause) =>
-              new WorkspaceRepoError({
-                message:
-                  cause instanceof Error
-                    ? cause.message
-                    : "workspace lookup failed",
-                cause,
+            catch: fail("workspace lookup"),
+          }),
+        findManyByIds: (workspaceIds) =>
+          workspaceIds.length === 0
+            ? Effect.succeed([])
+            : Effect.tryPromise({
+                try: () =>
+                  db
+                    .select(columns)
+                    .from(schema.workspaces)
+                    .where(inArray(schema.workspaces.id, [...workspaceIds])),
+                catch: fail("workspace batch lookup"),
               }),
+        insert: (workspace) =>
+          Effect.tryPromise({
+            try: async () => {
+              const rows = await db
+                .insert(schema.workspaces)
+                .values({
+                  name: workspace.name,
+                  ownerId: workspace.ownerId,
+                  createdAt: workspace.createdAt,
+                })
+                .returning({ id: schema.workspaces.id });
+              const id = rows[0]?.id;
+              if (id === undefined) {
+                throw new Error("workspace insert returned no id");
+              }
+              return id;
+            },
+            catch: fail("workspace insert"),
+          }),
+        findCustomerData: (workspaceId) =>
+          Effect.tryPromise({
+            try: async () => {
+              const rows = await db
+                .select({
+                  name: schema.workspaces.name,
+                  email: schema.users.email,
+                })
+                .from(schema.workspaces)
+                .leftJoin(
+                  schema.users,
+                  eq(schema.users.id, schema.workspaces.ownerId),
+                )
+                .where(eq(schema.workspaces.id, workspaceId))
+                .limit(1);
+              const row = rows[0];
+              return row === undefined
+                ? { name: null, email: null }
+                : { name: row.name, email: row.email ?? null };
+            },
+            catch: fail("workspace customer data lookup"),
+          }),
+        findUser: (userId) =>
+          Effect.tryPromise({
+            try: async () => {
+              const rows = await db
+                .select({
+                  id: schema.users.id,
+                  name: schema.users.name,
+                  email: schema.users.email,
+                })
+                .from(schema.users)
+                .where(eq(schema.users.id, userId))
+                .limit(1);
+              const row = rows[0];
+              return Option.fromNullable(
+                row === undefined
+                  ? null
+                  : { id: row.id, name: row.name ?? null, email: row.email },
+              );
+            },
+            catch: fail("user lookup"),
           }),
       };
     }),
@@ -106,10 +261,47 @@ export const WorkspaceRepoLive: Layer.Layer<WorkspaceRepo, never, DbClient> =
  */
 export const workspaceRepoLayer = (
   workspaces: readonly Workspace[],
-): Layer.Layer<WorkspaceRepo> =>
-  Layer.succeed(WorkspaceRepo, {
+  users: readonly WorkspaceUser[] = [],
+): Layer.Layer<WorkspaceRepo> => {
+  // A mutable copy so `insert` is observable by later reads in the SAME test
+  // (createWorkspace inserts, then the membership is created against the new id),
+  // exactly like the live table.
+  const rows: Workspace[] = [...workspaces];
+  const userRows: WorkspaceUser[] = [...users];
+  let seq = 0;
+  return Layer.succeed(WorkspaceRepo, {
     findById: (workspaceId) =>
       Effect.succeed(
-        Option.fromNullable(workspaces.find((w) => w.id === workspaceId)),
+        Option.fromNullable(rows.find((w) => w.id === workspaceId)),
+      ),
+    findManyByIds: (workspaceIds) =>
+      Effect.succeed(rows.filter((w) => workspaceIds.includes(w.id))),
+    insert: (workspace) =>
+      Effect.sync(() => {
+        const id = `ws_${seq++}_${workspace.ownerId}`;
+        rows.push({
+          id,
+          name: workspace.name,
+          ownerId: workspace.ownerId,
+        });
+        return id;
+      }),
+    findCustomerData: (workspaceId) =>
+      Effect.succeed(
+        Option.match(
+          Option.fromNullable(rows.find((w) => w.id === workspaceId)),
+          {
+            onNone: () => ({ name: null, email: null }),
+            onSome: (w) => ({
+              name: w.name,
+              email: userRows.find((u) => u.id === w.ownerId)?.email ?? null,
+            }),
+          },
+        ),
+      ),
+    findUser: (userId) =>
+      Effect.succeed(
+        Option.fromNullable(userRows.find((u) => u.id === userId) ?? null),
       ),
   });
+};

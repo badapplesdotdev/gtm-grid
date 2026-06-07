@@ -39,6 +39,16 @@ function toTrpcError(tag: string | undefined, message: string): TRPCError {
       return new TRPCError({ code: "FORBIDDEN", message });
     case "WorkspaceNotFoundError":
       return new TRPCError({ code: "NOT_FOUND", message });
+    // Billing/seats domain (W2): a forged/unknown plan is a bad request; a
+    // reached seat cap is a precondition failure; a misconfigured plan with no
+    // checkout URL and an Autumn transport error are server-side.
+    case "UnknownPlanError":
+      return new TRPCError({ code: "BAD_REQUEST", message });
+    case "SeatLimitExceededError":
+      return new TRPCError({ code: "PRECONDITION_FAILED", message });
+    case "NoCheckoutUrlError":
+    case "AutumnError":
+      return new TRPCError({ code: "INTERNAL_SERVER_ERROR", message });
     default:
       return new TRPCError({ code: "INTERNAL_SERVER_ERROR", message });
   }
