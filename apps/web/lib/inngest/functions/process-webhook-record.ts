@@ -2,7 +2,7 @@ import {
   CloudSchemaMapping,
   Engine,
   aiConfigFromEnv,
-  convexGridStoreShape,
+  cloudGridStoreShape,
   defaultRegistry,
   type Column,
   type EngineConfig,
@@ -55,14 +55,14 @@ function engineConfig(): EngineConfig {
 /**
  * Build the cloud-store-backed {@link GridStoreShape} for one cloud table,
  * pointed at the worker HTTP endpoints and resolving the workspace's SHARED
- * connector secrets. Mirrors `cloud-run.ts` `buildConvexStore`.
+ * connector secrets. Mirrors `cloud-run.ts` `buildCloudStore`.
  */
 function buildWorkerStore(
   tableId: string,
   workspaceId: string,
 ): Promise<GridStoreShape> {
   return Effect.runPromise(
-    convexGridStoreShape({
+    cloudGridStoreShape({
       client: workerClient,
       refs: WORKER_REFS,
       tableId,

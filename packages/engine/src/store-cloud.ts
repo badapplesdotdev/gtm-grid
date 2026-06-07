@@ -1,27 +1,25 @@
 /**
- * ConvexGridStore — a {@link GridStoreShape} backed by a Convex deployment, so
- * the LOCAL engine can drive a cloud/team project: it reads a table's columns,
- * rows, and cells from Convex and writes cell status/results back via the T4
- * mutations (`cells.setCellStatus` / `cells.setCell`) during a run. Cell status
- * (`running` → `done`/`error`) streams live to every workspace member through
- * Convex reactivity.
+ * The cloud GridStore — a {@link GridStoreShape} backed by an injected cloud
+ * client, so the LOCAL engine can drive a cloud/team project: it reads a table's
+ * columns, rows, and cells from the cloud and writes cell status/results back via
+ * the `setCellStatus` / `setCell` operations during a run. Cell status
+ * (`running` → `done`/`error`) streams live to every workspace member through the
+ * realtime broadcast the server emits on each write.
  *
  * DECOUPLING (the load-bearing constraint): this module — and therefore the
- * engine's `tsc -b` build — must NOT import `convex/_generated` or any generated
- * deployment code, so the engine package never depends on codegen that only
- * exists after `npx convex dev`. We achieve that by injecting a small typed
- * client interface ({@link ConvexClientLike}) plus opaque function references
- * ({@link ConvexFunctionRefs}). The real `ConvexHttpClient` from "convex/browser"
- * structurally satisfies `ConvexClientLike`, and `api.tables.getTable` /
- * `api.cells.setCell` / `api.cells.setCellStatus` satisfy the refs — the caller
- * (desktop/server wiring lane) passes them in; this file imports neither.
+ * engine's `tsc -b` build — must NOT import any backend client or generated code,
+ * so the engine package stays backend-agnostic. We achieve that by injecting a
+ * small typed client interface ({@link CloudClientLike}) plus opaque function
+ * references ({@link CloudFunctionRefs}). The caller (desktop/server/worker wiring)
+ * passes a client + refs in; this file imports neither. The desktop sidecar and
+ * the Inngest webhook worker both inject an HTTP client that POSTs to the apps/web
+ * `/api/worker/*` endpoints.
  *
  * SCOPE: a run targets a single table (`Engine.runColumn` resolves rows from
- * `col.table_id`). So a `ConvexGridStore` is constructed for ONE Convex table:
- * the granular reads the engine makes (`getColumn`/`getCell`/`rowCells` — all
- * keyed by column/row id with no table id) are served by fetching the table's
- * full grid via `getTable(tableId)` and indexing it in memory. This reuses the
- * one existing T4 reactive query rather than adding new Convex functions.
+ * `col.table_id`). So a cloud store is constructed for ONE table: the granular
+ * reads the engine makes (`getColumn`/`getCell`/`rowCells` — all keyed by
+ * column/row id with no table id) are served by fetching the table's full grid via
+ * `getTable(tableId)` and indexing it in memory.
  *
  * Follows the canonical Effect service shape (docs/effect-conventions.md):
  * typed errors via {@link GridStoreError}, methods returning `Effect.Effect`,
@@ -51,33 +49,31 @@ import type {
 } from "./types.js";
 
 /**
- * The minimal Convex client surface ConvexGridStore needs. Structurally
- * satisfied by `ConvexHttpClient` (from "convex/browser") and the reactive
- * `ConvexReactClient`, so the caller injects the real client without this file
- * importing any Convex code. `ref` is an opaque function reference (e.g.
- * `api.tables.getTable`); typed as `unknown` precisely so the engine build never
- * imports the generated `api`.
+ * The minimal cloud client surface the cloud store needs. The caller injects a
+ * concrete client (e.g. the desktop/worker HTTP client POSTing to `/api/worker/*`)
+ * without this file importing any backend code. `ref` is an opaque function
+ * reference (a route path on the HTTP path); typed as `unknown` precisely so the
+ * engine build stays backend-agnostic.
  */
-export interface ConvexClientLike {
+export interface CloudClientLike {
   query(ref: unknown, args: Record<string, unknown>): Promise<unknown>;
   mutation(ref: unknown, args: Record<string, unknown>): Promise<unknown>;
   /**
-   * Execute a Convex ACTION. Workspace-shared credentials are decrypted by the
-   * T7 `credentials:getCredentialForRun` action (Node runtime), so resolving a
-   * cloud run's secrets goes through here, not `query`. `ConvexHttpClient` from
-   * "convex/browser" structurally satisfies this.
+   * Execute a credential-decrypting operation. Workspace-shared credentials are
+   * decrypted server-side, so resolving a cloud run's secrets goes through here,
+   * not `query`. On the HTTP path query/mutation/action are identical (a POST).
    */
   action(ref: unknown, args: Record<string, unknown>): Promise<unknown>;
 }
 
 /**
- * Opaque references to the T4 Convex functions this store calls. The caller
- * passes `api.tables.getTable`, `api.cells.setCell`, `api.cells.setCellStatus`,
- * and optionally a credential-read query. They are `unknown` to the engine —
- * only the injected {@link ConvexClientLike} interprets them — which is what
- * keeps the engine decoupled from `convex/_generated`.
+ * Opaque references to the cloud operations this store calls. The caller passes
+ * the getTable / setCell / setCellStatus refs and optionally a credential-read
+ * ref. They are `unknown` to the engine — only the injected
+ * {@link CloudClientLike} interprets them — which is what keeps the engine
+ * backend-agnostic.
  */
-export interface ConvexFunctionRefs {
+export interface CloudFunctionRefs {
   /** `api.tables.getTable` — returns `{ table, columns, rows, cells }`. */
   readonly getTable: unknown;
   /** `api.cells.setCell` — upsert value/status/error for a cell. */
@@ -88,9 +84,9 @@ export interface ConvexFunctionRefs {
    * Optional ACTION resolving the decrypted secrets for a connector during a
    * run — the T7 `credentials:getCredentialForRun` decrypt-for-run path, gated
    * to an authorized workspace member. When wired (together with
-   * {@link ConvexCredentialResolution} on the config), it is called as an action
+   * {@link CloudCredentialResolution} on the config), it is called as an action
    * with `{ workspaceId, extensionId, scope }` and is expected to return
-   * {@link ConvexCredentialForRunResult} (or null). When omitted, credential
+   * {@link CloudCredentialForRunResult} (or null). When omitted, credential
    * lookups resolve to `undefined` (matching a project with no connected keys).
    */
   readonly getCredential?: unknown;
@@ -103,7 +99,7 @@ export interface ConvexFunctionRefs {
  * ownership rules. The T7 `getCredentialForRun` action enforces membership +
  * ownership before any plaintext is produced.
  */
-export interface ConvexCredentialResolution {
+export interface CloudCredentialResolution {
   /** The Convex `workspaces._id` the credential is scoped to. */
   readonly workspaceId: string;
   /** Which credential to read — `workspace` (shared) for a cloud column run. */
@@ -111,9 +107,9 @@ export interface ConvexCredentialResolution {
 }
 
 /** Config to build a table-scoped ConvexGridStore. */
-export interface ConvexGridStoreConfig {
-  readonly client: ConvexClientLike;
-  readonly refs: ConvexFunctionRefs;
+export interface CloudGridStoreConfig {
+  readonly client: CloudClientLike;
+  readonly refs: CloudFunctionRefs;
   /** The Convex `tables._id` (a string) this store reads/writes within. */
   readonly tableId: string;
   /**
@@ -122,7 +118,7 @@ export interface ConvexGridStoreConfig {
    * workspace's shared secret for that connector via the T7 action. Omitted for
    * data-only stores (reads/writes), where credential lookups are a no-op.
    */
-  readonly credentials?: ConvexCredentialResolution;
+  readonly credentials?: CloudCredentialResolution;
 }
 
 /** The shape `cells.setCell` / `cells.setCellStatus` are addressed by. */
@@ -177,7 +173,7 @@ interface ConvexGetTableResult {
  * credential. This is the ONLY shape that ever carries plaintext — listing
  * queries return metadata only, so no plaintext is exposed to them.
  */
-export interface ConvexCredentialForRunResult {
+export interface CloudCredentialForRunResult {
   readonly secrets: Record<string, string>;
 }
 
@@ -225,7 +221,7 @@ const toCell = (c: ConvexCellDoc): Cell => ({
 const toCredential = (
   extensionId: string,
   scope: CloudCredentialScope,
-  result: ConvexCredentialForRunResult,
+  result: CloudCredentialForRunResult,
 ): Credential => ({
   id: `${scope}:${extensionId}`,
   extension_id: extensionId,
@@ -257,8 +253,8 @@ const fromClient = <A>(
  * effect resolves {@link CloudSchemaMapping} so cell statuses are validated
  * against the cloud literal union before they are written.
  */
-export const convexGridStoreShape = (
-  config: ConvexGridStoreConfig,
+export const cloudGridStoreShape = (
+  config: CloudGridStoreConfig,
 ): Effect.Effect<GridStoreShape, never, CloudSchemaMapping> =>
   Effect.gen(function* () {
     const mapping = yield* CloudSchemaMapping;
@@ -328,7 +324,7 @@ export const convexGridStoreShape = (
      * Calls the T7 `getCredentialForRun` ACTION with `{ workspaceId,
      * extensionId, scope }` — the only path that yields plaintext, gated to an
      * authorized member by the action itself. A no-op (`undefined`) unless BOTH
-     * a credential ref and a {@link ConvexCredentialResolution} are wired, so a
+     * a credential ref and a {@link CloudCredentialResolution} are wired, so a
      * data-only store never resolves secrets and a run with no stored credential
      * behaves like a project with no connected keys.
      */
@@ -352,7 +348,7 @@ export const convexGridStoreShape = (
             : toCredential(
                 provider,
                 resolution.scope,
-                result as ConvexCredentialForRunResult,
+                result as CloudCredentialForRunResult,
               ),
         ),
       );
@@ -431,17 +427,17 @@ export const convexGridStoreShape = (
  * Requires {@link CloudSchemaMapping} (provided via its `.Default` Layer); the
  * caller composes `Layer.provide(CloudSchemaMapping.Default)`.
  */
-export const convexGridStore = (
-  config: ConvexGridStoreConfig,
+export const cloudGridStore = (
+  config: CloudGridStoreConfig,
 ): Layer.Layer<GridStore, never, CloudSchemaMapping> =>
-  Layer.effect(GridStore, convexGridStoreShape(config));
+  Layer.effect(GridStore, cloudGridStoreShape(config));
 
 /**
  * A {@link CredentialStore} `Layer` backed by a Convex client. Used when a
  * cloud run resolves connector secrets from the workspace's shared credentials
  * (via the injected `getCredential` ref) rather than the local key store.
  */
-export const convexCredentialStore = (
-  config: ConvexGridStoreConfig,
+export const cloudCredentialStore = (
+  config: CloudGridStoreConfig,
 ): Layer.Layer<CredentialStore, never, CloudSchemaMapping> =>
-  Layer.effect(CredentialStore, convexGridStoreShape(config));
+  Layer.effect(CredentialStore, cloudGridStoreShape(config));

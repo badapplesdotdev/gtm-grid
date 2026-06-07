@@ -20,8 +20,8 @@
 
 import { useCallback, useState } from "react";
 import { type BillingCycle, resolvePlanId } from "@gtmgrid/cloud";
-import type { Id } from "../../../../convex/_generated/dataModel";
-import { cloudEnabled } from "./convex";
+import type { Id } from "./ids";
+import { cloudEnabled } from "./client";
 import {
   useAccountActions,
   useActiveWorkspace,

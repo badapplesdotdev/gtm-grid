@@ -14,10 +14,7 @@ packages/desktop/src-tauri/target/
 packages/desktop/src-tauri/sidecar/
 packages/desktop/src-tauri/gen/
 
-# Local Convex deployment env (requires `npx convex dev` login).
-# NOTE: convex/_generated IS committed so CI / release builds / forks can
-# typecheck and bundle without Convex credentials. Regenerate after changing
-# convex/ functions or schema with `npx convex codegen` and commit the result.
+# Local environment overrides (DATABASE_URL, auth/Supabase secrets, etc.).
 .env.local
 
 # Claude Code session artifacts (skills, plans, workflow worktrees)

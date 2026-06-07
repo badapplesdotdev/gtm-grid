@@ -1,27 +1,22 @@
 /**
- * Reactive invitation reads + the revoke mutation, STRANGLER-branched on the
- * cloud path (TRI-3255). Two surfaces consume these:
+ * Invitation reads + the revoke/accept mutations over the apps/web tRPC API. Two
+ * surfaces consume these:
  *   - WorkspaceSettings.tsx — the pending list for a workspace (copy link /
  *     revoke), via {@link usePendingInvitations} + {@link useRevokeInvitation}.
  *   - PendingInvites.tsx — the invites waiting for the signed-in user (accept
  *     banner), via {@link useMyPendingInvitations}.
  *
- * The NEW path reads the apps/web tRPC API (`invitations.list` / `myPending`)
- * through react-query and writes via the vanilla client, invalidating the cache
- * after a revoke; the LEGACY path keeps the reactive Convex queries/mutations.
- * Each hook normalizes the two backends' field naming (tRPC `id` vs Convex `_id`)
- * to ONE UI shape, so the components never branch on the cloud path themselves.
- * `cloudViaApi` is a module constant, so hook order is stable across renders.
+ * Reads go through react-query (`invitations.list` / `myPending`); writes go
+ * through the tRPC client and invalidate the relevant cache so the surfaces
+ * refresh. Issues zero cloud calls when the cloud layer is off, so the
+ * local-first app is unaffected.
  */
 
 import { useQuery as useReactQuery, useQueryClient } from "@tanstack/react-query";
-import { useAction, useMutation, useQuery } from "convex/react";
 import { useCallback, useMemo } from "react";
-import { api } from "../../../../convex/_generated/api";
-import type { Id } from "../../../../convex/_generated/dataModel";
+import type { Id } from "./ids";
 import type { MemberRole } from "./invite";
-import { apiClient, cloudViaApi } from "./client";
-import { cloudEnabled } from "./convex";
+import { apiClient } from "./client";
 
 /** A pending invitation row for a workspace (the settings list). */
 export interface PendingInvitationRow {
@@ -34,10 +29,7 @@ export interface PendingInvitationRow {
   readonly expiresAt: number;
 }
 
-/**
- * The result of accepting an invitation, shared across both backends (the tRPC
- * `invitations.accept` and the Convex `acceptInvitation` action return this).
- */
+/** The result of accepting an invitation (the tRPC `invitations.accept`). */
 export type AcceptInviteResult =
   | { readonly status: "accepted"; readonly workspaceId: string }
   | { readonly status: "wrong_account"; readonly invitedEmail: string }
@@ -65,57 +57,24 @@ function pendingKey(workspaceId: string): readonly unknown[] {
 const myPendingKey: readonly unknown[] = ["invitations", "myPending"];
 
 /**
- * The reactive pending-invitation list for a workspace (copy link / revoke).
- * `undefined` while loading / when cloud is off / no workspace is active.
+ * The pending-invitation list for a workspace (copy link / revoke). `undefined`
+ * while loading / when cloud is off / no workspace is active.
  */
 export function usePendingInvitations(
   workspaceId: Id<"workspaces"> | null,
 ): readonly PendingInvitationRow[] | undefined {
-  if (cloudViaApi) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
-    const q = useReactQuery({
-      queryKey: pendingKey(workspaceId ?? ""),
-      enabled: apiClient !== null && workspaceId !== null,
-      queryFn: () =>
-        apiClient!.invitations.list.query({
-          workspaceId: workspaceId as string,
-        }),
-    });
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
-    return useMemo<readonly PendingInvitationRow[] | undefined>(
-      () =>
-        q.data?.map((r) => ({
-          id: r.id,
-          email: r.email,
-          role: r.role,
-          token: r.token,
-          acceptUrl: r.acceptUrl,
-          createdAt: r.createdAt,
-          expiresAt: r.expiresAt,
-        })),
-      [q.data],
-    );
-  }
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
-  const rows = useQuery(
-    api.invitations.listInvitations,
-    cloudEnabled && workspaceId !== null ? { workspaceId } : "skip",
-  ) as
-    | readonly {
-        _id: Id<"invitations">;
-        email: string;
-        role: MemberRole;
-        token: string;
-        acceptUrl: string;
-        createdAt: number;
-        expiresAt: number;
-      }[]
-    | undefined;
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+  const q = useReactQuery({
+    queryKey: pendingKey(workspaceId ?? ""),
+    enabled: apiClient !== null && workspaceId !== null,
+    queryFn: () =>
+      apiClient!.invitations.list.query({
+        workspaceId: workspaceId as string,
+      }),
+  });
   return useMemo<readonly PendingInvitationRow[] | undefined>(
     () =>
-      rows?.map((r) => ({
-        id: r._id,
+      q.data?.map((r) => ({
+        id: r.id,
         email: r.email,
         role: r.role,
         token: r.token,
@@ -123,43 +82,27 @@ export function usePendingInvitations(
         createdAt: r.createdAt,
         expiresAt: r.expiresAt,
       })),
-    [rows],
+    [q.data],
   );
 }
 
 /**
- * Revoke a pending invitation by id. On the NEW path this calls the tRPC
- * `invitations.revoke` mutation and invalidates the workspace's pending list (so
- * it refetches like the Convex reactive query did); on the legacy path it is the
- * Convex `revokeInvitation` mutation. The `workspaceId` scopes the cache
- * invalidation on the NEW path; it is ignored on the legacy path.
+ * Revoke a pending invitation by id. Calls the tRPC `invitations.revoke` mutation
+ * and invalidates the workspace's pending list so it refetches. The `workspaceId`
+ * scopes the cache invalidation.
  */
 export function useRevokeInvitation(
   workspaceId: Id<"workspaces"> | null,
 ): (invitationId: string) => Promise<void> {
-  if (cloudViaApi) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
-    const qc = useQueryClient();
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
-    return useCallback(
-      async (invitationId: string) => {
-        await apiClient!.invitations.revoke.mutate({ invitationId });
-        await qc.invalidateQueries({
-          queryKey: pendingKey(workspaceId ?? ""),
-        });
-      },
-      [qc, workspaceId],
-    );
-  }
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
-  const revoke = useMutation(api.invitations.revokeInvitation);
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+  const qc = useQueryClient();
   return useCallback(
-    (invitationId: string) =>
-      revoke({ invitationId: invitationId as Id<"invitations"> }).then(
-        () => undefined,
-      ),
-    [revoke],
+    async (invitationId: string) => {
+      await apiClient!.invitations.revoke.mutate({ invitationId });
+      await qc.invalidateQueries({
+        queryKey: pendingKey(workspaceId ?? ""),
+      });
+    },
+    [qc, workspaceId],
   );
 }
 
@@ -171,50 +114,15 @@ export function useRevokeInvitation(
 export function useMyPendingInvitations():
   | readonly MyPendingInvitationRow[]
   | undefined {
-  if (cloudViaApi) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
-    const q = useReactQuery({
-      queryKey: myPendingKey,
-      enabled: apiClient !== null,
-      queryFn: () => apiClient!.invitations.myPending.query(),
-    });
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
-    return useMemo<readonly MyPendingInvitationRow[] | undefined>(
-      () =>
-        q.data?.map((r) => ({
-          id: r.id,
-          token: r.token,
-          workspaceId: r.workspaceId,
-          workspaceName: r.workspaceName,
-          role: r.role,
-          invitedByName: r.invitedByName,
-          createdAt: r.createdAt,
-          expiresAt: r.expiresAt,
-        })),
-      [q.data],
-    );
-  }
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
-  const rows = useQuery(
-    api.invitations.myPendingInvitations,
-    cloudEnabled ? {} : "skip",
-  ) as
-    | readonly {
-        _id: Id<"invitations">;
-        token: string;
-        workspaceId: Id<"workspaces">;
-        workspaceName: string;
-        role: MemberRole;
-        invitedByName: string | null;
-        createdAt: number;
-        expiresAt: number;
-      }[]
-    | undefined;
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+  const q = useReactQuery({
+    queryKey: myPendingKey,
+    enabled: apiClient !== null,
+    queryFn: () => apiClient!.invitations.myPending.query(),
+  });
   return useMemo<readonly MyPendingInvitationRow[] | undefined>(
     () =>
-      rows?.map((r) => ({
-        id: r._id,
+      q.data?.map((r) => ({
+        id: r.id,
         token: r.token,
         workspaceId: r.workspaceId,
         workspaceName: r.workspaceName,
@@ -223,44 +131,30 @@ export function useMyPendingInvitations():
         createdAt: r.createdAt,
         expiresAt: r.expiresAt,
       })),
-    [rows],
+    [q.data],
   );
 }
 
 /**
  * Accept a pending invitation by token, returning the typed result the banner
- * branches on (`accepted` / `wrong_account` / `invalid` / `seat_limit`). On the
- * NEW path this calls the tRPC `invitations.accept` mutation and invalidates the
- * caller's waiting-invites cache on a successful accept (so the banner clears like
- * the Convex reactive query did); on the legacy path it is the Convex
- * `acceptInvitation` action.
+ * branches on (`accepted` / `wrong_account` / `invalid` / `seat_limit`). Calls
+ * the tRPC `invitations.accept` mutation and invalidates the caller's
+ * waiting-invites cache on a successful accept (so the banner clears).
  */
 export function useAcceptInvitation(): (
   token: string,
 ) => Promise<AcceptInviteResult> {
-  if (cloudViaApi) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
-    const qc = useQueryClient();
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
-    return useCallback(
-      async (token: string) => {
-        const res = (await apiClient!.invitations.accept.mutate({
-          token,
-        })) as AcceptInviteResult;
-        if (res.status === "accepted") {
-          await qc.invalidateQueries({ queryKey: myPendingKey });
-        }
-        return res;
-      },
-      [qc],
-    );
-  }
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
-  const acceptAction = useAction(api.invitations.acceptInvitation);
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+  const qc = useQueryClient();
   return useCallback(
-    (token: string) =>
-      acceptAction({ token }) as Promise<AcceptInviteResult>,
-    [acceptAction],
+    async (token: string) => {
+      const res = (await apiClient!.invitations.accept.mutate({
+        token,
+      })) as AcceptInviteResult;
+      if (res.status === "accepted") {
+        await qc.invalidateQueries({ queryKey: myPendingKey });
+      }
+      return res;
+    },
+    [qc],
   );
 }

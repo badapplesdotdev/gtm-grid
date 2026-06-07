@@ -23,7 +23,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { Layer } from "effect";
 import { type BillingCycle } from "@gtmgrid/cloud";
-import type { Id } from "../../../../../convex/_generated/dataModel";
+import type { Id } from "../ids";
 import { LogoMark } from "../../Logo";
 import { friendlyAuthError } from "../authErrors";
 import {

@@ -356,7 +356,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           } satisfies ResolvedWebhook;
         });
 
-      /** Atomic quota pre-check: reject when used+pending+1 would exceed limit. */
+      /** Atomic quota pre-check: reject when used+1 would exceed limit. */
       const assertQuota = (workspaceId: string) =>
         Effect.gen(function* () {
           const q = yield* repo.findWorkspaceQuota(workspaceId);
@@ -364,8 +364,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           const limit = q.value.cloudActionsLimit;
           if (typeof limit !== "number") return;
           const used = q.value.cloudActionsUsed ?? 0;
-          const pending = q.value.cloudActionsPending ?? 0;
-          if (used + pending + 1 > limit) {
+          if (used + 1 > limit) {
             return yield* Effect.fail(
               new CloudActionsLimitError({
                 message:
@@ -498,7 +497,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             receivedAt: now,
           });
           // Exactly ONE billable cloud action per received record.
-          yield* repo.bumpPending(table.value.workspaceId, 1);
+          yield* repo.meterActions(table.value.workspaceId, 1);
           return { rowId };
         });
 
@@ -575,7 +574,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             ...(args.recordId !== undefined ? { recordId: args.recordId } : {}),
             receivedAt: now,
           });
-          yield* repo.bumpPending(table.value.workspaceId, 1);
+          yield* repo.meterActions(table.value.workspaceId, 1);
           return { rowId };
         });
 
@@ -715,7 +714,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         Effect.gen(function* () {
           const table = yield* repo.findTable(tableId);
           if (table._tag === "None") return;
-          yield* repo.bumpPending(table.value.workspaceId, 1);
+          yield* repo.meterActions(table.value.workspaceId, 1);
         });
 
       /** Insert or patch a cell to the merged fields, returning its id. */

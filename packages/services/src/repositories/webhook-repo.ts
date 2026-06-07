@@ -125,7 +125,6 @@ export interface CellWrite {
 /** A workspace's cloud-actions quota snapshot the worker pre-checks. */
 export interface WorkspaceQuota {
   readonly cloudActionsUsed: number | null;
-  readonly cloudActionsPending: number | null;
   readonly cloudActionsLimit: number | null;
 }
 
@@ -240,8 +239,13 @@ export class WebhookRepo extends Context.Tag("WebhookRepo")<
     readonly findWorkspaceQuota: (
       workspaceId: string,
     ) => Effect.Effect<Option.Option<WorkspaceQuota>, WebhookRepoError>;
-    /** Bump a workspace's pending cloud-actions counter by `by`. */
-    readonly bumpPending: (
+    /**
+     * Meter `by` billable cloud actions onto a workspace by incrementing its
+     * `cloudActionsUsed` counter — the SINGLE cloud-actions surface (the grid
+     * `MeterService` writes the same column). The legacy `cloudActionsPending`
+     * counter + cron flush are gone; accounting is immediate on the write path.
+     */
+    readonly meterActions: (
       workspaceId: string,
       by: number,
     ) => Effect.Effect<void, WebhookRepoError>;
@@ -647,7 +651,6 @@ export const WebhookRepoLive: Layer.Layer<WebhookRepo, never, DbClient> =
                   const rows = await db
                     .select({
                       cloudActionsUsed: schema.workspaces.cloudActionsUsed,
-                      cloudActionsPending: schema.workspaces.cloudActionsPending,
                       cloudActionsLimit: schema.workspaces.cloudActionsLimit,
                     })
                     .from(schema.workspaces)
@@ -659,17 +662,17 @@ export const WebhookRepoLive: Layer.Layer<WebhookRepo, never, DbClient> =
               })
             : Effect.succeed(Option.none<WorkspaceQuota>()),
 
-        bumpPending: (workspaceId, by) =>
+        meterActions: (workspaceId, by) =>
           Effect.tryPromise({
             try: async () => {
               await db
                 .update(schema.workspaces)
                 .set({
-                  cloudActionsPending: schema.sql`coalesce(${schema.workspaces.cloudActionsPending}, 0) + ${by}`,
+                  cloudActionsUsed: schema.sql`coalesce(${schema.workspaces.cloudActionsUsed}, 0) + ${by}`,
                 })
                 .where(eq(schema.workspaces.id, workspaceId));
             },
-            catch: fail("pending bump failed"),
+            catch: fail("meter increment failed"),
           }),
       };
     }),
@@ -805,14 +808,13 @@ export const webhookRepoLayer = (fixtures: {
       ),
     findWorkspaceQuota: (workspaceId) =>
       Effect.succeed(Option.fromNullable(quotas.get(workspaceId))),
-    bumpPending: (workspaceId, by) =>
+    meterActions: (workspaceId, by) =>
       Effect.sync(() => {
         const q = quotas.get(workspaceId);
-        const current = q?.cloudActionsPending ?? 0;
+        const current = q?.cloudActionsUsed ?? 0;
         quotas.set(workspaceId, {
-          cloudActionsUsed: q?.cloudActionsUsed ?? null,
+          cloudActionsUsed: current + by,
           cloudActionsLimit: q?.cloudActionsLimit ?? null,
-          cloudActionsPending: current + by,
         });
       }),
   });

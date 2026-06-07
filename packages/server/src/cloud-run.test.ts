@@ -3,26 +3,26 @@
  *
  * Proves the load-bearing acceptance criterion: running a column on a CLOUD
  * project executes via the LOCAL engine reading inputs from / writing results
- * back to Convex through the ConvexGridStore — without any real Convex
- * deployment. We inject a FAKE Convex client (a `ConvexClientLike`) that:
- *   - serves `tables:getTable` from an in-memory grid, and
- *   - records `cells:setCell` / `cells:setCellStatus` mutations.
+ * back to Postgres through the cloud GridStore (the `/api/worker/*` routes) —
+ * without any real backend. We inject a FAKE cloud client (a `CloudClientLike`)
+ * that:
+ *   - serves `/api/worker/getTable` from an in-memory grid, and
+ *   - records `/api/worker/setCell` / `/api/worker/setCellStatus` mutations.
  * Then we assert the engine produced the right `{ ran, errors }` and that the
  * final `setCell` carried the computed value + `done` status — i.e. the run
- * really flowed through Convex, not local SQLite.
+ * really flowed through the cloud store, not local SQLite.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getFunctionName } from "convex/server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   Db,
   Registry,
   type ConnectorMethod,
   type Connector,
-  type ConvexClientLike,
+  type CloudClientLike,
 } from "@gtmgrid/engine";
 import { runCloudColumn, type CloudRunDeps } from "./cloud-run.js";
 
@@ -70,7 +70,7 @@ interface RecordedMutation {
 }
 
 /**
- * Build a fake {@link ConvexClientLike} backed by an in-memory grid. `getTable`
+ * Build a fake {@link CloudClientLike} backed by an in-memory grid. `getTable`
  * returns the grid (Convex camelCase shape); the cell mutations apply COALESCE
  * merge to the in-memory cells AND record the call so tests can assert ordering.
  */
@@ -90,7 +90,7 @@ function fakeConvex(
   /** Optional decrypt-for-run secrets, keyed by connector extension id (#18). */
   credentials: Record<string, Record<string, string>> = {},
 ): {
-  client: ConvexClientLike;
+  client: CloudClientLike;
   mutations: RecordedMutation[];
   credentialCalls: Array<Record<string, unknown>>;
 } {
@@ -113,10 +113,11 @@ function fakeConvex(
     cell.updatedAt = Date.now();
   };
 
-  const client: ConvexClientLike = {
+  // Refs are now `/api/worker/*` route-path strings; the fake matches on those.
+  const client: CloudClientLike = {
     query: async (ref) => {
-      const name = getFunctionName(ref as never);
-      if (name === "tables:getTable") {
+      const name = String(ref);
+      if (name === "/api/worker/getTable") {
         return {
           // The run resolves the workspace it should decrypt shared creds for
           // from the table doc, so getTable must carry the workspace id (#18).
@@ -129,17 +130,17 @@ function fakeConvex(
       throw new Error(`unexpected query ${name}`);
     },
     mutation: async (ref, args) => {
-      const name = getFunctionName(ref as never);
+      const name = String(ref);
       mutations.push({ name, args });
-      if (name === "cells:setCell" || name === "cells:setCellStatus") {
+      if (name === "/api/worker/setCell" || name === "/api/worker/setCellStatus") {
         upsert(args);
         return "cell-id";
       }
       throw new Error(`unexpected mutation ${name}`);
     },
     action: async (ref, args) => {
-      const name = getFunctionName(ref as never);
-      if (name === "credentials:getCredentialForRun") {
+      const name = String(ref);
+      if (name === "/api/worker/getCredential") {
         credentialCalls.push(args);
         const secrets = credentials[String(args.extensionId)];
         return secrets === undefined ? null : { secrets };
@@ -152,7 +153,7 @@ function fakeConvex(
 }
 
 /** Deps whose `makeClient` ignores url/token and returns the given fake client. */
-const depsFor = (client: ConvexClientLike, registry: Registry): CloudRunDeps => ({
+const depsFor = (client: CloudClientLike, registry: Registry): CloudRunDeps => ({
   makeClient: () => client,
   registry,
   config: {},
@@ -189,7 +190,7 @@ describe("runCloudColumn", () => {
     const { client, mutations } = fakeConvex(grid);
 
     const res = await runCloudColumn(
-      { convexUrl: "https://fake.convex.cloud", token: "jwt", tableId: "t1", columnId: "c_upper" },
+      { apiUrl: "https://app.gtmgrid.dev", token: "jwt", tableId: "t1", columnId: "c_upper" },
       depsFor(client, upperRegistry()),
     );
 
@@ -204,7 +205,7 @@ describe("runCloudColumn", () => {
     expect(r2Upper?.status).toBe("done");
 
     // Each row streamed a running status before its done write (live multiplayer).
-    const statusCalls = mutations.filter((m) => m.name === "cells:setCellStatus");
+    const statusCalls = mutations.filter((m) => m.name === "/api/worker/setCellStatus");
     expect(statusCalls.map((m) => m.args.status)).toContain("running");
     // No local SQLite write happened — the unused db has no such table/column.
     expect(db.getCell("r1", "c_upper")).toBeUndefined();
@@ -233,7 +234,7 @@ describe("runCloudColumn", () => {
     const { client } = fakeConvex(grid);
 
     const res = await runCloudColumn(
-      { convexUrl: "https://fake.convex.cloud", token: "jwt", tableId: "t1", columnId: "c_bad" },
+      { apiUrl: "https://app.gtmgrid.dev", token: "jwt", tableId: "t1", columnId: "c_bad" },
       depsFor(client, upperRegistry()),
     );
 
@@ -269,7 +270,7 @@ describe("runCloudColumn", () => {
     const { client } = fakeConvex(grid);
 
     const res = await runCloudColumn(
-      { convexUrl: "https://fake.convex.cloud", token: "jwt", tableId: "t1", columnId: "c_x", rowIds: ["r1"] },
+      { apiUrl: "https://app.gtmgrid.dev", token: "jwt", tableId: "t1", columnId: "c_x", rowIds: ["r1"] },
       depsFor(client, upperRegistry()),
     );
 
@@ -338,7 +339,7 @@ describe("runCloudColumn — workspace-shared credentials (#18)", () => {
     });
 
     const res = await runCloudColumn(
-      { convexUrl: "https://fake.convex.cloud", token: "jwt", tableId: "t1", columnId: "c_key" },
+      { apiUrl: "https://app.gtmgrid.dev", token: "jwt", tableId: "t1", columnId: "c_key" },
       depsFor(client, secretEchoRegistry()),
     );
 
@@ -361,7 +362,7 @@ describe("runCloudColumn — workspace-shared credentials (#18)", () => {
     const { client } = fakeConvex(grid, {}); // no credential stored for `secret`
 
     const res = await runCloudColumn(
-      { convexUrl: "https://fake.convex.cloud", token: "jwt", tableId: "t1", columnId: "c_key" },
+      { apiUrl: "https://app.gtmgrid.dev", token: "jwt", tableId: "t1", columnId: "c_key" },
       depsFor(client, secretEchoRegistry()),
     );
 

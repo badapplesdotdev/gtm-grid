@@ -1,12 +1,9 @@
 /**
- * NEW-path cloud client foundation tests (TRI-3252).
+ * Cloud client foundation tests.
  *
  * Everything here is OFFLINE: no live apps/web server, no Postgres, no network.
- * We assert the foundation pieces this lane ships:
- *   1. CLIENT CONSTRUCTION — the tRPC/auth/react-query clients build without
- *      throwing and the URL helpers derive the right endpoints.
- *   2. FLAG SELECTION — the strangler precedence (`selectCloudPath`) picks the
- *      new path when `VITE_API_URL` is set, else Convex, else local.
+ * We assert the foundation pieces this module ships: the tRPC/auth/react-query
+ * clients build without throwing and the URL helpers derive the right endpoints.
  *
  * Token-resolution + OAuth-callback logic live in ./api-auth.test.ts.
  */
@@ -18,7 +15,6 @@ import {
   makeAuthClient,
   makeQueryClient,
   makeTrpcClient,
-  selectCloudPath,
   trpcUrl,
 } from "./client";
 
@@ -70,24 +66,5 @@ describe("client construction (offline)", () => {
     expect(a).not.toBe(b);
     // Desktop defaults: no window-focus refetch.
     expect(a.getDefaultOptions().queries?.refetchOnWindowFocus).toBe(false);
-  });
-});
-
-describe("selectCloudPath — strangler flag precedence", () => {
-  it("picks the NEW api path when VITE_API_URL is set (wins over Convex)", () => {
-    expect(selectCloudPath("http://localhost:3000", undefined)).toBe("api");
-    expect(
-      selectCloudPath("http://localhost:3000", "https://x.convex.cloud"),
-    ).toBe("api");
-  });
-
-  it("falls back to the legacy Convex path when only Convex is set", () => {
-    expect(selectCloudPath(undefined, "https://x.convex.cloud")).toBe("convex");
-    expect(selectCloudPath("", "https://x.convex.cloud")).toBe("convex");
-  });
-
-  it("is local-only (no provider) when neither backend is configured", () => {
-    expect(selectCloudPath(undefined, undefined)).toBe("local");
-    expect(selectCloudPath("", "")).toBe("local");
   });
 });

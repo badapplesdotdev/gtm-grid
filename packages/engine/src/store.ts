@@ -3,8 +3,8 @@
  *
  * `Engine.dispatch` + `runColumn` historically called the concrete synchronous
  * `Db` directly. To let the same engine drive either local SQLite (solo) or a
- * cloud/Convex project (team multiplayer) we hide every read/write the run path
- * needs behind this Effect service: a tagged type, typed errors, and a `Layer`.
+ * cloud project (team multiplayer) we hide every read/write the run path needs
+ * behind this Effect service: a tagged type, typed errors, and a `Layer`.
  *
  * This follows the canonical Effect pattern in `sample-service.ts`:
  *   - errors are `Data.TaggedError` values in the Effect error channel,
@@ -12,8 +12,8 @@
  *   - a `Layer` provides a concrete implementation.
  *
  * `SqliteGridStore` (this file) is the local implementation: a thin, behaviour-
- * preserving wrapper over the existing `Db`. The cloud `ConvexGridStore` (a
- * later lane) is just another `Layer` for the same tag.
+ * preserving wrapper over the existing `Db`. The cloud store (`store-cloud.ts`)
+ * is just another `Layer` for the same tag.
  */
 
 import { Context, Data, Effect, Layer } from "effect";
@@ -22,8 +22,8 @@ import type { Cell, CellStatus, Column, Credential, Row } from "./types.js";
 
 /**
  * Raised when an underlying store operation fails (SQLite throw, network error,
- * Convex mutation rejection, etc.). Travels in the Effect error channel so
- * callers handle it by `_tag` instead of catching exceptions.
+ * cloud write rejection, etc.). Travels in the Effect error channel so callers
+ * handle it by `_tag` instead of catching exceptions.
  */
 export class GridStoreError extends Data.TaggedError("GridStoreError")<{
   readonly message: string;
@@ -78,7 +78,7 @@ export interface GridStoreShape {
   ) => Effect.Effect<Credential | undefined, GridStoreError>;
   /**
    * Optional: return a read-only snapshot of the store for the duration of one
-   * run. Stores whose granular reads are expensive to repeat (e.g. a Convex
+   * run. Stores whose granular reads are expensive to repeat (e.g. a cloud
    * store that re-fetches the whole grid on every read) implement this to fetch
    * once and serve all subsequent reads from memory, turning an N-row run from
    * O(N^2) reads into O(N). The engine calls it once per `runColumn` and reads
@@ -91,7 +91,7 @@ export interface GridStoreShape {
 
 /**
  * The GridStore service tag. The engine `yield*`s this; a `Layer`
- * (`sqliteGridStore` here, `convexGridStore` later) provides the implementation.
+ * (`sqliteGridStore` here, `cloudGridStore` later) provides the implementation.
  */
 export class GridStore extends Context.Tag("GridStore")<
   GridStore,

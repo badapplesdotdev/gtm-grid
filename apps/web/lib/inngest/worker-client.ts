@@ -1,11 +1,11 @@
 import type {
-  ConvexClientLike,
-  ConvexFunctionRefs,
+  CloudClientLike,
+  CloudFunctionRefs,
 } from "@gtmgrid/engine";
 
 /**
- * A {@link ConvexClientLike} (the structural cloud-store client the engine's
- * `convexGridStoreShape` injects — see `packages/engine/src/store-convex.ts`
+ * A {@link CloudClientLike} (the structural cloud-store client the engine's
+ * `cloudGridStoreShape` injects — see `packages/engine/src/store-convex.ts`
  * lines ~61-71) that talks to the headless webhook WORKER endpoints
  * (`apps/web/app/api/worker/*`, TRI-3250) over their SECRET-GATED HTTP boundary,
  * instead of authenticated function calls.
@@ -79,11 +79,11 @@ function routeOf(ref: unknown): string {
 }
 
 /**
- * The worker's {@link ConvexClientLike}. query/mutation/action are identical on
+ * The worker's {@link CloudClientLike}. query/mutation/action are identical on
  * the HTTP boundary (a POST to the route); the distinction only matters to the
  * authenticated client, which the worker does not use.
  */
-export const workerClient: ConvexClientLike = {
+export const workerClient: CloudClientLike = {
   query: (ref, args) => call(routeOf(ref), args),
   mutation: (ref, args) => call(routeOf(ref), args),
   action: (ref, args) => call(routeOf(ref), args),
@@ -100,7 +100,7 @@ export const workerClient: ConvexClientLike = {
  * `{ workspaceId, extensionId, scope }` and the route forwards `workspaceId` +
  * `extensionId` to the credential decrypt.
  */
-export const WORKER_REFS: ConvexFunctionRefs = {
+export const WORKER_REFS: CloudFunctionRefs = {
   getTable: "/api/worker/getTable",
   setCell: "/api/worker/setCell",
   setCellStatus: "/api/worker/setCellStatus",

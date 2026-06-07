@@ -27,12 +27,9 @@
  * additive cloud path, gated on a signed-in workspace.
  */
 
-import { useAction } from "convex/react";
 import { Context, Data, Effect, Layer } from "effect";
 import { useMemo } from "react";
-import { api } from "../../../../convex/_generated/api";
-import type { Id } from "../../../../convex/_generated/dataModel";
-import { apiClient, cloudViaApi } from "./client";
+import { apiClient } from "./client";
 
 /**
  * The cloud credential scope. Mirrors `credentialScope` in convex/schema.ts:
@@ -222,60 +219,18 @@ export function runSaveCredential(
 }
 
 /**
- * Build the Live {@link CredentialService} Layer for the running app, STRANGLER-
- * branched on the cloud path (TRI-3255):
- *   - NEW path  → the {@link CredentialSaver} is {@link apiCredentialSaver} (tRPC
- *     `credentials.save`); the Convex `useAction` is NOT called (its provider is
- *     not mounted on this path).
- *   - LEGACY path → the saver wraps the Convex `credentials.saveCredential` action.
+ * Build the Live {@link CredentialService} Layer for the running app: the
+ * {@link CredentialSaver} is {@link apiCredentialSaver} (tRPC `credentials.save`).
  *
  * Extracted here (a tiny hook) so useWorkspaceCredentials + OnboardingFlow share
- * ONE branch instead of duplicating it. `cloudViaApi` is a module constant, so the
- * hook order is stable across renders. Mirrors `useInviteLayer` in ./invite.ts.
+ * ONE Layer instead of duplicating it. Mirrors `useInviteLayer` in ./invite.ts.
  */
 export function useCredentialLayer(): Layer.Layer<CredentialService> {
-  if (cloudViaApi) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
-    return useMemo(
-      () =>
-        CredentialServiceLive.pipe(
-          Layer.provide(
-            Layer.succeed(CredentialSaver, apiCredentialSaver()),
-          ),
-        ),
-      [],
-    );
-  }
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
-  const saveAction = useAction(api.credentials.saveCredential);
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
   return useMemo(
     () =>
       CredentialServiceLive.pipe(
-        Layer.provide(
-          Layer.succeed(CredentialSaver, {
-            save: (input: SaveCredentialInput) =>
-              Effect.tryPromise({
-                try: () =>
-                  saveAction({
-                    workspaceId: input.workspaceId as Id<"workspaces">,
-                    extensionId: input.extensionId,
-                    scope: input.scope,
-                    name: input.name,
-                    secrets: input.secrets,
-                  }).then(() => undefined),
-                catch: (cause) =>
-                  new CredentialError({
-                    message:
-                      cause instanceof Error
-                        ? cause.message
-                        : "Could not save the key.",
-                    cause,
-                  }),
-              }),
-          }),
-        ),
+        Layer.provide(Layer.succeed(CredentialSaver, apiCredentialSaver())),
       ),
-    [saveAction],
+    [],
   );
 }

@@ -25,8 +25,8 @@ import { useCallback, useState } from "react";
 import { type BillingCycle, resolvePlanId } from "@gtmgrid/cloud";
 import { PlanGrid, BillingToggle } from "./onboarding/PlanGrid";
 import type { SelectablePlan } from "./onboarding/flow-logic";
-import type { Id } from "../../../../convex/_generated/dataModel";
-import { cloudEnabled } from "./convex";
+import type { Id } from "./ids";
+import { cloudEnabled } from "./client";
 import { useAuthState, useMembers } from "./auth";
 import { runInvite, useInviteLayer } from "./invite";
 import {
