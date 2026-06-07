@@ -1,5 +1,16 @@
 # @gtmgrid/desktop
 
+## 0.3.0
+
+### Minor Changes
+
+- b4b82c3: Migrate the cloud tier off Convex to Supabase Postgres + Drizzle + Better Auth + tRPC, with server-gated PartyKit realtime (multiplayer). The desktop app now talks to the tRPC API + Better Auth instead of Convex; the local-first SQLite engine is unchanged. Also adds a platform-aware download experience to the marketing site.
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.3.0
+- @gtmgrid/services@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes
