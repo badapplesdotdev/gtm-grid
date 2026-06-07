@@ -38,6 +38,7 @@ import {
   pgEnum,
   pgTable,
   text,
+  timestamp,
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
@@ -115,8 +116,8 @@ export const users = pgTable("users", {
   emailVerified: boolean("email_verified").notNull().default(false),
   /** Avatar URL (from OAuth providers or upload). */
   image: text("image"),
-  createdAt: bigint("created_at", { mode: "number" }).notNull(),
-  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull(),
 });
 
 /**
@@ -134,13 +135,13 @@ export const sessions = pgTable(
     userId: text("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" }).notNull(),
     /** Client IP at sign-in (audit/security; nullable). */
     ipAddress: text("ip_address"),
     /** Client user-agent at sign-in (nullable). */
     userAgent: text("user_agent"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull(),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull(),
   },
   (t) => [
     index("sessions_by_user").on(t.userId),
@@ -171,16 +172,14 @@ export const accounts = pgTable(
     refreshToken: text("refresh_token"),
     /** OAuth id token (nullable). */
     idToken: text("id_token"),
-    accessTokenExpiresAt: bigint("access_token_expires_at", { mode: "number" }),
-    refreshTokenExpiresAt: bigint("refresh_token_expires_at", {
-      mode: "number",
-    }),
+    accessTokenExpiresAt: timestamp("access_token_expires_at", { withTimezone: true, mode: "date" }),
+    refreshTokenExpiresAt: timestamp("refresh_token_expires_at", { withTimezone: true, mode: "date" }),
     /** Granted OAuth scopes (nullable). */
     scope: text("scope"),
     /** Hashed password for the credential account (nullable for OAuth rows). */
     password: text("password"),
-    createdAt: bigint("created_at", { mode: "number" }).notNull(),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull(),
   },
   (t) => [
     index("accounts_by_user").on(t.userId),
@@ -202,9 +201,9 @@ export const verifications = pgTable(
     identifier: text("identifier").notNull(),
     /** The OTP code (or token) being checked. */
     value: text("value").notNull(),
-    expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
-    createdAt: bigint("created_at", { mode: "number" }).notNull(),
-    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true, mode: "date" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull(),
   },
   (t) => [index("verifications_by_identifier").on(t.identifier)],
 );

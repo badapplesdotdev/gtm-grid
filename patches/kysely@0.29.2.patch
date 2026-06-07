@@ -1,0 +1,10 @@
+diff --git a/dist/index.js b/dist/index.js
+index 702f0e272d665fdc6cd1dd2c98f4c06cf9506f76..4f57c736e8bd27a3ff10a487b8713eda07adc421 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -198,3 +198,5 @@ export * from './util/compilable.js';
+ export * from './util/log.js';
+ export { logOnce } from './util/log-once.js';
+ export { createQueryId } from './util/query-id.js';
++
++export { DEFAULT_MIGRATION_TABLE, DEFAULT_MIGRATION_LOCK_TABLE } from './migration/migrator.js';
