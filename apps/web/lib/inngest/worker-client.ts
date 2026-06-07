@@ -5,7 +5,7 @@ import type {
 
 /**
  * A {@link CloudClientLike} (the structural cloud-store client the engine's
- * `cloudGridStoreShape` injects — see `packages/engine/src/store-convex.ts`
+ * `cloudGridStoreShape` injects — see `packages/engine/src/store-cloud.ts`
  * lines ~61-71) that talks to the headless webhook WORKER endpoints
  * (`apps/web/app/api/worker/*`, TRI-3250) over their SECRET-GATED HTTP boundary,
  * instead of authenticated function calls.
