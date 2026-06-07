@@ -35,7 +35,7 @@ import {
 } from "@gtmgrid/email";
 import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { emailOTP } from "better-auth/plugins";
+import { bearer, emailOTP } from "better-auth/plugins";
 import { generateOtp, OTP_EXPIRY_SECONDS, OTP_LENGTH } from "./otp.js";
 import { githubEnabled, googleEnabled } from "./providers.js";
 
@@ -46,9 +46,23 @@ import { githubEnabled, googleEnabled } from "./providers.js";
  */
 export const DESKTOP_DEEP_LINK_PREFIX = "gtmgrid://";
 
-/** Build the `trustedOrigins` allow-list: SITE_URL (if set) + the desktop scheme. */
+/**
+ * The Tauri desktop webview origins. The packaged app loads from a custom scheme
+ * (`tauri://localhost` on macOS, `http(s)://tauri.localhost` on Windows/Linux),
+ * and dev runs on Vite (`http://localhost:5173`). These must be trusted so Better
+ * Auth accepts the desktop's cross-origin auth requests (paired with CORS in
+ * apps/web/middleware.ts and Bearer-token sessions — WKWebview blocks 3p cookies).
+ */
+export const DESKTOP_WEB_ORIGINS = [
+  "tauri://localhost",
+  "http://tauri.localhost",
+  "https://tauri.localhost",
+  "http://localhost:5173",
+];
+
+/** Build the `trustedOrigins` allow-list: SITE_URL (if set) + desktop origins. */
 function trustedOrigins(): string[] {
-  const origins = [DESKTOP_DEEP_LINK_PREFIX];
+  const origins = [DESKTOP_DEEP_LINK_PREFIX, ...DESKTOP_WEB_ORIGINS];
   const siteUrl = process.env.SITE_URL;
   if (siteUrl !== undefined && siteUrl !== "") origins.push(siteUrl);
   return origins;
@@ -124,7 +138,10 @@ export function createAuth(db: Db): ReturnType<typeof betterAuth> {
     },
     socialProviders: socialProviders(),
     trustedOrigins: trustedOrigins(),
-    plugins: [otpPlugin()],
+    // `bearer` lets the desktop carry its session via `Authorization: Bearer
+    // <token>` instead of a cookie (WKWebview blocks third-party cookies). The
+    // client reads the `set-auth-token` response header on sign-in and replays it.
+    plugins: [otpPlugin(), bearer()],
   };
   return betterAuth(options);
 }

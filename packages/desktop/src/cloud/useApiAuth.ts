@@ -11,7 +11,7 @@
  * without React or a live session; this file is only the thin React binding.
  */
 
-import { authClient } from "./client";
+import { authClient, getStoredAuthToken } from "./client";
 import { type ApiSessionLike, sidecarTokenFromSession } from "./api-auth";
 
 /**
@@ -28,5 +28,11 @@ export function useApiAuthToken(): string | null {
   // eslint-disable-next-line react-hooks/rules-of-hooks -- `authClient` is a
   // module constant, so this branch never changes the hook order across renders.
   const session = authClient.useSession();
-  return sidecarTokenFromSession(session.data as ApiSessionLike | null);
+  // Subscribe to the session for reactivity (re-render on sign in/out), but the
+  // token the sidecar sends is the persisted Bearer token (cookies don't ride the
+  // Tauri webview cross-origin). Falls back to the session-derived token.
+  return (
+    getStoredAuthToken() ??
+    sidecarTokenFromSession(session.data as ApiSessionLike | null)
+  );
 }

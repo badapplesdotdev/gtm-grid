@@ -526,6 +526,25 @@ export default function App() {
   // state above is left intact so switching back is instant and unchanged.
   const me = useMe();
   const { isAuthenticated, isLoading: authLoading } = useAuthState();
+  // Local-first: when cloud is configured but the user hasn't signed in, the
+  // onboarding offers "Continue locally" — which sets this persisted flag so the
+  // app boots straight into local mode (no cloud features) on future launches.
+  // Signing in (via the AccountBar) unlocks cloud at any time.
+  const [localMode, setLocalMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("gtmgrid:localMode") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const continueLocally = useCallback(() => {
+    try {
+      localStorage.setItem("gtmgrid:localMode", "1");
+    } catch {
+      /* no storage — local mode just won't persist across launches */
+    }
+    setLocalMode(true);
+  }, []);
   const { activeWorkspace, setActiveWorkspaceId } = useActiveWorkspace(me ?? null);
 
   // ── Cloud onboarding flow (C28) ──────────────────────────────
@@ -1117,22 +1136,22 @@ export default function App() {
 
   const fnColCount = tableData?.columns.filter(c => c.kind === "function").length ?? 0;
 
-  // ── Forced auth gate (pro build only) ────────────────────────
-  // In the commercial build (cloudEnabled), an account is REQUIRED to use the
-  // app at all — even local/solo. We block the entire shell behind sign-in until
-  // authenticated; the gate lifts automatically when `isAuthenticated` flips.
-  // OSS builds never set cloudEnabled, so this is a no-op there (local-first,
-  // no account needed).
-  if (cloudEnabled && authLoading) {
+  // ── Cloud sign-in welcome (dismissable to local) ─────────────
+  // When cloud is configured, first launch shows the sign-in/onboarding screen —
+  // but it is NOT a hard gate: "Continue locally" (onClose → continueLocally)
+  // drops into local mode with NO cloud features, free + offline. Cloud access
+  // (workspaces, sync, realtime) requires signing in. Once the user has chosen
+  // local (or signed in), this never blocks again.
+  if (cloudEnabled && !localMode && authLoading) {
     return <AppLoader inShell label="Signing you in…" />;
   }
-  if (cloudEnabled && !isAuthenticated) {
+  if (cloudEnabled && !localMode && !isAuthenticated) {
     return (
       <OnboardingFlow
         forced
         initialScreen="signin"
         hasSession={false}
-        onClose={() => {}}
+        onClose={continueLocally}
         onDone={() => {}}
       />
     );
