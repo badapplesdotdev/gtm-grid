@@ -13,6 +13,7 @@
   "dependencies": {
     "@convex-dev/auth": "^0.0.87",
     "@gtmgrid/cloud": "workspace:*",
+    "@gtmgrid/services": "workspace:*",
     "@tanstack/react-query": "^5.62.0",
     "@tauri-apps/api": "^2.1.1",
     "@tauri-apps/plugin-deep-link": "^2.2.0",

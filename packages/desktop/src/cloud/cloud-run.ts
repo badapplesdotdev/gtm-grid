@@ -35,11 +35,19 @@ export interface CloudRunResult {
   readonly errors: number;
 }
 
-/** The signed-in session a cloud run authenticates with. */
+/**
+ * The signed-in session a cloud run authenticates with. STRANGLER (TRI-3254):
+ * the NEW Postgres-tier path carries the apps/web `apiUrl` + the Better Auth
+ * bearer token; the LEGACY path carries the Convex deployment `convexUrl` + the
+ * Convex Auth JWT. Exactly one of `apiUrl`/`convexUrl` is set per build; the
+ * sidecar payload forwards whichever is present (see {@link HttpCloudRunnerLive}).
+ */
 export interface CloudSession {
-  /** The Convex deployment URL (the desktop's `VITE_CONVEX_URL`). */
-  readonly convexUrl: string;
-  /** The signed-in member's Convex Auth JWT. */
+  /** The apps/web API base URL (the desktop's `VITE_API_URL`) — NEW path. */
+  readonly apiUrl?: string;
+  /** The Convex deployment URL (the desktop's `VITE_CONVEX_URL`) — LEGACY path. */
+  readonly convexUrl?: string;
+  /** The signed-in member's auth token (Better Auth bearer or Convex Auth JWT). */
   readonly token: string;
 }
 
@@ -125,8 +133,16 @@ export const HttpCloudRunnerLive: Layer.Layer<CloudRunner> = Layer.succeed(
           const res = await fetch(`${SIDECAR_BASE}/api/cloud/columns/run`, {
             method: "POST",
             headers: { "content-type": "application/json" },
+            // Forward whichever backend plumbing the session carries: `apiUrl`
+            // on the NEW Postgres-tier path, `convexUrl` on the LEGACY path.
+            // `JSON.stringify` drops the absent one (it is `undefined`).
             body: JSON.stringify({
-              convexUrl: session.convexUrl,
+              ...(session.apiUrl !== undefined
+                ? { apiUrl: session.apiUrl }
+                : {}),
+              ...(session.convexUrl !== undefined
+                ? { convexUrl: session.convexUrl }
+                : {}),
               token: session.token,
               tableId: input.tableId,
               columnId: input.columnId,

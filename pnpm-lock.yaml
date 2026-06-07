@@ -182,6 +182,9 @@ importers:
       '@gtmgrid/cloud':
         specifier: workspace:*
         version: link:../cloud
+      '@gtmgrid/services':
+        specifier: workspace:*
+        version: link:../services
       '@tanstack/react-query':
         specifier: ^5.62.0
         version: 5.101.0(react@18.3.1)
