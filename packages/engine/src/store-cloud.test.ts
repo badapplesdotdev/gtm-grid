@@ -16,17 +16,17 @@ import { CloudSchemaMapping } from "./cloud-schema.js";
 import { Engine } from "./execute.js";
 import { Registry } from "./registry.js";
 import {
-  convexGridStoreShape,
-  type ConvexClientLike,
-  type ConvexFunctionRefs,
-  type ConvexGridStoreConfig,
-} from "./store-convex.js";
+  cloudGridStoreShape,
+  type CloudClientLike,
+  type CloudFunctionRefs,
+  type CloudGridStoreConfig,
+} from "./store-cloud.js";
 import type { CellPatch, GridStoreError, GridStoreShape } from "./store.js";
 import type { Cell, Column, Connector, Row } from "./types.js";
 
 // Opaque refs — the engine never interprets these; the fake client compares by
 // identity to decide which "function" was called.
-const REFS: ConvexFunctionRefs = {
+const REFS: CloudFunctionRefs = {
   getTable: { kind: "getTable" },
   setCell: { kind: "setCell" },
   setCellStatus: { kind: "setCellStatus" },
@@ -47,9 +47,9 @@ function fakeClient(grid: {
   rows?: unknown[];
   cells?: unknown[];
   credential?: unknown;
-}): { client: ConvexClientLike; calls: Call[] } {
+}): { client: CloudClientLike; calls: Call[] } {
   const calls: Call[] = [];
-  const client: ConvexClientLike = {
+  const client: CloudClientLike = {
     query: async (ref, args) => {
       calls.push({ ref, args });
       if (ref === REFS.getTable) {
@@ -76,9 +76,9 @@ function fakeClient(grid: {
 }
 
 /** Build the store shape, providing the real CloudSchemaMapping layer. */
-const buildStore = (config: ConvexGridStoreConfig): Promise<GridStoreShape> =>
+const buildStore = (config: CloudGridStoreConfig): Promise<GridStoreShape> =>
   Effect.runPromise(
-    convexGridStoreShape(config).pipe(
+    cloudGridStoreShape(config).pipe(
       Effect.provide(CloudSchemaMapping.Default),
     ),
   );
@@ -262,7 +262,7 @@ describe("ConvexGridStore — writes (run-status mapping)", () => {
   });
 
   it("surfaces a Convex mutation rejection as a typed GridStoreError", async () => {
-    const client: ConvexClientLike = {
+    const client: CloudClientLike = {
       query: async () => ({ columns: [], rows: [], cells: [] }),
       mutation: async () => {
         throw new Error("network down");
@@ -341,7 +341,7 @@ describe("ConvexGridStore — credentials (T7 decrypt-for-run, #18)", () => {
   });
 
   it("is a no-op (undefined) when no credential ref is wired", async () => {
-    const refsNoCred: ConvexFunctionRefs = { ...REFS, getCredential: undefined };
+    const refsNoCred: CloudFunctionRefs = { ...REFS, getCredential: undefined };
     const { client } = fakeClient({});
     const store = await buildStore({
       client,

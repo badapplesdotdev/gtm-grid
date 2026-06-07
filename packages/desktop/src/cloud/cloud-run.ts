@@ -2,30 +2,29 @@
  * Cloud run orchestration (T9) — client-side LOGIC as an Effect service.
  *
  * Running a column on a CLOUD project does NOT happen in the browser: execution
- * stays LOCAL. The UI asks the local sidecar to run the column with a
- * Convex-backed engine (see packages/server/src/cloud-run.ts). This service owns
- * that orchestration: it assembles the request (deployment url + the signed-in
+ * stays LOCAL. The UI asks the local sidecar to run the column against the
+ * apps/web tRPC API (see packages/server/src/cloud-run.ts). This service owns
+ * that orchestration: it assembles the request (API url + the signed-in
  * member's auth token + table/column ids) and POSTs it to the sidecar, mapping
  * failures into a typed error.
  *
  * Per the repo convention, React components stay plain React; this client LOGIC
  * is an Effect service with typed errors + a Layer, so it can be unit-tested by
- * providing a fake {@link CloudRunner} Layer (no real sidecar, no real Convex).
- * The thin React hook that binds this to component state lives in
- * ./useCloudGrid.ts.
+ * providing a fake {@link CloudRunner} Layer (no real sidecar). The thin React
+ * hook that binds this to component state lives in ./useCloudGrid.ts.
  */
 
 import { Context, Data, Effect, Layer } from "effect";
 
 /** A request to run one column on a cloud project via the local sidecar. */
 export interface CloudRunInput {
-  /** The Convex `tables._id` the column belongs to. */
+  /** The `tables.id` the column belongs to. */
   readonly tableId: string;
-  /** The Convex `columns._id` to run. */
+  /** The `columns.id` to run. */
   readonly columnId: string;
   /** Re-run cells already marked `done`. */
   readonly force?: boolean;
-  /** Restrict the run to these Convex `rows._id`s (defaults to all rows). */
+  /** Restrict the run to these `rows.id`s (defaults to all rows). */
   readonly rowIds?: readonly string[];
 }
 
@@ -36,18 +35,14 @@ export interface CloudRunResult {
 }
 
 /**
- * The signed-in session a cloud run authenticates with. STRANGLER (TRI-3254):
- * the NEW Postgres-tier path carries the apps/web `apiUrl` + the Better Auth
- * bearer token; the LEGACY path carries the Convex deployment `convexUrl` + the
- * Convex Auth JWT. Exactly one of `apiUrl`/`convexUrl` is set per build; the
- * sidecar payload forwards whichever is present (see {@link HttpCloudRunnerLive}).
+ * The signed-in session a cloud run authenticates with: the apps/web `apiUrl` +
+ * the Better Auth bearer token. The sidecar payload forwards both (see
+ * {@link HttpCloudRunnerLive}).
  */
 export interface CloudSession {
-  /** The apps/web API base URL (the desktop's `VITE_API_URL`) — NEW path. */
-  readonly apiUrl?: string;
-  /** The Convex deployment URL (the desktop's `VITE_CONVEX_URL`) — LEGACY path. */
-  readonly convexUrl?: string;
-  /** The signed-in member's auth token (Better Auth bearer or Convex Auth JWT). */
+  /** The apps/web API base URL (the desktop's `VITE_API_URL`). */
+  readonly apiUrl: string;
+  /** The signed-in member's Better Auth bearer token. */
   readonly token: string;
 }
 
@@ -133,16 +128,9 @@ export const HttpCloudRunnerLive: Layer.Layer<CloudRunner> = Layer.succeed(
           const res = await fetch(`${SIDECAR_BASE}/api/cloud/columns/run`, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            // Forward whichever backend plumbing the session carries: `apiUrl`
-            // on the NEW Postgres-tier path, `convexUrl` on the LEGACY path.
-            // `JSON.stringify` drops the absent one (it is `undefined`).
+            // Forward the apps/web API url + the Better Auth bearer token.
             body: JSON.stringify({
-              ...(session.apiUrl !== undefined
-                ? { apiUrl: session.apiUrl }
-                : {}),
-              ...(session.convexUrl !== undefined
-                ? { convexUrl: session.convexUrl }
-                : {}),
+              apiUrl: session.apiUrl,
               token: session.token,
               tableId: input.tableId,
               columnId: input.columnId,

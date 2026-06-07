@@ -1,8 +1,9 @@
 /**
- * The NEW Postgres-tier cloud client foundation for the desktop app (TRI-3252).
+ * The Postgres-tier cloud client foundation for the desktop app.
  *
- * This module is the strangler-fig REPLACEMENT for `convex.tsx`'s
- * `ConvexReactClient` + `ConvexAuthProvider`. It constructs, in one place:
+ * This is the SINGLE cloud foundation: the tRPC + Better Auth path is the only
+ * path (the legacy Convex client was removed in the W5 cutover). It constructs,
+ * in one place:
  *
  *   1. a typed tRPC client (`httpBatchLink` → the apps/web API at
  *      `VITE_API_URL`) over the `AppRouter` exported by apps/web — imported
@@ -12,12 +13,10 @@
  *      in/up/out, OAuth (incl. the `gtmgrid://` desktop deep link), and the
  *      email-OTP verify + password-reset flows, persisting its own session.
  *
- * STRANGLER FLAG — this foundation is mounted ONLY when `VITE_API_URL` is set
- * (`cloudViaApi`). When it is unset, `CloudProvider` (convex.tsx) keeps the
- * existing Convex path. Either way, when NO cloud backend is configured at all
- * (`cloudEnabled` false), no provider mounts and the local-only app issues zero
- * cloud calls. This lane builds the foundation + flag ONLY — it does not rewire
- * the feature hooks (later W4 lanes do that).
+ * The cloud layer is mounted ONLY when `VITE_API_URL` is set (`cloudEnabled` /
+ * `cloudViaApi`). When it is unset (an OSS / local-only build), no provider
+ * mounts and the local sidecar app issues zero cloud calls — the local SQLite
+ * engine path is entirely unaffected.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -25,9 +24,8 @@ import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import { createAuthClient } from "better-auth/react";
 import { emailOTPClient } from "better-auth/client/plugins";
 import type { ReactNode } from "react";
-// TYPE-ONLY import of the server router contract. The relative path matches the
-// established pattern desktop uses for `convex/_generated/api`; importing the
-// type erases at build time so no server code is bundled.
+// TYPE-ONLY import of the server router contract over a relative path; importing
+// the type erases at build time so no server code is bundled into the desktop app.
 import type { AppRouter } from "../../../../apps/web/lib/trpc/root";
 import { useApiDeepLinkOAuth } from "./useDeepLinkOAuth";
 
@@ -41,29 +39,32 @@ export const API_URL: string | undefined =
   (import.meta.env.VITE_API_URL as string | undefined) || undefined;
 
 /**
- * Whether the NEW tRPC + Better Auth path is enabled. True iff `VITE_API_URL`
- * is configured. When false the app falls back to the legacy Convex provider
- * (or, if Convex is also unconfigured, to the local-only no-provider path).
+ * Whether the tRPC + Better Auth cloud layer is enabled. True iff `VITE_API_URL`
+ * is configured. When false the app runs local-only (no provider, zero cloud
+ * calls). `cloudEnabled` is the alias the feature hooks/components gate on; both
+ * names mean the same thing now that the new path is the only path.
  */
 export const cloudViaApi = API_URL !== undefined;
 
 /**
- * Which cloud foundation a build should mount, given which backends are
- * configured. Pure so the strangler PRECEDENCE is unit-testable without the
- * module-level env:
- *   - `apiUrl` set            → `"api"`  (NEW tRPC + Better Auth path; wins)
- *   - else `convexUrl` set    → `"convex"` (legacy path, kept working)
- *   - else                    → `"local"` (no provider; zero cloud calls)
- * The new path takes precedence so flipping the flag fully swaps the foundation.
+ * Whether the cloud layer is usable (an apps/web API is configured). Identical
+ * to {@link cloudViaApi}; kept as a distinct export so the many call sites that
+ * gate cloud reads/writes on "is the cloud configured?" read naturally. The
+ * OSS/local invariant — no provider, zero cloud calls when unset — holds because
+ * both gates are the same single flag.
  */
-export function selectCloudPath(
-  apiUrl: string | undefined,
-  convexUrl: string | undefined,
-): "api" | "convex" | "local" {
-  if (apiUrl !== undefined && apiUrl !== "") return "api";
-  if (convexUrl !== undefined && convexUrl !== "") return "convex";
-  return "local";
-}
+export const cloudEnabled = cloudViaApi;
+
+/**
+ * Base URL of the inbound-webhook receiver. The webhook setup form builds each
+ * table's endpoint as `${INNGEST_URL}/api/webhooks/:token`. Read once from
+ * Vite's `import.meta.env`; empty string is treated as unset. Falls back to a
+ * documentation placeholder host when no deployment is wired so the form still
+ * renders a copyable, clearly-non-live URL in OSS builds.
+ */
+export const INNGEST_URL: string =
+  (import.meta.env.VITE_INNGEST_URL as string | undefined) ||
+  "https://hooks.gtmgrid.app";
 
 /** The tRPC HTTP endpoint on the apps/web host (`<API_URL>/api/trpc`). */
 export function trpcUrl(apiUrl: string): string {
@@ -173,14 +174,13 @@ function ApiDeepLinkOAuthBridge({ children }: { children: ReactNode }) {
 }
 
 /**
- * Wrap the app in the NEW cloud providers (react-query). The tRPC + Better Auth
+ * Wrap the app in the cloud providers (react-query). The tRPC + Better Auth
  * clients are module singletons consumed directly by hooks, so the only React
- * provider needed is react-query's. A no-op pass-through when the new path is
- * disabled, so the legacy/local app renders identically with zero new-path
- * calls.
+ * provider needed is react-query's. A no-op pass-through when the cloud layer is
+ * disabled, so the local-only app renders identically with zero cloud calls.
  */
-export function ApiCloudProvider({ children }: { children: ReactNode }) {
-  if (!cloudViaApi) {
+export function CloudProvider({ children }: { children: ReactNode }) {
+  if (!cloudEnabled) {
     return <>{children}</>;
   }
   return (

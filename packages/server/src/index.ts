@@ -515,23 +515,24 @@ route("POST", "/api/columns/:id/run", async (p, body) => {
 
 // --- cloud run path (T9) ---
 // Running a column on a CLOUD project: build an Engine whose store is the
-// Convex-backed ConvexGridStore (authed as the signed-in member), so inputs are
-// read from Convex and statuses/results stream back live to all members. LOCAL
-// projects keep the route above unchanged. The registry + AI config are the
-// sidecar's existing ones, so connectors/AI columns behave identically.
+// cloud-backed GridStore (POSTing to the apps/web `/api/worker/*` endpoints), so
+// inputs are read from Postgres and statuses/results stream back live to all
+// members via the realtime broadcast the server emits. LOCAL projects keep the
+// route above unchanged. The registry + AI config are the sidecar's existing
+// ones, so connectors/AI columns behave identically.
 route("POST", "/api/cloud/columns/run", async (_p, body) => {
-  const convexUrl = String(body?.convexUrl ?? "").trim();
+  const apiUrl = String(body?.apiUrl ?? "").trim();
   const token = String(body?.token ?? "").trim();
   const tableId = String(body?.tableId ?? "").trim();
   const columnId = String(body?.columnId ?? "").trim();
-  if (!convexUrl || !token || !tableId || !columnId)
-    return { error: "convexUrl, token, tableId and columnId are required" };
+  if (!apiUrl || !token || !tableId || !columnId)
+    return { error: "apiUrl, token, tableId and columnId are required" };
   const rowIds = Array.isArray(body?.rowIds) && body.rowIds.length ? (body.rowIds as string[]) : undefined;
   const deps = defaultCloudRunDeps(registry, aiConfig());
   // The cloud path is Db-free: the engine is built with no Db and reads/writes
-  // through the injected Convex store, so no SQLite file is opened here.
+  // through the injected cloud store, so no SQLite file is opened here.
   return runCloudColumn(
-    { convexUrl, token, tableId, columnId, force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds },
+    { apiUrl, token, tableId, columnId, force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds },
     deps,
   );
 });

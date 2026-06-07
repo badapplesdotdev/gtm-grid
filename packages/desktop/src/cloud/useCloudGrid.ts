@@ -1,48 +1,31 @@
 /**
- * Cloud grid hooks (T9 → W4) — the reactive data source for CLOUD projects.
+ * Cloud grid hooks — the reactive data source for CLOUD projects.
  *
  * A LOCAL project's grid loads imperatively via the sidecar (`api.table()` in
  * api.ts). A CLOUD project's grid is LIVE.
  *
- * STRANGLER (TRI-3254): every hook here now has TWO implementations and
- * dispatches on the `cloudViaApi` flag (a module constant from ./client, so the
- * branch is stable across renders and the React hook order never changes):
- *
- *   - NEW path (`cloudViaApi` true) — reads/writes go through the vanilla tRPC
- *     client (`apiClient`, ./client) consumed DIRECTLY via `@tanstack/react-query`
- *     hooks (queryFn/mutationFn). Live reactivity that the Convex `useQuery`
- *     subscription used to provide is REPLACED by the W3 shared realtime module
- *     (`@gtmgrid/services/realtime`): each grid view SEEDS via tRPC `grid.getTable`
- *     then SUBSCRIBES via `subscribeToGrid`, patching the react-query cache with
- *     the pure `applyGridEvent` reducer on every inbound event.
- *
- *   - LEGACY path (`cloudViaApi` false) — the existing Convex `useQuery` /
- *     `useMutation` subscriptions, kept working unchanged.
+ * Reads/writes go through the typed tRPC client (`apiClient`, ./client) consumed
+ * DIRECTLY via `@tanstack/react-query` hooks (queryFn/mutationFn). Live
+ * reactivity is provided by the W3 shared realtime module
+ * (`@gtmgrid/services/realtime`): each grid view SEEDS via tRPC `grid.getTable`
+ * then SUBSCRIBES via `subscribeToGrid`, patching the react-query cache with the
+ * pure `applyGridEvent` reducer on every inbound event.
  *
  * These hooks deliberately produce the SAME shapes the existing grid render
  * components consume (`Column`, `Cell`, a `FullTable`-like view) so the cloud
  * grid reuses `CellContent` etc. — only the data source changes.
  */
 
-import { useAuthToken } from "@convex-dev/auth/react";
 import {
   useInfiniteQuery,
   useQuery as useRqQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import {
-  type UsePaginatedQueryResult,
-  useMutation,
-  usePaginatedQuery,
-  useQuery,
-} from "convex/react";
 import { applyGridEvent, subscribeToGrid } from "@gtmgrid/services/realtime";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { api } from "../../../../convex/_generated/api";
-import type { Id } from "../../../../convex/_generated/dataModel";
+import type { Id } from "./ids";
 import type { Cell, CellStatus, Column, FullTable } from "../api";
-import { apiClient, cloudViaApi, queryClient } from "./client";
-import { CONVEX_URL, cloudEnabled } from "./convex";
+import { apiClient, queryClient } from "./client";
 import type { CloudSession } from "./cloud-run";
 import { useApiAuthToken } from "./useApiAuth";
 
@@ -67,6 +50,23 @@ const SUPABASE_ANON_KEY: string | undefined =
 const realtimeConfigured: boolean =
   SUPABASE_URL !== undefined && SUPABASE_ANON_KEY !== undefined;
 
+/**
+ * The cursor-paginated result shape the deliveries panel consumes: the loaded
+ * `results`, a `loadMore` trigger, and a discrete `status` for the "Load more"
+ * control. (Formerly the Convex `UsePaginatedQueryResult`; redefined locally so
+ * the cloud grid no longer depends on `convex/react`.)
+ */
+export interface PaginatedResult<T> {
+  readonly results: readonly T[];
+  readonly status:
+    | "LoadingFirstPage"
+    | "CanLoadMore"
+    | "LoadingMore"
+    | "Exhausted";
+  readonly isLoading: boolean;
+  readonly loadMore: (numItems: number) => void;
+}
+
 /** A cloud project as listed for the switcher (the `listProjects` query shape). */
 export interface CloudProject {
   readonly _id: Id<"projects">;
@@ -87,7 +87,7 @@ export interface CloudTableSummary {
 // ───────────────────────────── react-query keys ─────────────────────────────
 
 /**
- * The react-query key factory for the NEW tRPC path. Centralised so the realtime
+ * The react-query key factory for the tRPC path. Centralised so the realtime
  * cache-patch updaters and the query/invalidation calls target identical keys.
  * Pure + serialisable so it is trivially unit-testable.
  */
@@ -101,9 +101,9 @@ export const gridQueryKeys = {
 };
 
 /**
- * The `getTable` snapshot the react-query cache holds on the NEW path. Equal in
- * shape to `@gtmgrid/services` `GridSnapshot` / `FullGrid`, so the tRPC result is
- * stored directly and fed back through {@link applyGridEvent} without translation.
+ * The `getTable` snapshot the react-query cache holds. Equal in shape to
+ * `@gtmgrid/services` `GridSnapshot` / `FullGrid`, so the tRPC result is stored
+ * directly and fed back through {@link applyGridEvent} without translation.
  */
 type GridCacheSnapshot = Awaited<
   ReturnType<NonNullable<typeof apiClient>["grid"]["getTable"]["query"]>
@@ -111,7 +111,7 @@ type GridCacheSnapshot = Awaited<
 
 /**
  * Mint the Supabase realtime JWT via the tRPC `realtime.token` MUTATION. Thrown
- * if the new path is disabled (callers guard on `cloudViaApi` first). Extracted
+ * if the cloud layer is disabled (callers guard on `apiClient` first). Extracted
  * so the realtime-token plumbing is a single named seam.
  */
 async function mintRealtimeToken(): Promise<string> {
@@ -121,34 +121,15 @@ async function mintRealtimeToken(): Promise<string> {
 }
 
 /**
- * The signed-in cloud session (deployment url + auth JWT) needed to run a cloud
- * column via the sidecar, or `null` when cloud is off / not yet authenticated.
- *
- * STRANGLER: on the NEW path the session is the apps/web API URL + the Better
- * Auth bearer token ({@link useApiAuthToken}); on the LEGACY path it is the
- * Convex deployment URL + the Convex Auth JWT. Both `useAuthToken` and
- * `useApiAuthToken` are reactive and called behind a module-constant branch, so
- * the hook order is stable across renders.
+ * The signed-in cloud session (apps/web API URL + Better Auth bearer token)
+ * needed to run a cloud column via the sidecar, or `null` when cloud is off /
+ * not yet authenticated. `useApiAuthToken` is reactive.
  */
 export function useCloudSession(): CloudSession | null {
-  // The branch is on module constants (`cloudViaApi` / `cloudEnabled`), so a
-  // build takes exactly one path and the hook count never changes mid-run.
-  if (cloudViaApi) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const token = useApiAuthToken();
-    const apiUrl = (import.meta.env.VITE_API_URL as string | undefined) || "";
-    if (!token || apiUrl === "") return null;
-    return { apiUrl, token };
-  }
-  // `useAuthToken` requires the Convex Auth provider, which only mounts when the
-  // cloud layer is enabled. When it is off there is no provider, so we must not
-  // call the hook — `cloudEnabled` is a module constant, so this branch is
-  // stable across renders (same rule the auth hooks follow).
-  if (!cloudEnabled || CONVEX_URL === undefined) return null;
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  const token = useAuthToken();
-  if (!token) return null;
-  return { convexUrl: CONVEX_URL, token };
+  const token = useApiAuthToken();
+  const apiUrl = (import.meta.env.VITE_API_URL as string | undefined) || "";
+  if (!token || apiUrl === "") return null;
+  return { apiUrl, token };
 }
 
 /**
@@ -158,35 +139,26 @@ export function useCloudSession(): CloudSession | null {
 export function useCloudProjects(
   workspaceId: Id<"workspaces"> | null,
 ): CloudProject[] | undefined {
-  if (cloudViaApi) {
-    // The grid realtime channel is scoped by workspace; capture the active
-    // workspace here (App calls this with the active workspace) so the
-    // workspace-less `getTable` snapshot can still scope its subscription.
-    if (workspaceId !== null) activeWorkspaceIdRef.current = workspaceId;
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const q = useRqQuery({
-      queryKey: gridQueryKeys.projects(workspaceId ?? ""),
-      enabled: apiClient !== null && workspaceId !== null,
-      queryFn: () =>
-        apiClient!.grid.listProjects.query({ workspaceId: workspaceId! }),
-    });
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    return useMemo<CloudProject[] | undefined>(
-      () =>
-        q.data?.map((p) => ({
-          _id: p.id as Id<"projects">,
-          workspaceId: p.workspaceId as Id<"workspaces">,
-          name: p.name,
-          createdAt: p.createdAt,
-        })),
-      [q.data],
-    );
-  }
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  return useQuery(
-    api.projects.listProjects,
-    cloudEnabled && workspaceId !== null ? { workspaceId } : "skip",
-  ) as CloudProject[] | undefined;
+  // The grid realtime channel is scoped by workspace; capture the active
+  // workspace here (App calls this with the active workspace) so the
+  // workspace-less `getTable` snapshot can still scope its subscription.
+  if (workspaceId !== null) activeWorkspaceIdRef.current = workspaceId;
+  const q = useRqQuery({
+    queryKey: gridQueryKeys.projects(workspaceId ?? ""),
+    enabled: apiClient !== null && workspaceId !== null,
+    queryFn: () =>
+      apiClient!.grid.listProjects.query({ workspaceId: workspaceId! }),
+  });
+  return useMemo<CloudProject[] | undefined>(
+    () =>
+      q.data?.map((p) => ({
+        _id: p.id as Id<"projects">,
+        workspaceId: p.workspaceId as Id<"workspaces">,
+        name: p.name,
+        createdAt: p.createdAt,
+      })),
+    [q.data],
+  );
 }
 
 /**
@@ -196,32 +168,22 @@ export function useCloudProjects(
 export function useCloudTables(
   projectId: Id<"projects"> | null,
 ): CloudTableSummary[] | undefined {
-  if (cloudViaApi) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const q = useRqQuery({
-      queryKey: gridQueryKeys.tables(projectId ?? ""),
-      enabled: apiClient !== null && projectId !== null,
-      queryFn: () =>
-        apiClient!.grid.listTables.query({ projectId: projectId! }),
-    });
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    return useMemo<CloudTableSummary[] | undefined>(
-      () =>
-        q.data?.map((t) => ({
-          _id: t.id as Id<"tables">,
-          projectId: t.projectId as Id<"projects">,
-          name: t.name,
-          position: t.position,
-          createdAt: t.createdAt,
-        })),
-      [q.data],
-    );
-  }
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  return useQuery(
-    api.tables.listTables,
-    cloudEnabled && projectId !== null ? { projectId } : "skip",
-  ) as CloudTableSummary[] | undefined;
+  const q = useRqQuery({
+    queryKey: gridQueryKeys.tables(projectId ?? ""),
+    enabled: apiClient !== null && projectId !== null,
+    queryFn: () => apiClient!.grid.listTables.query({ projectId: projectId! }),
+  });
+  return useMemo<CloudTableSummary[] | undefined>(
+    () =>
+      q.data?.map((t) => ({
+        _id: t.id as Id<"tables">,
+        projectId: t.projectId as Id<"projects">,
+        name: t.name,
+        position: t.position,
+        createdAt: t.createdAt,
+      })),
+    [q.data],
+  );
 }
 
 /**
@@ -230,83 +192,49 @@ export function useCloudTables(
  * to a table.
  */
 export function useCloudProjectMutations() {
-  if (cloudViaApi) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const qc = useQueryClient();
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const createProject = useCallback(
-      async (
-        workspaceId: Id<"workspaces">,
-        name: string,
-      ): Promise<Id<"projects">> => {
-        const id = await apiClient!.grid.createProject.mutate({
-          workspaceId,
-          name,
-        });
-        await qc.invalidateQueries({
-          queryKey: gridQueryKeys.projects(workspaceId),
-        });
-        // The tRPC create returns the new id as a `string`; brand it to the
-        // shared `Id` type the components consume (the only cross-path coercion).
-        return id as Id<"projects">;
-      },
-      [qc],
-    );
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const createTable = useCallback(
-      async (
-        projectId: Id<"projects">,
-        name: string,
-      ): Promise<Id<"tables">> => {
-        const id = await apiClient!.grid.createTable.mutate({
-          projectId,
-          name,
-        });
-        await qc.invalidateQueries({
-          queryKey: gridQueryKeys.tables(projectId),
-        });
-        return id as Id<"tables">;
-      },
-      [qc],
-    );
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const deleteTable = useCallback(
-      (tableId: Id<"tables">) =>
-        apiClient!.grid.deleteTable.mutate({ tableId }),
-      [],
-    );
-    return { createProject, createTable, deleteTable };
-  }
-
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  const createProjectMut = useMutation(api.projects.createProject);
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  const createTableMut = useMutation(api.tables.createTable);
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  const deleteTableMut = useMutation(api.tables.deleteTable);
-
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
+  const qc = useQueryClient();
   const createProject = useCallback(
-    (workspaceId: Id<"workspaces">, name: string) =>
-      createProjectMut({ workspaceId, name }),
-    [createProjectMut],
+    async (
+      workspaceId: Id<"workspaces">,
+      name: string,
+    ): Promise<Id<"projects">> => {
+      const id = await apiClient!.grid.createProject.mutate({
+        workspaceId,
+        name,
+      });
+      await qc.invalidateQueries({
+        queryKey: gridQueryKeys.projects(workspaceId),
+      });
+      // The tRPC create returns the new id as a `string`; brand it to the
+      // shared `Id` type the components consume.
+      return id as Id<"projects">;
+    },
+    [qc],
   );
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
   const createTable = useCallback(
-    (projectId: Id<"projects">, name: string) =>
-      createTableMut({ projectId, name }),
-    [createTableMut],
+    async (
+      projectId: Id<"projects">,
+      name: string,
+    ): Promise<Id<"tables">> => {
+      const id = await apiClient!.grid.createTable.mutate({
+        projectId,
+        name,
+      });
+      await qc.invalidateQueries({
+        queryKey: gridQueryKeys.tables(projectId),
+      });
+      return id as Id<"tables">;
+    },
+    [qc],
   );
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
   const deleteTable = useCallback(
-    (tableId: Id<"tables">) => deleteTableMut({ tableId }),
-    [deleteTableMut],
+    (tableId: Id<"tables">) => apiClient!.grid.deleteTable.mutate({ tableId }),
+    [],
   );
-
   return { createProject, createTable, deleteTable };
 }
 
-/** Map a Convex/Postgres column doc (from `getTable`) onto the desktop `Column`. */
+/** Map a column doc (from `getTable`) onto the desktop `Column`. */
 function toColumn(c: {
   _id: string;
   name: string;
@@ -346,8 +274,7 @@ function toCell(c: {
 
 /**
  * Project a `getTable`-shaped snapshot onto the desktop `FullTable` (columns
- * ordered, rows with a `cells` map keyed by column id). Shared by both paths so
- * the render shape is identical regardless of data source. Pure.
+ * ordered, rows with a `cells` map keyed by column id). Pure.
  */
 function toFullTable(data: {
   table: { _id: string; name: string };
@@ -403,50 +330,30 @@ function toFullTable(data: {
  * so the same render code works. `undefined` while loading or when no cloud table
  * is selected; `null` if the table no longer exists.
  *
- * STRANGLER: on the NEW path this SEEDS via tRPC `grid.getTable` (react-query)
- * and SUBSCRIBES via the W3 realtime module, patching the cache with
- * {@link applyGridEvent} on each event (the Convex `useQuery` reactivity
- * replacement). On the LEGACY path it is the Convex `getTable` subscription.
+ * SEEDS via tRPC `grid.getTable` (react-query) and SUBSCRIBES via the W3 realtime
+ * module, patching the cache with {@link applyGridEvent} on each event.
  */
 export function useCloudTable(
   tableId: Id<"tables"> | null,
 ): FullTable | null | undefined {
-  if (cloudViaApi) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const q = useRqQuery({
-      queryKey: gridQueryKeys.table(tableId ?? ""),
-      enabled: apiClient !== null && tableId !== null,
-      queryFn: () => apiClient!.grid.getTable.query({ tableId: tableId! }),
-    });
+  const q = useRqQuery({
+    queryKey: gridQueryKeys.table(tableId ?? ""),
+    enabled: apiClient !== null && tableId !== null,
+    queryFn: () => apiClient!.grid.getTable.query({ tableId: tableId! }),
+  });
 
-    // Seed → subscribe: once a snapshot is loaded, subscribe to the table's grid
-    // channel and patch the react-query cache with the pure reducer on each
-    // event. The workspace the channel is scoped to comes from the active-
-    // workspace handle the switcher sets (the snapshot itself omits it).
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    useGridRealtime(tableId, q.data ? activeWorkspaceIdRef.current : null);
+  // Seed → subscribe: once a snapshot is loaded, subscribe to the table's grid
+  // channel and patch the react-query cache with the pure reducer on each
+  // event. The workspace the channel is scoped to comes from the active-
+  // workspace handle the switcher sets (the snapshot itself omits it).
+  useGridRealtime(tableId, q.data ? activeWorkspaceIdRef.current : null);
 
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    return useMemo<FullTable | null | undefined>(() => {
-      if (q.isLoading && q.data === undefined) return undefined;
-      if (q.data === undefined) return undefined;
-      if (q.data === null) return null;
-      return toFullTable(q.data);
-    }, [q.data, q.isLoading]);
-  }
-
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  const data = useQuery(
-    api.tables.getTable,
-    cloudEnabled && tableId !== null ? { tableId } : "skip",
-  );
-
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
   return useMemo<FullTable | null | undefined>(() => {
-    if (data === undefined) return undefined;
-    if (data === null) return null;
-    return toFullTable(data);
-  }, [data]);
+    if (q.isLoading && q.data === undefined) return undefined;
+    if (q.data === undefined) return undefined;
+    if (q.data === null) return null;
+    return toFullTable(q.data);
+  }, [q.data, q.isLoading]);
 }
 
 /**
@@ -546,174 +453,75 @@ export function patchGridCache(
  * Mutation wrappers for cloud grid edits — cell edits, add row, add column, plus
  * the structural deletes.
  *
- * STRANGLER: on the NEW path these call the tRPC `grid.*` mutations; the server
- * broadcasts the change so every OTHER subscribed client patches its cache via
- * the realtime reducer. This client invalidates its own `getTable` query so its
- * write is reflected immediately even before the broadcast round-trips. On the
- * LEGACY path they call the Convex mutations (Convex reactivity reflects live).
+ * These call the tRPC `grid.*` mutations; the server broadcasts the change so
+ * every OTHER subscribed client patches its cache via the realtime reducer. This
+ * client invalidates its own `getTable` query so its write is reflected
+ * immediately even before the broadcast round-trips.
  */
 export function useCloudGridMutations() {
-  if (cloudViaApi) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const qc = useQueryClient();
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const refresh = useCallback(
-      (tableId: string) =>
-        qc.invalidateQueries({ queryKey: gridQueryKeys.table(tableId) }),
-      [qc],
-    );
+  const qc = useQueryClient();
+  const refresh = useCallback(
+    (tableId: string) =>
+      qc.invalidateQueries({ queryKey: gridQueryKeys.table(tableId) }),
+    [qc],
+  );
 
-    // setCell/deleteRow/deleteColumn carry only the cell/row/column id (matching
-    // the component API), not the owning table, so they invalidate ALL loaded
-    // `getTable` queries by key prefix — the live realtime broadcast patches the
-    // exact snapshot; this just guarantees the writer sees its own change.
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const refreshAllTables = useCallback(
-      () =>
-        qc.invalidateQueries({
-          predicate: (query) =>
-            query.queryKey[0] === "grid" && query.queryKey[1] === "table",
-        }),
-      [qc],
-    );
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const setCell = useCallback(
-      async (rowId: Id<"rows">, columnId: Id<"columns">, value: unknown) => {
-        const res = await apiClient!.grid.setCell.mutate({
-          rowId,
-          columnId,
-          value,
-          status: "done",
-          error: null,
-        });
-        await refreshAllTables();
-        return res;
-      },
-      [refreshAllTables],
-    );
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const addRow = useCallback(
-      async (tableId: Id<"tables">) => {
-        const res = await apiClient!.grid.addRow.mutate({ tableId });
-        await refresh(tableId);
-        return res;
-      },
-      [refresh],
-    );
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const addRowsWithCells = useCallback(
-      async (tableId: Id<"tables">, rows: Array<Record<string, unknown>>) => {
-        const res = await apiClient!.grid.addRowsWithCells.mutate({
-          tableId,
-          rows,
-        });
-        await refresh(tableId);
-        return res;
-      },
-      [refresh],
-    );
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const addColumn = useCallback(
-      async (
-        tableId: Id<"tables">,
-        body: {
-          name: string;
-          type?: string;
-          fn?: string;
-          code?: string;
-          params?: Record<string, unknown>;
-        },
-      ) => {
-        const { provider, method, kind } = deriveColumnKind(body);
-        const res = await apiClient!.grid.addColumn.mutate({
-          tableId,
-          name: body.name,
-          type: (body.type ?? "text") as
-            | "text"
-            | "number"
-            | "boolean"
-            | "date"
-            | "json",
-          kind,
-          provider,
-          method,
-          code: body.code ?? null,
-          params: body.params ?? {},
-        });
-        await refresh(tableId);
-        return res;
-      },
-      [refresh],
-    );
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const deleteRow = useCallback(
-      async (rowId: Id<"rows">) => {
-        const res = await apiClient!.grid.deleteRow.mutate({ rowId });
-        await refreshAllTables();
-        return res;
-      },
-      [refreshAllTables],
-    );
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const deleteColumn = useCallback(
-      async (columnId: Id<"columns">) => {
-        const res = await apiClient!.grid.deleteColumn.mutate({ columnId });
-        await refreshAllTables();
-        return res;
-      },
-      [refreshAllTables],
-    );
-
-    return { setCell, addRow, addRowsWithCells, addColumn, deleteRow, deleteColumn };
-  }
-
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  const setCellMut = useMutation(api.cells.setCell);
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  const addRowMut = useMutation(api.tables.addRow);
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  const addRowsWithCellsMut = useMutation(api.tables.addRowsWithCells);
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  const addColumnMut = useMutation(api.tables.addColumn);
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  const deleteRowMut = useMutation(api.tables.deleteRow);
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  const deleteColumnMut = useMutation(api.tables.deleteColumn);
-
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
+  // setCell/deleteRow/deleteColumn carry only the cell/row/column id (matching
+  // the component API), not the owning table, so they invalidate ALL loaded
+  // `getTable` queries by key prefix — the live realtime broadcast patches the
+  // exact snapshot; this just guarantees the writer sees its own change.
+  const refreshAllTables = useCallback(
+    () =>
+      qc.invalidateQueries({
+        predicate: (query) =>
+          query.queryKey[0] === "grid" && query.queryKey[1] === "table",
+      }),
+    [qc],
+  );
   const setCell = useCallback(
-    (rowId: Id<"rows">, columnId: Id<"columns">, value: unknown) =>
-      // Manual edits are authored values → status "done", mirroring the local
-      // sidecar's POST /api/cells behaviour.
-      setCellMut({ rowId, columnId, value, status: "done", error: null }),
-    [setCellMut],
+    async (rowId: Id<"rows">, columnId: Id<"columns">, value: unknown) => {
+      const res = await apiClient!.grid.setCell.mutate({
+        rowId,
+        columnId,
+        value,
+        status: "done",
+        error: null,
+      });
+      await refreshAllTables();
+      return res;
+    },
+    [refreshAllTables],
   );
-
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
   const addRow = useCallback(
-    (tableId: Id<"tables">) => addRowMut({ tableId }),
-    [addRowMut],
+    async (tableId: Id<"tables">) => {
+      const res = await apiClient!.grid.addRow.mutate({ tableId });
+      await refresh(tableId);
+      return res;
+    },
+    [refresh],
   );
-
   /**
    * Bulk insert rows + cells for CSV import. Each row is a `{ columnId: value }`
    * map; metered as one cloud action per row. Throws when the import would
    * exceed the plan's quota.
    */
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
   const addRowsWithCells = useCallback(
-    (tableId: Id<"tables">, rows: Array<Record<string, unknown>>) =>
-      addRowsWithCellsMut({ tableId, rows }),
-    [addRowsWithCellsMut],
+    async (tableId: Id<"tables">, rows: Array<Record<string, unknown>>) => {
+      const res = await apiClient!.grid.addRowsWithCells.mutate({
+        tableId,
+        rows,
+      });
+      await refresh(tableId);
+      return res;
+    },
+    [refresh],
   );
-
   /**
    * Add a column. `fn` ("provider.method") maps onto provider/method/kind the
    * same way the sidecar's POST /api/tables/:id/columns route does.
    */
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
   const addColumn = useCallback(
-    (
+    async (
       tableId: Id<"tables">,
       body: {
         name: string;
@@ -724,7 +532,7 @@ export function useCloudGridMutations() {
       },
     ) => {
       const { provider, method, kind } = deriveColumnKind(body);
-      return addColumnMut({
+      const res = await apiClient!.grid.addColumn.mutate({
         tableId,
         name: body.name,
         type: (body.type ?? "text") as
@@ -739,20 +547,26 @@ export function useCloudGridMutations() {
         code: body.code ?? null,
         params: body.params ?? {},
       });
+      await refresh(tableId);
+      return res;
     },
-    [addColumnMut],
+    [refresh],
   );
-
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
   const deleteRow = useCallback(
-    (rowId: Id<"rows">) => deleteRowMut({ rowId }),
-    [deleteRowMut],
+    async (rowId: Id<"rows">) => {
+      const res = await apiClient!.grid.deleteRow.mutate({ rowId });
+      await refreshAllTables();
+      return res;
+    },
+    [refreshAllTables],
   );
-
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
   const deleteColumn = useCallback(
-    (columnId: Id<"columns">) => deleteColumnMut({ columnId }),
-    [deleteColumnMut],
+    async (columnId: Id<"columns">) => {
+      const res = await apiClient!.grid.deleteColumn.mutate({ columnId });
+      await refreshAllTables();
+      return res;
+    },
+    [refreshAllTables],
   );
 
   return { setCell, addRow, addRowsWithCells, addColumn, deleteRow, deleteColumn };
@@ -760,8 +574,8 @@ export function useCloudGridMutations() {
 
 /**
  * Derive `{ provider, method, kind }` from an addColumn body. `fn` is
- * "provider.method"; a function column has either a provider or code. Pure +
- * shared by both paths so the mapping is identical. Unit-tested directly.
+ * "provider.method"; a function column has either a provider or code. Pure.
+ * Unit-tested directly.
  */
 export function deriveColumnKind(body: {
   fn?: string;
@@ -852,25 +666,16 @@ export function toCloudWebhook(w: {
 export function useWebhooks(
   tableId: Id<"tables"> | null,
 ): CloudWebhook[] | undefined {
-  if (cloudViaApi) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const q = useRqQuery({
-      queryKey: gridQueryKeys.webhooks(tableId ?? ""),
-      enabled: apiClient !== null && tableId !== null,
-      queryFn: () =>
-        apiClient!.webhooks.listWebhooks.query({ tableId: tableId! }),
-    });
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    return useMemo<CloudWebhook[] | undefined>(
-      () => q.data?.map(toCloudWebhook),
-      [q.data],
-    );
-  }
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  return useQuery(
-    api.webhooks.listWebhooks,
-    cloudEnabled && tableId !== null ? { tableId } : "skip",
-  ) as CloudWebhook[] | undefined;
+  const q = useRqQuery({
+    queryKey: gridQueryKeys.webhooks(tableId ?? ""),
+    enabled: apiClient !== null && tableId !== null,
+    queryFn: () =>
+      apiClient!.webhooks.listWebhooks.query({ tableId: tableId! }),
+  });
+  return useMemo<CloudWebhook[] | undefined>(
+    () => q.data?.map(toCloudWebhook),
+    [q.data],
+  );
 }
 
 /** One per-event delivery as returned by `listDeliveriesPaged` (newest first). */
@@ -916,233 +721,144 @@ export function toCloudDelivery(d: {
 
 /**
  * Cursor-paginated, reactive list of a webhook's deliveries (newest first,
- * member-gated). Returns the SAME {@link UsePaginatedQueryResult} shape both
- * paths satisfy (`results` / `status` / `loadMore`), so {@link WebhookModal}'s
- * "Load more" control is path-agnostic. Issues zero calls when cloud is off or
- * there is no webhook yet. Mirrors {@link useWebhooks}.
- *
- * STRANGLER: on the NEW path it wraps react-query `useInfiniteQuery` over the
- * tRPC keyset `listDeliveriesPaged` (20/page); on the LEGACY path it is the
- * Convex `usePaginatedQuery`.
+ * member-gated). Returns the {@link PaginatedResult} shape {@link WebhookModal}'s
+ * "Load more" control consumes. Issues zero calls when cloud is off or there is
+ * no webhook yet. Wraps react-query `useInfiniteQuery` over the tRPC keyset
+ * `listDeliveriesPaged` (20/page).
  */
 export function useWebhookDeliveries(
   webhookId: Id<"webhooks"> | null | undefined,
-): UsePaginatedQueryResult<CloudDelivery> {
-  if (cloudViaApi) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const q = useInfiniteQuery({
-      queryKey: gridQueryKeys.deliveries(webhookId ?? ""),
-      enabled: apiClient !== null && webhookId != null,
-      initialPageParam: null as { receivedAt: number; id: string } | null,
-      queryFn: ({ pageParam }) =>
-        apiClient!.webhooks.listDeliveriesPaged.query({
-          webhookId: webhookId!,
-          limit: 20,
-          cursor: pageParam,
-        }),
-      getNextPageParam: (last) => last.nextCursor,
-    });
+): PaginatedResult<CloudDelivery> {
+  const q = useInfiniteQuery({
+    queryKey: gridQueryKeys.deliveries(webhookId ?? ""),
+    enabled: apiClient !== null && webhookId != null,
+    initialPageParam: null as { receivedAt: number; id: string } | null,
+    queryFn: ({ pageParam }) =>
+      apiClient!.webhooks.listDeliveriesPaged.query({
+        webhookId: webhookId!,
+        limit: 20,
+        cursor: pageParam,
+      }),
+    getNextPageParam: (last) => last.nextCursor,
+  });
 
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    return useMemo<UsePaginatedQueryResult<CloudDelivery>>(() => {
-      const results = (q.data?.pages ?? [])
-        .flatMap((p) => p.items)
-        .map(toCloudDelivery);
-      const loadMore = (_n: number) => {
-        if (q.hasNextPage && !q.isFetchingNextPage) void q.fetchNextPage();
-      };
-      if (q.isLoading && results.length === 0) {
-        return { results, loadMore, status: "LoadingFirstPage", isLoading: true };
-      }
-      if (q.isFetchingNextPage) {
-        return { results, loadMore, status: "LoadingMore", isLoading: true };
-      }
-      if (q.hasNextPage) {
-        return { results, loadMore, status: "CanLoadMore", isLoading: false };
-      }
-      return { results, loadMore, status: "Exhausted", isLoading: false };
-    }, [
-      q.data,
-      q.isLoading,
-      q.isFetchingNextPage,
-      q.hasNextPage,
-      q.fetchNextPage,
-    ]);
-  }
-
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  return usePaginatedQuery(
-    api.webhooks.listDeliveriesPaged,
-    cloudEnabled && webhookId != null ? { webhookId } : "skip",
-    { initialNumItems: 20 },
-  ) as UsePaginatedQueryResult<CloudDelivery>;
+  return useMemo<PaginatedResult<CloudDelivery>>(() => {
+    const results = (q.data?.pages ?? [])
+      .flatMap((p) => p.items)
+      .map(toCloudDelivery);
+    const loadMore = (_n: number) => {
+      if (q.hasNextPage && !q.isFetchingNextPage) void q.fetchNextPage();
+    };
+    if (q.isLoading && results.length === 0) {
+      return { results, loadMore, status: "LoadingFirstPage", isLoading: true };
+    }
+    if (q.isFetchingNextPage) {
+      return { results, loadMore, status: "LoadingMore", isLoading: true };
+    }
+    if (q.hasNextPage) {
+      return { results, loadMore, status: "CanLoadMore", isLoading: false };
+    }
+    return { results, loadMore, status: "Exhausted", isLoading: false };
+  }, [
+    q.data,
+    q.isLoading,
+    q.isFetchingNextPage,
+    q.hasNextPage,
+    q.fetchNextPage,
+  ]);
 }
 
 /**
  * Mutation wrappers for the webhook config panel — create, enable/disable,
  * rotate secrets, edit the field mapping, and patch receive behaviour.
  *
- * STRANGLER: on the NEW path they call the tRPC `webhooks.*` mutations and
- * invalidate the table's `listWebhooks` query so the panel reflects the change;
- * on the LEGACY path they call the member-gated Convex mutations (Convex
- * reactivity reflects live). Mirrors {@link useCloudGridMutations}.
+ * These call the tRPC `webhooks.*` mutations and invalidate the table's
+ * `listWebhooks` query so the panel reflects the change. Mirrors
+ * {@link useCloudGridMutations}.
  */
 export function useWebhookMutations() {
-  if (cloudViaApi) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const qc = useQueryClient();
-    // Config mutations carry only the webhook id, not the owning table, so they
-    // invalidate ALL loaded webhook-list queries by key prefix.
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const refresh = useCallback(
-      () =>
-        qc.invalidateQueries({
-          predicate: (query) =>
-            query.queryKey[0] === "webhooks" && query.queryKey[1] === "list",
-        }),
-      [qc],
-    );
+  const qc = useQueryClient();
+  // Config mutations carry only the webhook id, not the owning table, so they
+  // invalidate ALL loaded webhook-list queries by key prefix.
+  const refresh = useCallback(
+    () =>
+      qc.invalidateQueries({
+        predicate: (query) =>
+          query.queryKey[0] === "webhooks" && query.queryKey[1] === "list",
+      }),
+    [qc],
+  );
 
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const createWebhook = useCallback(
-      async (tableId: Id<"tables">, name?: string) => {
-        const res = await apiClient!.webhooks.createWebhook.mutate({
-          tableId,
-          ...(name !== undefined ? { name } : {}),
-        });
-        await qc.invalidateQueries({
-          queryKey: gridQueryKeys.webhooks(tableId),
-        });
-        return res;
-      },
-      [qc],
-    );
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const updateMapping = useCallback(
-      async (webhookId: Id<"webhooks">, mapping: WebhookMappingEntry[]) => {
-        const res = await apiClient!.webhooks.updateWebhookMapping.mutate({
-          webhookId,
-          mapping: mapping.map((m) => ({ path: m.path, columnId: m.columnId })),
-        });
-        await refresh();
-        return res;
-      },
-      [refresh],
-    );
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const updateConfig = useCallback(
-      async (
-        webhookId: Id<"webhooks">,
-        patch: {
-          autoRun?: boolean;
-          mode?: "create" | "upsert";
-          upsertKey?: Id<"columns"> | null;
-        },
-      ) => {
-        const res = await apiClient!.webhooks.updateWebhookConfig.mutate({
-          webhookId,
-          ...patch,
-        });
-        await refresh();
-        return res;
-      },
-      [refresh],
-    );
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const toggleEnabled = useCallback(
-      async (webhookId: Id<"webhooks">, enabled: boolean) => {
-        const res = await apiClient!.webhooks.toggleEnabled.mutate({
-          webhookId,
-          enabled,
-        });
-        await refresh();
-        return res;
-      },
-      [refresh],
-    );
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const rotateSecret = useCallback(
-      async (webhookId: Id<"webhooks">) => {
-        const res = await apiClient!.webhooks.rotateSecret.mutate({ webhookId });
-        await refresh();
-        return res;
-      },
-      [refresh],
-    );
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-    const deleteWebhook = useCallback(
-      async (webhookId: Id<"webhooks">) => {
-        const res = await apiClient!.webhooks.deleteWebhook.mutate({
-          webhookId,
-        });
-        await refresh();
-        return res;
-      },
-      [refresh],
-    );
-
-    return {
-      createWebhook,
-      updateMapping,
-      updateConfig,
-      toggleEnabled,
-      rotateSecret,
-      deleteWebhook,
-    };
-  }
-
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  const createMut = useMutation(api.webhooks.createWebhook);
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  const updateMappingMut = useMutation(api.webhooks.updateWebhookMapping);
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  const updateConfigMut = useMutation(api.webhooks.updateWebhookConfig);
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  const toggleEnabledMut = useMutation(api.webhooks.toggleEnabled);
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  const rotateSecretMut = useMutation(api.webhooks.rotateSecret);
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
-  const deleteWebhookMut = useMutation(api.webhooks.deleteWebhook);
-
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
   const createWebhook = useCallback(
-    (tableId: Id<"tables">, name?: string) =>
-      createMut({ tableId, ...(name !== undefined ? { name } : {}) }),
-    [createMut],
+    async (tableId: Id<"tables">, name?: string) => {
+      const res = await apiClient!.webhooks.createWebhook.mutate({
+        tableId,
+        ...(name !== undefined ? { name } : {}),
+      });
+      await qc.invalidateQueries({
+        queryKey: gridQueryKeys.webhooks(tableId),
+      });
+      return res;
+    },
+    [qc],
   );
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
   const updateMapping = useCallback(
-    (webhookId: Id<"webhooks">, mapping: WebhookMappingEntry[]) =>
-      updateMappingMut({ webhookId, mapping }),
-    [updateMappingMut],
+    async (webhookId: Id<"webhooks">, mapping: WebhookMappingEntry[]) => {
+      const res = await apiClient!.webhooks.updateWebhookMapping.mutate({
+        webhookId,
+        mapping: mapping.map((m) => ({ path: m.path, columnId: m.columnId })),
+      });
+      await refresh();
+      return res;
+    },
+    [refresh],
   );
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
   const updateConfig = useCallback(
-    (
+    async (
       webhookId: Id<"webhooks">,
       patch: {
         autoRun?: boolean;
         mode?: "create" | "upsert";
         upsertKey?: Id<"columns"> | null;
       },
-    ) => updateConfigMut({ webhookId, ...patch }),
-    [updateConfigMut],
+    ) => {
+      const res = await apiClient!.webhooks.updateWebhookConfig.mutate({
+        webhookId,
+        ...patch,
+      });
+      await refresh();
+      return res;
+    },
+    [refresh],
   );
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
   const toggleEnabled = useCallback(
-    (webhookId: Id<"webhooks">, enabled: boolean) =>
-      toggleEnabledMut({ webhookId, enabled }),
-    [toggleEnabledMut],
+    async (webhookId: Id<"webhooks">, enabled: boolean) => {
+      const res = await apiClient!.webhooks.toggleEnabled.mutate({
+        webhookId,
+        enabled,
+      });
+      await refresh();
+      return res;
+    },
+    [refresh],
   );
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
   const rotateSecret = useCallback(
-    (webhookId: Id<"webhooks">) => rotateSecretMut({ webhookId }),
-    [rotateSecretMut],
+    async (webhookId: Id<"webhooks">) => {
+      const res = await apiClient!.webhooks.rotateSecret.mutate({ webhookId });
+      await refresh();
+      return res;
+    },
+    [refresh],
   );
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- stable per build.
   const deleteWebhook = useCallback(
-    (webhookId: Id<"webhooks">) => deleteWebhookMut({ webhookId }),
-    [deleteWebhookMut],
+    async (webhookId: Id<"webhooks">) => {
+      const res = await apiClient!.webhooks.deleteWebhook.mutate({
+        webhookId,
+      });
+      await refresh();
+      return res;
+    },
+    [refresh],
   );
 
   return {

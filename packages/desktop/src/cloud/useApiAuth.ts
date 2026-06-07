@@ -1,14 +1,11 @@
 /**
- * NEW-path auth React hooks (TRI-3252) — the Better Auth counterparts the
- * desktop UI will bind to once the feature hooks are rewired (later W4 lanes).
+ * Better Auth React hooks the desktop UI binds to for the cloud path.
  *
- * This lane ships only the FOUNDATION the rewire needs:
- *   - {@link useApiAuthToken} — the `useAuthToken()` REPLACEMENT
- *     (`@convex-dev/auth/react`, useCloudGrid.ts:20). Cloud-column runs send
- *     this bearer token to the apps/web API so the sidecar acts as the
- *     signed-in user. It reads the Better Auth session reactively and derives
- *     the token via the pure {@link sidecarTokenFromSession}, returning `null`
- *     while loading / signed out / when the new path is disabled.
+ *   - {@link useApiAuthToken} — the auth-token hook for cloud-column runs:
+ *     cloud runs send this bearer token to the apps/web API so the sidecar acts
+ *     as the signed-in user. It reads the Better Auth session reactively and
+ *     derives the token via the pure {@link sidecarTokenFromSession}, returning
+ *     `null` while loading / signed out / when the cloud layer is disabled.
  *
  * Token derivation is kept in the pure ./api-auth helper so it is unit-testable
  * without React or a live session; this file is only the thin React binding.

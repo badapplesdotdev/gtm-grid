@@ -16,7 +16,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Id } from "../../../../convex/_generated/dataModel";
+import type { Id } from "./ids";
 import { CellContent, Icon } from "../App";
 import type { Cell } from "../api";
 import { runCloudColumn } from "./cloud-run";

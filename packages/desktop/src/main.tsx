@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
-import { CloudProvider } from "./cloud/convex";
+import { CloudProvider } from "./cloud/client";
 import "./styles.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

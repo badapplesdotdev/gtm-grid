@@ -14,8 +14,8 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import type { Id } from "../../../../convex/_generated/dataModel";
-import { cloudEnabled } from "./convex";
+import type { Id } from "./ids";
+import { cloudEnabled } from "./client";
 import {
   useAcceptInvitation,
   useMyPendingInvitations,

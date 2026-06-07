@@ -24,10 +24,10 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Id } from "../../../../convex/_generated/dataModel";
+import type { Id } from "./ids";
 import type { Column } from "../api";
 import { Shell } from "../ImportCsvModal";
-import { INNGEST_URL } from "./convex";
+import { INNGEST_URL } from "./client";
 import {
   type CloudWebhook,
   type WebhookMappingEntry,

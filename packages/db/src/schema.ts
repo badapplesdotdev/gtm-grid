@@ -224,19 +224,19 @@ export const workspaces = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
-    /** Pending CLOUD-actions meter (C26). Optional/undefined treated as 0. */
-    cloudActionsPending: integer("cloud_actions_pending"),
-    /** Last-known CLOUD-actions usage Autumn reported (snapshotted by flush). */
+    /**
+     * CLOUD-actions usage counter — the SINGLE cloud-actions metering surface.
+     * Both the grid `MeterService` and the webhook worker increment this on the
+     * write path; the legacy pending counter + 1-min cron flush were removed.
+     * Optional/undefined treated as 0.
+     */
     cloudActionsUsed: integer("cloud_actions_used"),
     /** Plan cap for cloud actions; null for an unlimited plan. */
     cloudActionsLimit: integer("cloud_actions_limit"),
     /** Current PAID plan id: "team" | "business" | "unlimited", or null. */
     currentPlanId: text("current_plan_id"),
   },
-  (t) => [
-    index("workspaces_by_owner").on(t.ownerId),
-    index("workspaces_by_pending").on(t.cloudActionsPending),
-  ],
+  (t) => [index("workspaces_by_owner").on(t.ownerId)],
 );
 
 /** Workspace membership (convex/schema.ts:145). */

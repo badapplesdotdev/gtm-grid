@@ -8,7 +8,6 @@
   },
   "dependencies": {
     "@gtmgrid/engine": "workspace:*",
-    "convex": "^1.40.0",
     "effect": "^3.21.3"
   }
 }

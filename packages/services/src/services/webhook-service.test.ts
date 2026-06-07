@@ -165,7 +165,7 @@ describe("WebhookService.insertRow", () => {
     expect(Exit.isSuccess(exit)).toBe(true);
     expect(rows).toHaveLength(1);
     expect(cells).toHaveLength(2);
-    expect(quotas.get(WS)?.cloudActionsPending).toBe(1);
+    expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
   });
 
   it("skips empty/foreign cells", async () => {
@@ -187,7 +187,7 @@ describe("WebhookService.insertRow", () => {
 
   it("rejects when the delivery would exceed the cloud-actions limit", async () => {
     const quotas = new Map<string, WorkspaceQuota>([
-      [WS, { cloudActionsUsed: 10, cloudActionsPending: 0, cloudActionsLimit: 10 }],
+      [WS, { cloudActionsUsed: 10, cloudActionsLimit: 10 }],
     ]);
     const { run } = harness({ rows: [], cells: [], quotas });
     const exit = await run(
@@ -337,7 +337,7 @@ describe("WebhookService.setCell metering", () => {
         ),
       ),
     );
-    expect(quotas.get(WS)?.cloudActionsPending ?? 0).toBe(0);
+    expect(quotas.get(WS)?.cloudActionsUsed ?? 0).toBe(0);
   });
 
   it("meters once on a terminal (done) status", async () => {
@@ -356,7 +356,7 @@ describe("WebhookService.setCell metering", () => {
         ),
       ),
     );
-    expect(quotas.get(WS)?.cloudActionsPending).toBe(1);
+    expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
   });
 });
 
