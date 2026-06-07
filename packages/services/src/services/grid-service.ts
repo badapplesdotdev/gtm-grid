@@ -1,0 +1,567 @@
+/**
+ * `GridService` — the grid-data domain service composing the five grid
+ * repositories (Project/Table/Column/Row/Cell) + the reused `@gtmgrid/cloud`
+ * `CellMerge` (COALESCE cell merge) + the dedicated {@link MeterService}
+ * cloud-actions WRITE path, behind the `MembershipService` authz gate.
+ *
+ * Collapses the Convex action/mutation splits of `convex/projects.ts`,
+ * `convex/tables.ts`, and `convex/cells.ts` into single Effect procedures:
+ *
+ *   - reads: listProjects, listTables, getTable (full grid: table+columns+rows+
+ *     cells in ONE read, the exact shape desktop useCloudGrid.ts:165 consumes).
+ *   - structural writes (each metered ONE cloud action): createProject (NOT
+ *     metered — no source meter), createTable, addColumn, addRow,
+ *     deleteTable/deleteColumn/deleteRow (deletes rely on FK ON DELETE CASCADE).
+ *   - bulk write: addRowsWithCells — N rows + their cells, an ATOMIC quota
+ *     pre-check against cached usage, metered as N cloud actions.
+ *   - cell writes (each metered ONE): setCell (COALESCE merge), setCellStatus.
+ *
+ * Authz: every method resolves the owning workspace from the parent doc and calls
+ * `MembershipService.requireMember` BEFORE reading/writing, so a non-member is
+ * rejected before any data is touched and a missing parent fails authz (no
+ * leakage). Metering happens AFTER authz/validation, so only genuine cloud writes
+ * are counted.
+ */
+
+import {
+  CellMerge,
+  type CloudCellStatus,
+  type InsufficientRoleError,
+  type MemberRepoError,
+  MembershipService,
+  type NotAMemberError,
+  type UnauthenticatedError,
+} from "@gtmgrid/cloud";
+import { Data, Effect } from "effect";
+import {
+  type Cell,
+  CellRepo,
+  type CellRepoError,
+  type NewCell,
+} from "../repositories/cell-repo.js";
+import {
+  type Column,
+  ColumnRepo,
+  type ColumnRepoError,
+  type ColumnKind,
+} from "../repositories/column-repo.js";
+import {
+  type Project,
+  ProjectRepo,
+  type ProjectRepoError,
+} from "../repositories/project-repo.js";
+import {
+  type Row,
+  RowRepo,
+  type RowRepoError,
+} from "../repositories/row-repo.js";
+import {
+  type Table,
+  TableRepo,
+  type TableRepoError,
+} from "../repositories/table-repo.js";
+import { MeterService } from "./meter-service.js";
+
+/** Raised when a referenced project/table/column/row does not exist. */
+export class GridNotFoundError extends Data.TaggedError("GridNotFoundError")<{
+  readonly message: string;
+}> {}
+
+/** Raised when a (row, column) pair span different tables. */
+export class InvalidCellError extends Data.TaggedError("InvalidCellError")<{
+  readonly message: string;
+}> {}
+
+/** Raised when a bulk import would exceed the plan's remaining cloud actions. */
+export class CloudActionsLimitError extends Data.TaggedError(
+  "CloudActionsLimitError",
+)<{
+  readonly message: string;
+}> {}
+
+/**
+ * The full grid `getTable` returns, shaped to match what desktop
+ * useCloudGrid.ts:173-192 consumes: Convex-style `_id` keys on the table,
+ * columns, and rows; cells carry `rowId`/`columnId`/`value`/`status`/`error`.
+ */
+export interface FullGrid {
+  readonly table: { readonly _id: string; readonly name: string };
+  readonly columns: readonly {
+    readonly _id: string;
+    readonly name: string;
+    readonly type: string;
+    readonly kind: ColumnKind;
+    readonly provider: string | null;
+    readonly method: string | null;
+    readonly code: string | null;
+    readonly params: unknown;
+  }[];
+  readonly rows: readonly { readonly _id: string }[];
+  readonly cells: readonly {
+    readonly rowId: string;
+    readonly columnId: string;
+    readonly value: unknown;
+    readonly status: string;
+    readonly error: string | null;
+  }[];
+}
+
+/** A `{ columnId: value }` map of one bulk-imported row's cells. */
+export type CellMap = Readonly<Record<string, unknown>>;
+
+/** Next sibling `position` = max(existing)+1 (0 when empty). */
+const nextPosition = (siblings: readonly { position: number }[]): number =>
+  siblings.reduce((max, s) => Math.max(max, s.position + 1), 0);
+
+/**
+ * Grid domain service. Defined with the `Effect.Service` pattern; the composed
+ * `appLayer` wires the live repos/services, tests provide in-memory Layers and
+ * get the SAME service with different behaviour.
+ */
+export class GridService extends Effect.Service<GridService>()("GridService", {
+  effect: Effect.gen(function* () {
+    const projects = yield* ProjectRepo;
+    const tables = yield* TableRepo;
+    const columns = yield* ColumnRepo;
+    const rows = yield* RowRepo;
+    const cells = yield* CellRepo;
+    const cellMerge = yield* CellMerge;
+    const membership = yield* MembershipService;
+    const meter = yield* MeterService;
+
+    /** Load a project or fail typed. */
+    const requireProject = (
+      id: string,
+    ): Effect.Effect<Project, ProjectRepoError | GridNotFoundError> =>
+      Effect.gen(function* () {
+        const found = yield* projects.findById(id);
+        if (found._tag === "None") {
+          return yield* Effect.fail(
+            new GridNotFoundError({ message: `Project ${id} not found.` }),
+          );
+        }
+        return found.value;
+      });
+
+    /** Load a table or fail typed. */
+    const requireTable = (
+      id: string,
+    ): Effect.Effect<Table, TableRepoError | GridNotFoundError> =>
+      Effect.gen(function* () {
+        const found = yield* tables.findById(id);
+        if (found._tag === "None") {
+          return yield* Effect.fail(
+            new GridNotFoundError({ message: `Table ${id} not found.` }),
+          );
+        }
+        return found.value;
+      });
+
+    /** Load a column or fail typed. */
+    const requireColumn = (
+      id: string,
+    ): Effect.Effect<Column, ColumnRepoError | GridNotFoundError> =>
+      Effect.gen(function* () {
+        const found = yield* columns.findById(id);
+        if (found._tag === "None") {
+          return yield* Effect.fail(
+            new GridNotFoundError({ message: `Column ${id} not found.` }),
+          );
+        }
+        return found.value;
+      });
+
+    /** Load a row or fail typed. */
+    const requireRow = (
+      id: string,
+    ): Effect.Effect<Row, RowRepoError | GridNotFoundError> =>
+      Effect.gen(function* () {
+        const found = yield* rows.findById(id);
+        if (found._tag === "None") {
+          return yield* Effect.fail(
+            new GridNotFoundError({ message: `Row ${id} not found.` }),
+          );
+        }
+        return found.value;
+      });
+
+    // ── projects ──────────────────────────────────────────────────────────
+
+    /** A workspace's projects (creation order). Members-only. */
+    const listProjects = (workspaceId: string) =>
+      Effect.gen(function* () {
+        yield* membership.requireMember(workspaceId);
+        return yield* projects.listByWorkspace(workspaceId);
+      });
+
+    /** Create a project in a workspace. Members-only. NOT metered. */
+    const createProject = (args: {
+      readonly workspaceId: string;
+      readonly name: string;
+    }) =>
+      Effect.gen(function* () {
+        yield* membership.requireMember(args.workspaceId);
+        return yield* projects.insert({
+          workspaceId: args.workspaceId,
+          name: args.name,
+          createdAt: Date.now(),
+        });
+      });
+
+    // ── tables ────────────────────────────────────────────────────────────
+
+    /** A project's tables (position order). Members-only. */
+    const listTables = (projectId: string) =>
+      Effect.gen(function* () {
+        const project = yield* requireProject(projectId);
+        yield* membership.requireMember(project.workspaceId);
+        return yield* tables.listByProject(projectId);
+      });
+
+    /** The full grid for a table (table+columns+rows+cells). Members-only. */
+    const getTable = (tableId: string): Effect.Effect<
+      FullGrid,
+      | TableRepoError
+      | ColumnRepoError
+      | RowRepoError
+      | CellRepoError
+      | GridNotFoundError
+      | UnauthenticatedError
+      | NotAMemberError
+      | MemberRepoError
+      | InsufficientRoleError
+    > =>
+      Effect.gen(function* () {
+        const table = yield* requireTable(tableId);
+        yield* membership.requireMember(table.workspaceId);
+        const cols = yield* columns.listByTable(tableId);
+        const rws = yield* rows.listByTable(tableId);
+        const cls = yield* cells.listByTable(tableId);
+        return {
+          table: { _id: table.id, name: table.name },
+          columns: cols.map((c) => ({
+            _id: c.id,
+            name: c.name,
+            type: c.type,
+            kind: c.kind,
+            provider: c.provider,
+            method: c.method,
+            code: c.code,
+            params: c.params,
+          })),
+          rows: rws.map((r) => ({ _id: r.id })),
+          cells: cls.map((c) => ({
+            rowId: c.rowId,
+            columnId: c.columnId,
+            value: c.value,
+            status: c.status,
+            error: c.error,
+          })),
+        } satisfies FullGrid;
+      });
+
+    /** Create a table in a project. Members-only. Metered ONE action. */
+    const createTable = (args: {
+      readonly projectId: string;
+      readonly name: string;
+    }) =>
+      Effect.gen(function* () {
+        const project = yield* requireProject(args.projectId);
+        yield* membership.requireMember(project.workspaceId);
+        const siblings = yield* tables.listByProject(args.projectId);
+        const id = yield* tables.insert({
+          workspaceId: project.workspaceId,
+          projectId: args.projectId,
+          name: args.name,
+          position: nextPosition(siblings),
+          createdAt: Date.now(),
+        });
+        yield* meter.meterActions(project.workspaceId, 1);
+        return id;
+      });
+
+    /** Add a column to a table. Members-only. Metered ONE action. */
+    const addColumn = (args: {
+      readonly tableId: string;
+      readonly name: string;
+      readonly type: string;
+      readonly kind: ColumnKind;
+      readonly provider?: string | null;
+      readonly method?: string | null;
+      readonly code?: string | null;
+      readonly params?: unknown;
+    }) =>
+      Effect.gen(function* () {
+        const table = yield* requireTable(args.tableId);
+        yield* membership.requireMember(table.workspaceId);
+        const siblings = yield* columns.listByTable(args.tableId);
+        const id = yield* columns.insert({
+          workspaceId: table.workspaceId,
+          tableId: args.tableId,
+          name: args.name,
+          type: args.type,
+          kind: args.kind,
+          provider: args.provider ?? null,
+          method: args.method ?? null,
+          code: args.code ?? null,
+          params: args.params ?? {},
+          position: nextPosition(siblings),
+          createdAt: Date.now(),
+        });
+        yield* meter.meterActions(table.workspaceId, 1);
+        return id;
+      });
+
+    /** Add a row to a table. Members-only. Metered ONE action. */
+    const addRow = (tableId: string) =>
+      Effect.gen(function* () {
+        const table = yield* requireTable(tableId);
+        yield* membership.requireMember(table.workspaceId);
+        const siblings = yield* rows.listByTable(tableId);
+        const id = yield* rows.insert({
+          workspaceId: table.workspaceId,
+          tableId,
+          position: nextPosition(siblings),
+          createdAt: Date.now(),
+        });
+        yield* meter.meterActions(table.workspaceId, 1);
+        return id;
+      });
+
+    /**
+     * Bulk insert rows + their cells (CSV import). Members-only. Atomic quota
+     * pre-check against cached usage rejects an import that would exceed the
+     * plan limit BEFORE writing anything; metered as ONE action PER ROW.
+     */
+    const addRowsWithCells = (args: {
+      readonly tableId: string;
+      readonly rows: readonly CellMap[];
+    }) =>
+      Effect.gen(function* () {
+        const table = yield* requireTable(args.tableId);
+        yield* membership.requireMember(table.workspaceId);
+
+        // Atomic quota pre-check (free tier has a hard cap; unlimited passes).
+        const quota = yield* meter.readQuota(table.workspaceId);
+        if (quota._tag === "Some") {
+          const limit = quota.value.cloudActionsLimit;
+          if (typeof limit === "number") {
+            const used = quota.value.cloudActionsUsed ?? 0;
+            if (used + args.rows.length > limit) {
+              return yield* Effect.fail(
+                new CloudActionsLimitError({
+                  message:
+                    "This import would exceed your plan's remaining cloud actions. Upgrade your plan or import fewer rows.",
+                }),
+              );
+            }
+          }
+        }
+
+        const valid = new Set(
+          (yield* columns.listByTable(args.tableId)).map((c) => c.id),
+        );
+        const siblings = yield* rows.listByTable(args.tableId);
+        let position = nextPosition(siblings);
+        const now = Date.now();
+
+        const rowIds: string[] = [];
+        const cellInserts: NewCell[] = [];
+        for (const cellMap of args.rows) {
+          const rowId = yield* rows.insert({
+            workspaceId: table.workspaceId,
+            tableId: args.tableId,
+            position: position++,
+            createdAt: now,
+          });
+          rowIds.push(rowId);
+          for (const [columnId, value] of Object.entries(cellMap)) {
+            if (value === "" || value === null || value === undefined) continue;
+            if (!valid.has(columnId)) continue;
+            cellInserts.push({
+              workspaceId: table.workspaceId,
+              tableId: args.tableId,
+              rowId,
+              columnId,
+              value,
+              status: "done",
+              error: null,
+              updatedAt: now,
+            });
+          }
+        }
+        yield* cells.insertMany(cellInserts);
+        // ONE billable cloud action per imported row (cells are not metered).
+        yield* meter.meterActions(table.workspaceId, args.rows.length);
+        return { rowIds };
+      });
+
+    /** Delete a table (FK cascade drops children). Members-only. Metered ONE. */
+    const deleteTable = (tableId: string) =>
+      Effect.gen(function* () {
+        const table = yield* requireTable(tableId);
+        yield* membership.requireMember(table.workspaceId);
+        yield* tables.remove(tableId);
+        yield* meter.meterActions(table.workspaceId, 1);
+      });
+
+    /** Delete a column (FK cascade drops its cells). Members-only. Metered ONE. */
+    const deleteColumn = (columnId: string) =>
+      Effect.gen(function* () {
+        const column = yield* requireColumn(columnId);
+        yield* membership.requireMember(column.workspaceId);
+        yield* columns.remove(columnId);
+        yield* meter.meterActions(column.workspaceId, 1);
+      });
+
+    /** Delete a row (FK cascade drops its cells). Members-only. Metered ONE. */
+    const deleteRow = (rowId: string) =>
+      Effect.gen(function* () {
+        const row = yield* requireRow(rowId);
+        yield* membership.requireMember(row.workspaceId);
+        yield* rows.remove(rowId);
+        yield* meter.meterActions(row.workspaceId, 1);
+      });
+
+    // ── cells ─────────────────────────────────────────────────────────────
+
+    /**
+     * Resolve + authorize a (row, column) pair, returning the row + the existing
+     * cell (or null). Asserts both belong to the same table so a cell can't be
+     * written across tables. Members-only.
+     */
+    const resolveCell = (rowId: string, columnId: string) =>
+      Effect.gen(function* () {
+        const row = yield* rows.findById(rowId);
+        const column = yield* columns.findById(columnId);
+        if (row._tag === "None" || column._tag === "None") {
+          return yield* Effect.fail(
+            new GridNotFoundError({ message: "Row or column not found." }),
+          );
+        }
+        if (row.value.tableId !== column.value.tableId) {
+          return yield* Effect.fail(
+            new InvalidCellError({
+              message: "Row and column belong to different tables.",
+            }),
+          );
+        }
+        yield* membership.requireMember(row.value.workspaceId);
+        const existing = yield* cells.findByRowColumn(rowId, columnId);
+        return {
+          row: row.value,
+          existing: existing._tag === "None" ? null : existing.value,
+        };
+      });
+
+    /** Persist a merged cell (insert when none, else patch). Returns its id. */
+    const persistCell = (
+      row: Row,
+      columnId: string,
+      existing: Cell | null,
+      merged: {
+        value: unknown;
+        status: CloudCellStatus;
+        error: string | null;
+        updatedAt: number | null;
+      },
+    ) =>
+      existing === null
+        ? cells.insert({
+            workspaceId: row.workspaceId,
+            tableId: row.tableId,
+            rowId: row.id,
+            columnId,
+            value: merged.value,
+            status: merged.status,
+            error: merged.error,
+            updatedAt: merged.updatedAt,
+          })
+        : cells
+            .patch(existing.id, {
+              value: merged.value,
+              status: merged.status,
+              error: merged.error,
+              updatedAt: merged.updatedAt,
+            })
+            .pipe(Effect.as(existing.id));
+
+    /** Upsert a cell with COALESCE merge. Members-only. Metered ONE action. */
+    const setCell = (args: {
+      readonly rowId: string;
+      readonly columnId: string;
+      readonly value?: unknown;
+      readonly hasValue: boolean;
+      readonly status?: CloudCellStatus;
+      readonly error?: string | null;
+    }) =>
+      Effect.gen(function* () {
+        const { row, existing } = yield* resolveCell(args.rowId, args.columnId);
+        const merged = yield* cellMerge.mergeCellPatch(
+          existing === null
+            ? null
+            : {
+                value: existing.value,
+                status: existing.status as CloudCellStatus,
+                error: existing.error,
+                updatedAt: existing.updatedAt,
+              },
+          {
+            ...(args.hasValue ? { value: args.value } : {}),
+            ...(args.status !== undefined ? { status: args.status } : {}),
+            ...(args.error !== undefined ? { error: args.error } : {}),
+          },
+          Date.now(),
+        );
+        const id = yield* persistCell(row, args.columnId, existing, merged);
+        yield* meter.meterActions(row.workspaceId, 1);
+        return id;
+      });
+
+    /** Set only a cell's status (COALESCE-preserve value). Metered ONE action. */
+    const setCellStatus = (args: {
+      readonly rowId: string;
+      readonly columnId: string;
+      readonly status: CloudCellStatus;
+      readonly error?: string | null;
+    }) =>
+      Effect.gen(function* () {
+        const { row, existing } = yield* resolveCell(args.rowId, args.columnId);
+        const merged = yield* cellMerge.mergeCellPatch(
+          existing === null
+            ? null
+            : {
+                value: existing.value,
+                status: existing.status as CloudCellStatus,
+                error: existing.error,
+                updatedAt: existing.updatedAt,
+              },
+          {
+            status: args.status,
+            ...(args.error !== undefined ? { error: args.error } : {}),
+          },
+          Date.now(),
+        );
+        const id = yield* persistCell(row, args.columnId, existing, merged);
+        yield* meter.meterActions(row.workspaceId, 1);
+        return id;
+      });
+
+    return {
+      listProjects,
+      createProject,
+      listTables,
+      getTable,
+      createTable,
+      addColumn,
+      addRow,
+      addRowsWithCells,
+      deleteTable,
+      deleteColumn,
+      deleteRow,
+      setCell,
+      setCellStatus,
+    } as const;
+  }),
+  dependencies: [],
+}) {}

@@ -62,6 +62,40 @@ import {
 } from "./repositories/invitation-repo.js";
 import { MemberRepoLive } from "./repositories/member-repo.js";
 import {
+  CellRepo,
+  CellRepoLive,
+  cellRepoLayer,
+} from "./repositories/cell-repo.js";
+import {
+  ColumnRepo,
+  ColumnRepoLive,
+  columnRepoLayer,
+} from "./repositories/column-repo.js";
+import {
+  type GridStore,
+  makeGridStore,
+  type StoreCell,
+  type StoreColumn,
+  type StoreProject,
+  type StoreRow,
+  type StoreTable,
+} from "./repositories/grid-store.js";
+import {
+  ProjectRepo,
+  ProjectRepoLive,
+  projectRepoLayer,
+} from "./repositories/project-repo.js";
+import {
+  RowRepo,
+  RowRepoLive,
+  rowRepoLayer,
+} from "./repositories/row-repo.js";
+import {
+  TableRepo,
+  TableRepoLive,
+  tableRepoLayer,
+} from "./repositories/table-repo.js";
+import {
   type WebhookDelivery,
   WebhookDeliveryRepo,
   WebhookDeliveryRepoLive,
@@ -91,6 +125,13 @@ import {
   workspaceRepoLayer,
 } from "./repositories/workspace-repo.js";
 import { ExtensionService } from "./services/extension-service.js";
+import { GridService } from "./services/grid-service.js";
+import {
+  type MeterQuota,
+  MeterService,
+  MeterServiceLive,
+  meterServiceLayer,
+} from "./services/meter-service.js";
 import { WebhookService } from "./services/webhook-service.js";
 import { BillingService } from "./services/billing-service.js";
 import { CredentialService } from "./services/credential-service.js";
@@ -147,6 +188,17 @@ export const appLayer = (params: {
     Layer.provide(dbLayer),
   );
   const extensionRepo = ExtensionRepoLive.pipe(Layer.provide(dbLayer));
+  const projectRepo = ProjectRepoLive.pipe(Layer.provide(dbLayer));
+  const tableRepo = TableRepoLive.pipe(Layer.provide(dbLayer));
+  const columnRepo = ColumnRepoLive.pipe(Layer.provide(dbLayer));
+  const rowRepo = RowRepoLive.pipe(Layer.provide(dbLayer));
+  const cellRepo = CellRepoLive.pipe(Layer.provide(dbLayer));
+  // The metering WRITE path: a SEPARATE service (never bolted onto WorkspaceRepo)
+  // that increments cloudActionsUsed via Drizzle + tracks usage to Autumn.
+  const meterService = MeterServiceLive.pipe(
+    Layer.provide(dbLayer),
+    Layer.provide(AutumnClientLive),
+  );
   const membershipService = MembershipService.Default.pipe(
     Layer.provide(identity),
     Layer.provide(memberRepo),
@@ -192,6 +244,16 @@ export const appLayer = (params: {
     Layer.provide(extensionRepo),
     Layer.provide(membershipService),
   );
+  const gridService = GridService.Default.pipe(
+    Layer.provide(projectRepo),
+    Layer.provide(tableRepo),
+    Layer.provide(columnRepo),
+    Layer.provide(rowRepo),
+    Layer.provide(cellRepo),
+    Layer.provide(CellMerge.Default),
+    Layer.provide(membershipService),
+    Layer.provide(meterService),
+  );
   // Merge so callers can resolve any repo or service from one Layer.
   return Layer.mergeAll(
     workspaceService,
@@ -200,6 +262,7 @@ export const appLayer = (params: {
     credentialService,
     webhookService,
     extensionService,
+    gridService,
     workspaceRepo,
     workspaceMemberRepo,
     invitationRepo,
@@ -207,6 +270,12 @@ export const appLayer = (params: {
     webhookRepo,
     webhookDeliveryRepo,
     extensionRepo,
+    projectRepo,
+    tableRepo,
+    columnRepo,
+    rowRepo,
+    cellRepo,
+    meterService,
     membershipService,
     seatsService,
     AutumnClientLive,
@@ -288,6 +357,28 @@ export interface TestLayerFixtures {
   readonly extensions?: Extension[];
   /** Override the crypto service (defaults to the deterministic test layer). */
   readonly crypto?: Layer.Layer<CredentialCryptoService>;
+  // ── Grid store (TRI-3248) ──────────────────────────────────────────────────
+  // The five grid repos' Test Layers share ONE mutable store so cross-repo
+  // effects (a TableRepo delete cascades to its columns/rows/cells, a RowRepo
+  // insert is visible to CellRepo) hold exactly like the live FK-cascaded tables.
+  // Distinct keys from the webhook worker grid fixtures (tables/columns/rows/cells
+  // above) which back a DIFFERENT repo (WebhookRepo) with a narrower projection.
+  /** Projects visible to {@link ProjectRepo} (MUTATED by createProject). */
+  readonly gridProjects?: StoreProject[];
+  /** Tables visible to {@link TableRepo} (MUTATED by create/deleteTable). */
+  readonly gridTables?: StoreTable[];
+  /** Columns visible to {@link ColumnRepo} (MUTATED by addColumn/delete). */
+  readonly gridColumns?: StoreColumn[];
+  /** Rows visible to {@link RowRepo} (MUTATED by addRow(s)/delete). */
+  readonly gridRows?: StoreRow[];
+  /** Cells visible to {@link CellRepo} (MUTATED by setCell/bulk import). */
+  readonly gridCells?: StoreCell[];
+  /**
+   * Per-workspace cloud-actions quota the {@link MeterService} reads + bumps
+   * (MUTATED by meterActions). Keyed by workspace id; a test reads it back to
+   * assert the exact `cloudActionsUsed` increment / bulk pre-check.
+   */
+  readonly meterQuotas?: Map<string, MeterQuota>;
 }
 
 /**
@@ -343,6 +434,23 @@ export const TestLayer = (
   );
   const extensionRepo = extensionRepoLayer(fixtures.extensions ?? []);
   const credentialRepo = credentialRepoLayer(fixtures.credentials ?? []);
+  // ONE shared grid store so the five grid repos see consistent data and a table
+  // delete cascades to its children, exactly like the live FK-cascaded tables.
+  const gridStore: GridStore = makeGridStore({
+    projects: fixtures.gridProjects,
+    tables: fixtures.gridTables,
+    columns: fixtures.gridColumns,
+    rows: fixtures.gridRows,
+    cells: fixtures.gridCells,
+  });
+  const projectRepo = projectRepoLayer(gridStore);
+  const tableRepo = tableRepoLayer(gridStore);
+  const columnRepo = columnRepoLayer(gridStore);
+  const rowRepo = rowRepoLayer(gridStore);
+  const cellRepo = cellRepoLayer(gridStore);
+  const meterService = meterServiceLayer(
+    fixtures.meterQuotas ?? new Map<string, MeterQuota>(),
+  );
   // ONE shared member store backs both the data repo and the authz guard, so a
   // membership inserted via WorkspaceMemberRepo (e.g. createWorkspace's owner
   // row) is immediately visible to MembershipService — as in the live table.
@@ -414,6 +522,16 @@ export const TestLayer = (
     Layer.provide(extensionRepo),
     Layer.provide(membershipService),
   );
+  const gridService = GridService.Default.pipe(
+    Layer.provide(projectRepo),
+    Layer.provide(tableRepo),
+    Layer.provide(columnRepo),
+    Layer.provide(rowRepo),
+    Layer.provide(cellRepo),
+    Layer.provide(CellMerge.Default),
+    Layer.provide(membershipService),
+    Layer.provide(meterService),
+  );
   return Layer.mergeAll(
     workspaceService,
     billingService,
@@ -421,6 +539,7 @@ export const TestLayer = (
     credentialService,
     webhookService,
     extensionService,
+    gridService,
     workspaceRepo,
     workspaceMemberRepo,
     invitationRepo,
@@ -428,6 +547,12 @@ export const TestLayer = (
     webhookRepo,
     webhookDeliveryRepo,
     extensionRepo,
+    projectRepo,
+    tableRepo,
+    columnRepo,
+    rowRepo,
+    cellRepo,
+    meterService,
     membershipService,
     seatsService,
     autumn,
@@ -453,4 +578,11 @@ export type AppServices =
   | WebhookRepo
   | WebhookDeliveryRepo
   | ExtensionService
-  | ExtensionRepo;
+  | ExtensionRepo
+  | GridService
+  | ProjectRepo
+  | TableRepo
+  | ColumnRepo
+  | RowRepo
+  | CellRepo
+  | MeterService;

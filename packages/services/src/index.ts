@@ -99,6 +99,61 @@ export {
   ExtensionRepoLive,
   extensionRepoLayer,
 } from "./repositories/extension-repo.js";
+// --- Grid repositories (TRI-3248) --------------------------------------------
+export {
+  cascadeDeleteColumn,
+  cascadeDeleteRow,
+  cascadeDeleteTable,
+  type GridStore,
+  makeGridStore,
+  type StoreCell,
+  type StoreColumn,
+  type StoreProject,
+  type StoreRow,
+  type StoreTable,
+} from "./repositories/grid-store.js";
+export {
+  type NewProject,
+  type Project,
+  ProjectRepo,
+  ProjectRepoError,
+  ProjectRepoLive,
+  projectRepoLayer,
+} from "./repositories/project-repo.js";
+export {
+  type NewTable,
+  type Table,
+  TableRepo,
+  TableRepoError,
+  TableRepoLive,
+  tableRepoLayer,
+} from "./repositories/table-repo.js";
+export {
+  type Column,
+  type ColumnKind,
+  ColumnRepo,
+  ColumnRepoError,
+  ColumnRepoLive,
+  columnRepoLayer,
+  type NewColumn,
+} from "./repositories/column-repo.js";
+export {
+  type NewRow,
+  type Row,
+  RowRepo,
+  RowRepoError,
+  RowRepoLive,
+  rowRepoLayer,
+} from "./repositories/row-repo.js";
+export {
+  type Cell,
+  type CellPatchValues,
+  CellRepo,
+  CellRepoError,
+  CellRepoLive,
+  cellRepoLayer,
+  type NewCell,
+} from "./repositories/cell-repo.js";
 
 // --- The Autumn billing port (LIVE) ------------------------------------------
 export { autumnClientLayer, AutumnClientLive } from "./autumn-client.js";
@@ -171,6 +226,26 @@ export {
   type WorkerGrid,
 } from "./services/webhook-service.js";
 export { ExtensionService } from "./services/extension-service.js";
+// --- Grid domain service + the dedicated metering WRITE path (TRI-3248) -------
+// NB: the grid's CloudActionsLimitError / InvalidCellError carry the SAME `_tag`
+// as the webhook-service classes of the same name (so the trpc error mapping is
+// shared), but are re-exported under `Grid…` aliases here to avoid a barrel name
+// collision with the already-exported webhook versions.
+export {
+  type CellMap as GridCellMap,
+  CloudActionsLimitError as GridCloudActionsLimitError,
+  type FullGrid,
+  GridNotFoundError,
+  GridService,
+  InvalidCellError as GridInvalidCellError,
+} from "./services/grid-service.js";
+export {
+  type MeterQuota,
+  MeterService,
+  MeterServiceError,
+  MeterServiceLive,
+  meterServiceLayer,
+} from "./services/meter-service.js";
 
 // --- Webhook token/secret minting + credential crypto ------------------------
 // NB: webhook-mint also exports `mintToken`, but the invitation-service
