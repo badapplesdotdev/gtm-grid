@@ -301,6 +301,22 @@ export const UrlOpenerLive: Layer.Layer<UrlOpener> = Layer.succeed(UrlOpener, {
 });
 
 /**
+ * A {@link UrlOpener} that does NOTHING (TRI-3260).
+ *
+ * Used on the ONBOARDING path: there, an over-limit (`checkout`) invite must NOT
+ * yank the user out to the system browser / redirect away mid-wizard — that
+ * abandons onboarding. Instead the seat gate is deferred to the dedicated plan
+ * step. So the onboarding invite Layer composes {@link InviteServiceLive} with
+ * THIS no-op opener: the `checkout` result still flows back (the caller collects
+ * and ignores it) but no browser/redirect side effect fires. The
+ * settings-panel path keeps {@link UrlOpenerLive} so its upgrade flow still
+ * opens checkout.
+ */
+export const UrlOpenerNoop: Layer.Layer<UrlOpener> = Layer.succeed(UrlOpener, {
+  open: () => Effect.void,
+});
+
+/**
  * Convenience: run the invite orchestration, returning a Promise (so the React
  * glue can `await` it). Accepts the composed Layer so callers/tests choose the
  * transport. There is no module-level Live Layer because the {@link InviteRunner}
@@ -326,23 +342,28 @@ export function runInvite(
  *     `invitations.invite`); the Convex `useAction` is NOT called (its provider is
  *     not mounted on this path).
  *   - LEGACY path → the runner wraps the Convex `invitations.inviteByEmail` action.
- * Both compose with the shared system-browser {@link UrlOpenerLive}, so the
- * invited/already_member/checkout branch is identical across transports.
+ * Both compose with an injected opener Layer (`opener`, default
+ * {@link UrlOpenerLive}), so the invited/already_member/checkout branch is
+ * identical across transports. The ONBOARDING path passes {@link UrlOpenerNoop}
+ * (via {@link useOnboardingInviteLayer}) so an over-limit invite does not open
+ * the browser mid-wizard (TRI-3260).
  *
  * Extracted here (a tiny hook) so WorkspaceSettings + OnboardingFlow share ONE
  * branch instead of duplicating it. `cloudViaApi` is a module constant, so the
  * hook order is stable across renders. Mirrors `useCheckoutLayer` in ./checkout.ts.
  */
-export function useInviteLayer(): Layer.Layer<InviteService> {
+export function useInviteLayer(
+  opener: Layer.Layer<UrlOpener> = UrlOpenerLive,
+): Layer.Layer<InviteService> {
   if (cloudViaApi) {
     // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
     return useMemo(
       () =>
         InviteServiceLive.pipe(
           Layer.provide(Layer.succeed(InviteRunner, apiInviteRunner())),
-          Layer.provide(UrlOpenerLive),
+          Layer.provide(opener),
         ),
-      [],
+      [opener],
     );
   }
   // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
@@ -370,8 +391,23 @@ export function useInviteLayer(): Layer.Layer<InviteService> {
               }),
           }),
         ),
-        Layer.provide(UrlOpenerLive),
+        Layer.provide(opener),
       ),
-    [inviteAction],
+    [inviteAction, opener],
   );
+}
+
+/**
+ * The invite Layer for the ONBOARDING wizard (TRI-3260).
+ *
+ * Identical transport branching to {@link useInviteLayer} (cloudViaApi tRPC vs
+ * the Convex action — invited / already_member work on BOTH), but composed with
+ * the {@link UrlOpenerNoop} opener so an over-seat-limit (`checkout`) invite row
+ * does NOT open the system browser or redirect away during onboarding. The
+ * caller ({@link OnboardingFlow}'s `submitInvites`) collects and ignores the
+ * `checkout` outcome and defers the upgrade to the plan step — the pre-TRI-3255
+ * behavior. `UrlOpenerNoop` is a module constant, so the memo deps are stable.
+ */
+export function useOnboardingInviteLayer(): Layer.Layer<InviteService> {
+  return useInviteLayer(UrlOpenerNoop);
 }
