@@ -1,6 +1,9 @@
 /**
  * Webhook setup form (cloud-only) — the desktop recreation of the design's
- * `flow/webhook.jsx` `WebhookTrigger`, bound to the real Convex backend.
+ * `flow/webhook.jsx` `WebhookTrigger`, bound to the real cloud backend via the
+ * {@link useWebhooks} / {@link useWebhookMutations} / {@link useWebhookDeliveries}
+ * hooks. Those hooks pick the backend (NEW tRPC path or LEGACY Convex) behind
+ * the strangler flag (TRI-3254); this component imports only the `Id` TYPE.
  *
  * A cloud table gets a unique inbound POST endpoint: POST JSON → the field
  * mapping projects payload paths onto columns → a row is created (or upserted) →

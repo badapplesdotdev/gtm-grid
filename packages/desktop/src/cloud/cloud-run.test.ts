@@ -198,6 +198,34 @@ describe("HttpCloudRunnerLive", () => {
     });
   });
 
+  it("forwards apiUrl (NEW path) instead of convexUrl when the session carries it", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({
+      ok: true,
+      statusText: "OK",
+      json: async (): Promise<CloudRunResult> => ({ ran: 1, errors: 0 }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const apiSession: CloudSession = {
+      apiUrl: "https://app.gtmgrid.dev",
+      token: "ba_token",
+    };
+    const exit = await runHttp(apiSession, { tableId: "t1", columnId: "c1" });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(String(init.body));
+    // The NEW path carries apiUrl + the Better Auth token and OMITS convexUrl.
+    expect(body).toEqual({
+      apiUrl: "https://app.gtmgrid.dev",
+      token: "ba_token",
+      tableId: "t1",
+      columnId: "c1",
+      force: false,
+    });
+    expect("convexUrl" in body).toBe(false);
+  });
+
   it("maps a non-2xx response with an { error } body to a typed CloudRunError", async () => {
     vi.stubGlobal(
       "fetch",

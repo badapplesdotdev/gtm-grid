@@ -1,16 +1,18 @@
 /**
- * CloudGrid (T9) — the LIVE multiplayer grid view for a CLOUD project.
+ * CloudGrid (T9 → W4) — the LIVE multiplayer grid view for a CLOUD project.
  *
- * Renders a cloud table straight from Convex via {@link useCloudTable} (a
- * `useQuery` subscription), so cell edits / added rows / run statuses by any
- * workspace member appear here without a refresh. Edits, add row and add column
- * call the T4 Convex mutations ({@link useCloudGridMutations}); running a column
- * goes through the local sidecar with a Convex-backed engine via the
- * {@link runCloudColumn} Effect orchestration.
+ * Renders a cloud table via {@link useCloudTable}, so cell edits / added rows /
+ * run statuses by any workspace member appear here without a refresh. The data
+ * source is chosen INSIDE the hooks by the strangler flag (TRI-3254): the NEW
+ * tRPC + W3 realtime path (`grid.getTable` seed + `subscribeToGrid` cache patch)
+ * or the LEGACY Convex `useQuery` subscription. Edits, add row and add column go
+ * through {@link useCloudGridMutations}; running a column goes through the local
+ * sidecar via the {@link runCloudColumn} Effect orchestration. This component is
+ * data-source-agnostic — it only knows the `FullTable`-shaped hook output.
  *
  * It reuses the existing `CellContent` cell renderer and the shared `.grid-*`
- * CSS, so cloud and local grids look identical — only the data source differs.
- * The component stays plain React; the run LOGIC is the Effect service.
+ * CSS, so cloud and local grids look identical. The component stays plain React;
+ * the run LOGIC is the Effect service. It imports only the `Id` TYPE.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -153,7 +155,7 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
         <span className="toolbar-meta">
           {data.rows.length} rows · {data.columns.length} cols
         </span>
-        <span className="free-badge" title="Live multiplayer (Convex)">LIVE</span>
+        <span className="free-badge" title="Live multiplayer">LIVE</span>
         <div className="toolbar-spacer" />
         <button
           className="btn btn-outline btn-sm"
