@@ -30,7 +30,12 @@
  * WorkspaceSettings.tsx. Mirrors the ./cloud-run.ts pattern.
  */
 
+import { useAction } from "convex/react";
 import { Context, Data, Effect, Layer } from "effect";
+import { useMemo } from "react";
+import { api } from "../../../../convex/_generated/api";
+import type { Id } from "../../../../convex/_generated/dataModel";
+import { apiClient, cloudViaApi } from "./client";
 import { isTauri } from "./desktop-oauth.js";
 
 /** A workspace member role, mirroring `memberRole` in convex/schema.ts. */
@@ -105,6 +110,55 @@ export class InviteRunner extends Context.Tag("InviteRunner")<
   InviteRunner,
   InviteRunnerShape
 >() {}
+
+/**
+ * The single tRPC call this runner makes: `invitations.invite.mutate`. Abstracted
+ * so the runner can be unit-tested with a fake mutate fn (no live client),
+ * defaulting to the module `apiClient` in the app. Returns the
+ * {@link InviteActionResult} (the tRPC `InviteByEmailResult` shares this shape —
+ * `invited` / `already_member` / `checkout`).
+ */
+export type InviteMutate = (args: {
+  readonly workspaceId: string;
+  readonly email: string;
+  readonly role: MemberRole;
+}) => Promise<InviteActionResult>;
+
+/**
+ * Build an {@link InviteRunnerShape} backed by the NEW tRPC `invitations.invite`
+ * mutation (TRI-3255). This is the strangler-fig replacement for the Convex
+ * `useAction(api.invitations.inviteByEmail)`-derived runner the UI built inline:
+ * the same port, fed by the vanilla tRPC client instead of Convex, so the
+ * three-way invited/already_member/checkout branch in {@link InviteServiceLive}
+ * is unchanged. Pure (no React) so the call site composes it into the Live Layer
+ * directly and tests can inject a fake mutate. A tRPC error is normalized to a
+ * typed {@link InviteError} so the orchestration's error channel is unchanged.
+ *
+ * `mutate` defaults to the module `apiClient`'s `invitations.invite.mutate`
+ * (non-null on the `cloudViaApi` path — the only path that builds this runner);
+ * tests pass a fake to exercise the call + error mapping without a live client.
+ */
+export function apiInviteRunner(
+  mutate: InviteMutate = (args) =>
+    apiClient!.invitations.invite.mutate(args) as Promise<InviteActionResult>,
+): InviteRunnerShape {
+  return {
+    invite: (input: InviteInput) =>
+      Effect.tryPromise({
+        try: () =>
+          mutate({
+            workspaceId: input.workspaceId,
+            email: input.email,
+            role: input.role,
+          }),
+        catch: (cause) =>
+          new InviteError({
+            message: cause instanceof Error ? cause.message : "Invite failed.",
+            cause,
+          }),
+      }),
+  };
+}
 
 /**
  * Port: opens a URL in the user's SYSTEM browser (Autumn checkout). Abstracted
@@ -262,5 +316,62 @@ export function runInvite(
       const svc = yield* InviteService;
       return yield* svc.inviteMember(hasSession, input);
     }).pipe(Effect.provide(layer)),
+  );
+}
+
+/**
+ * Build the Live {@link InviteService} Layer for the running app, STRANGLER-
+ * branched on the cloud path (TRI-3255):
+ *   - NEW path  → the {@link InviteRunner} is {@link apiInviteRunner} (tRPC
+ *     `invitations.invite`); the Convex `useAction` is NOT called (its provider is
+ *     not mounted on this path).
+ *   - LEGACY path → the runner wraps the Convex `invitations.inviteByEmail` action.
+ * Both compose with the shared system-browser {@link UrlOpenerLive}, so the
+ * invited/already_member/checkout branch is identical across transports.
+ *
+ * Extracted here (a tiny hook) so WorkspaceSettings + OnboardingFlow share ONE
+ * branch instead of duplicating it. `cloudViaApi` is a module constant, so the
+ * hook order is stable across renders. Mirrors `useCheckoutLayer` in ./checkout.ts.
+ */
+export function useInviteLayer(): Layer.Layer<InviteService> {
+  if (cloudViaApi) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+    return useMemo(
+      () =>
+        InviteServiceLive.pipe(
+          Layer.provide(Layer.succeed(InviteRunner, apiInviteRunner())),
+          Layer.provide(UrlOpenerLive),
+        ),
+      [],
+    );
+  }
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+  const inviteAction = useAction(api.invitations.inviteByEmail);
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+  return useMemo(
+    () =>
+      InviteServiceLive.pipe(
+        Layer.provide(
+          Layer.succeed(InviteRunner, {
+            invite: (input: InviteInput) =>
+              Effect.tryPromise({
+                try: () =>
+                  inviteAction({
+                    workspaceId: input.workspaceId as Id<"workspaces">,
+                    email: input.email,
+                    role: input.role,
+                  }) as Promise<InviteActionResult>,
+                catch: (cause) =>
+                  new InviteError({
+                    message:
+                      cause instanceof Error ? cause.message : "Invite failed.",
+                    cause,
+                  }),
+              }),
+          }),
+        ),
+        Layer.provide(UrlOpenerLive),
+      ),
+    [inviteAction],
   );
 }

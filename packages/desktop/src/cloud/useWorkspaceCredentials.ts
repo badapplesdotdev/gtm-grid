@@ -14,20 +14,14 @@
  * wiring in WorkspaceSettings.tsx.
  */
 
-import { useAction, useQuery } from "convex/react";
+import { useQuery as useReactQuery } from "@tanstack/react-query";
+import { useQuery } from "convex/react";
 import { useMemo } from "react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import type { WorkspaceCredSource } from "../Panels";
-import { Effect, Layer } from "effect";
-import {
-  CredentialError,
-  CredentialSaver,
-  CredentialService,
-  CredentialServiceLive,
-  runSaveCredential,
-  type SaveCredentialInput,
-} from "./credentials";
+import { runSaveCredential, useCredentialLayer } from "./credentials";
+import { apiClient, cloudViaApi } from "./client";
 import { cloudEnabled } from "./convex";
 
 /** A credential metadata row from `listCredentials` (never includes plaintext). */
@@ -48,46 +42,15 @@ export function useWorkspaceCredentials(
 ): WorkspaceCredSource | undefined {
   const active = cloudEnabled && workspaceId !== null && isAuthenticated;
 
-  // Reactive metadata listing (no plaintext, no ciphertext). `skip` keeps a
-  // local-only / signed-out build from issuing any Convex query.
-  const credentials = useQuery(
-    api.credentialsData.listCredentials,
-    active ? { workspaceId } : "skip",
-  ) as readonly CredentialMeta[] | undefined;
+  // Reactive metadata listing (no plaintext, no ciphertext), STRANGLER-branched
+  // (tRPC `credentials.list` on the NEW path, the Convex query on the legacy
+  // path). Issues zero calls until a workspace is active.
+  const credentials = useCredentialMeta(active ? workspaceId : null);
 
-  // The Convex encrypted-save action, wrapped as the Effect `CredentialSaver` port.
-  const saveAction = useAction(api.credentials.saveCredential);
-
-  // Compose the Live save Layer once from the React-bound action.
-  const layer = useMemo<Layer.Layer<CredentialService>>(
-    () =>
-      CredentialServiceLive.pipe(
-        Layer.provide(
-          Layer.succeed(CredentialSaver, {
-            save: (input: SaveCredentialInput) =>
-              Effect.tryPromise({
-                try: () =>
-                  saveAction({
-                    workspaceId: input.workspaceId as Id<"workspaces">,
-                    extensionId: input.extensionId,
-                    scope: "workspace",
-                    name: input.name,
-                    secrets: input.secrets,
-                  }).then(() => undefined),
-                catch: (cause) =>
-                  new CredentialError({
-                    message:
-                      cause instanceof Error
-                        ? cause.message
-                        : "Could not save the shared key.",
-                    cause,
-                  }),
-              }),
-          }),
-        ),
-      ),
-    [saveAction],
-  );
+  // The Live save Layer, STRANGLER-branched (tRPC `credentials.save` on the NEW
+  // path, the Convex action on the legacy path). The session/empty-key guards in
+  // the Effect orchestration are unchanged across transports.
+  const layer = useCredentialLayer();
 
   return useMemo<WorkspaceCredSource | undefined>(() => {
     if (!active || workspaceId === null) return undefined;
@@ -112,4 +75,35 @@ export function useWorkspaceCredentials(
         ),
     };
   }, [active, workspaceId, credentials, isAuthenticated, layer]);
+}
+
+/**
+ * The reactive credential-metadata listing for a workspace (which connectors are
+ * connected — never plaintext/ciphertext), STRANGLER-branched on the cloud path:
+ *   - NEW path  → the tRPC `credentials.list` query via react-query.
+ *   - LEGACY path → the reactive Convex `credentialsData.listCredentials` query.
+ * `undefined` while loading; issues zero calls when `workspaceId` is `null` (cloud
+ * off / signed out / no workspace). `cloudViaApi` is a module constant so the hook
+ * order is stable across renders.
+ */
+function useCredentialMeta(
+  workspaceId: Id<"workspaces"> | null,
+): readonly CredentialMeta[] | undefined {
+  if (cloudViaApi) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+    const q = useReactQuery({
+      queryKey: ["credentials", "list", workspaceId],
+      enabled: apiClient !== null && workspaceId !== null,
+      queryFn: () =>
+        apiClient!.credentials.list.query({
+          workspaceId: workspaceId as string,
+        }),
+    });
+    return q.data as readonly CredentialMeta[] | undefined;
+  }
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+  return useQuery(
+    api.credentialsData.listCredentials,
+    workspaceId !== null ? { workspaceId } : "skip",
+  ) as readonly CredentialMeta[] | undefined;
 }

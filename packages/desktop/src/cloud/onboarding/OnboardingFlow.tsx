@@ -21,10 +21,8 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { useAction } from "convex/react";
-import { Effect, Layer } from "effect";
+import { Layer } from "effect";
 import { type BillingCycle } from "@gtmgrid/cloud";
-import { api } from "../../../../../convex/_generated/api";
 import type { Id } from "../../../../../convex/_generated/dataModel";
 import { LogoMark } from "../../Logo";
 import { friendlyAuthError } from "../authErrors";
@@ -36,13 +34,11 @@ import {
   type OAuthProvider,
 } from "../auth";
 import { useCheckoutLayer } from "../checkout";
+import { runInvite, useInviteLayer } from "../invite";
 import {
-  CredentialError,
-  CredentialSaver,
-  CredentialService,
-  CredentialServiceLive,
   aiProviderCredId,
   runSaveCredential,
+  useCredentialLayer,
 } from "../credentials";
 import {
   backScreen,
@@ -301,10 +297,11 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
   // createWorkspace via the strangler-branched hook (tRPC on the NEW path, Convex
   // on the legacy path).
   const createWorkspace = useCreateWorkspace();
-  // Invite by EMAIL (creates a pending invitation + emails the accept link).
-  // LEFT on the Convex path — migrated by the next lane (3255).
-  const inviteAction = useAction(api.invitations.inviteByEmail);
-  const saveCredentialAction = useAction(api.credentials.saveCredential);
+  // Invite by EMAIL (creates a pending invitation + emails the accept link), as
+  // the Live invite orchestration Layer — STRANGLER-branched (tRPC
+  // `invitations.invite` on the NEW path, the Convex action on the legacy path),
+  // shared with WorkspaceSettings via `useInviteLayer`.
+  const inviteLayer = useInviteLayer();
 
   // The C27 onboarding checkout Layer: wrap the strangler-branched
   // `CheckoutService` (tRPC `billing.checkout` on the NEW path, the Convex action
@@ -319,36 +316,11 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
     [checkoutServiceLayer],
   );
 
-  // The cloud credential-save Layer (workspace-scoped BYO key, T11).
-  const credentialLayer = useMemo<Layer.Layer<CredentialService>>(
-    () =>
-      CredentialServiceLive.pipe(
-        Layer.provide(
-          Layer.succeed(CredentialSaver, {
-            save: (input) =>
-              Effect.tryPromise({
-                try: () =>
-                  saveCredentialAction({
-                    workspaceId: input.workspaceId as Id<"workspaces">,
-                    extensionId: input.extensionId,
-                    scope: input.scope,
-                    name: input.name,
-                    secrets: input.secrets,
-                  }) as Promise<Id<"credentials">>,
-                catch: (cause) =>
-                  new CredentialError({
-                    message:
-                      cause instanceof Error
-                        ? cause.message
-                        : "Could not save the key.",
-                    cause,
-                  }),
-              }).pipe(Effect.asVoid),
-          } satisfies typeof CredentialSaver.Service),
-        ),
-      ),
-    [saveCredentialAction],
-  );
+  // The cloud credential-save Layer (workspace-scoped BYO key, T11) —
+  // STRANGLER-branched (tRPC `credentials.save` on the NEW path, the Convex action
+  // on the legacy path), shared with useWorkspaceCredentials via
+  // `useCredentialLayer`.
+  const credentialLayer = useCredentialLayer();
 
   // ── Step handlers (real backend) ────────────────────────────────────────
 
@@ -461,15 +433,16 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
     setBusy(true);
     setError(null);
     try {
-      // Invite each row by EMAIL against inviteByEmail. The action gates on
-      // seats; an over-limit result returns a checkout URL surfaced in the plan
-      // step rather than blocking onboarding here, so we just advance.
+      // Invite each row by EMAIL via the invite orchestration (the same
+      // session-guard + invited/already_member/checkout branch the settings panel
+      // uses). The seat gate's over-limit result is surfaced in the plan step
+      // rather than blocking onboarding here, so we just advance.
       for (const row of rows) {
-        await inviteAction({
-          workspaceId: wid,
-          email: row.value.trim(),
-          role: row.role,
-        });
+        await runInvite(
+          true,
+          { workspaceId: wid, email: row.value.trim(), role: row.role },
+          inviteLayer,
+        );
       }
       go("plan");
     } catch (e) {
@@ -477,7 +450,7 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
     } finally {
       setBusy(false);
     }
-  }, [busy, state.workspaceId, state.invites, inviteAction, go]);
+  }, [busy, state.workspaceId, state.invites, inviteLayer, go]);
 
   const continueFromPlan = useCallback(async () => {
     if (busy) return;

@@ -17,6 +17,7 @@
 import { Cause, Effect, Exit, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import {
+  apiInviteRunner,
   InviteError,
   InviteRunner,
   InviteService,
@@ -180,6 +181,79 @@ describe("InviteService", () => {
       if (err._tag === "Some") {
         expect(err.value.message).toBe("backend error");
       }
+    }
+  });
+});
+
+// ─── apiInviteRunner — the NEW tRPC `invitations.invite` branch (TRI-3255) ─────
+//
+// The strangler-fig replacement for the inline Convex `useAction`-derived runner.
+// We inject a fake `mutate` (the tRPC call) to assert it forwards the args and
+// passes through EACH of the three result shapes (invited / already_member /
+// checkout) unchanged, and maps a tRPC/transport failure to a typed InviteError —
+// no live client. The three-way branch itself is exercised by the InviteService
+// tests above; here we prove the runner is a transparent transport.
+
+describe("apiInviteRunner", () => {
+  it("forwards the args to the tRPC mutate and returns the invited result", async () => {
+    const calls: Array<{ workspaceId: string; email: string; role: string }> =
+      [];
+    const result: InviteActionResult = {
+      status: "invited",
+      email: input.email,
+      acceptUrl: "https://app.example/invite/tok",
+      emailSent: true,
+    };
+    const runner = apiInviteRunner(async (args) => {
+      calls.push(args);
+      return result;
+    });
+
+    const got = await Effect.runPromise(runner.invite(input));
+
+    expect(got).toEqual(result);
+    expect(calls).toEqual([
+      { workspaceId: input.workspaceId, email: input.email, role: input.role },
+    ]);
+  });
+
+  it("passes through the already_member result unchanged", async () => {
+    const runner = apiInviteRunner(async () => ({
+      status: "already_member" as const,
+      email: input.email,
+    }));
+
+    const got = await Effect.runPromise(runner.invite(input));
+
+    expect(got).toEqual({ status: "already_member", email: input.email });
+  });
+
+  it("passes through the checkout (over-limit) result unchanged", async () => {
+    const runner = apiInviteRunner(async () => ({
+      status: "checkout" as const,
+      checkoutUrl: "https://checkout.example/upgrade",
+    }));
+
+    const got = await Effect.runPromise(runner.invite(input));
+
+    expect(got).toEqual({
+      status: "checkout",
+      checkoutUrl: "https://checkout.example/upgrade",
+    });
+  });
+
+  it("maps a tRPC/transport failure to a typed InviteError", async () => {
+    const runner = apiInviteRunner(async () => {
+      throw new Error("FORBIDDEN");
+    });
+
+    const exit = await Effect.runPromiseExit(runner.invite(input));
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const err = Cause.failureOption(exit.cause);
+      expect(err._tag === "Some" && err.value instanceof InviteError).toBe(true);
+      if (err._tag === "Some") expect(err.value.message).toBe("FORBIDDEN");
     }
   });
 });
