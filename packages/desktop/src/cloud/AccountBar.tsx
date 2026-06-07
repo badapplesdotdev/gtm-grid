@@ -18,17 +18,15 @@
  * shown so local-only usage is unchanged.
  */
 
-import { useCallback, useMemo, useState } from "react";
-import { useAction, useMutation } from "convex/react";
-import { Effect, Layer } from "effect";
+import { useCallback, useState } from "react";
 import { type BillingCycle, resolvePlanId } from "@gtmgrid/cloud";
-import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
 import { cloudEnabled } from "./convex";
 import {
   useAccountActions,
   useActiveWorkspace,
   useAuthState,
+  useCreateWorkspace,
   useEnabledProviders,
   useMe,
   type OAuthProvider,
@@ -37,15 +35,7 @@ import {
 import { GitHub, Google } from "./onboarding/icons";
 import { PlanGrid, BillingToggle } from "./onboarding/PlanGrid";
 import type { SelectablePlan } from "./onboarding/flow-logic";
-import { UrlOpenerLive } from "./invite";
-import {
-  CheckoutError,
-  CheckoutRunner,
-  CheckoutService,
-  CheckoutServiceLive,
-  runCheckout,
-  type CheckoutActionResult,
-} from "./checkout";
+import { runCheckout, useCheckoutLayer } from "./checkout";
 
 type HealthStatus = "loading" | "connected" | "offline";
 
@@ -417,32 +407,7 @@ function PlanBillingModal(props: {
 }) {
   const { workspace, isAuthenticated, onClose } = props;
 
-  const checkoutAction = useAction(api.billing.checkout);
-  const checkoutLayer = useMemo<Layer.Layer<CheckoutService>>(
-    () =>
-      CheckoutServiceLive.pipe(
-        Layer.provide(
-          Layer.succeed(CheckoutRunner, {
-            checkout: (args) =>
-              Effect.tryPromise({
-                try: () =>
-                  checkoutAction({
-                    workspaceId: args.workspaceId as Id<"workspaces">,
-                    planId: args.planId,
-                  }) as Promise<CheckoutActionResult>,
-                catch: (cause) =>
-                  new CheckoutError({
-                    message:
-                      cause instanceof Error ? cause.message : "Checkout failed.",
-                    cause,
-                  }),
-              }),
-          }),
-        ),
-        Layer.provide(UrlOpenerLive),
-      ),
-    [checkoutAction],
-  );
+  const checkoutLayer = useCheckoutLayer();
 
   const [showUpgrade, setShowUpgrade] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<SelectablePlan>("business");
@@ -593,7 +558,7 @@ function WorkspaceSwitcher(props: {
   onSelect: (id: Id<"workspaces">) => void;
 }) {
   const { workspaces, activeId, onSelect } = props;
-  const createWorkspace = useMutation(api.workspaces.createWorkspace);
+  const createWorkspace = useCreateWorkspace();
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -603,7 +568,7 @@ function WorkspaceSwitcher(props: {
     if (!trimmed || busy) return;
     setBusy(true);
     try {
-      const id = await createWorkspace({ name: trimmed });
+      const id = await createWorkspace(trimmed);
       onSelect(id);
       setName("");
       setCreating(false);

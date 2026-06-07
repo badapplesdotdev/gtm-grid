@@ -25,12 +25,15 @@
  */
 
 import { useAuthActions } from "@convex-dev/auth/react";
-import { useConvexAuth, useQuery } from "convex/react";
+import { useQuery as useReactQuery } from "@tanstack/react-query";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { api } from "../../../../convex/_generated/api";
 import type { Id } from "../../../../convex/_generated/dataModel";
+import { apiClient, authClient, cloudViaApi } from "./client";
 import { cloudEnabled } from "./convex";
 import { chooseOAuthFlow, isTauri, startDesktopOAuth } from "./desktop-oauth";
+import { apiOAuthCallbackUrl, unwrapAuthResult } from "./api-auth";
 
 // ─── Shared types (mirror the `me` query in convex/workspaces.ts) ───────────
 
@@ -140,12 +143,40 @@ export function enabledProviderList(
  * signed out / cloud-disabled, or `undefined` while loading.
  */
 export function useMe(): Me | null | undefined {
+  // STRANGLER branch: when the NEW tRPC + Better Auth path is enabled, read
+  // `workspaces.me` through the vanilla tRPC client via react-query (no Convex);
+  // otherwise keep the existing reactive Convex query. `cloudViaApi` is a module
+  // constant, so the hook order is stable across renders (each branch always
+  // calls exactly one of `useApiMe` / `useQuery`).
+  if (cloudViaApi) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- `cloudViaApi` is a
+    // module constant; this branch is fixed for the process lifetime.
+    return useApiMe();
+  }
   // `skip` the query entirely when the cloud layer is off, so a local-only
   // build issues zero Convex calls.
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- see note above.
   return useQuery(api.workspaces.me, cloudEnabled ? {} : "skip") as
     | Me
     | null
     | undefined;
+}
+
+/**
+ * The NEW-path `me` read: the current user + their workspaces from the apps/web
+ * tRPC API via react-query. `undefined` while loading (mirrors the Convex
+ * `useQuery` loading shape) and `null` when signed out (the procedure maps the
+ * unauthenticated case to `null`, so the UI renders the local/sign-in state).
+ * The tRPC `me` returns `_id` as a plain string; we cast at this single boundary
+ * to the branded `Me` the UI consumes — the runtime values are identical.
+ */
+function useApiMe(): Me | null | undefined {
+  const { data, isPending } = useReactQuery({
+    queryKey: ["workspaces", "me"],
+    // `apiClient` is non-null whenever `cloudViaApi` is true.
+    queryFn: () => apiClient!.workspaces.me.query(),
+  });
+  return isPending ? undefined : (data as unknown as Me | null);
 }
 
 /**
@@ -155,14 +186,39 @@ export function useMe(): Me | null | undefined {
  * provider is actually configured. No secrets are ever read — booleans only.
  */
 export function useEnabledProviders(): readonly OAuthProvider[] {
+  // STRANGLER branch: NEW path reads the tRPC `auth.enabledProviders`; legacy
+  // path keeps the reactive Convex query. `cloudViaApi` is a module constant so
+  // the hook order is stable.
+  if (cloudViaApi) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+    const providers = useApiEnabledProviders();
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+    return useMemo(() => enabledProviderList(providers), [providers]);
+  }
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
   const providers = useQuery(
     api.auth.enabledProviders,
     cloudEnabled ? {} : "skip",
   ) as EnabledProviders | undefined;
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
   return useMemo(
     () => enabledProviderList(cloudEnabled ? providers : NO_PROVIDERS),
     [providers],
   );
+}
+
+/**
+ * The NEW-path enabled-providers read: the booleans-only flags from the tRPC
+ * `auth.enabledProviders` query via react-query, or `undefined` while loading
+ * (so the OAuth row stays hidden until we know a provider is configured). Shared
+ * by {@link useEnabledProviders} and {@link useEmailAuthEnabled}.
+ */
+function useApiEnabledProviders(): EnabledProviders | undefined {
+  const { data } = useReactQuery({
+    queryKey: ["auth", "enabledProviders"],
+    queryFn: () => apiClient!.auth.enabledProviders.query(),
+  });
+  return data ?? undefined;
 }
 
 /**
@@ -172,6 +228,14 @@ export function useEnabledProviders(): readonly OAuthProvider[] {
  * arrive. Defaults to false while loading / when cloud is off.
  */
 export function useEmailAuthEnabled(): boolean {
+  // STRANGLER branch: NEW path reads the tRPC `auth.enabledProviders`; legacy
+  // path keeps the reactive Convex query.
+  if (cloudViaApi) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+    const providers = useApiEnabledProviders();
+    return providers?.emailAuth ?? false;
+  }
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
   const providers = useQuery(
     api.auth.enabledProviders,
     cloudEnabled ? {} : "skip",
@@ -187,14 +251,59 @@ export function useEmailAuthEnabled(): boolean {
 export function useMembers(
   workspaceId: Id<"workspaces"> | null,
 ): WorkspaceMembers | undefined {
+  // STRANGLER branch: NEW path reads `workspaces.listMembers` over tRPC via
+  // react-query; legacy path keeps the reactive Convex query.
+  if (cloudViaApi) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+    return useApiMembers(workspaceId);
+  }
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
   return useQuery(
     api.workspaces.listMembers,
     cloudEnabled && workspaceId !== null ? { workspaceId } : "skip",
   ) as WorkspaceMembers | undefined;
 }
 
-/** Convex auth state: whether we are signed in and whether it is still loading. */
+/**
+ * The NEW-path workspace roster + seat usage from the tRPC
+ * `workspaces.listMembers` query via react-query. Disabled (so it issues no
+ * call, returning `undefined`) until a workspace is selected, mirroring the
+ * Convex `"skip"`. The tRPC member `_id` is a plain string; we cast at this
+ * single boundary to the branded shape the UI consumes.
+ */
+function useApiMembers(
+  workspaceId: Id<"workspaces"> | null,
+): WorkspaceMembers | undefined {
+  const { data } = useReactQuery({
+    queryKey: ["workspaces", "listMembers", workspaceId],
+    queryFn: () =>
+      apiClient!.workspaces.listMembers.query({
+        workspaceId: workspaceId as string,
+      }),
+    enabled: workspaceId !== null,
+  });
+  return (data as unknown as WorkspaceMembers | undefined) ?? undefined;
+}
+
+/**
+ * Auth state: whether we are signed in and whether it is still loading. On the
+ * NEW path this reflects the Better Auth session (`authClient.useSession`); on
+ * the legacy path it is `useConvexAuth`. When no cloud backend is configured at
+ * all, a stable signed-out/loaded state is returned without calling any hook.
+ */
 export function useAuthState(): { isAuthenticated: boolean; isLoading: boolean } {
+  // NEW path: derive from the Better Auth session. `authClient` is non-null
+  // whenever `cloudViaApi` is true; `useSession` is reactive (re-renders on sign
+  // in/out and OAuth completion). `cloudViaApi`/`authClient` are module
+  // constants, so the hook order is stable across renders.
+  if (cloudViaApi && authClient !== null) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+    const session = authClient.useSession();
+    return {
+      isAuthenticated: session.data != null,
+      isLoading: session.isPending,
+    };
+  }
   // `useConvexAuth` requires the provider; when cloud is disabled there is no
   // provider, so report a stable signed-out/loaded state without calling it.
   if (!cloudEnabled) {
@@ -339,12 +448,52 @@ export function useActiveWorkspace(me: Me | null | undefined): {
   return { activeWorkspace, setActiveWorkspaceId };
 }
 
+/** The account-actions surface the UI binds to, identical across both paths. */
+export interface AccountActions {
+  /**
+   * Email + password sign-in / sign-up. Returns `{ signingIn }`: `false` when a
+   * sign-up needs email verification before the session starts (call
+   * {@link AccountActions.verifyEmailCode}), `true` once the session is active.
+   */
+  readonly signInWithPassword: (
+    email: string,
+    password: string,
+    flow: "signIn" | "signUp",
+  ) => Promise<{ signingIn: boolean }>;
+  /** OAuth sign-in (web redirect or desktop deep link), per the runtime. */
+  readonly signInWithProvider: (provider: OAuthProvider) => Promise<void>;
+  /** Complete sign-up by verifying the emailed OTP; on success the session starts. */
+  readonly verifyEmailCode: (email: string, code: string) => Promise<void>;
+  /** Begin a password reset: email a one-time code to `email`. */
+  readonly requestPasswordReset: (email: string) => Promise<void>;
+  /** Finish a password reset: verify the code and set `newPassword`. */
+  readonly resetPasswordWithCode: (
+    email: string,
+    code: string,
+    newPassword: string,
+  ) => Promise<void>;
+  /** Sign out of the current session. */
+  readonly signOut: () => Promise<unknown>;
+}
+
 /**
  * Account actions for the UI: sign in (email + password OR OAuth provider), sign
- * out, and create a workspace. Wraps the Convex Auth actions + the
- * `createWorkspace` mutation. All no-ops when cloud is off.
+ * out, OTP verification, and password reset. STRANGLER branch: on the NEW path
+ * these call the Better Auth client; on the legacy path they wrap the Convex
+ * Auth actions. `cloudViaApi`/`authClient` are module constants, so the hook
+ * order is stable across renders.
  */
-export function useAccountActions() {
+export function useAccountActions(): AccountActions {
+  if (cloudViaApi && authClient !== null) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+    return useApiAccountActions();
+  }
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+  return useConvexAccountActions();
+}
+
+/** The legacy Convex Auth account actions (unchanged behaviour). */
+function useConvexAccountActions(): AccountActions {
   const { signIn, signOut } = useAuthActions();
 
   /**
@@ -442,4 +591,151 @@ export function useAccountActions() {
     resetPasswordWithCode,
     signOut,
   };
+}
+
+/**
+ * The NEW-path account actions, driven by the Better Auth client (TRI-3253).
+ *
+ * Behaviour mirrors {@link useConvexAccountActions} exactly so the UI is
+ * unchanged:
+ *   - sign-in / sign-up → `authClient.signIn.email` / `signUp.email`. When the
+ *     deployment requires email verification, a sign-up returns no session and
+ *     Better Auth sends the OTP, so we report `signingIn: false` to drive the
+ *     verification step; a successful session reports `signingIn: true`.
+ *   - verify / reset → the email-OTP plugin endpoints (`emailOtp.verifyEmail`,
+ *     `forgetPassword.emailOtp`, `emailOtp.resetPassword`).
+ *   - OAuth → `signIn.social`: a same-window redirect on the web build, or
+ *     (packaged Tauri) the provider URL opened in the system browser, completed
+ *     by the deep-link listener (useApiDeepLinkOAuth) re-reading the session.
+ *
+ * Better Auth RESOLVES `{ error }` instead of throwing, so every call is run
+ * through {@link unwrapAuthResult}, which re-raises a real `Error` — preserving
+ * the UI's `try/catch` + {@link friendlyAuthError} contract. `authClient` is
+ * non-null here because the caller only reaches this on the `cloudViaApi` path.
+ */
+function useApiAccountActions(): AccountActions {
+  const client = authClient!;
+
+  const signInWithPassword = useCallback(
+    async (
+      email: string,
+      password: string,
+      flow: "signIn" | "signUp",
+    ): Promise<{ signingIn: boolean }> => {
+      if (flow === "signUp") {
+        // Better Auth requires a `name`; the account bar collects only email +
+        // password, so default it to the email (the onboarding flow can update
+        // the profile later). When verification is required, `data.token` is
+        // absent (no session) and the OTP was emailed → signingIn:false.
+        const result = unwrapAuthResult(
+          await client.signUp.email({ email, password, name: email }),
+        );
+        const token = (result as { token?: string | null } | null)?.token;
+        return { signingIn: token != null };
+      }
+      unwrapAuthResult(await client.signIn.email({ email, password }));
+      return { signingIn: true };
+    },
+    [client],
+  );
+
+  const verifyEmailCode = useCallback(
+    async (email: string, code: string): Promise<void> => {
+      unwrapAuthResult(await client.emailOtp.verifyEmail({ email, otp: code }));
+    },
+    [client],
+  );
+
+  const requestPasswordReset = useCallback(
+    async (email: string): Promise<void> => {
+      unwrapAuthResult(await client.forgetPassword.emailOtp({ email }));
+    },
+    [client],
+  );
+
+  const resetPasswordWithCode = useCallback(
+    async (email: string, code: string, newPassword: string): Promise<void> => {
+      unwrapAuthResult(
+        await client.emailOtp.resetPassword({
+          email,
+          otp: code,
+          password: newPassword,
+        }),
+      );
+    },
+    [client],
+  );
+
+  const signInWithProvider = useCallback(
+    async (provider: OAuthProvider): Promise<void> => {
+      if (chooseOAuthFlow(isTauri()) === "web") {
+        // Web: same-window redirect to the provider, completed by Better Auth's
+        // callback which sets the session cookie and returns to the app.
+        unwrapAuthResult(await client.signIn.social({ provider }));
+        return;
+      }
+      // Packaged Tauri: ask Better Auth for the provider URL WITHOUT navigating
+      // (`disableRedirect`), open it in the system browser, and let the deep-link
+      // listener re-read the session when `gtmgrid://auth/callback` returns.
+      const result = unwrapAuthResult(
+        await client.signIn.social({
+          provider,
+          callbackURL: apiOAuthCallbackUrl(),
+          disableRedirect: true,
+        }),
+      ) as { url?: string | null } | null;
+      const url = result?.url;
+      if (url == null || url.length === 0) {
+        throw new Error("OAuth provider did not return a redirect URL.");
+      }
+      const { openUrl } = await import("@tauri-apps/plugin-opener");
+      await openUrl(url);
+    },
+    [client],
+  );
+
+  const signOut = useCallback((): Promise<unknown> => client.signOut(), [client]);
+
+  return {
+    signInWithPassword,
+    signInWithProvider,
+    verifyEmailCode,
+    requestPasswordReset,
+    resetPasswordWithCode,
+    signOut,
+  };
+}
+
+/**
+ * Create a workspace, returning its id. STRANGLER branch: the NEW path calls the
+ * tRPC `workspaces.createWorkspace` mutation via the vanilla client; the legacy
+ * path keeps the Convex `createWorkspace` mutation. Returned as a single callable
+ * the account bar + onboarding flow share, so neither component branches on the
+ * cloud path itself. `cloudViaApi` is a module constant, so the hook order is
+ * stable across renders.
+ *
+ * The id is returned as the branded `Id<"workspaces">` the UI threads through to
+ * the active-workspace store; the tRPC mutation returns a plain string, cast at
+ * this single boundary (the runtime value is identical).
+ */
+export function useCreateWorkspace(): (
+  name: string,
+) => Promise<Id<"workspaces">> {
+  if (cloudViaApi) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+    return useCallback(
+      async (name: string) =>
+        (await apiClient!.workspaces.createWorkspace.mutate({
+          name,
+        })) as Id<"workspaces">,
+      [],
+    );
+  }
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+  const createWorkspace = useMutation(api.workspaces.createWorkspace);
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+  return useCallback(
+    (name: string) => createWorkspace({ name }),
+    [createWorkspace],
+  );
 }
