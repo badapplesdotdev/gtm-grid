@@ -20,6 +20,7 @@ import { credentialsRouter } from "./routers/credentials";
 import { extensionsRouter } from "./routers/extensions";
 import { gridRouter } from "./routers/grid";
 import { invitationsRouter } from "./routers/invitations";
+import { realtimeRouter } from "./routers/realtime";
 import { webhooksRouter } from "./routers/webhooks";
 import { workspacesRouter } from "./routers/workspaces";
 import {
@@ -75,6 +76,11 @@ export const appRouter = router({
    * the full grid in one read; mutations meter cloud actions on the write path.
    */
   grid: gridRouter,
+  /**
+   * Realtime: `token` mints the Supabase-compatible JWT the client uses to
+   * authorize a Supabase Realtime connection for live grid + presence (TRI-3251).
+   */
+  realtime: realtimeRouter,
 });
 
 /** The API type the typed client (W2) consumes. */

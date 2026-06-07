@@ -60,7 +60,9 @@ import {
   TableRepo,
   type TableRepoError,
 } from "../repositories/table-repo.js";
+import type { GridChangeEvent } from "../realtime/events.js";
 import { MeterService } from "./meter-service.js";
+import { RealtimePublisher } from "./realtime-publisher.js";
 
 /** Raised when a referenced project/table/column/row does not exist. */
 export class GridNotFoundError extends Data.TaggedError("GridNotFoundError")<{
@@ -128,6 +130,20 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
     const cellMerge = yield* CellMerge;
     const membership = yield* MembershipService;
     const meter = yield* MeterService;
+    const realtime = yield* RealtimePublisher;
+
+    /**
+     * Broadcast a change event on the table's channel AFTER a successful write,
+     * so every other client subscribed to that table patches its cached snapshot
+     * (the Convex `useQuery` reactivity replacement). Best-effort by construction:
+     * the live publisher swallows transport errors, so realtime never fails a
+     * write that already succeeded.
+     */
+    const publish = (
+      workspaceId: string,
+      tableId: string,
+      event: GridChangeEvent,
+    ) => realtime.publish({ workspaceId, tableId, event });
 
     /** Load a project or fail typed. */
     const requireProject = (
@@ -277,6 +293,12 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
           createdAt: Date.now(),
         });
         yield* meter.meterActions(project.workspaceId, 1);
+        yield* publish(project.workspaceId, id, {
+          type: "table.insert",
+          tableId: id,
+          projectId: args.projectId,
+          name: args.name,
+        });
         return id;
       });
 
@@ -309,6 +331,19 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
           createdAt: Date.now(),
         });
         yield* meter.meterActions(table.workspaceId, 1);
+        yield* publish(table.workspaceId, args.tableId, {
+          type: "column.insert",
+          column: {
+            _id: id,
+            name: args.name,
+            type: args.type,
+            kind: args.kind,
+            provider: args.provider ?? null,
+            method: args.method ?? null,
+            code: args.code ?? null,
+            params: args.params ?? {},
+          },
+        });
         return id;
       });
 
@@ -325,6 +360,11 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
           createdAt: Date.now(),
         });
         yield* meter.meterActions(table.workspaceId, 1);
+        yield* publish(table.workspaceId, tableId, {
+          type: "row.insert",
+          row: { _id: id },
+          cells: [],
+        });
         return id;
       });
 
@@ -367,6 +407,9 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
 
         const rowIds: string[] = [];
         const cellInserts: NewCell[] = [];
+        // Per-row broadcast events (row + the cells created with it), emitted
+        // AFTER the write so each subscriber splices the imported rows in.
+        const rowEvents: GridChangeEvent[] = [];
         for (const cellMap of args.rows) {
           const rowId = yield* rows.insert({
             workspaceId: table.workspaceId,
@@ -375,6 +418,13 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
             createdAt: now,
           });
           rowIds.push(rowId);
+          const eventCells: {
+            rowId: string;
+            columnId: string;
+            value: unknown;
+            status: string;
+            error: string | null;
+          }[] = [];
           for (const [columnId, value] of Object.entries(cellMap)) {
             if (value === "" || value === null || value === undefined) continue;
             if (!valid.has(columnId)) continue;
@@ -388,11 +438,26 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
               error: null,
               updatedAt: now,
             });
+            eventCells.push({
+              rowId,
+              columnId,
+              value,
+              status: "done",
+              error: null,
+            });
           }
+          rowEvents.push({
+            type: "row.insert",
+            row: { _id: rowId },
+            cells: eventCells,
+          });
         }
         yield* cells.insertMany(cellInserts);
         // ONE billable cloud action per imported row (cells are not metered).
         yield* meter.meterActions(table.workspaceId, args.rows.length);
+        for (const event of rowEvents) {
+          yield* publish(table.workspaceId, args.tableId, event);
+        }
         return { rowIds };
       });
 
@@ -403,6 +468,10 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         yield* membership.requireMember(table.workspaceId);
         yield* tables.remove(tableId);
         yield* meter.meterActions(table.workspaceId, 1);
+        yield* publish(table.workspaceId, tableId, {
+          type: "table.delete",
+          tableId,
+        });
       });
 
     /** Delete a column (FK cascade drops its cells). Members-only. Metered ONE. */
@@ -412,6 +481,10 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         yield* membership.requireMember(column.workspaceId);
         yield* columns.remove(columnId);
         yield* meter.meterActions(column.workspaceId, 1);
+        yield* publish(column.workspaceId, column.tableId, {
+          type: "column.delete",
+          columnId,
+        });
       });
 
     /** Delete a row (FK cascade drops its cells). Members-only. Metered ONE. */
@@ -421,6 +494,10 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         yield* membership.requireMember(row.workspaceId);
         yield* rows.remove(rowId);
         yield* meter.meterActions(row.workspaceId, 1);
+        yield* publish(row.workspaceId, row.tableId, {
+          type: "row.delete",
+          rowId,
+        });
       });
 
     // ── cells ─────────────────────────────────────────────────────────────
@@ -515,6 +592,16 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         );
         const id = yield* persistCell(row, args.columnId, existing, merged);
         yield* meter.meterActions(row.workspaceId, 1);
+        yield* publish(row.workspaceId, row.tableId, {
+          type: "cell.upsert",
+          cell: {
+            rowId: row.id,
+            columnId: args.columnId,
+            value: merged.value,
+            status: merged.status,
+            error: merged.error,
+          },
+        });
         return id;
       });
 
@@ -544,6 +631,16 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         );
         const id = yield* persistCell(row, args.columnId, existing, merged);
         yield* meter.meterActions(row.workspaceId, 1);
+        yield* publish(row.workspaceId, row.tableId, {
+          type: "cell.upsert",
+          cell: {
+            rowId: row.id,
+            columnId: args.columnId,
+            value: merged.value,
+            status: merged.status,
+            error: merged.error,
+          },
+        });
         return id;
       });
 

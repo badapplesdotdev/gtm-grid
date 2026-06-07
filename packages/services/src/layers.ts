@@ -132,6 +132,12 @@ import {
   MeterServiceLive,
   meterServiceLayer,
 } from "./services/meter-service.js";
+import {
+  RealtimePublisher,
+  type RecordedGridEvent,
+  realtimePublisherLayerFromEnv,
+  recordingRealtimePublisherLayer,
+} from "./services/realtime-publisher.js";
 import { WebhookService } from "./services/webhook-service.js";
 import { BillingService } from "./services/billing-service.js";
 import { CredentialService } from "./services/credential-service.js";
@@ -199,6 +205,9 @@ export const appLayer = (params: {
     Layer.provide(dbLayer),
     Layer.provide(AutumnClientLive),
   );
+  // The live realtime broadcast port (TRI-3251): publishes grid change events to
+  // Supabase Realtime, or a no-op when Supabase env is not configured.
+  const realtimePublisher = realtimePublisherLayerFromEnv();
   const membershipService = MembershipService.Default.pipe(
     Layer.provide(identity),
     Layer.provide(memberRepo),
@@ -253,6 +262,7 @@ export const appLayer = (params: {
     Layer.provide(CellMerge.Default),
     Layer.provide(membershipService),
     Layer.provide(meterService),
+    Layer.provide(realtimePublisher),
   );
   // Merge so callers can resolve any repo or service from one Layer.
   return Layer.mergeAll(
@@ -276,6 +286,7 @@ export const appLayer = (params: {
     rowRepo,
     cellRepo,
     meterService,
+    realtimePublisher,
     membershipService,
     seatsService,
     AutumnClientLive,
@@ -379,6 +390,12 @@ export interface TestLayerFixtures {
    * assert the exact `cloudActionsUsed` increment / bulk pre-check.
    */
   readonly meterQuotas?: Map<string, MeterQuota>;
+  /**
+   * Records every grid change event the {@link RealtimePublisher} publishes
+   * (TRI-3251), shared by reference so a test asserts that a grid mutation
+   * broadcast the expected typed event — no Supabase, no network.
+   */
+  readonly realtimeEvents?: RecordedGridEvent[];
 }
 
 /**
@@ -450,6 +467,11 @@ export const TestLayer = (
   const cellRepo = cellRepoLayer(gridStore);
   const meterService = meterServiceLayer(
     fixtures.meterQuotas ?? new Map<string, MeterQuota>(),
+  );
+  // The recording realtime publisher — captures published events into the shared
+  // fixture array instead of broadcasting, so grid mutations are asserted offline.
+  const realtimePublisher = recordingRealtimePublisherLayer(
+    fixtures.realtimeEvents ?? [],
   );
   // ONE shared member store backs both the data repo and the authz guard, so a
   // membership inserted via WorkspaceMemberRepo (e.g. createWorkspace's owner
@@ -531,6 +553,7 @@ export const TestLayer = (
     Layer.provide(CellMerge.Default),
     Layer.provide(membershipService),
     Layer.provide(meterService),
+    Layer.provide(realtimePublisher),
   );
   return Layer.mergeAll(
     workspaceService,
@@ -553,6 +576,7 @@ export const TestLayer = (
     rowRepo,
     cellRepo,
     meterService,
+    realtimePublisher,
     membershipService,
     seatsService,
     autumn,
@@ -585,4 +609,5 @@ export type AppServices =
   | ColumnRepo
   | RowRepo
   | CellRepo
-  | MeterService;
+  | MeterService
+  | RealtimePublisher;

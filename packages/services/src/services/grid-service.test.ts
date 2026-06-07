@@ -32,6 +32,10 @@ import { rowRepoLayer } from "../repositories/row-repo.js";
 import { tableRepoLayer } from "../repositories/table-repo.js";
 import { GridService } from "./grid-service.js";
 import { type MeterQuota, meterServiceLayer } from "./meter-service.js";
+import {
+  type RecordedGridEvent,
+  recordingRealtimePublisherLayer,
+} from "./realtime-publisher.js";
 
 const WS = "ws-1";
 const memberships: readonly Membership[] = [
@@ -45,6 +49,7 @@ function harness(opts: {
 }) {
   const store = opts.store ?? makeGridStore();
   const quotas = opts.quotas ?? new Map<string, MeterQuota>();
+  const events: RecordedGridEvent[] = [];
   const membership = MembershipService.Default.pipe(
     Layer.provide(cloudIdentityLayer(opts.currentUserId ?? "member")),
     Layer.provide(cloudMemberRepoLayer(memberships)),
@@ -58,10 +63,11 @@ function harness(opts: {
     Layer.provide(CellMerge.Default),
     Layer.provide(membership),
     Layer.provide(meterServiceLayer(quotas)),
+    Layer.provide(recordingRealtimePublisherLayer(events)),
   );
   const run = <A, E>(program: Effect.Effect<A, E, GridService>) =>
     Effect.runPromiseExit(program.pipe(Effect.provide(layer)));
-  return { run, store, quotas };
+  return { run, store, quotas, events };
 }
 
 const failTag = (exit: Exit.Exit<unknown, unknown>): string | undefined => {
@@ -323,5 +329,97 @@ describe("GridService structural inserts — meter + position", () => {
     expect(quotas.get(WS)?.cloudActionsUsed).toBe(2);
     expect(store.columns).toHaveLength(1);
     expect(store.rows).toHaveLength(1);
+  });
+});
+
+describe("GridService realtime publishing (TRI-3251)", () => {
+  it("setCell publishes a cell.upsert with the merged value", async () => {
+    const store = makeGridStore({ tables: [table()], columns: [column()], rows: [row()] });
+    const { run, events } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.setCell({ rowId: "r1", columnId: "c1", hasValue: true, value: "hello" })));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ workspaceId: WS, tableId: "t1" });
+    expect(events[0].event).toMatchObject({
+      type: "cell.upsert",
+      cell: { rowId: "r1", columnId: "c1", value: "hello" },
+    });
+  });
+
+  it("setCellStatus publishes a cell.upsert preserving the value", async () => {
+    const store = makeGridStore({
+      tables: [table()], columns: [column()], rows: [row()],
+      cells: [{ id: "cell1", workspaceId: WS, tableId: "t1", rowId: "r1", columnId: "c1", value: "keep", status: "done", error: null, updatedAt: 1 }],
+    });
+    const { run, events } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.setCellStatus({ rowId: "r1", columnId: "c1", status: "running" })));
+    expect(events[0].event).toMatchObject({
+      type: "cell.upsert",
+      cell: { rowId: "r1", columnId: "c1", value: "keep", status: "running" },
+    });
+  });
+
+  it("addRow publishes a row.insert with the new row id and no cells", async () => {
+    const store = makeGridStore({ tables: [table()] });
+    const { run, events } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.addRow("t1")));
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(events[0].event).toMatchObject({ type: "row.insert", cells: [] });
+  });
+
+  it("addColumn publishes a column.insert with the column projection", async () => {
+    const store = makeGridStore({ tables: [table()] });
+    const { run, events } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.addColumn({ tableId: "t1", name: "B", type: "number", kind: "manual" })));
+    expect(events[0].event).toMatchObject({
+      type: "column.insert",
+      column: { name: "B", type: "number", kind: "manual" },
+    });
+  });
+
+  it("createTable publishes a table.insert", async () => {
+    const store = makeGridStore({ projects: [{ id: "p1", workspaceId: WS, name: "P", createdAt: 1 }] });
+    const { run, events } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.createTable({ projectId: "p1", name: "New" })));
+    expect(events[0].event).toMatchObject({ type: "table.insert", projectId: "p1", name: "New" });
+  });
+
+  it("addRowsWithCells publishes one row.insert per imported row with its cells", async () => {
+    const store = makeGridStore({ tables: [table()], columns: [column()] });
+    const { run, events } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.addRowsWithCells({ tableId: "t1", rows: [{ c1: "a" }, { c1: "b" }] })));
+    expect(events).toHaveLength(2);
+    expect(events.every((e) => e.event.type === "row.insert")).toBe(true);
+    const first = events[0].event;
+    if (first.type === "row.insert") {
+      expect(first.cells[0]).toMatchObject({ columnId: "c1", value: "a" });
+    }
+  });
+
+  it("deleteRow publishes a row.delete", async () => {
+    const store = makeGridStore({ tables: [table()], rows: [row()] });
+    const { run, events } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.deleteRow("r1")));
+    expect(events[0].event).toMatchObject({ type: "row.delete", rowId: "r1" });
+  });
+
+  it("deleteColumn publishes a column.delete", async () => {
+    const store = makeGridStore({ tables: [table()], columns: [column()] });
+    const { run, events } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.deleteColumn("c1")));
+    expect(events[0].event).toMatchObject({ type: "column.delete", columnId: "c1" });
+  });
+
+  it("deleteTable publishes a table.delete", async () => {
+    const store = makeGridStore({ tables: [table()] });
+    const { run, events } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.deleteTable("t1")));
+    expect(events[0].event).toMatchObject({ type: "table.delete", tableId: "t1" });
+  });
+
+  it("does not publish when authz fails (no write happened)", async () => {
+    const store = makeGridStore({ tables: [table()], rows: [row()] });
+    const { run, events } = harness({ store, currentUserId: "stranger" });
+    await run(Effect.flatMap(GridService, (s) => s.deleteRow("r1")));
+    expect(events).toHaveLength(0);
   });
 });
