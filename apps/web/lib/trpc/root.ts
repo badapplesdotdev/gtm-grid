@@ -15,6 +15,7 @@
 
 import { WorkspaceService } from "@gtmgrid/services";
 import { Effect } from "effect";
+import { invitationsRouter } from "./routers/invitations";
 import {
   publicProcedure,
   router,
@@ -49,6 +50,9 @@ export const appRouter = router({
   })),
 
   workspace: workspaceRouter,
+
+  /** Workspace invitations (invite -> accept lifecycle). */
+  invitations: invitationsRouter,
 
   // ── W2 router slots ──────────────────────────────────────────────────────
   // W2: projects: projectsRouter,

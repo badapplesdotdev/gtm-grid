@@ -39,6 +39,10 @@ function toTrpcError(tag: string | undefined, message: string): TRPCError {
       return new TRPCError({ code: "FORBIDDEN", message });
     case "WorkspaceNotFoundError":
       return new TRPCError({ code: "NOT_FOUND", message });
+    case "InvalidInvitationError":
+      return new TRPCError({ code: "NOT_FOUND", message });
+    case "InvalidEmailError":
+      return new TRPCError({ code: "BAD_REQUEST", message });
     default:
       return new TRPCError({ code: "INTERNAL_SERVER_ERROR", message });
   }
