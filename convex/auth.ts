@@ -69,13 +69,14 @@ const DESKTOP_DEEP_LINK_PREFIX = "gtmgrid://";
 const emailAuthEnabled = emailEnabled();
 
 /**
- * Generate a high-entropy 8-digit numeric OTP using Web Crypto (available in
- * Convex's default runtime). Numeric so it's easy to type from an email; the
- * verification/reset flows always also carry the `email`, so the OTP only needs
- * to be unguessable within its 15-minute window.
+ * Generate a 6-digit numeric OTP using Web Crypto (available in Convex's default
+ * runtime). Numeric + 6 digits to match the email design ("123 456") and the
+ * "6-digit code" copy on the verification screen; the verification/reset flows
+ * always also carry the `email`, so the OTP only needs to be unguessable within
+ * its 15-minute window.
  */
 function generateOtp(): string {
-  const buf = new Uint32Array(8);
+  const buf = new Uint32Array(6);
   globalThis.crypto.getRandomValues(buf);
   return Array.from(buf, (n) => (n % 10).toString()).join("");
 }
