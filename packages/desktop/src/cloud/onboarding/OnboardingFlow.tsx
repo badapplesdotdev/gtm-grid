@@ -34,7 +34,7 @@ import {
   type OAuthProvider,
 } from "../auth";
 import { useCheckoutLayer } from "../checkout";
-import { runInvite, useInviteLayer } from "../invite";
+import { runInvite, useOnboardingInviteLayer } from "../invite";
 import {
   aiProviderCredId,
   runSaveCredential,
@@ -299,9 +299,13 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
   const createWorkspace = useCreateWorkspace();
   // Invite by EMAIL (creates a pending invitation + emails the accept link), as
   // the Live invite orchestration Layer — STRANGLER-branched (tRPC
-  // `invitations.invite` on the NEW path, the Convex action on the legacy path),
-  // shared with WorkspaceSettings via `useInviteLayer`.
-  const inviteLayer = useInviteLayer();
+  // `invitations.invite` on the NEW path, the Convex action on the legacy path).
+  // Uses the ONBOARDING variant (TRI-3260): a NO-OP UrlOpener, so an over-seat-
+  // limit (`checkout`) invite row does NOT open the browser / redirect away
+  // mid-wizard — that result is collected-and-ignored here and the upgrade is
+  // deferred to the plan step. WorkspaceSettings keeps `useInviteLayer` (the
+  // live opener) for its in-app upgrade flow.
+  const inviteLayer = useOnboardingInviteLayer();
 
   // The C27 onboarding checkout Layer: wrap the strangler-branched
   // `CheckoutService` (tRPC `billing.checkout` on the NEW path, the Convex action
@@ -434,9 +438,11 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
     setError(null);
     try {
       // Invite each row by EMAIL via the invite orchestration (the same
-      // session-guard + invited/already_member/checkout branch the settings panel
-      // uses). The seat gate's over-limit result is surfaced in the plan step
-      // rather than blocking onboarding here, so we just advance.
+      // session-guard + invited/already_member/checkout branch the settings
+      // panel uses). `inviteLayer` is the ONBOARDING layer (no-op opener,
+      // TRI-3260), so an over-seat-limit (`checkout`) row resolves WITHOUT
+      // opening the browser/redirecting away — we collect and ignore that
+      // outcome and defer the upgrade to the plan step, then advance.
       for (const row of rows) {
         await runInvite(
           true,

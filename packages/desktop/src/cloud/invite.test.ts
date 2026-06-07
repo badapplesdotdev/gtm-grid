@@ -15,7 +15,7 @@
  */
 
 import { Cause, Effect, Exit, Layer } from "effect";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   apiInviteRunner,
   InviteError,
@@ -23,6 +23,7 @@ import {
   InviteService,
   InviteServiceLive,
   UrlOpener,
+  UrlOpenerNoop,
   type InviteActionResult,
   type InviteInput,
 } from "./invite";
@@ -255,5 +256,127 @@ describe("apiInviteRunner", () => {
       expect(err._tag === "Some" && err.value instanceof InviteError).toBe(true);
       if (err._tag === "Some") expect(err.value.message).toBe("FORBIDDEN");
     }
+  });
+});
+
+// ─── UrlOpenerNoop — the ONBOARDING opener (TRI-3260) ─────────────────────────
+//
+// Regression for TRI-3260: the onboarding invite Layer composes InviteServiceLive
+// with UrlOpenerNoop so an over-seat-limit (`checkout`) invite row does NOT open
+// the system browser or redirect (`location.assign`) away mid-wizard. These tests
+// FAIL if onboarding is wired to the live opener (UrlOpenerLive) again, while
+// proving invited / already_member still pass through on the no-op opener.
+
+/** Build the ONBOARDING invite Layer shape: InviteServiceLive + UrlOpenerNoop. */
+function onboardingInvite(result: InviteActionResult) {
+  const calls: InviteInput[] = [];
+  const layer = InviteServiceLive.pipe(
+    Layer.provide(
+      Layer.succeed(InviteRunner, {
+        invite: (i) => {
+          calls.push(i);
+          return Effect.succeed(result);
+        },
+      }),
+    ),
+    Layer.provide(UrlOpenerNoop),
+  );
+  return { layer, calls };
+}
+
+describe("UrlOpenerNoop", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("opens NO browser tab and triggers NO redirect (the side effect is suppressed)", async () => {
+    // If the no-op opener ever delegated to the live opener, these globals would
+    // be hit; they must stay untouched.
+    const open = vi.fn(() => ({}) as Window);
+    const assign = vi.fn();
+    vi.stubGlobal("window", {
+      open,
+      location: { assign },
+    } as unknown as Window & typeof globalThis);
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const opener = yield* UrlOpener;
+        yield* opener.open("https://checkout.example/upgrade");
+      }).pipe(Effect.provide(UrlOpenerNoop)),
+    );
+
+    expect(open).not.toHaveBeenCalled();
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("returns the checkout outcome on an over-limit invite WITHOUT opening the browser/redirect", async () => {
+    const open = vi.fn(() => ({}) as Window);
+    const assign = vi.fn();
+    vi.stubGlobal("window", {
+      open,
+      location: { assign },
+    } as unknown as Window & typeof globalThis);
+
+    const { layer, calls } = onboardingInvite({
+      status: "checkout",
+      checkoutUrl: "https://checkout.example/upgrade",
+    });
+
+    const exit = await run(invite(true), layer);
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      // The checkout outcome still flows back (the caller collects + ignores it),
+      // but NO browser/redirect side effect fired.
+      expect(exit.value).toEqual({
+        status: "checkout",
+        checkoutUrl: "https://checkout.example/upgrade",
+      });
+    }
+    expect(calls).toEqual([input]);
+    expect(open).not.toHaveBeenCalled();
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("still creates the invite on the invited result (onboarding opener)", async () => {
+    const { layer, calls } = onboardingInvite({
+      status: "invited",
+      email: input.email,
+      acceptUrl: "https://app.example/invite/tok",
+      emailSent: true,
+    });
+
+    const exit = await run(invite(true), layer);
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value).toEqual({
+        status: "invited",
+        email: input.email,
+        acceptUrl: "https://app.example/invite/tok",
+        emailSent: true,
+      });
+    }
+    expect(calls).toEqual([input]);
+  });
+
+  it("still passes through already_member (onboarding opener)", async () => {
+    const { layer, calls } = onboardingInvite({
+      status: "already_member",
+      email: input.email,
+    });
+
+    const exit = await run(invite(true), layer);
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value).toEqual({
+        status: "already_member",
+        email: input.email,
+      });
+    }
+    expect(calls).toEqual([input]);
   });
 });
