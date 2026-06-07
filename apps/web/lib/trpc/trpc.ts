@@ -49,6 +49,12 @@ function toTrpcError(tag: string | undefined, message: string): TRPCError {
     case "NoCheckoutUrlError":
     case "AutumnError":
       return new TRPCError({ code: "INTERNAL_SERVER_ERROR", message });
+    // Invitations domain (W2): an unknown/expired token is not found; a
+    // malformed email is a bad request.
+    case "InvalidInvitationError":
+      return new TRPCError({ code: "NOT_FOUND", message });
+    case "InvalidEmailError":
+      return new TRPCError({ code: "BAD_REQUEST", message });
     default:
       return new TRPCError({ code: "INTERNAL_SERVER_ERROR", message });
   }

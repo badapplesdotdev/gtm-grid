@@ -36,6 +36,22 @@ export {
   WorkspaceMemberRepoLive,
   workspaceMemberRepoLayer,
 } from "./repositories/workspace-member-repo.js";
+export {
+  type AcceptInsertInput,
+  type AcceptInsertResult,
+  InvalidInvitationError,
+  type Invitation,
+  type InvitationStatus,
+  InvitationRepo,
+  InvitationRepoError,
+  type InvitationRepoFixtures,
+  InvitationRepoLive,
+  invitationRepoLayer,
+  type InMemoryUser,
+  type InMemoryWorkspace,
+  type UpsertInviteInput,
+  type UserInfo,
+} from "./repositories/invitation-repo.js";
 
 // --- The Autumn billing port (LIVE) ------------------------------------------
 export { autumnClientLayer, AutumnClientLive } from "./autumn-client.js";
@@ -62,6 +78,24 @@ export {
   BillingService,
   type CheckoutError,
 } from "./services/billing-service.js";
+export {
+  type AcceptResult,
+  acceptUrlFor,
+  InvalidEmailError,
+  type InvitationPreview,
+  InvitationService,
+  type InviteByEmailResult,
+  mintToken,
+  type MyPendingInvitationView,
+  normalizeEmail,
+  type PendingInvitationView,
+} from "./services/invitation-service.js";
+export {
+  type InviteEmailArgs,
+  InviteEmailPort,
+  InviteEmailPortLive,
+  inviteEmailPortLayer,
+} from "./services/invite-email.js";
 
 // --- Composed Layers (the DI wiring point) -----------------------------------
 export {

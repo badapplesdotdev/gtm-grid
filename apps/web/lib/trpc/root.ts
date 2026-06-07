@@ -16,6 +16,7 @@
 import { WorkspaceService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { billingRouter } from "./routers/billing";
+import { invitationsRouter } from "./routers/invitations";
 import { workspacesRouter } from "./routers/workspaces";
 import {
   publicProcedure,
@@ -57,6 +58,8 @@ export const appRouter = router({
   workspaces: workspacesRouter,
   /** Billing: `checkout` (ports convex/billing.ts; Autumn upgrade URL). */
   billing: billingRouter,
+  /** Workspace invitations (invite -> accept lifecycle). */
+  invitations: invitationsRouter,
 
   // W2 (other lanes): projects, tables, columns, rows, credentials.
 });

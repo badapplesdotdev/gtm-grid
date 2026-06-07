@@ -36,6 +36,13 @@ import type { Db } from "@gtmgrid/db/client";
 import { Effect, Layer, Option } from "effect";
 import { AutumnClientLive } from "./autumn-client.js";
 import { dbClientLayer } from "./db-client.js";
+import {
+  type Invitation,
+  type InMemoryWorkspace,
+  InvitationRepo,
+  InvitationRepoLive,
+  invitationRepoLayer,
+} from "./repositories/invitation-repo.js";
 import { MemberRepoLive } from "./repositories/member-repo.js";
 import {
   memberStoreLayers,
@@ -48,9 +55,15 @@ import {
   WorkspaceRepo,
   WorkspaceRepoLive,
   workspaceRepoLayer,
-  type WorkspaceUser,
 } from "./repositories/workspace-repo.js";
 import { BillingService } from "./services/billing-service.js";
+import { InvitationService } from "./services/invitation-service.js";
+import {
+  type InviteEmailArgs,
+  InviteEmailPort,
+  InviteEmailPortLive,
+  inviteEmailPortLayer,
+} from "./services/invite-email.js";
 import { WorkspaceService } from "./services/workspace-service.js";
 
 /**
@@ -85,15 +98,19 @@ export const appLayer = (params: {
   | SeatsService
   | BillingService
   | AutumnClient
+  | InvitationService
+  | InvitationRepo
 > => {
   const dbLayer = dbClientLayer(params.db);
+  const identity = identityFromUserId(params.userId);
   const memberRepo = MemberRepoLive.pipe(Layer.provide(dbLayer));
   const workspaceRepo = WorkspaceRepoLive.pipe(Layer.provide(dbLayer));
   const workspaceMemberRepo = WorkspaceMemberRepoLive.pipe(
     Layer.provide(dbLayer),
   );
+  const invitationRepo = InvitationRepoLive.pipe(Layer.provide(dbLayer));
   const membershipService = MembershipService.Default.pipe(
-    Layer.provide(identityFromUserId(params.userId)),
+    Layer.provide(identity),
     Layer.provide(memberRepo),
   );
   // SeatsService is provided to BOTH the workspace service (transactional seat
@@ -113,12 +130,21 @@ export const appLayer = (params: {
     Layer.provide(workspaceRepo),
     Layer.provide(seatsService),
   );
+  const invitationService = InvitationService.Default.pipe(
+    Layer.provide(invitationRepo),
+    Layer.provide(membershipService),
+    Layer.provide(seatsService),
+    Layer.provide(identity),
+    Layer.provide(InviteEmailPortLive),
+  );
   // Merge so callers can resolve any repo or service from one Layer.
   return Layer.mergeAll(
     workspaceService,
     billingService,
+    invitationService,
     workspaceRepo,
     workspaceMemberRepo,
+    invitationRepo,
     membershipService,
     seatsService,
     AutumnClientLive,
@@ -129,8 +155,6 @@ export const appLayer = (params: {
 export interface TestLayerFixtures {
   /** Workspaces visible to {@link WorkspaceRepo}. */
   readonly workspaces?: readonly Workspace[];
-  /** User rows visible to {@link WorkspaceRepo} (`me` user + owner email). */
-  readonly users?: readonly WorkspaceUser[];
   /**
    * Membership rows visible to the authz core (the cloud `MemberRepo`'s
    * `findMembership`). The seat-guard / roster reads use {@link members} below.
@@ -146,11 +170,35 @@ export interface TestLayerFixtures {
   /** The current caller's user id, or `null` for an unauthenticated request. */
   readonly currentUserId?: string | null;
   /**
+   * User rows shared by {@link WorkspaceRepo} (the `me`/owner email reads) and
+   * {@link InvitationRepo} (inviter/invitee identity). The shape is the union of
+   * both repos' needs — id, optional name, optional email — so one fixture list
+   * serves the workspace AND invitation paths.
+   */
+  readonly users?: readonly {
+    readonly id: string;
+    readonly name?: string | null;
+    readonly email?: string | null;
+  }[];
+  /**
    * Configures the fake Autumn port (@gtmgrid/cloud `fakeAutumnLayer`) backing
-   * SeatsService + BillingService, so checkout / seat-ceiling tests run with no
-   * SDK or HTTP. Defaults to the happy under-limit config.
+   * SeatsService + BillingService + the invite/accept seat gate, so checkout /
+   * seat-ceiling / invite tests run with no SDK or HTTP. Defaults to a free seat
+   * (`allowed: true`, unlimited balance).
    */
   readonly autumn?: FakeAutumnConfig;
+  /** Invitation rows visible to {@link InvitationRepo}. */
+  readonly invitations?: readonly Invitation[];
+  /**
+   * Workspaces visible to {@link InvitationRepo} (name + owner). Defaults to
+   * `workspaces` projected to (id, name, ownerId) when omitted, so the common
+   * case needs only one list.
+   */
+  readonly invitationWorkspaces?: readonly InMemoryWorkspace[];
+  /** Records each invite email's args (the in-memory {@link InviteEmailPort}). */
+  readonly emailsSent?: InviteEmailArgs[];
+  /** Whether the in-memory email port reports delivery (default `true`). */
+  readonly emailDelivered?: boolean;
 }
 
 /**
@@ -187,13 +235,20 @@ export const TestLayer = (
   | SeatsService
   | BillingService
   | AutumnClient
+  | InvitationService
+  | InvitationRepo
 > => {
   const memberships = fixtures.memberships ?? [];
   const memberRows = fixtures.members ?? membershipsToMemberRows(memberships);
+  const fixtureUsers = fixtures.users ?? [];
 
   const workspaceRepo = workspaceRepoLayer(
     fixtures.workspaces ?? [],
-    fixtures.users ?? [],
+    fixtureUsers.map((u) => ({
+      id: u.id,
+      name: u.name ?? null,
+      email: u.email ?? null,
+    })),
   );
   // ONE shared member store backs both the data repo and the authz guard, so a
   // membership inserted via WorkspaceMemberRepo (e.g. createWorkspace's owner
@@ -202,6 +257,27 @@ export const TestLayer = (
   const identity = cloudIdentityLayer(fixtures.currentUserId ?? null);
   const autumn = fakeAutumnLayer(fixtures.autumn ?? {});
 
+  const invitationWorkspaces =
+    fixtures.invitationWorkspaces ??
+    (fixtures.workspaces ?? []).map((w) => ({
+      id: w.id,
+      name: w.name,
+      ownerId: w.ownerId,
+    }));
+  const invitationRepo = invitationRepoLayer({
+    invitations: fixtures.invitations,
+    members: fixtures.memberships,
+    workspaces: invitationWorkspaces,
+    users: fixtureUsers.map((u) => ({
+      id: u.id,
+      name: u.name ?? null,
+      email: u.email ?? "",
+    })),
+  });
+  const inviteEmail: Layer.Layer<InviteEmailPort> = inviteEmailPortLayer({
+    sent: fixtures.emailsSent ?? [],
+    delivered: fixtures.emailDelivered,
+  });
   const membershipService = MembershipService.Default.pipe(
     Layer.provide(identity),
     Layer.provide(memberRepo),
@@ -218,11 +294,20 @@ export const TestLayer = (
     Layer.provide(workspaceRepo),
     Layer.provide(seatsService),
   );
+  const invitationService = InvitationService.Default.pipe(
+    Layer.provide(invitationRepo),
+    Layer.provide(membershipService),
+    Layer.provide(seatsService),
+    Layer.provide(identity),
+    Layer.provide(inviteEmail),
+  );
   return Layer.mergeAll(
     workspaceService,
     billingService,
+    invitationService,
     workspaceRepo,
     workspaceMemberRepo,
+    invitationRepo,
     membershipService,
     seatsService,
     autumn,
@@ -237,4 +322,6 @@ export type AppServices =
   | MembershipService
   | SeatsService
   | BillingService
-  | AutumnClient;
+  | AutumnClient
+  | InvitationService
+  | InvitationRepo;
