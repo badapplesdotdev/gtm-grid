@@ -6,9 +6,10 @@ import { inngest } from "../../../../lib/inngest/client";
  * The public webhook receiver. A third party POSTs JSON to
  * `/api/webhooks/<token>`; this route:
  *
- *  1. Resolves the token via Convex `/webhook/resolveToken` (secret-gated with
- *     `WEBHOOK_WORKER_SECRET`). Unknown OR disabled tokens resolve to `null` and
- *     are rejected with 404 WITHOUT leaking which (no per-reason message).
+ *  1. Resolves the token via the worker endpoint `/api/worker/resolveToken`
+ *     (secret-gated with `WEBHOOK_WORKER_SECRET`). Unknown OR disabled tokens
+ *     resolve to `null` and are rejected with 404 WITHOUT leaking which (no
+ *     per-reason message).
  *  2. Verifies the `X-GTMGrid-Signature` header — `hex(HMAC-SHA256(signingSecret,
  *     rawBody))` — in constant time. A missing/invalid signature → 401.
  *  3. Applies the stored field mapping (`[{ path, columnId }]`) to the parsed
@@ -48,11 +49,11 @@ const json = (body: unknown, status: number): Response =>
     headers: { "Content-Type": "application/json" },
   });
 
-/** Resolve the Convex HTTP actions origin (the `.convex.site` host). */
-function convexSiteUrl(): string {
-  const url = process.env.CONVEX_SITE_URL;
+/** Resolve the base URL of the apps/web deployment serving the worker endpoints. */
+function workerBaseUrl(): string {
+  const url = process.env.SITE_URL;
   if (url === undefined || url === "") {
-    throw new Error("CONVEX_SITE_URL is not configured");
+    throw new Error("SITE_URL is not configured");
   }
   return url.replace(/\/$/, "");
 }
@@ -66,9 +67,9 @@ function workerSecret(): string {
   return secret;
 }
 
-/** Resolve a token to its webhook config (or `null`) via the secret-gated route. */
+/** Resolve a token to its webhook config (or `null`) via the secret-gated endpoint. */
 async function resolveToken(token: string): Promise<ResolvedWebhook | null> {
-  const res = await fetch(`${convexSiteUrl()}/webhook/resolveToken`, {
+  const res = await fetch(`${workerBaseUrl()}/api/worker/resolveToken`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

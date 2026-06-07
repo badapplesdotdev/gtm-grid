@@ -22,7 +22,7 @@ import {
 } from "./cloud-run";
 
 const session: CloudSession = {
-  convexUrl: "https://fake.convex.cloud",
+  apiUrl: "https://app.gtmgrid.dev",
   token: "jwt-token",
 };
 
@@ -113,7 +113,7 @@ describe("CloudRunService", () => {
       Effect.gen(function* () {
         const svc = yield* CloudRunService;
         return yield* svc.runColumn(
-          { convexUrl: "https://fake.convex.cloud", token: "   " },
+          { apiUrl: "https://app.gtmgrid.dev", token: "   " },
           { tableId: "t1", columnId: "c1" },
         );
       }),
@@ -189,12 +189,38 @@ describe("HttpCloudRunnerLive", () => {
     expect(url).toMatch(/\/api\/cloud\/columns\/run$/);
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual({
-      convexUrl: session.convexUrl,
+      apiUrl: session.apiUrl,
       token: session.token,
       tableId: "t1",
       columnId: "c1",
       force: true,
       rowIds: ["r1", "r2"],
+    });
+  });
+
+  it("forwards the apiUrl + Better Auth token in the POST body", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({
+      ok: true,
+      statusText: "OK",
+      json: async (): Promise<CloudRunResult> => ({ ran: 1, errors: 0 }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const apiSession: CloudSession = {
+      apiUrl: "https://app.gtmgrid.dev",
+      token: "ba_token",
+    };
+    const exit = await runHttp(apiSession, { tableId: "t1", columnId: "c1" });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(String(init.body));
+    expect(body).toEqual({
+      apiUrl: "https://app.gtmgrid.dev",
+      token: "ba_token",
+      tableId: "t1",
+      columnId: "c1",
+      force: false,
     });
   });
 

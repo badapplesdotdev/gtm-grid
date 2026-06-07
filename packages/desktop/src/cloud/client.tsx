@@ -1,0 +1,191 @@
+/**
+ * The Postgres-tier cloud client foundation for the desktop app.
+ *
+ * This is the SINGLE cloud foundation: the tRPC + Better Auth path is the only
+ * path (the legacy Convex client was removed in the W5 cutover). It constructs,
+ * in one place:
+ *
+ *   1. a typed tRPC client (`httpBatchLink` → the apps/web API at
+ *      `VITE_API_URL`) over the `AppRouter` exported by apps/web — imported
+ *      TYPE-ONLY so the desktop bundle never pulls the server in;
+ *   2. a `@tanstack/react-query` `QueryClient` + provider;
+ *   3. a Better Auth client (`createAuthClient`) with email+password sign
+ *      in/up/out, OAuth (incl. the `gtmgrid://` desktop deep link), and the
+ *      email-OTP verify + password-reset flows, persisting its own session.
+ *
+ * The cloud layer is mounted ONLY when `VITE_API_URL` is set (`cloudEnabled` /
+ * `cloudViaApi`). When it is unset (an OSS / local-only build), no provider
+ * mounts and the local sidecar app issues zero cloud calls — the local SQLite
+ * engine path is entirely unaffected.
+ */
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import { createAuthClient } from "better-auth/react";
+import { emailOTPClient } from "better-auth/client/plugins";
+import type { ReactNode } from "react";
+// TYPE-ONLY import of the server router contract over a relative path; importing
+// the type erases at build time so no server code is bundled into the desktop app.
+import type { AppRouter } from "../../../../apps/web/lib/trpc/root";
+import { useApiDeepLinkOAuth } from "./useDeepLinkOAuth";
+
+/**
+ * The apps/web API base URL (Next.js host that serves both tRPC at `/api/trpc`
+ * and Better Auth at `/api/auth`). Read once from Vite's `import.meta.env`; an
+ * empty string is treated as unset. Presence of this var is the strangler FLAG
+ * that selects the new Postgres-tier path over the legacy Convex path.
+ */
+export const API_URL: string | undefined =
+  (import.meta.env.VITE_API_URL as string | undefined) || undefined;
+
+/**
+ * Whether the tRPC + Better Auth cloud layer is enabled. True iff `VITE_API_URL`
+ * is configured. When false the app runs local-only (no provider, zero cloud
+ * calls). `cloudEnabled` is the alias the feature hooks/components gate on; both
+ * names mean the same thing now that the new path is the only path.
+ */
+export const cloudViaApi = API_URL !== undefined;
+
+/**
+ * Whether the cloud layer is usable (an apps/web API is configured). Identical
+ * to {@link cloudViaApi}; kept as a distinct export so the many call sites that
+ * gate cloud reads/writes on "is the cloud configured?" read naturally. The
+ * OSS/local invariant — no provider, zero cloud calls when unset — holds because
+ * both gates are the same single flag.
+ */
+export const cloudEnabled = cloudViaApi;
+
+/**
+ * Base URL of the inbound-webhook receiver. The webhook setup form builds each
+ * table's endpoint as `${INNGEST_URL}/api/webhooks/:token`. Read once from
+ * Vite's `import.meta.env`; empty string is treated as unset. Falls back to a
+ * documentation placeholder host when no deployment is wired so the form still
+ * renders a copyable, clearly-non-live URL in OSS builds.
+ */
+export const INNGEST_URL: string =
+  (import.meta.env.VITE_INNGEST_URL as string | undefined) ||
+  "https://hooks.gtmgrid.app";
+
+/** The tRPC HTTP endpoint on the apps/web host (`<API_URL>/api/trpc`). */
+export function trpcUrl(apiUrl: string): string {
+  // Tolerate a trailing slash on the configured base so both
+  // "http://host" and "http://host/" produce a single-slash endpoint.
+  return `${apiUrl.replace(/\/+$/, "")}/api/trpc`;
+}
+
+/** The Better Auth base URL on the apps/web host (`<API_URL>/api/auth`). */
+export function authUrl(apiUrl: string): string {
+  return `${apiUrl.replace(/\/+$/, "")}/api/auth`;
+}
+
+/**
+ * The Better Auth client type produced by {@link createAuthClient} with the
+ * email-OTP plugin. Exported so the (later) feature hooks and tests can type a
+ * client reference without re-deriving the inference.
+ */
+export type CloudAuthClient = ReturnType<
+  typeof createAuthClient<{ plugins: [ReturnType<typeof emailOTPClient>] }>
+>;
+
+/**
+ * Build the Better Auth client against the given API base. Cookies/session are
+ * persisted by Better Auth itself (it replaces the Convex Auth localStorage JWT
+ * at convex.tsx:16). `fetchOptions.credentials: "include"` so the session
+ * cookie rides cross-origin from the Tauri webview to the apps/web host. Pure +
+ * deterministic so it is unit-testable without a live server.
+ */
+export function makeAuthClient(apiUrl: string): CloudAuthClient {
+  return createAuthClient({
+    baseURL: authUrl(apiUrl),
+    fetchOptions: { credentials: "include" },
+    plugins: [emailOTPClient()],
+  });
+}
+
+/**
+ * Build the typed tRPC client against the given API base. `httpBatchLink`
+ * batches concurrent calls into one request and sends credentials so the Better
+ * Auth session cookie authenticates each call. Typed by the apps/web
+ * `AppRouter` so every procedure is end-to-end type-safe. Pure so client
+ * construction is unit-testable offline.
+ */
+export function makeTrpcClient(apiUrl: string) {
+  return createTRPCClient<AppRouter>({
+    links: [
+      httpBatchLink({
+        url: trpcUrl(apiUrl),
+        fetch(input, init) {
+          return fetch(input, { ...init, credentials: "include" });
+        },
+      }),
+    ],
+  });
+}
+
+/**
+ * The shared Better Auth client, or `null` when the new path is disabled. A
+ * module-level singleton so every hook/component shares one session + one
+ * cookie jar. `null` on the legacy/local path so nothing here ever runs.
+ */
+export const authClient: CloudAuthClient | null = cloudViaApi
+  ? makeAuthClient(API_URL as string)
+  : null;
+
+/**
+ * The shared tRPC client, or `null` when the new path is disabled. A
+ * module-level singleton mirroring {@link authClient}.
+ */
+export const apiClient: ReturnType<typeof makeTrpcClient> | null = cloudViaApi
+  ? makeTrpcClient(API_URL as string)
+  : null;
+
+/**
+ * Build the react-query `QueryClient`. Defaults mirror a desktop app: no
+ * window-focus refetch (the Tauri webview's focus events are noisy) and a short
+ * stale time so cloud reads stay fresh without thrashing. A factory (not a
+ * module singleton) so each provider mount — and each test — gets an isolated
+ * cache.
+ */
+export function makeQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        refetchOnWindowFocus: false,
+        staleTime: 30_000,
+      },
+    },
+  });
+}
+
+/**
+ * The shared react-query client for the running app. A module singleton so the
+ * provider and any imperative `apiClient` callers share one cache. Always
+ * constructed (cheap, no network) but only mounted when {@link cloudViaApi}.
+ */
+export const queryClient: QueryClient = makeQueryClient();
+
+/**
+ * Mounts the desktop deep-link OAuth listener once (so it lives for the app's
+ * whole lifetime). A no-op outside Tauri, so the web build is unaffected.
+ */
+function ApiDeepLinkOAuthBridge({ children }: { children: ReactNode }) {
+  useApiDeepLinkOAuth();
+  return <>{children}</>;
+}
+
+/**
+ * Wrap the app in the cloud providers (react-query). The tRPC + Better Auth
+ * clients are module singletons consumed directly by hooks, so the only React
+ * provider needed is react-query's. A no-op pass-through when the cloud layer is
+ * disabled, so the local-only app renders identically with zero cloud calls.
+ */
+export function CloudProvider({ children }: { children: ReactNode }) {
+  if (!cloudEnabled) {
+    return <>{children}</>;
+  }
+  return (
+    <QueryClientProvider client={queryClient}>
+      <ApiDeepLinkOAuthBridge>{children}</ApiDeepLinkOAuthBridge>
+    </QueryClientProvider>
+  );
+}

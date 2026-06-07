@@ -20,7 +20,7 @@ export * from "./types.js";
 // Canonical Effect-TS service pattern (see docs/effect-conventions.md). Later
 // business-logic services (e.g. GridStore) follow this same Service + typed-error + Layer shape.
 export { CellCoercionService, CellCoercionError, type CoercedValue } from "./sample-service.js";
-// Cloud schema mapping/validation (engine domain <-> convex/schema.ts literals).
+// Cloud schema mapping/validation (engine domain <-> cloud schema literals).
 export {
   CloudSchemaMapping,
   UnknownCellStatusError,
@@ -29,8 +29,8 @@ export {
   type CloudCredentialScope,
 } from "./cloud-schema.js";
 // GridStore — the engine's async storage abstraction (Effect service + typed
-// errors + Layer). SqliteGridStore is the local implementation; the cloud lane
-// adds a ConvexGridStore Layer for the same tag.
+// errors + Layer). SqliteGridStore is the local implementation; the cloud store
+// adds a cloud-client-backed Layer for the same tag.
 export {
   GridStore,
   CredentialStore,
@@ -41,20 +41,19 @@ export {
   type GridStoreShape,
   type CellPatch,
 } from "./store.js";
-// ConvexGridStore — the cloud GridStore Layer (Convex-client-backed). A small
-// injected client interface keeps the engine's `tsc -b` build decoupled from
-// convex/_generated; the desktop/server lane passes the real ConvexHttpClient
-// plus the T4 function refs.
+// The cloud GridStore Layer (cloud-client-backed). A small injected client
+// interface keeps the engine's `tsc -b` build backend-agnostic; the
+// desktop/server/worker wiring passes an HTTP client plus the operation refs.
 export {
-  convexGridStore,
-  convexCredentialStore,
-  convexGridStoreShape,
-  type ConvexClientLike,
-  type ConvexFunctionRefs,
-  type ConvexGridStoreConfig,
-  type ConvexCredentialResolution,
-  type ConvexCredentialForRunResult,
-} from "./store-convex.js";
+  cloudGridStore,
+  cloudCredentialStore,
+  cloudGridStoreShape,
+  type CloudClientLike,
+  type CloudFunctionRefs,
+  type CloudGridStoreConfig,
+  type CloudCredentialResolution,
+  type CloudCredentialForRunResult,
+} from "./store-cloud.js";
 
 export interface OpenProjectResult {
   db: Db;

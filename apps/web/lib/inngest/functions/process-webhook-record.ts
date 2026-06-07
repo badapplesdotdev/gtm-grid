@@ -2,7 +2,7 @@ import {
   CloudSchemaMapping,
   Engine,
   aiConfigFromEnv,
-  convexGridStoreShape,
+  cloudGridStoreShape,
   defaultRegistry,
   type Column,
   type EngineConfig,
@@ -10,14 +10,15 @@ import {
 } from "@gtmgrid/engine";
 import { Effect } from "effect";
 import { inngest } from "../client";
-import { convexWorkerClient, WORKER_REFS } from "../convex-worker-client";
+import { workerClient, WORKER_REFS } from "../worker-client";
 
 /**
  * The durable worker that turns one received webhook record into a row and (when
  * the webhook auto-runs) recomputes that row's function columns through the
  * engine — the SAME `Engine.runColumn` cloud path the desktop sidecar uses
- * (`packages/server/src/cloud-run.ts:159-176`), only the Convex client points at
- * the secret-gated `/webhook/*` routes instead of authed function calls.
+ * (`packages/server/src/cloud-run.ts:159-176`), only the cloud-store client
+ * points at the secret-gated `/api/worker/*` endpoints instead of authed
+ * function calls.
  *
  * Durability / exactly-once:
  *  - The triggering event carries `id: recordId` (a content hash), so Inngest
@@ -30,7 +31,7 @@ import { convexWorkerClient, WORKER_REFS } from "../convex-worker-client";
  */
 
 /** The `webhook/record.received` event payload the receiver enqueues. */
-interface WebhookRecordData {
+export interface WebhookRecordData {
   readonly tableId: string;
   readonly workspaceId: string;
   /** The mapped `{ columnId: value }` cells for this record. */
@@ -52,17 +53,17 @@ function engineConfig(): EngineConfig {
 }
 
 /**
- * Build the Convex-backed {@link GridStoreShape} for one cloud table, pointed at
- * the worker HTTP routes and resolving the workspace's SHARED connector secrets.
- * Mirrors `cloud-run.ts` `buildConvexStore`.
+ * Build the cloud-store-backed {@link GridStoreShape} for one cloud table,
+ * pointed at the worker HTTP endpoints and resolving the workspace's SHARED
+ * connector secrets. Mirrors `cloud-run.ts` `buildCloudStore`.
  */
 function buildWorkerStore(
   tableId: string,
   workspaceId: string,
 ): Promise<GridStoreShape> {
   return Effect.runPromise(
-    convexGridStoreShape({
-      client: convexWorkerClient,
+    cloudGridStoreShape({
+      client: workerClient,
       refs: WORKER_REFS,
       tableId,
       credentials: { workspaceId, scope: "workspace" },
@@ -86,34 +87,34 @@ interface WorkerGrid {
   }>;
 }
 
-/** Fetch the table grid directly through the worker route (for upsert + columns). */
-async function fetchGrid(tableId: string): Promise<WorkerGrid> {
-  return (await convexWorkerClient.query(WORKER_REFS.getTable, {
+/** Fetch the table grid directly through the worker endpoint (for upsert + columns). */
+export async function fetchGrid(tableId: string): Promise<WorkerGrid> {
+  return (await workerClient.query(WORKER_REFS.getTable, {
     tableId,
   })) as WorkerGrid;
 }
 
 /**
  * Resolve the row this record targets, honouring `mode`. Both paths write the
- * row + cells in ONE server-side Convex mutation that meters EXACTLY ONCE per
+ * row + cells in ONE server-side worker mutation that meters EXACTLY ONCE per
  * record (never per cell), returning the resolved `rowId`.
  *
- *  - "upsert": POST `/webhook/upsertRow` with the upsert key. Convex matches an
- *    existing row server-side (atomic — no client read-then-write race) and
+ *  - "upsert": POST `/api/worker/upsertRow` with the upsert key. The server
+ *    matches an existing row (atomic — no client read-then-write race) and
  *    patches its cells, or inserts a fresh row when nothing matches. The worker
  *    no longer fetches the grid or loops `setCell` per cell.
- *  - "create" (or upsert with no key): POST `/webhook/insertRow` (unchanged).
+ *  - "create" (or upsert with no key): POST `/api/worker/insertRow` (unchanged).
  *
  * Idempotency is provided by the event id de-dupe + the unique step key wrapping
  * this call, identically for both modes.
  */
-async function resolveRow(
+export async function resolveRow(
   data: WebhookRecordData,
   webhookId: string,
 ): Promise<string> {
   if (data.mode === "upsert" && data.upsertKey !== null) {
     // Server-side upsert: match + patch-or-insert in one metered-once mutation.
-    const result = (await convexWorkerClient.mutation("/webhook/upsertRow", {
+    const result = (await workerClient.mutation("/api/worker/upsertRow", {
       webhookId,
       upsertKey: data.upsertKey,
       cells: data.mappedCells,
@@ -122,7 +123,7 @@ async function resolveRow(
     return result.rowId;
   }
   // Create path: insert one row + its cells (metered once per record).
-  const result = (await convexWorkerClient.mutation("/webhook/insertRow", {
+  const result = (await workerClient.mutation("/api/worker/insertRow", {
     webhookId,
     cells: data.mappedCells,
     recordId: data.recordId,
@@ -134,7 +135,7 @@ export const processWebhookRecord = inngest.createFunction(
   {
     id: "process-webhook-record",
     // Bound per-workspace so one busy workspace can't starve others; retries
-    // cover transient Convex/engine failures (step memoization makes them safe).
+    // cover transient worker/engine failures (step memoization makes them safe).
     concurrency: {
       key: "event.data.workspaceId",
       limit: 5,
@@ -166,7 +167,7 @@ export const processWebhookRecord = inngest.createFunction(
         .sort((a, b) => a.position - b.position);
       if (functionColumns.length === 0) return 0;
 
-      // Build the Db-FREE engine: store + creds are the same injected Convex
+      // Build the Db-FREE engine: store + creds are the same injected cloud
       // store, so no SQLite file is opened (better-sqlite3 stays unloaded).
       const store = await buildWorkerStore(data.tableId, data.workspaceId);
       const engine = new Engine(undefined, engineConfig(), defaultRegistry(), undefined, {

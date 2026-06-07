@@ -57,10 +57,14 @@ packages/
   cli/      gtmgrid CLI — build & run grids headlessly
   mcp/      MCP server — exposes the grid as tools for Claude Code / Codex
   cloud/    shared cloud/domain logic (Effect: seats + cloud-actions metering, crypto)
+  db/       Drizzle schema + pooled Postgres (Supabase) client (@gtmgrid/db)
+  auth/     Better Auth server config + session/JWT helpers (@gtmgrid/auth)
+  services/ Effect-DI cloud services + repositories over Drizzle (@gtmgrid/services)
+  email/    transactional email templates (Resend) (@gtmgrid/email)
   desktop/  React + Tauri desktop app (the grid UI)
 apps/
-  web/      Next.js app (Vercel): marketing site + inbound-webhook receiver + Inngest worker
-convex/     Convex backend for the cloud tier (auth, workspaces, tables, webhooks, billing)
+  web/      Next.js app (Vercel): marketing site + tRPC API (/api/trpc) + Better Auth
+            (/api/auth) + inbound-webhook receiver + Inngest worker + worker endpoints
 ```
 
 - **Storage** — `better-sqlite3`, one `.db` file per project at `~/gtmgrid/<name>.db`. Schema: tables → columns → rows → cells, plus `extensions` and encrypted `credentials` (AES-256-GCM, scoped local/personal/team).
@@ -79,9 +83,9 @@ Flow: `POST` JSON → the receiver (`apps/web/api/webhooks/[token]`, on Vercel)
 verifies the `X-GTMGrid-Signature` HMAC against the webhook's signing secret →
 emits an **Inngest** event → the durable `processWebhookRecord` function inserts
 (or upserts) a row and, when **auto-run** is on, runs the table's function/AI
-columns to enrich it. The worker reaches Convex through **secret-gated
-`/webhook/*` HTTP actions** (the engine runs in the worker with a Convex-backed
-store — no `Db`/SQLite loaded). A per-event **delivery log** is recorded.
+columns to enrich it. The worker reaches the cloud grid through **secret-gated
+`/api/worker/*` HTTP endpoints** (the engine runs in the worker with a cloud-backed
+store over Postgres — no `Db`/SQLite loaded). A per-event **delivery log** is recorded.
 
 Each processed record counts as **usage** via the existing `cloud_actions` meter
 (see below) — once for the insert, once per terminal enrichment cell. Enrichment
@@ -210,7 +214,7 @@ bundled SQLite engine and never call the cloud. The commercial value is
 
 | | Free (local solo) | Paid (cloud team) |
 | --- | --- | --- |
-| **Storage** | local SQLite, one `.db` per project | [Convex](https://convex.dev) workspace (cloud source of truth) |
+| **Storage** | local SQLite, one `.db` per project | Postgres ([Supabase](https://supabase.com), via Drizzle) workspace (cloud source of truth) |
 | **Collaboration** | single machine | live multiplayer — members edit the same grids in real time |
 | **Connectors & tables** | unlimited | unlimited (nothing is capped) |
 | **Billing** | none | per-**seat** subscription, metered per workspace member |
@@ -230,82 +234,85 @@ Key design points (all shipped across Waves 1–3 of the cloud build):
   surface (current plan + usage + upgrade via the same Autumn checkout).
 - **Cloud-actions usage metering.** Billable cloud operations (cell writes,
   structural inserts, and each webhook record processed) increment a per-workspace
-  `cloud_actions` counter; a 1-minute cron flushes it to Autumn's `cloud_actions`
-  meter (free tier caps at 2000, paid is metered overage). Local solo projects are
-  **never** metered — they never call Convex. New Autumn customers are created with
-  the workspace name + owner email.
-- **Realtime multiplayer via Convex.** Cloud team projects live in Convex, whose
-  reactive database makes **every `useQuery` a live subscription** — so an edit,
-  add-row, or column run by any member appears in every other member's window
-  with no custom sync engine and no manual refresh. Account unit is the
-  **workspace (team)**: members, projects, and credentials all scope to it, and
-  billing is per workspace.
+  `cloud_actions_used` counter on the write path and track immediately to Autumn's
+  `cloud_actions` meter (free tier caps at 2000, paid is metered overage). There is
+  a single metering surface — both the grid `MeterService` and the webhook worker
+  write the same counter; there is no pending counter or scheduled flush. Local
+  solo projects are **never** metered — they never touch the cloud. New Autumn
+  customers are created with the workspace name + owner email.
+- **Realtime multiplayer via Supabase.** Cloud team projects live in Postgres. The
+  desktop SEEDS each grid via tRPC `grid.getTable`, then SUBSCRIBES to a
+  per-workspace+table **Supabase Realtime Broadcast** channel; the server publishes
+  a typed grid-change event after each write, and every other member's client
+  patches its cached snapshot through a pure reducer — so an edit, add-row, or
+  column run appears live with no manual refresh. Account unit is the **workspace
+  (team)**: members, projects, and credentials all scope to it, and billing is per
+  workspace.
 - **Execution stays local.** The cloud only stores and syncs data. When you run
-  a column on a cloud project, your **local engine** reads the inputs from Convex,
-  runs the QuickJS sandbox + connector HTTP calls **on your machine**, and writes
-  cell status (`running` → `done`/`error`) back through Convex mutations — so
-  results stream live to every member while no engine ever runs in the cloud.
-- **Shared team credentials.** Workspace connector keys are stored in Convex,
+  a column on a cloud project, your **local engine** reads the inputs through the
+  apps/web API, runs the QuickJS sandbox + connector HTTP calls **on your machine**,
+  and writes cell status (`running` → `done`/`error`) back through the same API —
+  so results stream live to every member while no engine ever runs in the cloud.
+- **Shared team credentials.** Workspace connector keys are stored in Postgres,
   encrypted at rest under a workspace-scoped key (envelope-wrapped by a backend
   master secret). Plaintext is only ever decrypted in the trusted run path —
   never exposed to other members' clients. Local projects keep the existing
   machine-local `~/.gtmgrid/key` AES-256-GCM model, untouched.
 
-> See [`docs/cloud.md`](./docs/cloud.md) for the full architecture, the Convex
-> function surface, and the verification matrix.
+The cloud tier is built on **Drizzle over Postgres** (`@gtmgrid/db`), **Better
+Auth** (`@gtmgrid/auth`), an **Effect-DI service layer** (`@gtmgrid/services`:
+repositories + domain services with LIVE Drizzle and in-memory TEST Layers), and a
+**tRPC** API (`apps/web/lib/trpc`) the desktop calls through a typed client.
+
+> See [`docs/cloud.md`](./docs/cloud.md) for the full architecture and the
+> verification matrix.
 
 ### Setup (cloud tier)
 
-The cloud tier needs a Convex deployment, an Autumn (billing) secret, and a
-backend master key for credential encryption. Configure these as **environment
-variables** — only the variable **names** are listed here; never commit secret
-values.
+The cloud tier needs a Postgres database (Supabase), an Autumn (billing) secret,
+and a backend master key for credential encryption. Configure these as
+**environment variables** (see [`.env.example`](./.env.example)) — only the
+variable **names** are listed here; never commit secret values.
 
 | Variable | Where it lives | Purpose |
 | --- | --- | --- |
-| `CONVEX_DEPLOYMENT` | `.env.local` (dev) | the Convex dev/prod deployment `convex dev` is bound to |
-| `VITE_CONVEX_URL` | `.env.local` (desktop build) | the deploy URL the React/Convex client connects to |
-| `VITE_INNGEST_URL` | `.env.local` (desktop build) | base URL of the webhook app, used to render a table's webhook endpoint |
-| `AUTUMN_SECRET_KEY` | Convex deployment env | server-side Autumn key for seats `check`/`checkout` + cloud-actions metering |
-| `CREDENTIALS_MASTER_KEY` | Convex deployment env | 32-byte backend master key (KEK) that wraps per-workspace credential keys |
-| `JWT_PRIVATE_KEY` + `JWKS` | Convex deployment env | Convex Auth signing keys (generate via `npx @convex-dev/auth`) |
-| `WEBHOOK_WORKER_SECRET` | Convex **and** the Vercel app | shared bearer the webhook worker uses to call the secret-gated `/webhook/*` actions (must match on both) |
-| `AUTH_RESEND_KEY` | Convex deployment env | Resend API key. When set, turns ON sign-up **email verification** + **password reset** and sends **invite** emails. Unset = those flows degrade gracefully (sign-up needs no code; invites still create a copyable accept link). |
-| `RESEND_FROM` | Convex deployment env (optional) | Verified sender, e.g. `gtm grid <noreply@gtmgrid.dev>`. Defaults to Resend's shared `onboarding@resend.dev` so email works before a domain is verified. |
-| `INVITE_BASE_URL` | Convex deployment env (optional) | Base URL of the web app that serves the `/invite/<token>` accept page (e.g. `https://gtmgrid.dev`). Falls back to `SITE_URL`; only used to build invite accept links. |
+| `DATABASE_URL` | apps/web env + `.env` for `pnpm db:migrate` | Supabase POOLED (Supavisor transaction mode, port 6543) Postgres URL the Drizzle client opens with `prepare:false` |
+| `SITE_URL` | apps/web env | the app's public base URL; a trusted origin for Better Auth OAuth redirects (alongside the `gtmgrid://` desktop deep link) |
+| `VITE_API_URL` | `.env` (desktop build) | base URL of the apps/web host serving the tRPC API + Better Auth; SET = cloud on, UNSET = local-only |
+| `VITE_INNGEST_URL` | `.env` (desktop build) | base URL of the webhook app, used to render a table's webhook endpoint |
+| `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` | `.env` (desktop build) | locate the Supabase project + publishable key for the live-grid Realtime subscription |
+| `AUTUMN_SECRET_KEY` | apps/web env | server-side Autumn key for seats `check`/`checkout` + cloud-actions metering |
+| `CREDENTIALS_MASTER_KEY` | apps/web env | 32-byte backend master key (KEK) that wraps per-workspace credential keys |
+| `SUPABASE_JWT_SECRET` | apps/web env | HS256 secret used by `@gtmgrid/auth` to mint a Supabase-compatible Realtime JWT for the signed-in user |
+| `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` | apps/web env | the server-side Supabase Realtime **broadcast** publisher (degrades to a no-op when unset) |
+| `AUTH_GITHUB_ID` + `AUTH_GITHUB_SECRET` | apps/web env (optional) | GitHub OAuth; the provider registers only when both are set |
+| `AUTH_GOOGLE_ID` + `AUTH_GOOGLE_SECRET` | apps/web env (optional) | Google OAuth; the provider registers only when both are set |
+| `WEBHOOK_WORKER_SECRET` | apps/web env **and** the desktop sidecar | shared bearer the Inngest webhook worker AND the sidecar cloud-run path use to call the secret-gated `/api/worker/*` endpoints (must match) |
+| `AUTH_RESEND_KEY` | apps/web env | Resend API key. When set, turns ON sign-up **email verification** + **password reset** and sends **invite** emails. Unset = those flows degrade gracefully (sign-up needs no code; invites still create a copyable accept link). |
+| `RESEND_FROM` | apps/web env (optional) | Verified sender, e.g. `gtm grid <noreply@gtmgrid.dev>`. Defaults to Resend's shared `onboarding@resend.dev` so email works before a domain is verified. |
+| `INVITE_BASE_URL` | apps/web env (optional) | Base URL of the web app that serves the `/invite/<token>` accept page. Falls back to `SITE_URL`; only used to build invite accept links. |
+| `INNGEST_EVENT_KEY` + `INNGEST_SIGNING_KEY` | apps/web env | the Inngest webhook worker keys |
 
-The webhook worker (`apps/web`, on Vercel) also needs, in its own project env:
-`CONVEX_URL` + `CONVEX_SITE_URL` (the target Convex deployment), `WEBHOOK_WORKER_SECRET`
-(same value as on Convex), and `INNGEST_EVENT_KEY` + `INNGEST_SIGNING_KEY` (Inngest).
-`SITE_URL` (the app's public URL) is set on the Convex deployment for auth redirects.
+**Email & invites.** Account email verification + password reset use Better Auth's
+email-OTP plugin (`@gtmgrid/auth`, gated on `AUTH_RESEND_KEY`). Team invites are
+**by email**: an owner/admin calls the tRPC `invitations.invite` mutation, which
+seat-gates via Autumn, creates a pending `invitations` row, and emails an accept
+link (`https://<INVITE_BASE_URL>/invite/<token>`, served by
+`apps/web/app/invite/[token]`). The invitee accepts in-app via the email-matched
+banner (`invitations.myPending`) or the link/`?invite=` token; acceptance re-checks
+seats and inserts the membership. All outbound mail funnels through `@gtmgrid/email`.
 
-**Email & invites.** Account email verification + password reset use Convex Auth's
-`Password` provider with Resend-backed OTP providers (`convex/auth.ts`, gated on
-`AUTH_RESEND_KEY`). Team invites are **by email**: an owner/admin calls
-`invitations.inviteByEmail`, which seat-gates via Autumn, creates a pending
-`invitations` row, and emails an accept link (`https://<INVITE_BASE_URL>/invite/<token>`,
-served by `apps/web/app/invite/[token]`). The invitee accepts in-app via the
-email-matched banner (`invitations.myPendingInvitations`) or the link/`?invite=` token;
-acceptance re-checks seats and inserts the membership. All outbound mail funnels through
-`convex/email.ts`.
-
-Run Convex codegen before typechecking the cloud code — the client imports
-`convex/_generated/*`, which only exists **after** a deployment login generates
-it:
+**Migrations.** The Drizzle schema lives in `@gtmgrid/db`; generate and apply
+migrations with:
 
 ```bash
-# Logs in / creates a Convex dev deployment and generates convex/_generated/.
-npx convex dev          # or: pnpm convex:dev
-# (codegen only, no long-running watcher:  npx convex codegen)
+pnpm db:generate   # generate SQL migrations from the schema (offline, no DB)
+pnpm db:migrate    # apply committed migrations (reads DATABASE_URL)
 ```
 
-`convex dev` writes `CONVEX_DEPLOYMENT` to `.env.local` and a deploy URL you set
-as the client's `VITE_CONVEX_URL`. `AUTUMN_SECRET_KEY` and `CREDENTIALS_MASTER_KEY`
-are set on the **Convex deployment** (they are read server-side and never reach
-the client). The OSS build runs with **no** cloud env at all: `convex/` is kept
-out of the root `tsc -b` graph and the desktop client treats an absent
-`VITE_CONVEX_URL` as "cloud disabled", so the local-only path needs no Convex
-deployment to build or run.
+The OSS build runs with **no** cloud env at all: the desktop client treats an
+absent `VITE_API_URL` as "cloud disabled", so the local-only SQLite path needs no
+database to build or run.
 
 ### Future Expansion
 
@@ -313,8 +320,8 @@ These are deliberately **out of scope** for v1 (cloud is additive on top of the
 unchanged local tool) and tracked for later:
 
 - **Full grid-in-browser.** A Next.js web surface now ships (`apps/web` —
-  marketing site + webhook worker on Vercel), and native deep-link OAuth has
-  landed. A full *grid UI in the browser* (the React app subscribing to Convex
+  marketing site + tRPC API + webhook worker on Vercel), and native deep-link OAuth
+  has landed. A full *grid UI in the browser* (a React app calling the tRPC API
   directly) is still future; the remaining gap is the in-app agent, which spawns
   the user's local `claude`/`codex` CLI.
 - **Cloud execution of grids.** Partially realized: webhook record processing +
@@ -324,8 +331,8 @@ unchanged local tool) and tracked for later:
 - **Proxied managed-key connectors.** Offering connectors (e.g. Trigify) through
   *our* keys with Autumn credit metering, as an additional revenue lever — no
   user-supplied key required.
-- **Offline editing of cloud projects** with later reconciliation. Convex is
-  online-first today; local projects remain the offline story until then.
+- **Offline editing of cloud projects** with later reconciliation. The cloud tier
+  is online-first today; local projects remain the offline story until then.
 
 ## Status
 
@@ -333,18 +340,21 @@ unchanged local tool) and tracked for later:
 - ✅ JSON-manifest extensions + LeadMagic (9) & Trigify (15) connectors — Trigify verified live
 - ✅ Desktop app: React grid UI + Tauri shell + **in-app Claude Code / Codex agent panel** (drives the grid live)
 - ✅ Self-contained `.dmg` — bundles node + engine; runs without a dev toolchain
-- ✅ Cloud / Teams tier (open-core): Convex backend (auth, workspace/project/table/cell
-  API, seats billing via Autumn, workspace-encrypted shared credentials), the
-  engine `GridStore` abstraction (`SqliteGridStore` + `ConvexGridStore`), and the
-  desktop cloud client (auth UI, workspace switcher, realtime grid, settings) — all
-  with Vitest coverage. Live two-window multiplayer needs a human Tauri run to
-  confirm visually; the data path is verified via `pnpm typecheck` + `pnpm test`.
+- ✅ Cloud / Teams tier (open-core): Postgres backend on Supabase via Drizzle
+  (`@gtmgrid/db`), Better Auth (`@gtmgrid/auth`), an Effect-DI service layer
+  (`@gtmgrid/services`) behind a tRPC API (`apps/web/lib/trpc`) — workspace/project/
+  table/cell procedures, seats billing via Autumn, workspace-encrypted shared
+  credentials — the engine `GridStore` abstraction (`SqliteGridStore` + the cloud
+  HTTP store), and the desktop cloud client (auth UI, workspace switcher, realtime
+  grid, settings) — all with Vitest coverage. Live two-window multiplayer needs a
+  human Tauri run to confirm visually; the data path is verified via `pnpm
+  typecheck` + `pnpm test`.
 - ✅ Turborepo monorepo + `apps/web` (marketing site + Inngest webhook worker) deployed to Vercel
 - ✅ **Inbound webhooks** per cloud table: HMAC-verified receiver → Inngest durable
   insert/upsert + auto-run enrichment, per-event delivery log, metered as cloud
   actions — **verified end-to-end in production**
 - ✅ CSV import → table (drop / review / done) + new-table chooser (blank / CSV / webhook)
-- ✅ Cloud-actions usage metering (Autumn) + in-app **Plan & billing** settings; Convex Auth with native deep-link OAuth
+- ✅ Cloud-actions usage metering (Autumn) + in-app **Plan & billing** settings; Better Auth with native deep-link OAuth
 
 ## License
 

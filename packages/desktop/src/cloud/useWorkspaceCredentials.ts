@@ -2,33 +2,23 @@
  * React glue for the shared (workspace-scoped) credential panels (T11).
  *
  * Binds the {@link CredentialService} Effect orchestration (./credentials.ts) to
- * Convex: the reactive `listCredentials` query (for the connected indicator) and
- * the `saveCredential` action (the encrypted-save port). Returns a
+ * the tRPC API: the `credentials.list` query (for the connected indicator) and
+ * the `credentials.save` mutation (the encrypted-save port). Returns a
  * {@link WorkspaceCredSource} the panels narrow per connector, or `undefined`
  * when no workspace is active (signed out / local-only) — so a local user's
- * panels render exactly as before with no Convex calls.
+ * panels render exactly as before with no cloud calls.
  *
  * The component (Panels.tsx) stays plain React; the typed-error guards live in
  * the Effect service (unit-tested with a fake saver Layer). This hook only
- * composes the Live Layer from the React-bound action, mirroring the invite
- * wiring in WorkspaceSettings.tsx.
+ * composes the Live Layer, mirroring the invite wiring in WorkspaceSettings.tsx.
  */
 
-import { useAction, useQuery } from "convex/react";
+import { useQuery as useReactQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { api } from "../../../../convex/_generated/api";
-import type { Id } from "../../../../convex/_generated/dataModel";
+import type { Id } from "./ids";
 import type { WorkspaceCredSource } from "../Panels";
-import { Effect, Layer } from "effect";
-import {
-  CredentialError,
-  CredentialSaver,
-  CredentialService,
-  CredentialServiceLive,
-  runSaveCredential,
-  type SaveCredentialInput,
-} from "./credentials";
-import { cloudEnabled } from "./convex";
+import { runSaveCredential, useCredentialLayer } from "./credentials";
+import { apiClient, cloudEnabled } from "./client";
 
 /** A credential metadata row from `listCredentials` (never includes plaintext). */
 interface CredentialMeta {
@@ -39,8 +29,8 @@ interface CredentialMeta {
 /**
  * Build the {@link WorkspaceCredSource} for the active workspace, or `undefined`
  * when there is no active workspace / cloud is disabled. Shared keys are saved at
- * the `workspace` scope via the Convex encrypted action; the connected set is
- * derived from the reactive listing (workspace-scoped rows only).
+ * the `workspace` scope via the tRPC encrypted mutation; the connected set is
+ * derived from the listing (workspace-scoped rows only).
  */
 export function useWorkspaceCredentials(
   workspaceId: Id<"workspaces"> | null,
@@ -48,46 +38,13 @@ export function useWorkspaceCredentials(
 ): WorkspaceCredSource | undefined {
   const active = cloudEnabled && workspaceId !== null && isAuthenticated;
 
-  // Reactive metadata listing (no plaintext, no ciphertext). `skip` keeps a
-  // local-only / signed-out build from issuing any Convex query.
-  const credentials = useQuery(
-    api.credentialsData.listCredentials,
-    active ? { workspaceId } : "skip",
-  ) as readonly CredentialMeta[] | undefined;
+  // Metadata listing (no plaintext, no ciphertext) via tRPC `credentials.list`.
+  // Issues zero calls until a workspace is active.
+  const credentials = useCredentialMeta(active ? workspaceId : null);
 
-  // The Convex encrypted-save action, wrapped as the Effect `CredentialSaver` port.
-  const saveAction = useAction(api.credentials.saveCredential);
-
-  // Compose the Live save Layer once from the React-bound action.
-  const layer = useMemo<Layer.Layer<CredentialService>>(
-    () =>
-      CredentialServiceLive.pipe(
-        Layer.provide(
-          Layer.succeed(CredentialSaver, {
-            save: (input: SaveCredentialInput) =>
-              Effect.tryPromise({
-                try: () =>
-                  saveAction({
-                    workspaceId: input.workspaceId as Id<"workspaces">,
-                    extensionId: input.extensionId,
-                    scope: "workspace",
-                    name: input.name,
-                    secrets: input.secrets,
-                  }).then(() => undefined),
-                catch: (cause) =>
-                  new CredentialError({
-                    message:
-                      cause instanceof Error
-                        ? cause.message
-                        : "Could not save the shared key.",
-                    cause,
-                  }),
-              }),
-          }),
-        ),
-      ),
-    [saveAction],
-  );
+  // The Live save Layer (tRPC `credentials.save`). The session/empty-key guards
+  // live in the Effect orchestration.
+  const layer = useCredentialLayer();
 
   return useMemo<WorkspaceCredSource | undefined>(() => {
     if (!active || workspaceId === null) return undefined;
@@ -112,4 +69,24 @@ export function useWorkspaceCredentials(
         ),
     };
   }, [active, workspaceId, credentials, isAuthenticated, layer]);
+}
+
+/**
+ * The credential-metadata listing for a workspace (which connectors are
+ * connected — never plaintext/ciphertext) via the tRPC `credentials.list` query.
+ * `undefined` while loading; issues zero calls when `workspaceId` is `null` (cloud
+ * off / signed out / no workspace).
+ */
+function useCredentialMeta(
+  workspaceId: Id<"workspaces"> | null,
+): readonly CredentialMeta[] | undefined {
+  const q = useReactQuery({
+    queryKey: ["credentials", "list", workspaceId],
+    enabled: apiClient !== null && workspaceId !== null,
+    queryFn: () =>
+      apiClient!.credentials.list.query({
+        workspaceId: workspaceId as string,
+      }),
+  });
+  return q.data as readonly CredentialMeta[] | undefined;
 }

@@ -1,38 +1,32 @@
 /**
- * Cloud auth + workspace hooks (T8).
+ * Cloud auth + workspace hooks.
  *
  * React hooks (`useMe`, `useActiveWorkspace`, `useAuthState`, `useAccountActions`)
- * the account-bar UI binds to. They wrap the Convex Auth React API
- * (`@convex-dev/auth/react`) + the reactive `me` query, and add an "active
- * workspace" selection persisted in `localStorage`.
+ * the account-bar UI binds to. They read the tRPC `workspaces.me` /
+ * `auth.enabledProviders` / `workspaces.listMembers` queries via react-query and
+ * drive auth through the Better Auth client, and add an "active workspace"
+ * selection persisted in `localStorage`.
  *
- * The auth paths are **email + password** (Convex Auth's Password provider) and
- * **OAuth web redirect** (GitHub + Google, configured in `convex/auth.ts`). The
- * OAuth path uses the STANDARD Convex Auth browser redirect: `signIn(provider)`
- * redirects to the provider, back to the Convex callback, then back to the app.
- * Which providers are enabled is exposed by the `auth.enabledProviders` query
- * (booleans only) so the UI shows a button per enabled provider and hides the
- * whole OAuth row when none are enabled.
- *
- * The PACKAGED desktop app additionally supports the native Tauri deep-link
- * OAuth flow (C29): `signInWithProvider` opens the provider in the system
- * browser and the session is completed from the `gtmgrid://auth/callback` deep
- * link. The runtime branch is selected by `isTauri()` (see ./desktop-oauth.ts).
+ * The auth paths are **email + password** and **OAuth** (GitHub + Google). The
+ * web build uses the standard Better Auth same-window redirect; the PACKAGED
+ * desktop app uses the native Tauri deep-link flow: `signInWithProvider` opens
+ * the provider in the system browser and the session is completed from the
+ * `gtmgrid://auth/callback` deep link (see ./useDeepLinkOAuth.ts). The runtime
+ * branch is selected by `isTauri()` (see ./desktop-oauth.ts).
  *
  * The local-only app is untouched: every hook degrades to a signed-out / null
- * shape when no Convex deployment is configured, and nothing here runs unless
- * the user explicitly signs in.
+ * shape when no apps/web API is configured (`cloudEnabled` false), and nothing
+ * here runs unless the user explicitly signs in.
  */
 
-import { useAuthActions } from "@convex-dev/auth/react";
-import { useConvexAuth, useQuery } from "convex/react";
+import { useQuery as useReactQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
-import { api } from "../../../../convex/_generated/api";
-import type { Id } from "../../../../convex/_generated/dataModel";
-import { cloudEnabled } from "./convex";
-import { chooseOAuthFlow, isTauri, startDesktopOAuth } from "./desktop-oauth";
+import type { Id } from "./ids";
+import { apiClient, authClient, cloudEnabled } from "./client";
+import { chooseOAuthFlow, isTauri } from "./desktop-oauth";
+import { apiOAuthCallbackUrl, unwrapAuthResult } from "./api-auth";
 
-// ─── Shared types (mirror the `me` query in convex/workspaces.ts) ───────────
+// ─── Shared types (mirror the tRPC `workspaces.me` query result) ────────────
 
 /** Seat usage for a workspace: members used vs. the plan limit (null = free). */
 export interface SeatUsage {
@@ -95,7 +89,7 @@ export interface WorkspaceMembers {
 
 // ─── OAuth providers (C17, web redirect flow) ────────────────────────────────
 
-/** The OAuth providers we support, matching the ids registered in convex/auth.ts. */
+/** The OAuth providers we support, matching the ids the apps/web auth registers. */
 export type OAuthProvider = "github" | "google";
 
 /**
@@ -140,12 +134,16 @@ export function enabledProviderList(
  * signed out / cloud-disabled, or `undefined` while loading.
  */
 export function useMe(): Me | null | undefined {
-  // `skip` the query entirely when the cloud layer is off, so a local-only
-  // build issues zero Convex calls.
-  return useQuery(api.workspaces.me, cloudEnabled ? {} : "skip") as
-    | Me
-    | null
-    | undefined;
+  // Read `workspaces.me` through the tRPC client via react-query. When the cloud
+  // layer is off (`apiClient` null) the query is disabled, so a local-only build
+  // issues zero cloud calls and the hook resolves to `null` (signed out).
+  const { data, isPending } = useReactQuery({
+    queryKey: ["workspaces", "me"],
+    queryFn: () => apiClient!.workspaces.me.query(),
+    enabled: apiClient !== null,
+  });
+  if (apiClient === null) return null;
+  return isPending ? undefined : (data as unknown as Me | null);
 }
 
 /**
@@ -155,14 +153,27 @@ export function useMe(): Me | null | undefined {
  * provider is actually configured. No secrets are ever read — booleans only.
  */
 export function useEnabledProviders(): readonly OAuthProvider[] {
-  const providers = useQuery(
-    api.auth.enabledProviders,
-    cloudEnabled ? {} : "skip",
-  ) as EnabledProviders | undefined;
+  const providers = useApiEnabledProviders();
   return useMemo(
     () => enabledProviderList(cloudEnabled ? providers : NO_PROVIDERS),
     [providers],
   );
+}
+
+/**
+ * The enabled-providers read: the booleans-only flags from the tRPC
+ * `auth.enabledProviders` query via react-query, or `undefined` while loading
+ * (so the OAuth row stays hidden until we know a provider is configured). The
+ * query is disabled when the cloud layer is off. Shared by
+ * {@link useEnabledProviders} and {@link useEmailAuthEnabled}.
+ */
+function useApiEnabledProviders(): EnabledProviders | undefined {
+  const { data } = useReactQuery({
+    queryKey: ["auth", "enabledProviders"],
+    queryFn: () => apiClient!.auth.enabledProviders.query(),
+    enabled: apiClient !== null,
+  });
+  return data ?? undefined;
 }
 
 /**
@@ -172,10 +183,7 @@ export function useEnabledProviders(): readonly OAuthProvider[] {
  * arrive. Defaults to false while loading / when cloud is off.
  */
 export function useEmailAuthEnabled(): boolean {
-  const providers = useQuery(
-    api.auth.enabledProviders,
-    cloudEnabled ? {} : "skip",
-  ) as EnabledProviders | undefined;
+  const providers = useApiEnabledProviders();
   return cloudEnabled ? (providers?.emailAuth ?? false) : false;
 }
 
@@ -187,22 +195,40 @@ export function useEmailAuthEnabled(): boolean {
 export function useMembers(
   workspaceId: Id<"workspaces"> | null,
 ): WorkspaceMembers | undefined {
-  return useQuery(
-    api.workspaces.listMembers,
-    cloudEnabled && workspaceId !== null ? { workspaceId } : "skip",
-  ) as WorkspaceMembers | undefined;
+  const { data } = useReactQuery({
+    queryKey: ["workspaces", "listMembers", workspaceId],
+    queryFn: () =>
+      apiClient!.workspaces.listMembers.query({
+        workspaceId: workspaceId as string,
+      }),
+    // Disabled (so it issues no call) until the cloud layer is on AND a
+    // workspace is selected.
+    enabled: apiClient !== null && workspaceId !== null,
+  });
+  return (data as unknown as WorkspaceMembers | undefined) ?? undefined;
 }
 
-/** Convex auth state: whether we are signed in and whether it is still loading. */
+/**
+ * Auth state: whether we are signed in and whether it is still loading. On the
+ * NEW path this reflects the Better Auth session (`authClient.useSession`); on
+ * When no cloud backend is configured at all (`authClient` null), a stable
+ * signed-out/loaded state is returned without calling any hook.
+ */
 export function useAuthState(): { isAuthenticated: boolean; isLoading: boolean } {
-  // `useConvexAuth` requires the provider; when cloud is disabled there is no
-  // provider, so report a stable signed-out/loaded state without calling it.
-  if (!cloudEnabled) {
-    return { isAuthenticated: false, isLoading: false };
+  // Derive from the Better Auth session. `authClient` is non-null whenever the
+  // cloud layer is on; `useSession` is reactive (re-renders on sign in/out and
+  // OAuth completion). `authClient` is a module constant, so the hook order is
+  // stable across renders.
+  if (authClient !== null) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
+    const session = authClient.useSession();
+    return {
+      isAuthenticated: session.data != null,
+      isLoading: session.isPending,
+    };
   }
-  // eslint-disable-next-line react-hooks/rules-of-hooks -- `cloudEnabled` is a
-  // module constant, so this branch is stable across renders.
-  return useConvexAuth();
+  // No cloud layer configured → stable signed-out/loaded state, no hook called.
+  return { isAuthenticated: false, isLoading: false };
 }
 
 const ACTIVE_WS_KEY = "gtmgrid:activeWorkspace";
@@ -339,100 +365,135 @@ export function useActiveWorkspace(me: Me | null | undefined): {
   return { activeWorkspace, setActiveWorkspaceId };
 }
 
+/** The account-actions surface the UI binds to, identical across both paths. */
+export interface AccountActions {
+  /**
+   * Email + password sign-in / sign-up. Returns `{ signingIn }`: `false` when a
+   * sign-up needs email verification before the session starts (call
+   * {@link AccountActions.verifyEmailCode}), `true` once the session is active.
+   */
+  readonly signInWithPassword: (
+    email: string,
+    password: string,
+    flow: "signIn" | "signUp",
+  ) => Promise<{ signingIn: boolean }>;
+  /** OAuth sign-in (web redirect or desktop deep link), per the runtime. */
+  readonly signInWithProvider: (provider: OAuthProvider) => Promise<void>;
+  /** Complete sign-up by verifying the emailed OTP; on success the session starts. */
+  readonly verifyEmailCode: (email: string, code: string) => Promise<void>;
+  /** Begin a password reset: email a one-time code to `email`. */
+  readonly requestPasswordReset: (email: string) => Promise<void>;
+  /** Finish a password reset: verify the code and set `newPassword`. */
+  readonly resetPasswordWithCode: (
+    email: string,
+    code: string,
+    newPassword: string,
+  ) => Promise<void>;
+  /** Sign out of the current session. */
+  readonly signOut: () => Promise<unknown>;
+}
+
 /**
  * Account actions for the UI: sign in (email + password OR OAuth provider), sign
- * out, and create a workspace. Wraps the Convex Auth actions + the
- * `createWorkspace` mutation. All no-ops when cloud is off.
+ * out, OTP verification, and password reset. Driven by the Better Auth client:
+ *   - sign-in / sign-up → `authClient.signIn.email` / `signUp.email`. When the
+ *     deployment requires email verification, a sign-up returns no session and
+ *     Better Auth sends the OTP, so we report `signingIn: false` to drive the
+ *     verification step; a successful session reports `signingIn: true`.
+ *   - verify / reset → the email-OTP plugin endpoints (`emailOtp.verifyEmail`,
+ *     `forgetPassword.emailOtp`, `emailOtp.resetPassword`).
+ *   - OAuth → `signIn.social`: a same-window redirect on the web build, or
+ *     (packaged Tauri) the provider URL opened in the system browser, completed
+ *     by the deep-link listener (useApiDeepLinkOAuth) re-reading the session.
+ *
+ * Better Auth RESOLVES `{ error }` instead of throwing, so every call is run
+ * through {@link unwrapAuthResult}, which re-raises a real `Error` — preserving
+ * the UI's `try/catch` + {@link friendlyAuthError} contract. `authClient` is
+ * non-null whenever the cloud layer is on; the account bar only renders the
+ * sign-in UI when it is.
  */
-export function useAccountActions() {
-  const { signIn, signOut } = useAuthActions();
+export function useAccountActions(): AccountActions {
+  const client = authClient!;
 
-  /**
-   * Direct email + password sign-in / sign-up (the active provider on the dev
-   * backend). Returns `{ signingIn }`: when email VERIFICATION is enabled, a
-   * sign-up resolves `signingIn: false` (the account exists but a code was
-   * emailed and must be verified before the session starts — call
-   * {@link verifyEmailCode}); otherwise `signingIn: true` (session started).
-   */
   const signInWithPassword = useCallback(
     async (
       email: string,
       password: string,
       flow: "signIn" | "signUp",
     ): Promise<{ signingIn: boolean }> => {
-      const res = await signIn("password", { email, password, flow });
-      return { signingIn: res.signingIn };
+      if (flow === "signUp") {
+        // Better Auth requires a `name`; the account bar collects only email +
+        // password, so default it to the email (the onboarding flow can update
+        // the profile later). When verification is required, `data.token` is
+        // absent (no session) and the OTP was emailed → signingIn:false.
+        const result = unwrapAuthResult(
+          await client.signUp.email({ email, password, name: email }),
+        );
+        const token = (result as { token?: string | null } | null)?.token;
+        return { signingIn: token != null };
+      }
+      unwrapAuthResult(await client.signIn.email({ email, password }));
+      return { signingIn: true };
     },
-    [signIn],
+    [client],
   );
 
-  /**
-   * Complete sign-up by verifying the OTP emailed to `email` (the
-   * `email-verification` flow). On success the session starts.
-   */
   const verifyEmailCode = useCallback(
     async (email: string, code: string): Promise<void> => {
-      await signIn("password", { email, code, flow: "email-verification" });
+      unwrapAuthResult(await client.emailOtp.verifyEmail({ email, otp: code }));
     },
-    [signIn],
+    [client],
   );
 
-  /**
-   * Begin a password reset: emails a one-time code to `email` (the `reset`
-   * flow). Pair with {@link resetPasswordWithCode} to set the new password.
-   */
   const requestPasswordReset = useCallback(
     async (email: string): Promise<void> => {
-      await signIn("password", { email, flow: "reset" });
+      unwrapAuthResult(await client.forgetPassword.emailOtp({ email }));
     },
-    [signIn],
+    [client],
   );
 
-  /**
-   * Finish a password reset: verify the emailed code and set `newPassword` (the
-   * `reset-verification` flow). On success the session starts.
-   */
   const resetPasswordWithCode = useCallback(
     async (email: string, code: string, newPassword: string): Promise<void> => {
-      await signIn("password", {
-        email,
-        code,
-        newPassword,
-        flow: "reset-verification",
-      });
+      unwrapAuthResult(
+        await client.emailOtp.resetPassword({
+          email,
+          otp: code,
+          password: newPassword,
+        }),
+      );
     },
-    [signIn],
+    [client],
   );
 
-  /**
-   * OAuth sign-in, branching on the runtime (C29):
-   *
-   *   - WEB build → the STANDARD Convex Auth web redirect (C17): `signIn(provider)`
-   *     navigates the browser to the provider, back to the Convex callback
-   *     (`<SITE>/api/auth/callback/<provider>`), then back to the app at
-   *     `SITE_URL`. The provider's `shouldHandleCode` auto-reads the returned
-   *     `code` from the URL.
-   *
-   *   - PACKAGED TAURI app → the native deep-link flow: ask Convex Auth for the
-   *     provider redirect URL (`redirectTo: gtmgrid://auth/callback`), open it in
-   *     the SYSTEM browser, and let {@link useDeepLinkOAuth} complete the session
-   *     when the `gtmgrid://auth/callback?code=…` deep link returns.
-   *
-   * The single {@link isTauri} helper selects the branch, so the web flow is
-   * unchanged. The opener plugin is imported lazily (Tauri-only) so the web
-   * bundle never loads it.
-   */
   const signInWithProvider = useCallback(
     async (provider: OAuthProvider): Promise<void> => {
       if (chooseOAuthFlow(isTauri()) === "web") {
-        await signIn(provider);
+        // Web: same-window redirect to the provider, completed by Better Auth's
+        // callback which sets the session cookie and returns to the app.
+        unwrapAuthResult(await client.signIn.social({ provider }));
         return;
       }
+      // Packaged Tauri: ask Better Auth for the provider URL WITHOUT navigating
+      // (`disableRedirect`), open it in the system browser, and let the deep-link
+      // listener re-read the session when `gtmgrid://auth/callback` returns.
+      const result = unwrapAuthResult(
+        await client.signIn.social({
+          provider,
+          callbackURL: apiOAuthCallbackUrl(),
+          disableRedirect: true,
+        }),
+      ) as { url?: string | null } | null;
+      const url = result?.url;
+      if (url == null || url.length === 0) {
+        throw new Error("OAuth provider did not return a redirect URL.");
+      }
       const { openUrl } = await import("@tauri-apps/plugin-opener");
-      await startDesktopOAuth(provider, signIn, openUrl);
+      await openUrl(url);
     },
-    [signIn],
+    [client],
   );
+
+  const signOut = useCallback((): Promise<unknown> => client.signOut(), [client]);
 
   return {
     signInWithPassword,
@@ -442,4 +503,24 @@ export function useAccountActions() {
     resetPasswordWithCode,
     signOut,
   };
+}
+
+/**
+ * Create a workspace, returning its id. Calls the tRPC
+ * `workspaces.createWorkspace` mutation via the apps/web client. Returned as a
+ * single callable the account bar + onboarding flow share.
+ *
+ * The id is returned as the `Id<"workspaces">` (a plain string) the UI threads
+ * through to the active-workspace store.
+ */
+export function useCreateWorkspace(): (
+  name: string,
+) => Promise<Id<"workspaces">> {
+  return useCallback(
+    async (name: string) =>
+      (await apiClient!.workspaces.createWorkspace.mutate({
+        name,
+      })) as Id<"workspaces">,
+    [],
+  );
 }

@@ -14,22 +14,12 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { useAction, useQuery } from "convex/react";
-import { api } from "../../../../convex/_generated/api";
-import type { Id } from "../../../../convex/_generated/dataModel";
-import { cloudEnabled } from "./convex";
-
-/** One waiting invitation, mirroring `invitations.myPendingInvitations`. */
-interface PendingInvite {
-  readonly _id: Id<"invitations">;
-  readonly token: string;
-  readonly workspaceId: Id<"workspaces">;
-  readonly workspaceName: string;
-  readonly role: "owner" | "admin" | "member";
-  readonly invitedByName: string | null;
-  readonly createdAt: number;
-  readonly expiresAt: number;
-}
+import type { Id } from "./ids";
+import { cloudEnabled } from "./client";
+import {
+  useAcceptInvitation,
+  useMyPendingInvitations,
+} from "./useWorkspaceInvitations";
 
 /** Read an invite token from the launch URL (query `?invite=` or hash `#invite=`). */
 function readInviteTokenFromUrl(): string | null {
@@ -69,11 +59,11 @@ interface PendingInvitesProps {
  * is `skip`ped otherwise), so it issues zero Convex calls in the local app.
  */
 export function PendingInvites({ onAccepted }: PendingInvitesProps) {
-  const invites = useQuery(
-    api.invitations.myPendingInvitations,
-    cloudEnabled ? {} : "skip",
-  ) as PendingInvite[] | undefined;
-  const acceptAction = useAction(api.invitations.acceptInvitation);
+  // Reactive waiting-invites read + accept, STRANGLER-branched on the cloud path
+  // (tRPC `invitations.myPending`/`accept` on the NEW path, the Convex
+  // query/action on the legacy path). Both normalize to one UI shape.
+  const invites = useMyPendingInvitations();
+  const acceptInvite = useAcceptInvitation();
 
   const [busyToken, setBusyToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -97,13 +87,9 @@ export function PendingInvites({ onAccepted }: PendingInvitesProps) {
       setBusyToken(token);
       setError(null);
       try {
-        const res = (await acceptAction({ token })) as
-          | { status: "accepted"; workspaceId: Id<"workspaces"> }
-          | { status: "wrong_account"; invitedEmail: string }
-          | { status: "invalid" }
-          | { status: "seat_limit"; checkoutUrl: string };
+        const res = await acceptInvite(token);
         if (res.status === "accepted") {
-          onAccepted(res.workspaceId);
+          onAccepted(res.workspaceId as Id<"workspaces">);
         } else if (res.status === "wrong_account") {
           setError(
             `This invite was sent to ${res.invitedEmail}. Sign in with that email to accept it.`,
@@ -121,7 +107,7 @@ export function PendingInvites({ onAccepted }: PendingInvitesProps) {
         setBusyToken(null);
       }
     },
-    [busyToken, acceptAction, onAccepted],
+    [busyToken, acceptInvite, onAccepted],
   );
 
   // Auto-accept a URL-supplied token once (after the user is authenticated, i.e.
@@ -150,7 +136,7 @@ export function PendingInvites({ onAccepted }: PendingInvitesProps) {
         </div>
       )}
       {visible.map((inv) => (
-        <div className="pending-invite-row" key={inv._id}>
+        <div className="pending-invite-row" key={inv.id}>
           <span className="pending-invite-text">
             {inv.invitedByName ? `${inv.invitedByName} invited you` : "You've been invited"}{" "}
             to join <strong>{inv.workspaceName}</strong>

@@ -1,0 +1,798 @@
+/**
+ * `WebhookService` — the webhook domain service: member-gated config CRUD PLUS
+ * the headless worker grid paths, collapsing the Convex action/mutation splits
+ * into single Effect procedures.
+ *
+ * Ports `convex/webhooks.ts`:
+ *   - CONFIG CRUD (member-gated): listWebhooks, createWebhook, updateWebhookConfig,
+ *     updateWebhookMapping, toggleEnabled, rotateSecret, listDeliveriesPaged
+ *     (now Drizzle KEYSET), deleteWebhook. NOT metered (config is metadata).
+ *   - WORKER PATHS (secret-gated UPSTREAM at the route, NOT member-gated here):
+ *     resolveToken, insertRow, upsertRow, getTable, setCell, setCellStatus.
+ *     `insertRow`/`upsertRow` meter EXACTLY ONCE per record; `setCell`/
+ *     `setCellStatus` meter ONLY on a TERMINAL status (done/error), never on
+ *     running. Deliveries are recorded with a 50-row prune (recordDelivery).
+ *
+ * Reuses the pure kernels from `@gtmgrid/cloud`: `findUpsertRowId` (upsert match)
+ * and `CellMerge.mergeCellPatch` (COALESCE cell merge). Authz uses the same
+ * `MembershipService.requireMember` port as the worked example.
+ */
+
+import {
+  CellMerge,
+  type CloudCellStatus,
+  CredentialCryptoService,
+  findUpsertRowId,
+  MembershipService,
+  type NotAMemberError,
+  type SecretMap,
+  type UnauthenticatedError,
+} from "@gtmgrid/cloud";
+import { Data, Effect } from "effect";
+import { mintSigningSecret, mintToken } from "../webhook-mint.js";
+import {
+  type DeliveryCursor,
+  type DeliveryPage,
+  WebhookDeliveryRepo,
+  type WebhookDeliveryRepoError,
+} from "../repositories/webhook-delivery-repo.js";
+import {
+  type Webhook,
+  type WebhookMappingEntry,
+  type WebhookMode,
+  WebhookRepo,
+  type WebhookRepoError,
+} from "../repositories/webhook-repo.js";
+
+/** Max delivery-log rows retained PER WEBHOOK (convex/webhooks.ts:676). */
+export const DELIVERY_RETENTION = 50;
+
+/** Default page size for the deliveries panel (convex/webhooks.ts:284 initial). */
+export const DELIVERIES_PAGE_SIZE = 20;
+
+/** Raised when a referenced webhook/table/column/row does not exist. */
+export class WebhookNotFoundError extends Data.TaggedError(
+  "WebhookNotFoundError",
+)<{
+  readonly message: string;
+}> {}
+
+/** Raised when a mapping/upsert target column is not in the bound table. */
+export class InvalidMappingError extends Data.TaggedError(
+  "InvalidMappingError",
+)<{
+  readonly message: string;
+}> {}
+
+/** Raised when an upsert config is incomplete (mode upsert without a key). */
+export class InvalidConfigError extends Data.TaggedError("InvalidConfigError")<{
+  readonly message: string;
+}> {}
+
+/** Raised when a delivery would exceed the plan's remaining cloud actions. */
+export class CloudActionsLimitError extends Data.TaggedError(
+  "CloudActionsLimitError",
+)<{
+  readonly message: string;
+}> {}
+
+/** Raised when a worker (row, column) pair span different tables. */
+export class InvalidCellError extends Data.TaggedError("InvalidCellError")<{
+  readonly message: string;
+}> {}
+
+/** A `{ columnId: value }` map of one received record's mapped cells. */
+export type CellMap = Readonly<Record<string, unknown>>;
+
+/** The resolved webhook config the worker route returns (or `null`). */
+export interface ResolvedWebhook {
+  readonly webhookId: string;
+  readonly workspaceId: string;
+  readonly tableId: string;
+  readonly mapping: readonly WebhookMappingEntry[];
+  readonly signingSecret: string | null;
+  readonly autoRun: boolean;
+  readonly mode: WebhookMode;
+  readonly upsertKey: string | null;
+}
+
+/** The grid payload `getTable` returns to the worker. */
+export interface WorkerGrid {
+  readonly table: { readonly id: string; readonly workspaceId: string };
+  readonly columns: readonly { readonly id: string }[];
+  readonly rows: readonly { readonly id: string; readonly position: number }[];
+  readonly cells: readonly {
+    readonly id: string;
+    readonly rowId: string;
+    readonly columnId: string;
+    readonly value: unknown;
+  }[];
+}
+
+/** A terminal cell status meters; `running` never does (no double-count). */
+const isTerminalStatus = (status: CloudCellStatus): boolean =>
+  status === "done" || status === "error";
+
+/**
+ * Webhook domain service. CRUD methods assert membership first; worker methods
+ * skip membership (the route's worker-secret bearer is their trust boundary) but
+ * still validate table/column ownership so a webhook can never write across
+ * tables.
+ */
+export class WebhookService extends Effect.Service<WebhookService>()(
+  "WebhookService",
+  {
+    effect: Effect.gen(function* () {
+      const repo = yield* WebhookRepo;
+      const deliveries = yield* WebhookDeliveryRepo;
+      const membership = yield* MembershipService;
+      const cellMerge = yield* CellMerge;
+      const crypto = yield* CredentialCryptoService;
+
+      /** Load a webhook or fail typed. */
+      const requireWebhook = (
+        webhookId: string,
+      ): Effect.Effect<Webhook, WebhookRepoError | WebhookNotFoundError> =>
+        Effect.gen(function* () {
+          const found = yield* repo.findById(webhookId);
+          if (found._tag === "None") {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({
+                message: `Webhook ${webhookId} not found.`,
+              }),
+            );
+          }
+          return found.value;
+        });
+
+      /** The set of column ids belonging to `tableId`. */
+      const tableColumnIds = (tableId: string) =>
+        repo
+          .listColumns(tableId)
+          .pipe(Effect.map((cols) => new Set(cols.map((c) => c.id))));
+
+      // ── CONFIG CRUD (member-gated, not metered) ──────────────────────────
+
+      /** Webhooks bound to a table (newest first). Members-only. */
+      const listWebhooks = (tableId: string) =>
+        Effect.gen(function* () {
+          const table = yield* repo.findTable(tableId);
+          if (table._tag === "None") {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({ message: `Table ${tableId} not found.` }),
+            );
+          }
+          yield* membership.requireMember(table.value.workspaceId);
+          return yield* repo.listByTable(tableId);
+        });
+
+      /** Create a webhook bound to a table, minting its token + secret. */
+      const createWebhook = (args: {
+        readonly tableId: string;
+        readonly name?: string | null;
+        readonly mapping?: readonly WebhookMappingEntry[];
+      }) =>
+        Effect.gen(function* () {
+          const table = yield* repo.findTable(args.tableId);
+          if (table._tag === "None") {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({
+                message: `Table ${args.tableId} not found.`,
+              }),
+            );
+          }
+          yield* membership.requireMember(table.value.workspaceId);
+
+          const mapping = args.mapping ?? [];
+          const valid = yield* tableColumnIds(args.tableId);
+          for (const m of mapping) {
+            if (!valid.has(m.columnId)) {
+              return yield* Effect.fail(
+                new InvalidMappingError({
+                  message: `Column ${m.columnId} does not belong to table ${args.tableId}.`,
+                }),
+              );
+            }
+          }
+
+          return yield* repo.insert({
+            workspaceId: table.value.workspaceId,
+            tableId: args.tableId,
+            name: args.name ?? null,
+            token: mintToken(),
+            signingSecret: mintSigningSecret(),
+            mapping,
+            enabled: true,
+            autoRun: true,
+            mode: "create",
+            upsertKey: null,
+            createdAt: Date.now(),
+          });
+        });
+
+      /** Patch receive behaviour — autoRun, mode, and the upsertKey column. */
+      const updateWebhookConfig = (args: {
+        readonly webhookId: string;
+        readonly autoRun?: boolean;
+        readonly mode?: WebhookMode;
+        readonly upsertKey?: string | null;
+      }) =>
+        Effect.gen(function* () {
+          const webhook = yield* requireWebhook(args.webhookId);
+          yield* membership.requireMember(webhook.workspaceId);
+
+          const patch: {
+            autoRun?: boolean;
+            mode?: WebhookMode;
+            upsertKey?: string | null;
+          } = {};
+          if (args.autoRun !== undefined) patch.autoRun = args.autoRun;
+
+          const nextMode = args.mode ?? webhook.mode ?? "create";
+          if (args.mode !== undefined) patch.mode = args.mode;
+
+          const nextKey =
+            args.upsertKey !== undefined
+              ? args.upsertKey
+              : (webhook.upsertKey ?? null);
+
+          if (nextMode === "upsert") {
+            if (nextKey === null) {
+              return yield* Effect.fail(
+                new InvalidConfigError({
+                  message: "Upsert mode requires a column to match on.",
+                }),
+              );
+            }
+            const valid = yield* tableColumnIds(webhook.tableId);
+            if (!valid.has(nextKey)) {
+              return yield* Effect.fail(
+                new InvalidConfigError({
+                  message: `Column ${nextKey} does not belong to table ${webhook.tableId}.`,
+                }),
+              );
+            }
+            if (args.upsertKey !== undefined) patch.upsertKey = nextKey;
+          } else {
+            patch.upsertKey = null;
+          }
+
+          yield* repo.patch(args.webhookId, patch);
+        });
+
+      /** Replace a webhook's field mapping (re-validates column ownership). */
+      const updateWebhookMapping = (args: {
+        readonly webhookId: string;
+        readonly mapping: readonly WebhookMappingEntry[];
+      }) =>
+        Effect.gen(function* () {
+          const webhook = yield* requireWebhook(args.webhookId);
+          yield* membership.requireMember(webhook.workspaceId);
+          const valid = yield* tableColumnIds(webhook.tableId);
+          for (const m of args.mapping) {
+            if (!valid.has(m.columnId)) {
+              return yield* Effect.fail(
+                new InvalidMappingError({
+                  message: `Column ${m.columnId} does not belong to table ${webhook.tableId}.`,
+                }),
+              );
+            }
+          }
+          yield* repo.patch(args.webhookId, { mapping: args.mapping });
+        });
+
+      /** Enable/disable a webhook. */
+      const toggleEnabled = (args: {
+        readonly webhookId: string;
+        readonly enabled: boolean;
+      }) =>
+        Effect.gen(function* () {
+          const webhook = yield* requireWebhook(args.webhookId);
+          yield* membership.requireMember(webhook.workspaceId);
+          yield* repo.patch(args.webhookId, { enabled: args.enabled });
+        });
+
+      /** Rotate a webhook's token + signing secret (revokes the old pair). */
+      const rotateSecret = (webhookId: string) =>
+        Effect.gen(function* () {
+          const webhook = yield* requireWebhook(webhookId);
+          yield* membership.requireMember(webhook.workspaceId);
+          const token = mintToken();
+          const signingSecret = mintSigningSecret();
+          yield* repo.patch(webhookId, { token, signingSecret });
+          return { token, signingSecret };
+        });
+
+      /** A KEYSET page of a webhook's deliveries (newest first). */
+      const listDeliveriesPaged = (args: {
+        readonly webhookId: string;
+        readonly limit?: number;
+        readonly cursor?: DeliveryCursor | null;
+      }): Effect.Effect<
+        DeliveryPage,
+        | WebhookRepoError
+        | WebhookDeliveryRepoError
+        | WebhookNotFoundError
+        | UnauthenticatedError
+        | NotAMemberError
+        | import("@gtmgrid/cloud").MemberRepoError
+        | import("@gtmgrid/cloud").InsufficientRoleError
+      > =>
+        Effect.gen(function* () {
+          const webhook = yield* requireWebhook(args.webhookId);
+          yield* membership.requireMember(webhook.workspaceId);
+          return yield* deliveries.listKeysetByWebhook({
+            webhookId: args.webhookId,
+            limit: args.limit ?? DELIVERIES_PAGE_SIZE,
+            cursor: args.cursor ?? null,
+          });
+        });
+
+      /** Delete a webhook. */
+      const deleteWebhook = (webhookId: string) =>
+        Effect.gen(function* () {
+          const webhook = yield* requireWebhook(webhookId);
+          yield* membership.requireMember(webhook.workspaceId);
+          yield* repo.remove(webhookId);
+        });
+
+      // ── WORKER PATHS (secret-gated upstream, NOT member-gated) ────────────
+
+      /** Resolve a token to its (enabled) webhook, or `null`. */
+      const resolveToken = (token: string) =>
+        Effect.gen(function* () {
+          const found = yield* repo.findByToken(token);
+          if (found._tag === "None" || !found.value.enabled) return null;
+          const w = found.value;
+          return {
+            webhookId: w.id,
+            workspaceId: w.workspaceId,
+            tableId: w.tableId,
+            mapping: w.mapping,
+            signingSecret: w.signingSecret ?? null,
+            autoRun: w.autoRun ?? true,
+            mode: w.mode ?? "create",
+            upsertKey: w.upsertKey ?? null,
+          } satisfies ResolvedWebhook;
+        });
+
+      /** Atomic quota pre-check: reject when used+1 would exceed limit. */
+      const assertQuota = (workspaceId: string) =>
+        Effect.gen(function* () {
+          const q = yield* repo.findWorkspaceQuota(workspaceId);
+          if (q._tag === "None") return;
+          const limit = q.value.cloudActionsLimit;
+          if (typeof limit !== "number") return;
+          const used = q.value.cloudActionsUsed ?? 0;
+          if (used + 1 > limit) {
+            return yield* Effect.fail(
+              new CloudActionsLimitError({
+                message:
+                  "This webhook delivery would exceed your plan's remaining cloud actions.",
+              }),
+            );
+          }
+        });
+
+      /** Record ONE delivery (status 200), bump telemetry, prune past 50. */
+      const recordDelivery = (
+        webhook: Webhook,
+        args: {
+          readonly mode: WebhookMode;
+          readonly rowsAffected: number;
+          readonly recordId?: string;
+          readonly receivedAt: number;
+        },
+      ) =>
+        Effect.gen(function* () {
+          yield* deliveries.insert({
+            workspaceId: webhook.workspaceId,
+            webhookId: webhook.id,
+            tableId: webhook.tableId,
+            status: 200,
+            rowsAffected: args.rowsAffected,
+            mode: args.mode,
+            recordId: args.recordId ?? null,
+            error: null,
+            receivedAt: args.receivedAt,
+          });
+          yield* repo.patch(webhook.id, {
+            lastReceivedAt: args.receivedAt,
+            receivedCount: (webhook.receivedCount ?? 0) + 1,
+          });
+          const all = yield* deliveries.listByWebhookOldestFirst(webhook.id);
+          if (all.length > DELIVERY_RETENTION) {
+            const surplus = all
+              .slice(0, all.length - DELIVERY_RETENTION)
+              .map((d) => d.id);
+            yield* deliveries.deleteByIds(surplus);
+          }
+        });
+
+      /** Write a set of mapped cells onto a row (patch-or-insert per column). */
+      const writeCells = (
+        webhook: Webhook,
+        rowId: string,
+        cells: CellMap,
+        validColumnIds: ReadonlySet<string>,
+        existingByColumn: ReadonlyMap<string, string>,
+        now: number,
+      ) =>
+        Effect.gen(function* () {
+          for (const [columnId, value] of Object.entries(cells)) {
+            if (value === "" || value === null || value === undefined) continue;
+            if (!validColumnIds.has(columnId)) continue;
+            const existingId = existingByColumn.get(columnId);
+            const cell = {
+              value,
+              status: "done",
+              error: null,
+              updatedAt: now,
+            } as const;
+            if (existingId !== undefined) {
+              yield* repo.patchCell(existingId, cell);
+            } else {
+              yield* repo.insertCell({
+                workspaceId: webhook.workspaceId,
+                tableId: webhook.tableId,
+                rowId,
+                columnId,
+                cell,
+              });
+            }
+          }
+        });
+
+      /** Next row position = max(existing)+1 (0 when empty). */
+      const nextPosition = (tableId: string) =>
+        repo
+          .listRows(tableId)
+          .pipe(
+            Effect.map((rows) =>
+              rows.reduce((max, r) => Math.max(max, r.position + 1), 0),
+            ),
+          );
+
+      /** Insert ONE received record (row + mapped cells), metered once. */
+      const insertRow = (args: {
+        readonly webhookId: string;
+        readonly cells: CellMap;
+        readonly recordId?: string;
+      }) =>
+        Effect.gen(function* () {
+          const webhook = yield* requireWebhook(args.webhookId);
+          const table = yield* repo.findTable(webhook.tableId);
+          if (table._tag === "None") {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({
+                message: `Table ${webhook.tableId} not found.`,
+              }),
+            );
+          }
+          yield* assertQuota(table.value.workspaceId);
+
+          const validColumnIds = yield* tableColumnIds(webhook.tableId);
+          const position = yield* nextPosition(webhook.tableId);
+          const now = Date.now();
+
+          const rowId = yield* repo.insertRow({
+            workspaceId: table.value.workspaceId,
+            tableId: webhook.tableId,
+            position,
+            createdAt: now,
+          });
+          yield* writeCells(
+            webhook,
+            rowId,
+            args.cells,
+            validColumnIds,
+            new Map(),
+            now,
+          );
+
+          yield* recordDelivery(webhook, {
+            mode: "create",
+            rowsAffected: 1,
+            ...(args.recordId !== undefined ? { recordId: args.recordId } : {}),
+            receivedAt: now,
+          });
+          // Exactly ONE billable cloud action per received record.
+          yield* repo.meterActions(table.value.workspaceId, 1);
+          return { rowId };
+        });
+
+      /** UPSERT ONE received record (match server-side), metered once. */
+      const upsertRow = (args: {
+        readonly webhookId: string;
+        readonly upsertKey: string;
+        readonly cells: CellMap;
+        readonly recordId?: string;
+      }) =>
+        Effect.gen(function* () {
+          const webhook = yield* requireWebhook(args.webhookId);
+          const table = yield* repo.findTable(webhook.tableId);
+          if (table._tag === "None") {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({
+                message: `Table ${webhook.tableId} not found.`,
+              }),
+            );
+          }
+          yield* assertQuota(table.value.workspaceId);
+
+          const validColumnIds = yield* tableColumnIds(webhook.tableId);
+          if (!validColumnIds.has(args.upsertKey)) {
+            return yield* Effect.fail(
+              new InvalidMappingError({
+                message: `Upsert key ${args.upsertKey} does not belong to table ${webhook.tableId}.`,
+              }),
+            );
+          }
+
+          const now = Date.now();
+          const incoming = args.cells[args.upsertKey];
+
+          // Server-side match: scan the upsert-key column's cells.
+          const keyCells = (
+            yield* repo.listCellsByTable(webhook.tableId)
+          )
+            .filter((c) => c.columnId === args.upsertKey)
+            .map((c) => ({ rowId: c.rowId, value: c.value }));
+          const matchedRowId = findUpsertRowId(keyCells, incoming);
+
+          let rowId: string;
+          let existingByColumn: ReadonlyMap<string, string>;
+          if (matchedRowId !== null) {
+            rowId = matchedRowId;
+            const map = new Map<string, string>();
+            for (const c of yield* repo.listCellsByRow(rowId)) {
+              map.set(c.columnId, c.id);
+            }
+            existingByColumn = map;
+          } else {
+            const position = yield* nextPosition(webhook.tableId);
+            rowId = yield* repo.insertRow({
+              workspaceId: table.value.workspaceId,
+              tableId: webhook.tableId,
+              position,
+              createdAt: now,
+            });
+            existingByColumn = new Map();
+          }
+          yield* writeCells(
+            webhook,
+            rowId,
+            args.cells,
+            validColumnIds,
+            existingByColumn,
+            now,
+          );
+
+          yield* recordDelivery(webhook, {
+            mode: "upsert",
+            rowsAffected: 1,
+            ...(args.recordId !== undefined ? { recordId: args.recordId } : {}),
+            receivedAt: now,
+          });
+          yield* repo.meterActions(table.value.workspaceId, 1);
+          return { rowId };
+        });
+
+      /** Full grid for a table (worker getTable shape). */
+      const getTable = (tableId: string) =>
+        Effect.gen(function* () {
+          const table = yield* repo.findTable(tableId);
+          if (table._tag === "None") {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({ message: `Table ${tableId} not found.` }),
+            );
+          }
+          const [columns, rows, cells] = [
+            yield* repo.listColumns(tableId),
+            yield* repo.listRows(tableId),
+            yield* repo.listCellsByTable(tableId),
+          ];
+          return {
+            table: { id: table.value.id, workspaceId: table.value.workspaceId },
+            columns: columns.map((c) => ({ id: c.id })),
+            rows: rows.map((r) => ({ id: r.id, position: r.position })),
+            cells,
+          } satisfies WorkerGrid;
+        });
+
+      /** Resolve + assert a (row, column) pair share a table; return the cell. */
+      const resolveCell = (rowId: string, columnId: string) =>
+        Effect.gen(function* () {
+          const row = yield* repo.findRow(rowId);
+          const column = yield* repo.findColumn(columnId);
+          if (row._tag === "None" || column._tag === "None") {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({ message: "Row or column not found." }),
+            );
+          }
+          if (row.value.tableId !== column.value.tableId) {
+            return yield* Effect.fail(
+              new InvalidCellError({
+                message: "Row and column belong to different tables.",
+              }),
+            );
+          }
+          const existing = yield* repo.findCell(rowId, columnId);
+          return {
+            row: row.value,
+            existing: existing._tag === "None" ? null : existing.value,
+          };
+        });
+
+      /** Worker cell upsert (COALESCE merge; meters only terminal). */
+      const setCell = (args: {
+        readonly rowId: string;
+        readonly columnId: string;
+        readonly value?: unknown;
+        readonly hasValue: boolean;
+        readonly status?: CloudCellStatus;
+        readonly error?: string | null;
+      }) =>
+        Effect.gen(function* () {
+          const { row, existing } = yield* resolveCell(
+            args.rowId,
+            args.columnId,
+          );
+          const merged = yield* cellMerge.mergeCellPatch(
+            existing === null
+              ? null
+              : {
+                  value: existing.value,
+                  status: existing.status as CloudCellStatus,
+                  error: existing.error,
+                  updatedAt: existing.updatedAt,
+                },
+            {
+              ...(args.hasValue ? { value: args.value } : {}),
+              ...(args.status !== undefined ? { status: args.status } : {}),
+              ...(args.error !== undefined ? { error: args.error } : {}),
+            },
+            Date.now(),
+          );
+
+          // Meter ONLY on a terminal status (done/error), keyed on the row's
+          // WORKSPACE (resolved via its table) — never on `running`.
+          if (isTerminalStatus(merged.status)) {
+            yield* meterTableWorkspace(row.tableId);
+          }
+
+          const cell = {
+            value: merged.value,
+            status: merged.status,
+            error: merged.error,
+            updatedAt: merged.updatedAt,
+          };
+          return yield* persistCell(args.rowId, args.columnId, existing, cell);
+        });
+
+      /** Worker status-only cell write (meters only terminal). */
+      const setCellStatus = (args: {
+        readonly rowId: string;
+        readonly columnId: string;
+        readonly status: CloudCellStatus;
+        readonly error?: string | null;
+      }) =>
+        Effect.gen(function* () {
+          const { row, existing } = yield* resolveCell(
+            args.rowId,
+            args.columnId,
+          );
+          const merged = yield* cellMerge.mergeCellPatch(
+            existing === null
+              ? null
+              : {
+                  value: existing.value,
+                  status: existing.status as CloudCellStatus,
+                  error: existing.error,
+                  updatedAt: existing.updatedAt,
+                },
+            {
+              status: args.status,
+              ...(args.error !== undefined ? { error: args.error } : {}),
+            },
+            Date.now(),
+          );
+          if (isTerminalStatus(merged.status)) {
+            yield* meterTableWorkspace(row.tableId);
+          }
+          const cell = {
+            value: merged.value,
+            status: merged.status,
+            error: merged.error,
+            updatedAt: merged.updatedAt,
+          };
+          return yield* persistCell(args.rowId, args.columnId, existing, cell);
+        });
+
+      /** Resolve a table's workspace and bump its pending cloud-actions +1. */
+      const meterTableWorkspace = (tableId: string) =>
+        Effect.gen(function* () {
+          const table = yield* repo.findTable(tableId);
+          if (table._tag === "None") return;
+          yield* repo.meterActions(table.value.workspaceId, 1);
+        });
+
+      /** Insert or patch a cell to the merged fields, returning its id. */
+      const persistCell = (
+        rowId: string,
+        columnId: string,
+        existing: { readonly id: string } | null,
+        cell: {
+          value: unknown;
+          status: CloudCellStatus;
+          error: string | null;
+          updatedAt: number | null;
+        },
+      ) =>
+        Effect.gen(function* () {
+          const row = yield* repo.findRow(rowId);
+          if (row._tag === "None") {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({ message: "Row not found." }),
+            );
+          }
+          const table = yield* repo.findTable(row.value.tableId);
+          const workspaceId =
+            table._tag === "None" ? "" : table.value.workspaceId;
+          if (existing === null) {
+            return yield* repo.insertCell({
+              workspaceId,
+              tableId: row.value.tableId,
+              rowId,
+              columnId,
+              cell,
+            });
+          }
+          yield* repo.patchCell(existing.id, cell);
+          return existing.id;
+        });
+
+      /**
+       * Decrypt the SHARED (workspace-scope) connector credential for the worker.
+       * Reads only `ownerUserId IS NULL` rows (never a member's personal key) and
+       * decrypts the envelope via {@link CredentialCryptoService}. Returns `null`
+       * when no shared credential exists for (workspaceId, extensionId).
+       */
+      const getCredential = (args: {
+        readonly workspaceId: string;
+        readonly extensionId: string;
+      }): Effect.Effect<
+        { readonly secrets: SecretMap } | null,
+        WebhookRepoError | import("@gtmgrid/cloud").DecryptError
+      > =>
+        Effect.gen(function* () {
+          const enc = yield* repo.findSharedCredentialEnc(
+            args.workspaceId,
+            args.extensionId,
+          );
+          if (enc._tag === "None") return null;
+          const secrets = yield* crypto.decrypt(args.workspaceId, enc.value);
+          return { secrets };
+        });
+
+      return {
+        listWebhooks,
+        createWebhook,
+        updateWebhookConfig,
+        updateWebhookMapping,
+        toggleEnabled,
+        rotateSecret,
+        listDeliveriesPaged,
+        deleteWebhook,
+        resolveToken,
+        insertRow,
+        upsertRow,
+        getTable,
+        setCell,
+        setCellStatus,
+        getCredential,
+      } as const;
+    }),
+    dependencies: [],
+  },
+) {}

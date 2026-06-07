@@ -46,6 +46,20 @@ const nextConfig: NextConfig = {
     "quickjs-emscripten",
     "quickjs-emscripten-core",
     "@jitl/quickjs-wasmfile-release-asyncify",
+    // better-auth (and its @better-auth/* internals, which each bundle kysely)
+    // must not be bundled by Next's server compiler: webpack's ESM analysis trips
+    // on kysely's DEFAULT_MIGRATION_TABLE root re-export and fails the build, even
+    // though it resolves fine when require()d at runtime. Externalize the whole
+    // @better-auth scope (the route pulls @better-auth/core + kysely-adapter, not
+    // just the `better-auth` umbrella) plus kysely + the pg driver.
+    "better-auth",
+    "@better-auth/core",
+    "@better-auth/drizzle-adapter",
+    "@better-auth/kysely-adapter",
+    "@better-auth/utils",
+    "@better-auth/telemetry",
+    "kysely",
+    "postgres",
   ],
   // @gtmgrid/engine + @gtmgrid/cloud are raw NodeNext TypeScript: their internal
   // imports carry explicit `.js` extensions (e.g. `./execute.js`) that actually

@@ -21,34 +21,19 @@
  * either is absent it renders nothing, so the local-only app is untouched.
  */
 
-import { useCallback, useMemo, useState } from "react";
-import { useAction, useConvexAuth, useMutation, useQuery } from "convex/react";
-import { Effect, Layer } from "effect";
+import { useCallback, useState } from "react";
 import { type BillingCycle, resolvePlanId } from "@gtmgrid/cloud";
 import { PlanGrid, BillingToggle } from "./onboarding/PlanGrid";
 import type { SelectablePlan } from "./onboarding/flow-logic";
-import { api } from "../../../../convex/_generated/api";
-import type { Id } from "../../../../convex/_generated/dataModel";
-import { cloudEnabled } from "./convex";
-import { useMembers } from "./auth";
+import type { Id } from "./ids";
+import { cloudEnabled } from "./client";
+import { useAuthState, useMembers } from "./auth";
+import { runInvite, useInviteLayer } from "./invite";
 import {
-  InviteError,
-  InviteRunner,
-  InviteService,
-  InviteServiceLive,
-  UrlOpenerLive,
-  runInvite,
-  type InviteActionResult,
-  type InviteInput,
-} from "./invite";
-import {
-  CheckoutError,
-  CheckoutRunner,
-  CheckoutService,
-  CheckoutServiceLive,
-  runCheckout,
-  type CheckoutActionResult,
-} from "./checkout";
+  usePendingInvitations,
+  useRevokeInvitation,
+} from "./useWorkspaceInvitations";
+import { runCheckout, useCheckoutLayer } from "./checkout";
 
 interface WorkspaceSettingsProps {
   /** The active workspace to manage, or `null` when none is selected. */
@@ -66,80 +51,27 @@ interface WorkspaceSettingsProps {
  */
 export function WorkspaceSettings(props: WorkspaceSettingsProps) {
   const { workspaceId, workspaceName, onClose } = props;
-  const { isAuthenticated } = useConvexAuth();
+  // Auth state via the strangler-branched hook (Better Auth on the NEW path,
+  // Convex on the legacy path). Used to guard the billing checkout below.
+  const { isAuthenticated } = useAuthState();
   const members = useMembers(workspaceId);
 
-  // The Convex `invitations.inviteByEmail` action, wrapped as the Effect
-  // `InviteRunner` port.
-  const inviteAction = useAction(api.invitations.inviteByEmail);
+  // The Live invite orchestration Layer, STRANGLER-branched on the cloud path
+  // (tRPC `invitations.invite` on the NEW path, the Convex action on the legacy
+  // path), composed with the shared system-browser opener. The
+  // invited/already_member/checkout branch is identical across transports.
+  const inviteLayer = useInviteLayer();
 
   // Pending invitations (reactive): drives the copy-link / revoke list, and
-  // updates live when an invite is created or revoked by any member.
-  const pendingInvites = useQuery(
-    api.invitations.listInvitations,
-    workspaceId ? { workspaceId } : "skip",
-  );
-  const revokeInvitation = useMutation(api.invitations.revokeInvitation);
+  // updates when an invite is created or revoked. STRANGLER-branched (tRPC
+  // `invitations.list` on the NEW path, the Convex query on the legacy path).
+  const pendingInvites = usePendingInvitations(workspaceId);
+  const revokeInvitation = useRevokeInvitation(workspaceId);
 
-  // Compose the Live invite Layer once: the React-bound runner + system-browser
-  // opener feeding the orchestration. `useMemo` keeps it stable across renders.
-  const inviteLayer = useMemo<Layer.Layer<InviteService>>(
-    () =>
-      InviteServiceLive.pipe(
-        Layer.provide(
-          Layer.succeed(InviteRunner, {
-            invite: (input: InviteInput) =>
-              Effect.tryPromise({
-                try: () =>
-                  inviteAction({
-                    workspaceId: input.workspaceId as Id<"workspaces">,
-                    email: input.email,
-                    role: input.role,
-                  }) as Promise<InviteActionResult>,
-                catch: (cause) =>
-                  new InviteError({
-                    message:
-                      cause instanceof Error ? cause.message : "Invite failed.",
-                    cause,
-                  }),
-              }),
-          }),
-        ),
-        Layer.provide(UrlOpenerLive),
-      ),
-    [inviteAction],
-  );
-
-  // The Convex `billing.checkout` action, wrapped as the Effect `CheckoutRunner`
-  // port. Composes with the shared system-browser opener (UrlOpenerLive).
-  const checkoutAction = useAction(api.billing.checkout);
-  const checkoutLayer = useMemo<Layer.Layer<CheckoutService>>(
-    () =>
-      CheckoutServiceLive.pipe(
-        Layer.provide(
-          Layer.succeed(CheckoutRunner, {
-            checkout: (args) =>
-              Effect.tryPromise({
-                try: () =>
-                  checkoutAction({
-                    workspaceId: args.workspaceId as Id<"workspaces">,
-                    planId: args.planId,
-                  }) as Promise<CheckoutActionResult>,
-                catch: (cause) =>
-                  new CheckoutError({
-                    message:
-                      cause instanceof Error
-                        ? cause.message
-                        : "Checkout failed.",
-                    cause,
-                  }),
-              }),
-          }),
-        ),
-        Layer.provide(UrlOpenerLive),
-      ),
-    [checkoutAction],
-  );
+  // The billing `checkout` orchestration Layer, strangler-branched on the cloud
+  // path (tRPC `billing.checkout` on the NEW path, the Convex action on the
+  // legacy path), composed with the shared system-browser opener.
+  const checkoutLayer = useCheckoutLayer();
 
   const [inviteEmail, setInviteEmail] = useState("");
   const [busy, setBusy] = useState(false);
@@ -203,12 +135,12 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
     [],
   );
 
-  // Revoke a pending invite; the list updates live via the query.
+  // Revoke a pending invite; the list updates via the query/cache invalidation.
   const revoke = useCallback(
-    async (invitationId: Id<"invitations">) => {
+    async (invitationId: string) => {
       setError(null);
       try {
-        await revokeInvitation({ invitationId });
+        await revokeInvitation(invitationId);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Could not revoke the invite.");
       }
@@ -345,18 +277,18 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
             ) : (
               <ul className="ws-member-list">
                 {pendingInvites.map((inv) => (
-                  <li key={inv._id} className="ws-member-row">
+                  <li key={inv.id} className="ws-member-row">
                     <span className="ws-member-name">{inv.email}</span>
                     <span className="ws-member-role">{inv.role}</span>
                     <button
                       className="btn btn-outline"
-                      onClick={() => void copyAcceptLink(inv._id, inv.acceptUrl)}
+                      onClick={() => void copyAcceptLink(inv.id, inv.acceptUrl)}
                     >
-                      {copiedId === inv._id ? "Copied" : "Copy link"}
+                      {copiedId === inv.id ? "Copied" : "Copy link"}
                     </button>
                     <button
                       className="btn btn-outline"
-                      onClick={() => void revoke(inv._id)}
+                      onClick={() => void revoke(inv.id)}
                     >
                       Revoke
                     </button>

@@ -2,6 +2,10 @@
   "files": [],
   "references": [
     { "path": "./packages/cloud" },
+    { "path": "./packages/db" },
+    { "path": "./packages/services" },
+    { "path": "./packages/email" },
+    { "path": "./packages/auth" },
     { "path": "./packages/engine" },
     { "path": "./packages/server" },
     { "path": "./packages/cli" },

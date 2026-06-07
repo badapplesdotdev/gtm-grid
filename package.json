@@ -17,25 +17,23 @@
     "sidecar:build": "node packages/desktop/scripts/bundle-sidecar.mjs",
     "tauri:dev": "pnpm --filter @gtmgrid/desktop tauri dev",
     "tauri:build": "pnpm --filter @gtmgrid/desktop tauri build",
-    "convex:dev": "convex dev",
+    "db:generate": "pnpm --filter @gtmgrid/db db:generate",
+    "db:migrate": "pnpm --filter @gtmgrid/db db:migrate",
     "build": "turbo run build",
     "dev": "turbo run dev",
     "turbo:typecheck": "turbo run typecheck",
     "turbo:lint": "turbo run lint",
     "turbo:test": "turbo run test",
     "typecheck": "tsc -b && pnpm --filter @gtmgrid/desktop typecheck",
-    "lint": "oxlint packages convex",
+    "lint": "oxlint packages",
     "test": "vitest run",
     "test:watch": "vitest",
     "changeset": "changeset",
     "version-packages": "changeset version && node scripts/sync-app-version.mjs"
   },
   "dependencies": {
-    "@auth/core": "0.37.0",
-    "@convex-dev/auth": "^0.0.87",
     "@gtmgrid/cloud": "workspace:*",
     "autumn-js": "1.2.27",
-    "convex": "^1.40.0",
     "effect": "^3.21.3",
     "resend": "^4.0.0"
   },
@@ -53,6 +51,12 @@
     "onlyBuiltDependencies": [
       "better-sqlite3",
       "esbuild"
-    ]
+    ],
+    "overrides": {
+      "kysely": "0.29.2"
+    },
+    "patchedDependencies": {
+      "kysely@0.29.2": "patches/kysely@0.29.2.patch"
+    }
   }
 }

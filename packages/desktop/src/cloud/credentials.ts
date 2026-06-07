@@ -28,6 +28,8 @@
  */
 
 import { Context, Data, Effect, Layer } from "effect";
+import { useMemo } from "react";
+import { apiClient } from "./client";
 
 /**
  * The cloud credential scope. Mirrors `credentialScope` in convex/schema.ts:
@@ -80,6 +82,61 @@ export class CredentialSaver extends Context.Tag("CredentialSaver")<
   CredentialSaver,
   CredentialSaverShape
 >() {}
+
+/**
+ * The single tRPC call this saver makes: `credentials.save.mutate`. Abstracted so
+ * the saver can be unit-tested with a fake mutate fn (no live client), defaulting
+ * to the module `apiClient` in the app. The tRPC mutation returns the saved row
+ * id; the saver discards it (its contract is `void`).
+ */
+export type SaveMutate = (input: {
+  readonly workspaceId: string;
+  readonly extensionId: string;
+  readonly scope: CloudCredentialScope;
+  readonly name: string;
+  readonly secrets: Record<string, string>;
+}) => Promise<unknown>;
+
+/**
+ * Build a {@link CredentialSaverShape} backed by the NEW tRPC `credentials.save`
+ * mutation (TRI-3255). This is the strangler-fig replacement for the Convex
+ * `useAction(api.credentials.saveCredential)`-derived saver the UI built inline:
+ * the same port, fed by the vanilla tRPC client instead of Convex, so the
+ * session/empty-key guards in {@link CredentialServiceLive} are unchanged.
+ * Plaintext is sent once to the trusted procedure (which envelope-encrypts it) and
+ * never persisted client-side. Pure (no React) so the call site composes it into
+ * the Live Layer directly and tests can inject a fake mutate. A tRPC error is
+ * normalized to a typed {@link CredentialError}.
+ *
+ * `mutate` defaults to the module `apiClient`'s `credentials.save.mutate`
+ * (non-null on the `cloudViaApi` path — the only path that builds this saver);
+ * tests pass a fake to exercise the call + error mapping without a live client.
+ */
+export function apiCredentialSaver(
+  mutate: SaveMutate = (input) => apiClient!.credentials.save.mutate(input),
+): CredentialSaverShape {
+  return {
+    save: (input: SaveCredentialInput) =>
+      Effect.tryPromise({
+        try: () =>
+          mutate({
+            workspaceId: input.workspaceId,
+            extensionId: input.extensionId,
+            scope: input.scope,
+            name: input.name,
+            secrets: input.secrets,
+          }),
+        catch: (cause) =>
+          new CredentialError({
+            message:
+              cause instanceof Error
+                ? cause.message
+                : "Could not save the key.",
+            cause,
+          }),
+      }).pipe(Effect.asVoid),
+  };
+}
 
 /** The save orchestration the UI calls. */
 export interface CredentialServiceShape {
@@ -158,5 +215,22 @@ export function runSaveCredential(
       const svc = yield* CredentialService;
       return yield* svc.saveCredential(hasSession, input);
     }).pipe(Effect.provide(layer)),
+  );
+}
+
+/**
+ * Build the Live {@link CredentialService} Layer for the running app: the
+ * {@link CredentialSaver} is {@link apiCredentialSaver} (tRPC `credentials.save`).
+ *
+ * Extracted here (a tiny hook) so useWorkspaceCredentials + OnboardingFlow share
+ * ONE Layer instead of duplicating it. Mirrors `useInviteLayer` in ./invite.ts.
+ */
+export function useCredentialLayer(): Layer.Layer<CredentialService> {
+  return useMemo(
+    () =>
+      CredentialServiceLive.pipe(
+        Layer.provide(Layer.succeed(CredentialSaver, apiCredentialSaver())),
+      ),
+    [],
   );
 }

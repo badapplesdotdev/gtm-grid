@@ -11,7 +11,7 @@ import { AccountBar } from "./cloud/AccountBar";
 import { PendingInvites } from "./cloud/PendingInvites";
 import { WorkspaceSettings } from "./cloud/WorkspaceSettings";
 import { OnboardingFlow } from "./cloud/onboarding/OnboardingFlow";
-import { cloudEnabled } from "./cloud/convex";
+import { cloudEnabled } from "./cloud/client";
 import { CloudGrid } from "./cloud/CloudGrid";
 import { useMe, useActiveWorkspace, useAuthState } from "./cloud/auth";
 import { useWorkspaceCredentials } from "./cloud/useWorkspaceCredentials";
@@ -24,7 +24,7 @@ import {
 } from "./cloud/useCloudGrid";
 import { ImportCsvModal } from "./ImportCsvModal";
 import type { ImportWriter } from "./csvImport";
-import type { Id } from "../../../convex/_generated/dataModel";
+import type { Id } from "./cloud/ids";
 import "./styles.css";
 
 // What the main area is showing.
