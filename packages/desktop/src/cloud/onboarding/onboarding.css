@@ -725,7 +725,7 @@
   letter-spacing: -0.01em;
 }
 .ob-q-text .ob-hl {
-  color: #ff8083;
+  color: var(--accent);
 }
 .ob-q-meta {
   margin-top: 14px;

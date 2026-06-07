@@ -1,17 +1,27 @@
 /**
  * Invite + upgrade orchestration (T10) — client-side LOGIC as an Effect service.
  *
- * Inviting a member is gated on seats (Autumn, T6). The Convex `inviteMember`
- * ACTION returns either `{ status: "added" }` (a seat was free) or
- * `{ status: "checkout", checkoutUrl }` (over the limit — nobody was added, the
- * UI must open the Autumn checkout to upgrade). This service owns that branch:
+ * Inviting a member is by EMAIL and gated on seats (Autumn, T6). The Convex
+ * `invitations.inviteByEmail` ACTION returns one of three results:
+ *
+ *   - `{ status: "invited", email, acceptUrl, emailSent }` — a pending invite
+ *     was created and the accept link emailed (best-effort; `emailSent` is false
+ *     when email isn't configured, in which case the UI surfaces the copyable
+ *     `acceptUrl` from the pending list instead),
+ *   - `{ status: "already_member", email }` — that email already belongs to the
+ *     workspace; nothing changed, and
+ *   - `{ status: "checkout", checkoutUrl }` — over the seat limit; nobody was
+ *     invited and the UI must open the Autumn checkout to upgrade.
+ *
+ * This service owns that branch:
  *
  *   1. validate there is a signed-in session (typed error otherwise),
  *   2. delegate the invite to the injected {@link InviteRunner} (the Convex
  *      action call), and
- *   3. on the over-limit result, open the checkout URL via the injected
- *      {@link UrlOpener} (the SYSTEM browser) and report `"checkout"` so the UI
- *      can show its upgrade modal.
+ *   3. on the over-limit (`checkout`) result, open the checkout URL via the
+ *      injected {@link UrlOpener} (the SYSTEM browser) before reporting
+ *      `"checkout"` so the UI can show its upgrade modal. The `invited` and
+ *      `already_member` results pass through unchanged for the UI to message.
  *
  * Per the repo convention React components stay plain React; this orchestration
  * is an Effect service with typed errors + Layers so it is unit-tested by
@@ -21,38 +31,56 @@
  */
 
 import { Context, Data, Effect, Layer } from "effect";
+import { isTauri } from "./desktop-oauth.js";
 
 /** A workspace member role, mirroring `memberRole` in convex/schema.ts. */
 export type MemberRole = "owner" | "admin" | "member";
 
-/** A request to invite (add) a user to a workspace. */
+/** A request to invite a user to a workspace by email. */
 export interface InviteInput {
-  /** The Convex `workspaces._id` to add the user to. */
+  /** The Convex `workspaces._id` to invite the user to. */
   readonly workspaceId: string;
-  /** The invitee's Convex Auth user id (`users._id`). */
-  readonly userId: string;
-  /** The role to grant. Defaults to `"member"` at the call site. */
+  /** The invitee's email address. */
+  readonly email: string;
+  /** The role to grant on accept. Defaults to `"member"` at the call site. */
   readonly role: MemberRole;
 }
 
 /**
- * The Convex `inviteMember` action result, mirrored from convex/workspaces.ts:
- * either the seat was free (`added`) or the workspace is over its limit and the
- * caller must open `checkoutUrl` to upgrade (`checkout`).
+ * The Convex `invitations.inviteByEmail` action result, mirrored from
+ * convex/invitations.ts: a pending invite was created (`invited`), the email is
+ * already a member (`already_member`), or the workspace is over its seat limit
+ * and the caller must open `checkoutUrl` to upgrade (`checkout`).
  */
 export type InviteActionResult =
-  | { readonly status: "added"; readonly memberId: string }
+  | {
+      readonly status: "invited";
+      readonly email: string;
+      readonly acceptUrl: string;
+      readonly emailSent: boolean;
+    }
+  | { readonly status: "already_member"; readonly email: string }
   | { readonly status: "checkout"; readonly checkoutUrl: string };
 
 /**
  * The outcome the UI acts on:
- *   - `added`    → the member was added; refresh the roster.
- *   - `checkout` → over the seat limit; the checkout URL has ALREADY been opened
- *      in the system browser, and `checkoutUrl` is returned so the UI can show
- *      its upgrade modal (with a manual "open" fallback link).
+ *   - `invited`        → a pending invite was created; the pending list updates
+ *      live. `emailSent` tells the UI whether the accept link was emailed or the
+ *      user should copy it from the pending list.
+ *   - `already_member` → the email already belongs to the workspace; show a
+ *      small "already a member" message.
+ *   - `checkout`       → over the seat limit; the checkout URL has ALREADY been
+ *      opened in the system browser, and `checkoutUrl` is returned so the UI can
+ *      show its upgrade modal (with a manual "open" fallback link).
  */
 export type InviteOutcome =
-  | { readonly status: "added"; readonly memberId: string }
+  | {
+      readonly status: "invited";
+      readonly email: string;
+      readonly acceptUrl: string;
+      readonly emailSent: boolean;
+    }
+  | { readonly status: "already_member"; readonly email: string }
   | { readonly status: "checkout"; readonly checkoutUrl: string };
 
 /** Raised when the invite cannot be performed (no session, or a backend error). */
@@ -62,10 +90,10 @@ export class InviteError extends Data.TaggedError("InviteError")<{
 }> {}
 
 /**
- * Port: performs the Convex `inviteMember` action. Abstracted behind a tag so
- * the orchestration is testable without a real Convex client. The Live Layer is
- * built in WorkspaceSettings.tsx from the `useAction` hook (React-bound), so no
- * default Layer lives here.
+ * Port: performs the Convex `invitations.inviteByEmail` action. Abstracted
+ * behind a tag so the orchestration is testable without a real Convex client.
+ * The Live Layer is built in WorkspaceSettings.tsx from the `useAction` hook
+ * (React-bound), so no default Layer lives here.
  */
 export interface InviteRunnerShape {
   readonly invite: (
@@ -95,9 +123,10 @@ export class UrlOpener extends Context.Tag("UrlOpener")<
 /** The invite orchestration the UI calls. */
 export interface InviteServiceShape {
   /**
-   * Invite a user. Fails with {@link InviteError} when there is no signed-in
-   * session or the backend call fails. On the over-limit path it opens the
-   * checkout URL in the system browser before resolving with `"checkout"`.
+   * Invite a user by email. Fails with {@link InviteError} when there is no
+   * signed-in session or the backend call fails. On the over-limit (`checkout`)
+   * path it opens the checkout URL in the system browser before resolving with
+   * `"checkout"`; the `invited` and `already_member` results pass through.
    */
   readonly inviteMember: (
     hasSession: boolean,
@@ -134,46 +163,77 @@ export const InviteServiceLive: Layer.Layer<
               }),
             )
           : runner.invite(input).pipe(
-              Effect.flatMap((result) =>
-                result.status === "added"
-                  ? Effect.succeed<InviteOutcome>({
-                      status: "added",
-                      memberId: result.memberId,
-                    })
-                  : // Over the seat limit: open the checkout in the system
+              Effect.flatMap((result) => {
+                switch (result.status) {
+                  case "invited":
+                    // A pending invite was created; pass it through so the UI can
+                    // clear the field and (when `emailSent` is false) point the
+                    // user at the copyable accept link.
+                    return Effect.succeed<InviteOutcome>({
+                      status: "invited",
+                      email: result.email,
+                      acceptUrl: result.acceptUrl,
+                      emailSent: result.emailSent,
+                    });
+                  case "already_member":
+                    // No-op on the backend; let the UI show a small message.
+                    return Effect.succeed<InviteOutcome>({
+                      status: "already_member",
+                      email: result.email,
+                    });
+                  case "checkout":
+                    // Over the seat limit: open the checkout in the system
                     // browser, then report `checkout` so the UI shows its modal.
-                    opener.open(result.checkoutUrl).pipe(
+                    return opener.open(result.checkoutUrl).pipe(
                       Effect.as<InviteOutcome>({
                         status: "checkout",
                         checkoutUrl: result.checkoutUrl,
                       }),
-                    ),
-              ),
+                    );
+                }
+              }),
             ),
     } satisfies InviteServiceShape;
   }),
 );
 
 /**
- * A {@link UrlOpener} that opens the URL in the system browser.
+ * A {@link UrlOpener} that opens a billing/accept URL the user can complete.
  *
- * Tauri's webview has no native window; opening `https://…` must hand the URL to
- * the OS. We use `window.open(url, "_blank")` which, in Tauri's webview, is
- * routed to the system browser. (A future task may swap this for the Tauri
- * opener plugin; the port keeps that change isolated to this Layer.) Guards
- * against a non-browser context (e.g. the Node test runner) so a missing
- * `window` surfaces as a typed error rather than a crash.
+ * The opener runs AFTER an `await` (the Convex action), so the original click's
+ * user-gesture context is gone. That breaks the naive `window.open(url,"_blank")`
+ * two ways: in a browser the popup blocker silently kills it (returns `null`, no
+ * error → "nothing happened"), and in the packaged Tauri webview `window.open`
+ * to an external origin doesn't reach the system browser at all. So we branch:
+ *
+ *   - PACKAGED TAURI app → hand the URL to the OS via the opener plugin
+ *     (`@tauri-apps/plugin-opener`), imported lazily so the web bundle never
+ *     loads it. The webview itself must NOT navigate to the billing page.
+ *   - WEB build → try a new tab first (preserves the app when popups are
+ *     allowed); if it's blocked, fall back to a SAME-TAB redirect
+ *     (`location.assign`), which is never popup-blocked — the standard hosted
+ *     checkout flow (pay, then Autumn redirects back).
+ *
+ * Guards a non-browser context (the Node test runner) with a typed error.
  */
 export const UrlOpenerLive: Layer.Layer<UrlOpener> = Layer.succeed(UrlOpener, {
   open: (url) =>
-    Effect.try({
-      try: () => {
-        const w = (globalThis as { window?: { open?: (u: string, t?: string) => unknown } })
-          .window;
-        if (w?.open === undefined) {
+    Effect.tryPromise({
+      try: async () => {
+        if (isTauri()) {
+          const { openUrl } = await import("@tauri-apps/plugin-opener");
+          await openUrl(url);
+          return;
+        }
+        const w = (globalThis as { window?: Window }).window;
+        if (w === undefined) {
           throw new Error("No system browser available to open the checkout URL.");
         }
-        w.open(url, "_blank");
+        // New tab if allowed; otherwise same-tab redirect (never popup-blocked).
+        const tab = w.open(url, "_blank", "noopener");
+        if (tab === null) {
+          w.location.assign(url);
+        }
       },
       catch: (cause) =>
         new InviteError({

@@ -439,7 +439,7 @@ export function ExtensionsBrowse({
 
   return (
     <div className="browse">
-      <h1 className="browse-title">Make gtm grid work your way</h1>
+      <h1 className="browse-title">Make GTM Grid work your way</h1>
 
       <div className="browse-search">
         <I.Search />

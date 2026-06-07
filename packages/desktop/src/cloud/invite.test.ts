@@ -6,11 +6,12 @@
  * Convex, no real browser. We assert it:
  *   1. refuses to invite without a signed-in session (typed error, runner never
  *      called),
- *   2. on the `added` result, forwards the request and returns `added` WITHOUT
- *      opening any URL,
- *   3. on the `checkout` (over-limit) result, opens the checkout URL in the
+ *   2. on the `invited` result, forwards the request and returns `invited`
+ *      (email + acceptUrl + emailSent) WITHOUT opening any URL,
+ *   3. on the `already_member` result, passes it through WITHOUT opening any URL,
+ *   4. on the `checkout` (over-limit) result, opens the checkout URL in the
  *      system browser and returns `checkout` with that URL, and
- *   4. surfaces a runner failure as a typed {@link InviteError}.
+ *   5. surfaces a runner failure as a typed {@link InviteError}.
  */
 
 import { Cause, Effect, Exit, Layer } from "effect";
@@ -27,7 +28,7 @@ import {
 
 const input: InviteInput = {
   workspaceId: "ws1",
-  userId: "user-2",
+  email: "teammate@company.com",
   role: "member",
 };
 
@@ -85,8 +86,10 @@ const invite = (hasSession: boolean) =>
 describe("InviteService", () => {
   it("fails with a typed InviteError when there is no session", async () => {
     const { layer, calls, opened } = fakeInvite({
-      status: "added",
-      memberId: "m1",
+      status: "invited",
+      email: input.email,
+      acceptUrl: "https://app.example/invite/tok",
+      emailSent: true,
     });
 
     const exit = await run(invite(false), layer);
@@ -105,17 +108,43 @@ describe("InviteService", () => {
     expect(opened).toHaveLength(0);
   });
 
-  it("adds the member and opens NO url on the added result", async () => {
+  it("creates the invite and opens NO url on the invited result", async () => {
     const { layer, calls, opened } = fakeInvite({
-      status: "added",
-      memberId: "m9",
+      status: "invited",
+      email: input.email,
+      acceptUrl: "https://app.example/invite/tok9",
+      emailSent: true,
     });
 
     const exit = await run(invite(true), layer);
 
     expect(Exit.isSuccess(exit)).toBe(true);
     if (Exit.isSuccess(exit)) {
-      expect(exit.value).toEqual({ status: "added", memberId: "m9" });
+      expect(exit.value).toEqual({
+        status: "invited",
+        email: input.email,
+        acceptUrl: "https://app.example/invite/tok9",
+        emailSent: true,
+      });
+    }
+    expect(calls).toEqual([input]);
+    expect(opened).toHaveLength(0);
+  });
+
+  it("passes through already_member and opens NO url", async () => {
+    const { layer, calls, opened } = fakeInvite({
+      status: "already_member",
+      email: input.email,
+    });
+
+    const exit = await run(invite(true), layer);
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value).toEqual({
+        status: "already_member",
+        email: input.email,
+      });
     }
     expect(calls).toEqual([input]);
     expect(opened).toHaveLength(0);

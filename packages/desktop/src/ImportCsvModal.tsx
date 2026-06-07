@@ -283,7 +283,7 @@ export function ImportCsvModal({
         <div className="import-eyebrow">New table</div>
         <h1 className="import-title">Import a CSV</h1>
         <p className="import-sub">
-          Drop a file to create a table — gtm grid infers each column's type, then
+          Drop a file to create a table — GTM Grid infers each column's type, then
           every column becomes a function you can run.
         </p>
 

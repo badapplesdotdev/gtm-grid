@@ -1,6 +1,6 @@
 # @gtmgrid/web
 
-The **gtm grid** marketing site — a small Next.js (App Router) app for the
+The **GTM Grid** marketing site — a small Next.js (App Router) app for the
 local-first, programmable GTM spreadsheet where _every column is a function_.
 
 ## Stack
@@ -29,6 +29,6 @@ pnpm --filter @gtmgrid/web start    # serve the production build
 
 ## Brand
 
-Lowercase `gtm grid` wordmark (DM Sans 700, `-0.02em`), a single hot red accent
+Lowercase `GTM Grid` wordmark (DM Sans 700, `-0.02em`), a single hot red accent
 (`#e60006`) used sparingly, near-white surfaces, hairline borders, and mono for
 anything data-shaped. No emoji; icons are line-drawn SVG.

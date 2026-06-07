@@ -105,10 +105,16 @@ export type OAuthProvider = "github" | "google";
 export interface EnabledProviders {
   readonly github: boolean;
   readonly google: boolean;
+  /** Whether email verification + password reset are active (Resend configured). */
+  readonly emailAuth: boolean;
 }
 
 /** When the providers query is unavailable (loading / cloud off), nothing is enabled. */
-const NO_PROVIDERS: EnabledProviders = { github: false, google: false };
+const NO_PROVIDERS: EnabledProviders = {
+  github: false,
+  google: false,
+  emailAuth: false,
+};
 
 /**
  * The list of enabled OAuth providers, in display order, derived from the
@@ -157,6 +163,20 @@ export function useEnabledProviders(): readonly OAuthProvider[] {
     () => enabledProviderList(cloudEnabled ? providers : NO_PROVIDERS),
     [providers],
   );
+}
+
+/**
+ * Whether email-backed account flows (sign-up VERIFICATION + password RESET) are
+ * active on the deployment (Resend configured). The UI shows the verification
+ * code step + "Forgot password?" only when true — otherwise no email would ever
+ * arrive. Defaults to false while loading / when cloud is off.
+ */
+export function useEmailAuthEnabled(): boolean {
+  const providers = useQuery(
+    api.auth.enabledProviders,
+    cloudEnabled ? {} : "skip",
+  ) as EnabledProviders | undefined;
+  return cloudEnabled ? (providers?.emailAuth ?? false) : false;
 }
 
 /**
@@ -327,14 +347,59 @@ export function useActiveWorkspace(me: Me | null | undefined): {
 export function useAccountActions() {
   const { signIn, signOut } = useAuthActions();
 
-  /** Direct email + password sign-in (the active provider on the dev backend). */
+  /**
+   * Direct email + password sign-in / sign-up (the active provider on the dev
+   * backend). Returns `{ signingIn }`: when email VERIFICATION is enabled, a
+   * sign-up resolves `signingIn: false` (the account exists but a code was
+   * emailed and must be verified before the session starts — call
+   * {@link verifyEmailCode}); otherwise `signingIn: true` (session started).
+   */
   const signInWithPassword = useCallback(
     async (
       email: string,
       password: string,
       flow: "signIn" | "signUp",
-    ): Promise<void> => {
-      await signIn("password", { email, password, flow });
+    ): Promise<{ signingIn: boolean }> => {
+      const res = await signIn("password", { email, password, flow });
+      return { signingIn: res.signingIn };
+    },
+    [signIn],
+  );
+
+  /**
+   * Complete sign-up by verifying the OTP emailed to `email` (the
+   * `email-verification` flow). On success the session starts.
+   */
+  const verifyEmailCode = useCallback(
+    async (email: string, code: string): Promise<void> => {
+      await signIn("password", { email, code, flow: "email-verification" });
+    },
+    [signIn],
+  );
+
+  /**
+   * Begin a password reset: emails a one-time code to `email` (the `reset`
+   * flow). Pair with {@link resetPasswordWithCode} to set the new password.
+   */
+  const requestPasswordReset = useCallback(
+    async (email: string): Promise<void> => {
+      await signIn("password", { email, flow: "reset" });
+    },
+    [signIn],
+  );
+
+  /**
+   * Finish a password reset: verify the emailed code and set `newPassword` (the
+   * `reset-verification` flow). On success the session starts.
+   */
+  const resetPasswordWithCode = useCallback(
+    async (email: string, code: string, newPassword: string): Promise<void> => {
+      await signIn("password", {
+        email,
+        code,
+        newPassword,
+        flow: "reset-verification",
+      });
     },
     [signIn],
   );
@@ -369,5 +434,12 @@ export function useAccountActions() {
     [signIn],
   );
 
-  return { signInWithPassword, signInWithProvider, signOut };
+  return {
+    signInWithPassword,
+    signInWithProvider,
+    verifyEmailCode,
+    requestPasswordReset,
+    resetPasswordWithCode,
+    signOut,
+  };
 }

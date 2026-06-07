@@ -240,7 +240,7 @@ export function AccountBar(props: AccountBarProps) {
                       <polyline points="10 17 15 12 10 7" />
                       <line x1="15" y1="12" x2="3" y2="12" />
                     </svg>
-                    Sign in to gtm grid cloud
+                    Sign in to GTM Grid cloud
                   </button>
                 </div>
               ) : (

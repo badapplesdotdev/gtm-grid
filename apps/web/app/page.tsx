@@ -1,12 +1,13 @@
-// gtm grid — marketing landing page.
+// GTM Grid — marketing landing page.
 // Voice: lowercase wordmark, direct second person, technical precision, no emoji.
 // Icons are line-drawn SVG (currentColor), never emoji or unicode glyphs.
 
 function Wordmark() {
   return (
     <span className="wordmark">
-      <span className="wordmark__mark" aria-hidden="true" />
-      gtm grid
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img className="wordmark__mark" src="/brand/icon.png" alt="" width={16} height={16} aria-hidden="true" />
+      GTM Grid
     </span>
   );
 }
@@ -145,7 +146,7 @@ export default function Home() {
                 Every column is a <span className="accent">function</span>.
               </h1>
               <p className="hero__lede">
-                gtm grid is a programmable spreadsheet for go-to-market teams.
+                GTM Grid is a programmable spreadsheet for go-to-market teams.
                 Rows are leads, companies, posts. Columns are functions — a manual
                 value, an AI prompt, or a connector call. Template inputs with{" "}
                 <code>{"{{Column Name}}"}</code>, hit run, and watch cells fill
@@ -153,7 +154,7 @@ export default function Home() {
               </p>
               <div className="hero__cta">
                 <a className="btn btn--primary" href="https://github.com/maxtrigify/gtm-grid">
-                  Get gtm grid
+                  Get GTM Grid
                 </a>
                 <a className="btn btn--ghost" href="#how">
                   See how it works

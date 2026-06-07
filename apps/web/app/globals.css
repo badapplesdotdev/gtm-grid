@@ -1,5 +1,5 @@
 /* ─────────────────────────────────────────────────────────
-   gtm grid — marketing site
+   GTM Grid — marketing site
    Design tokens copied from the canonical design system:
      project/_ds/.../tokens/{colors,semantic,typography,spacing,effects}.css
    These mirror packages/desktop/src/styles.css. Keep them in sync.
@@ -8,7 +8,7 @@
    --font-dm-sans and --font-mono; the token families below consume them.
 ───────────────────────────────────────────────────────── */
 
-/* ── Colors — base palette + brand red ramp ── */
+/* ── Colors — base palette + brand green ramp ── */
 :root {
   /* Neutral surfaces (cool near-white → ink) */
   --bg:          #f8f8fa;
@@ -24,21 +24,23 @@
   --ink-3:       #9696a8;
   --ink-on-dark: #0d0d0f;
 
-  /* Brand red ramp */
-  --red-700: #b00004;
-  --red-600: #b30005;
-  --red-500: #e60006; /* the brand red */
-  --red-300: #ff4d51;
-  --red-200: #ff8083;
-  --red-100: #ffb3b5;
-  --red-bg:  #ffecec;
-  --red-soft: rgba(230, 0, 6, 0.08);
-
-  /* Status hues */
-  --green-500: #22c55e;
-  --green-600: #15803d;
+  /* Brand green ramp (DESIGN.md — Anymark brand kit) */
+  --green-800: #0b411f;
+  --green-700: #136d34; /* accent press / button bg (AA on white) */
+  --green-600: #1a9849; /* accent hover */
+  --green-500: #22c55e; /* the brand primary */
+  --green-400: #3bdd77;
+  --green-300: #67e595;
+  --green-200: #92ecb3;
+  --green-100: #bef4d2;
   --green-bg:  #f0fdf4;
   --green-border: #bbf0cd;
+  --green-soft: rgba(34, 197, 94, 0.10);
+
+  /* Legacy red ramp — retained only for the object data-type accent */
+  --red-500: #e60006;
+
+  /* Status hues */
 
   --amber-500: #f59e0b;
   --amber-bg:  #fffbeb;
@@ -56,7 +58,7 @@
   --text-body:      var(--ink);
   --text-muted:     var(--ink-2);
   --text-subtle:    var(--ink-3);
-  --text-accent:    var(--red-500);
+  --text-accent:    var(--green-700);
   --text-on-accent: #ffffff;
 
   /* surface roles */
@@ -69,12 +71,12 @@
   --line:        var(--border);
   --line-strong: var(--border-2);
 
-  /* accent (brand red) */
-  --accent:        var(--red-500);
-  --accent-hover:  var(--red-600);
-  --accent-press:  var(--red-700);
-  --accent-tint:   var(--red-bg);
-  --accent-wash:   var(--red-soft);
+  /* accent (brand green) */
+  --accent:        var(--green-600);
+  --accent-hover:  var(--green-700);
+  --accent-press:  var(--green-800);
+  --accent-tint:   var(--green-bg);
+  --accent-wash:   var(--green-soft);
 
   /* status roles */
   --ok:          var(--green-500);
@@ -164,11 +166,11 @@
   --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.12), 0 4px 8px rgba(0, 0, 0, 0.06);
 
   /* brand-tinted shadow for primary buttons */
-  --shadow-accent: 0 1px 3px rgba(230, 0, 6, 0.35);
+  --shadow-accent: 0 1px 3px rgba(34, 197, 94, 0.35);
 
   /* focus ring (accent wash around inputs) */
-  --ring-accent: 0 0 0 3px rgba(230, 0, 6, 0.15);
-  --ring-accent-soft: 0 0 0 2px rgba(230, 0, 6, 0.08);
+  --ring-accent: 0 0 0 3px rgba(34, 197, 94, 0.15);
+  --ring-accent-soft: 0 0 0 2px rgba(34, 197, 94, 0.08);
 
   /* motion — fast & utilitarian, no bounce */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
@@ -259,25 +261,13 @@ code, .mono {
   color: var(--text-body);
 }
 
+/* brand icon (gtm_grid_icon_color.png) */
 .wordmark__mark {
   width: 16px;
   height: 16px;
-  border-radius: var(--r-xs);
-  background: var(--ink-on-dark);
-  position: relative;
   flex: none;
-}
-
-/* the single red "pixel" in the mark */
-.wordmark__mark::after {
-  content: "";
-  position: absolute;
-  right: 3px;
-  bottom: 3px;
-  width: 4px;
-  height: 4px;
-  border-radius: 1px;
-  background: var(--accent);
+  object-fit: contain;
+  display: block;
 }
 
 /* ─────────────────────────────────────────────────────────
@@ -668,6 +658,138 @@ code, .mono {
 }
 
 /* ─────────────────────────────────────────────────────────
+   Invite landing page (/invite/<token>)
+───────────────────────────────────────────────────────── */
+.invite-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.invite-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 72px var(--space-8);
+}
+
+.invite-card {
+  width: 100%;
+  max-width: 480px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-9);
+}
+
+.invite-card__title {
+  margin-top: var(--space-4);
+  font-size: clamp(26px, 4vw, 34px);
+}
+
+.invite-card__title .accent {
+  color: var(--accent);
+}
+
+.invite-card__who {
+  margin-top: var(--space-6);
+  color: var(--text-muted);
+  font-size: 16px;
+}
+
+.invite-card__role {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-accent);
+}
+
+.invite-card__email {
+  margin-top: var(--space-4);
+  color: var(--text-subtle);
+  font-size: 14.5px;
+}
+
+.invite-card__email code,
+.invite-card__note code {
+  font-family: var(--font-mono);
+  color: var(--text-body);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  padding: 1px 5px;
+  font-size: 12.5px;
+}
+
+.invite-card__cta {
+  width: 100%;
+  margin-top: var(--space-8);
+}
+
+.invite-card__note {
+  margin-top: var(--space-7);
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+}
+
+.invite-fallback {
+  margin-top: var(--space-8);
+  padding-top: var(--space-7);
+  border-top: 1px solid var(--line);
+}
+
+.invite-fallback__lead {
+  color: var(--text-muted);
+  font-size: 14.5px;
+  line-height: var(--leading-snug);
+}
+
+.invite-code {
+  margin-top: var(--space-5);
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-3);
+}
+
+.invite-code__value {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: var(--space-3) var(--space-5);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-body);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.invite-code__copy {
+  flex: none;
+  padding: 0 var(--space-6);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-card);
+  color: var(--text-body);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  cursor: pointer;
+  transition: background var(--dur-base) var(--ease),
+              border-color var(--dur-base) var(--ease);
+}
+
+.invite-code__copy:hover {
+  background: var(--surface-hover);
+  border-color: var(--accent);
+}
+
+/* ─────────────────────────────────────────────────────────
    Responsive
 ───────────────────────────────────────────────────────── */
 @media (max-width: 860px) {
@@ -675,4 +797,65 @@ code, .mono {
   .split { grid-template-columns: 1fr; gap: var(--space-9); }
   .features { grid-template-columns: 1fr; }
   .site-nav { display: none; }
+}
+
+/* ─────────────────────────────────────────────────────────
+   Full-page branded app loader (AppLoader.tsx / loading.tsx)
+   The brand chevrons pulse in sequence over a soft breathing
+   scale. Use anywhere the whole page is blocked on a load.
+───────────────────────────────────────────────────────── */
+.app-loader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  min-height: 100vh;
+  width: 100%;
+  background: var(--surface-page);
+  color: var(--text-muted);
+}
+.brand-loader-mark {
+  display: block;
+  animation: brand-loader-breathe 2.4s ease-in-out infinite;
+}
+.brand-loader-chevron {
+  animation: brand-loader-pulse 1.4s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.brand-loader-chevron:nth-child(1) { animation-delay: 0s; }
+.brand-loader-chevron:nth-child(2) { animation-delay: 0.18s; }
+.brand-loader-chevron:nth-child(3) { animation-delay: 0.36s; }
+.app-loader-label {
+  margin: 0;
+  font: var(--weight-medium) var(--text-md) / 1.4 var(--font-sans);
+  letter-spacing: var(--track-snug);
+  color: var(--text-subtle);
+}
+
+@keyframes brand-loader-pulse {
+  0%, 70%, 100% { opacity: 0.22; }
+  35%           { opacity: 1; }
+}
+@keyframes brand-loader-breathe {
+  0%, 100% { transform: scale(0.94); }
+  50%      { transform: scale(1.04); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-loader-mark { animation: none; }
+  .brand-loader-chevron { animation: none; opacity: 1; }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
