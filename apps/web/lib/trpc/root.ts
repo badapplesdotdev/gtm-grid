@@ -16,6 +16,7 @@
 import { WorkspaceService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { billingRouter } from "./routers/billing";
+import { credentialsRouter } from "./routers/credentials";
 import { invitationsRouter } from "./routers/invitations";
 import { workspacesRouter } from "./routers/workspaces";
 import {
@@ -60,8 +61,10 @@ export const appRouter = router({
   billing: billingRouter,
   /** Workspace invitations (invite -> accept lifecycle). */
   invitations: invitationsRouter,
+  /** Connector credentials — encrypt/save, member-gated decrypt, metadata list. */
+  credentials: credentialsRouter,
 
-  // W2 (other lanes): projects, tables, columns, rows, credentials.
+  // W2 (other lanes): projects, tables, columns, rows.
 });
 
 /** The API type the typed client (W2) consumes. */

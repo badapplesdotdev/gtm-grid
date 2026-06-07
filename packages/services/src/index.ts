@@ -52,6 +52,16 @@ export {
   type UpsertInviteInput,
   type UserInfo,
 } from "./repositories/invitation-repo.js";
+export {
+  type CredentialMetadata,
+  type CredentialRow,
+  CredentialRepo,
+  CredentialRepoError,
+  CredentialRepoLive,
+  credentialRepoLayer,
+  type CredentialUpsert,
+  type OwnerKey,
+} from "./repositories/credential-repo.js";
 
 // --- The Autumn billing port (LIVE) ------------------------------------------
 export { autumnClientLayer, AutumnClientLive } from "./autumn-client.js";
@@ -96,6 +106,20 @@ export {
   InviteEmailPortLive,
   inviteEmailPortLayer,
 } from "./services/invite-email.js";
+export {
+  CryptoService,
+  CryptoServiceLive,
+  cryptoServiceLayer,
+  TEST_MASTER_KEY,
+} from "./services/crypto-service.js";
+export {
+  CredentialService,
+  type GetForRunError,
+  type GetForRunInput,
+  type ListCredentialsError,
+  type SaveCredentialError,
+  type SaveCredentialInput,
+} from "./services/credential-service.js";
 
 // --- Composed Layers (the DI wiring point) -----------------------------------
 export {
@@ -109,11 +133,16 @@ export {
 // --- Worker-secret boundary (W2) ---------------------------------------------
 export { isAuthorizedWorker, timingSafeEqual } from "./worker-secret.js";
 
-// --- Re-export the reused authz + seats/billing core (one import surface) -----
+// --- Re-export the reused authz + seats/billing + crypto core ----------------
 export {
   AutumnClient,
   AutumnError,
+  CredentialOwnershipError,
+  CredentialOwnershipService,
+  type CredentialScope,
   type CustomerData,
+  DecryptError,
+  EncryptError,
   type FakeAutumnConfig,
   fakeAutumnLayer,
   failingAutumnLayer,
@@ -128,6 +157,7 @@ export {
   NotAMemberError,
   planName,
   type SeatCheck,
+  type SecretMap,
   SeatLimitExceededError,
   SeatsService,
   UnauthenticatedError,

@@ -25,6 +25,7 @@
 import {
   type AutumnClient,
   identityLayer as cloudIdentityLayer,
+  CredentialOwnershipService,
   type FakeAutumnConfig,
   fakeAutumnLayer,
   Identity,
@@ -36,6 +37,12 @@ import type { Db } from "@gtmgrid/db/client";
 import { Effect, Layer, Option } from "effect";
 import { AutumnClientLive } from "./autumn-client.js";
 import { dbClientLayer } from "./db-client.js";
+import {
+  type CredentialRow,
+  CredentialRepo,
+  CredentialRepoLive,
+  credentialRepoLayer,
+} from "./repositories/credential-repo.js";
 import {
   type Invitation,
   type InMemoryWorkspace,
@@ -57,6 +64,12 @@ import {
   workspaceRepoLayer,
 } from "./repositories/workspace-repo.js";
 import { BillingService } from "./services/billing-service.js";
+import { CredentialService } from "./services/credential-service.js";
+import {
+  CryptoService,
+  CryptoServiceLive,
+  cryptoServiceLayer,
+} from "./services/crypto-service.js";
 import { InvitationService } from "./services/invitation-service.js";
 import {
   type InviteEmailArgs,
@@ -100,6 +113,9 @@ export const appLayer = (params: {
   | AutumnClient
   | InvitationService
   | InvitationRepo
+  | CredentialService
+  | CredentialRepo
+  | CryptoService
 > => {
   const dbLayer = dbClientLayer(params.db);
   const identity = identityFromUserId(params.userId);
@@ -109,6 +125,7 @@ export const appLayer = (params: {
     Layer.provide(dbLayer),
   );
   const invitationRepo = InvitationRepoLive.pipe(Layer.provide(dbLayer));
+  const credentialRepo = CredentialRepoLive.pipe(Layer.provide(dbLayer));
   const membershipService = MembershipService.Default.pipe(
     Layer.provide(identity),
     Layer.provide(memberRepo),
@@ -137,17 +154,26 @@ export const appLayer = (params: {
     Layer.provide(identity),
     Layer.provide(InviteEmailPortLive),
   );
+  const credentialService = CredentialService.Default.pipe(
+    Layer.provide(credentialRepo),
+    Layer.provide(CryptoServiceLive),
+    Layer.provide(membershipService),
+    Layer.provide(CredentialOwnershipService.Default),
+  );
   // Merge so callers can resolve any repo or service from one Layer.
   return Layer.mergeAll(
     workspaceService,
     billingService,
     invitationService,
+    credentialService,
     workspaceRepo,
     workspaceMemberRepo,
     invitationRepo,
+    credentialRepo,
     membershipService,
     seatsService,
     AutumnClientLive,
+    CryptoServiceLive,
   );
 };
 
@@ -167,6 +193,8 @@ export interface TestLayerFixtures {
    * (so a test that only sets `memberships` still gets a consistent roster).
    */
   readonly members?: readonly MemberWithUser[];
+  /** Credential rows visible to {@link CredentialRepo} (incl. ciphertext). */
+  readonly credentials?: readonly CredentialRow[];
   /** The current caller's user id, or `null` for an unauthenticated request. */
   readonly currentUserId?: string | null;
   /**
@@ -237,6 +265,9 @@ export const TestLayer = (
   | AutumnClient
   | InvitationService
   | InvitationRepo
+  | CredentialService
+  | CredentialRepo
+  | CryptoService
 > => {
   const memberships = fixtures.memberships ?? [];
   const memberRows = fixtures.members ?? membershipsToMemberRows(memberships);
@@ -250,6 +281,7 @@ export const TestLayer = (
       email: u.email ?? null,
     })),
   );
+  const credentialRepo = credentialRepoLayer(fixtures.credentials ?? []);
   // ONE shared member store backs both the data repo and the authz guard, so a
   // membership inserted via WorkspaceMemberRepo (e.g. createWorkspace's owner
   // row) is immediately visible to MembershipService — as in the live table.
@@ -301,16 +333,28 @@ export const TestLayer = (
     Layer.provide(identity),
     Layer.provide(inviteEmail),
   );
+  // Real AES-256-GCM under a fixed test master key — round-trips run genuine
+  // crypto offline, no env, no DB.
+  const cryptoService = cryptoServiceLayer();
+  const credentialService = CredentialService.Default.pipe(
+    Layer.provide(credentialRepo),
+    Layer.provide(cryptoService),
+    Layer.provide(membershipService),
+    Layer.provide(CredentialOwnershipService.Default),
+  );
   return Layer.mergeAll(
     workspaceService,
     billingService,
     invitationService,
+    credentialService,
     workspaceRepo,
     workspaceMemberRepo,
     invitationRepo,
+    credentialRepo,
     membershipService,
     seatsService,
     autumn,
+    cryptoService,
   );
 };
 
@@ -324,4 +368,7 @@ export type AppServices =
   | BillingService
   | AutumnClient
   | InvitationService
-  | InvitationRepo;
+  | InvitationRepo
+  | CredentialService
+  | CredentialRepo
+  | CryptoService;
