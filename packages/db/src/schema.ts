@@ -87,20 +87,127 @@ export const invitationStatus = pgEnum("invitation_status", [
 ]);
 
 // ---------------------------------------------------------------------------
-// users — FK target only (Better Auth owns the real table; W1 auth task)
+// Better Auth tables (W1 auth task) — users / sessions / accounts / verification
 // ---------------------------------------------------------------------------
 
 /**
- * Minimal `users` table declared ONLY so the FK columns below
- * (`workspaces.ownerId`, `members.userId`, ...) have a real referential target.
- * Better Auth defines the authoritative `users` schema in the separate W1 auth
- * task; this declaration intentionally carries just the `id` primary key (text,
- * to match Better Auth's id type — Convex stored `Id<"users">` as a plain
- * string). When the auth task lands its full table, it extends this id target.
+ * The authoritative Better Auth `users` table.
+ *
+ * CRITICAL: the `id` stays `text` (Better Auth mints string ids), NOT changed to
+ * uuid — every cloud FK below (`workspaces.ownerId`, `members.userId`,
+ * `invitations.invitedBy`/`acceptedBy`, `credentials.ownerUserId`) references
+ * `users.id` as text, so flipping the type would break referential integrity and
+ * the TRI-3243 migration. This task only ADDS the Better Auth profile columns
+ * (name/email/emailVerified/image/timestamps) onto the existing text id.
+ *
+ * Better Auth's default model name is the SINGULAR `user`; we keep GTM Grid's
+ * plural `users` table name and tell Better Auth about it via the Drizzle
+ * adapter's `usePlural` option (packages/auth/src/server.ts), so the schema and
+ * the auth runtime agree without renaming the table the rest of the cloud uses.
  */
 export const users = pgTable("users", {
   id: text("id").primaryKey(),
+  /** Display name (Better Auth core field; nullable until set). */
+  name: text("name"),
+  /** Primary email; unique across the table (Better Auth requirement). */
+  email: text("email").notNull().unique(),
+  /** Whether the email was verified via the OTP flow. */
+  emailVerified: boolean("email_verified").notNull().default(false),
+  /** Avatar URL (from OAuth providers or upload). */
+  image: text("image"),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
 });
+
+/**
+ * Active login sessions (Better Auth core `session` table; we keep the plural
+ * `sessions` to match the `usePlural` adapter option). One row per signed-in
+ * device/browser; `token` is the opaque session cookie value the
+ * session-resolution helper validates.
+ */
+export const sessions = pgTable(
+  "sessions",
+  {
+    id: text("id").primaryKey(),
+    /** Opaque session token (the cookie value); unique. */
+    token: text("token").notNull().unique(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+    /** Client IP at sign-in (audit/security; nullable). */
+    ipAddress: text("ip_address"),
+    /** Client user-agent at sign-in (nullable). */
+    userAgent: text("user_agent"),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+  },
+  (t) => [
+    index("sessions_by_user").on(t.userId),
+    index("sessions_by_token").on(t.token),
+  ],
+);
+
+/**
+ * Credential + linked-OAuth accounts (Better Auth core `account` table). One row
+ * per (providerId, accountId): the email/password "credential" account stores
+ * the hashed `password`; GitHub/Google rows store the OAuth tokens. The plural
+ * `accounts` name matches the `usePlural` adapter option.
+ */
+export const accounts = pgTable(
+  "accounts",
+  {
+    id: text("id").primaryKey(),
+    /** Provider's account id ("credential" provider uses the user id). */
+    accountId: text("account_id").notNull(),
+    /** Provider id: "credential" | "github" | "google". */
+    providerId: text("provider_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** OAuth access token (nullable for credential accounts). */
+    accessToken: text("access_token"),
+    /** OAuth refresh token (nullable). */
+    refreshToken: text("refresh_token"),
+    /** OAuth id token (nullable). */
+    idToken: text("id_token"),
+    accessTokenExpiresAt: bigint("access_token_expires_at", { mode: "number" }),
+    refreshTokenExpiresAt: bigint("refresh_token_expires_at", {
+      mode: "number",
+    }),
+    /** Granted OAuth scopes (nullable). */
+    scope: text("scope"),
+    /** Hashed password for the credential account (nullable for OAuth rows). */
+    password: text("password"),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+  },
+  (t) => [
+    index("accounts_by_user").on(t.userId),
+    index("accounts_by_provider_account").on(t.providerId, t.accountId),
+  ],
+);
+
+/**
+ * Short-lived verification values (Better Auth core `verification` table). Backs
+ * the email-OTP verification + password-reset flows: `identifier` keys the flow
+ * (e.g. the email), `value` holds the 6-digit OTP, and `expiresAt` enforces the
+ * 15-minute window. The plural `verifications` matches the `usePlural` option.
+ */
+export const verifications = pgTable(
+  "verifications",
+  {
+    id: text("id").primaryKey(),
+    /** Flow key (the email being verified / reset). */
+    identifier: text("identifier").notNull(),
+    /** The OTP code (or token) being checked. */
+    value: text("value").notNull(),
+    expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+  },
+  (t) => [index("verifications_by_identifier").on(t.identifier)],
+);
 
 // ---------------------------------------------------------------------------
 // Control-plane tables
