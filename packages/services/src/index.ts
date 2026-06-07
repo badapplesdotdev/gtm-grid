@@ -246,6 +246,41 @@ export {
   MeterServiceLive,
   meterServiceLayer,
 } from "./services/meter-service.js";
+// --- Realtime broadcast port + shared client event schema/reducer (TRI-3251) -
+export {
+  noopRealtimePublisherLayer,
+  RealtimePublisher,
+  type RealtimePublisherConfig,
+  RealtimePublisherError,
+  realtimePublisherConfigFromEnv,
+  realtimePublisherLayer,
+  realtimePublisherLayerFromEnv,
+  type RecordedGridEvent,
+  recordingRealtimePublisherLayer,
+} from "./services/realtime-publisher.js";
+export {
+  type CellUpsertEvent,
+  type ColumnDeleteEvent,
+  type ColumnInsertEvent,
+  GRID_EVENT_NAME,
+  type GridChangeEvent,
+  type GridEventCell,
+  type GridEventColumn,
+  type GridEventRow,
+  type GridSnapshot,
+  gridChannelName,
+  type RowDeleteEvent,
+  type RowInsertEvent,
+  type TableDeleteEvent,
+  type TableInsertEvent,
+} from "./realtime/events.js";
+export { applyGridEvent } from "./realtime/reducer.js";
+export {
+  type GridPresenceState,
+  type GridSubscription,
+  subscribeToGrid,
+  type SubscribeToGridOptions,
+} from "./realtime/channel.js";
 
 // --- Webhook token/secret minting + credential crypto ------------------------
 // NB: webhook-mint also exports `mintToken`, but the invitation-service

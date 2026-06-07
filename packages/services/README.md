@@ -105,6 +105,43 @@ wholesale), so no connection is opened.
 Never mock — substitute real in-memory Layers. This is the same discipline as
 `@gtmgrid/cloud` (`docs/effect-conventions.md`).
 
+## Realtime — live grid + presence (W3, TRI-3251)
+
+The Convex `useQuery(api.tables.getTable)` live subscription is replaced by
+**Supabase Realtime Broadcast + Presence**, fronted by an injectable Effect port.
+
+**Channel model.** One channel per workspace+table: `grid:{workspaceId}:{tableId}`
+(`gridChannelName` in `src/realtime/events.ts`). After a successful grid write,
+`GridService` calls `RealtimePublisher.publish` with the owning workspace, table,
+and a typed `GridChangeEvent` (cell/row/column insert·update·delete, table
+insert·delete). Every other client subscribed to that table receives the
+Broadcast and patches its cached `getTable` snapshot via the **pure reducer**
+`applyGridEvent` (`src/realtime/reducer.ts`) — no refetch, no Postgres-Changes/CDC.
+
+**Auth model (no RLS).** The client authorizes the Realtime *connection* with a
+Supabase-compatible HS256 JWT minted by the server (`realtime.token`
+protectedProcedure → `@gtmgrid/auth` `mintSupabaseJwt`, signed with
+`SUPABASE_JWT_SECRET`). The JWT authorizes the socket only; **all reads/writes
+still go through tRPC**. Presence carries who's-editing / cursor state. The thin
+client subscriber is `subscribeToGrid` (`src/realtime/channel.ts`); the event
+schema + reducer + subscriber live HERE (not apps/web) so the desktop (W4) imports
+them from `@gtmgrid/services`.
+
+**DI.** `RealtimePublisher` (`src/services/realtime-publisher.ts`) is a
+`Context.Tag` with a LIVE Layer (`realtimePublisherLayerFromEnv` — Supabase
+broadcast, best-effort, degrades to a no-op when `SUPABASE_URL` /
+`SUPABASE_SERVICE_ROLE_KEY` are unset) and a TEST Layer
+(`recordingRealtimePublisherLayer` — records events into a shared array). Both are
+registered in `appLayer` / `TestLayer` and provided to `GridService`, so grid
+mutations are unit-tested offline by asserting the recorded events. The live
+publish is best-effort by construction: a realtime transport error never fails a
+write that already succeeded (tRPC reads remain the source of truth).
+
+> **Fallback note (option b).** If Supabase Realtime auth without RLS proves
+> awkward in the live two-client verification (deferred to TRI-3259 E2E), the
+> publisher port can be re-pointed at a dedicated CRDT provider authed via tRPC
+> with NO change to `GridService` — the whole point of the injectable port.
+
 ## Adding a router's data layer (W2 checklist)
 
 1. Add a repository in `src/repositories/<name>-repo.ts` (Tag + `*Live` + test
