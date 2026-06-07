@@ -18,6 +18,8 @@
     "tauri:dev": "pnpm --filter @gtmgrid/desktop tauri dev",
     "tauri:build": "pnpm --filter @gtmgrid/desktop tauri build",
     "convex:dev": "convex dev",
+    "db:generate": "pnpm --filter @gtmgrid/db db:generate",
+    "db:migrate": "pnpm --filter @gtmgrid/db db:migrate",
     "build": "turbo run build",
     "dev": "turbo run dev",
     "turbo:typecheck": "turbo run typecheck",
