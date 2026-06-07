@@ -18,7 +18,7 @@ export {
   type GridRejectReason,
   type PartyTokenClaims,
   workspaceIdFromRoomId,
-} from "@gtmgrid/auth";
+} from "@gtmgrid/auth/party-token";
 
 /** Read the `?token=` query param from a connect request URL, or null. */
 export const tokenFromUrl = (url: string): string | null => {

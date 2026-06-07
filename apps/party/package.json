@@ -1,0 +1,18 @@
+{
+  "name": "@gtmgrid/party",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "partykit dev",
+    "deploy": "partykit deploy"
+  },
+  "dependencies": {
+    "@gtmgrid/auth": "workspace:*",
+    "jose": "^6.1.0"
+  },
+  "devDependencies": {
+    "partykit": "^0.0.115",
+    "partysocket": "^1.1.4"
+  }
+}
