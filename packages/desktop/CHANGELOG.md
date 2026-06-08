@@ -1,5 +1,16 @@
 # @gtmgrid/desktop
 
+## 0.3.14
+
+### Patch Changes
+
+- 2f7da8b: Agent panel now shows past conversations again — read from each CLI's own native
+  transcript store (Claude Code project sessions, Codex rollouts for the current
+  project) instead of a local copy. Opening one loads its messages and resumes the
+  CLI's native session for full context. Replaces the previous localStorage history.
+  - @gtmgrid/cloud@0.3.14
+  - @gtmgrid/services@0.3.14
+
 ## 0.3.13
 
 ### Patch Changes
