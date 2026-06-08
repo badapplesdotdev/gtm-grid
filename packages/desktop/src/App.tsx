@@ -736,7 +736,32 @@ export default function App() {
     // no-op, so a user with no cloud projects simply stays in local mode.
     if (autoCloudWorkspaceRef.current === activeWorkspaceId) return;
     if (cloudProject !== null) return;
-    if (!cloudProjects || cloudProjects.length === 0) return;
+    if (!cloudProjects) return; // still loading
+    if (cloudProjects.length === 0) {
+      // A cloud workspace must NEVER fall back to the local engine — that would
+      // silently save tables to disk instead of the cloud. If the workspace has
+      // no projects yet, auto-create a default cloud project so the app enters
+      // cloud mode (`inCloud`) and the local table section stays hidden. Skip when
+      // cloud is locked (the lapsed-trial panel owns that state).
+      if (cloudLocked || !activeWorkspace) return;
+      autoCloudWorkspaceRef.current = activeWorkspaceId;
+      void (async () => {
+        try {
+          const id = await createCloudProject(activeWorkspace._id, "Default");
+          setCloudProject({
+            _id: id,
+            workspaceId: activeWorkspace._id,
+            name: "Default",
+            createdAt: Date.now(),
+          });
+          setCloudTableId(null);
+          setView({ kind: "table" });
+        } catch {
+          autoCloudWorkspaceRef.current = null; // allow a retry on next change
+        }
+      })();
+      return;
+    }
     autoCloudWorkspaceRef.current = activeWorkspaceId;
     let persisted: string | null = null;
     try { persisted = localStorage.getItem(LAST_CLOUD_PROJECT_KEY); } catch { /* ignore */ }
@@ -749,7 +774,7 @@ export default function App() {
       setCloudTableId(null);
       setView({ kind: "table" });
     }
-  }, [activeWorkspaceId, cloudProjects, cloudProject]);
+  }, [activeWorkspaceId, cloudProjects, cloudProject, cloudLocked, activeWorkspace, createCloudProject]);
 
   // Appearance: only the dark-mode toggle is user-controllable. Density and
   // accent are fixed (compact + green) by product decision.
