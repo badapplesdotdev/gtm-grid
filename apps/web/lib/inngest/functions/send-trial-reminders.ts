@@ -12,11 +12,15 @@
  * mid-run retry safe. A no-op when email (`AUTH_RESEND_KEY`) is unconfigured.
  */
 
-import { db } from "@gtmgrid/db/client";
 import { emailEnabled, sendEmail, trialEndingEmail } from "@gtmgrid/email";
 import { appLayer, WorkspaceRepo } from "@gtmgrid/services";
 import { Effect, ManagedRuntime } from "effect";
 import { inngest } from "../client";
+
+// NB: `@gtmgrid/db/client` is imported LAZILY inside the handler (not at module
+// top). It throws "DATABASE_URL is not set" on import, which would crash Next's
+// build-time page-data collection for the Inngest serve route. Same pattern as
+// the tRPC context.
 
 const DAY_MS = 86_400_000;
 
@@ -36,6 +40,7 @@ export const sendTrialReminders = inngest.createFunction(
 
     // Scan both disjoint windows in one step; returns the JSON-serializable list.
     const due = await step.run("scan-trials", async (): Promise<DueReminder[]> => {
+      const { db } = await import("@gtmgrid/db/client");
       const now = Date.now();
       const runtime = ManagedRuntime.make(appLayer({ db, userId: null }));
       try {
