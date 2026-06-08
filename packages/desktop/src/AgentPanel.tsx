@@ -6,7 +6,7 @@
 // grid live as the agent calls mutating tools.
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { api, API_BASE, type AgentStatus } from "./api";
+import { api, API_BASE, type AgentSession, type AgentStatus } from "./api";
 
 type AgentKind = "claude" | "codex";
 
@@ -23,6 +23,14 @@ interface Message {
 }
 
 const AGENT_LABEL: Record<AgentKind, string> = { claude: "Claude Code", codex: "Codex" };
+
+function relativeTime(ts: number): string {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
 
 // Persist the per-agent model selection so it survives a relaunch (the rest of
 // the conversation history is NOT stored here — the agents keep their own native
@@ -318,6 +326,12 @@ export default function AgentPanel({
   const sessionRef = useRef<Record<AgentKind, string | undefined>>({ claude: undefined, codex: undefined });
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // History dropdown: past conversations from the agent's OWN native transcript
+  // store (read via the sidecar), NOT a local copy. Opening one loads its messages
+  // and reuses the native session id so the next turn resumes with full context.
+  const [showHistory, setShowHistory] = useState(false);
+  const [sessions, setSessions] = useState<AgentSession[] | null>(null);
+  const historyRef = useRef<HTMLDivElement>(null);
 
   const messages = threads[agent];
 
@@ -330,11 +344,38 @@ export default function AgentPanel({
     }
   }, [models]);
 
+  // Load the native session list when the dropdown opens (refetch per open so it
+  // reflects conversations the CLI wrote since last time). Close on outside click.
+  useEffect(() => {
+    if (!showHistory) return;
+    setSessions(null);
+    let live = true;
+    api.agentSessions(agent).then((r) => live && setSessions(r.sessions)).catch(() => live && setSessions([]));
+    const onDoc = (e: MouseEvent) => {
+      if (historyRef.current && !historyRef.current.contains(e.target as Node)) setShowHistory(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => { live = false; document.removeEventListener("mousedown", onDoc); };
+  }, [showHistory, agent]);
+
   /** Start a fresh conversation for the current agent (drops the in-session CLI
    * session id so the next turn starts a new native transcript). */
   const newChat = () => {
     sessionRef.current[agent] = undefined;
     setThreads((t) => ({ ...t, [agent]: [] }));
+  };
+
+  /** Reopen a past conversation: load its messages from the native transcript and
+   * adopt its session id so the next turn resumes the CLI's own session. */
+  const openSession = async (s: AgentSession) => {
+    setShowHistory(false);
+    try {
+      const { messages: msgs } = await api.agentSession(agent, s.id);
+      setThreads((t) => ({ ...t, [agent]: msgs as Message[] }));
+      sessionRef.current[agent] = s.id;
+    } catch {
+      /* transcript unreadable — leave the current thread as-is */
+    }
   };
 
   useEffect(() => {
@@ -614,9 +655,33 @@ export default function AgentPanel({
               </button>
             )}
           </div>
-          {/* Composer footer: the model picker (opens upward). Past conversations
-              live in the agents' own native transcripts — surfaced in a follow-up. */}
+          {/* Composer footer: chat history + model picker, both open upward. History
+              is read from the agent's OWN native transcript store (sidecar). */}
           <div className="agent-composer-foot">
+            <div className="agent-history-picker" ref={historyRef}>
+              {showHistory && (
+                <div className="agent-history">
+                  <div className="agent-history-head">Recent {AGENT_LABEL[agent]} chats · this project</div>
+                  {sessions === null ? (
+                    <div className="agent-history-empty">Loading…</div>
+                  ) : sessions.length === 0 ? (
+                    <div className="agent-history-empty">No past conversations for this project yet.</div>
+                  ) : (
+                    sessions.map((s) => (
+                      <div key={s.id} className="agent-history-row" onClick={() => openSession(s)}>
+                        <span className="agent-history-logo">{AGENT_LOGO[agent]}</span>
+                        <span className="agent-history-title" title={s.title}>{s.title}</span>
+                        <span className="agent-history-time">{relativeTime(s.updatedAt)}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+              <button className="agent-model-btn" onClick={() => setShowHistory((s) => !s)} title="Chat history">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><polyline points="12 7 12 12 15 14" /></svg>
+                History
+              </button>
+            </div>
             <span style={{ marginLeft: "auto" }} />
             <ModelPicker agent={agent} value={models[agent]} onChange={(v) => setModels((p) => ({ ...p, [agent]: v }))} />
           </div>

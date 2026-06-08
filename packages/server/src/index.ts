@@ -22,6 +22,7 @@ import {
   listProjects,
 } from "@gtmgrid/engine";
 import { detectAgents, streamClaude, streamCodex, setAgentPath, rescanAgents, type AgentKind } from "./agent.js";
+import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
 import { corsHeadersFor, isOriginAllowed } from "./cors.js";
 import {
@@ -800,6 +801,17 @@ route("POST", "/api/extensions/:id/connect", (p, body) => {
 });
 
 route("GET", "/api/agents", () => detectAgents());
+
+// Past conversations for the current project, read from the CLI's OWN native
+// transcript store (Claude Code project dir / Codex rollouts) — no local copy.
+route("GET", "/api/agent/sessions/:agent", (p) => ({
+  sessions: listAgentSessions(p.agent === "codex" ? "codex" : "claude", REPO_ROOT),
+}));
+// One conversation's messages, parsed from the native transcript. Resuming it
+// reuses the native session id via the chat route's `--resume`.
+route("GET", "/api/agent/sessions/:agent/:id", (p) => ({
+  messages: readAgentSession(p.agent === "codex" ? "codex" : "claude", REPO_ROOT, p.id),
+}));
 
 // Manually connect a CLI (set its path) and/or rescan after install.
 route("POST", "/api/agents/connect", (_p, body) => {
