@@ -22,7 +22,7 @@
 import { useQuery as useReactQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { Id } from "./ids";
-import { apiClient, authClient, cloudEnabled } from "./client";
+import { apiClient, authClient, cloudEnabled, setStoredAuthToken } from "./client";
 import { chooseOAuthFlow, isTauri } from "./desktop-oauth";
 import { apiOAuthCallbackUrl, unwrapAuthResult } from "./api-auth";
 
@@ -493,7 +493,11 @@ export function useAccountActions(): AccountActions {
     [client],
   );
 
-  const signOut = useCallback((): Promise<unknown> => client.signOut(), [client]);
+  const signOut = useCallback(async (): Promise<unknown> => {
+    const r = await client.signOut();
+    setStoredAuthToken(null); // drop the persisted Bearer token on sign-out
+    return r;
+  }, [client]);
 
   return {
     signInWithPassword,

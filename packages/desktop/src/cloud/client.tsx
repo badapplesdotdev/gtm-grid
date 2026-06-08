@@ -88,32 +88,67 @@ export type CloudAuthClient = ReturnType<
 >;
 
 /**
- * Build the Better Auth client against the given API base. Cookies/session are
- * persisted by Better Auth itself (it replaces the Convex Auth localStorage JWT
- * at convex.tsx:16). `fetchOptions.credentials: "include"` so the session
- * cookie rides cross-origin from the Tauri webview to the apps/web host. Pure +
- * deterministic so it is unit-testable without a live server.
+ * Bearer-token session store. The desktop runs in a custom-scheme webview
+ * (`tauri://localhost`) whose cross-site cookies to the apps/web host are blocked
+ * (WKWebview ITP), so we DON'T rely on the session cookie. Instead the Better
+ * Auth `bearer` plugin returns a `set-auth-token` header on sign-in; we persist
+ * it in localStorage and replay it as `Authorization: Bearer <token>` on every
+ * auth + tRPC + sidecar call. Survives reloads like the old Convex JWT did.
+ */
+const AUTH_TOKEN_KEY = "gtmgrid:authToken";
+
+export function getStoredAuthToken(): string | null {
+  try {
+    return localStorage.getItem(AUTH_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredAuthToken(token: string | null): void {
+  try {
+    if (token) localStorage.setItem(AUTH_TOKEN_KEY, token);
+    else localStorage.removeItem(AUTH_TOKEN_KEY);
+  } catch {
+    /* private mode / no storage — bearer just won't persist */
+  }
+}
+
+/**
+ * Build the Better Auth client against the given API base. Uses Bearer-token
+ * sessions (see {@link getStoredAuthToken}): captures `set-auth-token` from each
+ * response and sends the stored token on subsequent requests. `credentials:
+ * "include"` is kept as a same-origin/web fallback. Pure + unit-testable.
  */
 export function makeAuthClient(apiUrl: string): CloudAuthClient {
   return createAuthClient({
     baseURL: authUrl(apiUrl),
-    fetchOptions: { credentials: "include" },
+    fetchOptions: {
+      credentials: "include",
+      auth: { type: "Bearer", token: () => getStoredAuthToken() ?? "" },
+      onSuccess(ctx) {
+        const token = ctx.response.headers.get("set-auth-token");
+        if (token) setStoredAuthToken(token);
+      },
+    },
     plugins: [emailOTPClient()],
   });
 }
 
 /**
- * Build the typed tRPC client against the given API base. `httpBatchLink`
- * batches concurrent calls into one request and sends credentials so the Better
- * Auth session cookie authenticates each call. Typed by the apps/web
- * `AppRouter` so every procedure is end-to-end type-safe. Pure so client
- * construction is unit-testable offline.
+ * Build the typed tRPC client against the given API base. Sends the stored Bearer
+ * token (so each procedure authenticates without a cross-site cookie). Typed by
+ * the apps/web `AppRouter` for end-to-end safety. Pure so it is unit-testable.
  */
 export function makeTrpcClient(apiUrl: string) {
   return createTRPCClient<AppRouter>({
     links: [
       httpBatchLink({
         url: trpcUrl(apiUrl),
+        headers() {
+          const token = getStoredAuthToken();
+          return token ? { Authorization: `Bearer ${token}` } : {};
+        },
         fetch(input, init) {
           return fetch(input, { ...init, credentials: "include" });
         },

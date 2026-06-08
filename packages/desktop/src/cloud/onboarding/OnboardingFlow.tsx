@@ -606,7 +606,6 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
                     }
                   : undefined
               }
-              forced={forced}
             />
           )}
           {screen === "signup" && (
@@ -619,6 +618,7 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
               onError={setError}
               onSubmit={() => void submitAuth("signUp")}
               onGoSignin={() => go("signin")}
+              onSkip={onClose}
             />
           )}
           {screen === "workspace" && (
@@ -703,7 +703,6 @@ function SignIn(props: {
   onSkip: () => void;
   /** Open the password-reset flow; absent when email auth is off. */
   onForgot?: () => void;
-  forced?: boolean;
 }) {
   const {
     state,
@@ -716,7 +715,6 @@ function SignIn(props: {
     onGoSignup,
     onSkip,
     onForgot,
-    forced,
   } = props;
   return (
     <Pane
@@ -774,13 +772,17 @@ function SignIn(props: {
         {busy ? "Signing in…" : "Sign in"} <ArrowRight s={15} />
       </button>
 
-      {!forced && (
-        <p className="ob-fineprint">
-          Solo &amp; offline? You don't need an account —{" "}
-          <a onClick={onSkip}>just keep using the desktop app</a>. Sign in is for
-          cloud sync &amp; realtime teams.
-        </p>
-      )}
+      <button
+        className="ob-btn ob-btn-ghost ob-btn-block"
+        onClick={onSkip}
+        style={{ marginTop: 8 }}
+      >
+        Continue locally — no account
+      </button>
+      <p className="ob-fineprint">
+        Local stays free: your tables, engine and runs work fully offline. Sign in
+        only to unlock cloud workspaces, sync &amp; realtime teams.
+      </p>
     </Pane>
   );
 }
@@ -795,9 +797,19 @@ function SignUp(props: {
   onError: (message: string) => void;
   onSubmit: () => void;
   onGoSignin: () => void;
+  onSkip: () => void;
 }) {
-  const { state, set, busy, error, providers, onError, onSubmit, onGoSignin } =
-    props;
+  const {
+    state,
+    set,
+    busy,
+    error,
+    providers,
+    onError,
+    onSubmit,
+    onGoSignin,
+    onSkip,
+  } = props;
   return (
     <Pane
       screenKey="signup"
@@ -859,6 +871,18 @@ function SignUp(props: {
       >
         {busy ? "Creating…" : "Create account"} <ArrowRight s={15} />
       </button>
+
+      <button
+        className="ob-btn ob-btn-ghost ob-btn-block"
+        onClick={onSkip}
+        style={{ marginTop: 8 }}
+      >
+        Continue locally — no account
+      </button>
+      <p className="ob-fineprint">
+        Local stays free and works fully offline. An account only unlocks cloud
+        workspaces, sync &amp; realtime teams.
+      </p>
     </Pane>
   );
 }
