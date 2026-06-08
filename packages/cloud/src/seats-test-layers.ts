@@ -70,6 +70,8 @@ export interface FakeAutumnConfig {
   readonly activePlanIds?: readonly string[];
   /** The `trialEndsAt` (epoch ms) `getActiveSubscriptions` reports; default null. */
   readonly trialEndsAt?: number | null;
+  /** Per-seat price `previewSeatChange` multiplies by the seat count; default 20. */
+  readonly perSeatPrice?: number;
 }
 
 /**
@@ -97,6 +99,12 @@ export const fakeAutumnLayer = (
           customerData,
         });
         return { allowed, balance };
+      }),
+    previewSeatChange: ({ seats }) =>
+      Effect.succeed({
+        total: seats * (config.perSeatPrice ?? 20),
+        currency: "usd",
+        seats,
       }),
     attach: ({ customerId, customerData }) =>
       Effect.sync(() => {
@@ -172,6 +180,8 @@ export const failingAutumnLayer = (
       failOn === "check"
         ? fail
         : Effect.succeed({ allowed: failOn !== "attach", balance: null }),
+    previewSeatChange: ({ seats }) =>
+      Effect.succeed({ total: seats * 20, currency: "usd", seats }),
     attach: () =>
       failOn === "attach"
         ? fail

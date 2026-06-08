@@ -98,6 +98,31 @@ function boundMethods(client: Autumn): AutumnClientImpl {
         catch: (cause) =>
           new AutumnError({ message: autumnMessage(cause, "check"), cause }),
       }),
+    previewSeatChange: ({ customerId, planId, seats }) =>
+      Effect.tryPromise({
+        try: async () => {
+          // The customer is already on the plan (trial or paid) when inviting, so
+          // this is a seat-QUANTITY change → previewUpdate (previewAttach 409s on
+          // the same plan). The RECURRING price the user will pay is next cycle's
+          // total; `total` is the (often $0 during a trial) immediate proration.
+          const res = await client.billing.previewUpdate({
+            customerId,
+            planId,
+            featureQuantities: [{ featureId: SEATS_FEATURE_ID, quantity: seats }],
+          });
+          const recurring =
+            (typeof res.nextCycle?.total === "number"
+              ? res.nextCycle.total
+              : undefined) ??
+            (typeof res.total === "number" ? res.total : 0);
+          return { total: recurring, currency: res.currency ?? "usd", seats };
+        },
+        catch: (cause) =>
+          new AutumnError({
+            message: autumnMessage(cause, "previewUpdate"),
+            cause,
+          }),
+      }),
     attach: ({ customerId, planId, customerData }) =>
       Effect.tryPromise({
         try: async () => {
@@ -271,6 +296,8 @@ export const AutumnClientLive: Layer.Layer<AutumnClient> = Layer.effect(
       sdk.pipe(Effect.flatMap((client) => use(boundMethods(client))));
     return {
       checkSeats: (args) => withClient((m) => m.checkSeats(args)),
+      previewSeatChange: (args) =>
+        withClient((m) => m.previewSeatChange(args)),
       attach: (args) => withClient((m) => m.attach(args)),
       startTrial: (args) => withClient((m) => m.startTrial(args)),
       trackSeats: (args) => withClient((m) => m.trackSeats(args)),

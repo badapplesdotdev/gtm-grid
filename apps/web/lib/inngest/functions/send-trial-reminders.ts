@@ -29,8 +29,8 @@ interface DueReminder {
 }
 
 export const sendTrialReminders = inngest.createFunction(
-  { id: "send-trial-reminders" },
-  { cron: "0 14 * * *" }, // daily at 14:00 UTC
+  // Daily at 14:00 UTC.
+  { id: "send-trial-reminders", triggers: [{ cron: "0 14 * * *" }] },
   async ({ step }) => {
     if (!emailEnabled()) return { sent: 0, skipped: "email disabled" };
 

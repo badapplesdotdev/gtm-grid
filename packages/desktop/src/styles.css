@@ -2871,3 +2871,8 @@ button.import-type:hover { background: var(--surface-3); }
 .trial-banner { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: var(--surface-2, rgba(34,197,94,0.10)); border-bottom: 1px solid var(--border-1, rgba(0,0,0,0.08)); font-size: 13px; }
 .trial-banner__text { flex: 1; min-width: 0; color: var(--text-1); }
 .trial-banner--urgent { background: rgba(234,88,12,0.12); }
+
+/* Seat-cost confirmation price. */
+.seat-price { display: flex; align-items: baseline; gap: 6px; padding: 12px 14px; border: 1px solid var(--border-1, rgba(0,0,0,0.08)); border-radius: 10px; background: var(--surface-2, rgba(0,0,0,0.02)); }
+.seat-price__amount { font-size: 24px; font-weight: 700; color: var(--text-1); }
+.seat-price__unit { font-size: 13px; color: var(--text-2); }
