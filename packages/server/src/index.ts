@@ -24,6 +24,19 @@ import {
 import { detectAgents, streamClaude, streamCodex, setAgentPath, rescanAgents, type AgentKind } from "./agent.js";
 import { runCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
 import { corsHeadersFor, isOriginAllowed } from "./cors.js";
+import {
+  SIGNAL_SOURCES,
+  getSource,
+  listBindings,
+  upsertBinding,
+  deleteBinding,
+  newBinding,
+  syncBinding,
+  startSignalPoller,
+  syncDue,
+  type SignalDeps,
+  type SignalSchedule,
+} from "./signals.js";
 
 const PORT = Number(process.env.GTMGRID_PORT ?? 8787);
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
@@ -427,6 +440,82 @@ route("DELETE", "/api/skills/:id", (p) => {
   return { ok: true };
 });
 
+// --- Signals: bind a table to a Trigify saved search + poll new results in ---
+function signalDeps(): SignalDeps {
+  return { dispatch: (pr, m, i) => current.engine.dispatch(pr, m, i), projectDb: current.projectDb };
+}
+
+// Catalog of signal sources + each one's input schema (for the config form).
+route("GET", "/api/signals/sources", () => ({
+  trigifyConnected: !!globalDb.getCredential("trigify"),
+  sources: SIGNAL_SOURCES.map((s) => {
+    const m = registry.method("trigify", s.method);
+    return {
+      id: s.id,
+      label: s.label,
+      group: s.group,
+      kind: s.kind,
+      description: s.description,
+      columns: s.columns,
+      inputSchema: (m as any)?.inputSchema ?? null,
+    };
+  }),
+}));
+
+// Bindings in the current project (without the heavy `seen` dedupe window).
+route("GET", "/api/signals", () =>
+  listBindings(current.projectDb).map(({ seen, ...b }) => b),
+);
+
+// Create: table + columns + Trigify search + binding + initial pull.
+route("POST", "/api/signals", async (_p, body) => {
+  const source = getSource(String(body?.sourceId ?? ""));
+  if (!source) return { error: "unknown signal source" };
+  if (!globalDb.getCredential("trigify")) return { error: "Connect Trigify first (Tools → Trigify)." };
+  const name = (String(body?.name ?? "").trim() || source.label).slice(0, 80);
+  const config = (body?.config ?? {}) as Record<string, unknown>;
+  const schedule = (["manual", "hourly", "daily", "weekly"].includes(body?.schedule) ? body.schedule : "daily") as SignalSchedule;
+
+  const table = current.projectDb.createTable(name);
+  for (const col of source.columns) {
+    current.projectDb.createColumn({ tableId: table.id, name: col.name, type: "text", kind: "manual", provider: null, method: null, code: null, params: {} });
+  }
+
+  let searchId: string | null = null;
+  try {
+    const created: any = await current.engine.dispatch("trigify", source.method, { name, ...config });
+    searchId = created?.id ?? created?.search_id ?? created?.data?.id ?? created?.search?.id ?? null;
+  } catch (e) {
+    current.projectDb.deleteTable(table.id);
+    return { error: `Could not create the Trigify search: ${e instanceof Error ? e.message : String(e)}` };
+  }
+
+  const binding = newBinding({ tableId: table.id, source, config: { name, ...config }, schedule, searchId });
+  upsertBinding(current.projectDb, binding);
+  const sync = await syncBinding(signalDeps(), binding);
+  return { tableId: table.id, bindingId: binding.id, searchId, added: sync.added, error: sync.error ?? null };
+});
+
+// Manual "pull now".
+route("POST", "/api/signals/:id/sync", async (p) => {
+  const b = listBindings(current.projectDb).find((x) => x.id === p.id);
+  if (!b) return { error: "not found" };
+  const r = await syncBinding(signalDeps(), b);
+  return { ok: !r.error, added: r.added, error: r.error ?? null };
+});
+
+route("POST", "/api/signals/:id/toggle", (p, body) => {
+  const b = listBindings(current.projectDb).find((x) => x.id === p.id);
+  if (!b) return { error: "not found" };
+  b.enabled = (body as any)?.enabled !== false;
+  upsertBinding(current.projectDb, b);
+  return { ok: true, enabled: b.enabled };
+});
+
+route("DELETE", "/api/signals/:id", (p) =>
+  deleteBinding(current.projectDb, p.id) ? { ok: true } : { error: "not found" },
+);
+
 // --- AI providers (bring-your-own-key for AI step functions) ---
 // `fallbackModels` is only used if the live /v1/models fetch fails (offline,
 // bad key). When connected, the real model list is pulled from the provider.
@@ -824,3 +913,7 @@ const HOST = "127.0.0.1";
 server.listen(PORT, HOST, () => {
   console.error(`gtmgrid server on http://${HOST}:${PORT} (project: ${current.name})`);
 });
+
+// Poll-while-open: pull new Trigify signal results into bound tables on schedule,
+// with a catch-up pass ~8s after boot (follows project switches via getDeps).
+startSignalPoller(() => (current ? signalDeps() : null));

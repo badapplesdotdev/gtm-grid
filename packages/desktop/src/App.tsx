@@ -27,6 +27,7 @@ import {
   type CloudProject,
 } from "./cloud/useCloudGrid";
 import { ImportCsvModal } from "./ImportCsvModal";
+import { SignalsModal } from "./SignalsModal";
 import type { ImportWriter } from "./csvImport";
 import type { Id } from "./cloud/ids";
 import "./styles.css";
@@ -387,12 +388,14 @@ function NewTableChooser({
   onBlank,
   onCsv,
   onWebhook,
+  onSignals,
 }: {
   inCloud: boolean;
   onClose: () => void;
   onBlank: () => void;
   onCsv: () => void;
   onWebhook: () => void;
+  onSignals: () => void;
 }) {
   const Caret = (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
@@ -402,6 +405,9 @@ function NewTableChooser({
   );
   const WebhookIcon = (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17a4 4 0 0 1 3.6-3.98" /><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06" /><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8" /></svg>
+  );
+  const SignalIcon = (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 11a9 9 0 0 1 9 9" /><path d="M4 4a16 16 0 0 1 16 16" /><circle cx="5" cy="19" r="1" /></svg>
   );
   const LockIcon = (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
@@ -429,6 +435,14 @@ function NewTableChooser({
               <span className="acx-item-text">
                 <span className="acx-item-title">Import a CSV</span>
                 <span className="acx-item-sub">Drop a file; map columns; populate rows.</span>
+              </span>
+              <span className="acx-item-caret">{Caret}</span>
+            </button>
+            <button className="acx-item" onClick={() => { onSignals(); onClose(); }}>
+              <span className="acx-item-icon">{SignalIcon}</span>
+              <span className="acx-item-text">
+                <span className="acx-item-title">From Signals</span>
+                <span className="acx-item-sub">Trigify social signals on a schedule — auto-fills rows.</span>
               </span>
               <span className="acx-item-caret">{Caret}</span>
             </button>
@@ -497,6 +511,7 @@ export default function App() {
   // The "New table" chooser (Blank / CSV / Webhook) replaces the old
   // straight-to-blank entry points.
   const [showNewTableChooser, setShowNewTableChooser] = useState(false);
+  const [showSignals, setShowSignals] = useState(false);
   // Bumped to ask the CloudGrid to auto-open the webhook setup form (the chooser's
   // Webhook flow). A monotonic token so each request re-triggers cleanly.
   const [openWebhookToken, setOpenWebhookToken] = useState(0);
@@ -1996,6 +2011,22 @@ export default function App() {
           }}
           onCsv={() => setImportMode(inCloud ? "cloud" : "local")}
           onWebhook={() => { void onChooseWebhook(); }}
+          onSignals={() => setShowSignals(true)}
+        />
+      )}
+
+      {showSignals && (
+        <SignalsModal
+          onClose={() => setShowSignals(false)}
+          onConnectTrigify={() => { setShowSignals(false); setView({ kind: "extension", id: "trigify" }); }}
+          onCreated={(tableId) => {
+            setShowSignals(false);
+            api.tables().then((t) => {
+              setTables(t);
+              setSelectedTableId(tableId);
+              setView({ kind: "table" });
+            }).catch(() => {});
+          }}
         />
       )}
 
