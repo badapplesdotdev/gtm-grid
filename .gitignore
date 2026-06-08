@@ -14,8 +14,12 @@ packages/desktop/src-tauri/target/
 packages/desktop/src-tauri/sidecar/
 packages/desktop/src-tauri/gen/
 
-# Local environment overrides (DATABASE_URL, auth/Supabase secrets, etc.).
-.env.local
+# Local environment + secrets (DATABASE_URL, Autumn/Resend keys, the Tauri
+# updater signing key, etc.). Ignore every .env variant except the checked-in
+# template, so a secret can never be committed by accident.
+.env
+.env.*
+!.env.example
 
 # Claude Code session artifacts (skills, plans, workflow worktrees)
 .claude/
