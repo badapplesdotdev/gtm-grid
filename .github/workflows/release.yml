@@ -78,6 +78,13 @@ jobs:
     needs: version
     strategy:
       fail-fast: false
+      # Serialize the platform builds. tauri-action's "first job creates the
+      # release, the rest upload to it" model is a read-modify-write on both the
+      # release assets and `latest.json`: run concurrently, two jobs can clobber
+      # each other (e.g. v0.3.10 lost the macOS-Intel + Windows assets AND their
+      # `latest.json` entries while every job still reported success). One job at
+      # a time means each completes its fetch→merge→upload before the next starts.
+      max-parallel: 1
       matrix:
         include:
           - platform: macos-14 # Apple silicon (native)
