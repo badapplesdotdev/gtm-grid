@@ -18,6 +18,11 @@ import {
   useMyPendingInvitations,
   useAcceptInvitation,
 } from "./cloud/useWorkspaceInvitations";
+import {
+  clearPendingInviteToken,
+  usePendingInviteToken,
+} from "./cloud/pendingInvite";
+import { fireConfetti } from "./cloud/confetti";
 import { useWorkspaceCredentials } from "./cloud/useWorkspaceCredentials";
 import {
   useCloudProjects,
@@ -530,6 +535,10 @@ export default function App() {
   // state above is left intact so switching back is instant and unchanged.
   const me = useMe();
   const { isAuthenticated, isLoading: authLoading } = useAuthState();
+  // A captured invite (deep link `gtmgrid://invite/<token>` or `?invite=` URL).
+  // When present + signed out it FORCES the auth flow even in local mode, so an
+  // invitee is always guided to sign up / sign in and then auto-enrolled.
+  const pendingInviteToken = usePendingInviteToken();
   // Local-first: when cloud is configured but the user hasn't signed in, the
   // onboarding offers "Continue locally" — which sets this persisted flag so the
   // app boots straight into local mode (no cloud features) on future launches.
@@ -558,6 +567,22 @@ export default function App() {
     if (workspaceId !== null) void syncWorkspacePlan(workspaceId);
   }, []);
   const { activeWorkspace, setActiveWorkspaceId } = useActiveWorkspace(me ?? null);
+  // Shown after joining a workspace via an invite: a confetti burst + a
+  // confirmation dialog. Centralised so every accept path (the banner + the
+  // new-signup auto-enrol) celebrates + refreshes state identically.
+  const [celebrateInvite, setCelebrateInvite] = useState<{
+    workspaceName: string | null;
+  } | null>(null);
+  const onInviteAccepted = useCallback(
+    (workspaceId: Id<"workspaces">, workspaceName: string | null) => {
+      clearPendingInviteToken();
+      setActiveWorkspaceId(workspaceId);
+      refreshAppState(workspaceId);
+      fireConfetti();
+      setCelebrateInvite({ workspaceName });
+    },
+    [setActiveWorkspaceId, refreshAppState],
+  );
 
   // ── Cloud onboarding flow (C28) ──────────────────────────────
   // The full-screen split-layout onboarding wizard. Opened from the AccountBar
@@ -589,9 +614,13 @@ export default function App() {
       if (autoAcceptedRef.current) return;
       autoAcceptedRef.current = true;
       void (async () => {
-        const res = await acceptInvite(myInvites[0].token).catch(() => null);
+        const invite = myInvites[0];
+        const res = await acceptInvite(invite.token).catch(() => null);
         if (res?.status === "accepted") {
-          setActiveWorkspaceId(res.workspaceId as Id<"workspaces">);
+          onInviteAccepted(
+            res.workspaceId as Id<"workspaces">,
+            invite.workspaceName,
+          );
           return;
         }
         // Couldn't auto-enrol (seat limit / invalid / error): fall back to the
@@ -1246,16 +1275,26 @@ export default function App() {
   // drops into local mode with NO cloud features, free + offline. Cloud access
   // (workspaces, sync, realtime) requires signing in. Once the user has chosen
   // local (or signed in), this never blocks again.
-  if (cloudEnabled && !localMode && authLoading) {
+  // A pending invite OVERRIDES local mode: an invitee who previously chose
+  // "continue locally" must still be guided through sign-in to accept + join.
+  const mustAuth =
+    cloudEnabled &&
+    !isAuthenticated &&
+    (!localMode || pendingInviteToken !== null);
+  if (mustAuth && authLoading) {
     return <AppLoader inShell label="Signing you in…" />;
   }
-  if (cloudEnabled && !localMode && !isAuthenticated) {
+  if (mustAuth) {
     return (
       <OnboardingFlow
         forced
-        initialScreen="signin"
+        initialScreen={pendingInviteToken !== null ? "signup" : "signin"}
         hasSession={false}
-        onClose={continueLocally}
+        onClose={() => {
+          // Opting out clears the invite so the gate doesn't re-fire in a loop.
+          if (pendingInviteToken !== null) clearPendingInviteToken();
+          continueLocally();
+        }}
         onDone={() => {}}
       />
     );
@@ -1265,7 +1304,7 @@ export default function App() {
     <div className="app-shell" style={{ ["--sidebar-w"]: `${sidebarWidth}px` } as CSSProperties}>
       {/* Workspace-invite accept banner (email-matched + ?invite= URL token).
           Self-gates: renders nothing when signed out / no pending invites. */}
-      <PendingInvites onAccepted={setActiveWorkspaceId} />
+      <PendingInvites onAccepted={onInviteAccepted} />
       {showTrialBanner && trialDaysLeft != null && (
         <div
           className={`trial-banner${trialDaysLeft <= 2 ? " trial-banner--urgent" : ""}`}
@@ -1954,6 +1993,34 @@ export default function App() {
           workspaceName={activeWorkspace.name}
           onClose={() => setShowWorkspaceSettings(false)}
         />
+      )}
+
+      {/* Invite-accepted celebration: confetti fires on accept; this confirms it. */}
+      {celebrateInvite && (
+        <div
+          className="overlay"
+          onMouseDown={(e) =>
+            e.target === e.currentTarget && setCelebrateInvite(null)
+          }
+        >
+          <div className="modal celebrate" style={{ width: 380 }}>
+            <div className="celebrate__emoji">🎉</div>
+            <h2 className="celebrate__title">
+              You&apos;re in{celebrateInvite.workspaceName ? "!" : "!"}
+            </h2>
+            <p className="celebrate__body">
+              You&apos;ve joined{" "}
+              <strong>{celebrateInvite.workspaceName ?? "the workspace"}</strong>
+              . Your teammates&apos; cloud tables are ready.
+            </p>
+            <button
+              className="btn btn--primary"
+              onClick={() => setCelebrateInvite(null)}
+            >
+              Let&apos;s go
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Upgrade prompt for the cloud-locked / trial-expired state. Reuses the
