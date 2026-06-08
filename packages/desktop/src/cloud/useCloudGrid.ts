@@ -225,8 +225,18 @@ export function useCloudProjectMutations() {
     [qc],
   );
   const deleteTable = useCallback(
-    (tableId: Id<"tables">) => apiClient!.grid.deleteTable.mutate({ tableId }),
-    [],
+    async (tableId: Id<"tables">) => {
+      await apiClient!.grid.deleteTable.mutate({ tableId });
+      // Refresh the sidebar list (the delete only carries the tableId, so
+      // invalidate every loaded tables list by key prefix) and drop the now-gone
+      // table's own query.
+      await qc.invalidateQueries({
+        predicate: (query) =>
+          query.queryKey[0] === "grid" && query.queryKey[1] === "tables",
+      });
+      qc.removeQueries({ queryKey: gridQueryKeys.table(tableId) });
+    },
+    [qc],
   );
   return { createProject, createTable, deleteTable };
 }
