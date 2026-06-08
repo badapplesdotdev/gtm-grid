@@ -1521,7 +1521,7 @@ html, body, #root {
 .agent-input textarea:focus { border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 3px var(--accent-ring); }
 .agent-send {
   all: unset; cursor: pointer;
-  position: absolute; right: 18px; bottom: 18px;
+  position: absolute; right: 18px; top: 50%; transform: translateY(-50%);
   height: 28px;
   width: 28px;
   border-radius: var(--r-sm);
