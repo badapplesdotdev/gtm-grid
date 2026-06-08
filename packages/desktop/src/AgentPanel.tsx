@@ -28,15 +28,19 @@ const AGENT_LABEL: Record<AgentKind, string> = { claude: "Claude Code", codex: "
 const MODEL_OPTIONS: Record<AgentKind, { value: string; label: string }[]> = {
   claude: [
     { value: "", label: "Default" },
-    { value: "opus", label: "Opus" },
-    { value: "sonnet", label: "Sonnet" },
-    { value: "haiku", label: "Haiku" },
+    { value: "claude-opus-4-8", label: "Opus 4.8" },
+    { value: "claude-opus-4-7", label: "Opus 4.7" },
+    { value: "claude-opus-4-6", label: "Opus 4.6" },
+    { value: "claude-sonnet-4-6", label: "Sonnet 4.6" },
+    { value: "claude-haiku-4-5", label: "Haiku 4.5" },
   ],
   codex: [
     { value: "", label: "Default" },
     { value: "gpt-5-codex", label: "GPT-5 Codex" },
     { value: "gpt-5", label: "GPT-5" },
+    { value: "gpt-5-mini", label: "GPT-5 mini" },
     { value: "o3", label: "o3" },
+    { value: "o4-mini", label: "o4-mini" },
   ],
 };
 const AGENT_SHORT: Record<AgentKind, string> = { claude: "Claude", codex: "Codex" };
