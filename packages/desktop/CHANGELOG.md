@@ -1,5 +1,28 @@
 # @gtmgrid/desktop
 
+## 0.3.10
+
+### Patch Changes
+
+- 5c89f92: Auto-updater now re-checks for new releases while the app stays open, instead of
+  only at launch. It polls every 2 hours and re-checks when the window regains
+  focus (throttled to once per 15 minutes), so a long-running app surfaces the
+  update banner without needing a manual restart. Polling stops once an update is
+  found.
+  - @gtmgrid/cloud@0.3.10
+  - @gtmgrid/services@0.3.10
+
+## 0.3.9
+
+### Patch Changes
+
+- c627d4b: Fix deleted cloud tables lingering in the sidebar. `deleteTable` fired the
+  mutation but never invalidated the tables-list query, so the removed table stayed
+  visible until a manual refresh. It now invalidates the loaded tables lists and
+  drops the deleted table's own cached query.
+  - @gtmgrid/cloud@0.3.9
+  - @gtmgrid/services@0.3.9
+
 ## 0.3.8
 
 ### Patch Changes
