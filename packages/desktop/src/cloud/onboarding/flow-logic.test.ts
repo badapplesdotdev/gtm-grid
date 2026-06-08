@@ -33,9 +33,11 @@ describe("nextScreen / backScreen (state machine)", () => {
     expect(nextScreen("signup")).toBe("workspace");
   });
 
-  it("walks the wizard forward workspace → invite → plan → connect → done", () => {
+  it("walks the wizard forward workspace → invite → done (plan + AI key skipped)", () => {
     expect(nextScreen("workspace")).toBe("invite");
-    expect(nextScreen("invite")).toBe("plan");
+    // Plan + AI-key steps removed from the active flow (auto Team trial).
+    expect(nextScreen("invite")).toBe("done");
+    // The retained-but-unreachable screens still chain for safety.
     expect(nextScreen("plan")).toBe("connect");
     expect(nextScreen("connect")).toBe("done");
   });
@@ -51,6 +53,8 @@ describe("nextScreen / backScreen (state machine)", () => {
     expect(backScreen("workspace")).toBe("signup");
     expect(backScreen("signup")).toBe("signin");
     expect(backScreen("signin")).toBe("signin");
+    // Team is the last reachable step now, so done walks back to invite.
+    expect(backScreen("done")).toBe("invite");
   });
 });
 

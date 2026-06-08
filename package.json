@@ -24,7 +24,7 @@
     "turbo:typecheck": "turbo run typecheck",
     "turbo:lint": "turbo run lint",
     "turbo:test": "turbo run test",
-    "typecheck": "tsc -b && pnpm --filter @gtmgrid/desktop typecheck",
+    "typecheck": "tsc -b && pnpm --filter @gtmgrid/web typecheck && pnpm --filter @gtmgrid/desktop typecheck",
     "lint": "oxlint packages",
     "test": "vitest run",
     "test:watch": "vitest",
