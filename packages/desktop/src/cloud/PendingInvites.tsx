@@ -49,17 +49,12 @@ export function PendingInvites({ onAccepted }: PendingInvitesProps) {
   const [error, setError] = useState<string | null>(null);
   // Invites the user dismissed this session (hidden without accepting).
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
-  // A token captured from the launch URL, accepted once the user is signed in.
-  const [urlToken, setUrlToken] = useState<string | null>(null);
+  // A token captured from a `gtmgrid://invite/<token>` deep link or `?invite=`
+  // URL (see pendingInvite.ts). Read once via lazy init — no mount effect needed
+  // — and auto-accepted once the user is authenticated; cleared on success, not
+  // on read, so a failed/abandoned accept can be retried.
+  const [urlToken] = useState<string | null>(getPendingInviteToken);
   const [urlTokenHandled, setUrlTokenHandled] = useState(false);
-
-  useEffect(() => {
-    // Captured from a `gtmgrid://invite/<token>` deep link or `?invite=` URL
-    // (see pendingInvite.ts). Cleared on a successful accept, not on read, so a
-    // failed/abandoned accept can be retried.
-    const token = getPendingInviteToken();
-    if (token) setUrlToken(token);
-  }, []);
 
   const accept = useCallback(
     async (token: string) => {
