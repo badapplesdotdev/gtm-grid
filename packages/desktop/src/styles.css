@@ -1505,13 +1505,13 @@ html, body, #root {
 .agent-think-dots span:nth-child(3) { animation-delay: .4s; }
 @keyframes agentPulse { 0%,60%,100% { opacity: .3; } 30% { opacity: 1; } }
 
-.agent-input { border-top: 1px solid var(--border); padding: 12px; display: flex; gap: 8px; flex-shrink: 0; align-items: flex-end; }
+.agent-input { border-top: 1px solid var(--border); padding: 12px; display: flex; gap: 8px; flex-shrink: 0; align-items: flex-end; position: relative; }
 .agent-input textarea {
   flex: 1;
   resize: none;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
-  padding: 9px 11px;
+  padding: 9px 42px 9px 11px;
   font: 400 13px var(--font-sans);
   color: var(--text);
   background: var(--surface-2);
@@ -1521,9 +1521,9 @@ html, body, #root {
 .agent-input textarea:focus { border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 3px var(--accent-ring); }
 .agent-send {
   all: unset; cursor: pointer;
-  align-self: flex-end;
-  height: 32px;
-  width: 32px;
+  position: absolute; right: 18px; bottom: 18px;
+  height: 28px;
+  width: 28px;
   border-radius: var(--r-sm);
   background: transparent;
   color: var(--accent-2);
