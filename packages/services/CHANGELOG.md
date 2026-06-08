@@ -1,5 +1,21 @@
 # @gtmgrid/services
 
+## 0.3.8
+
+### Patch Changes
+
+- 7f41587: Fix the plan upgrade/checkout from a trial. Autumn `attach` now forces hosted
+  Stripe Checkout (`redirectMode: "always"`) so upgrading a customer with no card on
+  file (e.g. on a no-card trial) opens checkout to collect payment instead of
+  failing with a Stripe "no payment source" 400. And selecting the plan you're
+  already trialing (e.g. Team → Team) now uses `setupPayment` (add a card, convert
+  the trial to paid) instead of re-attaching the same plan, which Autumn rejects
+  with a 409 `plan_already_attached`.
+- Updated dependencies [7f41587]
+  - @gtmgrid/cloud@0.3.8
+  - @gtmgrid/db@0.3.8
+  - @gtmgrid/email@0.3.8
+
 ## 0.3.7
 
 ### Patch Changes
