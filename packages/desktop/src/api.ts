@@ -232,7 +232,26 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ agent, path }),
     }),
+  // Past conversations from the CLI's OWN native transcript store (current project).
+  agentSessions: (agent: "claude" | "codex") =>
+    http<{ sessions: AgentSession[] }>(`/api/agent/sessions/${agent}`),
+  agentSession: (agent: "claude" | "codex", id: string) =>
+    http<{ messages: AgentHistoryMessage[] }>(`/api/agent/sessions/${agent}/${encodeURIComponent(id)}`),
 };
+
+/** A past conversation summary (from the agent's native transcript store). */
+export interface AgentSession {
+  id: string;
+  title: string;
+  updatedAt: number;
+  messageCount: number;
+}
+/** One parsed turn from a native transcript. */
+export interface AgentHistoryMessage {
+  role: "user" | "assistant";
+  text: string;
+  tools: { name: string; input: Record<string, unknown>; result?: string }[];
+}
 
 export interface AgentStatus {
   installed: boolean;
