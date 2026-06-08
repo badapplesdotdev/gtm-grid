@@ -1,0 +1,55 @@
+name: Migrate prod DB
+
+# Apply pending Drizzle migrations to the PRODUCTION database on every push to
+# main, BEFORE/alongside the Vercel deploy. This closes the gap that caused an
+# outage once: a migration (new column) shipped in the code but was never run on
+# prod, so the new code's queries referenced a column the DB lacked.
+#
+# Migrations MUST stay backward-compatible (expand-contract): the previous code
+# keeps working before this runs, and the new code works after. For additive
+# changes (ADD COLUMN, new tables/indexes) that holds, so running in parallel with
+# the Vercel deploy is safe.
+#
+# Requires the `PROD_DATABASE_URL` repository secret (the Supabase pooled
+# connection string — Supavisor transaction mode, port 6543).
+
+on:
+  push:
+    branches: [main]
+    # Only run when migrations (or the schema/config that generates them) change,
+    # so unrelated pushes don't re-run drizzle-kit needlessly.
+    paths:
+      - "packages/db/migrations/**"
+      - "packages/db/src/schema.ts"
+      - "packages/db/drizzle.config.ts"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never run two prod migrations at once.
+  group: migrate-prod
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: Apply pending migrations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: drizzle-kit migrate (prod)
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "::error::PROD_DATABASE_URL secret is not set — add the prod Supabase pooled connection string in repo Settings → Secrets."
+            exit 1
+          fi
+          pnpm --filter @gtmgrid/db db:migrate
