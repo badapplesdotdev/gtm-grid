@@ -132,6 +132,10 @@ fn main() {
         // System-browser opener: the desktop OAuth flow opens the provider
         // authorise URL here (not inside the webview).
         .plugin(tauri_plugin_opener::init())
+        // In-app auto-update (download + install a signed newer release) and the
+        // process plugin so the frontend can relaunch after installing.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let child = spawn_sidecar(app);
             app.manage(Sidecar(Mutex::new(child)));

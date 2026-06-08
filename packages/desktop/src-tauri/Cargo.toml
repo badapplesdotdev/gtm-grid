@@ -16,6 +16,10 @@ tauri-plugin-deep-link = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 # Open the OAuth authorise URL in the user's SYSTEM browser (not the webview).
 tauri-plugin-opener = "2"
+# In-app auto-update: download + install a signed newer release. `process` lets
+# us relaunch the app after the update is installed.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 # Required in scope by `generate_context!` once a plugin config (deep-link
 # schemes) is present in tauri.conf.json — it deserialises that config at build.
 serde_json = "1"
