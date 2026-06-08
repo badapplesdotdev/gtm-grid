@@ -33,8 +33,6 @@ import {
   newBinding,
   syncBinding,
   warmUpBinding,
-  startSignalPoller,
-  syncDue,
   type SignalDeps,
   type SignalSchedule,
 } from "./signals.js";
@@ -917,6 +915,8 @@ server.listen(PORT, HOST, () => {
   console.error(`gtmgrid server on http://${HOST}:${PORT} (project: ${current.name})`);
 });
 
-// Poll-while-open: pull new Trigify signal results into bound tables on schedule,
-// with a catch-up pass ~8s after boot (follows project switches via getDeps).
-startSignalPoller(() => (current ? signalDeps() : null));
+// NOTE: the LOCAL desktop does NOT run a recurring poller — a social-signal table
+// pulls once when created (with a short warm-up retry while Trigify scrapes), and
+// can be re-synced on demand via POST /api/signals/:id/sync. Recurring/scheduled
+// auto-refresh is a CLOUD-only feature (the Inngest cron worker), since a desktop
+// "cron" can't run while the app is closed anyway.

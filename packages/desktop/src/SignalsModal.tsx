@@ -4,12 +4,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, SignalSource } from "./api";
 
-const SCHEDULES: { id: string; label: string }[] = [
-  { id: "manual", label: "Manual" },
-  { id: "hourly", label: "Hourly" },
-  { id: "daily", label: "Daily" },
-  { id: "weekly", label: "Weekly" },
-];
 
 // Fields surfaced in the main form (beyond `required`); the rest go under Advanced.
 const COMMON = new Set([
@@ -145,7 +139,8 @@ export function SignalsModal({
   const [sources, setSources] = useState<SignalSource[]>([]);
   const [selected, setSelected] = useState<SignalSource | null>(null);
   const [name, setName] = useState("");
-  const [schedule, setSchedule] = useState("daily");
+  // Local has no recurring cron — always pull once. (Cloud picks a real schedule.)
+  const schedule = "manual";
   const [values, setValues] = useState<Record<string, string | boolean | string[]>>({});
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -406,22 +401,9 @@ export function SignalsModal({
               </>
             )}
 
-            <div className="sig-field">
-              <label className="sig-label">Pull schedule</label>
-              <div className="sig-schedule">
-                {SCHEDULES.map((s) => (
-                  <button
-                    key={s.id}
-                    className={`sig-sched-btn${schedule === s.id ? " active" : ""}`}
-                    onClick={() => setSchedule(s.id)}
-                  >
-                    {s.label}
-                  </button>
-                ))}
-              </div>
-              <div className="sig-hint">
-                Runs a local cron while the app is open and catches up on launch. {schedule === "manual" ? "Manual = pull only when you click Sync." : ""}
-              </div>
+            <div className="sig-note">
+              This pulls results into the table <strong>once now</strong>. Recurring auto-refresh on a
+              schedule (hourly / daily) runs 24/7 server-side and is a <strong>cloud plan</strong> feature.
             </div>
 
             {error && <div className="sig-error">{error}</div>}
