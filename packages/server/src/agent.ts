@@ -334,7 +334,7 @@ function mcpConfig(repoRoot: string, project: string): string {
 /** Stream a Claude Code turn over SSE, driving gtmgrid via MCP. */
 export function streamClaude(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext; origin?: string },
+  opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext; origin?: string; model?: string },
 ): void {
   const sse = sseClient(res, opts.origin);
   const args = [
@@ -354,6 +354,7 @@ export function streamClaude(
   ];
   const preamble = contextPreamble(opts.context);
   if (preamble) args.push("--append-system-prompt", preamble);
+  if (opts.model) args.push("--model", opts.model);
   if (opts.sessionId) args.push("--resume", opts.sessionId);
 
   const bin = resolveAgentPath("claude");
@@ -442,7 +443,7 @@ function resultText(result: any): string {
  *  project) and bypasses approval prompts for headless tool use. */
 export function streamCodex(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; threadId?: string; context?: AgentContext; origin?: string },
+  opts: { message: string; project: string; repoRoot: string; threadId?: string; context?: AgentContext; origin?: string; model?: string },
 ): void {
   const sse = sseClient(res, opts.origin);
   const launcher = mcpLauncher(opts.repoRoot);
@@ -456,6 +457,7 @@ export function streamCodex(
     // user's other registered servers (Trigify/exa/etc.) and drives gtmgrid.
     "-c",
     `mcp_servers={ gtmgrid = { command = "${launcher}", env = { GTMGRID_PROJECT = "${opts.project}" } } }`,
+    ...(opts.model ? ["-m", opts.model] : []),
   ];
   const args = opts.threadId
     ? ["exec", "resume", opts.threadId, ...flags, message]

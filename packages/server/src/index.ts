@@ -874,8 +874,9 @@ const server = createServer(async (req, res) => {
       const context = { ...body?.context, providers, skills };
       // Pass `origin` through so the SSE stream emits the allowlisted CORS
       // header on this privileged route (#22).
-      if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context, origin });
-      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin });
+      const model = typeof body?.model === "string" && body.model.trim() ? body.model.trim() : undefined;
+      if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context, origin, model });
+      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model });
     } catch (e) {
       send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
     }

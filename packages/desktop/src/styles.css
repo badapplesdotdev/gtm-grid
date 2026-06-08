@@ -1337,6 +1337,19 @@ html, body, #root {
   align-items: center;
   flex-shrink: 0;
 }
+
+/* Per-agent model picker (chip row under the tabs) */
+.agent-models {
+  display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+  padding: 7px 10px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.agent-models-label { font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); margin-right: 2px; }
+.agent-model-chip {
+  all: unset; cursor: pointer; font: 500 11.5px var(--font-sans); color: var(--text-2);
+  padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); transition: all 0.12s;
+}
+.agent-model-chip:hover { border-color: var(--border-2); color: var(--text); }
+.agent-model-chip.active { background: var(--accent-soft); border-color: var(--accent-2); color: var(--accent-2); font-weight: 600; }
 .agent-tab {
   all: unset; cursor: pointer;
   display: flex; align-items: center; gap: 8px;
