@@ -11,7 +11,7 @@ import { AccountBar, PlanBillingModal } from "./cloud/AccountBar";
 import { PendingInvites } from "./cloud/PendingInvites";
 import { WorkspaceSettings } from "./cloud/WorkspaceSettings";
 import { OnboardingFlow } from "./cloud/onboarding/OnboardingFlow";
-import { cloudEnabled, syncWorkspacePlan } from "./cloud/client";
+import { cloudEnabled, queryClient, syncWorkspacePlan } from "./cloud/client";
 import { CloudGrid } from "./cloud/CloudGrid";
 import { useMe, useActiveWorkspace, useAuthState } from "./cloud/auth";
 import {
@@ -548,6 +548,14 @@ export default function App() {
       /* no storage — local mode just won't persist across launches */
     }
     setLocalMode(true);
+  }, []);
+  // Pull fresh cloud state (user, workspaces, plan, seats) after a flow that
+  // changes it — finishing onboarding or accepting an invite — so the badge,
+  // plan, and cloud tables are immediately in sync. Invalidates every cached
+  // query and reconciles the plan from Autumn for the given workspace.
+  const refreshAppState = useCallback((workspaceId: string | null) => {
+    void queryClient.invalidateQueries();
+    if (workspaceId !== null) void syncWorkspacePlan(workspaceId);
   }, []);
   const { activeWorkspace, setActiveWorkspaceId } = useActiveWorkspace(me ?? null);
 
@@ -1909,6 +1917,7 @@ export default function App() {
           onDone={(workspaceId) => {
             if (workspaceId !== null) setActiveWorkspaceId(workspaceId);
             setOnboarding(null);
+            refreshAppState(workspaceId);
           }}
         />
       )}

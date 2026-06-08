@@ -164,13 +164,16 @@ function Pane(props: {
   );
 }
 
-/** The 4-step wizard rail (Workspace / Team / Plan / AI key). */
+/**
+ * The wizard rail. Plan + AI-key steps were removed from the flow (auto Team
+ * trial; AI key added later), so onboarding is Workspace → Team. The `step` type
+ * still allows 3/4 because the (now-unreachable) Plan/AI-key screens keep passing
+ * those values; only nodes 1–2 render.
+ */
 function StepRail({ step }: { step: 1 | 2 | 3 | 4 }) {
   const nodes = [
     { n: 1, label: "Workspace" },
     { n: 2, label: "Team" },
-    { n: 3, label: "Plan" },
-    { n: 4, label: "AI key" },
   ] as const;
   return (
     <div className="ob-step-rail">
@@ -431,7 +434,7 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
     const wid = state.workspaceId;
     const rows = state.invites.filter((i) => i.value.trim().length > 0);
     if (wid === null || rows.length === 0) {
-      go("plan");
+      go("done");
       return;
     }
     setBusy(true);
@@ -450,7 +453,7 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
           inviteLayer,
         );
       }
-      go("plan");
+      go("done");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not send invites.");
     } finally {
