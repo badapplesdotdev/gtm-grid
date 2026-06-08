@@ -2835,3 +2835,27 @@ button.import-type:hover { background: var(--surface-3); }
   color: var(--text-1);
 }
 .pending-invite-text { flex: 1; min-width: 0; }
+
+/* Top-level error boundary fallback — keeps the window non-blank on a crash. */
+.error-boundary {
+  max-width: 520px;
+  margin: 12vh auto 0;
+  padding: 0 24px;
+  text-align: center;
+  font-family: inherit;
+  color: var(--text-1);
+}
+.error-boundary h1 { font-size: 20px; margin: 0 0 8px; }
+.error-boundary p { color: var(--text-2); margin: 0 0 16px; line-height: 1.5; }
+.error-boundary__detail {
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--surface-2, rgba(0,0,0,0.04));
+  border: 1px solid var(--border-1, rgba(0,0,0,0.08));
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 12px;
+  color: var(--text-2);
+  margin: 0 0 16px;
+}

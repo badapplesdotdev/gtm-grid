@@ -211,16 +211,24 @@ function ApiDeepLinkOAuthBridge({ children }: { children: ReactNode }) {
 /**
  * Wrap the app in the cloud providers (react-query). The tRPC + Better Auth
  * clients are module singletons consumed directly by hooks, so the only React
- * provider needed is react-query's. A no-op pass-through when the cloud layer is
- * disabled, so the local-only app renders identically with zero cloud calls.
+ * provider needed is react-query's.
+ *
+ * The `QueryClientProvider` is mounted UNCONDITIONALLY — even local-only (no
+ * `VITE_API_URL`) builds. `App` always calls react-query hooks (`useMe`, etc.);
+ * those queries are disabled when cloud is off, but `useQuery` still calls
+ * `useQueryClient()`, which throws "No QueryClient set" if no provider is mounted
+ * — crashing the whole app to a blank screen for every OSS user with no env vars.
+ * The client is constructed lazily and issues zero network calls, so this is free
+ * in local mode. Only the cloud-specific deep-link OAuth bridge stays gated.
  */
 export function CloudProvider({ children }: { children: ReactNode }) {
-  if (!cloudEnabled) {
-    return <>{children}</>;
-  }
   return (
     <QueryClientProvider client={queryClient}>
-      <ApiDeepLinkOAuthBridge>{children}</ApiDeepLinkOAuthBridge>
+      {cloudEnabled ? (
+        <ApiDeepLinkOAuthBridge>{children}</ApiDeepLinkOAuthBridge>
+      ) : (
+        children
+      )}
     </QueryClientProvider>
   );
 }
