@@ -140,6 +140,13 @@ import {
   recordingRealtimePublisherLayer,
 } from "./services/realtime-publisher.js";
 import { WebhookService } from "./services/webhook-service.js";
+import {
+  SignalRepo,
+  SignalRepoLive,
+  signalRepoLayer,
+  type SignalBinding,
+} from "./repositories/signal-repo.js";
+import { SignalService } from "./services/signal-service.js";
 import { BillingService } from "./services/billing-service.js";
 import { CredentialService } from "./services/credential-service.js";
 import {
@@ -267,6 +274,14 @@ export const appLayer = (params: {
     Layer.provide(extensionRepo),
     Layer.provide(membershipService),
   );
+  const signalRepo = SignalRepoLive.pipe(Layer.provide(dbLayer));
+  const signalService = SignalService.Default.pipe(
+    Layer.provide(signalRepo),
+    Layer.provide(webhookRepo),
+    Layer.provide(credentialService),
+    Layer.provide(membershipService),
+    Layer.provide(entitlementService),
+  );
   const gridService = GridService.Default.pipe(
     Layer.provide(projectRepo),
     Layer.provide(tableRepo),
@@ -288,6 +303,8 @@ export const appLayer = (params: {
     credentialService,
     webhookService,
     extensionService,
+    signalService,
+    signalRepo,
     gridService,
     workspaceRepo,
     workspaceMemberRepo,
@@ -362,6 +379,8 @@ export interface TestLayerFixtures {
   readonly emailDelivered?: boolean;
   /** Webhooks visible to {@link WebhookRepo} (MUTATED by insert/patch/delete). */
   readonly webhooks?: Webhook[];
+  /** Signal bindings visible to {@link SignalRepo} (MUTATED by insert/patch/delete). */
+  readonly signalBindings?: SignalBinding[];
   /** Tables backing the webhook worker grid paths. */
   readonly tables?: GridTable[];
   /** Columns backing mapping validation + getTable. */
@@ -565,6 +584,14 @@ export const TestLayer = (
     Layer.provide(extensionRepo),
     Layer.provide(membershipService),
   );
+  const signalRepo = signalRepoLayer({ bindings: fixtures.signalBindings });
+  const signalService = SignalService.Default.pipe(
+    Layer.provide(signalRepo),
+    Layer.provide(webhookRepo),
+    Layer.provide(credentialService),
+    Layer.provide(membershipService),
+    Layer.provide(entitlementService),
+  );
   const gridService = GridService.Default.pipe(
     Layer.provide(projectRepo),
     Layer.provide(tableRepo),
@@ -584,6 +611,8 @@ export const TestLayer = (
     credentialService,
     webhookService,
     extensionService,
+    signalService,
+    signalRepo,
     gridService,
     entitlementService,
     workspaceRepo,
@@ -624,6 +653,8 @@ export type AppServices =
   | WebhookService
   | WebhookRepo
   | WebhookDeliveryRepo
+  | SignalService
+  | SignalRepo
   | ExtensionService
   | ExtensionRepo
   | GridService
