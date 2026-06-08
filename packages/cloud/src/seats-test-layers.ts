@@ -115,6 +115,7 @@ export const fakeAutumnLayer = (
         });
         return { checkoutUrl };
       }),
+    setupPayment: () => Effect.succeed({ checkoutUrl }),
     startTrial: ({ customerId, planId, seats, trialDays, customerData }) =>
       Effect.sync(() => {
         config.trialCalls?.push({
@@ -186,6 +187,8 @@ export const failingAutumnLayer = (
       failOn === "attach"
         ? fail
         : Effect.succeed({ checkoutUrl: "https://billing.example.com/x" }),
+    setupPayment: () =>
+      Effect.succeed({ checkoutUrl: "https://billing.example.com/setup" }),
     startTrial: () => (failOn === "startTrial" ? fail : Effect.void),
     trackSeats: () => (failOn === "track" ? fail : Effect.void),
     getActivePlanIds: () =>
