@@ -182,6 +182,16 @@ export class AutumnClient extends Context.Tag("CloudAutumnClient")<
     }) => Effect.Effect<{ readonly checkoutUrl: string | null }, AutumnError>;
 
     /**
+     * Open hosted Stripe Checkout to add a payment method WITHOUT changing the
+     * plan. Used to convert a no-card trial of the CURRENT plan to paid — calling
+     * `attach` with the plan the customer is already on returns a 409
+     * (`plan_already_attached`). Returns the checkout URL, or `null`.
+     */
+    readonly setupPayment: (args: {
+      readonly customerId: string;
+    }) => Effect.Effect<{ readonly checkoutUrl: string | null }, AutumnError>;
+
+    /**
      * Start a no-card free trial of `planId` for `customerId`, granting `seats`
      * prepaid seats for the trial duration so the new workspace can invite
      * teammates immediately. Maps to Autumn `billing.attach` with
@@ -416,11 +426,13 @@ export class SeatsService extends Effect.Service<SeatsService>()(
               }),
             );
           }
-          const { checkoutUrl } = yield* autumn.attach({
-            customerId,
-            planId,
-            customerData,
-          });
+          // If the customer is ALREADY on the requested plan (e.g. trialing it),
+          // attach would 409 ("plan_already_attached"). Instead open Stripe
+          // Checkout to add a payment method, converting the trial to paid.
+          const activePlanIds = yield* autumn.getActivePlanIds({ customerId });
+          const { checkoutUrl } = activePlanIds.includes(planId)
+            ? yield* autumn.setupPayment({ customerId })
+            : yield* autumn.attach({ customerId, planId, customerData });
           if (checkoutUrl === null) {
             return yield* Effect.fail(
               new NoCheckoutUrlError({

@@ -129,11 +129,34 @@ function boundMethods(client: Autumn): AutumnClientImpl {
           await client.customers.getOrCreate(
             getOrCreateParams(customerId, customerData),
           );
-          const res = await client.billing.attach({ customerId, planId });
+          // `redirectMode: "always"` ALWAYS returns a Stripe Checkout URL. Without
+          // it, attaching a paid plan to a customer with no card (e.g. someone on
+          // a no-card trial) fails with a Stripe "no payment source" 400 instead
+          // of routing them through hosted checkout to add one.
+          const res = await client.billing.attach({
+            customerId,
+            planId,
+            redirectMode: "always",
+          });
           return { checkoutUrl: res.paymentUrl ?? null };
         },
         catch: (cause) =>
           new AutumnError({ message: autumnMessage(cause, "attach"), cause }),
+      }),
+    setupPayment: ({ customerId }) =>
+      Effect.tryPromise({
+        try: async () => {
+          // Hosted Stripe Checkout to add a payment method WITHOUT changing the
+          // plan — used to convert a no-card trial of the CURRENT plan to paid
+          // (re-attaching the same plan 409s "plan_already_attached").
+          const res = await client.billing.setupPayment({ customerId });
+          return { checkoutUrl: res.url ?? null };
+        },
+        catch: (cause) =>
+          new AutumnError({
+            message: autumnMessage(cause, "setupPayment"),
+            cause,
+          }),
       }),
     startTrial: ({ customerId, planId, seats, trialDays, customerData }) =>
       Effect.tryPromise({
@@ -299,6 +322,7 @@ export const AutumnClientLive: Layer.Layer<AutumnClient> = Layer.effect(
       previewSeatChange: (args) =>
         withClient((m) => m.previewSeatChange(args)),
       attach: (args) => withClient((m) => m.attach(args)),
+      setupPayment: (args) => withClient((m) => m.setupPayment(args)),
       startTrial: (args) => withClient((m) => m.startTrial(args)),
       trackSeats: (args) => withClient((m) => m.trackSeats(args)),
       getActivePlanIds: (args) => withClient((m) => m.getActivePlanIds(args)),
