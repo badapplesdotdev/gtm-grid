@@ -400,7 +400,7 @@ export function AccountBar(props: AccountBarProps) {
  * hosted URL in the system browser) and the shared {@link PlanGrid} card — it
  * does NOT reimplement billing.
  */
-function PlanBillingModal(props: {
+export function PlanBillingModal(props: {
   workspace: WorkspaceSummary;
   isAuthenticated: boolean;
   onClose: () => void;

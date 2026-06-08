@@ -2859,3 +2859,10 @@ button.import-type:hover { background: var(--surface-3); }
   color: var(--text-2);
   margin: 0 0 16px;
 }
+
+/* Cloud-locked (trial expired) main-area panel. */
+.cloud-locked { display: flex; align-items: center; justify-content: center; height: 100%; padding: 32px; }
+.cloud-locked__card { max-width: 420px; text-align: center; padding: 32px 28px; border: 1px solid var(--border-1, rgba(0,0,0,0.08)); border-radius: 14px; background: var(--surface-1, #fff); }
+.cloud-locked__icon { font-size: 34px; margin-bottom: 8px; }
+.cloud-locked__card h2 { margin: 0 0 8px; font-size: 18px; }
+.cloud-locked__card p { margin: 0 0 18px; color: var(--text-2); line-height: 1.55; font-size: 14px; }

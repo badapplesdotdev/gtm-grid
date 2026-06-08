@@ -151,7 +151,11 @@ export function useAcceptInvitation(): (
         token,
       })) as AcceptInviteResult;
       if (res.status === "accepted") {
+        // Clear the waiting-invites banner AND refetch `me` so the just-joined
+        // workspace appears immediately (the badge, switcher, and the new-signup
+        // auto-enrol path all read `me.workspaces`).
         await qc.invalidateQueries({ queryKey: myPendingKey });
+        await qc.invalidateQueries({ queryKey: ["workspaces", "me"] });
       }
       return res;
     },

@@ -63,6 +63,17 @@ export interface CustomerData {
 export const TEAM_PLAN_ID = "team" as const;
 
 /**
+ * New-signup free-trial parameters. Every new workspace is auto-enrolled in a
+ * no-card {@link TEAM_PLAN_ID} trial of {@link TRIAL_DURATION_DAYS} days with
+ * {@link TRIAL_SEAT_COUNT} seats granted, so the owner can invite teammates from
+ * day one (least-friction onboarding). The Team plan's seats are PREPAID, so the
+ * trial must grant the seat quantity explicitly. When the trial ends with no card
+ * on file the subscription lapses back to free (inviting then needs an upgrade).
+ */
+export const TRIAL_DURATION_DAYS = 7 as const;
+export const TRIAL_SEAT_COUNT = 5 as const;
+
+/**
  * Result of {@link SeatsService.checkInvite}.
  *
  * - `allowed: true`  — the workspace has a free seat; the caller proceeds to
@@ -151,6 +162,24 @@ export class AutumnClient extends Context.Tag("CloudAutumnClient")<
        */
       readonly customerData?: CustomerData;
     }) => Effect.Effect<{ readonly checkoutUrl: string | null }, AutumnError>;
+
+    /**
+     * Start a no-card free trial of `planId` for `customerId`, granting `seats`
+     * prepaid seats for the trial duration so the new workspace can invite
+     * teammates immediately. Maps to Autumn `billing.attach` with
+     * `customize.freeTrial` ({@link FreeTrialAttach}: `durationLength`/
+     * `durationType: "day"`/`cardRequired: false`) and a `featureQuantities` seat
+     * grant. No payment URL is produced (no card); when the trial ends with no
+     * card on file the subscription lapses back to free. The plan's seats are
+     * PREPAID ($/seat) so the quantity must be granted explicitly here.
+     */
+    readonly startTrial: (args: {
+      readonly customerId: string;
+      readonly planId: string;
+      readonly seats: number;
+      readonly trialDays: number;
+      readonly customerData?: CustomerData;
+    }) => Effect.Effect<void, AutumnError>;
 
     /**
      * Record consumption of `value` seats for `customerId` (called after a
@@ -419,11 +448,34 @@ export class SeatsService extends Effect.Service<SeatsService>()(
         );
       };
 
+      /**
+       * Start the Team free trial for a brand-new workspace by attaching the Team
+       * product to its Autumn customer. The 7-day, no-card trial is configured ON
+       * the Team product in Autumn, so attaching enrols the customer in the trial
+       * rather than charging — every new signup gets Team seats and can invite
+       * teammates immediately (least friction). Best-effort by design: the
+       * returned payment URL (if Autumn is misconfigured to require a card) is
+       * discarded, and the caller treats any failure as non-fatal so workspace
+       * creation never blocks on billing.
+       */
+      const startTrial = (
+        customerId: string,
+        customerData?: CustomerData,
+      ): Effect.Effect<void, AutumnError> =>
+        autumn.startTrial({
+          customerId,
+          planId: TEAM_PLAN_ID,
+          seats: TRIAL_SEAT_COUNT,
+          trialDays: TRIAL_DURATION_DAYS,
+          customerData,
+        });
+
       return {
         checkInvite,
         checkout,
         trackSeatUsed,
         currentPlan,
+        startTrial,
         enforceSeatCeiling,
       } as const;
     }),

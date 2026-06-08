@@ -7,13 +7,17 @@ import CellDetails, { extractCode } from "./CellDetails";
 import { ExtensionPanel, AiProviderPanel, ExtensionsBrowse, BrandIcon } from "./Panels";
 import { AddColumnPopover, FunctionsModal } from "./AddColumn";
 import { ProjectSwitcher } from "./ProjectSwitcher";
-import { AccountBar } from "./cloud/AccountBar";
+import { AccountBar, PlanBillingModal } from "./cloud/AccountBar";
 import { PendingInvites } from "./cloud/PendingInvites";
 import { WorkspaceSettings } from "./cloud/WorkspaceSettings";
 import { OnboardingFlow } from "./cloud/onboarding/OnboardingFlow";
 import { cloudEnabled, syncWorkspacePlan } from "./cloud/client";
 import { CloudGrid } from "./cloud/CloudGrid";
 import { useMe, useActiveWorkspace, useAuthState } from "./cloud/auth";
+import {
+  useMyPendingInvitations,
+  useAcceptInvitation,
+} from "./cloud/useWorkspaceInvitations";
 import { useWorkspaceCredentials } from "./cloud/useWorkspaceCredentials";
 import {
   useCloudProjects,
@@ -559,13 +563,45 @@ export default function App() {
   // and not already showing the flow. A ref guards against re-opening it after
   // the user dismisses it.
   const autoStartedRef = useRef(false);
+  // Invitations waiting for the signed-in user (email-matched), + the accept
+  // mutation. Drive the "new signup with a pending invite → auto-enrol" path.
+  const myInvites = useMyPendingInvitations();
+  const acceptInvite = useAcceptInvitation();
+  const autoAcceptedRef = useRef(false);
   useEffect(() => {
     if (!cloudEnabled || !isAuthenticated || me == null) return;
     if (me.workspaces.length > 0) return;
+    // A signed-in user with ZERO workspaces is a fresh signup. If they were
+    // invited to a workspace (an email-matched pending invite), auto-enrol them
+    // there instead of prompting them to create their own workspace. Wait for the
+    // invites query to resolve (undefined = loading) before deciding, so we never
+    // flash the create-workspace wizard at an invitee.
+    if (myInvites === undefined) return;
+    if (myInvites.length > 0) {
+      if (autoAcceptedRef.current) return;
+      autoAcceptedRef.current = true;
+      void (async () => {
+        const res = await acceptInvite(myInvites[0].token).catch(() => null);
+        if (res?.status === "accepted") {
+          setActiveWorkspaceId(res.workspaceId as Id<"workspaces">);
+          return;
+        }
+        // Couldn't auto-enrol (seat limit / invalid / error): fall back to the
+        // create-workspace prompt so the user is never stranded, and let the
+        // PendingInvites banner surface the reason.
+        autoAcceptedRef.current = false;
+        if (!autoStartedRef.current && onboarding === null) {
+          autoStartedRef.current = true;
+          setOnboarding({ initialScreen: "workspace", hasSession: true });
+        }
+      })();
+      return;
+    }
+    // No pending invite → prompt the user to create their first workspace.
     if (autoStartedRef.current || onboarding !== null) return;
     autoStartedRef.current = true;
     setOnboarding({ initialScreen: "workspace", hasSession: true });
-  }, [isAuthenticated, me, onboarding]);
+  }, [isAuthenticated, me, onboarding, myInvites, acceptInvite, setActiveWorkspaceId]);
   // Keep the active workspace's plan reconciled with Autumn: on workspace switch
   // and whenever the window regains focus (returning from the Autumn checkout, or
   // after a manual upgrade in the Autumn dashboard), so the plan badge reflects
@@ -635,6 +671,13 @@ export default function App() {
   const [cloudCreateError, setCloudCreateError] = useState<string | null>(null);
   // Whether the app is currently viewing a cloud project (vs. local).
   const inCloud = cloudProject !== null;
+  // Cloud-access lock: the active workspace's trial lapsed / it's on Free (no
+  // plan id). Cloud tables/projects are shown but LOCKED — opening or editing
+  // them prompts an upgrade; local tables are unaffected. The server enforces the
+  // same gate (EntitlementService) so this is a UX layer over a real lock.
+  const cloudLocked =
+    cloudEnabled && activeWorkspace != null && activeWorkspace.plan.id === null;
+  const [showUpgrade, setShowUpgrade] = useState(false);
 
   // Reset the open cloud project when the active workspace changes: a project
   // belongs to exactly one workspace, so keeping it open across a switch would
@@ -1209,10 +1252,10 @@ export default function App() {
           {inCloud && (
             <div className="sidebar-section">
               <div className="sidebar-section-label">
-                Tables (cloud)
+                Tables (cloud){cloudLocked ? " 🔒" : ""}
                 <button
-                  title="New cloud table"
-                  disabled={cloudCreating}
+                  title={cloudLocked ? "Upgrade to add cloud tables" : "New cloud table"}
+                  disabled={cloudCreating || cloudLocked}
                   onClick={() => setShowNewTableChooser(true)}
                 >
                   <Icon.Plus />
@@ -1228,35 +1271,55 @@ export default function App() {
                 cloudTables.map((t) => (
                   <div
                     key={t._id}
-                    className={`sidebar-item${t._id === cloudTableId ? " active" : ""}`}
-                    onClick={() => setCloudTableId(t._id)}
+                    className={`sidebar-item${t._id === cloudTableId && !cloudLocked ? " active" : ""}`}
+                    style={cloudLocked ? { opacity: 0.6 } : undefined}
+                    title={cloudLocked ? "Upgrade to unlock cloud tables" : undefined}
+                    onClick={() =>
+                      cloudLocked ? setShowUpgrade(true) : setCloudTableId(t._id)
+                    }
                   >
-                    <span className="sidebar-item-icon"><Icon.Table /></span>
+                    <span className="sidebar-item-icon">
+                      {cloudLocked ? "🔒" : <Icon.Table />}
+                    </span>
                     <span className="sidebar-item-name">{t.name}</span>
-                    <button
-                      className="sidebar-item-del"
-                      title="Delete table"
-                      onClick={(e) => { e.stopPropagation(); setConfirmDeleteCloudTable({ _id: t._id, name: t.name }); }}
-                    >
-                      <Icon.Trash />
-                    </button>
+                    {!cloudLocked && (
+                      <button
+                        className="sidebar-item-del"
+                        title="Delete table"
+                        onClick={(e) => { e.stopPropagation(); setConfirmDeleteCloudTable({ _id: t._id, name: t.name }); }}
+                      >
+                        <Icon.Trash />
+                      </button>
+                    )}
                   </div>
                 ))
               )}
-              <div
-                className="sidebar-item"
-                style={{ marginTop: 2, opacity: cloudCreating ? 0.6 : 1 }}
-                onClick={() => setShowNewTableChooser(true)}
-              >
-                <span className="sidebar-item-icon" style={{ color: "var(--accent)" }}><Icon.Plus /></span>
-                <span className="sidebar-item-name" style={{ color: "var(--accent)" }}>
-                  {cloudCreating ? "Creating…" : "New table"}
-                </span>
-              </div>
-              <div className="sidebar-item" onClick={() => setImportMode("cloud")}>
-                <span className="sidebar-item-icon"><Icon.Table /></span>
-                <span className="sidebar-item-name">Import CSV…</span>
-              </div>
+              {cloudLocked ? (
+                <button
+                  className="btn btn--primary"
+                  style={{ margin: "8px 12px", width: "calc(100% - 24px)", justifyContent: "center" }}
+                  onClick={() => setShowUpgrade(true)}
+                >
+                  Upgrade to unlock cloud
+                </button>
+              ) : (
+                <>
+                  <div
+                    className="sidebar-item"
+                    style={{ marginTop: 2, opacity: cloudCreating ? 0.6 : 1 }}
+                    onClick={() => setShowNewTableChooser(true)}
+                  >
+                    <span className="sidebar-item-icon" style={{ color: "var(--accent)" }}><Icon.Plus /></span>
+                    <span className="sidebar-item-name" style={{ color: "var(--accent)" }}>
+                      {cloudCreating ? "Creating…" : "New table"}
+                    </span>
+                  </div>
+                  <div className="sidebar-item" onClick={() => setImportMode("cloud")}>
+                    <span className="sidebar-item-icon"><Icon.Table /></span>
+                    <span className="sidebar-item-name">Import CSV…</span>
+                  </div>
+                </>
+              )}
               {cloudCreateError && (
                 <div
                   className="account-menu-error"
@@ -1511,7 +1574,26 @@ export default function App() {
         {/* Cloud project: the LIVE multiplayer grid (Convex). Replaces the local
             sidecar grid entirely while a cloud project is open. Hidden while a
             CSV import is open in this pane. */}
-        {!importMode && inCloud && <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} />}
+        {!importMode && inCloud && !cloudLocked && <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} />}
+
+        {/* Cloud locked: the trial lapsed / Free plan. Cloud data stays safe but
+            inaccessible until the user upgrades; local tables are unaffected. */}
+        {!importMode && inCloud && cloudLocked && (
+          <div className="cloud-locked">
+            <div className="cloud-locked__card">
+              <div className="cloud-locked__icon">🔒</div>
+              <h2>Cloud is locked</h2>
+              <p>
+                Your free trial has ended. Your cloud tables, realtime sync and
+                shared credentials are safe — upgrade to unlock them again.
+                Everything local keeps working, free.
+              </p>
+              <button className="btn btn--primary" onClick={() => setShowUpgrade(true)}>
+                Upgrade to unlock cloud
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Extensions gallery + detail panels */}
         {!importMode && !inCloud && view.kind === "extensions" && (
@@ -1810,6 +1892,16 @@ export default function App() {
           workspaceId={activeWorkspace._id}
           workspaceName={activeWorkspace.name}
           onClose={() => setShowWorkspaceSettings(false)}
+        />
+      )}
+
+      {/* Upgrade prompt for the cloud-locked / trial-expired state. Reuses the
+          account bar's plan + checkout modal (opens the Autumn hosted checkout). */}
+      {showUpgrade && activeWorkspace && (
+        <PlanBillingModal
+          workspace={activeWorkspace}
+          isAuthenticated={isAuthenticated}
+          onClose={() => setShowUpgrade(false)}
         />
       )}
 

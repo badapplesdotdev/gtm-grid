@@ -32,6 +32,7 @@ import {
   planName,
   type SeatLimitExceededError,
   SeatsService,
+  TEAM_PLAN_ID,
   type UnauthenticatedError,
 } from "@gtmgrid/cloud";
 import { Data, Effect, Option } from "effect";
@@ -324,6 +325,18 @@ export class WorkspaceService extends Effect.Service<WorkspaceService>()(
             role: "owner",
             createdAt: now,
           });
+          // Start the Team free trial so the brand-new workspace can invite
+          // teammates from day one (least-friction onboarding). Best-effort: a
+          // billing hiccup (Autumn down / misconfigured) must NOT fail workspace
+          // creation — the next plan sync re-establishes the real state.
+          yield* Effect.gen(function* () {
+            const customerData = yield* repo.findCustomerData(workspaceId);
+            yield* seats.startTrial(workspaceId, customerData);
+            // Reflect the trial entitlement immediately so the workspace isn't
+            // locked between creation and the first plan sync (the cloud gate
+            // reads currentPlanId). syncPlan reconciles the exact id later.
+            yield* repo.updatePlanId(workspaceId, TEAM_PLAN_ID);
+          }).pipe(Effect.catchAll(() => Effect.void));
           return workspaceId;
         });
 

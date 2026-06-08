@@ -30,6 +30,11 @@ import {
 import { projectRepoLayer } from "../repositories/project-repo.js";
 import { rowRepoLayer } from "../repositories/row-repo.js";
 import { tableRepoLayer } from "../repositories/table-repo.js";
+import {
+  type Workspace,
+  workspaceRepoLayer,
+} from "../repositories/workspace-repo.js";
+import { EntitlementService } from "./entitlement-service.js";
 import { GridService } from "./grid-service.js";
 import { type MeterQuota, meterServiceLayer } from "./meter-service.js";
 import {
@@ -46,6 +51,8 @@ function harness(opts: {
   store?: GridStore;
   quotas?: Map<string, MeterQuota>;
   currentUserId?: string | null;
+  /** The workspace's cached plan; `undefined` defaults to "team" (cloud on). */
+  plan?: string | null;
 }) {
   const store = opts.store ?? makeGridStore();
   const quotas = opts.quotas ?? new Map<string, MeterQuota>();
@@ -53,6 +60,19 @@ function harness(opts: {
   const membership = MembershipService.Default.pipe(
     Layer.provide(cloudIdentityLayer(opts.currentUserId ?? "member")),
     Layer.provide(cloudMemberRepoLayer(memberships)),
+  );
+  // EntitlementService reads the workspace's currentPlanId; default "team" so the
+  // cloud gate passes. Pass `plan: null` to exercise a lapsed/Free workspace.
+  const workspaces: Workspace[] = [
+    {
+      id: WS,
+      name: "WS",
+      ownerId: "owner",
+      currentPlanId: opts.plan === undefined ? "team" : opts.plan,
+    },
+  ];
+  const entitlement = EntitlementService.Default.pipe(
+    Layer.provide(workspaceRepoLayer(workspaces)),
   );
   const layer = GridService.Default.pipe(
     Layer.provide(projectRepoLayer(store)),
@@ -64,6 +84,7 @@ function harness(opts: {
     Layer.provide(membership),
     Layer.provide(meterServiceLayer(quotas)),
     Layer.provide(recordingRealtimePublisherLayer(events)),
+    Layer.provide(entitlement),
   );
   const run = <A, E>(program: Effect.Effect<A, E, GridService>) =>
     Effect.runPromiseExit(program.pipe(Effect.provide(layer)));
@@ -421,5 +442,42 @@ describe("GridService realtime publishing (TRI-3251)", () => {
     const { run, events } = harness({ store, currentUserId: "stranger" });
     await run(Effect.flatMap(GridService, (s) => s.deleteRow("r1")));
     expect(events).toHaveLength(0);
+  });
+});
+
+describe("cloud-access gate (lapsed trial / Free workspace)", () => {
+  it("blocks opening a cloud table (getTable) with PlanRequiredError", async () => {
+    const store = makeGridStore({ tables: [table()] });
+    const { run } = harness({ store, plan: null });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.getTable("t1")));
+    expect(failTag(exit)).toBe("PlanRequiredError");
+  });
+
+  it("blocks cloud writes (createProject) with PlanRequiredError", async () => {
+    const { run } = harness({ plan: null });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.createProject({ workspaceId: WS, name: "P" }),
+      ),
+    );
+    expect(failTag(exit)).toBe("PlanRequiredError");
+  });
+
+  it("still ALLOWS listing projects so the desktop can render them as locked", async () => {
+    const { run } = harness({ plan: null });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.listProjects(WS)),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+  });
+
+  it("still ALLOWS listing a project's tables (locked view)", async () => {
+    const store = makeGridStore({
+      projects: [{ id: "p1", workspaceId: WS, name: "P", createdAt: 1 }],
+      tables: [table()],
+    });
+    const { run } = harness({ store, plan: null });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.listTables("p1")));
+    expect(Exit.isSuccess(exit)).toBe(true);
   });
 });

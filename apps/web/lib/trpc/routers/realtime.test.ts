@@ -46,7 +46,14 @@ afterAll(() => {
 const callerFor = (userId: string | null) =>
   createCaller(
     createTestContext({
-      layer: TestLayer({ memberships, currentUserId: userId }),
+      layer: TestLayer({
+        memberships,
+        currentUserId: userId,
+        // Cloud-enabled plan so the cloud-access gate passes (realtime is gated).
+        workspaces: [
+          { id: WS, name: "WS", ownerId: ALICE, currentPlanId: "team" },
+        ],
+      }),
       userId,
     }),
   );

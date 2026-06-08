@@ -34,10 +34,17 @@ const memberships: readonly Membership[] = [
   { workspaceId: WS, userId: ALICE, role: "member" },
 ];
 
+// Default the workspace to a cloud-enabled plan ("team") so the cloud-access
+// gate passes; a test can override `workspaces` to exercise a locked workspace.
 const callerFor = (fixtures: TestLayerFixtures) =>
   createCaller(
     createTestContext({
-      layer: TestLayer(fixtures),
+      layer: TestLayer({
+        workspaces: [
+          { id: WS, name: "WS", ownerId: ALICE, currentPlanId: "team" },
+        ],
+        ...fixtures,
+      }),
       userId: fixtures.currentUserId ?? null,
     }),
   );

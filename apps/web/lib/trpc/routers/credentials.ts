@@ -3,7 +3,7 @@
  * credential functions (convex/credentials.ts + convex/credentialsData.ts), with
  * the `"use node"` action/mutation split collapsed into single procedures.
  *
- * Every procedure is a `workspaceProcedure`, so membership is asserted by the
+ * Every procedure is a `cloudWorkspaceProcedure`, so membership is asserted by the
  * middleware BEFORE the body runs; the body then resolves {@link CredentialService}
  * from the request runtime and runs the Effect via {@link runEffect}. The
  * security invariants (the AC) are enforced inside `CredentialService`:
@@ -20,7 +20,7 @@
 import { CredentialService } from "@gtmgrid/services";
 import { Effect, Option } from "effect";
 import { z } from "zod";
-import { router, runEffect, workspaceProcedure } from "../trpc";
+import { router, runEffect, cloudWorkspaceProcedure } from "../trpc";
 
 /** Connector scope — mirrors the `credential_scope` pgEnum. */
 const credentialScope = z.enum(["workspace", "personal"]);
@@ -29,7 +29,7 @@ const credentialScope = z.enum(["workspace", "personal"]);
 const extensionId = z.string().min(1);
 
 /** Shared input for the get-for-run / save lookups (workspaceId comes from the
- * `workspaceProcedure` base input). */
+ * `cloudWorkspaceProcedure` base input). */
 const connectorInput = z.object({
   extensionId,
   scope: credentialScope,
@@ -42,7 +42,7 @@ export const credentialsRouter = router({
    * connected, never the ciphertext. A member sees the shared workspace rows plus
    * only their OWN personal keys.
    */
-  list: workspaceProcedure.query(({ ctx, input }) =>
+  list: cloudWorkspaceProcedure.query(({ ctx, input }) =>
     runEffect(
       ctx.runtime,
       Effect.gen(function* () {
@@ -57,7 +57,7 @@ export const credentialsRouter = router({
    * map; the service envelope-encrypts it and persists only the ciphertext.
    * Upserts on (workspace, extension, scope, owner). Returns the row id.
    */
-  save: workspaceProcedure
+  save: cloudWorkspaceProcedure
     .input(
       connectorInput.extend({
         name: z.string().min(1),
@@ -86,7 +86,7 @@ export const credentialsRouter = router({
    * authorized member. The ONLY procedure that yields plaintext. Returns `null`
    * when no matching credential exists.
    */
-  getForRun: workspaceProcedure
+  getForRun: cloudWorkspaceProcedure
     .input(connectorInput)
     .query(({ ctx, input }) =>
       runEffect(
