@@ -47,6 +47,11 @@ type View =
   | { kind: "skill"; id: string }
   | { kind: "ai"; id: string };
 
+// How many rows a sidebar section previews before the rest collapse behind a
+// clickable "+ N more" row (Tools/Skills open their Browse-all gallery; Functions
+// has no gallery, so it reveals the remaining providers inline).
+const NAV_PREVIEW_LIMIT = 10;
+
 // ─── Icons (inline SVG, no deps) ─────────────────────────
 
 export const Icon = {
@@ -502,6 +507,7 @@ export default function App() {
   const [aiProviders, setAiProviders] = useState<AiProviderInfo[]>([]);
   const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
   const [fnSectionOpen, setFnSectionOpen] = useState(false); // Functions section: collapsed by default
+  const [fnShowAll, setFnShowAll] = useState(false); // Functions: reveal providers past the preview limit inline (no gallery to open)
   const [aiSectionOpen, setAiSectionOpen] = useState(true);
   const [extSectionOpen, setExtSectionOpen] = useState(true);
   const [skillsSectionOpen, setSkillsSectionOpen] = useState(false); // Skills section: collapsed by default
@@ -1670,19 +1676,30 @@ export default function App() {
               <div className="skeleton-row">
                 <div className="shimmer skeleton-bar" style={{ width: "70%", height: 13 }} />
               </div>
-            ) : extensions.map(e => (
-              <div
-                key={e.id}
-                className={`ext-item clickable${view.kind === "extension" && view.id === e.id ? " active" : ""}`}
-                onClick={() => setView({ kind: "extension", id: e.id })}
-              >
-                <BrandIcon logo={e.logo} name={e.name} size={16} />
-                <span className="ext-item-name">{e.name}</span>
-                <span className={`ext-badge ${e.connected ? "connected" : "no-key"}`}>
-                  {e.connected ? "connected" : "no key"}
-                </span>
-              </div>
-            )))}
+            ) : <>
+              {extensions.slice(0, NAV_PREVIEW_LIMIT).map(e => (
+                <div
+                  key={e.id}
+                  className={`ext-item clickable${view.kind === "extension" && view.id === e.id ? " active" : ""}`}
+                  onClick={() => setView({ kind: "extension", id: e.id })}
+                >
+                  <BrandIcon logo={e.logo} name={e.name} size={16} />
+                  <span className="ext-item-name">{e.name}</span>
+                  <span className={`ext-badge ${e.connected ? "connected" : "no-key"}`}>
+                    {e.connected ? "connected" : "no key"}
+                  </span>
+                </div>
+              ))}
+              {extensions.length > NAV_PREVIEW_LIMIT && (
+                <div
+                  className="ext-item clickable ext-item-more"
+                  onClick={() => setView({ kind: "extensions" })}
+                  title="Browse all tools"
+                >
+                  +{extensions.length - NAV_PREVIEW_LIMIT} more
+                </div>
+              )}
+            </>)}
           </div>
 
           {/* Functions section — collapsed by default */}
@@ -1703,26 +1720,37 @@ export default function App() {
               <div className="skeleton-row">
                 <div className="shimmer skeleton-bar" style={{ width: "60%", height: 13 }} />
               </div>
-            ) : connectors.map(c => (
-              <div key={c.provider} className="connector-group">
-                <div className="connector-group-header" onClick={() => toggleProvider(c.provider)}>
-                  <span className={`connector-group-toggle${expandedProviders[c.provider] ? " open" : ""}`}>
-                    <Icon.ChevronRight />
-                  </span>
-                  <span className="connector-group-name">{c.name}</span>
-                  <span className="connector-method-count">{c.methods.length}</span>
-                </div>
-                {expandedProviders[c.provider] && (
-                  <div className="connector-methods">
-                    {c.methods.map(m => (
-                      <div key={m.method} className="connector-method-item" title={m.description}>
-                        {m.label}
-                      </div>
-                    ))}
+            ) : <>
+              {(fnShowAll ? connectors : connectors.slice(0, NAV_PREVIEW_LIMIT)).map(c => (
+                <div key={c.provider} className="connector-group">
+                  <div className="connector-group-header" onClick={() => toggleProvider(c.provider)}>
+                    <span className={`connector-group-toggle${expandedProviders[c.provider] ? " open" : ""}`}>
+                      <Icon.ChevronRight />
+                    </span>
+                    <span className="connector-group-name">{c.name}</span>
+                    <span className="connector-method-count">{c.methods.length}</span>
                   </div>
-                )}
-              </div>
-            )))}
+                  {expandedProviders[c.provider] && (
+                    <div className="connector-methods">
+                      {c.methods.map(m => (
+                        <div key={m.method} className="connector-method-item" title={m.description}>
+                          {m.label}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+              {!fnShowAll && connectors.length > NAV_PREVIEW_LIMIT && (
+                <div
+                  className="ext-item clickable ext-item-more"
+                  onClick={() => setFnShowAll(true)}
+                  title="Show all providers"
+                >
+                  +{connectors.length - NAV_PREVIEW_LIMIT} more
+                </div>
+              )}
+            </>)}
           </div>
 
           {/* Skills section — per-tool agent playbooks + custom skills */}
@@ -1745,18 +1773,29 @@ export default function App() {
               <div className="skeleton-row">
                 <div className="shimmer skeleton-bar" style={{ width: "70%", height: 13 }} />
               </div>
-            ) : skills.map(s => (
-              <div
-                key={s.id}
-                className={`ext-item clickable${view.kind === "skill" && view.id === s.id ? " active" : ""}`}
-                onClick={() => setView({ kind: "skill", id: s.id })}
-              >
-                <BrandIcon logo={s.logo} name={s.name} size={16} />
-                <span className="ext-item-name">{s.name}</span>
-                {s.source === "tool" && s.connected && <span className="ext-badge connected">on</span>}
-                {s.source === "custom" && <span className="ext-badge no-key">custom</span>}
-              </div>
-            )))}
+            ) : <>
+              {skills.slice(0, NAV_PREVIEW_LIMIT).map(s => (
+                <div
+                  key={s.id}
+                  className={`ext-item clickable${view.kind === "skill" && view.id === s.id ? " active" : ""}`}
+                  onClick={() => setView({ kind: "skill", id: s.id })}
+                >
+                  <BrandIcon logo={s.logo} name={s.name} size={16} />
+                  <span className="ext-item-name">{s.name}</span>
+                  {s.source === "tool" && s.connected && <span className="ext-badge connected">on</span>}
+                  {s.source === "custom" && <span className="ext-badge no-key">custom</span>}
+                </div>
+              ))}
+              {skills.length > NAV_PREVIEW_LIMIT && (
+                <div
+                  className="ext-item clickable ext-item-more"
+                  onClick={() => setView({ kind: "skills" })}
+                  title="Browse all skills"
+                >
+                  +{skills.length - NAV_PREVIEW_LIMIT} more
+                </div>
+              )}
+            </>)}
           </div>
         </div>
 

@@ -24,19 +24,40 @@ interface Message {
 
 const AGENT_LABEL: Record<AgentKind, string> = { claude: "Claude Code", codex: "Codex" };
 
+// Persist the per-agent model selection so it survives a relaunch (the rest of
+// the conversation history is NOT stored here — the agents keep their own native
+// transcripts; a follow-up surfaces those).
+const MODELS_KEY = "gtmgrid:agentModels";
+function loadModels(): Record<AgentKind, string> {
+  try {
+    const raw = localStorage.getItem(MODELS_KEY);
+    const obj = raw ? JSON.parse(raw) : null;
+    return {
+      claude: typeof obj?.claude === "string" ? obj.claude : "",
+      codex: typeof obj?.codex === "string" ? obj.codex : "",
+    };
+  } catch {
+    return { claude: "", codex: "" };
+  }
+}
+
 /** Selectable models per agent ("" = the CLI's default for your plan). */
 const MODEL_OPTIONS: Record<AgentKind, { value: string; label: string }[]> = {
   claude: [
     { value: "", label: "Default" },
-    { value: "opus", label: "Opus" },
-    { value: "sonnet", label: "Sonnet" },
-    { value: "haiku", label: "Haiku" },
+    { value: "claude-opus-4-8", label: "Opus 4.8" },
+    { value: "claude-opus-4-7", label: "Opus 4.7" },
+    { value: "claude-opus-4-6", label: "Opus 4.6" },
+    { value: "claude-sonnet-4-6", label: "Sonnet 4.6" },
+    { value: "claude-haiku-4-5", label: "Haiku 4.5" },
   ],
   codex: [
     { value: "", label: "Default" },
     { value: "gpt-5-codex", label: "GPT-5 Codex" },
     { value: "gpt-5", label: "GPT-5" },
+    { value: "gpt-5-mini", label: "GPT-5 mini" },
     { value: "o3", label: "o3" },
+    { value: "o4-mini", label: "o4-mini" },
   ],
 };
 const AGENT_SHORT: Record<AgentKind, string> = { claude: "Claude", codex: "Codex" };
@@ -75,6 +96,11 @@ const IconZap = ({ s = 11 }: { s?: number }) => (
 const IconArrow = ({ s = 15 }: { s?: number }) => (
   <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M12 19V5M5 12l7-7 7 7" />
+  </svg>
+);
+const IconStop = ({ s = 13 }: { s?: number }) => (
+  <svg width={s} height={s} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <rect x="6" y="6" width="12" height="12" rx="2.5" />
   </svg>
 );
 
@@ -233,6 +259,45 @@ function ToolCall({ tool, running }: { tool: ToolCallT; running: boolean }) {
   );
 }
 
+/** Bottom-of-composer model picker — a pill button that opens a menu UPWARD (Claude-Code style). */
+function ModelPicker({ agent, value, onChange }: { agent: AgentKind; value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  const opts = MODEL_OPTIONS[agent];
+  const current = opts.find((o) => o.value === value) ?? opts[0];
+  return (
+    <div className="agent-model-picker" ref={ref}>
+      {open && (
+        <div className="agent-model-menu">
+          <div className="agent-model-menu-head">Model · {AGENT_LABEL[agent]}</div>
+          {opts.map((o) => (
+            <button
+              key={o.value || "default"}
+              className={`agent-model-opt ${o.value === value ? "active" : ""}`}
+              onClick={() => { onChange(o.value); setOpen(false); }}
+            >
+              <span>{o.label}</span>
+              {o.value === value && <IconCheck s={12} />}
+            </button>
+          ))}
+        </div>
+      )}
+      <button className="agent-model-btn" onClick={() => setOpen((o) => !o)} title="Choose model">
+        {current.label}
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+      </button>
+    </div>
+  );
+}
+
 export default function AgentPanel({
   onGridChange,
   activeTable,
@@ -241,8 +306,8 @@ export default function AgentPanel({
   activeTable: { name: string; columns: string[] } | null;
 }) {
   const [agent, setAgent] = useState<AgentKind>("claude");
-  // Which model each agent's CLI runs with ("" = the plan's default).
-  const [models, setModels] = useState<Record<AgentKind, string>>({ claude: "", codex: "" });
+  // Which model each agent's CLI runs with ("" = the plan's default). Persisted.
+  const [models, setModels] = useState<Record<AgentKind, string>>(loadModels);
   const [status, setStatus] = useState<{ claude?: AgentStatus; codex?: AgentStatus }>({});
   const [threads, setThreads] = useState<Record<AgentKind, Message[]>>({ claude: [], codex: [] });
   const [input, setInput] = useState("");
@@ -255,6 +320,22 @@ export default function AgentPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const messages = threads[agent];
+
+  // Persist the model selection per agent (survives relaunch).
+  useEffect(() => {
+    try {
+      localStorage.setItem(MODELS_KEY, JSON.stringify(models));
+    } catch {
+      /* quota / disabled storage — ignore */
+    }
+  }, [models]);
+
+  /** Start a fresh conversation for the current agent (drops the in-session CLI
+   * session id so the next turn starts a new native transcript). */
+  const newChat = () => {
+    sessionRef.current[agent] = undefined;
+    setThreads((t) => ({ ...t, [agent]: [] }));
+  };
 
   useEffect(() => {
     api.agents().then(setStatus).catch(() => setStatus({}));
@@ -410,34 +491,16 @@ export default function AgentPanel({
             {AGENT_LABEL[k]}
           </button>
         ))}
-        {messages.length > 0 && (
-          <button className="agent-clear" title="New conversation" onClick={() => { if (!busy) { sessionRef.current[agent] = undefined; setMessages(() => []); } }}>
-            Clear
+        <span style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
+          {messages.length > 0 && (
+            <button className="agent-clear" title="New chat" onClick={() => { if (!busy) newChat(); }}>
+              New
+            </button>
+          )}
+          <button className="agent-collapse" title="Collapse panel" onClick={() => setCollapsed(true)}>
+            <IconChevronsRight s={15} />
           </button>
-        )}
-        <button
-          className="agent-collapse"
-          style={messages.length === 0 ? { marginLeft: "auto" } : undefined}
-          title="Collapse panel"
-          onClick={() => setCollapsed(true)}
-        >
-          <IconChevronsRight s={15} />
-        </button>
-      </div>
-
-      {/* Model picker — which model the selected agent's CLI runs with. */}
-      <div className="agent-models">
-        <span className="agent-models-label">Model</span>
-        {MODEL_OPTIONS[agent].map((m) => (
-          <button
-            key={m.value || "default"}
-            className={`agent-model-chip ${models[agent] === m.value ? "active" : ""}`}
-            title={m.value ? `Run ${AGENT_LABEL[agent]} with ${m.label}` : `Use your ${AGENT_LABEL[agent]} plan's default model`}
-            onClick={() => setModels((p) => ({ ...p, [agent]: m.value }))}
-          >
-            {m.label}
-          </button>
-        ))}
+        </span>
       </div>
 
       {!ready ? (
@@ -544,12 +607,18 @@ export default function AgentPanel({
               disabled={busy}
             />
             {busy ? (
-              <button className="agent-send agent-stop" onClick={stop}>Stop</button>
+              <button className="agent-send agent-stop" onClick={stop} title="Stop"><IconStop s={13} /></button>
             ) : (
               <button className="agent-send" onClick={() => send()} disabled={!input.trim()}>
                 <IconArrow s={15} />
               </button>
             )}
+          </div>
+          {/* Composer footer: the model picker (opens upward). Past conversations
+              live in the agents' own native transcripts — surfaced in a follow-up. */}
+          <div className="agent-composer-foot">
+            <span style={{ marginLeft: "auto" }} />
+            <ModelPicker agent={agent} value={models[agent]} onChange={(v) => setModels((p) => ({ ...p, [agent]: v }))} />
           </div>
         </>
       )}
