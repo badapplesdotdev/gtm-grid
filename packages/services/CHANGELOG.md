@@ -1,5 +1,13 @@
 # @gtmgrid/services
 
+## 0.3.12
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.3.12
+- @gtmgrid/db@0.3.12
+- @gtmgrid/email@0.3.12
+
 ## 0.3.11
 
 ### Patch Changes
