@@ -29,6 +29,25 @@ export interface AgentContext {
   columns?: string[];
   /** Live snapshot of the connector registry so the skill stays in sync with installed extensions. */
   providers?: Array<{ id: string; name: string; category: string; methodCount: number }>;
+  /** Per-tool operating manuals (the `<tool>.skill.md` files) for tools that are CONNECTED,
+   *  plus any enabled custom skills. Injected so the agent picks endpoints without guessing. */
+  skills?: Array<{ id: string; name: string; body: string }>;
+}
+
+/** Render the per-tool skill playbooks for connected tools into the preamble. */
+function renderSkillsSection(skills?: AgentContext["skills"]): string {
+  if (!skills?.length) return "";
+  const blocks = skills
+    .filter((s) => s.body && s.body.trim())
+    .map((s) => `<skill tool="${s.id}">\n${s.body.trim()}\n</skill>`)
+    .join("\n\n");
+  if (!blocks) return "";
+  return `
+
+## Tool playbooks (READ THESE before using a connected tool)
+The following are curated operating manuals for the tools the user has CONNECTED. Each tells you exactly which endpoint to use for each job, the inputs, and copy-paste recipes — so you do NOT need to burn turns on \`list_functions\` guessing. When a task matches one of these tools, follow its playbook first; fall back to \`search_functions\` only for endpoints a playbook doesn't cover.
+
+${blocks}`;
 }
 
 /** Render the installed-connectors section dynamically from the registry. */
@@ -131,6 +150,7 @@ The catalog is huge (Trigify alone exposes 122 methods). Discover in this order:
 ## Connectors currently installed
 ${renderConnectorsSection(ctx?.providers)}
 This snapshot is generated fresh from the live registry each turn — new extensions added to gtm grid appear here automatically. Use \`list_providers\` + \`search_functions\` to drill in, then \`list_functions\` scoped to one provider for the input schemas.
+${renderSkillsSection(ctx?.skills)}
 
 ## Style
 - Be terse. State the plan in one line, do the work, summarize.

@@ -111,12 +111,33 @@ export interface AiProviderInfo {
   viaEnv: boolean;
   connectedScopes: CredentialScope[];
 }
+export interface SkillInfo {
+  id: string;
+  name: string;
+  category: string;
+  description: string | null;
+  source: "tool" | "custom";
+  connected: boolean;
+  wordCount: number;
+  logo: string | null;
+  enabled: boolean;
+}
+export interface SkillDetail extends SkillInfo {
+  body: string;
+}
 
 export const api = {
   health: () => http<{ ok: boolean; project: string }>("/api/health"),
   functions: () => http<ConnectorInfo[]>("/api/functions"),
   extensions: () => http<ExtensionInfo[]>("/api/extensions"),
   extension: (id: string) => http<ExtensionDetail>(`/api/extensions/${id}`),
+  skills: () => http<SkillInfo[]>("/api/skills"),
+  skill: (id: string) => http<SkillDetail>(`/api/skills/${id}`),
+  saveSkill: (body: { id?: string; name: string; description?: string; body: string; enabled?: boolean }) =>
+    http<{ ok: boolean; id: string }>("/api/skills", { method: "POST", body: JSON.stringify(body) }),
+  toggleSkill: (id: string, enabled: boolean) =>
+    http<{ ok: boolean; enabled: boolean }>(`/api/skills/${id}/toggle`, { method: "POST", body: JSON.stringify({ enabled }) }),
+  deleteSkill: (id: string) => http<{ ok: boolean }>(`/api/skills/${id}`, { method: "DELETE" }),
   aiProviders: () => http<AiProviderInfo[]>("/api/ai-providers"),
   connectAiProvider: (id: string, body: { apiKey: string; scope?: CredentialScope }) =>
     http<{ ok: boolean }>(`/api/ai-providers/${id}/connect`, { method: "POST", body: JSON.stringify(body) }),

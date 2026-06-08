@@ -3,8 +3,9 @@
 // Local scope tabs, a "CONNECTIONS" add-card, and collapsible info sections.
 
 import { useState, useEffect, useCallback, ReactNode } from "react";
-import { api, ExtensionDetail, ExtensionInfo, AiProviderInfo, CredentialScope } from "./api";
+import { api, ExtensionDetail, ExtensionInfo, AiProviderInfo, CredentialScope, SkillInfo, SkillDetail } from "./api";
 import { aiProviderCredId } from "./cloud/credentials";
+import { Markdown } from "./AgentPanel";
 
 /**
  * The scope a credential is saved under in the panels. Extends the local-only
@@ -326,19 +327,19 @@ export function ExtensionPanel({ id, onConnected, onBack, workspaceCreds }: { id
   useEffect(() => { load(); }, [id, load]);
 
   const backBar = onBack && (
-    <button className="detail-back" onClick={onBack}><I.Back /> Extensions</button>
+    <button className="detail-back" onClick={onBack}><I.Back /> Tools</button>
   );
 
   if (loading) {
     return <div className="detail-wrap">{backBar}<div className="detail"><div className="cell-spinner" style={{ width: 18, height: 18, borderWidth: 2 }} /></div></div>;
   }
   if (!detail) {
-    return <div className="detail-wrap">{backBar}<div className="detail"><div className="detail-empty">Extension not found.</div></div></div>;
+    return <div className="detail-wrap">{backBar}<div className="detail"><div className="detail-empty">Tool not found.</div></div></div>;
   }
 
   const methodCount = detail.methods.length;
-  const description = detail.description ?? `${detail.category} extension`;
-  const meta = ["Extension", `${methodCount} method${methodCount !== 1 ? "s" : ""}`, detail.version ? `v${detail.version}` : null]
+  const description = detail.description ?? `${detail.category} tool`;
+  const meta = ["Tool", `${methodCount} method${methodCount !== 1 ? "s" : ""}`, detail.version ? `v${detail.version}` : null]
     .filter(Boolean)
     .join("  ·  ");
 
@@ -445,7 +446,7 @@ export function ExtensionsBrowse({
         <I.Search />
         <input
           className="browse-search-input"
-          placeholder="Search extensions"
+          placeholder="Search tools"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           autoFocus
@@ -458,7 +459,7 @@ export function ExtensionsBrowse({
             {filtered.length} result{filtered.length !== 1 ? "s" : ""}
           </div>
           {filtered.length === 0 ? (
-            <div className="browse-empty">No extensions match “{query}”.</div>
+            <div className="browse-empty">No tools match “{query}”.</div>
           ) : (
             <div className="browse-grid">
               {filtered.map((e) => <ExtensionCard key={e.id} e={e} onOpen={onOpen} />)}
@@ -475,7 +476,7 @@ export function ExtensionsBrowse({
               </div>
             </>
           )}
-          <div className="browse-section-label">All extensions</div>
+          <div className="browse-section-label">All tools</div>
           <div className="browse-grid">
             {rest.map((e) => <ExtensionCard key={e.id} e={e} onOpen={onOpen} />)}
           </div>
@@ -521,6 +522,238 @@ export function AiProviderPanel({ provider, onConnected, workspaceCreds }: { pro
           ))}
         </div>
       </Collapsible>
+    </div>
+  );
+}
+
+// ─── Skills: per-tool agent playbooks + custom skills ────────────────────
+
+function SkillCard({ s, onOpen }: { s: SkillInfo; onOpen: (id: string) => void }) {
+  return (
+    <button className="browse-card" onClick={() => onOpen(s.id)}>
+      <div className="browse-card-icon"><BrandIcon logo={s.logo} name={s.name} size={26} /></div>
+      <div className="browse-card-body">
+        <div className="browse-card-top">
+          <span className="browse-card-name">{s.name}</span>
+          {s.source === "tool" && s.connected && <span className="ext-badge connected">on</span>}
+          {s.source === "custom" && <span className="ext-badge no-key">custom</span>}
+        </div>
+        <div className="browse-card-desc">
+          {s.description ?? (s.source === "tool" ? `Playbook for the ${s.name} tool` : "Custom skill")} · {s.wordCount} words
+        </div>
+      </div>
+      <span className="browse-card-add"><I.Search /></span>
+    </button>
+  );
+}
+
+export function SkillsBrowse({
+  skills,
+  onOpen,
+  onChanged,
+}: {
+  skills: SkillInfo[];
+  onOpen: (id: string) => void;
+  onChanged: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [body, setBody] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? skills.filter((s) => s.name.toLowerCase().includes(q) || (s.description ?? "").toLowerCase().includes(q))
+    : skills;
+  const toolSkills = filtered.filter((s) => s.source === "tool");
+  const customSkills = filtered.filter((s) => s.source === "custom");
+
+  const create = async () => {
+    if (!name.trim()) return;
+    setSaving(true);
+    try {
+      const r = await api.saveSkill({ name: name.trim(), body });
+      setCreating(false);
+      setName("");
+      setBody("");
+      onChanged();
+      if (r?.id) onOpen(r.id);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="browse">
+      <h1 className="browse-title">Skills — playbooks for your tools</h1>
+      <p className="browse-sub">
+        Each connected tool ships an agent playbook so Claude / Codex picks the right endpoint without guessing.
+        Add your own to teach the agent your workflows.
+      </p>
+
+      <div className="browse-search">
+        <I.Search />
+        <input
+          className="browse-search-input"
+          placeholder="Search skills"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          autoFocus
+        />
+        <button className="skill-new-btn" onClick={() => setCreating((c) => !c)}>
+          <I.Plus /> New skill
+        </button>
+      </div>
+
+      {creating && (
+        <div className="skill-create">
+          <input
+            className="skill-create-name"
+            placeholder="Skill name — e.g. “Cold outbound playbook”"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoFocus
+          />
+          <textarea
+            className="skill-create-body"
+            placeholder={"# My playbook\n\n## When to use\n- ...\n\n## Recipes\n1. ..."}
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            rows={8}
+          />
+          <div className="skill-create-actions">
+            <button className="skill-btn ghost" onClick={() => setCreating(false)}>Cancel</button>
+            <button className="skill-btn primary" onClick={create} disabled={!name.trim() || saving}>
+              {saving ? "Saving…" : "Create skill"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {toolSkills.length > 0 && (
+        <>
+          <div className="browse-section-label">Tool playbooks</div>
+          <div className="browse-grid" style={{ marginBottom: 28 }}>
+            {toolSkills.map((s) => <SkillCard key={s.id} s={s} onOpen={onOpen} />)}
+          </div>
+        </>
+      )}
+
+      <div className="browse-section-label">Custom skills</div>
+      {customSkills.length === 0 ? (
+        <div className="browse-empty">No custom skills yet. Click “New skill” to add one.</div>
+      ) : (
+        <div className="browse-grid">
+          {customSkills.map((s) => <SkillCard key={s.id} s={s} onOpen={onOpen} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function SkillPanel({
+  id,
+  onBack,
+  onChanged,
+}: {
+  id: string;
+  onBack?: () => void;
+  onChanged: () => void;
+}) {
+  const [detail, setDetail] = useState<SkillDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const d = await api.skill(id);
+      setDetail(d);
+      setDraft(d.body);
+    } catch {
+      setDetail(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
+  useEffect(() => { load(); }, [id, load]);
+
+  const backBar = onBack && (
+    <button className="detail-back" onClick={onBack}><I.Back /> Skills</button>
+  );
+
+  if (loading) {
+    return <div className="detail-wrap">{backBar}<div className="detail"><div className="cell-spinner" style={{ width: 18, height: 18, borderWidth: 2 }} /></div></div>;
+  }
+  if (!detail) {
+    return <div className="detail-wrap">{backBar}<div className="detail"><div className="detail-empty">Skill not found.</div></div></div>;
+  }
+
+  const isCustom = detail.source === "custom";
+  const meta = [
+    isCustom ? "Custom skill" : "Tool playbook",
+    detail.source === "tool" ? (detail.connected ? "auto-loaded (connected)" : "loads when connected") : detail.enabled ? "enabled" : "disabled",
+  ].join("  ·  ");
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.saveSkill({ id: detail.id, name: detail.name, description: detail.description ?? "", body: draft });
+      setEditing(false);
+      await load();
+      onChanged();
+    } finally {
+      setSaving(false);
+    }
+  };
+  const remove = async () => {
+    await api.deleteSkill(detail.id);
+    onChanged();
+    onBack?.();
+  };
+
+  return (
+    <div className="detail-wrap">
+      {backBar}
+      <div className="detail">
+        <PanelHeader
+          logo={detail.logo}
+          title={detail.name}
+          description={detail.description ?? (isCustom ? "Custom skill" : `Agent playbook for ${detail.name}`)}
+          meta={meta}
+        />
+
+        {detail.source === "tool" && (
+          <div className="skill-note">
+            This playbook is injected into the agent automatically whenever <strong>{detail.name}</strong> is connected,
+            so Claude / Codex knows exactly which endpoints to use.
+          </div>
+        )}
+
+        <div className="skill-toolbar">
+          {isCustom && !editing && (
+            <>
+              <button className="skill-btn" onClick={() => setEditing(true)}>Edit</button>
+              <button className="skill-btn danger" onClick={remove}>Delete</button>
+            </>
+          )}
+          {isCustom && editing && (
+            <>
+              <button className="skill-btn ghost" onClick={() => { setEditing(false); setDraft(detail.body); }}>Cancel</button>
+              <button className="skill-btn primary" onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
+            </>
+          )}
+        </div>
+
+        {editing ? (
+          <textarea className="skill-edit-body" value={draft} onChange={(e) => setDraft(e.target.value)} rows={24} />
+        ) : (
+          <div className="skill-body"><Markdown text={detail.body} /></div>
+        )}
+      </div>
     </div>
   );
 }

@@ -11,7 +11,7 @@
     {
       "id": "enrichPerson",
       "label": "Enrich Person",
-      "description": "Find a verified work email (and optional mobile) for a person. Put the identifiers inside `data`: either { linkedin_url } OR { email } OR { full_name, company } OR { first_name, last_name, company_name | company_website | company_linkedin_url }. Returns { person: { email: { status, revealed, email }, mobile } }. Set enrich_mobile to also reveal a phone (extra cost).",
+      "description": "Find a verified work email (and optional mobile) plus full B2B data for one person. Put identifiers inside `data`: { linkedin_url } OR { email } OR { person_id } OR { full_name + a company field } OR { first_name + last_name + a company field } where a company field is company_name | company_website | company_linkedin_url. Returns { error, free_enrichment, person, company }. Set enrich_mobile:true to also reveal a direct mobile (10 credits if found). Costs 1 credit when an email is found, 0 if no match or re-enriched within 90 days.",
       "verb": "POST",
       "path": "/enrich-person",
       "credits": 1,
@@ -26,24 +26,165 @@
               "first_name": { "type": "string" },
               "last_name": { "type": "string" },
               "full_name": { "type": "string" },
-              "company": { "type": "string" },
               "company_name": { "type": "string" },
               "company_website": { "type": "string" },
               "company_linkedin_url": { "type": "string" },
               "linkedin_url": { "type": "string" },
               "email": { "type": "string" },
-              "person_id": { "type": "string" }
+              "person_id": { "type": "string", "description": "Person id returned by Search Person" }
             }
           },
           "only_verified_email": { "type": "boolean", "description": "Only return the email if it is verified" },
-          "enrich_mobile": { "type": "boolean", "description": "Also attempt to reveal a direct mobile number" }
+          "enrich_mobile": { "type": "boolean", "description": "Also attempt to reveal a direct mobile number (10 credits if found)" },
+          "only_verified_mobile": { "type": "boolean", "description": "Only return the mobile if it is verified" }
+        }
+      }
+    },
+    {
+      "id": "bulkEnrichPerson",
+      "label": "Bulk Enrich People",
+      "description": "Enrich up to 50 people in one call. `data` is an array; each item has an `identifier` (your own tracking string, echoed back) plus the same matching datapoints as Enrich Person (linkedin_url | email | person_id | full_name+company | first_name+last_name+company). Returns { error, total_cost, matched:[{ identifier, person, company }], not_matched:[identifier], invalid_datapoints:[identifier] }. Same per-match credit cost as Enrich Person.",
+      "verb": "POST",
+      "path": "/bulk-enrich-person",
+      "credits": 2,
+      "input": {
+        "type": "object",
+        "required": ["data"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "description": "Up to 50 person records, each with an identifier plus matching datapoints",
+            "items": {
+              "type": "object",
+              "required": ["identifier"],
+              "properties": {
+                "identifier": { "type": "string", "description": "Your own unique tracking string, echoed back in the response" },
+                "first_name": { "type": "string" },
+                "last_name": { "type": "string" },
+                "full_name": { "type": "string" },
+                "company_name": { "type": "string" },
+                "company_website": { "type": "string" },
+                "company_linkedin_url": { "type": "string" },
+                "linkedin_url": { "type": "string" },
+                "email": { "type": "string" },
+                "person_id": { "type": "string" }
+              }
+            }
+          },
+          "only_verified_email": { "type": "boolean" },
+          "enrich_mobile": { "type": "boolean", "description": "Also attempt to reveal mobiles (10 credits per mobile found)" },
+          "only_verified_mobile": { "type": "boolean" }
+        }
+      }
+    },
+    {
+      "id": "enrichCompany",
+      "label": "Enrich Company",
+      "description": "Enrich one company with firmographics, funding, technologies and job postings. Put identifiers inside `data`: company_website (preferred) OR company_linkedin_url OR company_id OR company_name (least reliable alone). Returns { error, free_enrichment, company } where company has { company_id, name, domain, industry, employee_count, employee_range, location, revenue_range, founded, keywords, funding, technology, job_postings }. 1 credit per match; 0 if no match or re-enriched within 90 days.",
+      "verb": "POST",
+      "path": "/enrich-company",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["data"],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Company identifiers. e.g. { \"company_website\": \"intercom.com\" }",
+            "properties": {
+              "company_website": { "type": "string", "description": "Domain, e.g. 'intercom.com'" },
+              "company_linkedin_url": { "type": "string", "description": "e.g. 'https://linkedin.com/company/deloitte'" },
+              "company_name": { "type": "string", "description": "Discouraged as the sole identifier" },
+              "company_id": { "type": "string", "description": "Company id from a previous enrichment or Search Company" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "bulkEnrichCompany",
+      "label": "Bulk Enrich Companies",
+      "description": "Enrich up to 50 companies in one call. `data` is an array; each item has an `identifier` (your own tracking string) plus company_website | company_linkedin_url | company_id | company_name. Returns { error, total_cost, matched:[{ identifier, company }], not_matched:[identifier], invalid_datapoints:[identifier] }. 1 credit per matched company.",
+      "verb": "POST",
+      "path": "/bulk-enrich-company",
+      "credits": 2,
+      "input": {
+        "type": "object",
+        "required": ["data"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "description": "Up to 50 company records, each with an identifier plus at least one datapoint",
+            "items": {
+              "type": "object",
+              "required": ["identifier"],
+              "properties": {
+                "identifier": { "type": "string", "description": "Your own unique tracking string, echoed back in the response" },
+                "company_website": { "type": "string" },
+                "company_linkedin_url": { "type": "string" },
+                "company_name": { "type": "string" },
+                "company_id": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "searchPerson",
+      "label": "Search People",
+      "description": "Search Prospeo's 200M+ contact database with 30+ filters (job title, seniority, department, location, company size/industry, technologies, etc.). Returns { error, free, results:[{ person, company }], pagination:{ current_page, per_page, total_page, total_count } }. 25 results per page, max 1,000 pages. Email/mobile are NOT included — feed each result's person_id into Enrich Person to reveal contact info. 1 credit per page returned (free if same filters+page repeated within 30 days). Build filter values with Search Suggestions first.",
+      "verb": "POST",
+      "path": "/search-person",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["filters"],
+        "properties": {
+          "filters": { "type": "object", "description": "Filter object (job_title, seniority, department, location, company filters, etc.). Use Search Suggestions to get canonical filter values. Cannot use only exclude filters." },
+          "page": { "type": "integer", "description": "Page number, defaults to 1. Max 1,000." }
+        }
+      }
+    },
+    {
+      "id": "searchCompany",
+      "label": "Search Companies",
+      "description": "Search Prospeo's 30M+ company database by firmographic filters (industry, size, location, technologies, funding, etc.). Returns { error, free, results:[{ company }], pagination:{ current_page, per_page, total_page, total_count } }. 25 per page, max 1,000 pages (25,000 companies). 1 credit per page returned (free if same filters+page repeated within 30 days). Websites/names filter lists are capped at 500 items.",
+      "verb": "POST",
+      "path": "/search-company",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["filters"],
+        "properties": {
+          "filters": { "type": "object", "description": "Company filter object (industry, employee_count, location, technologies, funding, etc.). Use Search Suggestions for canonical values. Cannot use only exclude filters." },
+          "page": { "type": "integer", "description": "Page number, defaults to 1. Max 1,000." }
+        }
+      }
+    },
+    {
+      "id": "searchSuggestions",
+      "label": "Search Suggestions",
+      "description": "FREE helper that resolves canonical filter values for Search People / Search Companies. Provide exactly ONE search field (min 2 chars): location_search, job_title_search, technology_search, industry_search, naics_search, or sic_search. Returns { error, location_suggestions, job_title_suggestions, technology_suggestions, industry_suggestions, naics_suggestions, sic_suggestions } — only the matching field is populated, others are null. 0 credits.",
+      "verb": "POST",
+      "path": "/search-suggestions",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "location_search": { "type": "string", "description": "Find canonical location values" },
+          "job_title_search": { "type": "string", "description": "Find job title suggestions" },
+          "technology_search": { "type": "string", "description": "Find technology names" },
+          "industry_search": { "type": "string", "description": "Find industry suggestions" },
+          "naics_search": { "type": "string", "description": "Find NAICS codes (numeric or text)" },
+          "sic_search": { "type": "string", "description": "Find SIC codes (numeric or text)" }
         }
       }
     },
     {
       "id": "accountInformation",
       "label": "Account Information",
-      "description": "Get remaining credits and account details. Returns { response: { remaining_credits, ... } }.",
+      "description": "Get plan and credit usage. Returns { error, response: { current_plan, current_team_members, remaining_credits, used_credits, next_quota_renewal_days, next_quota_renewal_date } }. Free.",
       "verb": "GET",
       "path": "/account-information",
       "credits": 0,

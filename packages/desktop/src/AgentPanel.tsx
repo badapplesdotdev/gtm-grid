@@ -119,7 +119,7 @@ function renderInline(text: string, keyBase: string): ReactNode[] {
   return nodes;
 }
 
-function Markdown({ text }: { text: string }): ReactNode {
+export function Markdown({ text }: { text: string }): ReactNode {
   const out: ReactNode[] = [];
   const parts = text.split(/```/);
   parts.forEach((part, pi) => {

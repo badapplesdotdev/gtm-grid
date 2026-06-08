@@ -38,6 +38,96 @@
       }
     },
     {
+      "id": "createCampaign",
+      "label": "Create Campaign",
+      "description": "Create a new campaign. Requires `name`; `campaign_schedule` (with at least one named schedule defining timing) is required by the API. Returns the created campaign object including its UUID. Campaign starts paused — call activateCampaign to launch.",
+      "verb": "POST",
+      "path": "/campaigns",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["name", "campaign_schedule"],
+        "properties": {
+          "name": { "type": "string", "description": "Campaign name" },
+          "campaign_schedule": { "type": "object", "description": "Schedule config: { schedules: [{ name, timing:{from,to}, days:{...}, timezone }] }" },
+          "email_list": { "type": "array", "description": "Sending account emails to attach", "items": { "type": "string" } },
+          "daily_limit": { "type": "integer", "description": "Max emails/day across the campaign" },
+          "sequences": { "type": "array", "description": "Email step sequences", "items": { "type": "object" } }
+        }
+      }
+    },
+    {
+      "id": "updateCampaign",
+      "label": "Update Campaign",
+      "description": "Patch a campaign by id (name, schedule, daily_limit, sequences, etc.). Returns the updated campaign.",
+      "verb": "PATCH",
+      "path": "/campaigns/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "description": "Campaign UUID" },
+          "name": { "type": "string" },
+          "daily_limit": { "type": "integer" },
+          "campaign_schedule": { "type": "object" },
+          "sequences": { "type": "array", "items": { "type": "object" } }
+        }
+      }
+    },
+    {
+      "id": "deleteCampaign",
+      "label": "Delete Campaign",
+      "description": "Delete a campaign by id (UUID). Irreversible.",
+      "verb": "DELETE",
+      "path": "/campaigns/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string", "description": "Campaign UUID" } }
+      }
+    },
+    {
+      "id": "activateCampaign",
+      "label": "Activate Campaign",
+      "description": "Start or resume a campaign (begins sending). Path id is the campaign UUID; no body required.",
+      "verb": "POST",
+      "path": "/campaigns/{id}/activate",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string", "description": "Campaign UUID" } }
+      }
+    },
+    {
+      "id": "pauseCampaign",
+      "label": "Pause Campaign",
+      "description": "Pause a running campaign (stops sending). Path id is the campaign UUID; no body required.",
+      "verb": "POST",
+      "path": "/campaigns/{id}/pause",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string", "description": "Campaign UUID" } }
+      }
+    },
+    {
+      "id": "searchCampaignsByContact",
+      "label": "Find Campaigns for a Contact",
+      "description": "Find which campaigns a contact (by email) is enrolled in. Returns the list of campaigns containing that lead. Useful to dedupe before enrolling.",
+      "verb": "POST",
+      "path": "/campaigns/search-by-contact",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["email"],
+        "properties": { "email": { "type": "string", "description": "Contact email to search for" } }
+      }
+    },
+    {
       "id": "createLead",
       "label": "Add Lead to Campaign",
       "description": "Add a contact to a campaign (or list). Only `email` is required; pass `campaign` (the campaign UUID — note: NOT campaign_id) to enroll them. Use skip_if_in_campaign to dedupe.",
@@ -61,9 +151,180 @@
       }
     },
     {
+      "id": "getLead",
+      "label": "Get Lead",
+      "description": "Get a single lead by its id (UUID). Returns the full lead object including custom variables, status and campaign membership.",
+      "verb": "GET",
+      "path": "/leads/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string", "description": "Lead UUID" } }
+      }
+    },
+    {
+      "id": "updateLead",
+      "label": "Update Lead",
+      "description": "Patch a lead by id — update name, company, custom variables, etc. Returns the updated lead. Note: setting a new custom variable propagates the key to all leads in the campaign.",
+      "verb": "PATCH",
+      "path": "/leads/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "description": "Lead UUID" },
+          "first_name": { "type": "string" },
+          "last_name": { "type": "string" },
+          "company_name": { "type": "string" },
+          "phone": { "type": "string" },
+          "website": { "type": "string" },
+          "custom_variables": { "type": "object", "description": "Arbitrary key/value metadata" }
+        }
+      }
+    },
+    {
+      "id": "deleteLead",
+      "label": "Delete Lead",
+      "description": "Delete a lead by id (UUID). Irreversible.",
+      "verb": "DELETE",
+      "path": "/leads/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string", "description": "Lead UUID" } }
+      }
+    },
+    {
+      "id": "listLeads",
+      "label": "List / Search Leads",
+      "description": "Search and page through leads. POST (not GET) because of complex filters. Filter by campaign, list_id, or search string. Returns { items[], next_starting_after }. Order is ascending by lead id; reuse next_starting_after to paginate.",
+      "verb": "POST",
+      "path": "/leads/list",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "campaign": { "type": "string", "description": "Filter to a campaign UUID" },
+          "list_id": { "type": "string", "description": "Filter to a lead-list UUID" },
+          "search": { "type": "string", "description": "Free-text match on email/name/company" },
+          "limit": { "type": "integer", "description": "1-100" },
+          "starting_after": { "type": "string", "description": "Pagination cursor" }
+        }
+      }
+    },
+    {
+      "id": "bulkAddLeads",
+      "label": "Bulk Add Leads",
+      "description": "Add many leads at once to a campaign or list. Pass `leads` (array of {email,...}) plus a target `campaign` (UUID) or `list_id`. Returns a background-job handle — poll getBackgroundJob until done. Heavier than createLead.",
+      "verb": "POST",
+      "path": "/leads/list/add",
+      "credits": 2,
+      "input": {
+        "type": "object",
+        "required": ["leads"],
+        "properties": {
+          "leads": { "type": "array", "description": "Array of lead objects (each needs at least `email`)", "items": { "type": "object" } },
+          "campaign": { "type": "string", "description": "Target campaign UUID" },
+          "list_id": { "type": "string", "description": "Target lead-list UUID" },
+          "skip_if_in_campaign": { "type": "boolean", "description": "Dedupe against existing campaign members" }
+        }
+      }
+    },
+    {
+      "id": "moveLeads",
+      "label": "Move Leads",
+      "description": "Move leads between campaigns/lists. Specify the source filter (campaign/list_id/ids) and the destination (to_campaign_id or to_list_id). Returns a background-job handle — poll getBackgroundJob. Heavy/bulk operation.",
+      "verb": "POST",
+      "path": "/leads/move",
+      "credits": 2,
+      "input": {
+        "type": "object",
+        "properties": {
+          "ids": { "type": "array", "description": "Specific lead UUIDs to move", "items": { "type": "string" } },
+          "campaign": { "type": "string", "description": "Source campaign UUID" },
+          "list_id": { "type": "string", "description": "Source list UUID" },
+          "to_campaign_id": { "type": "string", "description": "Destination campaign UUID" },
+          "to_list_id": { "type": "string", "description": "Destination list UUID" }
+        }
+      }
+    },
+    {
+      "id": "createLeadList",
+      "label": "Create Lead List",
+      "description": "Create a new lead list. Requires `name`. Returns the created list including its UUID.",
+      "verb": "POST",
+      "path": "/lead-lists",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["name"],
+        "properties": { "name": { "type": "string", "description": "Lead-list name" } }
+      }
+    },
+    {
+      "id": "listLeadLists",
+      "label": "List Lead Lists",
+      "description": "List lead lists (cursor-paginated). Returns { items[], next_starting_after }.",
+      "verb": "GET",
+      "path": "/lead-lists",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "description": "1-100" },
+          "starting_after": { "type": "string", "description": "Pagination cursor" }
+        }
+      }
+    },
+    {
+      "id": "getLeadList",
+      "label": "Get Lead List",
+      "description": "Get a lead list by id (UUID).",
+      "verb": "GET",
+      "path": "/lead-lists/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string", "description": "Lead-list UUID" } }
+      }
+    },
+    {
+      "id": "updateLeadList",
+      "label": "Update Lead List",
+      "description": "Patch a lead list by id (e.g. rename). Returns the updated list.",
+      "verb": "PATCH",
+      "path": "/lead-lists/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "description": "Lead-list UUID" },
+          "name": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "deleteLeadList",
+      "label": "Delete Lead List",
+      "description": "Delete a lead list by id (UUID). Irreversible.",
+      "verb": "DELETE",
+      "path": "/lead-lists/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string", "description": "Lead-list UUID" } }
+      }
+    },
+    {
       "id": "verifyEmail",
       "label": "Verify Email",
-      "description": "Validate an email address. Returns { verification_status: pending|verified|invalid, catch_all, credits }. May be async (re-poll if pending).",
+      "description": "Validate an email address. Returns { verification_status: pending|verified|invalid, catch_all, credits }. May be async — if status is `pending` (verify >10s), poll getEmailVerificationStatus with the same email.",
       "verb": "POST",
       "path": "/email-verification",
       "credits": 1,
@@ -71,6 +332,19 @@
         "type": "object",
         "required": ["email"],
         "properties": { "email": { "type": "string" } }
+      }
+    },
+    {
+      "id": "getEmailVerificationStatus",
+      "label": "Get Email Verification Status",
+      "description": "Check the status of a pending email verification job. Path email is URL-encoded. Returns the resolved { verification_status, catch_all }. Use after verifyEmail returns `pending`.",
+      "verb": "GET",
+      "path": "/email-verification/{email}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["email"],
+        "properties": { "email": { "type": "string", "description": "The email previously submitted to verifyEmail" } }
       }
     },
     {
@@ -90,6 +364,119 @@
       }
     },
     {
+      "id": "getAccount",
+      "label": "Get Sending Account",
+      "description": "Get a single sending account by its email address (path param). Returns account config, warmup state and health.",
+      "verb": "GET",
+      "path": "/accounts/{email}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["email"],
+        "properties": { "email": { "type": "string", "description": "Sending account email" } }
+      }
+    },
+    {
+      "id": "createAccount",
+      "label": "Create Sending Account",
+      "description": "Connect a sending email account via IMAP/SMTP. Requires email, first_name, last_name, provider_code and IMAP+SMTP credentials. Returns the created account.",
+      "verb": "POST",
+      "path": "/accounts",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["email", "first_name", "last_name", "provider_code"],
+        "properties": {
+          "email": { "type": "string" },
+          "first_name": { "type": "string" },
+          "last_name": { "type": "string" },
+          "provider_code": { "type": "integer", "description": "Email provider code (e.g. Google=1, custom IMAP)" },
+          "imap_username": { "type": "string" },
+          "imap_password": { "type": "string" },
+          "imap_host": { "type": "string" },
+          "imap_port": { "type": "integer" },
+          "smtp_username": { "type": "string" },
+          "smtp_password": { "type": "string" },
+          "smtp_host": { "type": "string" },
+          "smtp_port": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "updateAccount",
+      "label": "Update Sending Account",
+      "description": "Patch a sending account by email (e.g. daily limit, warmup, name). Returns the updated account.",
+      "verb": "PATCH",
+      "path": "/accounts/{email}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["email"],
+        "properties": {
+          "email": { "type": "string", "description": "Sending account email (path)" },
+          "first_name": { "type": "string" },
+          "last_name": { "type": "string" },
+          "daily_limit": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "deleteAccount",
+      "label": "Delete Sending Account",
+      "description": "Disconnect/delete a sending account by email. Irreversible.",
+      "verb": "DELETE",
+      "path": "/accounts/{email}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["email"],
+        "properties": { "email": { "type": "string", "description": "Sending account email" } }
+      }
+    },
+    {
+      "id": "pauseAccount",
+      "label": "Pause Sending Account",
+      "description": "Pause sending from an account (path email). No body required.",
+      "verb": "POST",
+      "path": "/accounts/{email}/pause",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["email"],
+        "properties": { "email": { "type": "string", "description": "Sending account email" } }
+      }
+    },
+    {
+      "id": "resumeAccount",
+      "label": "Resume Sending Account",
+      "description": "Resume sending from a paused account (path email). No body required.",
+      "verb": "POST",
+      "path": "/accounts/{email}/resume",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["email"],
+        "properties": { "email": { "type": "string", "description": "Sending account email" } }
+      }
+    },
+    {
+      "id": "warmupAnalytics",
+      "label": "Get Warmup Analytics",
+      "description": "Get warmup deliverability analytics for one or more sending accounts (emails array). Returns per-account warmup health, inbox/spam placement counts.",
+      "verb": "POST",
+      "path": "/accounts/warmup-analytics",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["emails"],
+        "properties": {
+          "emails": { "type": "array", "description": "Sending account emails to report on", "items": { "type": "string" } },
+          "start_date": { "type": "string", "description": "YYYY-MM-DD" },
+          "end_date": { "type": "string", "description": "YYYY-MM-DD" }
+        }
+      }
+    },
+    {
       "id": "campaignAnalytics",
       "label": "Get Campaign Analytics",
       "description": "Get analytics for a campaign (sent, opens, clicks, replies, bounces). Omit id for all campaigns.",
@@ -103,6 +490,142 @@
           "start_date": { "type": "string", "description": "YYYY-MM-DD" },
           "end_date": { "type": "string", "description": "YYYY-MM-DD" }
         }
+      }
+    },
+    {
+      "id": "campaignAnalyticsDaily",
+      "label": "Get Daily Campaign Analytics",
+      "description": "Get day-by-day campaign analytics (sent/opens/replies per day). Optional campaign_id; otherwise aggregates. Good for time-series columns.",
+      "verb": "GET",
+      "path": "/campaigns/analytics/daily",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "campaign_id": { "type": "string", "description": "Campaign UUID (omit for all)" },
+          "start_date": { "type": "string", "description": "YYYY-MM-DD" },
+          "end_date": { "type": "string", "description": "YYYY-MM-DD" }
+        }
+      }
+    },
+    {
+      "id": "campaignAnalyticsSteps",
+      "label": "Get Campaign Step Analytics",
+      "description": "Get per-sequence-step analytics for a campaign (how each email step performed). Set include_opportunities_count for opportunities per step.",
+      "verb": "GET",
+      "path": "/campaigns/analytics/steps",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "campaign_id": { "type": "string", "description": "Campaign UUID" },
+          "start_date": { "type": "string", "description": "YYYY-MM-DD" },
+          "end_date": { "type": "string", "description": "YYYY-MM-DD" },
+          "include_opportunities_count": { "type": "boolean" }
+        }
+      }
+    },
+    {
+      "id": "listEmails",
+      "label": "List Emails",
+      "description": "List/search inbox & sent emails (replies, sequence sends). Filter by campaign_id, eaccount (sending account), lead, is_unread, email_type, etc. Cursor-paginated. Returns { items[], next_starting_after }.",
+      "verb": "GET",
+      "path": "/emails",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "campaign_id": { "type": "string", "description": "Filter to a campaign UUID" },
+          "eaccount": { "type": "string", "description": "Filter to a sending account email" },
+          "lead": { "type": "string", "description": "Filter to a lead email" },
+          "is_unread": { "type": "boolean" },
+          "email_type": { "type": "string", "description": "e.g. 'received' | 'sent'" },
+          "limit": { "type": "integer", "description": "1-100" },
+          "starting_after": { "type": "string", "description": "Pagination cursor" }
+        }
+      }
+    },
+    {
+      "id": "getEmail",
+      "label": "Get Email",
+      "description": "Get a single email by its id (UUID). Returns full message incl. body, thread_id, lead/account.",
+      "verb": "GET",
+      "path": "/emails/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string", "description": "Email UUID" } }
+      }
+    },
+    {
+      "id": "replyToEmail",
+      "label": "Reply to Email",
+      "description": "Send a reply within an existing thread. Set reply_to_uuid to the id of an email returned by listEmails/getEmail, plus eaccount (sending account), subject and body. Returns the sent email.",
+      "verb": "POST",
+      "path": "/emails/reply",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["reply_to_uuid", "eaccount", "body"],
+        "properties": {
+          "reply_to_uuid": { "type": "string", "description": "id of the email to reply to" },
+          "eaccount": { "type": "string", "description": "Sending account email to send from" },
+          "subject": { "type": "string" },
+          "body": { "type": "object", "description": "{ html: '...', text: '...' }" }
+        }
+      }
+    },
+    {
+      "id": "countUnreadEmails",
+      "label": "Count Unread Emails",
+      "description": "Get the count of unread emails in the unibox. Returns { count }.",
+      "verb": "GET",
+      "path": "/emails/unread/count",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "markThreadAsRead",
+      "label": "Mark Thread as Read",
+      "description": "Mark all emails in a thread as read. Path thread_id from an email's thread_id field. No body required.",
+      "verb": "POST",
+      "path": "/emails/threads/{thread_id}/mark-as-read",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["thread_id"],
+        "properties": { "thread_id": { "type": "string", "description": "Email thread id" } }
+      }
+    },
+    {
+      "id": "listBackgroundJobs",
+      "label": "List Background Jobs",
+      "description": "List background jobs (bulk operations like bulkAddLeads/moveLeads). Filter by status/type. Returns { items[] }.",
+      "verb": "GET",
+      "path": "/background-jobs",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "description": "e.g. 'pending' | 'success' | 'failed'" },
+          "type": { "type": "string" },
+          "limit": { "type": "integer" },
+          "starting_after": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "getBackgroundJob",
+      "label": "Get Background Job",
+      "description": "Poll a background job by id (UUID) to check progress/result of a bulk operation (bulkAddLeads, moveLeads, etc.). Returns { status, progress, ... }.",
+      "verb": "GET",
+      "path": "/background-jobs/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string", "description": "Background job UUID" } }
       }
     }
   ]

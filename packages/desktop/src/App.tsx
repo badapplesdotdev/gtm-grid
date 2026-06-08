@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
-import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo } from "./api";
+import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo } from "./api";
 import AgentPanel from "./AgentPanel";
 import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import CellDetails, { extractCode } from "./CellDetails";
-import { ExtensionPanel, AiProviderPanel, ExtensionsBrowse, BrandIcon } from "./Panels";
+import { ExtensionPanel, AiProviderPanel, ExtensionsBrowse, SkillsBrowse, SkillPanel, BrandIcon } from "./Panels";
 import { AddColumnPopover, FunctionsModal } from "./AddColumn";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { AccountBar, PlanBillingModal } from "./cloud/AccountBar";
@@ -36,6 +36,8 @@ type View =
   | { kind: "table" }
   | { kind: "extensions" }
   | { kind: "extension"; id: string }
+  | { kind: "skills" }
+  | { kind: "skill"; id: string }
   | { kind: "ai"; id: string };
 
 // ─── Icons (inline SVG, no deps) ─────────────────────────
@@ -476,11 +478,13 @@ export default function App() {
   // Connectors / extensions / AI providers
   const [connectors, setConnectors] = useState<ConnectorInfo[]>([]);
   const [extensions, setExtensions] = useState<ExtensionInfo[]>([]);
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [aiProviders, setAiProviders] = useState<AiProviderInfo[]>([]);
   const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
   const [fnSectionOpen, setFnSectionOpen] = useState(false); // Functions section: collapsed by default
   const [aiSectionOpen, setAiSectionOpen] = useState(true);
   const [extSectionOpen, setExtSectionOpen] = useState(true);
+  const [skillsSectionOpen, setSkillsSectionOpen] = useState(false); // Skills section: collapsed by default
 
   // Which detail (table grid / extension / AI provider) the main area shows.
   const [view, setView] = useState<View>({ kind: "table" });
@@ -815,12 +819,13 @@ export default function App() {
     // it's reachable instead of giving up on the first failed check.
     const boot = async () => {
       try {
-        const [h, t, f, e, ai] = await Promise.all([
+        const [h, t, f, e, ai, sk] = await Promise.all([
           api.health(),
           api.tables(),
           api.functions(),
           api.extensions(),
           api.aiProviders(),
+          api.skills(),
         ]);
         if (cancelled) return;
         setHealthStatus("connected");
@@ -829,6 +834,7 @@ export default function App() {
         setConnectors(f);
         setExtensions(e);
         setAiProviders(ai);
+        setSkills(sk);
         setSelectedTableId((cur) => cur ?? (t.length > 0 ? t[0].id : null));
       } catch {
         if (cancelled) return;
@@ -1425,14 +1431,14 @@ export default function App() {
             )))}
           </div>
 
-          {/* Extensions section — collapsible, with Browse all in the header */}
+          {/* Tools section — collapsible, with Browse all in the header */}
           <div className="sidebar-section">
             <div className="sidebar-section-label clickable" onClick={() => setExtSectionOpen(o => !o)}>
               <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span className={`connector-group-toggle${extSectionOpen ? " open" : ""}`}>
                   <Icon.ChevronRight />
                 </span>
-                Extensions
+                Tools
               </span>
               <button
                 className={`section-link${view.kind === "extensions" ? " active" : ""}`}
@@ -1496,6 +1502,40 @@ export default function App() {
                     ))}
                   </div>
                 )}
+              </div>
+            )))}
+          </div>
+
+          {/* Skills section — per-tool agent playbooks + custom skills */}
+          <div className="sidebar-section">
+            <div className="sidebar-section-label clickable" onClick={() => setSkillsSectionOpen(o => !o)}>
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span className={`connector-group-toggle${skillsSectionOpen ? " open" : ""}`}>
+                  <Icon.ChevronRight />
+                </span>
+                Skills
+              </span>
+              <button
+                className={`section-link${view.kind === "skills" ? " active" : ""}`}
+                onClick={e => { e.stopPropagation(); setView({ kind: "skills" }); }}
+              >
+                Browse all
+              </button>
+            </div>
+            {skillsSectionOpen && (skills.length === 0 ? (
+              <div className="skeleton-row">
+                <div className="shimmer skeleton-bar" style={{ width: "70%", height: 13 }} />
+              </div>
+            ) : skills.map(s => (
+              <div
+                key={s.id}
+                className={`ext-item clickable${view.kind === "skill" && view.id === s.id ? " active" : ""}`}
+                onClick={() => setView({ kind: "skill", id: s.id })}
+              >
+                <BrandIcon logo={s.logo} name={s.name} size={16} />
+                <span className="ext-item-name">{s.name}</span>
+                {s.source === "tool" && s.connected && <span className="ext-badge connected">on</span>}
+                {s.source === "custom" && <span className="ext-badge no-key">custom</span>}
               </div>
             )))}
           </div>
@@ -1614,6 +1654,22 @@ export default function App() {
           const p = aiProviders.find(x => x.id === view.id);
           return p ? <AiProviderPanel provider={p} onConnected={refreshConnections} workspaceCreds={workspaceCreds} /> : null;
         })()}
+
+        {/* Skills gallery + detail panels */}
+        {!importMode && !inCloud && view.kind === "skills" && (
+          <SkillsBrowse
+            skills={skills}
+            onOpen={(id) => setView({ kind: "skill", id })}
+            onChanged={() => api.skills().then(setSkills).catch(() => {})}
+          />
+        )}
+        {!importMode && !inCloud && view.kind === "skill" && (
+          <SkillPanel
+            id={view.id}
+            onBack={() => setView({ kind: "skills" })}
+            onChanged={() => api.skills().then(setSkills).catch(() => {})}
+          />
+        )}
 
         {!importMode && !inCloud && view.kind === "table" && <>
         {/* Toolbar */}

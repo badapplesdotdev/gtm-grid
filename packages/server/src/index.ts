@@ -38,15 +38,17 @@ const registry = defaultRegistry();
 
 // Seed bundled connector manifests (extensions/*.json shipped next to the server
 // in the packaged app, or repo/extensions in dev) into the GLOBAL db + registry.
-function seedExtensions() {
-  const dirs = [process.env.GTMGRID_EXT_DIR, join(SERVER_DIR, "extensions"), join(REPO_ROOT, "extensions")].filter(
+// Directory the bundled connector manifests + their `<tool>.skill.md` files live in.
+const EXT_DIR =
+  [process.env.GTMGRID_EXT_DIR, join(SERVER_DIR, "extensions"), join(REPO_ROOT, "extensions")].find(
     (d): d is string => !!d && existsSync(d),
-  );
-  const dir = dirs[0];
-  if (!dir) return;
-  for (const file of readdirSync(dir).filter((f) => f.endsWith(".json"))) {
+  ) ?? null;
+
+function seedExtensions() {
+  if (!EXT_DIR) return;
+  for (const file of readdirSync(EXT_DIR).filter((f) => f.endsWith(".json"))) {
     try {
-      const manifest = parseManifest(readFileSync(join(dir, file), "utf8"));
+      const manifest = parseManifest(readFileSync(join(EXT_DIR, file), "utf8"));
       globalDb.saveExtension(manifest as any);
       registry.add(connectorFromManifest(manifest));
     } catch (err) {
@@ -55,6 +57,37 @@ function seedExtensions() {
   }
 }
 seedExtensions();
+
+// ── Tool skills: per-tool operating manuals (`<tool>.skill.md`) the workflow generates.
+//    Read straight off disk so they hot-update when regenerated. Custom (user-authored)
+//    skills live in the global db `meta` table as a JSON array under "custom_skills".
+function loadToolSkill(id: string): string | null {
+  if (!EXT_DIR) return null;
+  const f = join(EXT_DIR, `${id}.skill.md`);
+  return existsSync(f) ? readFileSync(f, "utf8") : null;
+}
+interface CustomSkill {
+  id: string;
+  name: string;
+  description?: string;
+  body: string;
+  enabled?: boolean;
+}
+function listCustomSkills(): CustomSkill[] {
+  try {
+    const raw = globalDb.getMeta("custom_skills");
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+function saveCustomSkills(skills: CustomSkill[]): void {
+  globalDb.setMeta("custom_skills", JSON.stringify(skills));
+}
+function wordCount(s: string): number {
+  return s.trim() ? s.trim().split(/\s+/).length : 0;
+}
 // Load any custom (uploaded) manifests already stored in the global db.
 for (const manifest of globalDb.listExtensions()) {
   try {
@@ -125,6 +158,11 @@ function logoFor(domainOrUrl?: string | null): string | null {
   }
   host = host.replace(/^(www|api)\./, "");
   return host ? `https://www.google.com/s2/favicons?domain=${host}&sz=128` : null;
+}
+
+/** URL/id-safe slug from a display name (for custom skill ids). */
+function slugify(s: string): string {
+  return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "skill";
 }
 
 // Credential scope from request body — Personal / Team / Local tabs in the UI.
@@ -278,6 +316,115 @@ route("GET", "/api/extensions/:id", (p) => {
       path: x.path ?? null,
     })),
   };
+});
+
+// --- Skills: per-tool agent playbooks (<tool>.skill.md) + custom user skills ---
+// List: one entry per tool that ships a skill file, plus every custom skill.
+route("GET", "/api/skills", () => {
+  const toolSkills = globalDb
+    .listExtensions()
+    .map((e: any) => {
+      const body = loadToolSkill(e.id);
+      if (!body) return null;
+      return {
+        id: e.id,
+        name: e.name,
+        category: e.category ?? "custom",
+        description: e.description ?? null,
+        source: "tool" as const,
+        connected: !!globalDb.getCredential(e.id),
+        wordCount: wordCount(body),
+        logo: e.logo ?? logoFor(e.baseUrl),
+        enabled: true,
+      };
+    })
+    .filter(Boolean);
+  const custom = listCustomSkills().map((s) => ({
+    id: s.id,
+    name: s.name,
+    category: "custom",
+    description: s.description ?? null,
+    source: "custom" as const,
+    connected: false,
+    wordCount: wordCount(s.body ?? ""),
+    logo: null,
+    enabled: s.enabled !== false,
+  }));
+  return [...toolSkills, ...custom];
+});
+
+// Full skill body (markdown) for one skill — tool skill from disk, or a custom skill.
+route("GET", "/api/skills/:id", (p) => {
+  const ext: any = globalDb.getExtension(p.id);
+  const body = loadToolSkill(p.id);
+  if (ext && body) {
+    return {
+      id: ext.id,
+      name: ext.name,
+      category: ext.category ?? "custom",
+      description: ext.description ?? null,
+      source: "tool" as const,
+      connected: !!globalDb.getCredential(ext.id),
+      logo: ext.logo ?? logoFor(ext.baseUrl),
+      enabled: true,
+      body,
+    };
+  }
+  const custom = listCustomSkills().find((s) => s.id === p.id);
+  if (custom) {
+    return {
+      id: custom.id,
+      name: custom.name,
+      category: "custom",
+      description: custom.description ?? null,
+      source: "custom" as const,
+      connected: false,
+      logo: null,
+      enabled: custom.enabled !== false,
+      body: custom.body ?? "",
+    };
+  }
+  return { error: "not found" };
+});
+
+// Create or update a CUSTOM skill (tool skills are read-only files).
+route("POST", "/api/skills", (_p, body) => {
+  const b = (body ?? {}) as Partial<CustomSkill>;
+  const name = (b.name ?? "").trim();
+  if (!name) return { error: "name required" };
+  const id = (b.id ?? "").trim() || `custom-${slugify(name)}`;
+  const skills = listCustomSkills();
+  const next: CustomSkill = {
+    id,
+    name,
+    description: b.description ?? "",
+    body: b.body ?? "",
+    enabled: b.enabled !== false,
+  };
+  const i = skills.findIndex((s) => s.id === id);
+  if (i >= 0) skills[i] = next;
+  else skills.push(next);
+  saveCustomSkills(skills);
+  return { ok: true, id };
+});
+
+// Toggle whether a custom skill is injected into the agent.
+route("POST", "/api/skills/:id/toggle", (p, body) => {
+  const skills = listCustomSkills();
+  const s = skills.find((x) => x.id === p.id);
+  if (!s) return { error: "not found (tool skills are always on for connected tools)" };
+  s.enabled = (body as any)?.enabled !== false;
+  saveCustomSkills(skills);
+  return { ok: true, enabled: s.enabled };
+});
+
+// Delete a custom skill (tool skills cannot be deleted via the API).
+route("DELETE", "/api/skills/:id", (p) => {
+  const skills = listCustomSkills();
+  const next = skills.filter((s) => s.id !== p.id);
+  if (next.length === skills.length) return { error: "no such custom skill" };
+  saveCustomSkills(next);
+  return { ok: true };
 });
 
 // --- AI providers (bring-your-own-key for AI step functions) ---
@@ -622,7 +769,19 @@ const server = createServer(async (req, res) => {
         category: c.category,
         methodCount: c.methods.length,
       }));
-      const context = { ...body?.context, providers };
+      // Inject the operating playbook for every CONNECTED tool (so the agent
+      // stops guessing endpoints), plus any enabled custom skills. Only connected
+      // tools are included to keep the system prompt bounded.
+      const toolSkills = current.engine.registry
+        .list()
+        .filter((c) => !!globalDb.getCredential(c.id))
+        .map((c) => ({ id: c.id, name: c.name, body: loadToolSkill(c.id) }))
+        .filter((s): s is { id: string; name: string; body: string } => !!s.body);
+      const customSkills = listCustomSkills()
+        .filter((s) => s.enabled !== false && s.body?.trim())
+        .map((s) => ({ id: s.id, name: s.name, body: s.body }));
+      const skills = [...toolSkills, ...customSkills];
+      const context = { ...body?.context, providers, skills };
       // Pass `origin` through so the SSE stream emits the allowlisted CORS
       // header on this privileged route (#22).
       if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context, origin });
