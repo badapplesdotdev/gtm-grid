@@ -1,6 +1,10 @@
 import { serve } from "inngest/next";
 import { inngest } from "../../../lib/inngest/client";
 import { processWebhookRecord } from "../../../lib/inngest/functions/process-webhook-record";
+import {
+  pollTrigifySignals,
+  processSignalBinding,
+} from "../../../lib/inngest/functions/poll-trigify-signals";
 
 /**
  * The Inngest serve endpoint. Inngest invokes durable function steps by POSTing
@@ -12,5 +16,5 @@ export const runtime = "nodejs";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [processWebhookRecord],
+  functions: [processWebhookRecord, pollTrigifySignals, processSignalBinding],
 });
