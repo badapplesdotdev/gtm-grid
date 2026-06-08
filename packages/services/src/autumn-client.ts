@@ -110,6 +110,35 @@ function boundMethods(client: Autumn): AutumnClientImpl {
         catch: (cause) =>
           new AutumnError({ message: autumnMessage(cause, "attach"), cause }),
       }),
+    startTrial: ({ customerId, planId, seats, trialDays, customerData }) =>
+      Effect.tryPromise({
+        try: async () => {
+          await client.customers.getOrCreate(
+            getOrCreateParams(customerId, customerData),
+          );
+          // No-card trial: `customize.freeTrial` starts a `trialDays`-day trial
+          // with no payment method (paymentUrl is null). The Team plan's seats are
+          // PREPAID, so grant the seat quantity explicitly via featureQuantities —
+          // otherwise the trial grants 0 seats and the owner can't invite anyone.
+          await client.billing.attach({
+            customerId,
+            planId,
+            customize: {
+              freeTrial: {
+                durationLength: trialDays,
+                durationType: "day",
+                cardRequired: false,
+              },
+            },
+            featureQuantities: [{ featureId: SEATS_FEATURE_ID, quantity: seats }],
+          });
+        },
+        catch: (cause) =>
+          new AutumnError({
+            message: autumnMessage(cause, "startTrial"),
+            cause,
+          }),
+      }),
     trackSeats: ({ customerId, value }) =>
       Effect.tryPromise({
         try: async () => {
@@ -127,7 +156,12 @@ function boundMethods(client: Autumn): AutumnClientImpl {
         try: async () => {
           const res = await client.customers.get({ customerId });
           const subs = res.subscriptions ?? [];
-          return subs.filter((s) => s.status === "active").map((s) => s.planId);
+          // Count TRIALING subscriptions as active: a new signup is on the Team
+          // trial (status "trialing"), and we want the plan badge + seat
+          // entitlements to reflect Team during the trial, not Free.
+          return subs
+            .filter((s) => s.status === "active" || s.status === "trialing")
+            .map((s) => s.planId);
         },
         catch: (cause) =>
           new AutumnError({
@@ -220,6 +254,7 @@ export const AutumnClientLive: Layer.Layer<AutumnClient> = Layer.effect(
     return {
       checkSeats: (args) => withClient((m) => m.checkSeats(args)),
       attach: (args) => withClient((m) => m.attach(args)),
+      startTrial: (args) => withClient((m) => m.startTrial(args)),
       trackSeats: (args) => withClient((m) => m.trackSeats(args)),
       getActivePlanIds: (args) => withClient((m) => m.getActivePlanIds(args)),
       trackUsage: (args) => withClient((m) => m.trackUsage(args)),

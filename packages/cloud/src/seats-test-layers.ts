@@ -47,7 +47,15 @@ export interface FakeAutumnConfig {
    */
   readonly customerDataCalls?: Array<{
     customerId: string;
-    op: "checkSeats" | "attach" | "trackUsage";
+    op: "checkSeats" | "attach" | "trackUsage" | "startTrial";
+    customerData?: CustomerData;
+  }>;
+  /** Records each `startTrial` call (new-signup trial enrolment) for assertions. */
+  readonly trialCalls?: Array<{
+    customerId: string;
+    planId: string;
+    seats: number;
+    trialDays: number;
     customerData?: CustomerData;
   }>;
   /**
@@ -97,6 +105,21 @@ export const fakeAutumnLayer = (
         });
         return { checkoutUrl };
       }),
+    startTrial: ({ customerId, planId, seats, trialDays, customerData }) =>
+      Effect.sync(() => {
+        config.trialCalls?.push({
+          customerId,
+          planId,
+          seats,
+          trialDays,
+          customerData,
+        });
+        config.customerDataCalls?.push({
+          customerId,
+          op: "startTrial",
+          customerData,
+        });
+      }),
     trackSeats: ({ customerId, value }) =>
       Effect.sync(() => {
         config.trackCalls?.push({ customerId, value });
@@ -124,6 +147,7 @@ export const failingAutumnLayer = (
   failOn:
     | "check"
     | "attach"
+    | "startTrial"
     | "track"
     | "trackUsage"
     | "checkUsage"
@@ -143,6 +167,7 @@ export const failingAutumnLayer = (
       failOn === "attach"
         ? fail
         : Effect.succeed({ checkoutUrl: "https://billing.example.com/x" }),
+    startTrial: () => (failOn === "startTrial" ? fail : Effect.void),
     trackSeats: () => (failOn === "track" ? fail : Effect.void),
     getActivePlanIds: () =>
       failOn === "getActivePlanIds" ? fail : Effect.succeed(["free"]),

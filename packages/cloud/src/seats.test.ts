@@ -169,6 +169,42 @@ describe("checkout (standalone upgrade action)", () => {
   });
 });
 
+describe("startTrial (Team free trial on new-workspace signup)", () => {
+  const startTrial = () =>
+    Effect.gen(function* () {
+      const svc = yield* SeatsService;
+      return yield* svc.startTrial(CUSTOMER, {
+        name: "Acme",
+        email: "owner@acme.com",
+      });
+    });
+
+  it("starts a Team trial with the trial seats granted (no checkout)", async () => {
+    const trialCalls: {
+      customerId: string;
+      planId: string;
+      seats: number;
+      trialDays: number;
+      customerData?: { name?: string | null; email?: string | null };
+    }[] = [];
+    const result = await run(startTrial(), fakeAutumnLayer({ trialCalls }));
+    expect(result).toBeUndefined();
+    expect(trialCalls).toHaveLength(1);
+    expect(trialCalls[0]).toMatchObject({
+      customerId: CUSTOMER,
+      planId: "team",
+      seats: 5,
+      trialDays: 7,
+      customerData: { name: "Acme", email: "owner@acme.com" },
+    });
+  });
+
+  it("propagates an AutumnError when the trial attach fails", async () => {
+    const error = await failureOf(startTrial(), failingAutumnLayer("startTrial"));
+    expect(error).toBeInstanceOf(AutumnError);
+  });
+});
+
 describe("currentPlan (derive the workspace's paid plan for the badge)", () => {
   const currentPlan = () =>
     Effect.gen(function* () {

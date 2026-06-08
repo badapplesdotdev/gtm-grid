@@ -14,6 +14,10 @@ import { OnboardingFlow } from "./cloud/onboarding/OnboardingFlow";
 import { cloudEnabled, syncWorkspacePlan } from "./cloud/client";
 import { CloudGrid } from "./cloud/CloudGrid";
 import { useMe, useActiveWorkspace, useAuthState } from "./cloud/auth";
+import {
+  useMyPendingInvitations,
+  useAcceptInvitation,
+} from "./cloud/useWorkspaceInvitations";
 import { useWorkspaceCredentials } from "./cloud/useWorkspaceCredentials";
 import {
   useCloudProjects,
@@ -559,13 +563,45 @@ export default function App() {
   // and not already showing the flow. A ref guards against re-opening it after
   // the user dismisses it.
   const autoStartedRef = useRef(false);
+  // Invitations waiting for the signed-in user (email-matched), + the accept
+  // mutation. Drive the "new signup with a pending invite → auto-enrol" path.
+  const myInvites = useMyPendingInvitations();
+  const acceptInvite = useAcceptInvitation();
+  const autoAcceptedRef = useRef(false);
   useEffect(() => {
     if (!cloudEnabled || !isAuthenticated || me == null) return;
     if (me.workspaces.length > 0) return;
+    // A signed-in user with ZERO workspaces is a fresh signup. If they were
+    // invited to a workspace (an email-matched pending invite), auto-enrol them
+    // there instead of prompting them to create their own workspace. Wait for the
+    // invites query to resolve (undefined = loading) before deciding, so we never
+    // flash the create-workspace wizard at an invitee.
+    if (myInvites === undefined) return;
+    if (myInvites.length > 0) {
+      if (autoAcceptedRef.current) return;
+      autoAcceptedRef.current = true;
+      void (async () => {
+        const res = await acceptInvite(myInvites[0].token).catch(() => null);
+        if (res?.status === "accepted") {
+          setActiveWorkspaceId(res.workspaceId as Id<"workspaces">);
+          return;
+        }
+        // Couldn't auto-enrol (seat limit / invalid / error): fall back to the
+        // create-workspace prompt so the user is never stranded, and let the
+        // PendingInvites banner surface the reason.
+        autoAcceptedRef.current = false;
+        if (!autoStartedRef.current && onboarding === null) {
+          autoStartedRef.current = true;
+          setOnboarding({ initialScreen: "workspace", hasSession: true });
+        }
+      })();
+      return;
+    }
+    // No pending invite → prompt the user to create their first workspace.
     if (autoStartedRef.current || onboarding !== null) return;
     autoStartedRef.current = true;
     setOnboarding({ initialScreen: "workspace", hasSession: true });
-  }, [isAuthenticated, me, onboarding]);
+  }, [isAuthenticated, me, onboarding, myInvites, acceptInvite, setActiveWorkspaceId]);
   // Keep the active workspace's plan reconciled with Autumn: on workspace switch
   // and whenever the window regains focus (returning from the Autumn checkout, or
   // after a manual upgrade in the Autumn dashboard), so the plan badge reflects

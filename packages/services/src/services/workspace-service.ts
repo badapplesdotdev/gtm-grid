@@ -324,6 +324,14 @@ export class WorkspaceService extends Effect.Service<WorkspaceService>()(
             role: "owner",
             createdAt: now,
           });
+          // Start the Team free trial so the brand-new workspace can invite
+          // teammates from day one (least-friction onboarding). Best-effort: a
+          // billing hiccup (Autumn down / misconfigured) must NOT fail workspace
+          // creation — the next plan sync re-establishes the real state.
+          yield* Effect.gen(function* () {
+            const customerData = yield* repo.findCustomerData(workspaceId);
+            yield* seats.startTrial(workspaceId, customerData);
+          }).pipe(Effect.catchAll(() => Effect.void));
           return workspaceId;
         });
 
