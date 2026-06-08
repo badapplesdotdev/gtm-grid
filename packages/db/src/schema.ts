@@ -234,6 +234,13 @@ export const workspaces = pgTable(
     cloudActionsLimit: integer("cloud_actions_limit"),
     /** Current PAID plan id: "team" | "business" | "unlimited", or null. */
     currentPlanId: text("current_plan_id"),
+    /**
+     * Epoch ms when the current trial ends, or null when not trialing (Free, or a
+     * paid non-trial subscription). Synced from Autumn by `BillingService.syncPlan`
+     * and seeded on trial start; drives the in-app countdown banner + the
+     * scheduled trial-ending email reminders.
+     */
+    trialEndsAt: bigint("trial_ends_at", { mode: "number" }),
   },
   (t) => [index("workspaces_by_owner").on(t.ownerId)],
 );

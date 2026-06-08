@@ -2866,3 +2866,8 @@ button.import-type:hover { background: var(--surface-3); }
 .cloud-locked__icon { font-size: 34px; margin-bottom: 8px; }
 .cloud-locked__card h2 { margin: 0 0 8px; font-size: 18px; }
 .cloud-locked__card p { margin: 0 0 18px; color: var(--text-2); line-height: 1.55; font-size: 14px; }
+
+/* Trial countdown banner (top of the app shell). */
+.trial-banner { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: var(--surface-2, rgba(34,197,94,0.10)); border-bottom: 1px solid var(--border-1, rgba(0,0,0,0.08)); font-size: 13px; }
+.trial-banner__text { flex: 1; min-width: 0; color: var(--text-1); }
+.trial-banner--urgent { background: rgba(234,88,12,0.12); }

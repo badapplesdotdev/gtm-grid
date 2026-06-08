@@ -169,6 +169,24 @@ function boundMethods(client: Autumn): AutumnClientImpl {
             cause,
           }),
       }),
+    getActiveSubscriptions: ({ customerId }) =>
+      Effect.tryPromise({
+        try: async () => {
+          const res = await client.customers.get({ customerId });
+          const subs = res.subscriptions ?? [];
+          return subs
+            .filter((s) => s.status === "active" || s.status === "trialing")
+            .map((s) => ({
+              planId: s.planId,
+              trialEndsAt: s.trialEndsAt ?? null,
+            }));
+        },
+        catch: (cause) =>
+          new AutumnError({
+            message: autumnMessage(cause, "customers.get"),
+            cause,
+          }),
+      }),
     trackUsage: ({ customerId, featureId, value, customerData }) =>
       Effect.tryPromise({
         try: async () => {
@@ -257,6 +275,8 @@ export const AutumnClientLive: Layer.Layer<AutumnClient> = Layer.effect(
       startTrial: (args) => withClient((m) => m.startTrial(args)),
       trackSeats: (args) => withClient((m) => m.trackSeats(args)),
       getActivePlanIds: (args) => withClient((m) => m.getActivePlanIds(args)),
+      getActiveSubscriptions: (args) =>
+        withClient((m) => m.getActiveSubscriptions(args)),
       trackUsage: (args) => withClient((m) => m.trackUsage(args)),
       checkUsage: (args) => withClient((m) => m.checkUsage(args)),
     };

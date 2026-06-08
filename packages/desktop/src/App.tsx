@@ -678,6 +678,15 @@ export default function App() {
   const cloudLocked =
     cloudEnabled && activeWorkspace != null && activeWorkspace.plan.id === null;
   const [showUpgrade, setShowUpgrade] = useState(false);
+  // Trial countdown: whole days left until the active workspace's trial ends
+  // (null when not trialing). Drives the in-app "trial ends in N days" banner so
+  // users add a card BEFORE the hard lock.
+  const trialEndsAt = activeWorkspace?.plan.trialEndsAt ?? null;
+  const trialDaysLeft =
+    trialEndsAt != null
+      ? Math.max(0, Math.ceil((trialEndsAt - Date.now()) / 86_400_000))
+      : null;
+  const showTrialBanner = cloudEnabled && !cloudLocked && trialDaysLeft != null;
 
   // Reset the open cloud project when the active workspace changes: a project
   // belongs to exactly one workspace, so keeping it open across a switch would
@@ -1224,6 +1233,24 @@ export default function App() {
       {/* Workspace-invite accept banner (email-matched + ?invite= URL token).
           Self-gates: renders nothing when signed out / no pending invites. */}
       <PendingInvites onAccepted={setActiveWorkspaceId} />
+      {showTrialBanner && trialDaysLeft != null && (
+        <div
+          className={`trial-banner${trialDaysLeft <= 2 ? " trial-banner--urgent" : ""}`}
+          role="status"
+        >
+          <span className="trial-banner__text">
+            {trialDaysLeft === 0
+              ? "Your trial ends today — add a card to keep cloud sync, realtime & shared credentials."
+              : `Your trial ends in ${trialDaysLeft} day${trialDaysLeft === 1 ? "" : "s"} — add a card to keep your cloud features.`}
+          </span>
+          <button
+            className="btn btn--primary btn-sm"
+            onClick={() => setShowUpgrade(true)}
+          >
+            Upgrade now
+          </button>
+        </div>
+      )}
       <div className="app">
       {/* ── Sidebar ─────────────────────── */}
       <aside className="sidebar">

@@ -92,7 +92,7 @@ describe("WorkspaceService.me", () => {
           // cloud actions read from the cached columns (kept semantics).
           cloudActions: { used: 42, limit: 2000 },
           // plan id + derived human name.
-          plan: { id: "team", name: "Team" },
+          plan: { id: "team", name: "Team", trialEndsAt: null },
         },
       ],
     });
@@ -113,7 +113,11 @@ describe("WorkspaceService.me", () => {
       used: 0,
       limit: null,
     });
-    expect(exit.value.workspaces[0]?.plan).toEqual({ id: null, name: "Free" });
+    expect(exit.value.workspaces[0]?.plan).toEqual({
+      id: null,
+      name: "Free",
+      trialEndsAt: null,
+    });
   });
 
   it("is batched/no-N+1: lists only workspaces the user belongs to", async () => {
