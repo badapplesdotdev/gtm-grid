@@ -999,6 +999,7 @@ export default function App() {
           createdAt: Date.now(),
         });
         setCloudTableId(null);
+        setView({ kind: "table" });
       } catch (e) {
         const message =
           e instanceof Error ? e.message : "Could not create project.";
@@ -1023,6 +1024,7 @@ export default function App() {
     try {
       const id = await createCloudTable(cloudProject._id, "Untitled");
       setCloudTableId(id);
+      setView({ kind: "table" });
     } catch (e) {
       setCloudCreateError(
         e instanceof Error ? e.message : "Could not create table.",
@@ -1042,6 +1044,7 @@ export default function App() {
     try {
       const id = await createCloudTable(cloudProject._id, "Webhook table");
       setCloudTableId(id);
+      setView({ kind: "table" });
       setOpenWebhookToken((n) => n + 1);
     } catch (e) {
       setCloudCreateError(
@@ -1417,7 +1420,9 @@ export default function App() {
                     style={cloudLocked ? { opacity: 0.6 } : undefined}
                     title={cloudLocked ? "Upgrade to unlock cloud tables" : undefined}
                     onClick={() =>
-                      cloudLocked ? setShowUpgrade(true) : setCloudTableId(t._id)
+                      cloudLocked
+                        ? setShowUpgrade(true)
+                        : (setCloudTableId(t._id), setView({ kind: "table" }))
                     }
                   >
                     <span className="sidebar-item-icon">
@@ -1716,11 +1721,11 @@ export default function App() {
         {/* Cloud project: the LIVE multiplayer grid (Convex). Replaces the local
             sidecar grid entirely while a cloud project is open. Hidden while a
             CSV import is open in this pane. */}
-        {!importMode && inCloud && !cloudLocked && <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} />}
+        {!importMode && inCloud && !cloudLocked && view.kind === "table" && <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} />}
 
         {/* Cloud locked: the trial lapsed / Free plan. Cloud data stays safe but
             inaccessible until the user upgrades; local tables are unaffected. */}
-        {!importMode && inCloud && cloudLocked && (
+        {!importMode && inCloud && cloudLocked && view.kind === "table" && (
           <div className="cloud-locked">
             <div className="cloud-locked__card">
               <div className="cloud-locked__icon">🔒</div>
@@ -1737,14 +1742,17 @@ export default function App() {
           </div>
         )}
 
-        {/* Extensions gallery + detail panels */}
-        {!importMode && !inCloud && view.kind === "extensions" && (
+        {/* Extensions gallery + detail panels. These render in BOTH local and
+            cloud workspaces — in cloud they own the shared "Workspace" credential
+            scope, so they must take precedence over the CloudGrid (which only
+            renders for the "table" view). */}
+        {!importMode && view.kind === "extensions" && (
           <ExtensionsBrowse
             extensions={extensions}
             onOpen={(id) => setView({ kind: "extension", id })}
           />
         )}
-        {!importMode && !inCloud && view.kind === "extension" && (
+        {!importMode && view.kind === "extension" && (
           <ExtensionPanel
             id={view.id}
             onConnected={refreshConnections}
@@ -1752,7 +1760,7 @@ export default function App() {
             workspaceCreds={workspaceCreds}
           />
         )}
-        {!importMode && !inCloud && view.kind === "ai" && (() => {
+        {!importMode && view.kind === "ai" && (() => {
           const p = aiProviders.find(x => x.id === view.id);
           return p ? <AiProviderPanel provider={p} onConnected={refreshConnections} workspaceCreds={workspaceCreds} /> : null;
         })()}
