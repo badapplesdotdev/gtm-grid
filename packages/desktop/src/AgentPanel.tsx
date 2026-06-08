@@ -22,6 +22,34 @@ interface Message {
   error?: boolean;
 }
 
+/** A persisted past conversation. `sessionId` lets the CLI resume with full context. */
+interface Conversation {
+  id: string;
+  agent: AgentKind;
+  title: string;
+  messages: Message[];
+  sessionId?: string;
+  updatedAt: number;
+}
+
+const CHATS_KEY = "gtmgrid:agentChats";
+function loadChats(): Conversation[] {
+  try {
+    const raw = localStorage.getItem(CHATS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+function relativeTime(ts: number): string {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
 const AGENT_LABEL: Record<AgentKind, string> = { claude: "Claude Code", codex: "Codex" };
 
 /** Selectable models per agent ("" = the CLI's default for your plan). */
@@ -296,8 +324,61 @@ export default function AgentPanel({
   const sessionRef = useRef<Record<AgentKind, string | undefined>>({ claude: undefined, codex: undefined });
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Persistent chat history (survives restart). convIdRef = the conversation each
+  // agent thread is currently writing to (so a completed turn updates the right one).
+  const [history, setHistory] = useState<Conversation[]>(loadChats);
+  const [showHistory, setShowHistory] = useState(false);
+  const convIdRef = useRef<Record<AgentKind, string | null>>({ claude: null, codex: null });
 
   const messages = threads[agent];
+
+  // Persist history whenever it changes (cap to the 40 most recent).
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHATS_KEY, JSON.stringify(history.slice(0, 40)));
+    } catch {
+      /* quota / disabled storage — ignore */
+    }
+  }, [history]);
+
+  // Snapshot the active thread into history when a turn FINISHES (busy → false),
+  // so reopening it later restores both the messages and the CLI session id.
+  useEffect(() => {
+    if (busy) return;
+    const msgs = threads[agent];
+    if (!msgs.length) return;
+    let id = convIdRef.current[agent];
+    if (!id) {
+      id = (crypto.randomUUID?.() ?? `c_${Date.now()}_${Math.floor(Math.random() * 1e6)}`);
+      convIdRef.current[agent] = id;
+    }
+    const title = (msgs.find((m) => m.role === "user")?.text ?? "Conversation").trim().slice(0, 60) || "Conversation";
+    const conv: Conversation = { id, agent, title, messages: msgs, sessionId: sessionRef.current[agent], updatedAt: Date.now() };
+    setHistory((h) => [conv, ...h.filter((c) => c.id !== id)]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy]);
+
+  /** Start a fresh conversation for the current agent (previous one is already saved). */
+  const newChat = () => {
+    convIdRef.current[agent] = null;
+    sessionRef.current[agent] = undefined;
+    setThreads((t) => ({ ...t, [agent]: [] }));
+    setShowHistory(false);
+  };
+  /** Reopen a saved conversation — restores its messages + CLI session for context. */
+  const openChat = (c: Conversation) => {
+    setAgent(c.agent);
+    setThreads((t) => ({ ...t, [c.agent]: c.messages }));
+    sessionRef.current[c.agent] = c.sessionId;
+    convIdRef.current[c.agent] = c.id;
+    setShowHistory(false);
+  };
+  const deleteChat = (id: string) => {
+    setHistory((h) => h.filter((c) => c.id !== id));
+    (Object.keys(convIdRef.current) as AgentKind[]).forEach((k) => {
+      if (convIdRef.current[k] === id) convIdRef.current[k] = null;
+    });
+  };
 
   useEffect(() => {
     api.agents().then(setStatus).catch(() => setStatus({}));
@@ -453,19 +534,36 @@ export default function AgentPanel({
             {AGENT_LABEL[k]}
           </button>
         ))}
-        {messages.length > 0 && (
-          <button className="agent-clear" title="New conversation" onClick={() => { if (!busy) { sessionRef.current[agent] = undefined; setMessages(() => []); } }}>
-            Clear
+        <span style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
+          {messages.length > 0 && (
+            <button className="agent-clear" title="New chat" onClick={() => { if (!busy) newChat(); }}>
+              New
+            </button>
+          )}
+          <button className={`agent-clear${showHistory ? " active" : ""}`} title="Chat history" onClick={() => setShowHistory((s) => !s)}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><polyline points="12 7 12 12 15 14" /></svg>
           </button>
+          <button className="agent-collapse" title="Collapse panel" onClick={() => setCollapsed(true)}>
+            <IconChevronsRight s={15} />
+          </button>
+        </span>
+        {showHistory && (
+          <div className="agent-history">
+            <div className="agent-history-head">Recent chats</div>
+            {history.length === 0 ? (
+              <div className="agent-history-empty">No saved chats yet — they appear here after your first message.</div>
+            ) : (
+              history.map((c) => (
+                <div key={c.id} className="agent-history-row" onClick={() => openChat(c)}>
+                  <span className="agent-history-logo">{AGENT_LOGO[c.agent]}</span>
+                  <span className="agent-history-title" title={c.title}>{c.title}</span>
+                  <span className="agent-history-time">{relativeTime(c.updatedAt)}</span>
+                  <button className="agent-history-del" title="Delete chat" onClick={(e) => { e.stopPropagation(); deleteChat(c.id); }}>×</button>
+                </div>
+              ))
+            )}
+          </div>
         )}
-        <button
-          className="agent-collapse"
-          style={messages.length === 0 ? { marginLeft: "auto" } : undefined}
-          title="Collapse panel"
-          onClick={() => setCollapsed(true)}
-        >
-          <IconChevronsRight s={15} />
-        </button>
       </div>
 
       {!ready ? (
