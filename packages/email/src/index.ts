@@ -15,6 +15,7 @@ export {
   verificationEmail,
   passwordResetEmail,
   inviteEmail,
+  trialEndingEmail,
   welcomeEmail,
   type OutboundEmail,
 } from "./templates.js";

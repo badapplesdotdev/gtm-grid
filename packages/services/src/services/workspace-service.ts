@@ -33,6 +33,7 @@ import {
   type SeatLimitExceededError,
   SeatsService,
   TEAM_PLAN_ID,
+  TRIAL_DURATION_DAYS,
   type UnauthenticatedError,
 } from "@gtmgrid/cloud";
 import { Data, Effect, Option } from "effect";
@@ -57,6 +58,8 @@ export interface SeatUsage {
 export interface WorkspacePlan {
   readonly id: string | null;
   readonly name: string;
+  /** Epoch ms the trial ends, or null when not trialing. Drives the countdown. */
+  readonly trialEndsAt: number | null;
 }
 
 /**
@@ -261,7 +264,11 @@ export class WorkspaceService extends Effect.Service<WorkspaceService>()(
                   used: ws.cloudActionsUsed ?? 0,
                   limit: ws.cloudActionsLimit ?? null,
                 },
-                plan: { id: planId, name: planName(planId) },
+                plan: {
+                  id: planId,
+                  name: planName(planId),
+                  trialEndsAt: ws.trialEndsAt ?? null,
+                },
               },
             ];
           });
@@ -334,8 +341,14 @@ export class WorkspaceService extends Effect.Service<WorkspaceService>()(
             yield* seats.startTrial(workspaceId, customerData);
             // Reflect the trial entitlement immediately so the workspace isn't
             // locked between creation and the first plan sync (the cloud gate
-            // reads currentPlanId). syncPlan reconciles the exact id later.
-            yield* repo.updatePlanId(workspaceId, TEAM_PLAN_ID);
+            // reads currentPlanId). Seed trialEndsAt = now + trial days so the
+            // countdown banner + reminder scan work right away; syncPlan
+            // reconciles the exact id + Autumn trial end later.
+            yield* repo.updatePlan(
+              workspaceId,
+              TEAM_PLAN_ID,
+              now + TRIAL_DURATION_DAYS * 86_400_000,
+            );
           }).pipe(Effect.catchAll(() => Effect.void));
           return workspaceId;
         });

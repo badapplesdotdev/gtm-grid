@@ -208,6 +208,22 @@ export class AutumnClient extends Context.Tag("CloudAutumnClient")<
     }) => Effect.Effect<readonly string[], AutumnError>;
 
     /**
+     * Like {@link getActivePlanIds} but also returns each active/trialing
+     * subscription's `trialEndsAt` (epoch ms, or null when not trialing). Backs
+     * `BillingService.syncPlan`, which caches the plan id + trial end on the
+     * workspace for the badge, cloud gate, countdown banner and reminder scan.
+     */
+    readonly getActiveSubscriptions: (args: {
+      readonly customerId: string;
+    }) => Effect.Effect<
+      readonly {
+        readonly planId: string;
+        readonly trialEndsAt: number | null;
+      }[],
+      AutumnError
+    >;
+
+    /**
      * Record consumption of `value` units of an arbitrary metered feature for
      * `customerId`. Generalises {@link trackSeats} so the cloud-actions meter
      * (C26) can batch-flush its pending count to Autumn under

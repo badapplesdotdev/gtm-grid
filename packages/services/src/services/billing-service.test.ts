@@ -171,7 +171,11 @@ describe("BillingService.syncPlan", () => {
       autumn: { activePlanIds: ["business"] },
     });
     if (!Exit.isSuccess(exit)) throw new Error("expected success");
-    expect(exit.value).toEqual({ id: "business", name: planName("business") });
+    expect(exit.value).toEqual({
+      id: "business",
+      name: planName("business"),
+      trialEndsAt: null,
+    });
   });
 
   it("normalises an annual plan id to its tier name", async () => {
@@ -186,6 +190,23 @@ describe("BillingService.syncPlan", () => {
     expect(exit.value).toEqual({
       id: "business_annual",
       name: planName("business_annual"),
+      trialEndsAt: null,
+    });
+  });
+
+  it("surfaces the trial end when the active subscription is trialing", async () => {
+    const exit = await runSync({
+      workspaces,
+      users,
+      memberships: ownerMembership,
+      currentUserId: "user_owner",
+      autumn: { activePlanIds: ["team"], trialEndsAt: 1_999_000_000_000 },
+    });
+    if (!Exit.isSuccess(exit)) throw new Error("expected success");
+    expect(exit.value).toEqual({
+      id: "team",
+      name: planName("team"),
+      trialEndsAt: 1_999_000_000_000,
     });
   });
 
@@ -198,7 +219,7 @@ describe("BillingService.syncPlan", () => {
       autumn: { activePlanIds: ["free"] },
     });
     if (!Exit.isSuccess(exit)) throw new Error("expected success");
-    expect(exit.value).toEqual({ id: null, name: "Free" });
+    expect(exit.value).toEqual({ id: null, name: "Free", trialEndsAt: null });
   });
 
   it("allows any member (not only owner/admin) to refresh the plan", async () => {

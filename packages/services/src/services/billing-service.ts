@@ -63,6 +63,8 @@ export type SyncPlanError =
 export interface SyncedPlan {
   readonly id: string | null;
   readonly name: string;
+  /** Epoch ms the trial ends, or null when not trialing. */
+  readonly trialEndsAt: number | null;
 }
 
 /**
@@ -112,21 +114,24 @@ export class BillingService extends Effect.Service<BillingService>()(
        *
        * The workspace id IS the Autumn customer id. Any MEMBER may refresh the
        * view (billing CHANGES stay owner/admin in {@link checkout}). We pick the
-       * first ACTIVE paid plan id (monthly or annual) from Autumn, write it back,
-       * and return `{ id, name }`; no active paid plan → `null` (Free).
+       * first ACTIVE paid subscription (monthly or annual) from Autumn, cache its
+       * plan id + trial end, and return `{ id, name, trialEndsAt }`; no active
+       * paid plan → `null` (Free, trialEndsAt null).
        */
       const syncPlan = (
         workspaceId: string,
       ): Effect.Effect<SyncedPlan, SyncPlanError> =>
         Effect.gen(function* () {
           yield* membership.requireMember(workspaceId);
-          const active = yield* autumn.getActivePlanIds({
+          const subs = yield* autumn.getActiveSubscriptions({
             customerId: workspaceId,
           });
           const paidPlanIds: readonly string[] = ALL_PAID_PLAN_IDS;
-          const planId = active.find((id) => paidPlanIds.includes(id)) ?? null;
-          yield* repo.updatePlanId(workspaceId, planId);
-          return { id: planId, name: planName(planId) };
+          const paid = subs.find((s) => paidPlanIds.includes(s.planId)) ?? null;
+          const planId = paid?.planId ?? null;
+          const trialEndsAt = paid?.trialEndsAt ?? null;
+          yield* repo.updatePlan(workspaceId, planId, trialEndsAt);
+          return { id: planId, name: planName(planId), trialEndsAt };
         });
 
       return { checkout, syncPlan } as const;

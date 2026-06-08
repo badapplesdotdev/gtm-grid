@@ -83,7 +83,7 @@ describe("workspaces.me", () => {
           role: "owner",
           seatUsage: { used: 1, limit: null },
           cloudActions: { used: 7, limit: 2000 },
-          plan: { id: "team", name: "Team" },
+          plan: { id: "team", name: "Team", trialEndsAt: null },
         },
       ],
     });
@@ -211,7 +211,7 @@ describe("billing.syncPlan", () => {
       autumn: { activePlanIds: ["business"] },
     });
     const result = await caller.billing.syncPlan({ workspaceId: WS_ID });
-    expect(result).toEqual({ id: "business", name: "Business" });
+    expect(result).toEqual({ id: "business", name: "Business", trialEndsAt: null });
   });
 
   it("resolves to Free when Autumn has no active paid plan", async () => {
@@ -224,7 +224,7 @@ describe("billing.syncPlan", () => {
       autumn: { activePlanIds: ["free"] },
     });
     const result = await caller.billing.syncPlan({ workspaceId: WS_ID });
-    expect(result).toEqual({ id: null, name: "Free" });
+    expect(result).toEqual({ id: null, name: "Free", trialEndsAt: null });
   });
 
   it("rejects a non-member with FORBIDDEN", async () => {

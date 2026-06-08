@@ -59,6 +59,8 @@ export {
   SeatsService,
   SEATS_FEATURE_ID,
   TEAM_PLAN_ID,
+  TRIAL_DURATION_DAYS,
+  TRIAL_SEAT_COUNT,
   UnknownPlanError,
   type CustomerData,
   type SeatCheck,

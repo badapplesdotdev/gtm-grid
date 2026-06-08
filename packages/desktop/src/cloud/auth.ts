@@ -40,6 +40,8 @@ export interface WorkspacePlan {
   readonly id: string | null;
   /** Human name: "Free" | "Team" | "Business" | "Unlimited". */
   readonly name: string;
+  /** Epoch ms the trial ends, or null when not trialing. Drives the countdown. */
+  readonly trialEndsAt: number | null;
 }
 
 /** A workspace the signed-in user belongs to, with their role + seat usage. */
