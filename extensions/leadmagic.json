@@ -86,6 +86,36 @@
       }
     },
     {
+      "id": "socialToWorkEmail",
+      "label": "LinkedIn Profile to Work Email",
+      "description": "Reverse of b2bProfile: get a person's verified work email from their LinkedIn/B2B profile URL. Returns { email, profile_url, credits_consumed, message }. 5 credits on success; free if no result.",
+      "verb": "POST",
+      "path": "/people/b2b-profile-email",
+      "credits": 5,
+      "input": {
+        "type": "object",
+        "required": ["profile_url"],
+        "properties": {
+          "profile_url": { "type": "string", "description": "LinkedIn/B2B profile URL or username, e.g. 'linkedin.com/in/johndoe'" }
+        }
+      }
+    },
+    {
+      "id": "personalEmailFinder",
+      "label": "Find Personal Email",
+      "description": "Find a person's personal email(s) (Gmail/Outlook/iCloud) from their LinkedIn/B2B profile URL. Returns { profile_url, first_personal_email, personal_emails[], name, credits_consumed, message }. 2 credits if found; free if none.",
+      "verb": "POST",
+      "path": "/people/personal-email-finder",
+      "credits": 2,
+      "input": {
+        "type": "object",
+        "required": ["profile_url"],
+        "properties": {
+          "profile_url": { "type": "string", "description": "Professional/LinkedIn profile URL or username" }
+        }
+      }
+    },
+    {
       "id": "companySearch",
       "label": "Enrich Company",
       "description": "Enrich a company from its domain, name, or LinkedIn URL. Returns camelCase fields: { companyName, industry, employeeCount, employeeRange, founded, headquarters, revenue, description, specialties[] }. 1 credit on success.",
@@ -102,19 +132,49 @@
       }
     },
     {
+      "id": "companyFunding",
+      "label": "Company Funding",
+      "description": "Get a company's funding history, financials, investors and CEO details. Provide company_domain (preferred) OR company_name. Returns { company_name, total_funding, latest_round, latest_round_amount, latest_round_date, funding_rounds[], investors[], lead_investors[], leadership.ceo{ firstName, lastName, designation, b2b_profile }, credits_consumed, message }. 4 credits on success; free if no funding data.",
+      "verb": "POST",
+      "path": "/companies/company-funding",
+      "credits": 4,
+      "input": {
+        "type": "object",
+        "properties": {
+          "company_domain": { "type": "string", "description": "Company website domain (preferred)" },
+          "company_name": { "type": "string", "description": "Company name (alternative to domain)" }
+        }
+      }
+    },
+    {
       "id": "roleFinder",
       "label": "Find Person by Role",
-      "description": "Find a person holding a given job title at a company. Provide job_title plus company_domain OR company_name. Returns { full_name, profile_url, job_title, company_name }. 2 credits on success.",
+      "description": "Find a person holding a given job title at a company. Requires company_domain OR company_name; job_title is optional (partial match). Returns { first_name, last_name, full_name, job_title, company_name, company_website, profile_url, credits_consumed, message }. 2 credits if found; free if no match.",
       "verb": "POST",
       "path": "/people/role-finder",
       "credits": 2,
       "input": {
         "type": "object",
-        "required": ["job_title"],
         "properties": {
-          "job_title": { "type": "string", "description": "Target job title, e.g. 'VP of Sales'" },
           "company_domain": { "type": "string", "description": "Company website domain" },
-          "company_name": { "type": "string", "description": "Company name" }
+          "company_name": { "type": "string", "description": "Company name" },
+          "job_title": { "type": "string", "description": "Target job title (partial match), e.g. 'VP of Sales'" }
+        }
+      }
+    },
+    {
+      "id": "employeeFinder",
+      "label": "Find Company Employees",
+      "description": "List employees at a company. Requires company_domain OR company_name; optional limit (default 10). Returns { employees[]{ first_name, last_name, full_name, job_title, location, profile_url }, total_count, credits_consumed, message }. 0.05 credit per employee returned.",
+      "verb": "POST",
+      "path": "/people/employee-finder",
+      "credits": 2,
+      "input": {
+        "type": "object",
+        "properties": {
+          "company_domain": { "type": "string", "description": "Company website domain" },
+          "company_name": { "type": "string", "description": "Company name" },
+          "limit": { "type": "integer", "description": "Max employees to return (default 10)" }
         }
       }
     },
@@ -132,6 +192,117 @@
           "profile_url": { "type": "string", "description": "LinkedIn profile URL" },
           "company_domain": { "type": "string", "description": "Expected (known) company domain" },
           "company_name": { "type": "string", "description": "Expected (known) company name" }
+        }
+      }
+    },
+    {
+      "id": "jobsFinder",
+      "label": "Search Job Postings",
+      "description": "Search live job postings with company, role, location and date filters (intent/hiring signal). All params optional. Returns { total_count, page, per_page, total_pages, credits_consumed, results[]{ title, company info, location, types, experience level, remote status, publish date, description, application URL } }. 1 credit per job returned. Use jobCountries/jobTypes to resolve filter IDs first.",
+      "verb": "POST",
+      "path": "/jobs/jobs-finder",
+      "credits": 2,
+      "input": {
+        "type": "object",
+        "properties": {
+          "company_name": { "type": "string", "description": "Filter by company name" },
+          "company_website": { "type": "string", "description": "Filter by company website/domain" },
+          "company_type_id": { "type": "integer", "description": "Company type filter ID" },
+          "company_industry_id": { "type": "integer", "description": "Company industry filter ID" },
+          "min_employees": { "type": "integer", "description": "Minimum company headcount" },
+          "max_employees": { "type": "integer", "description": "Maximum company headcount" },
+          "job_title": { "type": "string", "description": "Filter by job title" },
+          "job_description": { "type": "string", "description": "Filter by text in job description" },
+          "experience_level": { "type": "string", "description": "One of: entry, mid, senior, executive" },
+          "job_type_id": { "type": "integer", "description": "Job type filter ID (see jobTypes)" },
+          "has_remote": { "type": "boolean", "description": "Only remote jobs" },
+          "location": { "type": "string", "description": "Free-text location" },
+          "city_name": { "type": "string", "description": "City name" },
+          "country_id": { "type": "string", "description": "Country filter ID (see jobCountries)" },
+          "region_id": { "type": "integer", "description": "Region/state filter ID" },
+          "posted_within": { "type": "integer", "description": "Jobs posted within the last N days" },
+          "posted_after": { "type": "string", "description": "Jobs posted on/after date (YYYY-MM-DD)" },
+          "posted_before": { "type": "string", "description": "Jobs posted on/before date (YYYY-MM-DD)" },
+          "page": { "type": "integer", "description": "Page number (default 1)" },
+          "per_page": { "type": "integer", "description": "Results per page (default 20, max 50)" }
+        }
+      }
+    },
+    {
+      "id": "jobCountries",
+      "label": "List Job Countries",
+      "description": "List supported country filter IDs for jobsFinder. No inputs. Returns an array of { id, name }. Free — cache locally.",
+      "verb": "GET",
+      "path": "/jobs/job-country",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "jobTypes",
+      "label": "List Job Types",
+      "description": "List supported job_type_id values for jobsFinder (e.g. Full Time=1, Part Time=2, Temporary=3, Internship=4, Freelance=5, Contract=6). No inputs. Returns an array of { id, name }. Free — cache locally.",
+      "verb": "GET",
+      "path": "/jobs/job-types",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "googleAdsSearch",
+      "label": "Search Google Ads",
+      "description": "Find a company's active Google Ads creatives (ad-spend / GTM intel). Requires company_domain (preferred) OR company_name. Returns { ads_count, ads[]{ advertiser_id, creative_id, original_url, variants[], start, last_seen, advertiser_name, format }, credits_consumed, message }. 0.2 credit per search; free if no results.",
+      "verb": "POST",
+      "path": "/ads/google-ads-search",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "properties": {
+          "company_domain": { "type": "string", "description": "Company website domain (preferred), e.g. 'gong.io'" },
+          "company_name": { "type": "string", "description": "Company name (alternative to domain)" }
+        }
+      }
+    },
+    {
+      "id": "metaAdsSearch",
+      "label": "Search Meta Ads",
+      "description": "Find a company's active Meta (Facebook/Instagram) Ads from the Facebook Ad Library. Requires company_domain OR company_name. Returns { ads_count, ads[], credits_consumed, message }. 0.2 credit per search; free if no results.",
+      "verb": "POST",
+      "path": "/ads/meta-ads-search",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "properties": {
+          "company_domain": { "type": "string", "description": "Company website domain" },
+          "company_name": { "type": "string", "description": "Company name" }
+        }
+      }
+    },
+    {
+      "id": "b2bAdsSearch",
+      "label": "Search B2B (LinkedIn) Ads",
+      "description": "Find a company's B2B / LinkedIn ad creatives. Requires company_domain OR company_name. Returns { ads_count, ads[]{ content, link, image_url }, credits_consumed, message }. Use b2bAdDetails with an ad link/ID for full creative copy.",
+      "verb": "POST",
+      "path": "/ads/b2b-ads-search",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "properties": {
+          "company_domain": { "type": "string", "description": "Company website domain" },
+          "company_name": { "type": "string", "description": "Company name" }
+        }
+      }
+    },
+    {
+      "id": "b2bAdDetails",
+      "label": "Get B2B Ad Details",
+      "description": "Resolve full creative detail for a single B2B ad returned by b2bAdsSearch. Requires ad_url (the Ad Library URL or ID). Returns { ad_details{ ads_type, content, heading, cta{ title, url } }, credits_consumed, message }. 2 credits per resolved ad; free if not found.",
+      "verb": "POST",
+      "path": "/ads/b2b-ads-details",
+      "credits": 2,
+      "input": {
+        "type": "object",
+        "required": ["ad_url"],
+        "properties": {
+          "ad_url": { "type": "string", "description": "Ad Library URL or ID (from b2bAdsSearch results)" }
         }
       }
     },
