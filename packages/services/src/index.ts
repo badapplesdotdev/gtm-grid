@@ -226,6 +226,11 @@ export {
   type WorkerGrid,
 } from "./services/webhook-service.js";
 export { ExtensionService } from "./services/extension-service.js";
+// --- Cloud-access gate (entitlement) -----------------------------------------
+export {
+  EntitlementService,
+  PlanRequiredError,
+} from "./services/entitlement-service.js";
 // --- Grid domain service + the dedicated metering WRITE path (TRI-3248) -------
 // NB: the grid's CloudActionsLimitError / InvalidCellError carry the SAME `_tag`
 // as the webhook-service classes of the same name (so the trpc error mapping is

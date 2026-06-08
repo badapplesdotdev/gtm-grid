@@ -21,3 +21,10 @@ auto-enrol invited users instead of prompting them to create their own workspace
 
 Verified end-to-end against the dev Autumn sandbox + local Postgres (trial attach,
 seat availability, plan sync, invite-during-trial, and invite→signup→auto-enrol).
+
+Also gates the cloud tier on entitlement: when the trial lapses (no card) the
+workspace falls back to Free and cloud tables/projects, realtime and shared
+credentials LOCK (server-enforced via `EntitlementService.requireCloudAccess` on
+the grid service + a `cloudWorkspaceProcedure`). The desktop shows cloud tables as
+locked with an "Upgrade to unlock cloud" prompt (reusing the Autumn checkout);
+listing stays available so names render, and local tables are unaffected.

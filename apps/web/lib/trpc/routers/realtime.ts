@@ -2,7 +2,7 @@
  * The `realtime` tRPC router — mints the WORKSPACE-SCOPED token the desktop/web
  * client uses to open a server-gated PartyKit grid connection (TRI-3261).
  *
- * `realtime.token` is a `workspaceProcedure` (input `{ workspaceId }`): the
+ * `realtime.token` is a `cloudWorkspaceProcedure` (input `{ workspaceId }`): the
  * middleware asserts the caller is a MEMBER of the workspace BEFORE the body
  * runs, so a non-member is rejected with FORBIDDEN and can never obtain a token
  * for a workspace they do not belong to. The body then mints a token
@@ -20,7 +20,7 @@
  */
 
 import { mintPartyToken, PARTY_TOKEN_TTL_SECONDS } from "@gtmgrid/auth";
-import { router, workspaceProcedure } from "../trpc";
+import { router, cloudWorkspaceProcedure } from "../trpc";
 
 /**
  * The base URL of the PartyKit deployment the client connects to. Local dev
@@ -35,10 +35,10 @@ export const realtimeRouter = router({
    * the connection only if the token's `workspaceId` matches the room. Expires in
    * {@link PARTY_TOKEN_TTL_SECONDS}; the client re-fetches before expiry.
    *
-   * `workspaceProcedure` has already asserted membership of `input.workspaceId`,
+   * `cloudWorkspaceProcedure` has already asserted membership of `input.workspaceId`,
    * so reaching this body means the caller is authorized for that workspace.
    */
-  token: workspaceProcedure.mutation(async ({ ctx, input }) => {
+  token: cloudWorkspaceProcedure.mutation(async ({ ctx, input }) => {
     const token = await mintPartyToken({
       userId: ctx.userId,
       workspaceId: input.workspaceId,

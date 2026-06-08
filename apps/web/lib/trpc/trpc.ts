@@ -14,7 +14,11 @@
  *     same program works in production and under `createCaller` in tests.
  */
 
-import { type AppServices, MembershipService } from "@gtmgrid/services";
+import {
+  type AppServices,
+  EntitlementService,
+  MembershipService,
+} from "@gtmgrid/services";
 import { initTRPC, TRPCError } from "@trpc/server";
 import { Cause, Effect, Exit } from "effect";
 import { z } from "zod";
@@ -36,6 +40,9 @@ function toTrpcError(tag: string | undefined, message: string): TRPCError {
     case "NotAMemberError":
     case "InsufficientRoleError":
     case "CredentialOwnershipError":
+    // Cloud-access gate: the workspace's trial lapsed / no paid plan. FORBIDDEN;
+    // the desktop also locks the cloud UI proactively from `me.plan`.
+    case "PlanRequiredError":
       return new TRPCError({ code: "FORBIDDEN", message });
     case "WorkspaceNotFoundError":
     case "WebhookNotFoundError":
@@ -128,3 +135,27 @@ export const workspaceProcedure = protectedProcedure
     );
     return next({ ctx: { ...ctx, membership } });
   });
+
+/**
+ * A member of `input.workspaceId` AND the workspace has CLOUD ACCESS (a paid plan
+ * or active trial). Layers `EntitlementService.requireCloudAccess` on top of
+ * {@link workspaceProcedure}; a workspace whose trial lapsed (Free) is rejected
+ * with `FORBIDDEN` (`PlanRequiredError`). Use for cloud-tier features — realtime,
+ * shared credentials, webhooks — so they lock when the plan is inactive. Pure
+ * workspace management (members, billing, leaving) stays on `workspaceProcedure`
+ * so a locked-out owner can still view the workspace and upgrade.
+ */
+export const cloudWorkspaceProcedure = workspaceProcedure.use(
+  async ({ ctx, input, next }) => {
+    await runEffect(
+      ctx.runtime,
+      Effect.gen(function* () {
+        const svc = yield* EntitlementService;
+        yield* svc.requireCloudAccess(
+          (input as { workspaceId: string }).workspaceId,
+        );
+      }),
+    );
+    return next();
+  },
+);

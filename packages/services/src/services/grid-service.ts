@@ -60,7 +60,9 @@ import {
   TableRepo,
   type TableRepoError,
 } from "../repositories/table-repo.js";
+import type { WorkspaceRepoError } from "../repositories/workspace-repo.js";
 import type { GridChangeEvent } from "../realtime/events.js";
+import { EntitlementService, type PlanRequiredError } from "./entitlement-service.js";
 import { MeterService } from "./meter-service.js";
 import { RealtimePublisher } from "./realtime-publisher.js";
 
@@ -131,6 +133,20 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
     const membership = yield* MembershipService;
     const meter = yield* MeterService;
     const realtime = yield* RealtimePublisher;
+    const entitlement = yield* EntitlementService;
+
+    /**
+     * Members-only AND the workspace has cloud access (paid plan / active trial).
+     * The cloud-data gate: every cloud WRITE + opening a cloud table runs this so
+     * a workspace whose trial lapsed (Free) is locked out — only listing existing
+     * cloud tables (so the desktop can render them as "locked") stays open. Local
+     * tables are wholly unaffected.
+     */
+    const requireCloudMember = (workspaceId: string) =>
+      Effect.gen(function* () {
+        yield* membership.requireMember(workspaceId);
+        yield* entitlement.requireCloudAccess(workspaceId);
+      });
 
     /**
      * Broadcast a change event on the table's channel AFTER a successful write,
@@ -216,7 +232,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       readonly name: string;
     }) =>
       Effect.gen(function* () {
-        yield* membership.requireMember(args.workspaceId);
+        yield* requireCloudMember(args.workspaceId);
         return yield* projects.insert({
           workspaceId: args.workspaceId,
           name: args.name,
@@ -246,10 +262,12 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       | NotAMemberError
       | MemberRepoError
       | InsufficientRoleError
+      | PlanRequiredError
+      | WorkspaceRepoError
     > =>
       Effect.gen(function* () {
         const table = yield* requireTable(tableId);
-        yield* membership.requireMember(table.workspaceId);
+        yield* requireCloudMember(table.workspaceId);
         const cols = yield* columns.listByTable(tableId);
         const rws = yield* rows.listByTable(tableId);
         const cls = yield* cells.listByTable(tableId);
@@ -283,7 +301,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
     }) =>
       Effect.gen(function* () {
         const project = yield* requireProject(args.projectId);
-        yield* membership.requireMember(project.workspaceId);
+        yield* requireCloudMember(project.workspaceId);
         const siblings = yield* tables.listByProject(args.projectId);
         const id = yield* tables.insert({
           workspaceId: project.workspaceId,
@@ -315,7 +333,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
     }) =>
       Effect.gen(function* () {
         const table = yield* requireTable(args.tableId);
-        yield* membership.requireMember(table.workspaceId);
+        yield* requireCloudMember(table.workspaceId);
         const siblings = yield* columns.listByTable(args.tableId);
         const id = yield* columns.insert({
           workspaceId: table.workspaceId,
@@ -351,7 +369,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
     const addRow = (tableId: string) =>
       Effect.gen(function* () {
         const table = yield* requireTable(tableId);
-        yield* membership.requireMember(table.workspaceId);
+        yield* requireCloudMember(table.workspaceId);
         const siblings = yield* rows.listByTable(tableId);
         const id = yield* rows.insert({
           workspaceId: table.workspaceId,
@@ -379,7 +397,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
     }) =>
       Effect.gen(function* () {
         const table = yield* requireTable(args.tableId);
-        yield* membership.requireMember(table.workspaceId);
+        yield* requireCloudMember(table.workspaceId);
 
         // Atomic quota pre-check (free tier has a hard cap; unlimited passes).
         const quota = yield* meter.readQuota(table.workspaceId);
@@ -465,7 +483,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
     const deleteTable = (tableId: string) =>
       Effect.gen(function* () {
         const table = yield* requireTable(tableId);
-        yield* membership.requireMember(table.workspaceId);
+        yield* requireCloudMember(table.workspaceId);
         yield* tables.remove(tableId);
         yield* meter.meterActions(table.workspaceId, 1);
         yield* publish(table.workspaceId, tableId, {
@@ -478,7 +496,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
     const deleteColumn = (columnId: string) =>
       Effect.gen(function* () {
         const column = yield* requireColumn(columnId);
-        yield* membership.requireMember(column.workspaceId);
+        yield* requireCloudMember(column.workspaceId);
         yield* columns.remove(columnId);
         yield* meter.meterActions(column.workspaceId, 1);
         yield* publish(column.workspaceId, column.tableId, {
@@ -491,7 +509,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
     const deleteRow = (rowId: string) =>
       Effect.gen(function* () {
         const row = yield* requireRow(rowId);
-        yield* membership.requireMember(row.workspaceId);
+        yield* requireCloudMember(row.workspaceId);
         yield* rows.remove(rowId);
         yield* meter.meterActions(row.workspaceId, 1);
         yield* publish(row.workspaceId, row.tableId, {
@@ -523,7 +541,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
             }),
           );
         }
-        yield* membership.requireMember(row.value.workspaceId);
+        yield* requireCloudMember(row.value.workspaceId);
         const existing = yield* cells.findByRowColumn(rowId, columnId);
         return {
           row: row.value,

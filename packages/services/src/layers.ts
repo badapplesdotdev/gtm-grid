@@ -125,6 +125,7 @@ import {
   workspaceRepoLayer,
 } from "./repositories/workspace-repo.js";
 import { ExtensionService } from "./services/extension-service.js";
+import { EntitlementService } from "./services/entitlement-service.js";
 import { GridService } from "./services/grid-service.js";
 import {
   type MeterQuota,
@@ -262,6 +263,9 @@ export const appLayer = (params: {
     Layer.provide(extensionRepo),
     Layer.provide(membershipService),
   );
+  const entitlementService = EntitlementService.Default.pipe(
+    Layer.provide(workspaceRepo),
+  );
   const gridService = GridService.Default.pipe(
     Layer.provide(projectRepo),
     Layer.provide(tableRepo),
@@ -272,9 +276,11 @@ export const appLayer = (params: {
     Layer.provide(membershipService),
     Layer.provide(meterService),
     Layer.provide(realtimePublisher),
+    Layer.provide(entitlementService),
   );
   // Merge so callers can resolve any repo or service from one Layer.
   return Layer.mergeAll(
+    entitlementService,
     workspaceService,
     billingService,
     invitationService,
@@ -554,6 +560,9 @@ export const TestLayer = (
     Layer.provide(extensionRepo),
     Layer.provide(membershipService),
   );
+  const entitlementService = EntitlementService.Default.pipe(
+    Layer.provide(workspaceRepo),
+  );
   const gridService = GridService.Default.pipe(
     Layer.provide(projectRepo),
     Layer.provide(tableRepo),
@@ -564,6 +573,7 @@ export const TestLayer = (
     Layer.provide(membershipService),
     Layer.provide(meterService),
     Layer.provide(realtimePublisher),
+    Layer.provide(entitlementService),
   );
   return Layer.mergeAll(
     workspaceService,
@@ -573,6 +583,7 @@ export const TestLayer = (
     webhookService,
     extensionService,
     gridService,
+    entitlementService,
     workspaceRepo,
     workspaceMemberRepo,
     invitationRepo,
@@ -614,6 +625,7 @@ export type AppServices =
   | ExtensionService
   | ExtensionRepo
   | GridService
+  | EntitlementService
   | ProjectRepo
   | TableRepo
   | ColumnRepo
