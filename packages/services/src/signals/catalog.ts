@@ -27,7 +27,36 @@ export interface SignalSource {
   /** Path template that FETCHES results — `{id}` is the search id (GET). */
   resultsPath: string;
   columns: SignalColumn[];
+  /** Minimal JSON-schema of the config the create form collects (cloud UI). */
+  inputSchema: { type: "object"; required: string[]; properties: Record<string, unknown> };
 }
+
+// Scan settings shared by every source (look-back / limit / scan frequency).
+const SCAN_PROPS: Record<string, unknown> = {
+  time_frame: { type: "string", description: "past-24h | past-week | past-month | past-6-months | past-year | all-time" },
+  max_results: { type: "number", description: "10-100" },
+  frequency: { type: "string", description: "hourly | every-12h | daily | weekly | monthly | quarterly" },
+};
+// Keyword (Boolean) post searches → OR/AND/NOT builder.
+const KEYWORD_SCHEMA = {
+  type: "object" as const,
+  required: ["keywords"],
+  properties: {
+    keywords: { type: "array", items: { type: "string" }, description: "Match ANY of these (OR)" },
+    keywords_and: { type: "array", items: { type: "string" }, description: "Must also include (AND)" },
+    keywords_not: { type: "array", items: { type: "string" }, description: "Exclude (NOT)" },
+    ...SCAN_PROPS,
+  },
+};
+// Profile / channel monitors → a single profile URL.
+const PROFILE_SCHEMA = {
+  type: "object" as const,
+  required: ["profile_url"],
+  properties: {
+    profile_url: { type: "string", description: "Profile / channel / publication URL" },
+    ...SCAN_PROPS,
+  },
+};
 
 // People-who-posted (post sources + profile monitors) vs engagers.
 const POST_COLUMNS: SignalColumn[] = [
@@ -56,6 +85,7 @@ const post = (id: string, label: string, group: string, createPath: string): Sig
   createPath,
   resultsPath: RESULTS,
   columns: POST_COLUMNS,
+  inputSchema: group === "Profile & company" ? PROFILE_SCHEMA : KEYWORD_SCHEMA,
 });
 
 export const SIGNAL_SOURCES: SignalSource[] = [
@@ -89,6 +119,14 @@ export const SIGNAL_SOURCES: SignalSource[] = [
     createPath: "/v1/profile/engagement/bulk",
     resultsPath: "/v1/profile/engagement/results",
     columns: ENGAGE_COLUMNS,
+    inputSchema: {
+      type: "object",
+      required: ["profile_urls"],
+      properties: {
+        profile_urls: { type: "array", items: { type: "string" }, description: "LinkedIn profile URLs to track engagement on" },
+        ...SCAN_PROPS,
+      },
+    },
   },
 ];
 

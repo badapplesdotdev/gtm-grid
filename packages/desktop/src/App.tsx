@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
-import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo } from "./api";
+import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource } from "./api";
 import AgentPanel from "./AgentPanel";
 import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
@@ -11,7 +11,7 @@ import { AccountBar, PlanBillingModal } from "./cloud/AccountBar";
 import { PendingInvites } from "./cloud/PendingInvites";
 import { WorkspaceSettings } from "./cloud/WorkspaceSettings";
 import { OnboardingFlow } from "./cloud/onboarding/OnboardingFlow";
-import { cloudEnabled, syncWorkspacePlan } from "./cloud/client";
+import { cloudEnabled, syncWorkspacePlan, apiClient } from "./cloud/client";
 import { CloudGrid } from "./cloud/CloudGrid";
 import { useMe, useActiveWorkspace, useAuthState } from "./cloud/auth";
 import {
@@ -27,7 +27,7 @@ import {
   type CloudProject,
 } from "./cloud/useCloudGrid";
 import { ImportCsvModal } from "./ImportCsvModal";
-import { SignalsModal } from "./SignalsModal";
+import { SignalsModal, type SignalsCloud } from "./SignalsModal";
 import type { ImportWriter } from "./csvImport";
 import type { Id } from "./cloud/ids";
 import "./styles.css";
@@ -438,25 +438,14 @@ function NewTableChooser({
               </span>
               <span className="acx-item-caret">{Caret}</span>
             </button>
-            {!inCloud ? (
-              <button className="acx-item" onClick={() => { onSignals(); onClose(); }}>
-                <span className="acx-item-icon"><BrandIcon logo="https://www.google.com/s2/favicons?domain=trigify.io&sz=128" name="Trigify" size={18} /></span>
-                <span className="acx-item-text">
-                  <span className="acx-item-title">From Social Signals</span>
-                  <span className="acx-item-sub">Powered by Trigify — pulls social posts into rows (API key required).</span>
-                </span>
-                <span className="acx-item-caret">{Caret}</span>
-              </button>
-            ) : (
-              <button className="acx-item acx-disabled" disabled title="Cloud support coming soon">
-                <span className="acx-item-icon"><BrandIcon logo="https://www.google.com/s2/favicons?domain=trigify.io&sz=128" name="Trigify" size={18} /></span>
-                <span className="acx-item-text">
-                  <span className="acx-item-title">From Social Signals</span>
-                  <span className="acx-item-sub">Desktop only for now — cloud support coming soon.</span>
-                </span>
-                <span className="acx-item-caret" style={{ color: "var(--text-3)" }}>{LockIcon}</span>
-              </button>
-            )}
+            <button className="acx-item" onClick={() => { onSignals(); onClose(); }}>
+              <span className="acx-item-icon"><BrandIcon logo="https://www.google.com/s2/favicons?domain=trigify.io&sz=128" name="Trigify" size={18} /></span>
+              <span className="acx-item-text">
+                <span className="acx-item-title">From Social Signals</span>
+                <span className="acx-item-sub">Powered by Trigify — pulls social posts into rows (API key required).</span>
+              </span>
+              <span className="acx-item-caret">{Caret}</span>
+            </button>
             {inCloud ? (
               <button className="acx-item" onClick={() => { onWebhook(); onClose(); }}>
                 <span className="acx-item-icon">{WebhookIcon}</span>
@@ -696,6 +685,37 @@ export default function App() {
       },
     };
   }, [cloudProject, createCloudTable, cloudAddColumn, cloudAddRowsWithCells]);
+  // Cloud "From Social Signals" adapter — loads sources via tRPC + creates the
+  // cloud table/columns/binding (the recurring poll runs in the Inngest worker).
+  const signalsCloud = useMemo<SignalsCloud | undefined>(() => {
+    if (!cloudProject || !apiClient) return undefined;
+    const client = apiClient;
+    const project = cloudProject;
+    return {
+      loadSources: async () => {
+        const src = await client.signals.sources.query();
+        const trigifyConnected = workspaceCreds?.connectedExtensionIds.has("trigify") ?? false;
+        return { trigifyConnected, sources: src.map((s) => ({ ...s, description: null })) as unknown as SignalSource[] };
+      },
+      create: async (args) => {
+        const tableId = await createCloudTable(project._id, args.name);
+        const columns: { key: string; columnId: string }[] = [];
+        for (const col of args.columns) {
+          const columnId = await cloudAddColumn(tableId as Id<"tables">, { name: col.name, type: "text" });
+          columns.push({ key: col.key, columnId: String(columnId) });
+        }
+        const r = await client.signals.createSignalBinding.mutate({
+          tableId: String(tableId),
+          sourceId: args.sourceId,
+          name: args.name,
+          config: args.config,
+          schedule: "daily",
+          columns,
+        });
+        return { tableId: String(tableId), added: (r as { added?: number })?.added ?? 0 };
+      },
+    };
+  }, [cloudProject, workspaceCreds, createCloudTable, cloudAddColumn]);
   // Cloud create (project/table) UX: a busy flag to disable the trigger while the
   // mutation is in flight, and a surfaced error so a failed create never hangs
   // silently. Both are cleared on the next attempt / success.
@@ -2060,16 +2080,21 @@ export default function App() {
 
       {showSignals && (
         <SignalsModal
+          cloud={inCloud ? signalsCloud : undefined}
           onClose={() => setShowSignals(false)}
           onConnectTrigify={() => { setShowSignals(false); setView({ kind: "extension", id: "trigify" }); }}
           onCreated={(tableId, added) => {
             setShowSignals(false);
-            api.tables().then((t) => {
-              setTables(t);
-              setSelectedTableId(tableId);
-              setView({ kind: "table" });
-            }).catch(() => {});
-            if (!added) startWarming(tableId);
+            if (inCloud) {
+              setCloudTableId(tableId as Id<"tables">);
+            } else {
+              api.tables().then((t) => {
+                setTables(t);
+                setSelectedTableId(tableId);
+                setView({ kind: "table" });
+              }).catch(() => {});
+              if (!added) startWarming(tableId);
+            }
           }}
         />
       )}

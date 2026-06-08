@@ -8,7 +8,7 @@
  * the Inngest cron worker (apps/web/lib/inngest/functions/poll-trigify-signals).
  */
 
-import { SignalService } from "@gtmgrid/services";
+import { SignalService, SIGNAL_SOURCES } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { z } from "zod";
 import { protectedProcedure, router, runEffect } from "../trpc";
@@ -22,6 +22,18 @@ const columnEntry = z.object({
 const schedule = z.enum(["manual", "hourly", "daily", "weekly"]);
 
 export const signalsRouter = router({
+  /** The static catalog of Trigify signal sources (id, label, group, columns, schema). */
+  sources: protectedProcedure.query(() =>
+    SIGNAL_SOURCES.map((s) => ({
+      id: s.id,
+      label: s.label,
+      group: s.group,
+      kind: s.kind,
+      columns: s.columns,
+      inputSchema: s.inputSchema,
+    })),
+  ),
+
   /** Signal bindings on a table (newest first). Members-only. */
   listSignalBindings: protectedProcedure
     .input(z.object({ tableId: z.string().min(1) }))

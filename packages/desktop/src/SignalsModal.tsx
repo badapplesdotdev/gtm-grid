@@ -125,22 +125,39 @@ function Dropdown({
   );
 }
 
+/**
+ * Cloud adapter — when present, the modal loads sources + creates the binding via
+ * the cloud (tRPC) path instead of the local sidecar. Cloud `create` also makes
+ * the cloud table + columns, so the modal only hands it the source + config.
+ */
+export interface SignalsCloud {
+  loadSources: () => Promise<{ trigifyConnected: boolean; sources: SignalSource[] }>;
+  create: (args: {
+    sourceId: string;
+    name: string;
+    config: Record<string, unknown>;
+    columns: { key: string; name: string }[];
+  }) => Promise<{ tableId?: string; added?: number; error?: string | null }>;
+}
+
 export function SignalsModal({
   onClose,
   onCreated,
   onConnectTrigify,
+  cloud,
 }: {
   onClose: () => void;
   onCreated: (tableId: string, added: number) => void;
   onConnectTrigify: () => void;
+  cloud?: SignalsCloud;
 }) {
   const [loading, setLoading] = useState(true);
   const [connected, setConnected] = useState(false);
   const [sources, setSources] = useState<SignalSource[]>([]);
   const [selected, setSelected] = useState<SignalSource | null>(null);
   const [name, setName] = useState("");
-  // Local has no recurring cron — always pull once. (Cloud picks a real schedule.)
-  const schedule = "manual";
+  // Local pulls once (no cron); cloud runs the recurring Inngest poll (daily).
+  const schedule = cloud ? "daily" : "manual";
   const [values, setValues] = useState<Record<string, string | boolean | string[]>>({});
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -148,7 +165,7 @@ export function SignalsModal({
 
   useEffect(() => {
     let cancelled = false;
-    api.signalSources()
+    (cloud ? cloud.loadSources() : api.signalSources())
       .then((r) => {
         if (cancelled) return;
         setSources(r.sources);
@@ -157,7 +174,7 @@ export function SignalsModal({
       .catch(() => setError("Could not load signal sources."))
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
-  }, []);
+  }, [cloud]);
 
   const groups = useMemo(() => {
     const m = new Map<string, SignalSource[]>();
@@ -240,7 +257,9 @@ export function SignalsModal({
     setSubmitting(true);
     setError(null);
     try {
-      const r = await api.createSignal({ sourceId: selected.id, name: name.trim() || selected.label, config: buildConfig(), schedule });
+      const r = cloud
+        ? await cloud.create({ sourceId: selected.id, name: name.trim() || selected.label, config: buildConfig(), columns: selected.columns })
+        : await api.createSignal({ sourceId: selected.id, name: name.trim() || selected.label, config: buildConfig(), schedule });
       if (r.error) { setError(r.error); return; }
       if (r.tableId) onCreated(r.tableId, r.added ?? 0);
     } catch (e) {
