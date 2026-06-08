@@ -329,8 +329,19 @@ export default function AgentPanel({
   const [history, setHistory] = useState<Conversation[]>(loadChats);
   const [showHistory, setShowHistory] = useState(false);
   const convIdRef = useRef<Record<AgentKind, string | null>>({ claude: null, codex: null });
+  const historyRef = useRef<HTMLDivElement>(null);
 
   const messages = threads[agent];
+
+  // Close the history dropdown on an outside click.
+  useEffect(() => {
+    if (!showHistory) return;
+    const onDoc = (e: MouseEvent) => {
+      if (historyRef.current && !historyRef.current.contains(e.target as Node)) setShowHistory(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [showHistory]);
 
   // Persist history whenever it changes (cap to the 40 most recent).
   useEffect(() => {
@@ -540,30 +551,10 @@ export default function AgentPanel({
               New
             </button>
           )}
-          <button className={`agent-clear${showHistory ? " active" : ""}`} title="Chat history" onClick={() => setShowHistory((s) => !s)}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><polyline points="12 7 12 12 15 14" /></svg>
-          </button>
           <button className="agent-collapse" title="Collapse panel" onClick={() => setCollapsed(true)}>
             <IconChevronsRight s={15} />
           </button>
         </span>
-        {showHistory && (
-          <div className="agent-history">
-            <div className="agent-history-head">Recent chats</div>
-            {history.length === 0 ? (
-              <div className="agent-history-empty">No saved chats yet — they appear here after your first message.</div>
-            ) : (
-              history.map((c) => (
-                <div key={c.id} className="agent-history-row" onClick={() => openChat(c)}>
-                  <span className="agent-history-logo">{AGENT_LOGO[c.agent]}</span>
-                  <span className="agent-history-title" title={c.title}>{c.title}</span>
-                  <span className="agent-history-time">{relativeTime(c.updatedAt)}</span>
-                  <button className="agent-history-del" title="Delete chat" onClick={(e) => { e.stopPropagation(); deleteChat(c.id); }}>×</button>
-                </div>
-              ))
-            )}
-          </div>
-        )}
       </div>
 
       {!ready ? (
@@ -677,8 +668,32 @@ export default function AgentPanel({
               </button>
             )}
           </div>
-          {/* Model picker — bottom-right of the composer; opens upward. */}
+          {/* Composer footer: chat history + model picker, both open upward. */}
           <div className="agent-composer-foot">
+            <div className="agent-history-picker" ref={historyRef}>
+              {showHistory && (
+                <div className="agent-history">
+                  <div className="agent-history-head">Recent chats</div>
+                  {history.length === 0 ? (
+                    <div className="agent-history-empty">No saved chats yet — they appear here after your first message.</div>
+                  ) : (
+                    history.map((c) => (
+                      <div key={c.id} className="agent-history-row" onClick={() => openChat(c)}>
+                        <span className="agent-history-logo">{AGENT_LOGO[c.agent]}</span>
+                        <span className="agent-history-title" title={c.title}>{c.title}</span>
+                        <span className="agent-history-time">{relativeTime(c.updatedAt)}</span>
+                        <button className="agent-history-del" title="Delete chat" onClick={(e) => { e.stopPropagation(); deleteChat(c.id); }}>×</button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+              <button className="agent-model-btn" onClick={() => setShowHistory((s) => !s)} title="Chat history">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><polyline points="12 7 12 12 15 14" /></svg>
+                History
+              </button>
+            </div>
+            <span style={{ marginLeft: "auto" }} />
             <ModelPicker agent={agent} value={models[agent]} onChange={(v) => setModels((p) => ({ ...p, [agent]: v }))} />
           </div>
         </>
