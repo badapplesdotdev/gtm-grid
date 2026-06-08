@@ -28,7 +28,6 @@
 import type { Db } from "@gtmgrid/db/client";
 import * as schema from "@gtmgrid/db/schema";
 import {
-  emailEnabled,
   passwordResetEmail,
   sendEmail,
   verificationEmail,
@@ -59,6 +58,18 @@ export const DESKTOP_WEB_ORIGINS = [
   "https://tauri.localhost",
   "http://localhost:5173",
 ];
+
+/**
+ * Whether sign-in is gated on a verified email. Opt-in via
+ * `AUTH_REQUIRE_EMAIL_VERIFICATION="true"` (default OFF). Deliberately decoupled
+ * from `emailEnabled()`: turning it on while Resend is unconfigured would lock
+ * everyone out (no way to receive the code), and the desktop's WKWebview bearer
+ * needs sign-up to mint a session immediately rather than via the OTP-verify
+ * round-trip. Verification mail still sends whenever `emailEnabled()`.
+ */
+function requireEmailVerification(): boolean {
+  return process.env.AUTH_REQUIRE_EMAIL_VERIFICATION === "true";
+}
 
 /** Build the `trustedOrigins` allow-list: SITE_URL (if set) + desktop origins. */
 function trustedOrigins(): string[] {
@@ -129,12 +140,16 @@ export function createAuth(db: Db): ReturnType<typeof betterAuth> {
         verifications: schema.verifications,
       },
     }),
-    // Email + password is ALWAYS available (convex/auth.ts:114). When Resend is
-    // configured we require a verified email before sign-in; otherwise sign-up
-    // still works without verification, exactly as the Convex setup degraded.
+    // Email + password is ALWAYS available (convex/auth.ts:114). Sign-up
+    // auto-creates a session (Better Auth `autoSignIn` default) so the desktop
+    // captures its `set-auth-token` bearer immediately — the WKWebview path can't
+    // rely on the cross-origin OTP-verify response to mint the token. Requiring a
+    // verified email BEFORE sign-in is opt-in via `AUTH_REQUIRE_EMAIL_VERIFICATION`
+    // (default off); decoupled from `emailEnabled()` so Resend can send OTP /
+    // password-reset mail without gating account creation.
     emailAndPassword: {
       enabled: true,
-      requireEmailVerification: emailEnabled(),
+      requireEmailVerification: requireEmailVerification(),
     },
     socialProviders: socialProviders(),
     trustedOrigins: trustedOrigins(),
