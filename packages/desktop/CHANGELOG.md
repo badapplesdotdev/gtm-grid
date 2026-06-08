@@ -1,5 +1,24 @@
 # @gtmgrid/desktop
 
+## 0.3.7
+
+### Patch Changes
+
+- 3ec43e5: In-app update notifications: the desktop app checks the latest GitHub release on
+  launch + window focus and, when a newer version is available, shows an "update
+  available" banner linking to the download page. Tauri-only; version comparison is
+  a pure, unit-tested helper. (First increment of the update system — the
+  download-and-install-in-app step via the Tauri updater plugin is a follow-up that
+  needs an updater signing keypair.)
+- 2fe6521: Full in-app auto-updater (Tauri `plugin-updater`). The desktop app checks for a
+  newer SIGNED release on launch and offers "Update & restart" — it downloads,
+  installs, and relaunches in-app (no manual re-download). Updates are verified
+  against a public key baked into the app, signed in CI with `TAURI_SIGNING_PRIVATE_KEY`;
+  the release publishes `latest.json` + per-bundle signatures. macOS + Windows are
+  auto-updatable; Linux `.deb` updates via apt as before (no banner there).
+  - @gtmgrid/cloud@0.3.7
+  - @gtmgrid/services@0.3.7
+
 ## 0.3.6
 
 ### Patch Changes

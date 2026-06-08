@@ -1,5 +1,11 @@
 # @gtmgrid/party
 
+## 0.3.7
+
+### Patch Changes
+
+- @gtmgrid/auth@0.3.7
+
 ## 0.3.6
 
 ### Patch Changes
