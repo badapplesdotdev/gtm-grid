@@ -25,7 +25,7 @@ const TABS: readonly Tab[] = [
     id: "claude",
     label: "Claude Code",
     comment: "# Drive the grid from your terminal Claude Code over MCP.",
-    cmd: 'claude mcp add gtmgrid -s user -e GTMGRID_PROJECT=default -- "$HOME/dev/gtm-grid/bin/gtmgrid-mcp"',
+    cmd: 'claude mcp add gtmgrid -s user -e GTMGRID_PROJECT=default -- "$HOME/dev/gtmgrid/bin/gtmgrid-mcp"',
   },
   {
     id: "app",
