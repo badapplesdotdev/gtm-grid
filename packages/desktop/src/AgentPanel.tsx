@@ -22,21 +22,53 @@ interface Message {
   error?: boolean;
 }
 
+/** A persisted past conversation. `sessionId` lets the CLI resume with full context. */
+interface Conversation {
+  id: string;
+  agent: AgentKind;
+  title: string;
+  messages: Message[];
+  sessionId?: string;
+  updatedAt: number;
+}
+
+const CHATS_KEY = "gtmgrid:agentChats";
+function loadChats(): Conversation[] {
+  try {
+    const raw = localStorage.getItem(CHATS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+function relativeTime(ts: number): string {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
 const AGENT_LABEL: Record<AgentKind, string> = { claude: "Claude Code", codex: "Codex" };
 
 /** Selectable models per agent ("" = the CLI's default for your plan). */
 const MODEL_OPTIONS: Record<AgentKind, { value: string; label: string }[]> = {
   claude: [
     { value: "", label: "Default" },
-    { value: "opus", label: "Opus" },
-    { value: "sonnet", label: "Sonnet" },
-    { value: "haiku", label: "Haiku" },
+    { value: "claude-opus-4-8", label: "Opus 4.8" },
+    { value: "claude-opus-4-7", label: "Opus 4.7" },
+    { value: "claude-opus-4-6", label: "Opus 4.6" },
+    { value: "claude-sonnet-4-6", label: "Sonnet 4.6" },
+    { value: "claude-haiku-4-5", label: "Haiku 4.5" },
   ],
   codex: [
     { value: "", label: "Default" },
     { value: "gpt-5-codex", label: "GPT-5 Codex" },
     { value: "gpt-5", label: "GPT-5" },
+    { value: "gpt-5-mini", label: "GPT-5 mini" },
     { value: "o3", label: "o3" },
+    { value: "o4-mini", label: "o4-mini" },
   ],
 };
 const AGENT_SHORT: Record<AgentKind, string> = { claude: "Claude", codex: "Codex" };
@@ -75,6 +107,11 @@ const IconZap = ({ s = 11 }: { s?: number }) => (
 const IconArrow = ({ s = 15 }: { s?: number }) => (
   <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M12 19V5M5 12l7-7 7 7" />
+  </svg>
+);
+const IconStop = ({ s = 13 }: { s?: number }) => (
+  <svg width={s} height={s} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <rect x="6" y="6" width="12" height="12" rx="2.5" />
   </svg>
 );
 
@@ -233,6 +270,45 @@ function ToolCall({ tool, running }: { tool: ToolCallT; running: boolean }) {
   );
 }
 
+/** Bottom-of-composer model picker — a pill button that opens a menu UPWARD (Claude-Code style). */
+function ModelPicker({ agent, value, onChange }: { agent: AgentKind; value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  const opts = MODEL_OPTIONS[agent];
+  const current = opts.find((o) => o.value === value) ?? opts[0];
+  return (
+    <div className="agent-model-picker" ref={ref}>
+      {open && (
+        <div className="agent-model-menu">
+          <div className="agent-model-menu-head">Model · {AGENT_LABEL[agent]}</div>
+          {opts.map((o) => (
+            <button
+              key={o.value || "default"}
+              className={`agent-model-opt ${o.value === value ? "active" : ""}`}
+              onClick={() => { onChange(o.value); setOpen(false); }}
+            >
+              <span>{o.label}</span>
+              {o.value === value && <IconCheck s={12} />}
+            </button>
+          ))}
+        </div>
+      )}
+      <button className="agent-model-btn" onClick={() => setOpen((o) => !o)} title="Choose model">
+        {current.label}
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+      </button>
+    </div>
+  );
+}
+
 export default function AgentPanel({
   onGridChange,
   activeTable,
@@ -253,8 +329,72 @@ export default function AgentPanel({
   const sessionRef = useRef<Record<AgentKind, string | undefined>>({ claude: undefined, codex: undefined });
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Persistent chat history (survives restart). convIdRef = the conversation each
+  // agent thread is currently writing to (so a completed turn updates the right one).
+  const [history, setHistory] = useState<Conversation[]>(loadChats);
+  const [showHistory, setShowHistory] = useState(false);
+  const convIdRef = useRef<Record<AgentKind, string | null>>({ claude: null, codex: null });
+  const historyRef = useRef<HTMLDivElement>(null);
 
   const messages = threads[agent];
+
+  // Close the history dropdown on an outside click.
+  useEffect(() => {
+    if (!showHistory) return;
+    const onDoc = (e: MouseEvent) => {
+      if (historyRef.current && !historyRef.current.contains(e.target as Node)) setShowHistory(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [showHistory]);
+
+  // Persist history whenever it changes (cap to the 40 most recent).
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHATS_KEY, JSON.stringify(history.slice(0, 40)));
+    } catch {
+      /* quota / disabled storage — ignore */
+    }
+  }, [history]);
+
+  // Snapshot the active thread into history when a turn FINISHES (busy → false),
+  // so reopening it later restores both the messages and the CLI session id.
+  useEffect(() => {
+    if (busy) return;
+    const msgs = threads[agent];
+    if (!msgs.length) return;
+    let id = convIdRef.current[agent];
+    if (!id) {
+      id = (crypto.randomUUID?.() ?? `c_${Date.now()}_${Math.floor(Math.random() * 1e6)}`);
+      convIdRef.current[agent] = id;
+    }
+    const title = (msgs.find((m) => m.role === "user")?.text ?? "Conversation").trim().slice(0, 60) || "Conversation";
+    const conv: Conversation = { id, agent, title, messages: msgs, sessionId: sessionRef.current[agent], updatedAt: Date.now() };
+    setHistory((h) => [conv, ...h.filter((c) => c.id !== id)]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy]);
+
+  /** Start a fresh conversation for the current agent (previous one is already saved). */
+  const newChat = () => {
+    convIdRef.current[agent] = null;
+    sessionRef.current[agent] = undefined;
+    setThreads((t) => ({ ...t, [agent]: [] }));
+    setShowHistory(false);
+  };
+  /** Reopen a saved conversation — restores its messages + CLI session for context. */
+  const openChat = (c: Conversation) => {
+    setAgent(c.agent);
+    setThreads((t) => ({ ...t, [c.agent]: c.messages }));
+    sessionRef.current[c.agent] = c.sessionId;
+    convIdRef.current[c.agent] = c.id;
+    setShowHistory(false);
+  };
+  const deleteChat = (id: string) => {
+    setHistory((h) => h.filter((c) => c.id !== id));
+    (Object.keys(convIdRef.current) as AgentKind[]).forEach((k) => {
+      if (convIdRef.current[k] === id) convIdRef.current[k] = null;
+    });
+  };
 
   useEffect(() => {
     api.agents().then(setStatus).catch(() => setStatus({}));
@@ -410,34 +550,16 @@ export default function AgentPanel({
             {AGENT_LABEL[k]}
           </button>
         ))}
-        {messages.length > 0 && (
-          <button className="agent-clear" title="New conversation" onClick={() => { if (!busy) { sessionRef.current[agent] = undefined; setMessages(() => []); } }}>
-            Clear
+        <span style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
+          {messages.length > 0 && (
+            <button className="agent-clear" title="New chat" onClick={() => { if (!busy) newChat(); }}>
+              New
+            </button>
+          )}
+          <button className="agent-collapse" title="Collapse panel" onClick={() => setCollapsed(true)}>
+            <IconChevronsRight s={15} />
           </button>
-        )}
-        <button
-          className="agent-collapse"
-          style={messages.length === 0 ? { marginLeft: "auto" } : undefined}
-          title="Collapse panel"
-          onClick={() => setCollapsed(true)}
-        >
-          <IconChevronsRight s={15} />
-        </button>
-      </div>
-
-      {/* Model picker — which model the selected agent's CLI runs with. */}
-      <div className="agent-models">
-        <span className="agent-models-label">Model</span>
-        {MODEL_OPTIONS[agent].map((m) => (
-          <button
-            key={m.value || "default"}
-            className={`agent-model-chip ${models[agent] === m.value ? "active" : ""}`}
-            title={m.value ? `Run ${AGENT_LABEL[agent]} with ${m.label}` : `Use your ${AGENT_LABEL[agent]} plan's default model`}
-            onClick={() => setModels((p) => ({ ...p, [agent]: m.value }))}
-          >
-            {m.label}
-          </button>
-        ))}
+        </span>
       </div>
 
       {!ready ? (
@@ -544,12 +666,40 @@ export default function AgentPanel({
               disabled={busy}
             />
             {busy ? (
-              <button className="agent-send agent-stop" onClick={stop}>Stop</button>
+              <button className="agent-send agent-stop" onClick={stop} title="Stop"><IconStop s={13} /></button>
             ) : (
               <button className="agent-send" onClick={() => send()} disabled={!input.trim()}>
                 <IconArrow s={15} />
               </button>
             )}
+          </div>
+          {/* Composer footer: chat history + model picker, both open upward. */}
+          <div className="agent-composer-foot">
+            <div className="agent-history-picker" ref={historyRef}>
+              {showHistory && (
+                <div className="agent-history">
+                  <div className="agent-history-head">Recent chats</div>
+                  {history.length === 0 ? (
+                    <div className="agent-history-empty">No saved chats yet — they appear here after your first message.</div>
+                  ) : (
+                    history.map((c) => (
+                      <div key={c.id} className="agent-history-row" onClick={() => openChat(c)}>
+                        <span className="agent-history-logo">{AGENT_LOGO[c.agent]}</span>
+                        <span className="agent-history-title" title={c.title}>{c.title}</span>
+                        <span className="agent-history-time">{relativeTime(c.updatedAt)}</span>
+                        <button className="agent-history-del" title="Delete chat" onClick={(e) => { e.stopPropagation(); deleteChat(c.id); }}>×</button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+              <button className="agent-model-btn" onClick={() => setShowHistory((s) => !s)} title="Chat history">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><polyline points="12 7 12 12 15 14" /></svg>
+                History
+              </button>
+            </div>
+            <span style={{ marginLeft: "auto" }} />
+            <ModelPicker agent={agent} value={models[agent]} onChange={(v) => setModels((p) => ({ ...p, [agent]: v }))} />
           </div>
         </>
       )}

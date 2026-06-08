@@ -1,0 +1,730 @@
+{
+  "id": "supabase",
+  "name": "Supabase",
+  "version": "1.0.0",
+  "category": "database",
+  "description": "Query and manage your Supabase Postgres projects via the Management API.",
+  "logo": "https://www.google.com/s2/favicons?domain=supabase.com&sz=128",
+  "baseUrl": "https://api.supabase.com",
+  "auth": { "type": "apiKey", "header": "Authorization", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "runQuery",
+      "label": "Run SQL Query",
+      "description": "★ Run arbitrary SQL against a project's Postgres database and get rows back — this is how you 'query databases' through the Management API (there is no PostgREST data API here). Body: { query (required, the SQL string — a single statement or a script), read_only?, parameters? }. Runs as the `postgres` role, so it CAN read AND mutate (INSERT/UPDATE/DELETE/DDL). Returns an array of result rows (e.g. [{ ... }]). Path needs the project `ref`. Write — 1 credit (can mutate).",
+      "verb": "POST",
+      "path": "/v1/projects/{ref}/database/query",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["ref", "query"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref (the 20-char id in the dashboard URL / from listProjects)" },
+          "query": { "type": "string", "description": "The SQL to run, e.g. \"SELECT * FROM users WHERE email = 'a@b.com' LIMIT 50\". Single string." },
+          "read_only": { "type": "boolean", "description": "Run in a read-only transaction so writes are rejected (safer for SELECTs)" },
+          "parameters": { "type": "array", "items": {}, "description": "Optional positional bind parameters for the query" }
+        }
+      }
+    },
+    {
+      "id": "runQueryReadOnly",
+      "label": "Run SQL Query (Read-Only)",
+      "description": "Run SQL in a guaranteed read-only transaction — any write/DDL is rejected by Postgres. Safe way to SELECT / inspect schema. Body: { query (required), parameters? }. Returns an array of result rows. Path needs `ref`. Free read.",
+      "verb": "POST",
+      "path": "/v1/projects/{ref}/database/query/read-only",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ref", "query"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" },
+          "query": { "type": "string", "description": "Read-only SQL, e.g. a SELECT or an information_schema lookup" },
+          "parameters": { "type": "array", "items": {}, "description": "Optional positional bind parameters" }
+        }
+      }
+    },
+    {
+      "id": "getDatabaseContext",
+      "label": "Get Database Context",
+      "description": "Get a compact description of the database — schemas, tables, columns and extensions — useful before writing SQL so you know what exists. Path needs `ref`. Free read.",
+      "verb": "GET",
+      "path": "/v1/projects/{ref}/database/context",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" }
+        }
+      }
+    },
+    {
+      "id": "listMigrations",
+      "label": "List Migrations",
+      "description": "List the migration history for a project's database. Returns [{ version, name }]. Path needs `ref`. Free read.",
+      "verb": "GET",
+      "path": "/v1/projects/{ref}/database/migrations",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" }
+        }
+      }
+    },
+    {
+      "id": "applyMigration",
+      "label": "Apply Migration",
+      "description": "Apply a new migration to the database (records it in the migration history). Body: { query (required, the migration SQL), name?, rollback? }. Path needs `ref`. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/v1/projects/{ref}/database/migrations",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["ref", "query"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" },
+          "query": { "type": "string", "description": "The migration SQL to apply" },
+          "name": { "type": "string", "description": "Human-readable migration name" },
+          "rollback": { "type": "string", "description": "Optional rollback SQL" }
+        }
+      }
+    },
+    {
+      "id": "upsertMigration",
+      "label": "Upsert Migration",
+      "description": "Create or update (idempotently apply) a migration. Body: { query (required), name?, rollback? }. Path needs `ref`. Write — 1 credit.",
+      "verb": "PUT",
+      "path": "/v1/projects/{ref}/database/migrations",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["ref", "query"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" },
+          "query": { "type": "string", "description": "The migration SQL" },
+          "name": { "type": "string", "description": "Migration name" },
+          "rollback": { "type": "string", "description": "Optional rollback SQL" }
+        }
+      }
+    },
+    {
+      "id": "enableWebhooks",
+      "label": "Enable Database Webhooks",
+      "description": "Enable Database Webhooks (pg_net / supabase_functions triggers) for the project. No body. Path needs `ref`. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/v1/projects/{ref}/database/webhooks/enable",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" }
+        }
+      }
+    },
+    {
+      "id": "getTypescriptTypes",
+      "label": "Generate TypeScript Types",
+      "description": "Generate TypeScript type definitions for the project's database schema. Query: included_schemas? (comma-separated, e.g. 'public,auth'). Returns { types } (a TS string). Path needs `ref`. Free read.",
+      "verb": "GET",
+      "path": "/v1/projects/{ref}/types/typescript",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" },
+          "included_schemas": { "type": "string", "description": "Comma-separated schemas to include, e.g. 'public,auth' (default 'public')" }
+        }
+      }
+    },
+    {
+      "id": "getPgbouncerConfig",
+      "label": "Get PgBouncer Config",
+      "description": "Get the project's PgBouncer connection-pooler configuration. Path needs `ref`. Free read.",
+      "verb": "GET",
+      "path": "/v1/projects/{ref}/config/database/pgbouncer",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" }
+        }
+      }
+    },
+    {
+      "id": "getPoolerConfig",
+      "label": "Get Supavisor Pooler Config",
+      "description": "Get the project's Supavisor connection-pooler config (pool mode, sizes, connection string). Path needs `ref`. Free read.",
+      "verb": "GET",
+      "path": "/v1/projects/{ref}/config/database/pooler",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" }
+        }
+      }
+    },
+    {
+      "id": "getPostgresConfig",
+      "label": "Get Postgres Config",
+      "description": "Get the Postgres server configuration (e.g. max_connections, statement_timeout) for the project. Path needs `ref`. Free read.",
+      "verb": "GET",
+      "path": "/v1/projects/{ref}/config/database/postgres",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" }
+        }
+      }
+    },
+
+    {
+      "id": "listProjects",
+      "label": "List Projects",
+      "description": "List all projects you can access. Returns [{ id (the ref), organization_id, name, region, created_at, status, database{ host, version } }]. Start here to find a project `ref` for the database/query endpoints. Free read.",
+      "verb": "GET",
+      "path": "/v1/projects",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "getProject",
+      "label": "Get Project",
+      "description": "Get one project by ref. Returns { id, name, organization_id, region, status, database{ host, version } }. Free read.",
+      "verb": "GET",
+      "path": "/v1/projects/{ref}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" }
+        }
+      }
+    },
+    {
+      "id": "createProject",
+      "label": "Create Project",
+      "description": "Provision a new Supabase project. Body: { name (required), organization_slug (required), db_pass (required, the Postgres password), region?, plan?, desired_instance_size?, template_url? }. Returns the created project incl. its `ref`. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/v1/projects",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["name", "organization_slug", "db_pass"],
+        "properties": {
+          "name": { "type": "string", "description": "Project name" },
+          "organization_slug": { "type": "string", "description": "Slug of the org to create it in (see listOrganizations)" },
+          "db_pass": { "type": "string", "description": "Password for the project's Postgres database" },
+          "region": { "type": "string", "description": "Region, e.g. 'us-east-1' (see availableRegions)" },
+          "plan": { "type": "string", "description": "Billing plan, e.g. 'free' | 'pro'" },
+          "desired_instance_size": { "type": "string", "description": "Compute size, e.g. 'micro','small','medium'" },
+          "template_url": { "type": "string", "description": "Optional template repo URL to seed the project" }
+        }
+      }
+    },
+    {
+      "id": "deleteProject",
+      "label": "Delete Project",
+      "description": "Permanently delete a project by ref. Destructive. Returns the deleted project. Write — 1 credit.",
+      "verb": "DELETE",
+      "path": "/v1/projects/{ref}",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" }
+        }
+      }
+    },
+    {
+      "id": "pauseProject",
+      "label": "Pause Project",
+      "description": "Pause a project (stops its database). No body. Path needs `ref`. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/v1/projects/{ref}/pause",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" }
+        }
+      }
+    },
+    {
+      "id": "restoreProject",
+      "label": "Restore Project",
+      "description": "Restore (unpause) a paused project. No body. Path needs `ref`. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/v1/projects/{ref}/restore",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" }
+        }
+      }
+    },
+    {
+      "id": "getProjectHealth",
+      "label": "Get Project Health",
+      "description": "Get the health of a project's services (db, auth, rest, realtime, storage). Query: services? (comma-separated). Path needs `ref`. Free read.",
+      "verb": "GET",
+      "path": "/v1/projects/{ref}/health",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" },
+          "services": { "type": "string", "description": "Comma-separated services to check, e.g. 'db,auth,rest,realtime,storage'" }
+        }
+      }
+    },
+    {
+      "id": "listApiKeys",
+      "label": "List API Keys",
+      "description": "List the project's API keys (anon, service_role and publishable/secret keys). Query: reveal? (true to return the actual key values). Path needs `ref`. Free read.",
+      "verb": "GET",
+      "path": "/v1/projects/{ref}/api-keys",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" },
+          "reveal": { "type": "boolean", "description": "Reveal the actual key values (default false)" }
+        }
+      }
+    },
+    {
+      "id": "createApiKey",
+      "label": "Create API Key",
+      "description": "Create a new project API key. Body: { type (required, e.g. 'publishable' | 'secret'), name (required), description?, secret_jwt_template? }. Path needs `ref`. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/v1/projects/{ref}/api-keys",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["ref", "type", "name"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" },
+          "type": { "type": "string", "description": "Key type, e.g. 'publishable' | 'secret'" },
+          "name": { "type": "string", "description": "Key name" },
+          "description": { "type": "string", "description": "Optional description" },
+          "secret_jwt_template": { "type": "object", "description": "Optional JWT template config for the key" }
+        }
+      }
+    },
+    {
+      "id": "getPostgrestConfig",
+      "label": "Get PostgREST Config",
+      "description": "Get the project's PostgREST (data API) configuration — exposed schemas, max rows, db extra search path. Path needs `ref`. Free read.",
+      "verb": "GET",
+      "path": "/v1/projects/{ref}/postgrest",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" }
+        }
+      }
+    },
+    {
+      "id": "getAuthConfig",
+      "label": "Get Auth Config",
+      "description": "Get the project's Auth (GoTrue) configuration — providers, JWT expiry, email/SMS settings. Path needs `ref`. Free read.",
+      "verb": "GET",
+      "path": "/v1/projects/{ref}/config/auth",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" }
+        }
+      }
+    },
+    {
+      "id": "getStorageConfig",
+      "label": "Get Storage Config",
+      "description": "Get the project's Storage configuration (file size limit, features). Path needs `ref`. Free read.",
+      "verb": "GET",
+      "path": "/v1/projects/{ref}/config/storage",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" }
+        }
+      }
+    },
+    {
+      "id": "availableRegions",
+      "label": "List Available Regions",
+      "description": "List the regions you can provision new projects in (use a value here for createProject's `region`). Free read.",
+      "verb": "GET",
+      "path": "/v1/projects/available-regions",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+
+    {
+      "id": "listOrganizations",
+      "label": "List Organizations",
+      "description": "List organizations you belong to. Returns [{ id, slug, name }]. Use the `slug` for createProject and member/project lookups. Free read.",
+      "verb": "GET",
+      "path": "/v1/organizations",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "getOrganization",
+      "label": "Get Organization",
+      "description": "Get one organization by slug. Returns { id, slug, name, ... }. Free read.",
+      "verb": "GET",
+      "path": "/v1/organizations/{slug}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["slug"],
+        "properties": {
+          "slug": { "type": "string", "description": "Organization slug (from listOrganizations)" }
+        }
+      }
+    },
+    {
+      "id": "listOrganizationMembers",
+      "label": "List Organization Members",
+      "description": "List the members of an organization. Returns [{ user_id, email, role_name }]. Free read.",
+      "verb": "GET",
+      "path": "/v1/organizations/{slug}/members",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["slug"],
+        "properties": {
+          "slug": { "type": "string", "description": "Organization slug" }
+        }
+      }
+    },
+    {
+      "id": "listOrganizationProjects",
+      "label": "List Organization Projects",
+      "description": "List the projects belonging to a specific organization. Returns project objects (each has its `ref`). Free read.",
+      "verb": "GET",
+      "path": "/v1/organizations/{slug}/projects",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["slug"],
+        "properties": {
+          "slug": { "type": "string", "description": "Organization slug" }
+        }
+      }
+    },
+    {
+      "id": "createOrganization",
+      "label": "Create Organization",
+      "description": "Create a new organization. Body: { name (required) }. Returns the created org incl. its `slug`. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/v1/organizations",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "description": "Organization name" }
+        }
+      }
+    },
+
+    {
+      "id": "listSecrets",
+      "label": "List Secrets",
+      "description": "List the project's environment secrets (names, not values). Returns [{ name, value (masked) }]. Path needs `ref`. Free read.",
+      "verb": "GET",
+      "path": "/v1/projects/{ref}/secrets",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" }
+        }
+      }
+    },
+    {
+      "id": "createSecrets",
+      "label": "Create / Update Secrets",
+      "description": "Create or update project secrets (env vars available to Edge Functions). The JSON body is an ARRAY of { name, value } — pass it as the request body. Path needs `ref`. Returns 201. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/v1/projects/{ref}/secrets",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" },
+          "secrets": { "type": "array", "items": { "type": "object" }, "description": "Array of { name, value } secrets (the API body is this array)" }
+        }
+      }
+    },
+    {
+      "id": "deleteSecrets",
+      "label": "Delete Secrets",
+      "description": "Delete project secrets by name. The JSON body is an ARRAY of secret name strings. Path needs `ref`. Returns 200. Write — 1 credit.",
+      "verb": "DELETE",
+      "path": "/v1/projects/{ref}/secrets",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" },
+          "names": { "type": "array", "items": { "type": "string" }, "description": "Array of secret names to delete (the API body is this array)" }
+        }
+      }
+    },
+
+    {
+      "id": "listFunctions",
+      "label": "List Edge Functions",
+      "description": "List the project's Edge Functions. Returns [{ id, slug, name, status, version, verify_jwt, created_at }]. Path needs `ref`. Free read.",
+      "verb": "GET",
+      "path": "/v1/projects/{ref}/functions",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" }
+        }
+      }
+    },
+    {
+      "id": "getFunction",
+      "label": "Get Edge Function",
+      "description": "Get one Edge Function by its slug. Returns { id, slug, name, status, version, verify_jwt }. Path needs `ref` and `function_slug`. Free read.",
+      "verb": "GET",
+      "path": "/v1/projects/{ref}/functions/{function_slug}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ref", "function_slug"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" },
+          "function_slug": { "type": "string", "description": "The function's slug" }
+        }
+      }
+    },
+    {
+      "id": "getFunctionBody",
+      "label": "Get Edge Function Body",
+      "description": "Download the source body of an Edge Function by slug. Path needs `ref` and `function_slug`. Free read.",
+      "verb": "GET",
+      "path": "/v1/projects/{ref}/functions/{function_slug}/body",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ref", "function_slug"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" },
+          "function_slug": { "type": "string", "description": "The function's slug" }
+        }
+      }
+    },
+    {
+      "id": "createFunction",
+      "label": "Create Edge Function",
+      "description": "Create an Edge Function. Body: { slug (required), name (required), body (required, the Deno/TS source), verify_jwt? }. Path needs `ref`. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/v1/projects/{ref}/functions",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["ref", "slug", "name", "body"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" },
+          "slug": { "type": "string", "description": "URL slug for the function" },
+          "name": { "type": "string", "description": "Display name" },
+          "body": { "type": "string", "description": "The function source code (TypeScript/Deno)" },
+          "verify_jwt": { "type": "boolean", "description": "Require a valid JWT to invoke (default true)" }
+        }
+      }
+    },
+    {
+      "id": "updateFunction",
+      "label": "Update Edge Function",
+      "description": "Update an Edge Function by slug. Body: { name?, body?, verify_jwt? } — only included fields change. Path needs `ref` and `function_slug`. Write — 1 credit.",
+      "verb": "PATCH",
+      "path": "/v1/projects/{ref}/functions/{function_slug}",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["ref", "function_slug"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" },
+          "function_slug": { "type": "string", "description": "The function's slug" },
+          "name": { "type": "string", "description": "New display name" },
+          "body": { "type": "string", "description": "New source code" },
+          "verify_jwt": { "type": "boolean", "description": "Require a valid JWT to invoke" }
+        }
+      }
+    },
+    {
+      "id": "deleteFunction",
+      "label": "Delete Edge Function",
+      "description": "Delete an Edge Function by slug. Path needs `ref` and `function_slug`. Returns 200. Write — 1 credit.",
+      "verb": "DELETE",
+      "path": "/v1/projects/{ref}/functions/{function_slug}",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["ref", "function_slug"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" },
+          "function_slug": { "type": "string", "description": "The function's slug" }
+        }
+      }
+    },
+
+    {
+      "id": "listBuckets",
+      "label": "List Storage Buckets",
+      "description": "List the project's Storage buckets. Returns [{ id, name, public, created_at }]. Path needs `ref`. Free read.",
+      "verb": "GET",
+      "path": "/v1/projects/{ref}/storage/buckets",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Project ref" }
+        }
+      }
+    },
+
+    {
+      "id": "listBranches",
+      "label": "List Database Branches",
+      "description": "List the database branches (preview environments) of a project. Returns [{ id, name, project_ref, is_default, status, git_branch }]. Path needs `ref`. Free read.",
+      "verb": "GET",
+      "path": "/v1/projects/{ref}/branches",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": { "type": "string", "description": "Parent project ref" }
+        }
+      }
+    },
+    {
+      "id": "createBranch",
+      "label": "Create Database Branch",
+      "description": "Create a database branch (preview environment) off a project. Body: { branch_name (required), git_branch?, region?, persistent?, with_data? }. Path needs `ref`. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/v1/projects/{ref}/branches",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["ref", "branch_name"],
+        "properties": {
+          "ref": { "type": "string", "description": "Parent project ref" },
+          "branch_name": { "type": "string", "description": "Name for the new branch" },
+          "git_branch": { "type": "string", "description": "Git branch to link the preview to" },
+          "region": { "type": "string", "description": "Region for the branch's database" },
+          "persistent": { "type": "boolean", "description": "Keep the branch alive between deploys" },
+          "with_data": { "type": "boolean", "description": "Clone data from the parent into the branch" }
+        }
+      }
+    },
+    {
+      "id": "getBranch",
+      "label": "Get Database Branch",
+      "description": "Get a database branch's config by its branch id or ref. Returns { ref, status, db_host, db_port, ... }. Free read.",
+      "verb": "GET",
+      "path": "/v1/branches/{branch_id_or_ref}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["branch_id_or_ref"],
+        "properties": {
+          "branch_id_or_ref": { "type": "string", "description": "Branch ref or (deprecated) branch id" }
+        }
+      }
+    },
+    {
+      "id": "deleteBranch",
+      "label": "Delete Database Branch",
+      "description": "Delete a database branch by its branch id or ref. Query: force?. Returns { message }. Write — 1 credit.",
+      "verb": "DELETE",
+      "path": "/v1/branches/{branch_id_or_ref}",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["branch_id_or_ref"],
+        "properties": {
+          "branch_id_or_ref": { "type": "string", "description": "Branch ref or (deprecated) branch id" },
+          "force": { "type": "boolean", "description": "Force-delete even if the branch is busy" }
+        }
+      }
+    },
+
+    {
+      "id": "listSnippets",
+      "label": "List SQL Snippets",
+      "description": "List saved SQL Editor snippets. Query: project_ref?, cursor?, limit?, sort_by?, sort_order?. Returns saved queries you can re-run via runQuery. Free read.",
+      "verb": "GET",
+      "path": "/v1/snippets",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "project_ref": { "type": "string", "description": "Filter snippets to a project ref" },
+          "cursor": { "type": "string", "description": "Pagination cursor" },
+          "limit": { "type": "string", "description": "Page size" }
+        }
+      }
+    },
+    {
+      "id": "getSnippet",
+      "label": "Get SQL Snippet",
+      "description": "Get a single saved SQL snippet by id, including its SQL content (feed it into runQuery). Free read.",
+      "verb": "GET",
+      "path": "/v1/snippets/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "description": "Snippet id" }
+        }
+      }
+    },
+
+    {
+      "id": "getProfile",
+      "label": "Get Authenticated User",
+      "description": "Get the profile of the user/owner of the Personal Access Token in use. Returns { id, primary_email, username }. Handy to confirm the PAT works. Free read.",
+      "verb": "GET",
+      "path": "/v1/profile",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    }
+  ]
+}
