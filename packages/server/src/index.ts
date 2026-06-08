@@ -912,18 +912,48 @@ const server = createServer(async (req, res) => {
   send(res, 404, { error: "not found" }, origin);
 });
 
-server.on("error", (err: NodeJS.ErrnoException) => {
-  if (err.code === "EADDRINUSE") {
-    console.error(`gtmgrid server: port ${PORT} already in use — assuming another instance is running.`);
-    process.exit(0);
-  }
-  throw err;
-});
+// Parent-death watchdog. The desktop app spawns this sidecar as a child; if the
+// app dies WITHOUT killing us — notably an auto-update `relaunch()`, which
+// hard-exits and never fires the window-destroyed handler — we'd otherwise linger
+// as an orphan holding the port. The NEW app's sidecar would then hit EADDRINUSE
+// and the stale (older) process would keep serving outdated routes, so the
+// refreshed UI sees 404s and reports "server not reachable". When orphaned we get
+// reparented to init/launchd (ppid 1), so exit on that transition. (Skipped when
+// launched directly from a shell in dev, where there is no parent app to outlive.)
+const PARENT_PID = process.ppid;
+if (PARENT_PID > 1) {
+  setInterval(() => {
+    if (process.ppid !== PARENT_PID || process.ppid <= 1) {
+      console.error("gtmgrid server: parent app exited — shutting down sidecar.");
+      process.exit(0);
+    }
+  }, 1500).unref();
+}
 
 // Bind to loopback (127.0.0.1) ONLY, never 0.0.0.0 (#22): the sidecar runs
 // connectors with the user's credentials and spawns their authenticated CLIs,
 // so it must be reachable only from this machine — not exposed on the LAN.
 const HOST = "127.0.0.1";
+
+// On EADDRINUSE, RETRY rather than give up: right after an app relaunch the
+// previous sidecar may still be releasing the port (its watchdog is exiting), so
+// brief contention is expected. Retry for a few seconds before failing, so the
+// new (current-version) sidecar reliably wins the port.
+let bindAttempts = 0;
+const MAX_BIND_ATTEMPTS = 15;
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    bindAttempts += 1;
+    if (bindAttempts >= MAX_BIND_ATTEMPTS) {
+      console.error(`gtmgrid server: port ${PORT} still in use after ${bindAttempts} attempts — giving up.`);
+      process.exit(0);
+    }
+    setTimeout(() => server.listen(PORT, HOST), 1000);
+    return;
+  }
+  throw err;
+});
+
 server.listen(PORT, HOST, () => {
   console.error(`gtmgrid server on http://${HOST}:${PORT} (project: ${current.name})`);
 });

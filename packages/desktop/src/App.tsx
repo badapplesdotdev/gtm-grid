@@ -962,17 +962,22 @@ export default function App() {
     // it's reachable instead of giving up on the first failed check.
     const boot = async () => {
       try {
-        const [h, t, f, e, ai, sk] = await Promise.all([
-          api.health(),
-          api.tables(),
-          api.functions(),
-          api.extensions(),
-          api.aiProviders(),
-          api.skills(),
-        ]);
+        // `health` is the liveness contract — gate connected/offline on it ALONE.
+        const h = await api.health();
         if (cancelled) return;
         setHealthStatus("connected");
         setProjectName(h.project ?? "gtmgrid");
+        // Load feature data resiliently: a single missing/failed route (e.g. a
+        // version-skewed sidecar lacking a newer endpoint) must degrade that one
+        // feature, never blank the whole app with "server not reachable".
+        const [t, f, e, ai, sk] = await Promise.all([
+          api.tables().catch(() => []),
+          api.functions().catch(() => []),
+          api.extensions().catch(() => []),
+          api.aiProviders().catch(() => []),
+          api.skills().catch(() => []),
+        ]);
+        if (cancelled) return;
         setTables(t);
         setConnectors(f);
         setExtensions(e);
