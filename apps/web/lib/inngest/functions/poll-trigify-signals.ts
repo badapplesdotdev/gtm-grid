@@ -66,17 +66,29 @@ export const processSignalBinding = inngest.createFunction(
   },
   async ({ event, step }) => {
     const bindingId = (event.data as { bindingId?: string }).bindingId ?? "";
-    if (!bindingId) return { bindingId, added: 0 };
-    const added = await step.run(`sync:${bindingId}`, () =>
+    if (!bindingId) return { bindingId, added: 0, error: null };
+    const result = await step.run(`sync:${bindingId}`, () =>
       withRuntime((exec) =>
         exec(
           Effect.gen(function* () {
             const svc = yield* SignalService;
-            return yield* svc.syncForWorker(bindingId);
-          }).pipe(Effect.catchAll(() => Effect.succeed(0))),
+            const added = yield* svc.syncForWorker(bindingId);
+            return { added, error: null as string | null };
+          }).pipe(
+            // Isolate per-binding failures so one bad binding can't abort the
+            // batch — but make them VISIBLE (log + surface in the step output)
+            // rather than silently reporting success. The error tag/message never
+            // contains the API key (it lives only in the request header).
+            Effect.catchAll((e) => {
+              const tag = (e as { _tag?: string })?._tag ?? "Error";
+              const message = (e as { message?: string })?.message ?? String(e);
+              console.error(`[signals] binding ${bindingId} sync failed: ${tag}: ${message}`);
+              return Effect.succeed({ added: 0, error: `${tag}: ${message}` });
+            }),
+          ),
         ),
       ),
     );
-    return { bindingId, added };
+    return { bindingId, ...result };
   },
 );

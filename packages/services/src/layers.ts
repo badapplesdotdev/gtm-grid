@@ -280,6 +280,7 @@ export const appLayer = (params: {
     Layer.provide(signalRepo),
     Layer.provide(webhookRepo),
     Layer.provide(credentialService),
+    Layer.provide(credentialCryptoLive),
     Layer.provide(membershipService),
     Layer.provide(entitlementService),
   );
@@ -591,6 +592,7 @@ export const TestLayer = (
     Layer.provide(signalRepo),
     Layer.provide(webhookRepo),
     Layer.provide(credentialService),
+    Layer.provide(fixtures.crypto ?? credentialCryptoTest()),
     Layer.provide(membershipService),
     Layer.provide(entitlementService),
   );

@@ -10,7 +10,7 @@
  * boundary).
  */
 
-import { MembershipService } from "@gtmgrid/cloud";
+import { CredentialCryptoService, MembershipService } from "@gtmgrid/cloud";
 import { Data, Effect, Option } from "effect";
 import {
   getSignalSource,
@@ -80,10 +80,17 @@ export class SignalService extends Effect.Service<SignalService>()("SignalServic
     const repo = yield* SignalRepo;
     const grid = yield* WebhookRepo;
     const credentials = yield* CredentialService;
+    const crypto = yield* CredentialCryptoService;
     const membership = yield* MembershipService;
     const entitlement = yield* EntitlementService;
 
-    /** Decrypt the workspace-shared Trigify API key (membership-free run path). */
+    const NO_KEY = "No Trigify API key connected for this workspace.";
+
+    /**
+     * Member path: decrypt the workspace-shared Trigify key via the
+     * membership-gated {@link CredentialService} (the caller already asserted
+     * membership). Use only where a `currentUserId` is present.
+     */
     const trigifyKey = (workspaceId: string) =>
       Effect.gen(function* () {
         const credOpt = yield* credentials.getCredentialForRun({
@@ -93,9 +100,33 @@ export class SignalService extends Effect.Service<SignalService>()("SignalServic
         });
         const secrets = Option.getOrNull(credOpt);
         const apiKey = (secrets?.apiKey as string | undefined) ?? (secrets?.key as string | undefined) ?? "";
-        if (!apiKey) return yield* Effect.fail(new SignalError({ message: "No Trigify API key connected for this workspace." }));
+        if (!apiKey) return yield* Effect.fail(new SignalError({ message: NO_KEY }));
         return apiKey;
       });
+
+    /**
+     * Worker path: read the SHARED (workspace-scope, `ownerUserId IS NULL`)
+     * Trigify key WITHOUT membership — mirrors {@link WebhookService}'s worker
+     * credential read. The cron runs with `userId: null`, so the membership-gated
+     * {@link trigifyKey} would always fail closed; the trust boundary here is the
+     * cron's worker secret. Repo/decrypt failures map to {@link SignalError}.
+     */
+    const workerTrigifyKey = (workspaceId: string) =>
+      Effect.gen(function* () {
+        const enc = yield* grid.findSharedCredentialEnc(workspaceId, "trigify");
+        if (Option.isNone(enc)) return yield* Effect.fail(new SignalError({ message: NO_KEY }));
+        const secrets = yield* crypto.decrypt(workspaceId, enc.value);
+        const apiKey = (secrets.apiKey as string | undefined) ?? (secrets.key as string | undefined) ?? "";
+        if (!apiKey) return yield* Effect.fail(new SignalError({ message: NO_KEY }));
+        return apiKey;
+      }).pipe(
+        Effect.catchTags({
+          WebhookRepoError: (e) =>
+            Effect.fail(new SignalError({ message: "Could not read Trigify credential", cause: e })),
+          DecryptError: (e) =>
+            Effect.fail(new SignalError({ message: "Could not decrypt Trigify credential", cause: e })),
+        }),
+      );
 
     /** Pull new results for a binding into its table. Records lastError on failure. */
     const runSync = (binding: SignalBinding, apiKey: string) =>
@@ -207,6 +238,7 @@ export class SignalService extends Effect.Service<SignalService>()("SignalServic
         const table = yield* grid.findTable(tableId);
         if (Option.isNone(table)) return [] as readonly SignalBinding[];
         yield* membership.requireMember(table.value.workspaceId);
+        yield* entitlement.requireCloudAccess(table.value.workspaceId);
         return yield* repo.listByTable(tableId);
       });
 
@@ -215,25 +247,34 @@ export class SignalService extends Effect.Service<SignalService>()("SignalServic
         const binding = yield* repo.findById(bindingId);
         if (Option.isNone(binding)) return;
         yield* membership.requireMember(binding.value.workspaceId);
+        yield* entitlement.requireCloudAccess(binding.value.workspaceId);
         yield* repo.remove(bindingId);
       });
 
-    /** Membership-gated manual "pull now". */
+    /** Membership-gated, entitlement-gated manual "pull now". */
     const sync = (bindingId: string) =>
       Effect.gen(function* () {
         const binding = yield* repo.findById(bindingId);
         if (Option.isNone(binding)) return yield* Effect.fail(new SignalError({ message: "Binding not found" }));
         yield* membership.requireMember(binding.value.workspaceId);
+        yield* entitlement.requireCloudAccess(binding.value.workspaceId);
         const apiKey = yield* trigifyKey(binding.value.workspaceId);
         return yield* runSync(binding.value, apiKey);
       });
 
-    /** Worker path (NO membership) — the cron's trust boundary is its worker secret. */
+    /**
+     * Worker path (NO membership) — the cron's trust boundary is its worker
+     * secret. Still entitlement-gated: a workspace whose trial lapsed (Free) must
+     * not get server-side pulls of a paid feature, so {@link requireCloudAccess}
+     * skips it (the worker caller treats the resulting failure as "skip binding").
+     * Reads the key via the membership-free {@link workerTrigifyKey}.
+     */
     const syncForWorker = (bindingId: string) =>
       Effect.gen(function* () {
         const binding = yield* repo.findById(bindingId);
         if (Option.isNone(binding)) return 0;
-        const apiKey = yield* trigifyKey(binding.value.workspaceId);
+        yield* entitlement.requireCloudAccess(binding.value.workspaceId);
+        const apiKey = yield* workerTrigifyKey(binding.value.workspaceId);
         return yield* runSync(binding.value, apiKey);
       });
 

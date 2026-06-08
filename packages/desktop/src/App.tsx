@@ -1877,15 +1877,19 @@ export default function App() {
           return p ? <AiProviderPanel provider={p} onConnected={refreshConnections} workspaceCreds={workspaceCreds} /> : null;
         })()}
 
-        {/* Skills gallery + detail panels */}
-        {!importMode && !inCloud && view.kind === "skills" && (
+        {/* Skills gallery + detail panels. Like the extension/AI panels, these
+            render in BOTH local and cloud workspaces (the Skills sidebar is shown
+            in both) and take precedence over CloudGrid, which is gated to the
+            "table" view — otherwise selecting a skill in a cloud workspace would
+            hide the grid and render nothing (a blank dead-end). */}
+        {!importMode && view.kind === "skills" && (
           <SkillsBrowse
             skills={skills}
             onOpen={(id) => setView({ kind: "skill", id })}
             onChanged={() => api.skills().then(setSkills).catch(() => {})}
           />
         )}
-        {!importMode && !inCloud && view.kind === "skill" && (
+        {!importMode && view.kind === "skill" && (
           <SkillPanel
             id={view.id}
             onBack={() => setView({ kind: "skills" })}
@@ -2266,6 +2270,7 @@ export default function App() {
             setShowSignals(false);
             if (inCloud) {
               setCloudTableId(tableId as Id<"tables">);
+              setView({ kind: "table" });
             } else {
               api.tables().then((t) => {
                 setTables(t);
