@@ -11,11 +11,25 @@ export const metadata: Metadata = {
 // Revalidate hourly so a new release surfaces without a redeploy.
 export const revalidate = 3600;
 
-// Group the resolved downloads into the three OS families for display.
-const GROUPS: ReadonlyArray<{ os: string; keys: readonly string[]; note?: string }> = [
-  { os: "macOS", keys: ["mac-arm", "mac-intel"], note: "Apple Silicon (M-series) or Intel" },
+// Group the resolved downloads into the three OS families for display. `hint`
+// renders a smaller first-launch instruction below the buttons.
+const GROUPS: ReadonlyArray<{
+  os: string;
+  keys: readonly string[];
+  note?: string;
+  hint?: string;
+}> = [
+  {
+    os: "macOS",
+    keys: ["mac-arm", "mac-intel"],
+    note: "Apple Silicon (M-series) or Intel",
+    // The app is ad-hoc signed (not notarized — no paid Apple Developer ID yet),
+    // so first launch shows an "unidentified developer" warning. Right-click → Open
+    // (or clear the quarantine flag) gets past it; subsequent launches are normal.
+    hint: 'First launch: right-click the app → Open → Open. If macOS still blocks it, run “xattr -cr \'/Applications/GTM Grid.app\'” in Terminal once.',
+  },
   { os: "Windows", keys: ["windows"], note: "Windows 10/11, 64-bit" },
-  { os: "Linux", keys: ["linux", "linux-deb"], note: "AppImage (portable) or .deb (Debian/Ubuntu)" },
+  { os: "Linux", keys: ["linux"], note: ".deb (Debian/Ubuntu)" },
 ];
 
 export default async function DownloadPage() {
@@ -49,6 +63,7 @@ export default async function DownloadPage() {
               <section className="download__group" key={g.os}>
                 <h2>{g.os}</h2>
                 {g.note ? <p className="download__note">{g.note}</p> : null}
+                {g.hint ? <p className="download__hint">{g.hint}</p> : null}
                 <ul className="download__list">
                   {items.map((d) => (
                     <li key={d.key}>

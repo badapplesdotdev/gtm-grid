@@ -875,6 +875,7 @@ code, .mono {
 .download__group { border: 1px solid var(--line); border-radius: var(--r-lg); padding: var(--space-7); background: var(--surface-card); }
 .download__group h2 { font-size: var(--text-xl); margin: 0; }
 .download__note { color: var(--text-subtle); font-size: var(--text-sm); margin: var(--space-2) 0 var(--space-5); }
+.download__hint { color: var(--text-subtle); font-size: var(--text-xs); line-height: 1.5; margin: calc(-1 * var(--space-3)) 0 var(--space-5); padding: var(--space-3) var(--space-4); border-left: 2px solid var(--line); background: var(--surface-muted, rgba(0,0,0,0.02)); border-radius: var(--r-sm); }
 .download__list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-4); }
 .download__list li { display: flex; align-items: center; gap: var(--space-5); }
 .download__btn { min-width: 220px; justify-content: center; }

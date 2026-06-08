@@ -24,15 +24,16 @@ export interface Platform {
 }
 
 /**
- * The five distributable installers (the `.app.tar.gz` updater artifacts are
+ * The four distributable installers (the `.app.tar.gz` updater artifacts are
  * intentionally excluded — those are for the auto-updater, not direct download).
+ * Linux ships as `.deb` only: the AppImage bundler's upstream tool download is
+ * unreliable (persistent 504s), so the `linux` key resolves to the `.deb`.
  */
 export const PLATFORMS: readonly Platform[] = [
   { key: "mac-arm", label: "macOS (Apple Silicon)", match: /aarch64\.dmg$/ },
   { key: "mac-intel", label: "macOS (Intel)", match: /x64\.dmg$/ },
   { key: "windows", label: "Windows", match: /x64-setup\.exe$/ },
-  { key: "linux", label: "Linux (AppImage)", match: /amd64\.AppImage$/ },
-  { key: "linux-deb", label: "Linux (.deb)", match: /amd64\.deb$/ },
+  { key: "linux", label: "Linux (.deb)", match: /amd64\.deb$/ },
 ];
 
 export const platformByKey = (key: string): Platform | undefined =>
