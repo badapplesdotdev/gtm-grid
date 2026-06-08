@@ -438,14 +438,25 @@ function NewTableChooser({
               </span>
               <span className="acx-item-caret">{Caret}</span>
             </button>
-            <button className="acx-item" onClick={() => { onSignals(); onClose(); }}>
-              <span className="acx-item-icon">{SignalIcon}</span>
-              <span className="acx-item-text">
-                <span className="acx-item-title">From Social Signals</span>
-                <span className="acx-item-sub">Trigify social signals on a schedule — auto-fills rows.</span>
-              </span>
-              <span className="acx-item-caret">{Caret}</span>
-            </button>
+            {!inCloud ? (
+              <button className="acx-item" onClick={() => { onSignals(); onClose(); }}>
+                <span className="acx-item-icon">{SignalIcon}</span>
+                <span className="acx-item-text">
+                  <span className="acx-item-title">From Social Signals</span>
+                  <span className="acx-item-sub">Trigify social signals on a schedule — auto-fills rows.</span>
+                </span>
+                <span className="acx-item-caret">{Caret}</span>
+              </button>
+            ) : (
+              <button className="acx-item acx-disabled" disabled title="Cloud support coming soon">
+                <span className="acx-item-icon">{SignalIcon}</span>
+                <span className="acx-item-text">
+                  <span className="acx-item-title">From Social Signals</span>
+                  <span className="acx-item-sub">Desktop only for now — cloud support coming soon.</span>
+                </span>
+                <span className="acx-item-caret" style={{ color: "var(--text-3)" }}>{LockIcon}</span>
+              </button>
+            )}
             {inCloud ? (
               <button className="acx-item" onClick={() => { onWebhook(); onClose(); }}>
                 <span className="acx-item-icon">{WebhookIcon}</span>

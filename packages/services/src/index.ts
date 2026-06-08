@@ -343,3 +343,5 @@ export {
   UnauthenticatedError,
   UnknownPlanError,
 } from "@gtmgrid/cloud";
+
+export * from "./signals/catalog.js";
