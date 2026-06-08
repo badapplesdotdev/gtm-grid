@@ -148,6 +148,24 @@ export class AutumnClient extends Context.Tag("CloudAutumnClient")<
     >;
 
     /**
+     * Preview what `customerId` would be billed for `planId` at `seats` seats,
+     * WITHOUT making any change — Autumn `billing.previewAttach`. Powers the
+     * "adding a teammate raises your bill to $X" confirmation before an invite.
+     */
+    readonly previewSeatChange: (args: {
+      readonly customerId: string;
+      readonly planId: string;
+      readonly seats: number;
+    }) => Effect.Effect<
+      {
+        readonly total: number;
+        readonly currency: string;
+        readonly seats: number;
+      },
+      AutumnError
+    >;
+
+    /**
      * Begin attaching `planId` to `customerId`, returning the checkout/payment
      * URL the customer completes (or `null` when no payment is required). Maps
      * to Autumn `billing.attach({ customerId, planId })` → `{ paymentUrl }`.

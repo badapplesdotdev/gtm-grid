@@ -26,7 +26,7 @@ import { type BillingCycle, resolvePlanId } from "@gtmgrid/cloud";
 import { PlanGrid, BillingToggle } from "./onboarding/PlanGrid";
 import type { SelectablePlan } from "./onboarding/flow-logic";
 import type { Id } from "./ids";
-import { cloudEnabled } from "./client";
+import { apiClient, cloudEnabled } from "./client";
 import { useAuthState, useMembers } from "./auth";
 import { runInvite, useInviteLayer } from "./invite";
 import {
@@ -81,9 +81,39 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
   // When true, the plan-selection upgrade modal is shown.
   const [showUpgrade, setShowUpgrade] = useState(false);
 
+  // Seat-cost confirmation: an invite consumes a paid seat, so before sending we
+  // preview the new bill (Autumn) and hold the invite until the user approves the
+  // new price. Null when no confirmation is pending.
+  const [pendingInvite, setPendingInvite] = useState<{
+    email: string;
+    seats: number;
+    total: number;
+    currency: string;
+  } | null>(null);
+
   const submitInvite = useCallback(async () => {
     const email = inviteEmail.trim();
     if (!email || busy || workspaceId === null) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      // Show the projected new price first; the actual invite runs on confirm.
+      const preview = await apiClient!.billing.previewSeatChange.query({
+        workspaceId,
+      });
+      setPendingInvite({ email, ...preview });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't price this invite.");
+    } finally {
+      setBusy(false);
+    }
+  }, [inviteEmail, busy, workspaceId]);
+
+  const confirmInvite = useCallback(async () => {
+    if (!pendingInvite || workspaceId === null || busy) return;
+    const email = pendingInvite.email;
+    setPendingInvite(null);
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -115,7 +145,7 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
     } finally {
       setBusy(false);
     }
-  }, [inviteEmail, busy, workspaceId, isAuthenticated, inviteLayer]);
+  }, [pendingInvite, busy, workspaceId, isAuthenticated, inviteLayer]);
 
   // Copy an accept link to the clipboard (best-effort) for the pending list.
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -334,8 +364,68 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
           }}
         />
       )}
+
+      {pendingInvite && (
+        <div
+          className="overlay"
+          onMouseDown={(e) =>
+            e.target === e.currentTarget && setPendingInvite(null)
+          }
+        >
+          <div className="modal" style={{ width: 420 }}>
+            <div className="modal-header">
+              <h3>Add a seat?</h3>
+            </div>
+            <div className="modal-body">
+              <p style={{ margin: "0 0 12px", lineHeight: 1.55 }}>
+                Inviting <strong>{pendingInvite.email}</strong> adds a seat to{" "}
+                <strong>{workspaceName ?? "this workspace"}</strong>. Your
+                subscription becomes:
+              </p>
+              <div className="seat-price">
+                <span className="seat-price__amount">
+                  {formatPrice(pendingInvite.total, pendingInvite.currency)}
+                </span>
+                <span className="seat-price__unit">
+                  /mo · {pendingInvite.seats} seat
+                  {pendingInvite.seats === 1 ? "" : "s"}
+                </span>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button
+                className="btn btn-ghost"
+                onClick={() => setPendingInvite(null)}
+                disabled={busy}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn--primary"
+                onClick={() => void confirmInvite()}
+                disabled={busy}
+              >
+                Confirm &amp; invite
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+/** Format a recurring price like `$60` / `€60` from an amount + ISO currency. */
+function formatPrice(amount: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: currency.toUpperCase(),
+      maximumFractionDigits: amount % 1 === 0 ? 0 : 2,
+    }).format(amount);
+  } catch {
+    return `${amount} ${currency.toUpperCase()}`;
+  }
 }
 
 /**

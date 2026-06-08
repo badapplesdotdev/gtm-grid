@@ -241,3 +241,33 @@ describe("billing.syncPlan", () => {
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });
+
+describe("billing.previewSeatChange", () => {
+  it("previews the bill for current members + 1 seat", async () => {
+    const caller = callerFor({
+      users,
+      workspaces,
+      members, // one member
+      memberships: ownerMembership,
+      currentUserId: "user_owner",
+      autumn: { perSeatPrice: 20 },
+    });
+    const result = await caller.billing.previewSeatChange({ workspaceId: WS_ID });
+    // 1 existing member + 1 new seat = 2 × $20 = $40.
+    expect(result).toEqual({ seats: 2, total: 40, currency: "usd" });
+  });
+
+  it("rejects a non-member with FORBIDDEN", async () => {
+    const caller = callerFor({
+      users,
+      workspaces,
+      members: [],
+      memberships: [],
+      currentUserId: "user_stranger",
+      autumn: { perSeatPrice: 20 },
+    });
+    await expect(
+      caller.billing.previewSeatChange({ workspaceId: WS_ID }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
