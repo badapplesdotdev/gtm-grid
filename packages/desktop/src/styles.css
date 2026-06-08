@@ -1522,17 +1522,17 @@ html, body, #root {
 .agent-send {
   all: unset; cursor: pointer;
   align-self: flex-end;
-  height: 37px;
-  padding: 0 17px;
-  border-radius: var(--r-md);
-  background: var(--accent);
-  color: #fff;
-  font: 600 13px var(--font-sans);
-  display: flex; align-items: center;
-  box-shadow: 0 1px 3px var(--accent-shadow);
+  height: 32px;
+  width: 32px;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--accent-2);
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.12s, color 0.12s;
 }
-.agent-send:hover { filter: brightness(1.06); }
-.agent-send:disabled { opacity: .45; cursor: default; box-shadow: none; }
+/* The "box" only appears on hover/focus — otherwise it's a bare icon. */
+.agent-send:hover { background: var(--surface-3); }
+.agent-send:disabled { color: var(--text-3); opacity: .55; cursor: default; background: transparent; }
 
 /* ─── Agent panel: markdown + tool results + controls ─────── */
 .agent-clear {
@@ -1588,14 +1588,9 @@ html, body, #root {
 }
 .agent-text .md-pre code { font: 12px var(--font-mono); color: #e4e4ea; white-space: pre; }
 .agent-text a { color: var(--accent); }
-/* Stop — subtle neutral icon button (not the green send, not red) */
-.agent-stop {
-  background: var(--surface-3) !important;
-  color: var(--text-2) !important;
-  box-shadow: none !important;
-  padding: 0 13px !important;
-}
-.agent-stop:hover { background: var(--surface-2) !important; color: var(--text) !important; filter: none; }
+/* Stop — bare neutral icon (not green, not red); box only on hover */
+.agent-stop { color: var(--text-2) !important; }
+.agent-stop:hover { background: var(--surface-3) !important; color: var(--text) !important; }
 
 /* ─── Agent panel: connect / locate CLI ───────────────────── */
 .agent-connect-btn {
