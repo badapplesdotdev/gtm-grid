@@ -23,6 +23,7 @@ import { gridRouter } from "./routers/grid";
 import { invitationsRouter } from "./routers/invitations";
 import { realtimeRouter } from "./routers/realtime";
 import { webhooksRouter } from "./routers/webhooks";
+import { signalsRouter } from "./routers/signals";
 import { workspacesRouter } from "./routers/workspaces";
 import {
   publicProcedure,
@@ -76,6 +77,8 @@ export const appRouter = router({
   credentials: credentialsRouter,
   /** Member-gated webhook config CRUD (TRI-3250). */
   webhooks: webhooksRouter,
+  /** Member-gated Social Signals (Trigify) bindings; recurring poll runs in Inngest. */
+  signals: signalsRouter,
   /** Member-gated connector extensions (TRI-3250). */
   extensions: extensionsRouter,
   /**
