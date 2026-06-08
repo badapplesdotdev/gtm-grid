@@ -109,6 +109,11 @@ const IconArrow = ({ s = 15 }: { s?: number }) => (
     <path d="M12 19V5M5 12l7-7 7 7" />
   </svg>
 );
+const IconStop = ({ s = 13 }: { s?: number }) => (
+  <svg width={s} height={s} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <rect x="6" y="6" width="12" height="12" rx="2.5" />
+  </svg>
+);
 
 // Brand logomarks for the agent tabs (inline SVG — no network, ships offline).
 const AGENT_LOGO: Record<AgentKind, ReactNode> = {
@@ -661,7 +666,7 @@ export default function AgentPanel({
               disabled={busy}
             />
             {busy ? (
-              <button className="agent-send agent-stop" onClick={stop}>Stop</button>
+              <button className="agent-send agent-stop" onClick={stop} title="Stop"><IconStop s={13} /></button>
             ) : (
               <button className="agent-send" onClick={() => send()} disabled={!input.trim()}>
                 <IconArrow s={15} />

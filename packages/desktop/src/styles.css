@@ -1588,7 +1588,14 @@ html, body, #root {
 }
 .agent-text .md-pre code { font: 12px var(--font-mono); color: #e4e4ea; white-space: pre; }
 .agent-text a { color: var(--accent); }
-.agent-stop { background: var(--danger) !important; }
+/* Stop — subtle neutral icon button (not the green send, not red) */
+.agent-stop {
+  background: var(--surface-3) !important;
+  color: var(--text-2) !important;
+  box-shadow: none !important;
+  padding: 0 13px !important;
+}
+.agent-stop:hover { background: var(--surface-2) !important; color: var(--text) !important; filter: none; }
 
 /* ─── Agent panel: connect / locate CLI ───────────────────── */
 .agent-connect-btn {
