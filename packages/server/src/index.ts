@@ -24,6 +24,18 @@ import {
 import { detectAgents, streamClaude, streamCodex, setAgentPath, rescanAgents, type AgentKind } from "./agent.js";
 import { runCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
 import { corsHeadersFor, isOriginAllowed } from "./cors.js";
+import {
+  SIGNAL_SOURCES,
+  getSource,
+  listBindings,
+  upsertBinding,
+  deleteBinding,
+  newBinding,
+  syncBinding,
+  warmUpBinding,
+  type SignalDeps,
+  type SignalSchedule,
+} from "./signals.js";
 
 const PORT = Number(process.env.GTMGRID_PORT ?? 8787);
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
@@ -38,15 +50,17 @@ const registry = defaultRegistry();
 
 // Seed bundled connector manifests (extensions/*.json shipped next to the server
 // in the packaged app, or repo/extensions in dev) into the GLOBAL db + registry.
-function seedExtensions() {
-  const dirs = [process.env.GTMGRID_EXT_DIR, join(SERVER_DIR, "extensions"), join(REPO_ROOT, "extensions")].filter(
+// Directory the bundled connector manifests + their `<tool>.skill.md` files live in.
+const EXT_DIR =
+  [process.env.GTMGRID_EXT_DIR, join(SERVER_DIR, "extensions"), join(REPO_ROOT, "extensions")].find(
     (d): d is string => !!d && existsSync(d),
-  );
-  const dir = dirs[0];
-  if (!dir) return;
-  for (const file of readdirSync(dir).filter((f) => f.endsWith(".json"))) {
+  ) ?? null;
+
+function seedExtensions() {
+  if (!EXT_DIR) return;
+  for (const file of readdirSync(EXT_DIR).filter((f) => f.endsWith(".json"))) {
     try {
-      const manifest = parseManifest(readFileSync(join(dir, file), "utf8"));
+      const manifest = parseManifest(readFileSync(join(EXT_DIR, file), "utf8"));
       globalDb.saveExtension(manifest as any);
       registry.add(connectorFromManifest(manifest));
     } catch (err) {
@@ -55,6 +69,37 @@ function seedExtensions() {
   }
 }
 seedExtensions();
+
+// ── Tool skills: per-tool operating manuals (`<tool>.skill.md`) the workflow generates.
+//    Read straight off disk so they hot-update when regenerated. Custom (user-authored)
+//    skills live in the global db `meta` table as a JSON array under "custom_skills".
+function loadToolSkill(id: string): string | null {
+  if (!EXT_DIR) return null;
+  const f = join(EXT_DIR, `${id}.skill.md`);
+  return existsSync(f) ? readFileSync(f, "utf8") : null;
+}
+interface CustomSkill {
+  id: string;
+  name: string;
+  description?: string;
+  body: string;
+  enabled?: boolean;
+}
+function listCustomSkills(): CustomSkill[] {
+  try {
+    const raw = globalDb.getMeta("custom_skills");
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+function saveCustomSkills(skills: CustomSkill[]): void {
+  globalDb.setMeta("custom_skills", JSON.stringify(skills));
+}
+function wordCount(s: string): number {
+  return s.trim() ? s.trim().split(/\s+/).length : 0;
+}
 // Load any custom (uploaded) manifests already stored in the global db.
 for (const manifest of globalDb.listExtensions()) {
   try {
@@ -125,6 +170,11 @@ function logoFor(domainOrUrl?: string | null): string | null {
   }
   host = host.replace(/^(www|api)\./, "");
   return host ? `https://www.google.com/s2/favicons?domain=${host}&sz=128` : null;
+}
+
+/** URL/id-safe slug from a display name (for custom skill ids). */
+function slugify(s: string): string {
+  return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "skill";
 }
 
 // Credential scope from request body — Personal / Team / Local tabs in the UI.
@@ -279,6 +329,193 @@ route("GET", "/api/extensions/:id", (p) => {
     })),
   };
 });
+
+// --- Skills: per-tool agent playbooks (<tool>.skill.md) + custom user skills ---
+// List: one entry per tool that ships a skill file, plus every custom skill.
+route("GET", "/api/skills", () => {
+  const toolSkills = globalDb
+    .listExtensions()
+    .map((e: any) => {
+      const body = loadToolSkill(e.id);
+      if (!body) return null;
+      return {
+        id: e.id,
+        name: e.name,
+        category: e.category ?? "custom",
+        description: e.description ?? null,
+        source: "tool" as const,
+        connected: !!globalDb.getCredential(e.id),
+        wordCount: wordCount(body),
+        logo: e.logo ?? logoFor(e.baseUrl),
+        enabled: true,
+      };
+    })
+    .filter(Boolean);
+  const custom = listCustomSkills().map((s) => ({
+    id: s.id,
+    name: s.name,
+    category: "custom",
+    description: s.description ?? null,
+    source: "custom" as const,
+    connected: false,
+    wordCount: wordCount(s.body ?? ""),
+    logo: null,
+    enabled: s.enabled !== false,
+  }));
+  return [...toolSkills, ...custom];
+});
+
+// Full skill body (markdown) for one skill — tool skill from disk, or a custom skill.
+route("GET", "/api/skills/:id", (p) => {
+  const ext: any = globalDb.getExtension(p.id);
+  const body = loadToolSkill(p.id);
+  if (ext && body) {
+    return {
+      id: ext.id,
+      name: ext.name,
+      category: ext.category ?? "custom",
+      description: ext.description ?? null,
+      source: "tool" as const,
+      connected: !!globalDb.getCredential(ext.id),
+      logo: ext.logo ?? logoFor(ext.baseUrl),
+      enabled: true,
+      body,
+    };
+  }
+  const custom = listCustomSkills().find((s) => s.id === p.id);
+  if (custom) {
+    return {
+      id: custom.id,
+      name: custom.name,
+      category: "custom",
+      description: custom.description ?? null,
+      source: "custom" as const,
+      connected: false,
+      logo: null,
+      enabled: custom.enabled !== false,
+      body: custom.body ?? "",
+    };
+  }
+  return { error: "not found" };
+});
+
+// Create or update a CUSTOM skill (tool skills are read-only files).
+route("POST", "/api/skills", (_p, body) => {
+  const b = (body ?? {}) as Partial<CustomSkill>;
+  const name = (b.name ?? "").trim();
+  if (!name) return { error: "name required" };
+  const id = (b.id ?? "").trim() || `custom-${slugify(name)}`;
+  const skills = listCustomSkills();
+  const next: CustomSkill = {
+    id,
+    name,
+    description: b.description ?? "",
+    body: b.body ?? "",
+    enabled: b.enabled !== false,
+  };
+  const i = skills.findIndex((s) => s.id === id);
+  if (i >= 0) skills[i] = next;
+  else skills.push(next);
+  saveCustomSkills(skills);
+  return { ok: true, id };
+});
+
+// Toggle whether a custom skill is injected into the agent.
+route("POST", "/api/skills/:id/toggle", (p, body) => {
+  const skills = listCustomSkills();
+  const s = skills.find((x) => x.id === p.id);
+  if (!s) return { error: "not found (tool skills are always on for connected tools)" };
+  s.enabled = (body as any)?.enabled !== false;
+  saveCustomSkills(skills);
+  return { ok: true, enabled: s.enabled };
+});
+
+// Delete a custom skill (tool skills cannot be deleted via the API).
+route("DELETE", "/api/skills/:id", (p) => {
+  const skills = listCustomSkills();
+  const next = skills.filter((s) => s.id !== p.id);
+  if (next.length === skills.length) return { error: "no such custom skill" };
+  saveCustomSkills(next);
+  return { ok: true };
+});
+
+// --- Signals: bind a table to a Trigify saved search + poll new results in ---
+function signalDeps(): SignalDeps {
+  return { dispatch: (pr, m, i) => current.engine.dispatch(pr, m, i), projectDb: current.projectDb };
+}
+
+// Catalog of signal sources + each one's input schema (for the config form).
+route("GET", "/api/signals/sources", () => ({
+  trigifyConnected: !!globalDb.getCredential("trigify"),
+  sources: SIGNAL_SOURCES.map((s) => {
+    const m = registry.method("trigify", s.method);
+    return {
+      id: s.id,
+      label: s.label,
+      group: s.group,
+      kind: s.kind,
+      description: s.description,
+      columns: s.columns,
+      inputSchema: (m as any)?.inputSchema ?? null,
+    };
+  }),
+}));
+
+// Bindings in the current project (without the heavy `seen` dedupe window).
+route("GET", "/api/signals", () =>
+  listBindings(current.projectDb).map(({ seen, ...b }) => b),
+);
+
+// Create: table + columns + Trigify search + binding + initial pull.
+route("POST", "/api/signals", async (_p, body) => {
+  const source = getSource(String(body?.sourceId ?? ""));
+  if (!source) return { error: "unknown signal source" };
+  if (!globalDb.getCredential("trigify")) return { error: "Connect Trigify first (Tools → Trigify)." };
+  const name = (String(body?.name ?? "").trim() || source.label).slice(0, 80);
+  const config = (body?.config ?? {}) as Record<string, unknown>;
+  const schedule = (["manual", "hourly", "daily", "weekly"].includes(body?.schedule) ? body.schedule : "daily") as SignalSchedule;
+
+  const table = current.projectDb.createTable(name);
+  for (const col of source.columns) {
+    current.projectDb.createColumn({ tableId: table.id, name: col.name, type: "text", kind: "manual", provider: null, method: null, code: null, params: {} });
+  }
+
+  let searchId: string | null = null;
+  try {
+    const created: any = await current.engine.dispatch("trigify", source.method, { name, ...config });
+    searchId = created?.id ?? created?.search_id ?? created?.data?.id ?? created?.search?.id ?? null;
+  } catch (e) {
+    current.projectDb.deleteTable(table.id);
+    return { error: `Could not create the Trigify search: ${e instanceof Error ? e.message : String(e)}` };
+  }
+
+  const binding = newBinding({ tableId: table.id, source, config: { name, ...config }, schedule, searchId });
+  upsertBinding(current.projectDb, binding);
+  const sync = await syncBinding(signalDeps(), binding);
+  // Results populate async — keep retrying in the background until rows land.
+  if (!sync.error && sync.added === 0) void warmUpBinding(signalDeps(), binding.id);
+  return { tableId: table.id, bindingId: binding.id, searchId, added: sync.added, error: sync.error ?? null };
+});
+
+// Manual "pull now".
+route("POST", "/api/signals/:id/sync", async (p) => {
+  const b = listBindings(current.projectDb).find((x) => x.id === p.id);
+  if (!b) return { error: "not found" };
+  const r = await syncBinding(signalDeps(), b);
+  return { ok: !r.error, added: r.added, error: r.error ?? null };
+});
+
+route("POST", "/api/signals/:id/toggle", (p, body) => {
+  const b = listBindings(current.projectDb).find((x) => x.id === p.id);
+  if (!b) return { error: "not found" };
+  b.enabled = (body as any)?.enabled !== false;
+  upsertBinding(current.projectDb, b);
+  return { ok: true, enabled: b.enabled };
+});
+
+route("DELETE", "/api/signals/:id", (p) =>
+  deleteBinding(current.projectDb, p.id) ? { ok: true } : { error: "not found" },
+);
 
 // --- AI providers (bring-your-own-key for AI step functions) ---
 // `fallbackModels` is only used if the live /v1/models fetch fails (offline,
@@ -622,11 +859,24 @@ const server = createServer(async (req, res) => {
         category: c.category,
         methodCount: c.methods.length,
       }));
-      const context = { ...body?.context, providers };
+      // Inject the operating playbook for every CONNECTED tool (so the agent
+      // stops guessing endpoints), plus any enabled custom skills. Only connected
+      // tools are included to keep the system prompt bounded.
+      const toolSkills = current.engine.registry
+        .list()
+        .filter((c) => !!globalDb.getCredential(c.id))
+        .map((c) => ({ id: c.id, name: c.name, body: loadToolSkill(c.id) }))
+        .filter((s): s is { id: string; name: string; body: string } => !!s.body);
+      const customSkills = listCustomSkills()
+        .filter((s) => s.enabled !== false && s.body?.trim())
+        .map((s) => ({ id: s.id, name: s.name, body: s.body }));
+      const skills = [...toolSkills, ...customSkills];
+      const context = { ...body?.context, providers, skills };
       // Pass `origin` through so the SSE stream emits the allowlisted CORS
       // header on this privileged route (#22).
-      if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context, origin });
-      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin });
+      const model = typeof body?.model === "string" && body.model.trim() ? body.model.trim() : undefined;
+      if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context, origin, model });
+      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model });
     } catch (e) {
       send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
     }
@@ -665,3 +915,9 @@ const HOST = "127.0.0.1";
 server.listen(PORT, HOST, () => {
   console.error(`gtmgrid server on http://${HOST}:${PORT} (project: ${current.name})`);
 });
+
+// NOTE: the LOCAL desktop does NOT run a recurring poller — a social-signal table
+// pulls once when created (with a short warm-up retry while Trigify scrapes), and
+// can be re-synced on demand via POST /api/signals/:id/sync. Recurring/scheduled
+// auto-refresh is a CLOUD-only feature (the Inngest cron worker), since a desktop
+// "cron" can't run while the app is closed anyway.

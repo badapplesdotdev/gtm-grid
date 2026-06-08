@@ -36,6 +36,13 @@
       "when": 1780910823729,
       "tag": "0004_melted_gamma_corps",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1780925359459,
+      "tag": "0005_vengeful_rockslide",
+      "breakpoints": true
     }
   ]
 }

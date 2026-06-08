@@ -11,7 +11,7 @@
     {
       "id": "verify",
       "label": "Verify Email",
-      "description": "Verify a single email address. mode 'quick' is instant syntax/MX/disposable checks; mode 'power' does deep SMTP/inbox checks (slower, more accurate). Returns { status, is_deliverable, is_valid_syntax, is_disposable, is_role_account, mx_accepts_mail, ... }.",
+      "description": "Verify a single email address. mode 'quick' is instant (~0.5s) syntax/MX/disposable checks; mode 'power' does deep SMTP/inbox/catch-all checks (slower, more accurate). Returns { status, overall_score, is_safe_to_send, is_deliverable, is_valid_syntax, is_disposable, is_role_account, is_free_email, mx_accepts_mail, can_connect_smtp, is_catch_all, mx_records, ... }. status is one of 'valid' | 'invalid' | 'disabled' | 'unknown' | 'catch_all' | 'spamtrap'.",
       "verb": "GET",
       "path": "/verify",
       "credits": 1,
@@ -20,14 +20,45 @@
         "required": ["email"],
         "properties": {
           "email": { "type": "string", "description": "Email address to verify" },
-          "mode": { "type": "string", "description": "quick | power (default quick)" }
+          "mode": { "type": "string", "description": "quick | power (default quick). power = deep SMTP/inbox verification" }
+        }
+      }
+    },
+    {
+      "id": "createBulkTask",
+      "label": "Create Bulk Verification Task",
+      "description": "Submit up to 50,000 emails for asynchronous batch verification. Duplicates are removed automatically. Returns { status, task_id, count_submitted, count_duplicates_removed, count_rejected_emails, count_processing }. Save task_id, then poll getBulkResult until status is 'completed'. Bulk runs in power mode.",
+      "verb": "POST",
+      "path": "/create-bulk-verification-task/",
+      "credits": 3,
+      "input": {
+        "type": "object",
+        "required": ["emails"],
+        "properties": {
+          "emails": { "type": "array", "items": { "type": "string" }, "description": "Array of email addresses (max 50,000)" },
+          "name": { "type": "string", "description": "Optional task name, max 25 characters" }
+        }
+      }
+    },
+    {
+      "id": "getBulkResult",
+      "label": "Get Bulk Verification Result",
+      "description": "Retrieve progress and per-email results for a bulk task created by createBulkTask. Returns { task_id, name, status, count_total, count_checked, progress_percentage, results }. status is 'running' until done then 'completed'; poll until then. results is an object keyed by email with the per-email verification fields (status, is_deliverable, is_safe_to_send, etc.).",
+      "verb": "GET",
+      "path": "/get-result-bulk-verification-task/",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["task_id"],
+        "properties": {
+          "task_id": { "type": "string", "description": "Task ID returned by createBulkTask" }
         }
       }
     },
     {
       "id": "accountBalance",
       "label": "Check Account Balance",
-      "description": "Get remaining verification credits. Returns account credit balance.",
+      "description": "Get remaining verification credits. Returns { api_status, remaining_daily_credits, remaining_instant_credits, status }. Daily credits reset each day; instant credits are purchased and do not reset.",
       "verb": "GET",
       "path": "/check-account-balance/",
       "credits": 0,

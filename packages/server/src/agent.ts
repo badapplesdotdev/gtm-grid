@@ -29,6 +29,25 @@ export interface AgentContext {
   columns?: string[];
   /** Live snapshot of the connector registry so the skill stays in sync with installed extensions. */
   providers?: Array<{ id: string; name: string; category: string; methodCount: number }>;
+  /** Per-tool operating manuals (the `<tool>.skill.md` files) for tools that are CONNECTED,
+   *  plus any enabled custom skills. Injected so the agent picks endpoints without guessing. */
+  skills?: Array<{ id: string; name: string; body: string }>;
+}
+
+/** Render the per-tool skill playbooks for connected tools into the preamble. */
+function renderSkillsSection(skills?: AgentContext["skills"]): string {
+  if (!skills?.length) return "";
+  const blocks = skills
+    .filter((s) => s.body && s.body.trim())
+    .map((s) => `<skill tool="${s.id}">\n${s.body.trim()}\n</skill>`)
+    .join("\n\n");
+  if (!blocks) return "";
+  return `
+
+## Tool playbooks (READ THESE before using a connected tool)
+The following are curated operating manuals for the tools the user has CONNECTED. Each tells you exactly which endpoint to use for each job, the inputs, and copy-paste recipes — so you do NOT need to burn turns on \`list_functions\` guessing. When a task matches one of these tools, follow its playbook first; fall back to \`search_functions\` only for endpoints a playbook doesn't cover.
+
+${blocks}`;
 }
 
 /** Render the installed-connectors section dynamically from the registry. */
@@ -75,7 +94,7 @@ The catalog is huge (Trigify alone exposes 122 methods). Discover in this order:
 3. **list_functions(provider:'trigify')** — only when you need the full input schema for ONE provider's methods. Calling it without \`provider\` returns everything and may blow your token budget.
 
 ## Common patterns
-- **Source rows**: use \`run_function\` to call a search/discover method directly (e.g. \`trigify.discoverCreators\`, \`trigify.socialMapping\`), then \`add_rows\` with the results.
+- **Source rows**: use \`run_function\` to call a search/source method directly (e.g. \`trigify.createLinkedInPostsSearch\` then \`trigify.searchResults\`, or \`trigify.socialMapping\`), then \`add_rows\` with the results.
 - **Enrich rows**: add a function column wired to an enrichment method (e.g. \`trigify.enrichProfile\` with \`params: { profileUrl: "{{LinkedIn URL}}" }\`), then \`run_column\` to fill it for all rows.
 - **Personalize**: \`ai.generate\` columns with a prompt referencing other columns — e.g. prompt \`"Write a 2-sentence intro for {{First Name}} who works at {{Company}}"\`. Pass the model + system as params.
 - **Format/Normalize**: the \`formatting\` connector has 12 free helpers — normalizeDomain, normalizePhoneNumber, splitFullName, formatDate, titleCase, etc. Use these BEFORE enrichment to clean inputs.
@@ -131,6 +150,7 @@ The catalog is huge (Trigify alone exposes 122 methods). Discover in this order:
 ## Connectors currently installed
 ${renderConnectorsSection(ctx?.providers)}
 This snapshot is generated fresh from the live registry each turn — new extensions added to gtm grid appear here automatically. Use \`list_providers\` + \`search_functions\` to drill in, then \`list_functions\` scoped to one provider for the input schemas.
+${renderSkillsSection(ctx?.skills)}
 
 ## Style
 - Be terse. State the plan in one line, do the work, summarize.
@@ -314,7 +334,7 @@ function mcpConfig(repoRoot: string, project: string): string {
 /** Stream a Claude Code turn over SSE, driving gtmgrid via MCP. */
 export function streamClaude(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext; origin?: string },
+  opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext; origin?: string; model?: string },
 ): void {
   const sse = sseClient(res, opts.origin);
   const args = [
@@ -334,6 +354,7 @@ export function streamClaude(
   ];
   const preamble = contextPreamble(opts.context);
   if (preamble) args.push("--append-system-prompt", preamble);
+  if (opts.model) args.push("--model", opts.model);
   if (opts.sessionId) args.push("--resume", opts.sessionId);
 
   const bin = resolveAgentPath("claude");
@@ -422,7 +443,7 @@ function resultText(result: any): string {
  *  project) and bypasses approval prompts for headless tool use. */
 export function streamCodex(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; threadId?: string; context?: AgentContext; origin?: string },
+  opts: { message: string; project: string; repoRoot: string; threadId?: string; context?: AgentContext; origin?: string; model?: string },
 ): void {
   const sse = sseClient(res, opts.origin);
   const launcher = mcpLauncher(opts.repoRoot);
@@ -436,6 +457,7 @@ export function streamCodex(
     // user's other registered servers (Trigify/exa/etc.) and drives gtmgrid.
     "-c",
     `mcp_servers={ gtmgrid = { command = "${launcher}", env = { GTMGRID_PROJECT = "${opts.project}" } } }`,
+    ...(opts.model ? ["-m", opts.model] : []),
   ];
   const args = opts.threadId
     ? ["exec", "resume", opts.threadId, ...flags, message]

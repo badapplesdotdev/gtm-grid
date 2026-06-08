@@ -3,8 +3,10 @@
 // Local scope tabs, a "CONNECTIONS" add-card, and collapsible info sections.
 
 import { useState, useEffect, useCallback, ReactNode } from "react";
-import { api, ExtensionDetail, ExtensionInfo, AiProviderInfo, CredentialScope } from "./api";
+import { createPortal } from "react-dom";
+import { api, ExtensionDetail, ExtensionInfo, AiProviderInfo, CredentialScope, SkillInfo, SkillDetail } from "./api";
 import { aiProviderCredId } from "./cloud/credentials";
+import { Markdown } from "./AgentPanel";
 
 /**
  * The scope a credential is saved under in the panels. Extends the local-only
@@ -106,6 +108,26 @@ const I = {
   Search: () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </svg>
+  ),
+  X: ({ s = 16 }: { s?: number }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  ),
+  Check: ({ s = 14 }: { s?: number }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  ),
+  Tag: ({ s = 15 }: { s?: number }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L3 13V3h10l7.59 7.59a2 2 0 0 1 0 2.82z" /><circle cx="7.5" cy="7.5" r="1.5" fill="currentColor" stroke="none" />
+    </svg>
+  ),
+  Copy: ({ s = 14 }: { s?: number }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
     </svg>
   ),
 };
@@ -326,19 +348,19 @@ export function ExtensionPanel({ id, onConnected, onBack, workspaceCreds }: { id
   useEffect(() => { load(); }, [id, load]);
 
   const backBar = onBack && (
-    <button className="detail-back" onClick={onBack}><I.Back /> Extensions</button>
+    <button className="detail-back" onClick={onBack}><I.Back /> Tools</button>
   );
 
   if (loading) {
     return <div className="detail-wrap">{backBar}<div className="detail"><div className="cell-spinner" style={{ width: 18, height: 18, borderWidth: 2 }} /></div></div>;
   }
   if (!detail) {
-    return <div className="detail-wrap">{backBar}<div className="detail"><div className="detail-empty">Extension not found.</div></div></div>;
+    return <div className="detail-wrap">{backBar}<div className="detail"><div className="detail-empty">Tool not found.</div></div></div>;
   }
 
   const methodCount = detail.methods.length;
-  const description = detail.description ?? `${detail.category} extension`;
-  const meta = ["Extension", `${methodCount} method${methodCount !== 1 ? "s" : ""}`, detail.version ? `v${detail.version}` : null]
+  const description = detail.description ?? `${detail.category} tool`;
+  const meta = ["Tool", `${methodCount} method${methodCount !== 1 ? "s" : ""}`, detail.version ? `v${detail.version}` : null]
     .filter(Boolean)
     .join("  ·  ");
 
@@ -399,7 +421,87 @@ export function ExtensionPanel({ id, onConnected, onBack, workspaceCreds }: { id
 
 // ─── Extensions gallery (Browse all) ─────────────────────
 
+interface Perk {
+  /** Discount code the user redeems on the partner's checkout. */
+  code: string;
+  /** Short discount label, e.g. "50% off" (uppercased for the card badge). */
+  pct: string;
+  /** One-line terms / context shown under the partner name in the modal. */
+  sub: string;
+}
+
+/**
+ * Hand-picked partner discounts, keyed by extension id. Each perk surfaces three
+ * ways in Browse all: a quiet "% OFF" badge on the matching card (in-context
+ * discovery), a "Partner perks" button under the search that opens
+ * {@link PerksModal}, and a copyable code chip in that modal. Codes are redeemed
+ * on the partner's own billing page — GTM Grid doesn't process the discount.
+ * Add or remove a perk by editing this object and {@link PERK_ORDER}; the button
+ * count and card badges update automatically.
+ */
+const PERKS: Record<string, Perk> = {
+  smuggler: { code: "MAX50", pct: "50% off", sub: "First 3 months on any plan · LinkedIn engagement intelligence" },
+  trigify: { code: "MAX30", pct: "30% off", sub: "Any annual plan · social listening + engagement signals" },
+  avtrz: { code: "MAX10", pct: "10% off", sub: "Stacks with usage credits · profile-photo enrichment" },
+};
+const PERK_ORDER = ["smuggler", "trigify", "avtrz"];
+
+/** A click-to-copy code chip; flips to a green "Copied" confirmation briefly. */
+function CodeChip({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    if (navigator.clipboard) navigator.clipboard.writeText(code).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  };
+  return (
+    <button className={`perk-code${copied ? " copied" : ""}`} onClick={copy} title="Copy code">
+      <span className="perk-code-label">Code</span>
+      <span className="perk-code-val">{copied ? "Copied" : code}</span>
+      <span className="perk-code-copy">{copied ? <I.Check /> : <I.Copy />}</span>
+    </button>
+  );
+}
+
+/** Modal listing every partner perk with its discount and a copyable code. */
+function PerksModal({ extensions, onClose }: { extensions: ExtensionInfo[]; onClose: () => void }) {
+  const rows = PERK_ORDER.flatMap((id) => {
+    const ext = extensions.find((e) => e.id === id);
+    return ext ? [{ ext, perk: PERKS[id] }] : [];
+  });
+  // Portal to <body> so the overlay escapes the main-area stacking context
+  // (otherwise it's trapped below the sidebar — a partial dim + dead click-off).
+  return createPortal(
+    <div className="ppm-scrim" onMouseDown={(ev) => ev.target === ev.currentTarget && onClose()}>
+      <div className="ppm" role="dialog" aria-modal="true" aria-label="Partner perks" onMouseDown={(ev) => ev.stopPropagation()}>
+        <div className="ppm-head">
+          <div className="ppm-head-text">
+            <div className="ppm-title"><span className="tag-ic"><I.Tag s={17} /></span>Partner perks</div>
+            <div className="ppm-sub">Exclusive codes for GTM Grid users. Copy a code and apply it at the partner's checkout.</div>
+          </div>
+          <button className="ppm-close" onClick={onClose} aria-label="Close"><I.X s={17} /></button>
+        </div>
+        <div className="ppm-body">
+          {rows.map(({ ext, perk }) => (
+            <div key={ext.id} className="ppm-row">
+              <span className="browse-card-icon ppm-row-icon"><BrandIcon logo={ext.logo} name={ext.name} size={26} /></span>
+              <div className="ppm-row-body">
+                <div className="ppm-row-name"><strong>{ext.name}</strong><span className="ppm-pct">{perk.pct}</span></div>
+                <div className="ppm-row-sub">{perk.sub}</div>
+              </div>
+              <CodeChip code={perk.code} />
+            </div>
+          ))}
+        </div>
+        <div className="ppm-foot">Codes are redeemed on the partner's own billing page — GTM Grid doesn't process the discount.</div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function ExtensionCard({ e, onOpen, featured = false }: { e: ExtensionInfo; onOpen: (id: string) => void; featured?: boolean }) {
+  const perk = PERKS[e.id];
   return (
     <button className={`browse-card${featured ? " featured" : ""}`} onClick={() => onOpen(e.id)}>
       <div className="browse-card-icon"><BrandIcon logo={e.logo} name={e.name} size={26} /></div>
@@ -407,6 +509,7 @@ function ExtensionCard({ e, onOpen, featured = false }: { e: ExtensionInfo; onOp
         <div className="browse-card-top">
           <span className="browse-card-name">{e.name}</span>
           {e.connected && <span className="ext-badge connected">connected</span>}
+          {perk && <span className="deal-badge">{perk.pct.toUpperCase()}</span>}
         </div>
         <div className="browse-card-desc">{e.description ?? `${e.category} · ${e.methods} methods`}</div>
       </div>
@@ -423,6 +526,7 @@ export function ExtensionsBrowse({
   onOpen: (id: string) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [perksOpen, setPerksOpen] = useState(false);
   const q = query.trim().toLowerCase();
   const filtered = q
     ? extensions.filter(
@@ -436,6 +540,7 @@ export function ExtensionsBrowse({
   const featured = extensions.filter((e) => e.featured);
   const rest = extensions.filter((e) => !e.featured);
   const searching = q.length > 0;
+  const availablePerks = PERK_ORDER.filter((id) => extensions.some((e) => e.id === id));
 
   return (
     <div className="browse">
@@ -445,12 +550,22 @@ export function ExtensionsBrowse({
         <I.Search />
         <input
           className="browse-search-input"
-          placeholder="Search extensions"
+          placeholder="Search tools"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           autoFocus
         />
       </div>
+
+      {availablePerks.length > 0 && (
+        <div className="perks-bar">
+          <button className="perks-btn" onClick={() => setPerksOpen(true)}>
+            <span className="tag-ic"><I.Tag s={14} /></span>
+            Partner perks
+            <span className="perks-btn-count">{availablePerks.length}</span>
+          </button>
+        </div>
+      )}
 
       {searching ? (
         <>
@@ -458,7 +573,7 @@ export function ExtensionsBrowse({
             {filtered.length} result{filtered.length !== 1 ? "s" : ""}
           </div>
           {filtered.length === 0 ? (
-            <div className="browse-empty">No extensions match “{query}”.</div>
+            <div className="browse-empty">No tools match “{query}”.</div>
           ) : (
             <div className="browse-grid">
               {filtered.map((e) => <ExtensionCard key={e.id} e={e} onOpen={onOpen} />)}
@@ -475,12 +590,14 @@ export function ExtensionsBrowse({
               </div>
             </>
           )}
-          <div className="browse-section-label">All extensions</div>
+          <div className="browse-section-label">All tools</div>
           <div className="browse-grid">
             {rest.map((e) => <ExtensionCard key={e.id} e={e} onOpen={onOpen} />)}
           </div>
         </>
       )}
+
+      {perksOpen && <PerksModal extensions={extensions} onClose={() => setPerksOpen(false)} />}
     </div>
   );
 }
@@ -521,6 +638,238 @@ export function AiProviderPanel({ provider, onConnected, workspaceCreds }: { pro
           ))}
         </div>
       </Collapsible>
+    </div>
+  );
+}
+
+// ─── Skills: per-tool agent playbooks + custom skills ────────────────────
+
+function SkillCard({ s, onOpen }: { s: SkillInfo; onOpen: (id: string) => void }) {
+  return (
+    <button className="browse-card" onClick={() => onOpen(s.id)}>
+      <div className="browse-card-icon"><BrandIcon logo={s.logo} name={s.name} size={26} /></div>
+      <div className="browse-card-body">
+        <div className="browse-card-top">
+          <span className="browse-card-name">{s.name}</span>
+          {s.source === "tool" && s.connected && <span className="ext-badge connected">on</span>}
+          {s.source === "custom" && <span className="ext-badge no-key">custom</span>}
+        </div>
+        <div className="browse-card-desc">
+          {s.description ?? (s.source === "tool" ? `Playbook for the ${s.name} tool` : "Custom skill")} · {s.wordCount} words
+        </div>
+      </div>
+      <span className="browse-card-add"><I.Search /></span>
+    </button>
+  );
+}
+
+export function SkillsBrowse({
+  skills,
+  onOpen,
+  onChanged,
+}: {
+  skills: SkillInfo[];
+  onOpen: (id: string) => void;
+  onChanged: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [body, setBody] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? skills.filter((s) => s.name.toLowerCase().includes(q) || (s.description ?? "").toLowerCase().includes(q))
+    : skills;
+  const toolSkills = filtered.filter((s) => s.source === "tool");
+  const customSkills = filtered.filter((s) => s.source === "custom");
+
+  const create = async () => {
+    if (!name.trim()) return;
+    setSaving(true);
+    try {
+      const r = await api.saveSkill({ name: name.trim(), body });
+      setCreating(false);
+      setName("");
+      setBody("");
+      onChanged();
+      if (r?.id) onOpen(r.id);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="browse">
+      <h1 className="browse-title">Skills — playbooks for your tools</h1>
+      <p className="browse-sub">
+        Each connected tool ships an agent playbook so Claude / Codex picks the right endpoint without guessing.
+        Add your own to teach the agent your workflows.
+      </p>
+
+      <div className="browse-search">
+        <I.Search />
+        <input
+          className="browse-search-input"
+          placeholder="Search skills"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          autoFocus
+        />
+        <button className="skill-new-btn" onClick={() => setCreating((c) => !c)}>
+          <I.Plus /> New skill
+        </button>
+      </div>
+
+      {creating && (
+        <div className="skill-create">
+          <input
+            className="skill-create-name"
+            placeholder="Skill name — e.g. “Cold outbound playbook”"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoFocus
+          />
+          <textarea
+            className="skill-create-body"
+            placeholder={"# My playbook\n\n## When to use\n- ...\n\n## Recipes\n1. ..."}
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            rows={8}
+          />
+          <div className="skill-create-actions">
+            <button className="skill-btn ghost" onClick={() => setCreating(false)}>Cancel</button>
+            <button className="skill-btn primary" onClick={create} disabled={!name.trim() || saving}>
+              {saving ? "Saving…" : "Create skill"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {toolSkills.length > 0 && (
+        <>
+          <div className="browse-section-label">Tool playbooks</div>
+          <div className="browse-grid" style={{ marginBottom: 28 }}>
+            {toolSkills.map((s) => <SkillCard key={s.id} s={s} onOpen={onOpen} />)}
+          </div>
+        </>
+      )}
+
+      <div className="browse-section-label">Custom skills</div>
+      {customSkills.length === 0 ? (
+        <div className="browse-empty">No custom skills yet. Click “New skill” to add one.</div>
+      ) : (
+        <div className="browse-grid">
+          {customSkills.map((s) => <SkillCard key={s.id} s={s} onOpen={onOpen} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function SkillPanel({
+  id,
+  onBack,
+  onChanged,
+}: {
+  id: string;
+  onBack?: () => void;
+  onChanged: () => void;
+}) {
+  const [detail, setDetail] = useState<SkillDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const d = await api.skill(id);
+      setDetail(d);
+      setDraft(d.body);
+    } catch {
+      setDetail(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
+  useEffect(() => { load(); }, [id, load]);
+
+  const backBar = onBack && (
+    <button className="detail-back" onClick={onBack}><I.Back /> Skills</button>
+  );
+
+  if (loading) {
+    return <div className="detail-wrap">{backBar}<div className="detail"><div className="cell-spinner" style={{ width: 18, height: 18, borderWidth: 2 }} /></div></div>;
+  }
+  if (!detail) {
+    return <div className="detail-wrap">{backBar}<div className="detail"><div className="detail-empty">Skill not found.</div></div></div>;
+  }
+
+  const isCustom = detail.source === "custom";
+  const meta = [
+    isCustom ? "Custom skill" : "Tool playbook",
+    detail.source === "tool" ? (detail.connected ? "auto-loaded (connected)" : "loads when connected") : detail.enabled ? "enabled" : "disabled",
+  ].join("  ·  ");
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.saveSkill({ id: detail.id, name: detail.name, description: detail.description ?? "", body: draft });
+      setEditing(false);
+      await load();
+      onChanged();
+    } finally {
+      setSaving(false);
+    }
+  };
+  const remove = async () => {
+    await api.deleteSkill(detail.id);
+    onChanged();
+    onBack?.();
+  };
+
+  return (
+    <div className="detail-wrap">
+      {backBar}
+      <div className="detail">
+        <PanelHeader
+          logo={detail.logo}
+          title={detail.name}
+          description={detail.description ?? (isCustom ? "Custom skill" : `Agent playbook for ${detail.name}`)}
+          meta={meta}
+        />
+
+        {detail.source === "tool" && (
+          <div className="skill-note">
+            This playbook is injected into the agent automatically whenever <strong>{detail.name}</strong> is connected,
+            so Claude / Codex knows exactly which endpoints to use.
+          </div>
+        )}
+
+        <div className="skill-toolbar">
+          {isCustom && !editing && (
+            <>
+              <button className="skill-btn" onClick={() => setEditing(true)}>Edit</button>
+              <button className="skill-btn danger" onClick={remove}>Delete</button>
+            </>
+          )}
+          {isCustom && editing && (
+            <>
+              <button className="skill-btn ghost" onClick={() => { setEditing(false); setDraft(detail.body); }}>Cancel</button>
+              <button className="skill-btn primary" onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
+            </>
+          )}
+        </div>
+
+        {editing ? (
+          <textarea className="skill-edit-body" value={draft} onChange={(e) => setDraft(e.target.value)} rows={24} />
+        ) : (
+          <div className="skill-body"><Markdown text={detail.body} /></div>
+        )}
+      </div>
     </div>
   );
 }

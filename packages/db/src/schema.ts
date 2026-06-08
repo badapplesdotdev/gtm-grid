@@ -529,6 +529,49 @@ export const webhooks = pgTable(
   ],
 );
 
+/**
+ * A cloud table fed by a scheduled Trigify social-signal search. The Inngest
+ * cron worker polls each enabled binding, pulls new results from Trigify, maps
+ * them through `columns`, and inserts rows/cells — the scheduled analogue of a
+ * webhook (which is push-driven).
+ */
+export const signalBindings = pgTable(
+  "signal_bindings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    tableId: uuid("table_id")
+      .notNull()
+      .references(() => tables.id, { onDelete: "cascade" }),
+    /** Signal source id, e.g. "linkedin-posts". */
+    sourceId: text("source_id").notNull(),
+    label: text("label").notNull(),
+    /** "search" | "profileEngagement". */
+    kind: text("kind").notNull(),
+    /** The Trigify search id; null until the search is created. */
+    searchId: text("search_id"),
+    /** Inputs used to create the Trigify search (jsonb). */
+    config: jsonb("config").notNull(),
+    /** "manual" | "hourly" | "daily" | "weekly". */
+    schedule: text("schedule").notNull(),
+    /** Result-field → column mapping: [{ key, name }] (jsonb). */
+    columns: jsonb("columns").notNull(),
+    /** Recently-seen result keys for cross-poll dedupe (jsonb string[]). */
+    seen: jsonb("seen"),
+    lastSyncedAt: bigint("last_synced_at", { mode: "number" }),
+    lastError: text("last_error"),
+    rowsPulled: integer("rows_pulled"),
+    enabled: boolean("enabled").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  },
+  (t) => [
+    index("signal_bindings_by_workspace").on(t.workspaceId),
+    index("signal_bindings_by_table").on(t.tableId),
+  ],
+);
+
 /** Per-event webhook delivery log (convex/schema.ts:380). */
 export const webhookDeliveries = pgTable(
   "webhook_deliveries",

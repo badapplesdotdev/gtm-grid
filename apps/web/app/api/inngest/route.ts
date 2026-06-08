@@ -1,6 +1,10 @@
 import { serve } from "inngest/next";
 import { inngest } from "../../../lib/inngest/client";
 import { processWebhookRecord } from "../../../lib/inngest/functions/process-webhook-record";
+import {
+  pollTrigifySignals,
+  processSignalBinding,
+} from "../../../lib/inngest/functions/poll-trigify-signals";
 import { sendTrialReminders } from "../../../lib/inngest/functions/send-trial-reminders";
 
 /**
@@ -13,5 +17,10 @@ export const runtime = "nodejs";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [processWebhookRecord, sendTrialReminders],
+  functions: [
+    processWebhookRecord,
+    sendTrialReminders,
+    pollTrigifySignals,
+    processSignalBinding,
+  ],
 });

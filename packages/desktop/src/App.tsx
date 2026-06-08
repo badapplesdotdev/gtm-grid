@@ -1,17 +1,17 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
-import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo } from "./api";
+import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource } from "./api";
 import AgentPanel from "./AgentPanel";
 import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import CellDetails, { extractCode } from "./CellDetails";
-import { ExtensionPanel, AiProviderPanel, ExtensionsBrowse, BrandIcon } from "./Panels";
+import { ExtensionPanel, AiProviderPanel, ExtensionsBrowse, SkillsBrowse, SkillPanel, BrandIcon } from "./Panels";
 import { AddColumnPopover, FunctionsModal } from "./AddColumn";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { AccountBar, PlanBillingModal } from "./cloud/AccountBar";
 import { PendingInvites } from "./cloud/PendingInvites";
 import { WorkspaceSettings } from "./cloud/WorkspaceSettings";
 import { OnboardingFlow } from "./cloud/onboarding/OnboardingFlow";
-import { cloudEnabled, queryClient, syncWorkspacePlan } from "./cloud/client";
+import { cloudEnabled, queryClient, syncWorkspacePlan, apiClient } from "./cloud/client";
 import { CloudGrid } from "./cloud/CloudGrid";
 import { useMe, useActiveWorkspace, useAuthState } from "./cloud/auth";
 import {
@@ -33,6 +33,7 @@ import {
   type CloudProject,
 } from "./cloud/useCloudGrid";
 import { ImportCsvModal } from "./ImportCsvModal";
+import { SignalsModal, type SignalsCloud } from "./SignalsModal";
 import type { ImportWriter } from "./csvImport";
 import type { Id } from "./cloud/ids";
 import "./styles.css";
@@ -42,6 +43,8 @@ type View =
   | { kind: "table" }
   | { kind: "extensions" }
   | { kind: "extension"; id: string }
+  | { kind: "skills" }
+  | { kind: "skill"; id: string }
   | { kind: "ai"; id: string };
 
 // ─── Icons (inline SVG, no deps) ─────────────────────────
@@ -391,12 +394,14 @@ function NewTableChooser({
   onBlank,
   onCsv,
   onWebhook,
+  onSignals,
 }: {
   inCloud: boolean;
   onClose: () => void;
   onBlank: () => void;
   onCsv: () => void;
   onWebhook: () => void;
+  onSignals: () => void;
 }) {
   const Caret = (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
@@ -406,6 +411,9 @@ function NewTableChooser({
   );
   const WebhookIcon = (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17a4 4 0 0 1 3.6-3.98" /><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06" /><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8" /></svg>
+  );
+  const SignalIcon = (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 11a9 9 0 0 1 9 9" /><path d="M4 4a16 16 0 0 1 16 16" /><circle cx="5" cy="19" r="1" /></svg>
   );
   const LockIcon = (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
@@ -433,6 +441,14 @@ function NewTableChooser({
               <span className="acx-item-text">
                 <span className="acx-item-title">Import a CSV</span>
                 <span className="acx-item-sub">Drop a file; map columns; populate rows.</span>
+              </span>
+              <span className="acx-item-caret">{Caret}</span>
+            </button>
+            <button className="acx-item" onClick={() => { onSignals(); onClose(); }}>
+              <span className="acx-item-icon"><BrandIcon logo="https://www.google.com/s2/favicons?domain=trigify.io&sz=128" name="Trigify" size={18} /></span>
+              <span className="acx-item-text">
+                <span className="acx-item-title">From Social Signals</span>
+                <span className="acx-item-sub">Powered by Trigify — pulls social posts into rows (API key required).</span>
               </span>
               <span className="acx-item-caret">{Caret}</span>
             </button>
@@ -482,11 +498,13 @@ export default function App() {
   // Connectors / extensions / AI providers
   const [connectors, setConnectors] = useState<ConnectorInfo[]>([]);
   const [extensions, setExtensions] = useState<ExtensionInfo[]>([]);
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [aiProviders, setAiProviders] = useState<AiProviderInfo[]>([]);
   const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
   const [fnSectionOpen, setFnSectionOpen] = useState(false); // Functions section: collapsed by default
   const [aiSectionOpen, setAiSectionOpen] = useState(true);
   const [extSectionOpen, setExtSectionOpen] = useState(true);
+  const [skillsSectionOpen, setSkillsSectionOpen] = useState(false); // Skills section: collapsed by default
 
   // Which detail (table grid / extension / AI provider) the main area shows.
   const [view, setView] = useState<View>({ kind: "table" });
@@ -499,6 +517,9 @@ export default function App() {
   // The "New table" chooser (Blank / CSV / Webhook) replaces the old
   // straight-to-blank entry points.
   const [showNewTableChooser, setShowNewTableChooser] = useState(false);
+  const [showSignals, setShowSignals] = useState(false);
+  const [warmingTableId, setWarmingTableId] = useState<string | null>(null);
+  const warmTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Bumped to ask the CloudGrid to auto-open the webhook setup form (the chooser's
   // Webhook flow). A monotonic token so each request re-triggers cleanly.
   const [openWebhookToken, setOpenWebhookToken] = useState(0);
@@ -719,6 +740,37 @@ export default function App() {
       },
     };
   }, [cloudProject, createCloudTable, cloudAddColumn, cloudAddRowsWithCells]);
+  // Cloud "From Social Signals" adapter — loads sources via tRPC + creates the
+  // cloud table/columns/binding (the recurring poll runs in the Inngest worker).
+  const signalsCloud = useMemo<SignalsCloud | undefined>(() => {
+    if (!cloudProject || !apiClient) return undefined;
+    const client = apiClient;
+    const project = cloudProject;
+    return {
+      loadSources: async () => {
+        const src = await client.signals.sources.query();
+        const trigifyConnected = workspaceCreds?.connectedExtensionIds.has("trigify") ?? false;
+        return { trigifyConnected, sources: src.map((s) => ({ ...s, description: null })) as unknown as SignalSource[] };
+      },
+      create: async (args) => {
+        const tableId = await createCloudTable(project._id, args.name);
+        const columns: { key: string; columnId: string }[] = [];
+        for (const col of args.columns) {
+          const columnId = await cloudAddColumn(tableId as Id<"tables">, { name: col.name, type: "text" });
+          columns.push({ key: col.key, columnId: String(columnId) });
+        }
+        const r = await client.signals.createSignalBinding.mutate({
+          tableId: String(tableId),
+          sourceId: args.sourceId,
+          name: args.name,
+          config: args.config,
+          schedule: "daily",
+          columns,
+        });
+        return { tableId: String(tableId), added: (r as { added?: number })?.added ?? 0 };
+      },
+    };
+  }, [cloudProject, workspaceCreds, createCloudTable, cloudAddColumn]);
   // Cloud create (project/table) UX: a busy flag to disable the trigger while the
   // mutation is in flight, and a surfaced error so a failed create never hangs
   // silently. Both are cleared on the next attempt / success.
@@ -904,12 +956,13 @@ export default function App() {
     // it's reachable instead of giving up on the first failed check.
     const boot = async () => {
       try {
-        const [h, t, f, e, ai] = await Promise.all([
+        const [h, t, f, e, ai, sk] = await Promise.all([
           api.health(),
           api.tables(),
           api.functions(),
           api.extensions(),
           api.aiProviders(),
+          api.skills(),
         ]);
         if (cancelled) return;
         setHealthStatus("connected");
@@ -918,6 +971,7 @@ export default function App() {
         setConnectors(f);
         setExtensions(e);
         setAiProviders(ai);
+        setSkills(sk);
         setSelectedTableId((cur) => cur ?? (t.length > 0 ? t[0].id : null));
       } catch {
         if (cancelled) return;
@@ -950,6 +1004,30 @@ export default function App() {
     if (selectedTableId) loadTable(selectedTableId);
     else setTableData(null);
   }, [selectedTableId, loadTable]);
+
+  // A freshly-created social-signal table populates asynchronously (Trigify
+  // scrapes results over ~10-60s). Poll until rows land, showing a skeleton.
+  const startWarming = useCallback((tableId: string) => {
+    setWarmingTableId(tableId);
+    if (warmTimerRef.current) clearInterval(warmTimerRef.current);
+    let ticks = 0;
+    warmTimerRef.current = setInterval(async () => {
+      ticks++;
+      try {
+        const data = await api.table(tableId);
+        if (data.rows.length > 0) {
+          setTableData((cur) => (cur && cur.id === tableId ? data : cur));
+          setWarmingTableId(null);
+          if (warmTimerRef.current) clearInterval(warmTimerRef.current);
+          return;
+        }
+      } catch { /* keep polling */ }
+      if (ticks >= 40) {
+        setWarmingTableId(null);
+        if (warmTimerRef.current) clearInterval(warmTimerRef.current);
+      }
+    }, 8000);
+  }, []);
 
   // Live refresh when the in-app agent mutates the grid (Phase D).
   const refreshAll = useCallback(async () => {
@@ -1572,14 +1650,14 @@ export default function App() {
             )))}
           </div>
 
-          {/* Extensions section — collapsible, with Browse all in the header */}
+          {/* Tools section — collapsible, with Browse all in the header */}
           <div className="sidebar-section">
             <div className="sidebar-section-label clickable" onClick={() => setExtSectionOpen(o => !o)}>
               <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span className={`connector-group-toggle${extSectionOpen ? " open" : ""}`}>
                   <Icon.ChevronRight />
                 </span>
-                Extensions
+                Tools
               </span>
               <button
                 className={`section-link${view.kind === "extensions" ? " active" : ""}`}
@@ -1643,6 +1721,40 @@ export default function App() {
                     ))}
                   </div>
                 )}
+              </div>
+            )))}
+          </div>
+
+          {/* Skills section — per-tool agent playbooks + custom skills */}
+          <div className="sidebar-section">
+            <div className="sidebar-section-label clickable" onClick={() => setSkillsSectionOpen(o => !o)}>
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span className={`connector-group-toggle${skillsSectionOpen ? " open" : ""}`}>
+                  <Icon.ChevronRight />
+                </span>
+                Skills
+              </span>
+              <button
+                className={`section-link${view.kind === "skills" ? " active" : ""}`}
+                onClick={e => { e.stopPropagation(); setView({ kind: "skills" }); }}
+              >
+                Browse all
+              </button>
+            </div>
+            {skillsSectionOpen && (skills.length === 0 ? (
+              <div className="skeleton-row">
+                <div className="shimmer skeleton-bar" style={{ width: "70%", height: 13 }} />
+              </div>
+            ) : skills.map(s => (
+              <div
+                key={s.id}
+                className={`ext-item clickable${view.kind === "skill" && view.id === s.id ? " active" : ""}`}
+                onClick={() => setView({ kind: "skill", id: s.id })}
+              >
+                <BrandIcon logo={s.logo} name={s.name} size={16} />
+                <span className="ext-item-name">{s.name}</span>
+                {s.source === "tool" && s.connected && <span className="ext-badge connected">on</span>}
+                {s.source === "custom" && <span className="ext-badge no-key">custom</span>}
               </div>
             )))}
           </div>
@@ -1765,6 +1877,26 @@ export default function App() {
           return p ? <AiProviderPanel provider={p} onConnected={refreshConnections} workspaceCreds={workspaceCreds} /> : null;
         })()}
 
+        {/* Skills gallery + detail panels. Like the extension/AI panels, these
+            render in BOTH local and cloud workspaces (the Skills sidebar is shown
+            in both) and take precedence over CloudGrid, which is gated to the
+            "table" view — otherwise selecting a skill in a cloud workspace would
+            hide the grid and render nothing (a blank dead-end). */}
+        {!importMode && view.kind === "skills" && (
+          <SkillsBrowse
+            skills={skills}
+            onOpen={(id) => setView({ kind: "skill", id })}
+            onChanged={() => api.skills().then(setSkills).catch(() => {})}
+          />
+        )}
+        {!importMode && view.kind === "skill" && (
+          <SkillPanel
+            id={view.id}
+            onBack={() => setView({ kind: "skills" })}
+            onChanged={() => api.skills().then(setSkills).catch(() => {})}
+          />
+        )}
+
         {!importMode && !inCloud && view.kind === "table" && <>
         {/* Toolbar */}
         <div className="toolbar">
@@ -1849,6 +1981,12 @@ export default function App() {
             <button className="btn btn-primary" onClick={openAddCol}>
               <Icon.Plus /> Add first column
             </button>
+          </div>
+        ) : tableData && tableData.rows.length === 0 && warmingTableId === tableData.id ? (
+          <div className="empty-state">
+            <div className="cell-spinner" style={{ width: 22, height: 22, borderWidth: 2, marginBottom: 14 }} />
+            <div className="empty-title">Pulling results from Trigify…</div>
+            <p className="empty-sub">Trigify is scraping your signal — first results can take a few minutes. They'll appear here automatically, and keep updating on your schedule.</p>
           </div>
         ) : tableData ? (
           <div className="grid-wrap">
@@ -2119,6 +2257,29 @@ export default function App() {
           }}
           onCsv={() => setImportMode(inCloud ? "cloud" : "local")}
           onWebhook={() => { void onChooseWebhook(); }}
+          onSignals={() => setShowSignals(true)}
+        />
+      )}
+
+      {showSignals && (
+        <SignalsModal
+          cloud={inCloud ? signalsCloud : undefined}
+          onClose={() => setShowSignals(false)}
+          onConnectTrigify={() => { setShowSignals(false); setView({ kind: "extension", id: "trigify" }); }}
+          onCreated={(tableId, added) => {
+            setShowSignals(false);
+            if (inCloud) {
+              setCloudTableId(tableId as Id<"tables">);
+              setView({ kind: "table" });
+            } else {
+              api.tables().then((t) => {
+                setTables(t);
+                setSelectedTableId(tableId);
+                setView({ kind: "table" });
+              }).catch(() => {});
+              if (!added) startWarming(tableId);
+            }
+          }}
         />
       )}
 

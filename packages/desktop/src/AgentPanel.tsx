@@ -23,6 +23,22 @@ interface Message {
 }
 
 const AGENT_LABEL: Record<AgentKind, string> = { claude: "Claude Code", codex: "Codex" };
+
+/** Selectable models per agent ("" = the CLI's default for your plan). */
+const MODEL_OPTIONS: Record<AgentKind, { value: string; label: string }[]> = {
+  claude: [
+    { value: "", label: "Default" },
+    { value: "opus", label: "Opus" },
+    { value: "sonnet", label: "Sonnet" },
+    { value: "haiku", label: "Haiku" },
+  ],
+  codex: [
+    { value: "", label: "Default" },
+    { value: "gpt-5-codex", label: "GPT-5 Codex" },
+    { value: "gpt-5", label: "GPT-5" },
+    { value: "o3", label: "o3" },
+  ],
+};
 const AGENT_SHORT: Record<AgentKind, string> = { claude: "Claude", codex: "Codex" };
 
 const PROMPTS = [
@@ -119,7 +135,7 @@ function renderInline(text: string, keyBase: string): ReactNode[] {
   return nodes;
 }
 
-function Markdown({ text }: { text: string }): ReactNode {
+export function Markdown({ text }: { text: string }): ReactNode {
   const out: ReactNode[] = [];
   const parts = text.split(/```/);
   parts.forEach((part, pi) => {
@@ -225,6 +241,8 @@ export default function AgentPanel({
   activeTable: { name: string; columns: string[] } | null;
 }) {
   const [agent, setAgent] = useState<AgentKind>("claude");
+  // Which model each agent's CLI runs with ("" = the plan's default).
+  const [models, setModels] = useState<Record<AgentKind, string>>({ claude: "", codex: "" });
   const [status, setStatus] = useState<{ claude?: AgentStatus; codex?: AgentStatus }>({});
   const [threads, setThreads] = useState<Record<AgentKind, Message[]>>({ claude: [], codex: [] });
   const [input, setInput] = useState("");
@@ -287,6 +305,7 @@ export default function AgentPanel({
         body: JSON.stringify({
           agent,
           message: text,
+          model: models[agent] || undefined,
           sessionId: sessionRef.current[agent],
           context: activeTable ? { tableName: activeTable.name, columns: activeTable.columns } : undefined,
         }),
@@ -404,6 +423,21 @@ export default function AgentPanel({
         >
           <IconChevronsRight s={15} />
         </button>
+      </div>
+
+      {/* Model picker — which model the selected agent's CLI runs with. */}
+      <div className="agent-models">
+        <span className="agent-models-label">Model</span>
+        {MODEL_OPTIONS[agent].map((m) => (
+          <button
+            key={m.value || "default"}
+            className={`agent-model-chip ${models[agent] === m.value ? "active" : ""}`}
+            title={m.value ? `Run ${AGENT_LABEL[agent]} with ${m.label}` : `Use your ${AGENT_LABEL[agent]} plan's default model`}
+            onClick={() => setModels((p) => ({ ...p, [agent]: m.value }))}
+          >
+            {m.label}
+          </button>
+        ))}
       </div>
 
       {!ready ? (

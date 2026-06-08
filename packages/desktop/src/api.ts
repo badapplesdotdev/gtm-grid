@@ -111,12 +111,79 @@ export interface AiProviderInfo {
   viaEnv: boolean;
   connectedScopes: CredentialScope[];
 }
+export interface SkillInfo {
+  id: string;
+  name: string;
+  category: string;
+  description: string | null;
+  source: "tool" | "custom";
+  connected: boolean;
+  wordCount: number;
+  logo: string | null;
+  enabled: boolean;
+}
+export interface SkillDetail extends SkillInfo {
+  body: string;
+}
+export interface SignalColumn { key: string; name: string; }
+export interface SignalSource {
+  id: string;
+  label: string;
+  group: string;
+  kind: "search" | "profileEngagement";
+  description: string;
+  columns: SignalColumn[];
+  inputSchema: { type?: string; required?: string[]; properties?: Record<string, any> } | null;
+}
+export interface SignalSourcesResponse {
+  trigifyConnected: boolean;
+  sources: SignalSource[];
+}
+export interface SignalBinding {
+  id: string;
+  tableId: string;
+  provider: "trigify";
+  sourceId: string;
+  label: string;
+  kind: string;
+  searchId: string | null;
+  config: Record<string, unknown>;
+  schedule: "manual" | "hourly" | "daily" | "weekly";
+  columns: SignalColumn[];
+  lastSyncedAt: number | null;
+  lastError: string | null;
+  rowsPulled: number;
+  enabled: boolean;
+  createdAt: number;
+}
+export interface CreateSignalResult {
+  tableId?: string;
+  bindingId?: string;
+  searchId?: string | null;
+  added?: number;
+  error?: string | null;
+}
 
 export const api = {
   health: () => http<{ ok: boolean; project: string }>("/api/health"),
   functions: () => http<ConnectorInfo[]>("/api/functions"),
   extensions: () => http<ExtensionInfo[]>("/api/extensions"),
   extension: (id: string) => http<ExtensionDetail>(`/api/extensions/${id}`),
+  skills: () => http<SkillInfo[]>("/api/skills"),
+  skill: (id: string) => http<SkillDetail>(`/api/skills/${id}`),
+  saveSkill: (body: { id?: string; name: string; description?: string; body: string; enabled?: boolean }) =>
+    http<{ ok: boolean; id: string }>("/api/skills", { method: "POST", body: JSON.stringify(body) }),
+  toggleSkill: (id: string, enabled: boolean) =>
+    http<{ ok: boolean; enabled: boolean }>(`/api/skills/${id}/toggle`, { method: "POST", body: JSON.stringify({ enabled }) }),
+  deleteSkill: (id: string) => http<{ ok: boolean }>(`/api/skills/${id}`, { method: "DELETE" }),
+  signalSources: () => http<SignalSourcesResponse>("/api/signals/sources"),
+  signals: () => http<SignalBinding[]>("/api/signals"),
+  createSignal: (body: { sourceId: string; name: string; config: Record<string, unknown>; schedule: string }) =>
+    http<CreateSignalResult>("/api/signals", { method: "POST", body: JSON.stringify(body) }),
+  syncSignal: (id: string) => http<{ ok: boolean; added: number; error: string | null }>(`/api/signals/${id}/sync`, { method: "POST" }),
+  toggleSignal: (id: string, enabled: boolean) =>
+    http<{ ok: boolean; enabled: boolean }>(`/api/signals/${id}/toggle`, { method: "POST", body: JSON.stringify({ enabled }) }),
+  deleteSignal: (id: string) => http<{ ok: boolean }>(`/api/signals/${id}`, { method: "DELETE" }),
   aiProviders: () => http<AiProviderInfo[]>("/api/ai-providers"),
   connectAiProvider: (id: string, body: { apiKey: string; scope?: CredentialScope }) =>
     http<{ ok: boolean }>(`/api/ai-providers/${id}/connect`, { method: "POST", body: JSON.stringify(body) }),

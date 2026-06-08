@@ -26,6 +26,23 @@
       }
     },
     {
+      "id": "enrichByEmail",
+      "label": "Enrich Company by Email",
+      "description": "Enrich a company from a work email address (e.g. 'jane@stripe.com') — extracts the domain and returns the full company object (same shape as enrichByDomain). Use when you have an email but not the domain. 1 credit.",
+      "verb": "GET",
+      "path": "/companies/by-email",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["email"],
+        "properties": {
+          "email": { "type": "string", "description": "Work email address, e.g. 'jane@stripe.com'" },
+          "simplified": { "type": "boolean", "description": "Smaller payload" },
+          "refresh": { "type": "boolean", "description": "Force recrawl (+10 credits)" }
+        }
+      }
+    },
+    {
       "id": "searchByName",
       "label": "Find Company by Name",
       "description": "Look up a company by its name (e.g. 'Stripe'). Returns matching company object(s) — names aren't unique so multiple may return.",
@@ -37,9 +54,10 @@
         "required": ["name"],
         "properties": {
           "name": { "type": "string", "description": "Company name to search for" },
-          "exactMatch": { "type": "boolean", "description": "Require an exact name match (default true)" },
+          "exactWordsMatch": { "type": "boolean", "description": "Require all words to match exactly" },
           "countries": { "type": "string", "description": "Comma-separated country codes to filter, e.g. 'us,gb'" },
           "size": { "type": "integer", "description": "Max results 1-25 (default 1)" },
+          "page": { "type": "integer", "description": "Page number for pagination (default 1)" },
           "simplified": { "type": "boolean", "description": "Smaller payload" }
         }
       }
@@ -60,7 +78,123 @@
           "github": { "type": "string", "description": "GitHub org URL" },
           "instagram": { "type": "string", "description": "Instagram URL" },
           "youtube": { "type": "string", "description": "YouTube channel URL" },
+          "tiktok": { "type": "string", "description": "TikTok URL" },
+          "pinterest": { "type": "string", "description": "Pinterest URL" },
+          "wellfound": { "type": "string", "description": "Wellfound/AngelList URL" },
           "refresh": { "type": "boolean", "description": "Force recrawl (+10 credits)" }
+        }
+      }
+    },
+    {
+      "id": "searchCompanies",
+      "label": "Search Companies by Attributes",
+      "description": "Search the full company database with structured boolean conditions (industry, size, location, technology, revenue, etc.). Pass `query` as a JSON-encoded array of condition objects. Returns { companies[], meta, query }. 1 credit per company returned. Use for building target lists, not single-company lookups.",
+      "verb": "GET",
+      "path": "/companies",
+      "credits": 2,
+      "input": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "JSON-stringified+encoded array of condition objects (the segmentation filter). Build via promptToSegmentation if you have natural language." },
+          "search": { "type": "string", "description": "Free-text query on company name or domain" },
+          "searchFields": { "type": "string", "description": "Which fields the `search` term applies to" },
+          "size": { "type": "integer", "description": "Results per page, 1-100 (default 10)" },
+          "page": { "type": "integer", "description": "Page number (default 1)" },
+          "sortKey": { "type": "string", "description": "Single field to sort by" },
+          "sortOrder": { "type": "string", "description": "'asc' or 'desc'" },
+          "domainsToExclude": { "type": "string", "description": "Comma-separated domains to exclude" },
+          "linkedinToExclude": { "type": "string", "description": "Comma-separated LinkedIn URLs to exclude" },
+          "simplified": { "type": "boolean", "description": "Return preview data without full credit deduction" }
+        }
+      }
+    },
+    {
+      "id": "searchByPrompt",
+      "label": "Search Companies by Prompt",
+      "description": "Search companies with a natural-language prompt (e.g. 'B2B SaaS companies in Germany with 50-200 employees using Salesforce'). The API converts it to a segmentation filter and returns matching { companies[], meta }. Easier than building a `query` array by hand. 1 credit per company returned.",
+      "verb": "GET",
+      "path": "/companies/by-prompt",
+      "credits": 2,
+      "input": {
+        "type": "object",
+        "required": ["prompt"],
+        "properties": {
+          "prompt": { "type": "string", "description": "Natural-language description of the companies to find" },
+          "similarity": { "type": "number", "description": "Minimum similarity threshold for matches" },
+          "size": { "type": "integer", "description": "Results per page, 1-100 (default 10)" },
+          "page": { "type": "integer", "description": "Page number (default 1)" },
+          "listsToExclude": { "type": "string", "description": "Comma-separated list IDs whose companies to exclude" },
+          "simplified": { "type": "boolean", "description": "Preview data without full credit deduction" }
+        }
+      }
+    },
+    {
+      "id": "similarCompanies",
+      "label": "Find Similar Companies",
+      "description": "Given one or more seed domains, return companies similar to them (lookalike search). Pass `domains` comma-separated. Returns { companies[], meta }. 1 credit per company returned. Use to expand a target account list from known good-fit accounts.",
+      "verb": "GET",
+      "path": "/companies/similar",
+      "credits": 2,
+      "input": {
+        "type": "object",
+        "required": ["domains"],
+        "properties": {
+          "domains": { "type": "string", "description": "Comma-separated seed domains, e.g. 'stripe.com,adyen.com'" },
+          "size": { "type": "integer", "description": "Results per page, 1-100 (default 10)" },
+          "page": { "type": "integer", "description": "Page number (default 1)" },
+          "proximityExact": { "type": "number", "description": "Weight for exact-attribute proximity" },
+          "proximityTerm": { "type": "number", "description": "Weight for semantic/term proximity" },
+          "simplified": { "type": "boolean", "description": "Preview data without full credit deduction" }
+        }
+      }
+    },
+    {
+      "id": "countCompanies",
+      "label": "Count Companies Matching a Filter",
+      "description": "Return the total count of companies matching a segmentation `query` (and/or `search`) WITHOUT returning records — use to size a market/segment before paying to fetch. Returns { count }. Cheap (does not bill per-company).",
+      "verb": "GET",
+      "path": "/companies/count",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "JSON-stringified+encoded array of condition objects" },
+          "search": { "type": "string", "description": "Free-text query on name/domain" },
+          "searchFields": { "type": "string", "description": "Which fields the `search` term applies to" }
+        }
+      }
+    },
+    {
+      "id": "askCompany",
+      "label": "Ask a Question About a Company",
+      "description": "Ask a free-text question about a company (by domain) and get a structured AI answer (e.g. 'Does this company sell to enterprise?'). Define the output shape via `fields`. Returns { answer, meta }. Great for custom enrichment columns the standard datapoints don't cover. 1 credit.",
+      "verb": "POST",
+      "path": "/companies/{domain}/ask",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["domain", "question"],
+        "properties": {
+          "domain": { "type": "string", "description": "Company website domain, e.g. 'stripe.com'" },
+          "question": { "type": "string", "description": "The question to answer about the company" },
+          "fields": { "type": "array", "description": "Array of { key, type, description } objects defining the structured answer shape", "items": { "type": "object" } },
+          "model": { "type": "string", "description": "'large' (more detail) or 'small' (cheaper/faster)" },
+          "explain": { "type": "boolean", "description": "Include reasoning behind the answer" }
+        }
+      }
+    },
+    {
+      "id": "companyContext",
+      "label": "Fetch Company Context",
+      "description": "Get the full text context (crawled site content + profile) for a company by domain — the raw material the AI uses. Returns a large context blob. Useful to feed your own LLM column. 1 credit.",
+      "verb": "GET",
+      "path": "/companies/{domain}/context",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["domain"],
+        "properties": {
+          "domain": { "type": "string", "description": "Company website domain, e.g. 'stripe.com'" }
         }
       }
     },
@@ -75,9 +209,120 @@
         "type": "object",
         "required": ["domain"],
         "properties": {
-          "domain": { "type": "string", "description": "Company website domain, e.g. 'stripe.com'" }
+          "domain": { "type": "string", "description": "Company website domain, e.g. 'stripe.com'" },
+          "emailsCount": { "type": "integer", "description": "Number of example emails to base patterns on" },
+          "precision": { "type": "string", "description": "Pattern precision level" }
         }
       }
+    },
+    {
+      "id": "searchIndustries",
+      "label": "Search Industries",
+      "description": "Search the industry taxonomy by keyword. Returns { industries[] } with the canonical industry identifiers used in segmentation `query` filters. Use to resolve a human industry name to a valid filter value. Free/cheap.",
+      "verb": "GET",
+      "path": "/industries",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "properties": {
+          "search": { "type": "string", "description": "Industry keyword to search" },
+          "size": { "type": "integer", "description": "Results per page" },
+          "page": { "type": "integer", "description": "Page number" }
+        }
+      }
+    },
+    {
+      "id": "searchTechnologies",
+      "label": "Search Technologies",
+      "description": "Search the technology taxonomy by keyword (e.g. 'salesforce', 'react'). Returns { technologies[] } with canonical identifiers used in segmentation `query` filters (technographic targeting). Free/cheap.",
+      "verb": "GET",
+      "path": "/technologies",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "properties": {
+          "search": { "type": "string", "description": "Technology keyword to search" },
+          "size": { "type": "integer", "description": "Results per page" },
+          "page": { "type": "integer", "description": "Page number" }
+        }
+      }
+    },
+    {
+      "id": "searchCountries",
+      "label": "Search Countries",
+      "description": "Search/resolve countries for use in location segmentation filters. Returns { countries[] } with canonical codes. Free/cheap. (Sister endpoints exist for cities/states/counties/continents.)",
+      "verb": "GET",
+      "path": "/locations/countries",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "properties": {
+          "search": { "type": "string", "description": "Country name to search" },
+          "filters": { "type": "string", "description": "Additional filter conditions" },
+          "size": { "type": "integer", "description": "Results per page" },
+          "page": { "type": "integer", "description": "Page number" }
+        }
+      }
+    },
+    {
+      "id": "searchCities",
+      "label": "Search Cities",
+      "description": "Search/resolve cities for use in location segmentation filters. Returns { cities[] } with canonical identifiers. Free/cheap.",
+      "verb": "GET",
+      "path": "/locations/cities",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "properties": {
+          "search": { "type": "string", "description": "City name to search" },
+          "filters": { "type": "string", "description": "Additional filter conditions (e.g. restrict to a country)" },
+          "size": { "type": "integer", "description": "Results per page" },
+          "page": { "type": "integer", "description": "Page number" }
+        }
+      }
+    },
+    {
+      "id": "enrichJobTitles",
+      "label": "Enrich a Job Title",
+      "description": "Normalize/classify a raw job title (e.g. 'VP Sales EMEA') into seniority, department, and canonical role. Returns the structured job-title enrichment. 1 credit.",
+      "verb": "GET",
+      "path": "/job-titles/enrich",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "description": "Raw job title to enrich, e.g. 'VP of Sales'" }
+        }
+      }
+    },
+    {
+      "id": "promptToSegmentation",
+      "label": "Convert Prompt to Segmentation Filter",
+      "description": "Turn a natural-language description into the structured segmentation `query` array used by searchCompanies / countCompanies. Returns the filter object. Use this first when you only have a prose ICP, then feed the result into searchCompanies. 1 credit.",
+      "verb": "POST",
+      "path": "/prompts/segmentation",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["prompt"],
+        "properties": {
+          "prompt": { "type": "string", "description": "Natural-language ICP / target description" },
+          "context": { "type": "string", "description": "Extra context to guide the conversion" },
+          "model": { "type": "string", "description": "Model to use ('large' or 'small')" },
+          "listId": { "type": "string", "description": "Optional list to scope against" },
+          "force": { "type": "boolean", "description": "Force regeneration instead of using a cached result" }
+        }
+      }
+    },
+    {
+      "id": "checkUser",
+      "label": "Fetch Account / Credits",
+      "description": "Get the current API account info including remaining credit balance. Returns the user object. Free.",
+      "verb": "GET",
+      "path": "/user",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
     }
   ]
 }

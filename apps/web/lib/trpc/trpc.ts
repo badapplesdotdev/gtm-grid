@@ -68,6 +68,8 @@ function toTrpcError(tag: string | undefined, message: string): TRPCError {
     case "InvalidMappingError":
     case "InvalidConfigError":
     case "InvalidCellError":
+    // Social Signals domain: bad source id, missing Trigify key, Trigify API error.
+    case "SignalError":
       return new TRPCError({ code: "BAD_REQUEST", message });
     // Webhooks domain (W2): exceeding the cloud-actions cap is a forbidden op.
     case "CloudActionsLimitError":

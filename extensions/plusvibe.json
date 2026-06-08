@@ -9,9 +9,18 @@
   "auth": { "type": "apiKey", "header": "x-api-key", "secretKey": "apiKey" },
   "methods": [
     {
+      "id": "listWorkspaces",
+      "label": "List Workspaces",
+      "description": "Authenticate the API key and list the workspaces it can access. Returns { status, workspaces:[{ _id, name }] }. Use this first to resolve a workspace_id. No params besides the API key.",
+      "verb": "GET",
+      "path": "/authenticate",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
       "id": "listCampaigns",
       "label": "List Campaigns",
-      "description": "List campaigns in a workspace (newest first). Returns an array of campaigns. Requires workspace_id.",
+      "description": "List campaigns in a workspace (newest first). Returns an array of campaign objects (id, name, status, sequence steps, sent/opened/replied counts). Requires workspace_id.",
       "verb": "GET",
       "path": "/campaign/list-all",
       "credits": 0,
@@ -20,20 +29,86 @@
         "required": ["workspace_id"],
         "properties": {
           "workspace_id": { "type": "string", "description": "Workspace id (required on almost every call)" },
-          "status": { "type": "string", "description": "Filter by campaign status" },
-          "campaign_type": { "type": "string" },
-          "skip": { "type": "integer" },
-          "limit": { "type": "integer", "description": "Max 100" }
+          "campaign_id": { "type": "string", "description": "Filter by a single campaign id" },
+          "parent_camp_id": { "type": "string", "description": "Filter by parent campaign id" },
+          "status": { "type": "string", "description": "ACTIVE | PAUSED | COMPLETED | ARCHIVED" },
+          "campaign_type": { "type": "string", "description": "all | parent | subseq" },
+          "skip": { "type": "integer", "description": "Records to skip (default 0)" },
+          "limit": { "type": "integer", "description": "Max records (default 10, max 100)" }
+        }
+      }
+    },
+    {
+      "id": "createCampaign",
+      "label": "Create Campaign",
+      "description": "Create a new empty campaign. Returns { status, _id } where _id is the new campaign id. Requires workspace_id + camp_name.",
+      "verb": "POST",
+      "path": "/campaign/add/campaign",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id", "camp_name"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "camp_name": { "type": "string", "description": "Campaign name" }
+        }
+      }
+    },
+    {
+      "id": "getCampaignStatus",
+      "label": "Get Campaign Status",
+      "description": "Get the run status of a single campaign. Returns { campaign_id, status } (e.g. ACTIVE, PAUSED). Requires workspace_id + campaign_id.",
+      "verb": "GET",
+      "path": "/campaign/get/status",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id", "campaign_id"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "campaign_id": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "activateCampaign",
+      "label": "Activate Campaign",
+      "description": "Launch/activate (start sending) a campaign. Returns { status: 'success' }. Requires workspace_id + campaign_id in the body.",
+      "verb": "POST",
+      "path": "/campaign/launch",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id", "campaign_id"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "campaign_id": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "pauseCampaign",
+      "label": "Pause Campaign",
+      "description": "Pause a running campaign (stops sending). Returns { status: 'success' }. Requires workspace_id + campaign_id in the body.",
+      "verb": "POST",
+      "path": "/campaign/pause",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id", "campaign_id"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "campaign_id": { "type": "string" }
         }
       }
     },
     {
       "id": "addLeads",
       "label": "Add Leads to Campaign",
-      "description": "Add leads to a campaign. `leads` is an array; each lead supports email, first_name, last_name, company_name, company_website, linkedin_person_url, phone_number, custom_variables. Requires workspace_id + campaign_id. Returns the add result.",
+      "description": "Add leads to a campaign. `leads` is an array; each lead supports email, first_name, last_name, notes, address_line, city, country, country_code, phone_number, company_name, company_website, linkedin_person_url, linkedin_company_url, custom_variables. Returns { status, leads_uploaded, duplicate_email_count, already_in_campaign, invalid_email_count, skipped, remaining_in_plan }. Requires workspace_id + campaign_id + leads.",
       "verb": "POST",
       "path": "/lead/add",
-      "credits": 0,
+      "credits": 1,
       "input": {
         "type": "object",
         "required": ["workspace_id", "campaign_id", "leads"],
@@ -42,16 +117,40 @@
           "campaign_id": { "type": "string" },
           "leads": {
             "type": "array",
-            "description": "Array of leads. Each: { email, first_name, last_name, company_name, company_website, linkedin_person_url, phone_number, custom_variables }",
+            "description": "Array of leads. Each: { email, first_name, last_name, notes, address_line, city, country, country_code, phone_number, company_name, company_website, linkedin_person_url, linkedin_company_url, custom_variables }",
             "items": { "type": "object" }
-          }
+          },
+          "skip_if_in_workspace": { "type": "boolean", "description": "Skip leads already present anywhere in the workspace" },
+          "skip_lead_in_active_pause_camp": { "type": "boolean", "description": "Skip leads already in an active or paused campaign" },
+          "skip_lead_for_active_only_camp": { "type": "boolean", "description": "Skip leads already in an active campaign" },
+          "resume_camp_if_completed": { "type": "boolean" },
+          "is_overwrite": { "type": "boolean", "description": "Overwrite existing lead data for matching emails" }
+        }
+      }
+    },
+    {
+      "id": "getLead",
+      "label": "Get / Search Lead",
+      "description": "Look up a single lead by email (optionally scoped to a campaign). Returns the lead object: { id, campaign, status, contact, email_opened, email_replied, lead_data{...}, campaign_name }. Requires workspace_id + email.",
+      "verb": "GET",
+      "path": "/lead/get",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id", "email"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "email": { "type": "string", "description": "Lead's email address" },
+          "campaign_id": { "type": "string", "description": "Omit to search all campaigns" },
+          "skip": { "type": "integer", "description": "Pagination offset (min 0)" },
+          "limit": { "type": "integer", "description": "Results per page (1-100)" }
         }
       }
     },
     {
       "id": "workspaceLeads",
       "label": "List Workspace Leads",
-      "description": "List/search leads in a workspace. Filter by campaign_id, status, email, first_name, last_name. Returns paginated leads. Requires workspace_id.",
+      "description": "List/search leads across a workspace. Filter by campaign_id, status, label, email, first_name, last_name. Returns paginated lead objects. Requires workspace_id.",
       "verb": "GET",
       "path": "/lead/workspace-leads",
       "credits": 0,
@@ -61,28 +160,313 @@
         "properties": {
           "workspace_id": { "type": "string" },
           "campaign_id": { "type": "string" },
-          "status": { "type": "string" },
+          "status": { "type": "string", "description": "NOT_CONTACTED | CONTACTED | COMPLETED | REPLIED | BOUNCED | UNSUBSCRIBED | RESCHEDULED | SKIPPED | PENDING" },
+          "label": { "type": "string", "description": "INTERESTED | NOT_INTERESTED | custom label" },
           "email": { "type": "string" },
           "first_name": { "type": "string" },
           "last_name": { "type": "string" },
           "page": { "type": "integer" },
-          "limit": { "type": "integer" }
+          "limit": { "type": "integer" },
+          "sort": { "type": "string", "description": "Field to sort by" },
+          "direction": { "type": "string", "description": "asc | desc" }
         }
       }
     },
     {
-      "id": "campaignStats",
-      "label": "Campaign Stats",
-      "description": "Get analytics for a campaign. Requires workspace_id (and campaign_id for a single campaign). Returns sent/open/reply/bounce stats.",
+      "id": "updateLeadData",
+      "label": "Update Lead Variables / Label",
+      "description": "Update or add custom variables (and label) on a lead, keyed by email. `variables` is a key-value object merged into the lead's data. Returns { status: 'success' }. Requires workspace_id + email + variables.",
+      "verb": "POST",
+      "path": "/lead/data/update",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id", "email", "variables"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "email": { "type": "string", "description": "Lead's email address" },
+          "variables": { "type": "object", "description": "Key-value custom fields to set/add (may include label)" },
+          "campaign_id": { "type": "string", "description": "Optional campaign scope" }
+        }
+      }
+    },
+    {
+      "id": "updateLeadStatus",
+      "label": "Update Lead Status",
+      "description": "Mark a lead as COMPLETED in a campaign (only COMPLETED is accepted). Returns { status: 'success' }. Requires workspace_id + campaign_id + email + new_status='COMPLETED'.",
+      "verb": "POST",
+      "path": "/lead/update/status",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id", "campaign_id", "email", "new_status"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "campaign_id": { "type": "string" },
+          "email": { "type": "string" },
+          "new_status": { "type": "string", "description": "Must be 'COMPLETED'" }
+        }
+      }
+    },
+    {
+      "id": "deleteLeads",
+      "label": "Delete Leads",
+      "description": "Remove leads from a campaign (or workspace) by email. `delete_list` is an array of emails. Returns { status: 'success' }. Requires workspace_id + delete_list.",
+      "verb": "POST",
+      "path": "/lead/delete",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id", "delete_list"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "delete_list": { "type": "array", "description": "Email addresses to remove (min 1)", "items": { "type": "string" } },
+          "campaign_id": { "type": "string" },
+          "delete_all_from_company": { "type": "boolean", "description": "Remove all leads sharing the same domain" },
+          "delete_parent_lead": { "type": "boolean", "description": "Default true; set false for subsequence leads" }
+        }
+      }
+    },
+    {
+      "id": "leadStatusCounts",
+      "label": "Lead Counts by Status",
+      "description": "Get lead counts grouped by status for a workspace (optionally one campaign). Returns an array of { status, count }. Requires workspace_id.",
       "verb": "GET",
-      "path": "/campaign/stats",
+      "path": "/lead/count/lead-status",
       "credits": 0,
       "input": {
         "type": "object",
         "required": ["workspace_id"],
         "properties": {
           "workspace_id": { "type": "string" },
+          "campaign_id": { "type": "string", "description": "Optional campaign filter" }
+        }
+      }
+    },
+    {
+      "id": "campaignSummary",
+      "label": "Campaign Summary",
+      "description": "Lifetime summary for one campaign. Returns { campaign_id, campaign_name, completed, contacted, leads_who_read, leads_who_replied, bounced, unsubscribed }. Requires workspace_id + campaign_id.",
+      "verb": "GET",
+      "path": "/analytics/campaign/summary",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id", "campaign_id"],
+        "properties": {
+          "workspace_id": { "type": "string" },
           "campaign_id": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "campaignStats",
+      "label": "Campaign Stats",
+      "description": "Per-campaign analytics over a date range. Omit campaign_id for all campaigns. Returns objects with lead_count, sent_count, unique_opened_count, replied_count, bounced_count, unsubscribed_count, positive_reply_count, opportunity_val. Requires workspace_id + start_date.",
+      "verb": "GET",
+      "path": "/analytics/campaign/stats",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id", "start_date"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "campaign_id": { "type": "string", "description": "Omit for all campaigns" },
+          "start_date": { "type": "string", "description": "Period start, e.g. 2024-01-01" },
+          "end_date": { "type": "string", "description": "Period end, e.g. 2024-03-14" }
+        }
+      }
+    },
+    {
+      "id": "allCampaignsStats",
+      "label": "All Campaigns Statistics",
+      "description": "Aggregated totals across every campaign in a workspace over a date range. Returns { lead_count, completed_lead_count, sent_count, replied_count, positive_reply_count, bounced_count, unsubscribed_count, unique_opened_count, opportunity_val, lead_contacted_count }. Requires workspace_id + start_date + end_date.",
+      "verb": "GET",
+      "path": "/campaign/stats/all",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id", "start_date", "end_date"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "start_date": { "type": "string", "description": "e.g. 2024-01-01" },
+          "end_date": { "type": "string", "description": "e.g. 2024-03-14" }
+        }
+      }
+    },
+    {
+      "id": "listEmailAccounts",
+      "label": "List Email Accounts",
+      "description": "List sending email accounts in a workspace. Returns { accounts:[{ id, email, status, warmup status, provider, daily limits, health score, reply rate }] }. Requires workspace_id.",
+      "verb": "GET",
+      "path": "/account/list",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "email": { "type": "string", "description": "Filter by email address" },
+          "tags": { "type": "string", "description": "Comma-separated tag ids" },
+          "skip": { "type": "integer" },
+          "limit": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "checkAccountVitals",
+      "label": "Check Account Vitals (SPF/DKIM/DMARC)",
+      "description": "Validate SPF, DKIM and DMARC for sending domains. `accounts` is an array of email addresses. Returns { status, success_list:[{ domain, allPass, spf, dkim, dmarc }], failure_list }. Requires workspace_id + accounts.",
+      "verb": "POST",
+      "path": "/account/test/vitals",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id", "accounts"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "accounts": { "type": "array", "description": "Email addresses to test", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "id": "uniboxEmails",
+      "label": "Get Unibox Emails",
+      "description": "List inbox/sent emails (the unified inbox). Filter by lead email, campaign_id, email_type, label. Returns { page_trail, data:[{ id, message_id, subject, from, to, timestamp, preview, body, labels, thread }] }. Requires workspace_id. Use page_trail to paginate.",
+      "verb": "GET",
+      "path": "/unibox/emails",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "lead": { "type": "string", "description": "Filter to a specific lead email" },
+          "campaign_id": { "type": "string" },
+          "email_type": { "type": "string", "description": "all | received | sent" },
+          "label": { "type": "string", "description": "Label in CAPS_WITH_UNDERSCORES" },
+          "preview_only": { "type": "boolean", "description": "Return only the content preview" },
+          "page_trail": { "type": "string", "description": "Pagination token from a previous response" }
+        }
+      }
+    },
+    {
+      "id": "unreadCount",
+      "label": "Unread Email Count",
+      "description": "Count of unread emails in the workspace inbox. Returns { count }. Requires workspace_id.",
+      "verb": "GET",
+      "path": "/unibox/emails/count/unread",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id"],
+        "properties": { "workspace_id": { "type": "string" } }
+      }
+    },
+    {
+      "id": "replyEmail",
+      "label": "Reply to Email",
+      "description": "Send a reply to an existing thread. Body accepts HTML. Returns { status: 'success', id }. Requires workspace_id (query) + reply_to_id + subject + from + to + body. Include 'Re: ' in subject to keep the thread.",
+      "verb": "POST",
+      "path": "/unibox/emails/reply",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id", "reply_to_id", "subject", "from", "to", "body"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "reply_to_id": { "type": "string", "description": "Email id being replied to" },
+          "subject": { "type": "string" },
+          "from": { "type": "string", "description": "Sender address (must be a connected account)" },
+          "to": { "type": "string", "description": "Recipient address" },
+          "body": { "type": "string", "description": "HTML or text body" },
+          "cc": { "type": "string" },
+          "bcc": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "listBlocklist",
+      "label": "List Blocklist",
+      "description": "List blocklisted emails/domains in a workspace. Returns entries [{ _id, value, created_by_label, created_at }]. Requires workspace_id.",
+      "verb": "GET",
+      "path": "/blocklist/list",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "skip": { "type": "integer", "description": "Default 0" },
+          "limit": { "type": "integer", "description": "Default 100" }
+        }
+      }
+    },
+    {
+      "id": "addBlocklist",
+      "label": "Add to Blocklist",
+      "description": "Add emails or domains to the suppression blocklist. `entries` is an array of strings. Returns { status, entries_added, already_in_blocklist }. Requires workspace_id + entries.",
+      "verb": "POST",
+      "path": "/blocklist/add/entries",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id", "entries"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "entries": { "type": "array", "description": "Emails or domains to blocklist", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "id": "listTags",
+      "label": "List Tags",
+      "description": "List tags in a workspace. Returns an array of { _id, name, color, description, status }. Use tag ids to filter email accounts. Requires workspace_id.",
+      "verb": "GET",
+      "path": "/tags/list",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "skip": { "type": "integer" },
+          "limit": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "listWebhooks",
+      "label": "List Webhooks",
+      "description": "List webhooks configured in a workspace. Returns { hooks:[{ _id, url, name, camp_ids, event_types, status }] }. Requires workspace_id.",
+      "verb": "GET",
+      "path": "/hook/list",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id"],
+        "properties": { "workspace_id": { "type": "string" } }
+      }
+    },
+    {
+      "id": "addWebhook",
+      "label": "Add Webhook",
+      "description": "Register a webhook for campaign events (e.g. LEAD_MARKED_AS_INTERESTED, ALL_EMAIL_REPLIES). camp_ids can be ['ALL']. Returns { status, _id }. Requires workspace_id + name + url + camp_ids + event_types.",
+      "verb": "POST",
+      "path": "/hook/add",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["workspace_id", "name", "url", "camp_ids", "event_types"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "name": { "type": "string" },
+          "url": { "type": "string", "description": "Destination endpoint for events" },
+          "camp_ids": { "type": "array", "description": "Campaign ids, or ['ALL']", "items": { "type": "string" } },
+          "event_types": { "type": "array", "description": "e.g. ALL_EMAIL_REPLIES, LEAD_MARKED_AS_INTERESTED", "items": { "type": "string" } },
+          "secret": { "type": "string", "description": "Signing secret for payload verification" },
+          "ignore_ooo": { "type": "integer", "description": "1 to exclude out-of-office replies" },
+          "ignore_automatic": { "type": "integer", "description": "1 to exclude automatic replies" }
         }
       }
     }

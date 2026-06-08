@@ -3,7 +3,8 @@
   "name": "Trigify",
   "version": "2.0.0",
   "category": "social",
-  "description": "Social listening + engagement intelligence — monitor profiles, companies, posts and topics across LinkedIn, X/Twitter, Reddit, YouTube, TikTok, Substack, Bluesky, GitHub, Hacker News, Daily.dev, Podcasts and News.",
+  "description": "Social listening + engagement intelligence — monitor profiles, companies, posts and topics across LinkedIn, X/Twitter, Reddit, YouTube, Substack, Bluesky, GitHub, Hacker News, Daily.dev, Podcasts and News.",
+  "featured": true,
   "baseUrl": "https://api.trigify.io",
   "logo": "https://www.google.com/s2/favicons?domain=trigify.io&sz=128",
   "auth": { "type": "apiKey", "header": "x-api-key", "secretKey": "apiKey" },
@@ -160,29 +161,6 @@
         "page": { "type": "integer" },
         "page_size": { "type": "integer", "description": "10, 25 or 50" },
         "includes": { "type": "array", "items": { "type": "string" }, "description": "Fields to return: first_name, last_name, linkedin_url, avatar, company, job_title, post.text, etc." }
-      }}
-    },
-    {
-      "id": "discoverCreators",
-      "label": "Discover Creators",
-      "description": "Find LinkedIn creators who POST about specific topics (vs. engage). Filter by job titles, firmographics, follower count, location. Returns prospect data + posting cadence + avg engagement.",
-      "verb": "POST", "path": "/v1/discover/creators", "credits": 1,
-      "input": { "type": "object", "required": ["posted_about_keywords", "posted_about_days"], "properties": {
-        "posted_about_keywords": { "type": "array", "items": { "type": "string" } },
-        "posted_about_days": { "type": "number", "description": "1-30" },
-        "posted_about_topic_strength": { "type": "number", "description": "0-5 posting frequency" },
-        "job_titles": { "type": "array", "items": { "type": "string" } },
-        "job_titles_excludes": { "type": "array", "items": { "type": "string" } },
-        "company_domain_includes": { "type": "array", "items": { "type": "string" } },
-        "company_domain_excludes": { "type": "array", "items": { "type": "string" } },
-        "location_country": { "type": "array", "items": { "type": "string" } },
-        "location_excludes": { "type": "array", "items": { "type": "string" } },
-        "industries": { "type": "array", "items": { "type": "string" } },
-        "industries_excludes": { "type": "array", "items": { "type": "string" } },
-        "company_sizes": { "type": "array", "items": { "type": "string" } },
-        "followers": { "type": "array", "items": { "type": "string" } },
-        "page": { "type": "number" },
-        "page_size": { "type": "integer", "description": "10, 25 or 50" }
       }}
     },
     {
@@ -454,23 +432,6 @@
       }}
     },
     {
-      "id": "createTikTokVideosSearch",
-      "label": "Create TikTok Videos Search",
-      "description": "Monitor TikTok videos. TikTok has no boolean logic — each keyword runs as an independent search and results are merged. past-year is NOT supported. Costs 1 credit.",
-      "verb": "POST", "path": "/v1/searches/tiktok/videos", "credits": 1,
-      "input": { "type": "object", "required": ["name", "keywords"], "properties": {
-        "name": { "type": "string" },
-        "keywords": { "type": "array", "items": { "type": "string" }, "description": "1-10 keywords" },
-        "keywords_not": { "type": "array", "items": { "type": "string" } },
-        "time_frame": { "type": "string", "description": "past-24h | past-week | past-month | past-6-months | all-time (no past-year)" },
-        "max_results": { "type": "number" },
-        "frequency": { "type": "string" },
-        "country": { "type": "string", "description": "ISO 3166-1 alpha-2" },
-        "match_exactly": { "type": "boolean" },
-        "sorting": { "type": "string", "description": "0 (relevance) | 1 (most liked) | 2 (most recent)" }
-      }}
-    },
-    {
       "id": "createGitHubIssuesSearch",
       "label": "Create GitHub Issues Search",
       "description": "Monitor GitHub issues by keywords. Optionally scope to specific repos (owner/repo format). Costs 1 credit.",
@@ -567,18 +528,6 @@
         "max_results": { "type": "number" },
         "frequency": { "type": "string" },
         "time_frame": { "type": "string" }
-      }}
-    },
-    {
-      "id": "createTikTokProfileSearch",
-      "label": "Monitor TikTok Profile",
-      "description": "Monitor new videos from a TikTok creator. Accepts URL (https://tiktok.com/@handle) or @handle. Costs 1 credit.",
-      "verb": "POST", "path": "/v1/searches/tiktok/profile", "credits": 1,
-      "input": { "type": "object", "required": ["name", "profile_url"], "properties": {
-        "name": { "type": "string" },
-        "profile_url": { "type": "string" },
-        "max_results": { "type": "number" },
-        "frequency": { "type": "string" }
       }}
     },
     {
