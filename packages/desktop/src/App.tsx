@@ -23,7 +23,7 @@ import {
   usePendingInviteToken,
 } from "./cloud/pendingInvite";
 import { fireConfetti } from "./cloud/confetti";
-import { openExternal, useUpdateCheck } from "./useUpdateCheck";
+import { useUpdateCheck } from "./useUpdateCheck";
 import { useWorkspaceCredentials } from "./cloud/useWorkspaceCredentials";
 import {
   useCloudProjects,
@@ -540,10 +540,23 @@ export default function App() {
   // When present + signed out it FORCES the auth flow even in local mode, so an
   // invitee is always guided to sign up / sign in and then auto-enrolled.
   const pendingInviteToken = usePendingInviteToken();
-  // In-app "update available" check (Tauri only): a newer GitHub release than the
-  // running app surfaces a top banner linking to the download page.
+  // In-app auto-update (Tauri only): a newer SIGNED release surfaces a top banner
+  // that downloads + installs it and relaunches, all in-app.
   const update = useUpdateCheck();
   const [updateDismissed, setUpdateDismissed] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const runUpdate = useCallback(async () => {
+    if (!update || updating) return;
+    setUpdating(true);
+    setUpdateError(null);
+    try {
+      await update.install(); // downloads, installs, then relaunches the app
+    } catch {
+      setUpdateError("Update failed — please try again.");
+      setUpdating(false);
+    }
+  }, [update, updating]);
   // Local-first: when cloud is configured but the user hasn't signed in, the
   // onboarding offers "Continue locally" — which sets this persisted flag so the
   // app boots straight into local mode (no cloud features) on future launches.
@@ -1312,19 +1325,23 @@ export default function App() {
         <div className="update-banner" role="status">
           <span className="update-banner__text">
             GTM Grid <strong>v{update.version}</strong> is available.
+            {updateError ? ` ${updateError}` : ""}
           </span>
           <button
             className="btn btn--primary btn-sm"
-            onClick={() => void openExternal(update.url)}
+            disabled={updating}
+            onClick={() => void runUpdate()}
           >
-            Update
+            {updating ? "Updating…" : "Update & restart"}
           </button>
-          <button
-            className="btn btn-ghost btn-sm"
-            onClick={() => setUpdateDismissed(true)}
-          >
-            Later
-          </button>
+          {!updating && (
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => setUpdateDismissed(true)}
+            >
+              Later
+            </button>
+          )}
         </div>
       )}
 
