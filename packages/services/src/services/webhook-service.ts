@@ -29,6 +29,7 @@ import {
   type UnauthenticatedError,
 } from "@gtmgrid/cloud";
 import { Data, Effect } from "effect";
+import { EntitlementService } from "./entitlement-service.js";
 import { mintSigningSecret, mintToken } from "../webhook-mint.js";
 import {
   type DeliveryCursor,
@@ -128,6 +129,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
       const membership = yield* MembershipService;
       const cellMerge = yield* CellMerge;
       const crypto = yield* CredentialCryptoService;
+      const entitlement = yield* EntitlementService;
 
       /** Load a webhook or fail typed. */
       const requireWebhook = (
@@ -182,6 +184,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             );
           }
           yield* membership.requireMember(table.value.workspaceId);
+          yield* entitlement.requireCloudAccess(table.value.workspaceId);
 
           const mapping = args.mapping ?? [];
           const valid = yield* tableColumnIds(args.tableId);
@@ -344,6 +347,14 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           const found = yield* repo.findByToken(token);
           if (found._tag === "None" || !found.value.enabled) return null;
           const w = found.value;
+          // Cloud-access gate at the inbound door: a lapsed/Free workspace stops
+          // accepting webhook data. Treated as not-found (the caller 404s) so no
+          // external data flows into a locked workspace and nothing leaks.
+          const hasAccess = yield* entitlement.requireCloudAccess(w.workspaceId).pipe(
+            Effect.as(true),
+            Effect.catchTag("PlanRequiredError", () => Effect.succeed(false)),
+          );
+          if (!hasAccess) return null;
           return {
             webhookId: w.id,
             workspaceId: w.workspaceId,
