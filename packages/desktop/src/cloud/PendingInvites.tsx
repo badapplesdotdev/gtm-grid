@@ -17,40 +17,20 @@ import { useCallback, useEffect, useState } from "react";
 import type { Id } from "./ids";
 import { cloudEnabled } from "./client";
 import {
+  clearPendingInviteToken,
+  getPendingInviteToken,
+} from "./pendingInvite";
+import {
   useAcceptInvitation,
   useMyPendingInvitations,
 } from "./useWorkspaceInvitations";
 
-/** Read an invite token from the launch URL (query `?invite=` or hash `#invite=`). */
-function readInviteTokenFromUrl(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const fromQuery = new URLSearchParams(window.location.search).get("invite");
-    if (fromQuery) return fromQuery;
-    const hash = window.location.hash.replace(/^#/, "");
-    const fromHash = new URLSearchParams(hash).get("invite");
-    return fromHash || null;
-  } catch {
-    return null;
-  }
-}
-
-/** Strip the `invite` token from the URL so a refresh doesn't re-trigger it. */
-function clearInviteTokenFromUrl(): void {
-  if (typeof window === "undefined") return;
-  try {
-    const url = new URL(window.location.href);
-    url.searchParams.delete("invite");
-    if (url.hash.includes("invite=")) url.hash = "";
-    window.history.replaceState({}, "", url.toString());
-  } catch {
-    /* ignore */
-  }
-}
-
 interface PendingInvitesProps {
-  /** Called with the joined workspace id after a successful accept. */
-  onAccepted: (workspaceId: Id<"workspaces">) => void;
+  /** Called with the joined workspace id + name after a successful accept. */
+  onAccepted: (
+    workspaceId: Id<"workspaces">,
+    workspaceName: string | null,
+  ) => void;
 }
 
 /**
@@ -74,11 +54,11 @@ export function PendingInvites({ onAccepted }: PendingInvitesProps) {
   const [urlTokenHandled, setUrlTokenHandled] = useState(false);
 
   useEffect(() => {
-    const token = readInviteTokenFromUrl();
-    if (token) {
-      setUrlToken(token);
-      clearInviteTokenFromUrl();
-    }
+    // Captured from a `gtmgrid://invite/<token>` deep link or `?invite=` URL
+    // (see pendingInvite.ts). Cleared on a successful accept, not on read, so a
+    // failed/abandoned accept can be retried.
+    const token = getPendingInviteToken();
+    if (token) setUrlToken(token);
   }, []);
 
   const accept = useCallback(
@@ -89,7 +69,11 @@ export function PendingInvites({ onAccepted }: PendingInvitesProps) {
       try {
         const res = await acceptInvite(token);
         if (res.status === "accepted") {
-          onAccepted(res.workspaceId as Id<"workspaces">);
+          clearPendingInviteToken();
+          const name =
+            (invites ?? []).find((i) => i.token === token)?.workspaceName ??
+            null;
+          onAccepted(res.workspaceId as Id<"workspaces">, name);
         } else if (res.status === "wrong_account") {
           setError(
             `This invite was sent to ${res.invitedEmail}. Sign in with that email to accept it.`,
@@ -107,7 +91,7 @@ export function PendingInvites({ onAccepted }: PendingInvitesProps) {
         setBusyToken(null);
       }
     },
-    [busyToken, acceptInvite, onAccepted],
+    [busyToken, acceptInvite, onAccepted, invites],
   );
 
   // Auto-accept a URL-supplied token once (after the user is authenticated, i.e.

@@ -2876,3 +2876,9 @@ button.import-type:hover { background: var(--surface-3); }
 .seat-price { display: flex; align-items: baseline; gap: 6px; padding: 12px 14px; border: 1px solid var(--border-1, rgba(0,0,0,0.08)); border-radius: 10px; background: var(--surface-2, rgba(0,0,0,0.02)); }
 .seat-price__amount { font-size: 24px; font-weight: 700; color: var(--text-1); }
 .seat-price__unit { font-size: 13px; color: var(--text-2); }
+
+/* Invite-accepted celebration dialog. */
+.modal.celebrate { text-align: center; padding: 32px 28px; }
+.celebrate__emoji { font-size: 44px; line-height: 1; margin-bottom: 10px; }
+.celebrate__title { margin: 0 0 8px; font-size: 20px; }
+.celebrate__body { margin: 0 0 20px; color: var(--text-2); line-height: 1.55; font-size: 14px; }
