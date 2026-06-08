@@ -11,7 +11,7 @@ import { AccountBar } from "./cloud/AccountBar";
 import { PendingInvites } from "./cloud/PendingInvites";
 import { WorkspaceSettings } from "./cloud/WorkspaceSettings";
 import { OnboardingFlow } from "./cloud/onboarding/OnboardingFlow";
-import { cloudEnabled } from "./cloud/client";
+import { cloudEnabled, syncWorkspacePlan } from "./cloud/client";
 import { CloudGrid } from "./cloud/CloudGrid";
 import { useMe, useActiveWorkspace, useAuthState } from "./cloud/auth";
 import { useWorkspaceCredentials } from "./cloud/useWorkspaceCredentials";
@@ -566,6 +566,25 @@ export default function App() {
     autoStartedRef.current = true;
     setOnboarding({ initialScreen: "workspace", hasSession: true });
   }, [isAuthenticated, me, onboarding]);
+  // Keep the active workspace's plan reconciled with Autumn: on workspace switch
+  // and whenever the window regains focus (returning from the Autumn checkout, or
+  // after a manual upgrade in the Autumn dashboard), so the plan badge reflects
+  // reality without an app restart. Throttled so focus thrash can't spam Autumn.
+  const activeWorkspaceForPlan = activeWorkspace?._id ?? null;
+  useEffect(() => {
+    if (!cloudEnabled || !isAuthenticated || activeWorkspaceForPlan == null) {
+      return;
+    }
+    void syncWorkspacePlan(activeWorkspaceForPlan);
+    let last = Date.now();
+    const onFocus = () => {
+      if (Date.now() - last < 30_000) return;
+      last = Date.now();
+      void syncWorkspacePlan(activeWorkspaceForPlan);
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [activeWorkspaceForPlan, isAuthenticated]);
   // Shared (workspace-scoped) credential source for the connector / AI panels.
   // `undefined` when signed out / local-only, so those panels behave as before.
   const workspaceCreds = useWorkspaceCredentials(

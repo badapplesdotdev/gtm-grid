@@ -21,12 +21,15 @@
  */
 
 import {
+  ALL_PAID_PLAN_IDS,
+  AutumnClient,
   type AutumnError,
   type InsufficientRoleError,
   MembershipService,
   type MemberRepoError,
   type NoCheckoutUrlError,
   type NotAMemberError,
+  planName,
   SeatsService,
   type UnauthenticatedError,
   type UnknownPlanError,
@@ -48,6 +51,20 @@ export type CheckoutError =
   | NoCheckoutUrlError
   | UnknownPlanError;
 
+/** The full error channel of {@link BillingService.syncPlan}. */
+export type SyncPlanError =
+  | UnauthenticatedError
+  | NotAMemberError
+  | MemberRepoError
+  | WorkspaceRepoError
+  | AutumnError;
+
+/** The resolved plan after a sync: the Autumn plan id (null = Free) + name. */
+export interface SyncedPlan {
+  readonly id: string | null;
+  readonly name: string;
+}
+
 /**
  * Billing domain service. Composes {@link MembershipService} (authz),
  * {@link WorkspaceRepo} (customer profile) and the pure {@link SeatsService}
@@ -60,6 +77,7 @@ export class BillingService extends Effect.Service<BillingService>()(
       const membership = yield* MembershipService;
       const repo = yield* WorkspaceRepo;
       const seats = yield* SeatsService;
+      const autumn = yield* AutumnClient;
 
       /**
        * Begin a checkout/upgrade for `workspaceId` on the chosen `planId`,
@@ -85,7 +103,33 @@ export class BillingService extends Effect.Service<BillingService>()(
           return { checkoutUrl };
         });
 
-      return { checkout } as const;
+      /**
+       * Reconcile the workspace's cached `currentPlanId` with the LIVE Autumn
+       * subscription and return the resolved plan. This is what makes an upgrade —
+       * whether bought in-app OR changed manually in the Autumn dashboard —
+       * actually appear in the app: the `me` query reads the cached column (no
+       * outbound HTTP on that hot path), and this reconciles it on demand.
+       *
+       * The workspace id IS the Autumn customer id. Any MEMBER may refresh the
+       * view (billing CHANGES stay owner/admin in {@link checkout}). We pick the
+       * first ACTIVE paid plan id (monthly or annual) from Autumn, write it back,
+       * and return `{ id, name }`; no active paid plan → `null` (Free).
+       */
+      const syncPlan = (
+        workspaceId: string,
+      ): Effect.Effect<SyncedPlan, SyncPlanError> =>
+        Effect.gen(function* () {
+          yield* membership.requireMember(workspaceId);
+          const active = yield* autumn.getActivePlanIds({
+            customerId: workspaceId,
+          });
+          const paidPlanIds: readonly string[] = ALL_PAID_PLAN_IDS;
+          const planId = active.find((id) => paidPlanIds.includes(id)) ?? null;
+          yield* repo.updatePlanId(workspaceId, planId);
+          return { id: planId, name: planName(planId) };
+        });
+
+      return { checkout, syncPlan } as const;
     }),
     dependencies: [],
   },

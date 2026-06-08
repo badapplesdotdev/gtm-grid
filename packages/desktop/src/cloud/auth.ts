@@ -141,6 +141,13 @@ export function useMe(): Me | null | undefined {
     queryKey: ["workspaces", "me"],
     queryFn: () => apiClient!.workspaces.me.query(),
     enabled: apiClient !== null,
+    // `me` carries the Autumn plan/seat state, which can change OUTSIDE the app
+    // (a manual upgrade in Autumn, a teammate's change). Refetch when the user
+    // returns to the window and keep it briefly stale, so the plan badge and
+    // billing panel reflect external changes without an app restart. Overrides
+    // the query-client default (`refetchOnWindowFocus: false`) for this one query.
+    refetchOnWindowFocus: true,
+    staleTime: 10_000,
   });
   if (apiClient === null) return null;
   return isPending ? undefined : (data as unknown as Me | null);

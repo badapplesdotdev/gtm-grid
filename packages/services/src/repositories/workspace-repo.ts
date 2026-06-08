@@ -136,6 +136,18 @@ export class WorkspaceRepo extends Context.Tag("WorkspaceRepo")<
     readonly findUser: (
       userId: string,
     ) => Effect.Effect<Option.Option<WorkspaceUser>, WorkspaceRepoError>;
+
+    /**
+     * Persist the workspace's current paid plan id (`currentPlanId`). This is the
+     * write-back that was MISSING from the original snapshot — the column was only
+     * ever read, so the `me` query's cached plan was stuck at Free regardless of
+     * Autumn. `BillingService.syncPlan` calls this with the live Autumn plan id
+     * (or `null` for Free) so the badge/billing panel reflect real upgrades.
+     */
+    readonly updatePlanId: (
+      workspaceId: string,
+      planId: string | null,
+    ) => Effect.Effect<void, WorkspaceRepoError>;
   }
 >() {}
 
@@ -250,6 +262,16 @@ export const WorkspaceRepoLive: Layer.Layer<WorkspaceRepo, never, DbClient> =
             },
             catch: fail("user lookup"),
           }),
+        updatePlanId: (workspaceId, planId) =>
+          Effect.tryPromise({
+            try: async () => {
+              await db
+                .update(schema.workspaces)
+                .set({ currentPlanId: planId })
+                .where(eq(schema.workspaces.id, workspaceId));
+            },
+            catch: fail("workspace plan update"),
+          }),
       };
     }),
   );
@@ -303,5 +325,10 @@ export const workspaceRepoLayer = (
       Effect.succeed(
         Option.fromNullable(userRows.find((u) => u.id === userId) ?? null),
       ),
+    updatePlanId: (workspaceId, planId) =>
+      Effect.sync(() => {
+        const i = rows.findIndex((r) => r.id === workspaceId);
+        if (i !== -1) rows[i] = { ...rows[i], currentPlanId: planId };
+      }),
   });
 };

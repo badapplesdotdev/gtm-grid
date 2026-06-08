@@ -41,4 +41,22 @@ export const billingRouter = router({
         }),
       ),
     ),
+
+  /**
+   * Reconcile a workspace's cached plan with its live Autumn subscription and
+   * return `{ id, name }`. Any member may call it; the desktop calls it on app
+   * load, on window focus, and when the billing panel opens so a plan changed in
+   * Autumn (manual upgrade or completed checkout) is reflected without a restart.
+   */
+  syncPlan: protectedProcedure
+    .input(z.object({ workspaceId: z.string().min(1) }))
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* BillingService;
+          return yield* svc.syncPlan(input.workspaceId);
+        }),
+      ),
+    ),
 });
