@@ -233,6 +233,45 @@ function ToolCall({ tool, running }: { tool: ToolCallT; running: boolean }) {
   );
 }
 
+/** Bottom-of-composer model picker — a pill button that opens a menu UPWARD (Claude-Code style). */
+function ModelPicker({ agent, value, onChange }: { agent: AgentKind; value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  const opts = MODEL_OPTIONS[agent];
+  const current = opts.find((o) => o.value === value) ?? opts[0];
+  return (
+    <div className="agent-model-picker" ref={ref}>
+      {open && (
+        <div className="agent-model-menu">
+          <div className="agent-model-menu-head">Model · {AGENT_LABEL[agent]}</div>
+          {opts.map((o) => (
+            <button
+              key={o.value || "default"}
+              className={`agent-model-opt ${o.value === value ? "active" : ""}`}
+              onClick={() => { onChange(o.value); setOpen(false); }}
+            >
+              <span>{o.label}</span>
+              {o.value === value && <IconCheck s={12} />}
+            </button>
+          ))}
+        </div>
+      )}
+      <button className="agent-model-btn" onClick={() => setOpen((o) => !o)} title="Choose model">
+        {current.label}
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+      </button>
+    </div>
+  );
+}
+
 export default function AgentPanel({
   onGridChange,
   activeTable,
@@ -425,21 +464,6 @@ export default function AgentPanel({
         </button>
       </div>
 
-      {/* Model picker — which model the selected agent's CLI runs with. */}
-      <div className="agent-models">
-        <span className="agent-models-label">Model</span>
-        {MODEL_OPTIONS[agent].map((m) => (
-          <button
-            key={m.value || "default"}
-            className={`agent-model-chip ${models[agent] === m.value ? "active" : ""}`}
-            title={m.value ? `Run ${AGENT_LABEL[agent]} with ${m.label}` : `Use your ${AGENT_LABEL[agent]} plan's default model`}
-            onClick={() => setModels((p) => ({ ...p, [agent]: m.value }))}
-          >
-            {m.label}
-          </button>
-        ))}
-      </div>
-
       {!ready ? (
         <div className="agent-empty">
           <div className="agent-empty-mark"><IconZap s={20} /></div>
@@ -550,6 +574,10 @@ export default function AgentPanel({
                 <IconArrow s={15} />
               </button>
             )}
+          </div>
+          {/* Model picker — bottom-right of the composer; opens upward. */}
+          <div className="agent-composer-foot">
+            <ModelPicker agent={agent} value={models[agent]} onChange={(v) => setModels((p) => ({ ...p, [agent]: v }))} />
           </div>
         </>
       )}

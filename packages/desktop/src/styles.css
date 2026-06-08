@@ -1338,18 +1338,29 @@ html, body, #root {
   flex-shrink: 0;
 }
 
-/* Per-agent model picker (chip row under the tabs) */
-.agent-models {
-  display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
-  padding: 7px 10px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+/* Per-agent model picker — bottom-right of the composer, popover opens upward */
+.agent-composer-foot { display: flex; justify-content: flex-end; align-items: center; padding: 2px 12px 8px; flex-shrink: 0; }
+.agent-model-picker { position: relative; }
+.agent-model-btn {
+  all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+  font: 500 11.5px var(--font-sans); color: var(--text-2); padding: 3px 8px; border-radius: var(--r-sm);
+  transition: background 0.12s, color 0.12s;
 }
-.agent-models-label { font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); margin-right: 2px; }
-.agent-model-chip {
-  all: unset; cursor: pointer; font: 500 11.5px var(--font-sans); color: var(--text-2);
-  padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); transition: all 0.12s;
+.agent-model-btn:hover { background: var(--surface-2); color: var(--text); }
+.agent-model-btn svg { color: var(--text-3); }
+.agent-model-menu {
+  position: absolute; bottom: calc(100% + 6px); right: 0; z-index: 60; min-width: 200px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16); padding: 5px; max-height: 280px; overflow-y: auto;
 }
-.agent-model-chip:hover { border-color: var(--border-2); color: var(--text); }
-.agent-model-chip.active { background: var(--accent-soft); border-color: var(--accent-2); color: var(--accent-2); font-weight: 600; }
+.agent-model-menu-head { font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); padding: 5px 9px 6px; }
+.agent-model-opt {
+  all: unset; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; box-sizing: border-box;
+  font: 500 12.5px var(--font-sans); color: var(--text); padding: 7px 9px; border-radius: var(--r-xs);
+}
+.agent-model-opt:hover { background: var(--surface-2); }
+.agent-model-opt.active { color: var(--accent-2); font-weight: 600; }
+.agent-model-opt svg { color: var(--accent-2); }
 .agent-tab {
   all: unset; cursor: pointer;
   display: flex; align-items: center; gap: 8px;
@@ -1729,6 +1740,12 @@ html, body, #root {
   background: var(--accent); border-radius: 0 2px 2px 0;
 }
 .ext-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* "+ N more" row at the foot of a sidebar section preview — reads as a link,
+   aligned under the item labels. Opens the Browse-all gallery (Tools/Skills) or
+   reveals the remaining providers inline (Functions). */
+.ext-item.ext-item-more { padding-left: 40px; color: var(--accent-2); font-weight: 500; }
+.ext-item.clickable.ext-item-more:hover { color: var(--accent-2); background: var(--accent-soft); }
 
 /* ── Detail panels (extension / AI provider) ─────────────── */
 .detail {
