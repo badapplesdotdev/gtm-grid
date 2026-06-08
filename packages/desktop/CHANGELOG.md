@@ -1,5 +1,38 @@
 # @gtmgrid/desktop
 
+## 0.3.6
+
+### Patch Changes
+
+- 3ee732b: A signed-in cloud workspace now always operates in cloud mode — it never falls
+  back to the local engine (which silently saved tables to disk instead of the
+  cloud). When the active cloud workspace has no cloud project yet, the app
+  auto-creates a default cloud project so `inCloud` is true: the local-tables
+  section + local "New table" stay hidden and all tables go to the cloud. Skipped
+  when the workspace's cloud access is locked (lapsed trial).
+- 8513552: Fix + polish the team-invite acceptance flow:
+
+  - **Not-authed invites now guide sign-up.** A `gtmgrid://invite/<token>` deep link
+    (or `?invite=` URL) is captured into a pending-invite store; while signed out it
+    FORCES the sign-in/sign-up flow even if the user previously chose "continue
+    locally", so an invitee is always routed to create an account and is then
+    auto-enrolled. Previously the app opened in local state and never prompted.
+  - **Celebrate on join** — accepting an invite (banner or new-signup auto-enrol)
+    fires confetti + a confirmation dialog and refreshes app state (plan, badge,
+    cloud tables) so everything is immediately in sync.
+
+- 7d93c78: Simplify onboarding to Workspace → Team. The Plan-selection and AI-key steps are
+  removed from the flow (every new workspace is auto-enrolled in the Team trial on
+  creation, and the AI key can be added later); both screens are kept in code but
+  unreachable. After onboarding finishes, app state is refreshed (react-query
+  invalidate + Autumn plan sync) so the plan/badge/cloud tables are immediately in
+  sync. Also: the root `typecheck` script now runs `apps/web`'s typecheck (it was
+  skipped, which let a web-only type error merge + break the Vercel build).
+- 6480d95: Refactor: read the launch invite token via lazy `useState` init instead of a
+  mount `useEffect` in PendingInvites — fewer effects, more declarative.
+  - @gtmgrid/cloud@0.3.6
+  - @gtmgrid/services@0.3.6
+
 ## 0.3.5
 
 ### Patch Changes
