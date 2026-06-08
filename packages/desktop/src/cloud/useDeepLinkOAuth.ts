@@ -26,6 +26,7 @@ import { useEffect } from "react";
 import { authClient } from "./client";
 import { OAUTH_CALLBACK_EVENT, isTauri } from "./desktop-oauth";
 import { isApiOAuthCallback } from "./api-auth";
+import { inviteTokenFromDeepLink, setPendingInviteToken } from "./pendingInvite";
 
 export function useApiDeepLinkOAuth(): void {
   useEffect(() => {
@@ -38,27 +39,41 @@ export function useApiDeepLinkOAuth(): void {
     let disposed = false;
     const cleanups: Array<() => void> = [];
 
-    // On our OAuth callback, re-read the session so `useSession` subscribers
-    // observe the now-authenticated state. A no-op for unrelated deep links.
-    const onCallback = (url: string): void => {
-      if (!isApiOAuthCallback(url)) return;
-      void client.getSession();
+    // Route a deep link: our OAuth callback re-reads the session; an invite link
+    // (`gtmgrid://invite/<token>`) is captured as the pending invite so the app
+    // forces sign-in/sign-up and auto-accepts it. Unrelated links are ignored.
+    const onUrl = (url: string): void => {
+      if (isApiOAuthCallback(url)) {
+        void client.getSession();
+        return;
+      }
+      const inviteToken = inviteTokenFromDeepLink(url);
+      if (inviteToken !== null) setPendingInviteToken(inviteToken);
     };
 
     void (async () => {
       const { listen } = await import("@tauri-apps/api/event");
       const unlistenEvent = await listen<string>(OAUTH_CALLBACK_EVENT, (e) => {
-        onCallback(e.payload);
+        onUrl(e.payload);
       });
       if (disposed) unlistenEvent();
       else cleanups.push(unlistenEvent);
 
       const deepLink = await import("@tauri-apps/plugin-deep-link");
       const unlistenDeepLink = await deepLink.onOpenUrl((urls) => {
-        for (const url of urls) onCallback(url);
+        for (const url of urls) onUrl(url);
       });
       if (disposed) unlistenDeepLink();
       else cleanups.push(unlistenDeepLink);
+
+      // Cold start: the app may have been launched BY the invite/oauth deep link,
+      // which arrives before the listener is attached — replay the launch URLs.
+      try {
+        const current = await deepLink.getCurrent();
+        if (!disposed && current) for (const url of current) onUrl(url);
+      } catch {
+        /* getCurrent unsupported on this platform — onOpenUrl still covers it */
+      }
     })();
 
     return () => {

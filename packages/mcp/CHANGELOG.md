@@ -1,5 +1,29 @@
 # @gtmgrid/mcp
 
+## 0.3.8
+
+### Patch Changes
+
+- @gtmgrid/engine@0.3.8
+
+## 0.3.7
+
+### Patch Changes
+
+- @gtmgrid/engine@0.3.7
+
+## 0.3.6
+
+### Patch Changes
+
+- @gtmgrid/engine@0.3.6
+
+## 0.3.5
+
+### Patch Changes
+
+- @gtmgrid/engine@0.3.5
+
 ## 0.3.4
 
 ### Patch Changes

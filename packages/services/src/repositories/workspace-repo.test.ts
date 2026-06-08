@@ -77,3 +77,37 @@ describe("workspaceRepoLayer", () => {
     expect(Option.isNone(none)).toBe(true);
   });
 });
+
+describe("workspaceRepoLayer.findTrialsEndingBetween", () => {
+  const trialWorkspaces: readonly Workspace[] = [
+    { id: "tw1", name: "InWindow", ownerId: "u1", trialEndsAt: 1_500 },
+    { id: "tw2", name: "TooEarly", ownerId: "u1", trialEndsAt: 5_000 },
+    { id: "tw3", name: "NoTrial", ownerId: "u1", trialEndsAt: null },
+    { id: "tw4", name: "NoOwnerEmail", ownerId: "u_no_email", trialEndsAt: 1_500 },
+  ];
+  const trialUsers: readonly WorkspaceUser[] = [
+    { id: "u1", name: "Una", email: "una@example.com" },
+    { id: "u_no_email", name: "NoMail", email: null as unknown as string },
+  ];
+  const runTrials = <A, E>(
+    use: (r: typeof WorkspaceRepo.Service) => Effect.Effect<A, E>,
+  ) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceRepo;
+        return yield* use(repo);
+      }).pipe(Effect.provide(workspaceRepoLayer(trialWorkspaces, trialUsers))),
+    );
+
+  it("returns only workspaces whose trial ends in the window, with the owner email", async () => {
+    const rows = await runTrials((r) => r.findTrialsEndingBetween(1_000, 2_000));
+    expect(rows.map((w) => w.id)).toEqual(["tw1"]);
+    expect(rows[0]?.ownerEmail).toBe("una@example.com");
+  });
+
+  it("excludes rows with no trial and rows with no owner email", async () => {
+    const rows = await runTrials((r) => r.findTrialsEndingBetween(0, 10_000));
+    // tw3 (no trial) and tw4 (no owner email) excluded; tw1 + tw2 included.
+    expect(rows.map((w) => w.id).sort()).toEqual(["tw1", "tw2"]);
+  });
+});

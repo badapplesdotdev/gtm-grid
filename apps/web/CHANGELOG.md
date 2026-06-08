@@ -1,5 +1,80 @@
 # @gtmgrid/web
 
+## 0.3.8
+
+### Patch Changes
+
+- Updated dependencies [7f41587]
+  - @gtmgrid/cloud@0.3.8
+  - @gtmgrid/services@0.3.8
+  - @gtmgrid/auth@0.3.8
+  - @gtmgrid/db@0.3.8
+  - @gtmgrid/email@0.3.8
+  - @gtmgrid/engine@0.3.8
+
+## 0.3.7
+
+### Patch Changes
+
+- @gtmgrid/auth@0.3.7
+- @gtmgrid/cloud@0.3.7
+- @gtmgrid/db@0.3.7
+- @gtmgrid/email@0.3.7
+- @gtmgrid/engine@0.3.7
+- @gtmgrid/services@0.3.7
+
+## 0.3.6
+
+### Patch Changes
+
+- @gtmgrid/auth@0.3.6
+- @gtmgrid/cloud@0.3.6
+- @gtmgrid/db@0.3.6
+- @gtmgrid/email@0.3.6
+- @gtmgrid/engine@0.3.6
+- @gtmgrid/services@0.3.6
+
+## 0.3.5
+
+### Patch Changes
+
+- b0d6cce: Confirm the new price before an invite that adds a billable seat. New
+  `billing.previewSeatChange` (backed by `AutumnClient.previewSeatChange` →
+  Autumn `previewUpdate`, reading the recurring next-cycle total) returns the
+  projected `{ seats, total, currency }` for the workspace's current members + 1.
+  The desktop's Workspace settings invite flow now shows an "Add a seat?"
+  confirmation with the new monthly price; the invite only sends on confirm.
+
+  Also fixes the apps/web build for the trial-reminders Inngest job (the
+  `send-trial-reminders` function used the wrong `createFunction` arity and apps/web
+  was missing the `@gtmgrid/email` dependency — neither is caught by the root
+  `tsc -b`, only by `apps/web`'s own typecheck / the Vercel build).
+
+- 1628165: Proactively prompt users to upgrade before the 7-day trial hard-locks the cloud:
+
+  - **In-app countdown banner**: a new `workspaces.trialEndsAt` column is synced from
+    Autumn (`getActiveSubscriptions`) by `syncPlan` and seeded on trial start; `me`
+    surfaces it, and the desktop shows a "Your trial ends in N days — upgrade" banner
+    (escalating in the last 2 days) with the Autumn checkout CTA.
+  - **Email reminders**: a daily Inngest job (`send-trial-reminders`) scans trials via
+    `WorkspaceRepo.findTrialsEndingBetween` using two disjoint one-day windows
+    (~2 days left, last day) so each milestone emails the owner exactly once (no
+    reminder-stage column), and sends the new `trialEndingEmail` via Resend. No-op
+    when email is unconfigured.
+
+  Verified end-to-end against local Postgres + dev Autumn: trialEndsAt seeded on
+  create, reconciled by syncPlan from Autumn, surfaced in me, and found by the scan.
+
+- Updated dependencies [b0d6cce]
+- Updated dependencies [1628165]
+- Updated dependencies [17c88ae]
+  - @gtmgrid/services@0.3.5
+  - @gtmgrid/auth@0.3.5
+  - @gtmgrid/cloud@0.3.5
+  - @gtmgrid/db@0.3.5
+  - @gtmgrid/email@0.3.5
+  - @gtmgrid/engine@0.3.5
+
 ## 0.3.4
 
 ### Patch Changes

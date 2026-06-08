@@ -81,6 +81,9 @@ importers:
       '@gtmgrid/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@gtmgrid/email':
+        specifier: workspace:*
+        version: link:../../packages/email
       '@gtmgrid/engine':
         specifier: workspace:*
         version: link:../../packages/engine
@@ -209,6 +212,12 @@ importers:
       '@tauri-apps/plugin-opener':
         specifier: ^2.2.6
         version: 2.5.4
+      '@tauri-apps/plugin-process':
+        specifier: ^2
+        version: 2.3.1
+      '@tauri-apps/plugin-updater':
+        specifier: ^2
+        version: 2.10.1
       '@trpc/client':
         specifier: ^11.0.0
         version: 11.17.0(@trpc/server@11.17.0(typescript@5.9.3))(typescript@5.9.3)
@@ -218,6 +227,9 @@ importers:
       better-auth:
         specifier: ^1.6.14
         version: 1.6.14(@cloudflare/workers-types@4.20240718.0)(@opentelemetry/api@1.9.1)(better-sqlite3@11.10.0)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20240718.0)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@7.6.13)(@types/pg@8.15.6)(better-sqlite3@11.10.0)(kysely@0.29.2(patch_hash=42ad1bc2b8a3fb6b712709176c93155ce11f157bf10cdfcd075ea4440a89972f))(postgres@3.4.9))(next@15.5.19(@babel/core@7.29.7)(@opentelemetry/api@1.9.1)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@22.19.19)(tsx@4.22.4)(yaml@2.9.0))
+      canvas-confetti:
+        specifier: ^1.9.3
+        version: 1.9.4
       effect:
         specifier: ^3.21.3
         version: 3.21.3
@@ -234,6 +246,9 @@ importers:
       '@trpc/server':
         specifier: ^11.0.0
         version: 11.17.0(typescript@5.9.3)
+      '@types/canvas-confetti':
+        specifier: ^1.6.4
+        version: 1.9.0
       '@types/react':
         specifier: ^18.3.18
         version: 18.3.30
@@ -2417,6 +2432,12 @@ packages:
   '@tauri-apps/plugin-opener@2.5.4':
     resolution: {integrity: sha512-1HnPkb+AmgO29HBazm4uPLKB+r7zzcTBW1d0fyYp1uP+jwtpoiNDGKMMzz58SFp49nOIrxdE3aUJtT57lfO9CQ==}
 
+  '@tauri-apps/plugin-process@2.3.1':
+    resolution: {integrity: sha512-nCa4fGVaDL/B9ai03VyPOjfAHRHSBz5v6F/ObsB73r/dA3MHHhZtldaDMIc0V/pnUw9ehzr2iEG+XkSEyC0JJA==}
+
+  '@tauri-apps/plugin-updater@2.10.1':
+    resolution: {integrity: sha512-NFYMg+tWOZPJdzE/PpFj2qfqwAWwNS3kXrb1tm1gnBJ9mYzZ4WDRrwy8udzWoAnfGCHLuePNLY1WVCNHnh3eRA==}
+
   '@traceloop/ai-semantic-conventions@0.20.0':
     resolution: {integrity: sha512-bvivhZU6U8TW4TKktYnjdTi+7GE4WxI8epaGjawalSKDunmxaA+4UVFQ+4tSCBvp2Scby+gnYNaTZSrtABfOlQ==}
     engines: {node: '>=14'}
@@ -2500,6 +2521,9 @@ packages:
 
   '@types/bunyan@1.8.11':
     resolution: {integrity: sha512-758fRH7umIMk5qt5ELmRMff4mLDlN+xyYzC+dkPTdKwbSkJFvz6xwyScrytPU0QIBbRRwbiE8/BIg8bpajerNQ==}
+
+  '@types/canvas-confetti@1.9.0':
+    resolution: {integrity: sha512-aBGj/dULrimR1XDZLtG9JwxX1b4HPRF6CX9Yfwh3NvstZEm1ZL7RBnel4keCPSqs1ANRu1u2Aoz9R+VmtjYuTg==}
 
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
@@ -3104,6 +3128,9 @@ packages:
 
   canonicalize@1.0.8:
     resolution: {integrity: sha512-0CNTVCLZggSh7bc5VkX5WWPWO+cyZbNd07IHIsSXLia/eAq+r836hgk+8BKoEh7949Mda87VUOitx5OddVj64A==}
+
+  canvas-confetti@1.9.4:
+    resolution: {integrity: sha512-yxQbJkAVrFXWNbTUjPqjF7G+g6pDotOUHGbkZq2NELZUMDpiJ85rIEazVb8GTaAptNW2miJAXbs1BtioA251Pw==}
 
   capnp-ts@0.7.0:
     resolution: {integrity: sha512-XKxXAC3HVPv7r674zP0VC3RTXz+/JKhfyw94ljvF80yynK6VkTnqE3jMuN8b3dUVmmc43TjyxjW4KTsmB3c86g==}
@@ -7462,6 +7489,14 @@ snapshots:
     dependencies:
       '@tauri-apps/api': 2.11.0
 
+  '@tauri-apps/plugin-process@2.3.1':
+    dependencies:
+      '@tauri-apps/api': 2.11.0
+
+  '@tauri-apps/plugin-updater@2.10.1':
+    dependencies:
+      '@tauri-apps/api': 2.11.0
+
   '@traceloop/ai-semantic-conventions@0.20.0':
     dependencies:
       '@opentelemetry/api': 1.9.1
@@ -7555,6 +7590,8 @@ snapshots:
   '@types/bunyan@1.8.11':
     dependencies:
       '@types/node': 22.19.19
+
+  '@types/canvas-confetti@1.9.0': {}
 
   '@types/chai@5.2.3':
     dependencies:
@@ -8196,6 +8233,8 @@ snapshots:
 
   canonicalize@1.0.8: {}
 
+  canvas-confetti@1.9.4: {}
+
   capnp-ts@0.7.0:
     dependencies:
       debug: 4.4.3
@@ -8656,8 +8695,8 @@ snapshots:
       '@typescript-eslint/parser': 8.60.1(eslint@9.39.4)(typescript@5.9.3)
       eslint: 9.39.4
       eslint-import-resolver-node: 0.3.10
-      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.1(eslint@9.39.4)(typescript@5.9.3))(eslint@9.39.4))(eslint@9.39.4)
-      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.60.1(eslint@9.39.4)(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.1(eslint@9.39.4)(typescript@5.9.3))(eslint@9.39.4))(eslint@9.39.4))(eslint@9.39.4)
+      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0)(eslint@9.39.4)
+      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.60.1(eslint@9.39.4)(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.4)
       eslint-plugin-jsx-a11y: 6.10.2(eslint@9.39.4)
       eslint-plugin-react: 7.37.5(eslint@9.39.4)
       eslint-plugin-react-hooks: 5.2.0(eslint@9.39.4)
@@ -8676,7 +8715,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.1(eslint@9.39.4)(typescript@5.9.3))(eslint@9.39.4))(eslint@9.39.4):
+  eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0)(eslint@9.39.4):
     dependencies:
       '@nolyfill/is-core-module': 1.0.39
       debug: 4.4.3
@@ -8687,22 +8726,22 @@ snapshots:
       tinyglobby: 0.2.17
       unrs-resolver: 1.12.2
     optionalDependencies:
-      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.60.1(eslint@9.39.4)(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.1(eslint@9.39.4)(typescript@5.9.3))(eslint@9.39.4))(eslint@9.39.4))(eslint@9.39.4)
+      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.60.1(eslint@9.39.4)(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.4)
     transitivePeerDependencies:
       - supports-color
 
-  eslint-module-utils@2.13.0(@typescript-eslint/parser@8.60.1(eslint@9.39.4)(typescript@5.9.3))(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.1(eslint@9.39.4)(typescript@5.9.3))(eslint@9.39.4))(eslint@9.39.4))(eslint@9.39.4):
+  eslint-module-utils@2.13.0(@typescript-eslint/parser@8.60.1(eslint@9.39.4)(typescript@5.9.3))(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.4):
     dependencies:
       debug: 3.2.7
     optionalDependencies:
       '@typescript-eslint/parser': 8.60.1(eslint@9.39.4)(typescript@5.9.3)
       eslint: 9.39.4
       eslint-import-resolver-node: 0.3.10
-      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.1(eslint@9.39.4)(typescript@5.9.3))(eslint@9.39.4))(eslint@9.39.4)
+      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0)(eslint@9.39.4)
     transitivePeerDependencies:
       - supports-color
 
-  eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.1(eslint@9.39.4)(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.1(eslint@9.39.4)(typescript@5.9.3))(eslint@9.39.4))(eslint@9.39.4))(eslint@9.39.4):
+  eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.1(eslint@9.39.4)(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.4):
     dependencies:
       '@rtsao/scc': 1.1.0
       array-includes: 3.1.9
@@ -8713,7 +8752,7 @@ snapshots:
       doctrine: 2.1.0
       eslint: 9.39.4
       eslint-import-resolver-node: 0.3.10
-      eslint-module-utils: 2.13.0(@typescript-eslint/parser@8.60.1(eslint@9.39.4)(typescript@5.9.3))(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.1(eslint@9.39.4)(typescript@5.9.3))(eslint@9.39.4))(eslint@9.39.4))(eslint@9.39.4)
+      eslint-module-utils: 2.13.0(@typescript-eslint/parser@8.60.1(eslint@9.39.4)(typescript@5.9.3))(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.4)
       hasown: 2.0.4
       is-core-module: 2.16.2
       is-glob: 4.0.3

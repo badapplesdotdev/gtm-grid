@@ -34,7 +34,12 @@ import {
   type UnauthenticatedError,
   type UnknownPlanError,
 } from "@gtmgrid/cloud";
-import { Effect } from "effect";
+import { TEAM_PLAN_ID } from "@gtmgrid/cloud";
+import { Effect, Option } from "effect";
+import {
+  WorkspaceMemberRepo,
+  type WorkspaceMemberRepoError,
+} from "../repositories/workspace-member-repo.js";
 import {
   WorkspaceRepo,
   type WorkspaceRepoError,
@@ -63,6 +68,27 @@ export type SyncPlanError =
 export interface SyncedPlan {
   readonly id: string | null;
   readonly name: string;
+  /** Epoch ms the trial ends, or null when not trialing. */
+  readonly trialEndsAt: number | null;
+}
+
+/** The error channel of {@link BillingService.previewSeatChange}. */
+export type PreviewSeatChangeError =
+  | UnauthenticatedError
+  | NotAMemberError
+  | MemberRepoError
+  | WorkspaceMemberRepoError
+  | WorkspaceRepoError
+  | AutumnError;
+
+/** A preview of the bill after adding seats: the new seat count + monthly total. */
+export interface SeatChangePreview {
+  /** The projected total seat count (current members + the ones being added). */
+  readonly seats: number;
+  /** The projected recurring total for that many seats. */
+  readonly total: number;
+  /** ISO currency code, e.g. "usd". */
+  readonly currency: string;
 }
 
 /**
@@ -76,6 +102,7 @@ export class BillingService extends Effect.Service<BillingService>()(
     effect: Effect.gen(function* () {
       const membership = yield* MembershipService;
       const repo = yield* WorkspaceRepo;
+      const memberRepo = yield* WorkspaceMemberRepo;
       const seats = yield* SeatsService;
       const autumn = yield* AutumnClient;
 
@@ -112,24 +139,59 @@ export class BillingService extends Effect.Service<BillingService>()(
        *
        * The workspace id IS the Autumn customer id. Any MEMBER may refresh the
        * view (billing CHANGES stay owner/admin in {@link checkout}). We pick the
-       * first ACTIVE paid plan id (monthly or annual) from Autumn, write it back,
-       * and return `{ id, name }`; no active paid plan → `null` (Free).
+       * first ACTIVE paid subscription (monthly or annual) from Autumn, cache its
+       * plan id + trial end, and return `{ id, name, trialEndsAt }`; no active
+       * paid plan → `null` (Free, trialEndsAt null).
        */
       const syncPlan = (
         workspaceId: string,
       ): Effect.Effect<SyncedPlan, SyncPlanError> =>
         Effect.gen(function* () {
           yield* membership.requireMember(workspaceId);
-          const active = yield* autumn.getActivePlanIds({
+          const subs = yield* autumn.getActiveSubscriptions({
             customerId: workspaceId,
           });
           const paidPlanIds: readonly string[] = ALL_PAID_PLAN_IDS;
-          const planId = active.find((id) => paidPlanIds.includes(id)) ?? null;
-          yield* repo.updatePlanId(workspaceId, planId);
-          return { id: planId, name: planName(planId) };
+          const paid = subs.find((s) => paidPlanIds.includes(s.planId)) ?? null;
+          const planId = paid?.planId ?? null;
+          const trialEndsAt = paid?.trialEndsAt ?? null;
+          yield* repo.updatePlan(workspaceId, planId, trialEndsAt);
+          return { id: planId, name: planName(planId), trialEndsAt };
         });
 
-      return { checkout, syncPlan } as const;
+      /**
+       * Preview the recurring bill AFTER adding `addSeats` seat(s) to the
+       * workspace, so the UI can confirm the new price before an invite that
+       * raises the subscription. Members-only (read-only preview). Seats =
+       * current member count + `addSeats`; priced against the workspace's current
+       * plan (defaulting to Team) via Autumn `previewAttach` — no change is made.
+       */
+      const previewSeatChange = (
+        workspaceId: string,
+        addSeats = 1,
+      ): Effect.Effect<SeatChangePreview, PreviewSeatChangeError> =>
+        Effect.gen(function* () {
+          yield* membership.requireMember(workspaceId);
+          const count = yield* memberRepo.countByWorkspace(workspaceId);
+          const ws = yield* repo.findById(workspaceId);
+          const planId = Option.match(ws, {
+            onNone: () => TEAM_PLAN_ID as string,
+            onSome: (w) => w.currentPlanId ?? TEAM_PLAN_ID,
+          });
+          const seatTarget = count + Math.max(1, addSeats);
+          const preview = yield* autumn.previewSeatChange({
+            customerId: workspaceId,
+            planId,
+            seats: seatTarget,
+          });
+          return {
+            seats: preview.seats,
+            total: preview.total,
+            currency: preview.currency,
+          };
+        });
+
+      return { checkout, syncPlan, previewSeatChange } as const;
     }),
     dependencies: [],
   },

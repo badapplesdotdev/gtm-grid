@@ -68,6 +68,10 @@ export interface FakeAutumnConfig {
    * auto-enabled free tier). Drives the plan the cron caches for the `me` query.
    */
   readonly activePlanIds?: readonly string[];
+  /** The `trialEndsAt` (epoch ms) `getActiveSubscriptions` reports; default null. */
+  readonly trialEndsAt?: number | null;
+  /** Per-seat price `previewSeatChange` multiplies by the seat count; default 20. */
+  readonly perSeatPrice?: number;
 }
 
 /**
@@ -96,6 +100,12 @@ export const fakeAutumnLayer = (
         });
         return { allowed, balance };
       }),
+    previewSeatChange: ({ seats }) =>
+      Effect.succeed({
+        total: seats * (config.perSeatPrice ?? 20),
+        currency: "usd",
+        seats,
+      }),
     attach: ({ customerId, customerData }) =>
       Effect.sync(() => {
         config.customerDataCalls?.push({
@@ -105,6 +115,7 @@ export const fakeAutumnLayer = (
         });
         return { checkoutUrl };
       }),
+    setupPayment: () => Effect.succeed({ checkoutUrl }),
     startTrial: ({ customerId, planId, seats, trialDays, customerData }) =>
       Effect.sync(() => {
         config.trialCalls?.push({
@@ -125,6 +136,13 @@ export const fakeAutumnLayer = (
         config.trackCalls?.push({ customerId, value });
       }),
     getActivePlanIds: () => Effect.succeed(activePlanIds),
+    getActiveSubscriptions: () =>
+      Effect.succeed(
+        activePlanIds.map((planId) => ({
+          planId,
+          trialEndsAt: config.trialEndsAt ?? null,
+        })),
+      ),
     trackUsage: ({ customerId, featureId, value, customerData }) =>
       Effect.sync(() => {
         config.usageCalls?.push({ customerId, featureId, value, customerData });
@@ -163,14 +181,22 @@ export const failingAutumnLayer = (
       failOn === "check"
         ? fail
         : Effect.succeed({ allowed: failOn !== "attach", balance: null }),
+    previewSeatChange: ({ seats }) =>
+      Effect.succeed({ total: seats * 20, currency: "usd", seats }),
     attach: () =>
       failOn === "attach"
         ? fail
         : Effect.succeed({ checkoutUrl: "https://billing.example.com/x" }),
+    setupPayment: () =>
+      Effect.succeed({ checkoutUrl: "https://billing.example.com/setup" }),
     startTrial: () => (failOn === "startTrial" ? fail : Effect.void),
     trackSeats: () => (failOn === "track" ? fail : Effect.void),
     getActivePlanIds: () =>
       failOn === "getActivePlanIds" ? fail : Effect.succeed(["free"]),
+    getActiveSubscriptions: () =>
+      failOn === "getActivePlanIds"
+        ? fail
+        : Effect.succeed([{ planId: "free", trialEndsAt: null }]),
     trackUsage: () => (failOn === "trackUsage" ? fail : Effect.void),
     // Default to a benign snapshot so a `trackUsage` failure can be exercised
     // without the (sequenced) `checkUsage` also being the thing that fails.

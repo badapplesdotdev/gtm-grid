@@ -59,4 +59,26 @@ export const billingRouter = router({
         }),
       ),
     ),
+
+  /**
+   * Preview the recurring bill after adding `addSeats` seat(s), so the desktop can
+   * confirm the new price before an invite that raises the subscription. Any
+   * member may preview; returns `{ seats, total, currency }`.
+   */
+  previewSeatChange: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().min(1),
+        addSeats: z.number().int().min(1).optional(),
+      }),
+    )
+    .query(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* BillingService;
+          return yield* svc.previewSeatChange(input.workspaceId, input.addSeats);
+        }),
+      ),
+    ),
 });

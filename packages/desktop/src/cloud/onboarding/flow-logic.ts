@@ -97,10 +97,12 @@ export function nextScreen(
     case "workspace":
       return "invite";
     case "invite":
-      return "plan";
+      // Plan + AI-key steps were removed from the flow (every new workspace is
+      // auto-enrolled in the Team trial on creation; the AI key can be added
+      // later). Those screens are kept in code but unreachable — team is now the
+      // last step, finishing onboarding.
+      return "done";
     case "plan":
-      // Free skips checkout; a paid plan ALSO lands on connect once its checkout
-      // has been launched (checkout is a side-step, not a screen here).
       return "connect";
     case "connect":
       return "done";
@@ -129,7 +131,8 @@ export function backScreen(screen: OnboardingScreen): OnboardingScreen {
     case "connect":
       return "plan";
     case "done":
-      return "connect";
+      // Team is the last reachable step now (plan + connect are skipped).
+      return "invite";
   }
 }
 

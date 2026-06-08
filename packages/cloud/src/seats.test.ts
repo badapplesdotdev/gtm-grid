@@ -126,6 +126,19 @@ describe("checkout (standalone upgrade action)", () => {
     expect(url).toBe("https://billing.example.com/upgrade/1");
   });
 
+  it("uses setupPayment (not attach) when already on the requested plan", async () => {
+    // On the Team trial + 'Choose Team' → re-attaching the same plan 409s, so we
+    // collect a payment method via Stripe Checkout instead.
+    const url = await run(
+      checkout("team"),
+      fakeAutumnLayer({
+        activePlanIds: ["team"],
+        checkoutUrl: "https://billing.example.com/setup/1",
+      }),
+    );
+    expect(url).toBe("https://billing.example.com/setup/1");
+  });
+
   it("attaches each valid paid plan id (C27)", async () => {
     for (const planId of ["team", "business", "unlimited"]) {
       const url = await run(

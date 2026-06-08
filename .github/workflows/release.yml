@@ -150,6 +150,12 @@ jobs:
           VITE_API_URL: ${{ vars.VITE_API_URL || 'https://www.gtmgrid.dev' }}
           VITE_PARTY_URL: ${{ vars.VITE_PARTY_URL || 'https://gtmgrid-party.iammorganparry.partykit.dev' }}
           VITE_INNGEST_URL: ${{ vars.VITE_INNGEST_URL || 'https://www.gtmgrid.dev' }}
+          # Auto-updater signing: with the updater configured + createUpdaterArtifacts
+          # on, tauri-action signs each bundle's update archive with this key and
+          # publishes `latest.json` to the release. The matching PUBLIC key is in
+          # tauri.conf.json; the app verifies updates against it. No password set.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           projectPath: packages/desktop
           tagName: ${{ needs.version.outputs.tag }}

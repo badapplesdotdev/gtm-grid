@@ -5,6 +5,7 @@ import {
   pollTrigifySignals,
   processSignalBinding,
 } from "../../../lib/inngest/functions/poll-trigify-signals";
+import { sendTrialReminders } from "../../../lib/inngest/functions/send-trial-reminders";
 
 /**
  * The Inngest serve endpoint. Inngest invokes durable function steps by POSTing
@@ -16,5 +17,10 @@ export const runtime = "nodejs";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [processWebhookRecord, pollTrigifySignals, processSignalBinding],
+  functions: [
+    processWebhookRecord,
+    sendTrialReminders,
+    pollTrigifySignals,
+    processSignalBinding,
+  ],
 });

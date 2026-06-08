@@ -24,6 +24,7 @@ import { describe, expect, it } from "vitest";
 import { TestLayer, type TestLayerFixtures } from "../layers.js";
 import type { Workspace, WorkspaceUser } from "../repositories/workspace-repo.js";
 import { workspaceRepoLayer } from "../repositories/workspace-repo.js";
+import { workspaceMemberRepoLayer } from "../repositories/workspace-member-repo.js";
 import { BillingService } from "./billing-service.js";
 
 const WS_ID = "11111111-1111-1111-1111-111111111111";
@@ -136,6 +137,7 @@ describe("BillingService.checkout", () => {
     const billing = BillingService.Default.pipe(
       Layer.provide(membership),
       Layer.provide(workspaceRepoLayer(workspaces, users)),
+      Layer.provide(workspaceMemberRepoLayer([])),
       Layer.provide(seats),
       Layer.provide(autumn),
     );
@@ -171,7 +173,11 @@ describe("BillingService.syncPlan", () => {
       autumn: { activePlanIds: ["business"] },
     });
     if (!Exit.isSuccess(exit)) throw new Error("expected success");
-    expect(exit.value).toEqual({ id: "business", name: planName("business") });
+    expect(exit.value).toEqual({
+      id: "business",
+      name: planName("business"),
+      trialEndsAt: null,
+    });
   });
 
   it("normalises an annual plan id to its tier name", async () => {
@@ -186,6 +192,23 @@ describe("BillingService.syncPlan", () => {
     expect(exit.value).toEqual({
       id: "business_annual",
       name: planName("business_annual"),
+      trialEndsAt: null,
+    });
+  });
+
+  it("surfaces the trial end when the active subscription is trialing", async () => {
+    const exit = await runSync({
+      workspaces,
+      users,
+      memberships: ownerMembership,
+      currentUserId: "user_owner",
+      autumn: { activePlanIds: ["team"], trialEndsAt: 1_999_000_000_000 },
+    });
+    if (!Exit.isSuccess(exit)) throw new Error("expected success");
+    expect(exit.value).toEqual({
+      id: "team",
+      name: planName("team"),
+      trialEndsAt: 1_999_000_000_000,
     });
   });
 
@@ -198,7 +221,7 @@ describe("BillingService.syncPlan", () => {
       autumn: { activePlanIds: ["free"] },
     });
     if (!Exit.isSuccess(exit)) throw new Error("expected success");
-    expect(exit.value).toEqual({ id: null, name: "Free" });
+    expect(exit.value).toEqual({ id: null, name: "Free", trialEndsAt: null });
   });
 
   it("allows any member (not only owner/admin) to refresh the plan", async () => {
@@ -222,6 +245,65 @@ describe("BillingService.syncPlan", () => {
       currentUserId: "user_stranger",
       autumn: { activePlanIds: ["team"] },
     });
+    expect(failureTag(exit)).toBe("NotAMemberError");
+  });
+});
+
+describe("BillingService.previewSeatChange", () => {
+  const ownerMembership: readonly Membership[] = [
+    { workspaceId: WS_ID, userId: "user_owner", role: "owner" },
+  ];
+
+  it("previews the new bill for current members + 1 seat", async () => {
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const svc = yield* BillingService;
+        return yield* svc.previewSeatChange(WS_ID);
+      }).pipe(
+        Effect.provide(
+          TestLayer({
+            workspaces,
+            users,
+            memberships: ownerMembership,
+            members: [
+              {
+                id: "m1",
+                workspaceId: WS_ID,
+                userId: "user_owner",
+                role: "owner",
+                createdAt: 1,
+                name: null,
+                email: null,
+              },
+            ],
+            currentUserId: "user_owner",
+            autumn: { perSeatPrice: 20 },
+          }),
+        ),
+      ),
+    );
+    if (!Exit.isSuccess(exit)) throw new Error("expected success");
+    // 1 existing member + 1 new seat = 2 seats × $20 = $40.
+    expect(exit.value).toEqual({ seats: 2, total: 40, currency: "usd" });
+  });
+
+  it("rejects a non-member with NotAMemberError", async () => {
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const svc = yield* BillingService;
+        return yield* svc.previewSeatChange(WS_ID);
+      }).pipe(
+        Effect.provide(
+          TestLayer({
+            workspaces,
+            users,
+            memberships: [],
+            currentUserId: "stranger",
+            autumn: { perSeatPrice: 20 },
+          }),
+        ),
+      ),
+    );
     expect(failureTag(exit)).toBe("NotAMemberError");
   });
 });

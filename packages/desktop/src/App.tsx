@@ -11,13 +11,19 @@ import { AccountBar, PlanBillingModal } from "./cloud/AccountBar";
 import { PendingInvites } from "./cloud/PendingInvites";
 import { WorkspaceSettings } from "./cloud/WorkspaceSettings";
 import { OnboardingFlow } from "./cloud/onboarding/OnboardingFlow";
-import { cloudEnabled, syncWorkspacePlan, apiClient } from "./cloud/client";
+import { cloudEnabled, queryClient, syncWorkspacePlan, apiClient } from "./cloud/client";
 import { CloudGrid } from "./cloud/CloudGrid";
 import { useMe, useActiveWorkspace, useAuthState } from "./cloud/auth";
 import {
   useMyPendingInvitations,
   useAcceptInvitation,
 } from "./cloud/useWorkspaceInvitations";
+import {
+  clearPendingInviteToken,
+  usePendingInviteToken,
+} from "./cloud/pendingInvite";
+import { fireConfetti } from "./cloud/confetti";
+import { useUpdateCheck } from "./useUpdateCheck";
 import { useWorkspaceCredentials } from "./cloud/useWorkspaceCredentials";
 import {
   useCloudProjects,
@@ -551,6 +557,27 @@ export default function App() {
   // state above is left intact so switching back is instant and unchanged.
   const me = useMe();
   const { isAuthenticated, isLoading: authLoading } = useAuthState();
+  // A captured invite (deep link `gtmgrid://invite/<token>` or `?invite=` URL).
+  // When present + signed out it FORCES the auth flow even in local mode, so an
+  // invitee is always guided to sign up / sign in and then auto-enrolled.
+  const pendingInviteToken = usePendingInviteToken();
+  // In-app auto-update (Tauri only): a newer SIGNED release surfaces a top banner
+  // that downloads + installs it and relaunches, all in-app.
+  const update = useUpdateCheck();
+  const [updateDismissed, setUpdateDismissed] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const runUpdate = useCallback(async () => {
+    if (!update || updating) return;
+    setUpdating(true);
+    setUpdateError(null);
+    try {
+      await update.install(); // downloads, installs, then relaunches the app
+    } catch {
+      setUpdateError("Update failed — please try again.");
+      setUpdating(false);
+    }
+  }, [update, updating]);
   // Local-first: when cloud is configured but the user hasn't signed in, the
   // onboarding offers "Continue locally" — which sets this persisted flag so the
   // app boots straight into local mode (no cloud features) on future launches.
@@ -570,7 +597,31 @@ export default function App() {
     }
     setLocalMode(true);
   }, []);
+  // Pull fresh cloud state (user, workspaces, plan, seats) after a flow that
+  // changes it — finishing onboarding or accepting an invite — so the badge,
+  // plan, and cloud tables are immediately in sync. Invalidates every cached
+  // query and reconciles the plan from Autumn for the given workspace.
+  const refreshAppState = useCallback((workspaceId: string | null) => {
+    void queryClient.invalidateQueries();
+    if (workspaceId !== null) void syncWorkspacePlan(workspaceId);
+  }, []);
   const { activeWorkspace, setActiveWorkspaceId } = useActiveWorkspace(me ?? null);
+  // Shown after joining a workspace via an invite: a confetti burst + a
+  // confirmation dialog. Centralised so every accept path (the banner + the
+  // new-signup auto-enrol) celebrates + refreshes state identically.
+  const [celebrateInvite, setCelebrateInvite] = useState<{
+    workspaceName: string | null;
+  } | null>(null);
+  const onInviteAccepted = useCallback(
+    (workspaceId: Id<"workspaces">, workspaceName: string | null) => {
+      clearPendingInviteToken();
+      setActiveWorkspaceId(workspaceId);
+      refreshAppState(workspaceId);
+      fireConfetti();
+      setCelebrateInvite({ workspaceName });
+    },
+    [setActiveWorkspaceId, refreshAppState],
+  );
 
   // ── Cloud onboarding flow (C28) ──────────────────────────────
   // The full-screen split-layout onboarding wizard. Opened from the AccountBar
@@ -602,9 +653,13 @@ export default function App() {
       if (autoAcceptedRef.current) return;
       autoAcceptedRef.current = true;
       void (async () => {
-        const res = await acceptInvite(myInvites[0].token).catch(() => null);
+        const invite = myInvites[0];
+        const res = await acceptInvite(invite.token).catch(() => null);
         if (res?.status === "accepted") {
-          setActiveWorkspaceId(res.workspaceId as Id<"workspaces">);
+          onInviteAccepted(
+            res.workspaceId as Id<"workspaces">,
+            invite.workspaceName,
+          );
           return;
         }
         // Couldn't auto-enrol (seat limit / invalid / error): fall back to the
@@ -730,6 +785,15 @@ export default function App() {
   const cloudLocked =
     cloudEnabled && activeWorkspace != null && activeWorkspace.plan.id === null;
   const [showUpgrade, setShowUpgrade] = useState(false);
+  // Trial countdown: whole days left until the active workspace's trial ends
+  // (null when not trialing). Drives the in-app "trial ends in N days" banner so
+  // users add a card BEFORE the hard lock.
+  const trialEndsAt = activeWorkspace?.plan.trialEndsAt ?? null;
+  const trialDaysLeft =
+    trialEndsAt != null
+      ? Math.max(0, Math.ceil((trialEndsAt - Date.now()) / 86_400_000))
+      : null;
+  const showTrialBanner = cloudEnabled && !cloudLocked && trialDaysLeft != null;
 
   // Reset the open cloud project when the active workspace changes: a project
   // belongs to exactly one workspace, so keeping it open across a switch would
@@ -771,7 +835,32 @@ export default function App() {
     // no-op, so a user with no cloud projects simply stays in local mode.
     if (autoCloudWorkspaceRef.current === activeWorkspaceId) return;
     if (cloudProject !== null) return;
-    if (!cloudProjects || cloudProjects.length === 0) return;
+    if (!cloudProjects) return; // still loading
+    if (cloudProjects.length === 0) {
+      // A cloud workspace must NEVER fall back to the local engine — that would
+      // silently save tables to disk instead of the cloud. If the workspace has
+      // no projects yet, auto-create a default cloud project so the app enters
+      // cloud mode (`inCloud`) and the local table section stays hidden. Skip when
+      // cloud is locked (the lapsed-trial panel owns that state).
+      if (cloudLocked || !activeWorkspace) return;
+      autoCloudWorkspaceRef.current = activeWorkspaceId;
+      void (async () => {
+        try {
+          const id = await createCloudProject(activeWorkspace._id, "Default");
+          setCloudProject({
+            _id: id,
+            workspaceId: activeWorkspace._id,
+            name: "Default",
+            createdAt: Date.now(),
+          });
+          setCloudTableId(null);
+          setView({ kind: "table" });
+        } catch {
+          autoCloudWorkspaceRef.current = null; // allow a retry on next change
+        }
+      })();
+      return;
+    }
     autoCloudWorkspaceRef.current = activeWorkspaceId;
     let persisted: string | null = null;
     try { persisted = localStorage.getItem(LAST_CLOUD_PROJECT_KEY); } catch { /* ignore */ }
@@ -784,7 +873,7 @@ export default function App() {
       setCloudTableId(null);
       setView({ kind: "table" });
     }
-  }, [activeWorkspaceId, cloudProjects, cloudProject]);
+  }, [activeWorkspaceId, cloudProjects, cloudProject, cloudLocked, activeWorkspace, createCloudProject]);
 
   // Appearance: only the dark-mode toggle is user-controllable. Density and
   // accent are fixed (compact + green) by product decision.
@@ -988,6 +1077,7 @@ export default function App() {
           createdAt: Date.now(),
         });
         setCloudTableId(null);
+        setView({ kind: "table" });
       } catch (e) {
         const message =
           e instanceof Error ? e.message : "Could not create project.";
@@ -1012,6 +1102,7 @@ export default function App() {
     try {
       const id = await createCloudTable(cloudProject._id, "Untitled");
       setCloudTableId(id);
+      setView({ kind: "table" });
     } catch (e) {
       setCloudCreateError(
         e instanceof Error ? e.message : "Could not create table.",
@@ -1031,6 +1122,7 @@ export default function App() {
     try {
       const id = await createCloudTable(cloudProject._id, "Webhook table");
       setCloudTableId(id);
+      setView({ kind: "table" });
       setOpenWebhookToken((n) => n + 1);
     } catch (e) {
       setCloudCreateError(
@@ -1282,16 +1374,26 @@ export default function App() {
   // drops into local mode with NO cloud features, free + offline. Cloud access
   // (workspaces, sync, realtime) requires signing in. Once the user has chosen
   // local (or signed in), this never blocks again.
-  if (cloudEnabled && !localMode && authLoading) {
+  // A pending invite OVERRIDES local mode: an invitee who previously chose
+  // "continue locally" must still be guided through sign-in to accept + join.
+  const mustAuth =
+    cloudEnabled &&
+    !isAuthenticated &&
+    (!localMode || pendingInviteToken !== null);
+  if (mustAuth && authLoading) {
     return <AppLoader inShell label="Signing you in…" />;
   }
-  if (cloudEnabled && !localMode && !isAuthenticated) {
+  if (mustAuth) {
     return (
       <OnboardingFlow
         forced
-        initialScreen="signin"
+        initialScreen={pendingInviteToken !== null ? "signup" : "signin"}
         hasSession={false}
-        onClose={continueLocally}
+        onClose={() => {
+          // Opting out clears the invite so the gate doesn't re-fire in a loop.
+          if (pendingInviteToken !== null) clearPendingInviteToken();
+          continueLocally();
+        }}
         onDone={() => {}}
       />
     );
@@ -1299,9 +1401,52 @@ export default function App() {
 
   return (
     <div className="app-shell" style={{ ["--sidebar-w"]: `${sidebarWidth}px` } as CSSProperties}>
+      {/* Update-available banner — a newer release than the running app. */}
+      {update && !updateDismissed && (
+        <div className="update-banner" role="status">
+          <span className="update-banner__text">
+            GTM Grid <strong>v{update.version}</strong> is available.
+            {updateError ? ` ${updateError}` : ""}
+          </span>
+          <button
+            className="btn btn--primary btn-sm"
+            disabled={updating}
+            onClick={() => void runUpdate()}
+          >
+            {updating ? "Updating…" : "Update & restart"}
+          </button>
+          {!updating && (
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => setUpdateDismissed(true)}
+            >
+              Later
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Workspace-invite accept banner (email-matched + ?invite= URL token).
           Self-gates: renders nothing when signed out / no pending invites. */}
-      <PendingInvites onAccepted={setActiveWorkspaceId} />
+      <PendingInvites onAccepted={onInviteAccepted} />
+      {showTrialBanner && trialDaysLeft != null && (
+        <div
+          className={`trial-banner${trialDaysLeft <= 2 ? " trial-banner--urgent" : ""}`}
+          role="status"
+        >
+          <span className="trial-banner__text">
+            {trialDaysLeft === 0
+              ? "Your trial ends today — add a card to keep cloud sync, realtime & shared credentials."
+              : `Your trial ends in ${trialDaysLeft} day${trialDaysLeft === 1 ? "" : "s"} — add a card to keep your cloud features.`}
+          </span>
+          <button
+            className="btn btn--primary btn-sm"
+            onClick={() => setShowUpgrade(true)}
+          >
+            Upgrade now
+          </button>
+        </div>
+      )}
       <div className="app">
       {/* ── Sidebar ─────────────────────── */}
       <aside className="sidebar">
@@ -1353,7 +1498,9 @@ export default function App() {
                     style={cloudLocked ? { opacity: 0.6 } : undefined}
                     title={cloudLocked ? "Upgrade to unlock cloud tables" : undefined}
                     onClick={() =>
-                      cloudLocked ? setShowUpgrade(true) : setCloudTableId(t._id)
+                      cloudLocked
+                        ? setShowUpgrade(true)
+                        : (setCloudTableId(t._id), setView({ kind: "table" }))
                     }
                   >
                     <span className="sidebar-item-icon">
@@ -1686,11 +1833,11 @@ export default function App() {
         {/* Cloud project: the LIVE multiplayer grid (Convex). Replaces the local
             sidecar grid entirely while a cloud project is open. Hidden while a
             CSV import is open in this pane. */}
-        {!importMode && inCloud && !cloudLocked && <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} />}
+        {!importMode && inCloud && !cloudLocked && view.kind === "table" && <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} />}
 
         {/* Cloud locked: the trial lapsed / Free plan. Cloud data stays safe but
             inaccessible until the user upgrades; local tables are unaffected. */}
-        {!importMode && inCloud && cloudLocked && (
+        {!importMode && inCloud && cloudLocked && view.kind === "table" && (
           <div className="cloud-locked">
             <div className="cloud-locked__card">
               <div className="cloud-locked__icon">🔒</div>
@@ -1707,14 +1854,17 @@ export default function App() {
           </div>
         )}
 
-        {/* Extensions gallery + detail panels */}
-        {!importMode && !inCloud && view.kind === "extensions" && (
+        {/* Extensions gallery + detail panels. These render in BOTH local and
+            cloud workspaces — in cloud they own the shared "Workspace" credential
+            scope, so they must take precedence over the CloudGrid (which only
+            renders for the "table" view). */}
+        {!importMode && view.kind === "extensions" && (
           <ExtensionsBrowse
             extensions={extensions}
             onOpen={(id) => setView({ kind: "extension", id })}
           />
         )}
-        {!importMode && !inCloud && view.kind === "extension" && (
+        {!importMode && view.kind === "extension" && (
           <ExtensionPanel
             id={view.id}
             onConnected={refreshConnections}
@@ -1722,7 +1872,7 @@ export default function App() {
             workspaceCreds={workspaceCreds}
           />
         )}
-        {!importMode && !inCloud && view.kind === "ai" && (() => {
+        {!importMode && view.kind === "ai" && (() => {
           const p = aiProviders.find(x => x.id === view.id);
           return p ? <AiProviderPanel provider={p} onConnected={refreshConnections} workspaceCreds={workspaceCreds} /> : null;
         })()}
@@ -2016,6 +2166,7 @@ export default function App() {
           onDone={(workspaceId) => {
             if (workspaceId !== null) setActiveWorkspaceId(workspaceId);
             setOnboarding(null);
+            refreshAppState(workspaceId);
           }}
         />
       )}
@@ -2027,6 +2178,34 @@ export default function App() {
           workspaceName={activeWorkspace.name}
           onClose={() => setShowWorkspaceSettings(false)}
         />
+      )}
+
+      {/* Invite-accepted celebration: confetti fires on accept; this confirms it. */}
+      {celebrateInvite && (
+        <div
+          className="overlay"
+          onMouseDown={(e) =>
+            e.target === e.currentTarget && setCelebrateInvite(null)
+          }
+        >
+          <div className="modal celebrate" style={{ width: 380 }}>
+            <div className="celebrate__emoji">🎉</div>
+            <h2 className="celebrate__title">
+              You&apos;re in{celebrateInvite.workspaceName ? "!" : "!"}
+            </h2>
+            <p className="celebrate__body">
+              You&apos;ve joined{" "}
+              <strong>{celebrateInvite.workspaceName ?? "the workspace"}</strong>
+              . Your teammates&apos; cloud tables are ready.
+            </p>
+            <button
+              className="btn btn--primary"
+              onClick={() => setCelebrateInvite(null)}
+            >
+              Let&apos;s go
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Upgrade prompt for the cloud-locked / trial-expired state. Reuses the

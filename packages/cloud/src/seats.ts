@@ -148,6 +148,24 @@ export class AutumnClient extends Context.Tag("CloudAutumnClient")<
     >;
 
     /**
+     * Preview what `customerId` would be billed for `planId` at `seats` seats,
+     * WITHOUT making any change — Autumn `billing.previewAttach`. Powers the
+     * "adding a teammate raises your bill to $X" confirmation before an invite.
+     */
+    readonly previewSeatChange: (args: {
+      readonly customerId: string;
+      readonly planId: string;
+      readonly seats: number;
+    }) => Effect.Effect<
+      {
+        readonly total: number;
+        readonly currency: string;
+        readonly seats: number;
+      },
+      AutumnError
+    >;
+
+    /**
      * Begin attaching `planId` to `customerId`, returning the checkout/payment
      * URL the customer completes (or `null` when no payment is required). Maps
      * to Autumn `billing.attach({ customerId, planId })` → `{ paymentUrl }`.
@@ -161,6 +179,16 @@ export class AutumnClient extends Context.Tag("CloudAutumnClient")<
        * checkout path also backfills the customer's profile.
        */
       readonly customerData?: CustomerData;
+    }) => Effect.Effect<{ readonly checkoutUrl: string | null }, AutumnError>;
+
+    /**
+     * Open hosted Stripe Checkout to add a payment method WITHOUT changing the
+     * plan. Used to convert a no-card trial of the CURRENT plan to paid — calling
+     * `attach` with the plan the customer is already on returns a 409
+     * (`plan_already_attached`). Returns the checkout URL, or `null`.
+     */
+    readonly setupPayment: (args: {
+      readonly customerId: string;
     }) => Effect.Effect<{ readonly checkoutUrl: string | null }, AutumnError>;
 
     /**
@@ -206,6 +234,22 @@ export class AutumnClient extends Context.Tag("CloudAutumnClient")<
     readonly getActivePlanIds: (args: {
       readonly customerId: string;
     }) => Effect.Effect<readonly string[], AutumnError>;
+
+    /**
+     * Like {@link getActivePlanIds} but also returns each active/trialing
+     * subscription's `trialEndsAt` (epoch ms, or null when not trialing). Backs
+     * `BillingService.syncPlan`, which caches the plan id + trial end on the
+     * workspace for the badge, cloud gate, countdown banner and reminder scan.
+     */
+    readonly getActiveSubscriptions: (args: {
+      readonly customerId: string;
+    }) => Effect.Effect<
+      readonly {
+        readonly planId: string;
+        readonly trialEndsAt: number | null;
+      }[],
+      AutumnError
+    >;
 
     /**
      * Record consumption of `value` units of an arbitrary metered feature for
@@ -382,11 +426,13 @@ export class SeatsService extends Effect.Service<SeatsService>()(
               }),
             );
           }
-          const { checkoutUrl } = yield* autumn.attach({
-            customerId,
-            planId,
-            customerData,
-          });
+          // If the customer is ALREADY on the requested plan (e.g. trialing it),
+          // attach would 409 ("plan_already_attached"). Instead open Stripe
+          // Checkout to add a payment method, converting the trial to paid.
+          const activePlanIds = yield* autumn.getActivePlanIds({ customerId });
+          const { checkoutUrl } = activePlanIds.includes(planId)
+            ? yield* autumn.setupPayment({ customerId })
+            : yield* autumn.attach({ customerId, planId, customerData });
           if (checkoutUrl === null) {
             return yield* Effect.fail(
               new NoCheckoutUrlError({

@@ -1,6 +1,6 @@
 {
   "name": "@gtmgrid/web",
-  "version": "0.3.4",
+  "version": "0.3.8",
   "private": true,
   "type": "module",
   "description": "GTM Grid — marketing site + Inngest webhook worker (unified Next.js app).",
@@ -15,6 +15,7 @@
     "@gtmgrid/auth": "workspace:*",
     "@gtmgrid/cloud": "workspace:*",
     "@gtmgrid/db": "workspace:*",
+    "@gtmgrid/email": "workspace:*",
     "@gtmgrid/engine": "workspace:*",
     "@gtmgrid/services": "workspace:*",
     "@jitl/quickjs-wasmfile-release-asyncify": "^0.31.0",

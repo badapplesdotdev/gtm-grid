@@ -98,17 +98,65 @@ function boundMethods(client: Autumn): AutumnClientImpl {
         catch: (cause) =>
           new AutumnError({ message: autumnMessage(cause, "check"), cause }),
       }),
+    previewSeatChange: ({ customerId, planId, seats }) =>
+      Effect.tryPromise({
+        try: async () => {
+          // The customer is already on the plan (trial or paid) when inviting, so
+          // this is a seat-QUANTITY change → previewUpdate (previewAttach 409s on
+          // the same plan). The RECURRING price the user will pay is next cycle's
+          // total; `total` is the (often $0 during a trial) immediate proration.
+          const res = await client.billing.previewUpdate({
+            customerId,
+            planId,
+            featureQuantities: [{ featureId: SEATS_FEATURE_ID, quantity: seats }],
+          });
+          const recurring =
+            (typeof res.nextCycle?.total === "number"
+              ? res.nextCycle.total
+              : undefined) ??
+            (typeof res.total === "number" ? res.total : 0);
+          return { total: recurring, currency: res.currency ?? "usd", seats };
+        },
+        catch: (cause) =>
+          new AutumnError({
+            message: autumnMessage(cause, "previewUpdate"),
+            cause,
+          }),
+      }),
     attach: ({ customerId, planId, customerData }) =>
       Effect.tryPromise({
         try: async () => {
           await client.customers.getOrCreate(
             getOrCreateParams(customerId, customerData),
           );
-          const res = await client.billing.attach({ customerId, planId });
+          // `redirectMode: "always"` ALWAYS returns a Stripe Checkout URL. Without
+          // it, attaching a paid plan to a customer with no card (e.g. someone on
+          // a no-card trial) fails with a Stripe "no payment source" 400 instead
+          // of routing them through hosted checkout to add one.
+          const res = await client.billing.attach({
+            customerId,
+            planId,
+            redirectMode: "always",
+          });
           return { checkoutUrl: res.paymentUrl ?? null };
         },
         catch: (cause) =>
           new AutumnError({ message: autumnMessage(cause, "attach"), cause }),
+      }),
+    setupPayment: ({ customerId }) =>
+      Effect.tryPromise({
+        try: async () => {
+          // Hosted Stripe Checkout to add a payment method WITHOUT changing the
+          // plan — used to convert a no-card trial of the CURRENT plan to paid
+          // (re-attaching the same plan 409s "plan_already_attached").
+          const res = await client.billing.setupPayment({ customerId });
+          return { checkoutUrl: res.url ?? null };
+        },
+        catch: (cause) =>
+          new AutumnError({
+            message: autumnMessage(cause, "setupPayment"),
+            cause,
+          }),
       }),
     startTrial: ({ customerId, planId, seats, trialDays, customerData }) =>
       Effect.tryPromise({
@@ -162,6 +210,24 @@ function boundMethods(client: Autumn): AutumnClientImpl {
           return subs
             .filter((s) => s.status === "active" || s.status === "trialing")
             .map((s) => s.planId);
+        },
+        catch: (cause) =>
+          new AutumnError({
+            message: autumnMessage(cause, "customers.get"),
+            cause,
+          }),
+      }),
+    getActiveSubscriptions: ({ customerId }) =>
+      Effect.tryPromise({
+        try: async () => {
+          const res = await client.customers.get({ customerId });
+          const subs = res.subscriptions ?? [];
+          return subs
+            .filter((s) => s.status === "active" || s.status === "trialing")
+            .map((s) => ({
+              planId: s.planId,
+              trialEndsAt: s.trialEndsAt ?? null,
+            }));
         },
         catch: (cause) =>
           new AutumnError({
@@ -253,10 +319,15 @@ export const AutumnClientLive: Layer.Layer<AutumnClient> = Layer.effect(
       sdk.pipe(Effect.flatMap((client) => use(boundMethods(client))));
     return {
       checkSeats: (args) => withClient((m) => m.checkSeats(args)),
+      previewSeatChange: (args) =>
+        withClient((m) => m.previewSeatChange(args)),
       attach: (args) => withClient((m) => m.attach(args)),
+      setupPayment: (args) => withClient((m) => m.setupPayment(args)),
       startTrial: (args) => withClient((m) => m.startTrial(args)),
       trackSeats: (args) => withClient((m) => m.trackSeats(args)),
       getActivePlanIds: (args) => withClient((m) => m.getActivePlanIds(args)),
+      getActiveSubscriptions: (args) =>
+        withClient((m) => m.getActiveSubscriptions(args)),
       trackUsage: (args) => withClient((m) => m.trackUsage(args)),
       checkUsage: (args) => withClient((m) => m.checkUsage(args)),
     };

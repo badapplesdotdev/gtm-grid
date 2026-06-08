@@ -243,6 +243,7 @@ export const appLayer = (params: {
   const billingService = BillingService.Default.pipe(
     Layer.provide(membershipService),
     Layer.provide(workspaceRepo),
+    Layer.provide(workspaceMemberRepo),
     Layer.provide(seatsService),
     Layer.provide(autumnLayer),
   );
@@ -550,6 +551,7 @@ export const TestLayer = (
   const billingService = BillingService.Default.pipe(
     Layer.provide(membershipService),
     Layer.provide(workspaceRepo),
+    Layer.provide(workspaceMemberRepo),
     Layer.provide(seatsService),
     Layer.provide(autumn),
   );

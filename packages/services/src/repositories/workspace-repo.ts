@@ -19,7 +19,7 @@
  */
 
 import { schema } from "@gtmgrid/db";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, gte, inArray, isNotNull, lte } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
 
@@ -46,6 +46,8 @@ export interface Workspace {
   readonly cloudActionsLimit?: number | null;
   /** Current PAID plan id ("team"|"business"|"unlimited"), or null for free. */
   readonly currentPlanId?: string | null;
+  /** Epoch ms the current trial ends, or null when not trialing. */
+  readonly trialEndsAt?: number | null;
 }
 
 /**
@@ -138,16 +140,37 @@ export class WorkspaceRepo extends Context.Tag("WorkspaceRepo")<
     ) => Effect.Effect<Option.Option<WorkspaceUser>, WorkspaceRepoError>;
 
     /**
-     * Persist the workspace's current paid plan id (`currentPlanId`). This is the
-     * write-back that was MISSING from the original snapshot — the column was only
-     * ever read, so the `me` query's cached plan was stuck at Free regardless of
-     * Autumn. `BillingService.syncPlan` calls this with the live Autumn plan id
-     * (or `null` for Free) so the badge/billing panel reflect real upgrades.
+     * Persist the workspace's current paid plan id (`currentPlanId`) AND its trial
+     * end (`trialEndsAt`, epoch ms or null when not trialing). The write-back that
+     * keeps the cached snapshot in step with Autumn — `BillingService.syncPlan`
+     * calls it with the live plan id + trial end (both null for Free), and trial
+     * start seeds it. Drives the plan badge, the cloud-access gate, the in-app
+     * trial countdown, and the email-reminder scan.
      */
-    readonly updatePlanId: (
+    readonly updatePlan: (
       workspaceId: string,
       planId: string | null,
+      trialEndsAt: number | null,
     ) => Effect.Effect<void, WorkspaceRepoError>;
+
+    /**
+     * Workspaces whose trial ends within `[fromMs, toMs]`, with the owner's email.
+     * Backs the scheduled trial-ending email reminders. Excludes rows with no
+     * trial or no owner email. Ordered by `trialEndsAt` ascending.
+     */
+    readonly findTrialsEndingBetween: (
+      fromMs: number,
+      toMs: number,
+    ) => Effect.Effect<
+      readonly {
+        readonly id: string;
+        readonly name: string;
+        readonly ownerEmail: string;
+        readonly ownerName: string | null;
+        readonly trialEndsAt: number;
+      }[],
+      WorkspaceRepoError
+    >;
   }
 >() {}
 
@@ -175,6 +198,7 @@ export const WorkspaceRepoLive: Layer.Layer<WorkspaceRepo, never, DbClient> =
         cloudActionsUsed: schema.workspaces.cloudActionsUsed,
         cloudActionsLimit: schema.workspaces.cloudActionsLimit,
         currentPlanId: schema.workspaces.currentPlanId,
+        trialEndsAt: schema.workspaces.trialEndsAt,
       } as const;
       return {
         findById: (workspaceId) =>
@@ -262,15 +286,55 @@ export const WorkspaceRepoLive: Layer.Layer<WorkspaceRepo, never, DbClient> =
             },
             catch: fail("user lookup"),
           }),
-        updatePlanId: (workspaceId, planId) =>
+        updatePlan: (workspaceId, planId, trialEndsAt) =>
           Effect.tryPromise({
             try: async () => {
               await db
                 .update(schema.workspaces)
-                .set({ currentPlanId: planId })
+                .set({ currentPlanId: planId, trialEndsAt })
                 .where(eq(schema.workspaces.id, workspaceId));
             },
             catch: fail("workspace plan update"),
+          }),
+        findTrialsEndingBetween: (fromMs, toMs) =>
+          Effect.tryPromise({
+            try: async () => {
+              const rows = await db
+                .select({
+                  id: schema.workspaces.id,
+                  name: schema.workspaces.name,
+                  trialEndsAt: schema.workspaces.trialEndsAt,
+                  ownerEmail: schema.users.email,
+                  ownerName: schema.users.name,
+                })
+                .from(schema.workspaces)
+                .innerJoin(
+                  schema.users,
+                  eq(schema.users.id, schema.workspaces.ownerId),
+                )
+                .where(
+                  and(
+                    isNotNull(schema.workspaces.trialEndsAt),
+                    gte(schema.workspaces.trialEndsAt, fromMs),
+                    lte(schema.workspaces.trialEndsAt, toMs),
+                  ),
+                )
+                .orderBy(schema.workspaces.trialEndsAt);
+              return rows.flatMap((r) =>
+                r.trialEndsAt === null
+                  ? []
+                  : [
+                      {
+                        id: r.id,
+                        name: r.name,
+                        ownerEmail: r.ownerEmail,
+                        ownerName: r.ownerName ?? null,
+                        trialEndsAt: r.trialEndsAt,
+                      },
+                    ],
+              );
+            },
+            catch: fail("trial-ending scan"),
           }),
       };
     }),
@@ -325,10 +389,30 @@ export const workspaceRepoLayer = (
       Effect.succeed(
         Option.fromNullable(userRows.find((u) => u.id === userId) ?? null),
       ),
-    updatePlanId: (workspaceId, planId) =>
+    updatePlan: (workspaceId, planId, trialEndsAt) =>
       Effect.sync(() => {
         const i = rows.findIndex((r) => r.id === workspaceId);
-        if (i !== -1) rows[i] = { ...rows[i], currentPlanId: planId };
+        if (i !== -1) {
+          rows[i] = { ...rows[i], currentPlanId: planId, trialEndsAt };
+        }
       }),
+    findTrialsEndingBetween: (fromMs, toMs) =>
+      Effect.succeed(
+        rows.flatMap((w) => {
+          const t = w.trialEndsAt ?? null;
+          if (t === null || t < fromMs || t > toMs) return [];
+          const owner = userRows.find((u) => u.id === w.ownerId);
+          if (owner?.email == null) return [];
+          return [
+            {
+              id: w.id,
+              name: w.name,
+              ownerEmail: owner.email,
+              ownerName: owner.name ?? null,
+              trialEndsAt: t,
+            },
+          ];
+        }),
+      ),
   });
 };

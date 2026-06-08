@@ -392,6 +392,55 @@ export function inviteEmail(opts: {
 }
 
 /**
+ * Trial-ending reminder. Sent by the scheduled trial-reminder job at the "soon"
+ * (a few days left) and "last day" milestones so the owner adds a card before the
+ * cloud tier locks. The CTA opens the app, where the upgrade/checkout lives.
+ */
+export function trialEndingEmail(opts: {
+  to: string;
+  workspaceName: string;
+  daysLeft: number;
+  appUrl: string;
+}): OutboundEmail {
+  const ws = escapeHtml(opts.workspaceName);
+  const when =
+    opts.daysLeft <= 0
+      ? "today"
+      : opts.daysLeft === 1
+        ? "tomorrow"
+        : `in ${opts.daysLeft} days`;
+  const headline =
+    opts.daysLeft <= 0
+      ? `Your ${APP_NAME} trial ends today`
+      : `Your ${APP_NAME} trial ends ${when}`;
+  const bodyRows =
+    bodyRow(
+      `<h1 style="margin:0 0 16px;font-family:${SANS};font-size:25px;line-height:1.2;font-weight:700;letter-spacing:-0.02em;color:${INK};">${headline}</h1>
+       <p style="margin:0;font-family:${SANS};font-size:15px;line-height:1.6;color:${INK_2};">The <strong style="color:${INK};font-weight:600;">${ws}</strong> workspace's free trial ends ${when}. Add a card to keep cloud sync, realtime multiplayer and shared credentials. Your data stays safe either way — local tables keep working free.</p>`,
+      "38px 36px 6px",
+    ) +
+    bodyRow(
+      `${ctaButton(opts.appUrl, "upgrade to keep cloud")}`,
+      "22px 36px 34px",
+    );
+  return {
+    to: opts.to,
+    subject:
+      opts.daysLeft <= 0
+        ? `Your ${opts.workspaceName} trial ends today`
+        : `Your ${opts.workspaceName} trial ends ${when}`,
+    html: shell({
+      title: `trial ending — ${APP_NAME}`,
+      preheader: `The ${opts.workspaceName} workspace trial ends ${when} — upgrade to keep cloud features.`,
+      tag: "Billing",
+      bodyRows,
+      footerNote: `this reminder was sent to ${opts.to}. local features always stay free.`,
+    }),
+    text: `Your ${opts.workspaceName} trial on ${APP_NAME} ends ${when}. Upgrade to keep cloud features: ${opts.appUrl}`,
+  };
+}
+
+/**
  * Welcome email (the design's 3-step "every column is a function" onboarding).
  * Builder is ready for wiring (e.g. on first workspace creation); not yet sent
  * by any trigger. "Welcome" tag.
