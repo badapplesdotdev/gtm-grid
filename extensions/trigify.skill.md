@@ -2,7 +2,7 @@
 > Agentic social-listening & GTM intelligence: Boolean keyword monitoring across LinkedIn, X/Twitter, Reddit, YouTube, podcasts, Substack, Bluesky, HN, GitHub & news — plus LinkedIn/company enrichment, post-engager capture, social signals, X actions, and workflow automation. The right tool when a grid column needs prospects sourced from social activity or LinkedIn profiles/companies enriched.
 
 ## When to use
-- Source prospects from social activity: who posted about a topic (`discoverCreators`, the `create*Search` family) or who liked/commented on a specific post or competitor (`postEngagements`, `postComments`, `profileEngagementBulk`).
+- Source prospects from social activity: who posted about a topic (the `create*Search` family) or who liked/commented on a specific post or competitor (`postEngagements`, `postComments`, `profileEngagementBulk`).
 - Enrich a LinkedIn profile or company URL into structured fields — name, title, company, headcount, etc. (`enrichProfile`, `enrichCompany`), or an X handle (`enrichXUser`, `lookupXUser`).
 - Stand up always-on monitoring: saved keyword/profile searches per platform, social-signal subscriptions, or topic searches that dedupe engagers across posts.
 - Run GTM automation inside Trigify (triggers → filters → actions to CRM/Slack/outreach) and take X actions (post, reply, follow, DM).
@@ -11,7 +11,7 @@
 ## Auth & cost
 - **Base URL:** `https://api.trigify.io`. Auth is the **`x-api-key`** header (the manifest injects it from the secret) — there is no Bearer token.
 - **Credits:** Trigify is credit-metered (1 credit ≈ 1 post monitored or 1 workflow/enrichment action). Enrichment, engager pulls, and signal subscriptions burn credits per row — estimate first with `estimateSocialSignals` / `getTopicCreditsSummary`, and watch the balance with `creditsBalance`.
-- **Most common entry points:** `trigify.enrichProfile` (LinkedIn → fields), `trigify.discoverCreators` (topic → creators), `trigify.postEngagements` (post URL → likers), and the per-platform `trigify.create*Search` + `trigify.searchResults` (async monitor → results).
+- **Most common entry points:** `trigify.enrichProfile` (LinkedIn → fields), `trigify.postEngagements` (post URL → likers), and the per-platform `trigify.create*Search` + `trigify.searchResults` (async monitor → results).
 
 ## Endpoints by job
 
@@ -33,9 +33,6 @@
 - `trigify.profileEngagementBulk` — bulk-register profiles to continuously capture their engagers.
 - `trigify.profileEngagementResults` / `trigify.profilePostEngagementResults` — pull captured engagers (overall vs per-post).
 - `trigify.profileEngagementRemove` — stop tracking a profile.
-
-**Discover creators by topic**
-- `trigify.discoverCreators` — given a topic/keyword, return creators posting about it. Best first step for topic-based sourcing before enrichment.
 
 **Create a saved search per platform (async)**
 - Posts/keywords: `trigify.createLinkedInPostsSearch`, `createTwitterPostsSearch`, `createRedditPostsSearch`, `createSubredditPostsSearch`, `createYouTubeVideosSearch`, `createSubstackPostsSearch`, `createSubstackNotesSearch`, `createPodcastKeywordsSearch`, `createHackerNewsStoriesSearch`, `createNewsApiAiPostsSearch`, `createDailyDevPostsSearch`, `createTikTokVideosSearch`, `createGitHubIssuesSearch`, `createGitHubDiscussionsSearch`, `createBlueskyPostsSearch`.
@@ -77,9 +74,9 @@
 - `trigify.getOrganisation`, `listOrganisations` — current org context.
 
 ## Recipes
-1. **Source creators who posted about a topic, then enrich**
-   1. `trigify.discoverCreators` with `{ "topic": "{{Topic}}" }` → list of creator profiles.
-   2. `add_rows` to the table with each creator's LinkedIn URL.
+1. **Source people posting about a topic, then enrich**
+   1. `trigify.createLinkedInPostsSearch` with Boolean keywords for the topic → returns a search `id` (results populate asynchronously).
+   2. Poll `trigify.searchResults` with `{ "id": "{{Search ID}}" }` → posters; `add_rows` with each LinkedIn URL.
    3. `trigify.enrichProfile` with `{ "url": "{{LinkedIn URL}}" }` → name, title, company, email per row.
 
 2. **Capture everyone who engaged with a competitor's post**

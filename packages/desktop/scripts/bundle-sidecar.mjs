@@ -77,8 +77,13 @@ writeFileSync(
 );
 
 // Ship the connector manifests so the bundled app has built-in extensions.
+// Wipe the destination first so a tool removed from source (its manifest +
+// <tool>.skill.md) is actually dropped from the bundle — cpSync only adds/over-
+// writes, it never prunes, which would otherwise resurrect deleted tools.
 const extSrc = resolve(repo, "extensions");
-if (existsSync(extSrc)) cpSync(extSrc, resolve(out, "extensions"), { recursive: true });
+const extDst = resolve(out, "extensions");
+rmSync(extDst, { recursive: true, force: true });
+if (existsSync(extSrc)) cpSync(extSrc, extDst, { recursive: true });
 
 // Bundled MCP launcher: runs the bundled node + mcp.mjs (used by the agent panel
 // so Claude Code / Codex connect to gtmgrid's MCP server inside the packaged app).

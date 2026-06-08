@@ -4,6 +4,7 @@
   "version": "2.0.0",
   "category": "social",
   "description": "Social listening + engagement intelligence — monitor profiles, companies, posts and topics across LinkedIn, X/Twitter, Reddit, YouTube, TikTok, Substack, Bluesky, GitHub, Hacker News, Daily.dev, Podcasts and News.",
+  "featured": true,
   "baseUrl": "https://api.trigify.io",
   "logo": "https://www.google.com/s2/favicons?domain=trigify.io&sz=128",
   "auth": { "type": "apiKey", "header": "x-api-key", "secretKey": "apiKey" },
@@ -160,29 +161,6 @@
         "page": { "type": "integer" },
         "page_size": { "type": "integer", "description": "10, 25 or 50" },
         "includes": { "type": "array", "items": { "type": "string" }, "description": "Fields to return: first_name, last_name, linkedin_url, avatar, company, job_title, post.text, etc." }
-      }}
-    },
-    {
-      "id": "discoverCreators",
-      "label": "Discover Creators",
-      "description": "Find LinkedIn creators who POST about specific topics (vs. engage). Filter by job titles, firmographics, follower count, location. Returns prospect data + posting cadence + avg engagement.",
-      "verb": "POST", "path": "/v1/discover/creators", "credits": 1,
-      "input": { "type": "object", "required": ["posted_about_keywords", "posted_about_days"], "properties": {
-        "posted_about_keywords": { "type": "array", "items": { "type": "string" } },
-        "posted_about_days": { "type": "number", "description": "1-30" },
-        "posted_about_topic_strength": { "type": "number", "description": "0-5 posting frequency" },
-        "job_titles": { "type": "array", "items": { "type": "string" } },
-        "job_titles_excludes": { "type": "array", "items": { "type": "string" } },
-        "company_domain_includes": { "type": "array", "items": { "type": "string" } },
-        "company_domain_excludes": { "type": "array", "items": { "type": "string" } },
-        "location_country": { "type": "array", "items": { "type": "string" } },
-        "location_excludes": { "type": "array", "items": { "type": "string" } },
-        "industries": { "type": "array", "items": { "type": "string" } },
-        "industries_excludes": { "type": "array", "items": { "type": "string" } },
-        "company_sizes": { "type": "array", "items": { "type": "string" } },
-        "followers": { "type": "array", "items": { "type": "string" } },
-        "page": { "type": "number" },
-        "page_size": { "type": "integer", "description": "10, 25 or 50" }
       }}
     },
     {

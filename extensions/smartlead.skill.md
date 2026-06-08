@@ -5,7 +5,7 @@
 - Use to push enriched leads from a grid into a Smartlead campaign sequence, then read back open/click/reply/bounce activity for each lead.
 - Use to discover campaign ids (list/get), check a lead's status by email, or audit which sending inboxes (email accounts) are connected.
 - Use for outbound *cold email* orchestration specifically — sequence sending, deliverability inboxes, reply tracking.
-- Do NOT use for finding/verifying email addresses or enriching people/companies (that's LeadMagic/Trigify), for LinkedIn/social outreach (HeyReach), or for meeting/transcript data (Fireflies). Smartlead only knows leads and sends inside *your* Smartlead workspace.
+- Do NOT use for finding/verifying email addresses or enriching people/companies (that's LeadMagic/Trigify), for LinkedIn/social outreach, or for meeting/transcript data (Fireflies). Smartlead only knows leads and sends inside *your* Smartlead workspace.
 
 ## Auth & cost
 - **Base URL:** `https://server.smartlead.ai/api/v1`.
