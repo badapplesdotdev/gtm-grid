@@ -1,5 +1,17 @@
 # @gtmgrid/desktop
 
+## 0.3.10
+
+### Patch Changes
+
+- 5c89f92: Auto-updater now re-checks for new releases while the app stays open, instead of
+  only at launch. It polls every 2 hours and re-checks when the window regains
+  focus (throttled to once per 15 minutes), so a long-running app surfaces the
+  update banner without needing a manual restart. Polling stops once an update is
+  found.
+  - @gtmgrid/cloud@0.3.10
+  - @gtmgrid/services@0.3.10
+
 ## 0.3.9
 
 ### Patch Changes
