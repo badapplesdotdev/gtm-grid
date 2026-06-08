@@ -1,0 +1,737 @@
+{
+  "id": "attio",
+  "name": "Attio",
+  "version": "1.0.0",
+  "category": "crm",
+  "description": "Attio CRM — read and write people, companies, deals and custom-object records, manage lists, attributes, notes, tasks, comments and webhooks via the Attio v2 REST API.",
+  "logo": "https://www.google.com/s2/favicons?domain=attio.com&sz=128",
+  "baseUrl": "https://api.attio.com",
+  "auth": { "type": "apiKey", "header": "Authorization", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "identifySelf",
+      "label": "Identify Token (Self)",
+      "description": "Identify the current access token: returns { active, scope, client_id, token_type, authorized_by_workspace_member_id, workspace_id, workspace_name, workspace_slug, workspace_logo_url }. Use to confirm auth and discover the workspace. No inputs. Free.",
+      "verb": "GET",
+      "path": "/v2/self",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+
+    {
+      "id": "listObjects",
+      "label": "List Objects",
+      "description": "List all system and custom objects in the workspace (people, companies, deals, users, workspaces + any custom objects). Returns { data: [{ id:{ workspace_id, object_id }, api_slug, singular_noun, plural_noun, created_at }] }. No inputs. Free.",
+      "verb": "GET",
+      "path": "/v2/objects",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "getObject",
+      "label": "Get Object",
+      "description": "Get a single object's config by id or api_slug (e.g. 'people', 'companies', 'deals'). Returns { data:{ id, api_slug, singular_noun, plural_noun } }. Free.",
+      "verb": "GET",
+      "path": "/v2/objects/{object}",
+      "credits": 0,
+      "input": { "type": "object", "required": ["object"], "properties": {
+        "object": { "type": "string", "description": "Object id or api_slug, e.g. 'companies'" }
+      }}
+    },
+    {
+      "id": "createObject",
+      "label": "Create Object",
+      "description": "Create a new custom object. Body: data:{ api_slug, singular_noun, plural_noun }. Returns the created object. 1 credit.",
+      "verb": "POST",
+      "path": "/v2/objects",
+      "credits": 1,
+      "input": { "type": "object", "required": ["data"], "properties": {
+        "data": { "type": "object", "description": "{ api_slug, singular_noun, plural_noun }" }
+      }}
+    },
+    {
+      "id": "updateObject",
+      "label": "Update Object",
+      "description": "Update a custom object's slug/nouns. Body: data:{ api_slug?, singular_noun?, plural_noun? }. Returns the updated object. 1 credit.",
+      "verb": "PATCH",
+      "path": "/v2/objects/{object}",
+      "credits": 1,
+      "input": { "type": "object", "required": ["object", "data"], "properties": {
+        "object": { "type": "string", "description": "Object id or api_slug" },
+        "data": { "type": "object", "description": "{ api_slug?, singular_noun?, plural_noun? }" }
+      }}
+    },
+
+    {
+      "id": "queryRecords",
+      "label": "Query Records",
+      "description": "List/filter/sort records of an object (people, companies, deals, or custom). Body: { filter?, filter_view_id?, sorts?:[{ attribute, direction:'asc'|'desc', field? }], limit? (max 500), offset? }. Returns { data:[{ id:{ record_id, object_id }, web_url, created_at, values }] }. Filter shape: { attribute_slug: value } or { '$or':[...] }. Free.",
+      "verb": "POST",
+      "path": "/v2/objects/{object}/records/query",
+      "credits": 0,
+      "input": { "type": "object", "required": ["object"], "properties": {
+        "object": { "type": "string", "description": "Object id or api_slug, e.g. 'companies'" },
+        "filter": { "type": "object", "description": "Attribute filter, e.g. { name: { '$contains': 'Stripe' } }" },
+        "filter_view_id": { "type": "string", "description": "Use a saved view's filter instead of an inline filter" },
+        "sorts": { "type": "array", "items": { "type": "object" }, "description": "[{ attribute, direction:'asc'|'desc', field? }]" },
+        "limit": { "type": "integer", "description": "Max records (default 500)" },
+        "offset": { "type": "integer", "description": "Pagination offset (default 0)" }
+      }}
+    },
+    {
+      "id": "searchRecords",
+      "label": "Search Records (Fuzzy)",
+      "description": "Fuzzy full-text search for records across one or more objects. Body: { query, objects?:['people','companies'], limit? }. Returns matching records ranked by relevance. Free.",
+      "verb": "POST",
+      "path": "/v2/objects/records/search",
+      "credits": 0,
+      "input": { "type": "object", "required": ["query"], "properties": {
+        "query": { "type": "string", "description": "Free-text search term" },
+        "objects": { "type": "array", "items": { "type": "string" }, "description": "Object slugs to search, e.g. ['people','companies']" },
+        "limit": { "type": "integer", "description": "Max results" }
+      }}
+    },
+    {
+      "id": "getRecord",
+      "label": "Get Record",
+      "description": "Get a single record by object + record_id, with all its current attribute values. Returns { data:{ id:{ record_id, object_id }, web_url, created_at, values } }. Free.",
+      "verb": "GET",
+      "path": "/v2/objects/{object}/records/{record_id}",
+      "credits": 0,
+      "input": { "type": "object", "required": ["object", "record_id"], "properties": {
+        "object": { "type": "string", "description": "Object id or api_slug" },
+        "record_id": { "type": "string", "description": "Record UUID" }
+      }}
+    },
+    {
+      "id": "createRecord",
+      "label": "Create Record",
+      "description": "Create a new record (person, company, deal, or custom). Body: { data:{ values:{ attribute_slug: value | [values] } } }. Throws on conflicts of unique attributes — use assertRecord to upsert instead. Returns the created record. 1 credit.",
+      "verb": "POST",
+      "path": "/v2/objects/{object}/records",
+      "credits": 1,
+      "input": { "type": "object", "required": ["object", "data"], "properties": {
+        "object": { "type": "string", "description": "Object id or api_slug, e.g. 'companies'" },
+        "data": { "type": "object", "description": "{ values: { attribute_slug: value, ... } }" }
+      }}
+    },
+    {
+      "id": "assertRecord",
+      "label": "Assert (Upsert) Record",
+      "description": "Create OR update a record matched by a single attribute. Query param matching_attribute = the slug/id used to find an existing record (e.g. 'domains' for companies, 'email_addresses' for people). If a record matches, it is updated; otherwise created. Body: { data:{ values:{...} } }. Returns the asserted record. 1 credit.",
+      "verb": "PUT",
+      "path": "/v2/objects/{object}/records",
+      "credits": 1,
+      "input": { "type": "object", "required": ["object", "data"], "properties": {
+        "object": { "type": "string", "description": "Object id or api_slug" },
+        "matching_attribute": { "type": "string", "description": "Query param — slug/id of the unique attribute used to match, e.g. 'domains'" },
+        "data": { "type": "object", "description": "{ values: { attribute_slug: value, ... } }" }
+      }}
+    },
+    {
+      "id": "updateRecordAppend",
+      "label": "Update Record (Append Multiselect)",
+      "description": "Update a record by id; for multiselect attributes the supplied values are APPENDED to existing ones. Body: { data:{ values:{...} } }. Returns the updated record. 1 credit.",
+      "verb": "PATCH",
+      "path": "/v2/objects/{object}/records/{record_id}",
+      "credits": 1,
+      "input": { "type": "object", "required": ["object", "record_id", "data"], "properties": {
+        "object": { "type": "string", "description": "Object id or api_slug" },
+        "record_id": { "type": "string", "description": "Record UUID" },
+        "data": { "type": "object", "description": "{ values: { attribute_slug: value, ... } }" }
+      }}
+    },
+    {
+      "id": "updateRecordOverwrite",
+      "label": "Update Record (Overwrite Multiselect)",
+      "description": "Update a record by id; for multiselect attributes the supplied values OVERWRITE (replace) existing ones. Body: { data:{ values:{...} } }. Returns the updated record. 1 credit.",
+      "verb": "PUT",
+      "path": "/v2/objects/{object}/records/{record_id}",
+      "credits": 1,
+      "input": { "type": "object", "required": ["object", "record_id", "data"], "properties": {
+        "object": { "type": "string", "description": "Object id or api_slug" },
+        "record_id": { "type": "string", "description": "Record UUID" },
+        "data": { "type": "object", "description": "{ values: { attribute_slug: value, ... } }" }
+      }}
+    },
+    {
+      "id": "deleteRecord",
+      "label": "Delete Record",
+      "description": "Permanently delete a record by object + record_id. Returns {} on success. 1 credit.",
+      "verb": "DELETE",
+      "path": "/v2/objects/{object}/records/{record_id}",
+      "credits": 1,
+      "input": { "type": "object", "required": ["object", "record_id"], "properties": {
+        "object": { "type": "string", "description": "Object id or api_slug" },
+        "record_id": { "type": "string", "description": "Record UUID" }
+      }}
+    },
+    {
+      "id": "listRecordAttributeValues",
+      "label": "List Record Attribute Values",
+      "description": "List the historical/current values of one attribute on a record (e.g. the full history of a company's 'name'). Returns { data:[{ active_from, active_until, value }] }. Free.",
+      "verb": "GET",
+      "path": "/v2/objects/{object}/records/{record_id}/attributes/{attribute}/values",
+      "credits": 0,
+      "input": { "type": "object", "required": ["object", "record_id", "attribute"], "properties": {
+        "object": { "type": "string", "description": "Object id or api_slug" },
+        "record_id": { "type": "string", "description": "Record UUID" },
+        "attribute": { "type": "string", "description": "Attribute id or slug" },
+        "limit": { "type": "integer" },
+        "offset": { "type": "integer" }
+      }}
+    },
+    {
+      "id": "listRecordEntries",
+      "label": "List Record's List Entries",
+      "description": "List all list entries that reference a given record — i.e. which lists this record belongs to. Returns { data:[{ list_id, entry_id, ... }] }. Free.",
+      "verb": "GET",
+      "path": "/v2/objects/{object}/records/{record_id}/entries",
+      "credits": 0,
+      "input": { "type": "object", "required": ["object", "record_id"], "properties": {
+        "object": { "type": "string", "description": "Object id or api_slug" },
+        "record_id": { "type": "string", "description": "Record UUID" },
+        "limit": { "type": "integer" },
+        "offset": { "type": "integer" }
+      }}
+    },
+
+    {
+      "id": "listAttributes",
+      "label": "List Attributes",
+      "description": "List all attributes defined on an object or list. target = 'objects' or 'lists'; identifier = the object/list slug or id. Returns { data:[{ id, api_slug, title, type, is_unique, is_multiselect, is_required }] }. Free.",
+      "verb": "GET",
+      "path": "/v2/{target}/{identifier}/attributes",
+      "credits": 0,
+      "input": { "type": "object", "required": ["target", "identifier"], "properties": {
+        "target": { "type": "string", "description": "'objects' or 'lists'" },
+        "identifier": { "type": "string", "description": "Object/list slug or id, e.g. 'companies'" },
+        "limit": { "type": "integer" },
+        "offset": { "type": "integer" }
+      }}
+    },
+    {
+      "id": "getAttribute",
+      "label": "Get Attribute",
+      "description": "Get a single attribute's config by id or slug on an object or list. target = 'objects'|'lists'. Returns { data:{ id, api_slug, title, type, is_unique, is_multiselect } }. Free.",
+      "verb": "GET",
+      "path": "/v2/{target}/{identifier}/attributes/{attribute}",
+      "credits": 0,
+      "input": { "type": "object", "required": ["target", "identifier", "attribute"], "properties": {
+        "target": { "type": "string", "description": "'objects' or 'lists'" },
+        "identifier": { "type": "string", "description": "Object/list slug or id" },
+        "attribute": { "type": "string", "description": "Attribute id or slug" }
+      }}
+    },
+    {
+      "id": "createAttribute",
+      "label": "Create Attribute",
+      "description": "Create a new attribute (custom field) on an object or list. Body: data:{ title, api_slug, type, is_required, is_unique, is_multiselect, ... }. type one of: text, number, checkbox, currency, date, timestamp, rating, status, select, record-reference, actor-reference, location, domain, email-address, phone-number, personal-name. Returns the created attribute. 1 credit.",
+      "verb": "POST",
+      "path": "/v2/{target}/{identifier}/attributes",
+      "credits": 1,
+      "input": { "type": "object", "required": ["target", "identifier", "data"], "properties": {
+        "target": { "type": "string", "description": "'objects' or 'lists'" },
+        "identifier": { "type": "string", "description": "Object/list slug or id" },
+        "data": { "type": "object", "description": "{ title, api_slug, type, is_required, is_unique, is_multiselect, ... }" }
+      }}
+    },
+    {
+      "id": "updateAttribute",
+      "label": "Update Attribute",
+      "description": "Update an attribute's config (title, description, required/unique flags, etc.) on an object or list. Body: data:{ ... }. Returns the updated attribute. 1 credit.",
+      "verb": "PATCH",
+      "path": "/v2/{target}/{identifier}/attributes/{attribute}",
+      "credits": 1,
+      "input": { "type": "object", "required": ["target", "identifier", "attribute", "data"], "properties": {
+        "target": { "type": "string", "description": "'objects' or 'lists'" },
+        "identifier": { "type": "string", "description": "Object/list slug or id" },
+        "attribute": { "type": "string", "description": "Attribute id or slug" },
+        "data": { "type": "object", "description": "Fields to update" }
+      }}
+    },
+    {
+      "id": "listSelectOptions",
+      "label": "List Select Options",
+      "description": "List the select options for a select-type attribute on an object or list. Returns { data:[{ id, title, is_archived }] }. Free.",
+      "verb": "GET",
+      "path": "/v2/{target}/{identifier}/attributes/{attribute}/options",
+      "credits": 0,
+      "input": { "type": "object", "required": ["target", "identifier", "attribute"], "properties": {
+        "target": { "type": "string", "description": "'objects' or 'lists'" },
+        "identifier": { "type": "string", "description": "Object/list slug or id" },
+        "attribute": { "type": "string", "description": "Select attribute id or slug" }
+      }}
+    },
+    {
+      "id": "createSelectOption",
+      "label": "Create Select Option",
+      "description": "Add a new option to a select-type attribute. Body: data:{ title }. Returns the created option. 1 credit.",
+      "verb": "POST",
+      "path": "/v2/{target}/{identifier}/attributes/{attribute}/options",
+      "credits": 1,
+      "input": { "type": "object", "required": ["target", "identifier", "attribute", "data"], "properties": {
+        "target": { "type": "string", "description": "'objects' or 'lists'" },
+        "identifier": { "type": "string", "description": "Object/list slug or id" },
+        "attribute": { "type": "string", "description": "Select attribute id or slug" },
+        "data": { "type": "object", "description": "{ title }" }
+      }}
+    },
+    {
+      "id": "updateSelectOption",
+      "label": "Update Select Option",
+      "description": "Update or archive a select option. Body: data:{ title?, is_archived? }. Returns the updated option. 1 credit.",
+      "verb": "PATCH",
+      "path": "/v2/{target}/{identifier}/attributes/{attribute}/options/{option}",
+      "credits": 1,
+      "input": { "type": "object", "required": ["target", "identifier", "attribute", "option", "data"], "properties": {
+        "target": { "type": "string", "description": "'objects' or 'lists'" },
+        "identifier": { "type": "string", "description": "Object/list slug or id" },
+        "attribute": { "type": "string", "description": "Select attribute id or slug" },
+        "option": { "type": "string", "description": "Option id" },
+        "data": { "type": "object", "description": "{ title?, is_archived? }" }
+      }}
+    },
+    {
+      "id": "listStatuses",
+      "label": "List Statuses",
+      "description": "List the statuses for a status-type attribute (e.g. a deal's 'stage'). Returns { data:[{ id, title, is_archived, celebration_enabled }] }. Free.",
+      "verb": "GET",
+      "path": "/v2/{target}/{identifier}/attributes/{attribute}/statuses",
+      "credits": 0,
+      "input": { "type": "object", "required": ["target", "identifier", "attribute"], "properties": {
+        "target": { "type": "string", "description": "'objects' or 'lists'" },
+        "identifier": { "type": "string", "description": "Object/list slug or id" },
+        "attribute": { "type": "string", "description": "Status attribute id or slug" }
+      }}
+    },
+    {
+      "id": "createStatus",
+      "label": "Create Status",
+      "description": "Add a new status to a status-type attribute. Body: data:{ title, celebration_enabled?, target_time_in_status? }. Returns the created status. 1 credit.",
+      "verb": "POST",
+      "path": "/v2/{target}/{identifier}/attributes/{attribute}/statuses",
+      "credits": 1,
+      "input": { "type": "object", "required": ["target", "identifier", "attribute", "data"], "properties": {
+        "target": { "type": "string", "description": "'objects' or 'lists'" },
+        "identifier": { "type": "string", "description": "Object/list slug or id" },
+        "attribute": { "type": "string", "description": "Status attribute id or slug" },
+        "data": { "type": "object", "description": "{ title, celebration_enabled?, target_time_in_status? }" }
+      }}
+    },
+    {
+      "id": "updateStatus",
+      "label": "Update Status",
+      "description": "Update or archive a status on a status-type attribute. Body: data:{ title?, is_archived?, celebration_enabled? }. Returns the updated status. 1 credit.",
+      "verb": "PATCH",
+      "path": "/v2/{target}/{identifier}/attributes/{attribute}/statuses/{status}",
+      "credits": 1,
+      "input": { "type": "object", "required": ["target", "identifier", "attribute", "status", "data"], "properties": {
+        "target": { "type": "string", "description": "'objects' or 'lists'" },
+        "identifier": { "type": "string", "description": "Object/list slug or id" },
+        "attribute": { "type": "string", "description": "Status attribute id or slug" },
+        "status": { "type": "string", "description": "Status id" },
+        "data": { "type": "object", "description": "{ title?, is_archived?, celebration_enabled? }" }
+      }}
+    },
+
+    {
+      "id": "listLists",
+      "label": "List All Lists",
+      "description": "List all lists in the workspace (e.g. 'Sales Pipeline', 'Newsletter'). Returns { data:[{ id:{ list_id }, api_slug, name, parent_object, workspace_access }] }. No inputs. Free.",
+      "verb": "GET",
+      "path": "/v2/lists",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "getList",
+      "label": "Get List",
+      "description": "Get a single list's config by id or api_slug. Returns { data:{ id, api_slug, name, parent_object } }. Free.",
+      "verb": "GET",
+      "path": "/v2/lists/{list}",
+      "credits": 0,
+      "input": { "type": "object", "required": ["list"], "properties": {
+        "list": { "type": "string", "description": "List id or api_slug" }
+      }}
+    },
+    {
+      "id": "createList",
+      "label": "Create List",
+      "description": "Create a new list. Body: data:{ name, api_slug, parent_object, workspace_access, workspace_member_access? }. parent_object is the object slug whose records this list holds (e.g. 'people'). Returns the created list. 1 credit.",
+      "verb": "POST",
+      "path": "/v2/lists",
+      "credits": 1,
+      "input": { "type": "object", "required": ["data"], "properties": {
+        "data": { "type": "object", "description": "{ name, api_slug, parent_object, workspace_access, ... }" }
+      }}
+    },
+    {
+      "id": "updateList",
+      "label": "Update List",
+      "description": "Update a list's name, slug or access. Body: data:{ name?, api_slug?, workspace_access? }. Returns the updated list. 1 credit.",
+      "verb": "PATCH",
+      "path": "/v2/lists/{list}",
+      "credits": 1,
+      "input": { "type": "object", "required": ["list", "data"], "properties": {
+        "list": { "type": "string", "description": "List id or api_slug" },
+        "data": { "type": "object", "description": "{ name?, api_slug?, workspace_access? }" }
+      }}
+    },
+    {
+      "id": "queryListEntries",
+      "label": "Query List Entries",
+      "description": "List/filter/sort entries in a list. Body: { filter?, sorts?, limit? (max 500), offset? }. Returns { data:[{ id:{ entry_id, list_id }, parent_record_id, parent_object, entry_values }] }. Free.",
+      "verb": "POST",
+      "path": "/v2/lists/{list}/entries/query",
+      "credits": 0,
+      "input": { "type": "object", "required": ["list"], "properties": {
+        "list": { "type": "string", "description": "List id or api_slug" },
+        "filter": { "type": "object", "description": "Entry/parent-record filter" },
+        "sorts": { "type": "array", "items": { "type": "object" } },
+        "limit": { "type": "integer", "description": "Max entries (default 500)" },
+        "offset": { "type": "integer" }
+      }}
+    },
+    {
+      "id": "createListEntry",
+      "label": "Create List Entry (Add Record to List)",
+      "description": "Add an existing record to a list as a new entry, optionally setting list-specific attribute values. Body: { data:{ parent_record_id, parent_object, entry_values:{ list_attr_slug: value } } }. Returns the created entry. 1 credit.",
+      "verb": "POST",
+      "path": "/v2/lists/{list}/entries",
+      "credits": 1,
+      "input": { "type": "object", "required": ["list", "data"], "properties": {
+        "list": { "type": "string", "description": "List id or api_slug" },
+        "data": { "type": "object", "description": "{ parent_record_id, parent_object, entry_values:{...} }" }
+      }}
+    },
+    {
+      "id": "assertListEntryByParent",
+      "label": "Assert List Entry by Parent",
+      "description": "Upsert a list entry keyed by its parent record: if the record is already in the list its entry_values are updated, otherwise a new entry is added. Body: { data:{ parent_record_id, parent_object, entry_values:{...} } }. Returns the entry. 1 credit.",
+      "verb": "PUT",
+      "path": "/v2/lists/{list}/entries",
+      "credits": 1,
+      "input": { "type": "object", "required": ["list", "data"], "properties": {
+        "list": { "type": "string", "description": "List id or api_slug" },
+        "data": { "type": "object", "description": "{ parent_record_id, parent_object, entry_values:{...} }" }
+      }}
+    },
+    {
+      "id": "getListEntry",
+      "label": "Get List Entry",
+      "description": "Get a single list entry by list + entry_id, with its entry_values and parent record reference. Free.",
+      "verb": "GET",
+      "path": "/v2/lists/{list}/entries/{entry_id}",
+      "credits": 0,
+      "input": { "type": "object", "required": ["list", "entry_id"], "properties": {
+        "list": { "type": "string", "description": "List id or api_slug" },
+        "entry_id": { "type": "string", "description": "Entry UUID" }
+      }}
+    },
+    {
+      "id": "updateListEntryAppend",
+      "label": "Update List Entry (Append Multiselect)",
+      "description": "Update an entry's list-attribute values; multiselect values are APPENDED. Body: { data:{ entry_values:{...} } }. Returns the updated entry. 1 credit.",
+      "verb": "PATCH",
+      "path": "/v2/lists/{list}/entries/{entry_id}",
+      "credits": 1,
+      "input": { "type": "object", "required": ["list", "entry_id", "data"], "properties": {
+        "list": { "type": "string", "description": "List id or api_slug" },
+        "entry_id": { "type": "string", "description": "Entry UUID" },
+        "data": { "type": "object", "description": "{ entry_values:{...} }" }
+      }}
+    },
+    {
+      "id": "updateListEntryOverwrite",
+      "label": "Update List Entry (Overwrite Multiselect)",
+      "description": "Update an entry's list-attribute values; multiselect values OVERWRITE existing ones. Body: { data:{ entry_values:{...} } }. Returns the updated entry. 1 credit.",
+      "verb": "PUT",
+      "path": "/v2/lists/{list}/entries/{entry_id}",
+      "credits": 1,
+      "input": { "type": "object", "required": ["list", "entry_id", "data"], "properties": {
+        "list": { "type": "string", "description": "List id or api_slug" },
+        "entry_id": { "type": "string", "description": "Entry UUID" },
+        "data": { "type": "object", "description": "{ entry_values:{...} }" }
+      }}
+    },
+    {
+      "id": "deleteListEntry",
+      "label": "Delete List Entry (Remove from List)",
+      "description": "Remove a record from a list by deleting its entry (the underlying record is NOT deleted). Returns {} on success. 1 credit.",
+      "verb": "DELETE",
+      "path": "/v2/lists/{list}/entries/{entry_id}",
+      "credits": 1,
+      "input": { "type": "object", "required": ["list", "entry_id"], "properties": {
+        "list": { "type": "string", "description": "List id or api_slug" },
+        "entry_id": { "type": "string", "description": "Entry UUID" }
+      }}
+    },
+    {
+      "id": "listListEntryAttributeValues",
+      "label": "List Entry Attribute Values",
+      "description": "List the historical/current values of one list-attribute on a list entry. Returns { data:[{ active_from, active_until, value }] }. Free.",
+      "verb": "GET",
+      "path": "/v2/lists/{list}/entries/{entry_id}/attributes/{attribute}/values",
+      "credits": 0,
+      "input": { "type": "object", "required": ["list", "entry_id", "attribute"], "properties": {
+        "list": { "type": "string", "description": "List id or api_slug" },
+        "entry_id": { "type": "string", "description": "Entry UUID" },
+        "attribute": { "type": "string", "description": "List attribute id or slug" },
+        "limit": { "type": "integer" },
+        "offset": { "type": "integer" }
+      }}
+    },
+
+    {
+      "id": "listNotes",
+      "label": "List Notes",
+      "description": "List notes, optionally filtered to a parent record. Query params: parent_object?, parent_record_id?, limit?, offset?. Returns { data:[{ id:{ note_id }, parent_object, parent_record_id, title, content_plaintext, created_at, created_by_actor }] }. Free.",
+      "verb": "GET",
+      "path": "/v2/notes",
+      "credits": 0,
+      "input": { "type": "object", "properties": {
+        "parent_object": { "type": "string", "description": "Filter to notes on this object slug" },
+        "parent_record_id": { "type": "string", "description": "Filter to notes on this record" },
+        "limit": { "type": "integer" },
+        "offset": { "type": "integer" }
+      }}
+    },
+    {
+      "id": "getNote",
+      "label": "Get Note",
+      "description": "Get a single note by id, including its full content. Free.",
+      "verb": "GET",
+      "path": "/v2/notes/{note_id}",
+      "credits": 0,
+      "input": { "type": "object", "required": ["note_id"], "properties": {
+        "note_id": { "type": "string", "description": "Note UUID" }
+      }}
+    },
+    {
+      "id": "createNote",
+      "label": "Create Note",
+      "description": "Create a note attached to a record. Body: data:{ parent_object, parent_record_id, title, format:'plaintext'|'markdown', content, created_at?, meeting_id? }. Returns the created note. 1 credit.",
+      "verb": "POST",
+      "path": "/v2/notes",
+      "credits": 1,
+      "input": { "type": "object", "required": ["data"], "properties": {
+        "data": { "type": "object", "description": "{ parent_object, parent_record_id, title, format:'plaintext'|'markdown', content }" }
+      }}
+    },
+    {
+      "id": "deleteNote",
+      "label": "Delete Note",
+      "description": "Permanently delete a note by id. Returns {} on success. 1 credit.",
+      "verb": "DELETE",
+      "path": "/v2/notes/{note_id}",
+      "credits": 1,
+      "input": { "type": "object", "required": ["note_id"], "properties": {
+        "note_id": { "type": "string", "description": "Note UUID" }
+      }}
+    },
+
+    {
+      "id": "listTasks",
+      "label": "List Tasks",
+      "description": "List tasks (oldest first), optionally filtered. Query params: limit?, offset?, sort?, linked_object?, linked_record_id?, assignee?, is_completed?. Returns { data:[{ id:{ task_id }, content_plaintext, is_completed, deadline_at, linked_records, assignees, created_at }] }. Free.",
+      "verb": "GET",
+      "path": "/v2/tasks",
+      "credits": 0,
+      "input": { "type": "object", "properties": {
+        "limit": { "type": "integer" },
+        "offset": { "type": "integer" },
+        "sort": { "type": "string", "description": "e.g. 'created_at:asc'" },
+        "linked_object": { "type": "string", "description": "Filter to tasks linked to this object" },
+        "linked_record_id": { "type": "string", "description": "Filter to tasks linked to this record" },
+        "assignee": { "type": "string", "description": "Workspace member id" },
+        "is_completed": { "type": "boolean" }
+      }}
+    },
+    {
+      "id": "getTask",
+      "label": "Get Task",
+      "description": "Get a single task by id, with content, deadline, assignees and linked records. Free.",
+      "verb": "GET",
+      "path": "/v2/tasks/{task_id}",
+      "credits": 0,
+      "input": { "type": "object", "required": ["task_id"], "properties": {
+        "task_id": { "type": "string", "description": "Task UUID" }
+      }}
+    },
+    {
+      "id": "createTask",
+      "label": "Create Task",
+      "description": "Create a task. Body: data:{ content, format:'plaintext', deadline_at?, is_completed?, linked_records?:[{ target_object, target_record_id }], assignees?:[{ referenced_actor_type:'workspace-member', referenced_actor_id }] }. Returns the created task. 1 credit.",
+      "verb": "POST",
+      "path": "/v2/tasks",
+      "credits": 1,
+      "input": { "type": "object", "required": ["data"], "properties": {
+        "data": { "type": "object", "description": "{ content, format:'plaintext', deadline_at?, linked_records?, assignees? }" }
+      }}
+    },
+    {
+      "id": "updateTask",
+      "label": "Update Task",
+      "description": "Update a task's completion, deadline, assignees or linked records. Body: data:{ is_completed?, deadline_at?, assignees?, linked_records? }. Returns the updated task. 1 credit.",
+      "verb": "PATCH",
+      "path": "/v2/tasks/{task_id}",
+      "credits": 1,
+      "input": { "type": "object", "required": ["task_id", "data"], "properties": {
+        "task_id": { "type": "string", "description": "Task UUID" },
+        "data": { "type": "object", "description": "{ is_completed?, deadline_at?, assignees?, linked_records? }" }
+      }}
+    },
+    {
+      "id": "deleteTask",
+      "label": "Delete Task",
+      "description": "Permanently delete a task by id. Returns {} on success. 1 credit.",
+      "verb": "DELETE",
+      "path": "/v2/tasks/{task_id}",
+      "credits": 1,
+      "input": { "type": "object", "required": ["task_id"], "properties": {
+        "task_id": { "type": "string", "description": "Task UUID" }
+      }}
+    },
+
+    {
+      "id": "listThreads",
+      "label": "List Threads",
+      "description": "List comment threads, optionally scoped to a record or list entry. Query params: record_id?, object?, entry_id?, list?, limit?, offset?. Returns { data:[{ id:{ thread_id }, comments[] }] }. Free.",
+      "verb": "GET",
+      "path": "/v2/threads",
+      "credits": 0,
+      "input": { "type": "object", "properties": {
+        "record_id": { "type": "string", "description": "Scope to a record" },
+        "object": { "type": "string", "description": "Object slug (with record_id)" },
+        "entry_id": { "type": "string", "description": "Scope to a list entry" },
+        "list": { "type": "string", "description": "List id/slug (with entry_id)" },
+        "limit": { "type": "integer" },
+        "offset": { "type": "integer" }
+      }}
+    },
+    {
+      "id": "getThread",
+      "label": "Get Thread",
+      "description": "Get a single comment thread by id, including all comments in order. Free.",
+      "verb": "GET",
+      "path": "/v2/threads/{thread_id}",
+      "credits": 0,
+      "input": { "type": "object", "required": ["thread_id"], "properties": {
+        "thread_id": { "type": "string", "description": "Thread UUID" }
+      }}
+    },
+    {
+      "id": "createComment",
+      "label": "Create Comment",
+      "description": "Create a comment, either starting a new thread on a record/entry or replying to an existing thread. Body: data:{ format:'plaintext', content, author:{ type:'workspace-member', id }, thread_id? (to reply) OR record:{ object, record_id } / entry:{ list, entry_id } (to start). Returns the created comment. 1 credit.",
+      "verb": "POST",
+      "path": "/v2/comments",
+      "credits": 1,
+      "input": { "type": "object", "required": ["data"], "properties": {
+        "data": { "type": "object", "description": "{ format:'plaintext', content, author, thread_id? | record? | entry? }" }
+      }}
+    },
+    {
+      "id": "getComment",
+      "label": "Get Comment",
+      "description": "Get a single comment by id, with its content, author and thread. Free.",
+      "verb": "GET",
+      "path": "/v2/comments/{comment_id}",
+      "credits": 0,
+      "input": { "type": "object", "required": ["comment_id"], "properties": {
+        "comment_id": { "type": "string", "description": "Comment UUID" }
+      }}
+    },
+    {
+      "id": "deleteComment",
+      "label": "Delete Comment",
+      "description": "Permanently delete a comment by id. Returns {} on success. 1 credit.",
+      "verb": "DELETE",
+      "path": "/v2/comments/{comment_id}",
+      "credits": 1,
+      "input": { "type": "object", "required": ["comment_id"], "properties": {
+        "comment_id": { "type": "string", "description": "Comment UUID" }
+      }}
+    },
+
+    {
+      "id": "listWorkspaceMembers",
+      "label": "List Workspace Members",
+      "description": "List all members of the workspace (used to resolve assignees and comment authors). Returns { data:[{ id:{ workspace_member_id }, first_name, last_name, email_address, access_level }] }. No inputs. Free.",
+      "verb": "GET",
+      "path": "/v2/workspace_members",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "getWorkspaceMember",
+      "label": "Get Workspace Member",
+      "description": "Get a single workspace member by id. Returns { data:{ first_name, last_name, email_address, access_level } }. Free.",
+      "verb": "GET",
+      "path": "/v2/workspace_members/{workspace_member_id}",
+      "credits": 0,
+      "input": { "type": "object", "required": ["workspace_member_id"], "properties": {
+        "workspace_member_id": { "type": "string", "description": "Workspace member UUID" }
+      }}
+    },
+
+    {
+      "id": "listWebhooks",
+      "label": "List Webhooks",
+      "description": "List all webhooks configured in the workspace. Query params: limit?, offset?. Returns { data:[{ id:{ webhook_id }, target_url, subscriptions, status }] }. Free.",
+      "verb": "GET",
+      "path": "/v2/webhooks",
+      "credits": 0,
+      "input": { "type": "object", "properties": {
+        "limit": { "type": "integer" },
+        "offset": { "type": "integer" }
+      }}
+    },
+    {
+      "id": "getWebhook",
+      "label": "Get Webhook",
+      "description": "Get a single webhook by id, including its event subscriptions and status. Free.",
+      "verb": "GET",
+      "path": "/v2/webhooks/{webhook_id}",
+      "credits": 0,
+      "input": { "type": "object", "required": ["webhook_id"], "properties": {
+        "webhook_id": { "type": "string", "description": "Webhook UUID" }
+      }}
+    },
+    {
+      "id": "createWebhook",
+      "label": "Create Webhook",
+      "description": "Create a webhook. Body: data:{ target_url, subscriptions:[{ event_type, filter? }] }. event_type examples: 'record.created', 'record.updated', 'record.deleted', 'list-entry.created', 'note.created', 'task.created', 'comment.created'. Returns the webhook incl. signing secret. 1 credit.",
+      "verb": "POST",
+      "path": "/v2/webhooks",
+      "credits": 1,
+      "input": { "type": "object", "required": ["data"], "properties": {
+        "data": { "type": "object", "description": "{ target_url, subscriptions:[{ event_type, filter? }] }" }
+      }}
+    },
+    {
+      "id": "updateWebhook",
+      "label": "Update Webhook",
+      "description": "Update a webhook's target URL or subscriptions. Body: data:{ target_url?, subscriptions? }. Returns the updated webhook. 1 credit.",
+      "verb": "PATCH",
+      "path": "/v2/webhooks/{webhook_id}",
+      "credits": 1,
+      "input": { "type": "object", "required": ["webhook_id", "data"], "properties": {
+        "webhook_id": { "type": "string", "description": "Webhook UUID" },
+        "data": { "type": "object", "description": "{ target_url?, subscriptions? }" }
+      }}
+    },
+    {
+      "id": "deleteWebhook",
+      "label": "Delete Webhook",
+      "description": "Permanently delete a webhook by id. Returns {} on success. 1 credit.",
+      "verb": "DELETE",
+      "path": "/v2/webhooks/{webhook_id}",
+      "credits": 1,
+      "input": { "type": "object", "required": ["webhook_id"], "properties": {
+        "webhook_id": { "type": "string", "description": "Webhook UUID" }
+      }}
+    }
+  ]
+}

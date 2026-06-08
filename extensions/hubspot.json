@@ -1,0 +1,1292 @@
+{
+  "id": "hubspot",
+  "name": "HubSpot",
+  "version": "1.0.0",
+  "category": "crm",
+  "description": "HubSpot CRM — read, search, create, update and associate contacts, companies, deals, tickets and other CRM records, plus properties, owners, pipelines, engagements and lists.",
+  "logo": "https://www.google.com/s2/favicons?domain=hubspot.com&sz=128",
+  "baseUrl": "https://api.hubapi.com",
+  "auth": { "type": "apiKey", "header": "Authorization", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "listContacts",
+      "label": "List Contacts",
+      "description": "List contacts (paginated). Returns { results[]{ id, properties{}, createdAt, updatedAt }, paging{ next{ after } } }. Use `properties` to choose which fields come back (default returns a minimal set). Page with `after` from paging.next. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/contacts",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "description": "Page size, max 100 (default 10)" },
+          "after": { "type": "string", "description": "Pagination cursor from paging.next.after" },
+          "properties": { "type": "array", "items": { "type": "string" }, "description": "Property names to return, e.g. ['email','firstname','lastname','company']" },
+          "associations": { "type": "array", "items": { "type": "string" }, "description": "Associated object types to include, e.g. ['companies','deals']" },
+          "archived": { "type": "boolean", "description": "Return only archived records (default false)" }
+        }
+      }
+    },
+    {
+      "id": "getContact",
+      "label": "Get Contact",
+      "description": "Get one contact by record id. Returns { id, properties{}, createdAt, updatedAt, associations{} }. Pass `properties` to control returned fields. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/contacts/{contactId}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["contactId"],
+        "properties": {
+          "contactId": { "type": "string", "description": "Contact record id (or an idProperty value if idProperty is set)" },
+          "properties": { "type": "array", "items": { "type": "string" }, "description": "Property names to return" },
+          "associations": { "type": "array", "items": { "type": "string" }, "description": "Associated object types to include" },
+          "idProperty": { "type": "string", "description": "Look up by a unique property instead of id, e.g. 'email'" },
+          "archived": { "type": "boolean" }
+        }
+      }
+    },
+    {
+      "id": "searchContacts",
+      "label": "Search Contacts",
+      "description": "Search contacts with filters. Body: filterGroups[] (AND of groups, OR between groups) each with filters[]{ propertyName, operator, value/values }, plus sorts[], properties[] (fields to return), query (free-text), limit (max 100), after (cursor). Operators: EQ, NEQ, GT, GTE, LT, LTE, CONTAINS_TOKEN, HAS_PROPERTY, IN, etc. Returns { total, results[], paging }. Free read.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/contacts/search",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "filterGroups": { "type": "array", "items": { "type": "object" }, "description": "Array of { filters: [{ propertyName, operator, value }] }; groups are OR'd, filters within a group are AND'd (max 5 groups, 6 filters each)" },
+          "sorts": { "type": "array", "items": { "type": "object" }, "description": "[{ propertyName, direction: 'ASCENDING'|'DESCENDING' }]" },
+          "properties": { "type": "array", "items": { "type": "string" }, "description": "Property names to return for matches" },
+          "query": { "type": "string", "description": "Free-text search across default searchable properties" },
+          "limit": { "type": "integer", "description": "Max 100 (default 10)" },
+          "after": { "type": "string", "description": "Pagination cursor" }
+        }
+      }
+    },
+    {
+      "id": "createContact",
+      "label": "Create Contact",
+      "description": "Create a contact. Body: { properties: { email, firstname, lastname, ... }, associations? }. `email` is the standard unique key. Returns the created { id, properties }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/contacts",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["properties"],
+        "properties": {
+          "properties": { "type": "object", "description": "Map of property name → value, e.g. { email, firstname, lastname, phone, company }" },
+          "associations": { "type": "array", "items": { "type": "object" }, "description": "Optional [{ to:{ id }, types:[{ associationCategory, associationTypeId }] }]" }
+        }
+      }
+    },
+    {
+      "id": "updateContact",
+      "label": "Update Contact",
+      "description": "Update a contact by id. Body: { properties: { ... } } — only included properties change. Returns updated { id, properties }. Write — 1 credit.",
+      "verb": "PATCH",
+      "path": "/crm/v3/objects/contacts/{contactId}",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["contactId", "properties"],
+        "properties": {
+          "contactId": { "type": "string" },
+          "properties": { "type": "object", "description": "Property name → new value" },
+          "idProperty": { "type": "string", "description": "Update by a unique property instead of id, e.g. 'email'" }
+        }
+      }
+    },
+    {
+      "id": "archiveContact",
+      "label": "Archive Contact",
+      "description": "Archive (soft-delete) a contact by id. Returns 204 No Content. Write — 1 credit.",
+      "verb": "DELETE",
+      "path": "/crm/v3/objects/contacts/{contactId}",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["contactId"],
+        "properties": { "contactId": { "type": "string" } }
+      }
+    },
+    {
+      "id": "batchReadContacts",
+      "label": "Batch Read Contacts",
+      "description": "Read up to 100 contacts at once by id (or by a unique idProperty). Body: { inputs:[{ id }], properties:[], idProperty? }. Returns { results[] }. Free read but counts as a batch op — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/contacts/batch/read",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["inputs"],
+        "properties": {
+          "inputs": { "type": "array", "items": { "type": "object" }, "description": "Up to 100 of { id }" },
+          "properties": { "type": "array", "items": { "type": "string" } },
+          "propertiesWithHistory": { "type": "array", "items": { "type": "string" } },
+          "idProperty": { "type": "string", "description": "e.g. 'email' to read by email instead of id" }
+        }
+      }
+    },
+    {
+      "id": "batchCreateContacts",
+      "label": "Batch Create Contacts",
+      "description": "Create up to 100 contacts in one call. Body: { inputs:[{ properties:{}, associations? }] }. Returns { results[] }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/contacts/batch/create",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["inputs"],
+        "properties": {
+          "inputs": { "type": "array", "items": { "type": "object" }, "description": "Up to 100 of { properties:{...} }" }
+        }
+      }
+    },
+    {
+      "id": "batchUpdateContacts",
+      "label": "Batch Update Contacts",
+      "description": "Update up to 100 contacts in one call. Body: { inputs:[{ id, properties:{} }] }. Returns { results[] }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/contacts/batch/update",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["inputs"],
+        "properties": {
+          "inputs": { "type": "array", "items": { "type": "object" }, "description": "Up to 100 of { id, properties:{...} }" }
+        }
+      }
+    },
+
+    {
+      "id": "listCompanies",
+      "label": "List Companies",
+      "description": "List companies (paginated). Returns { results[]{ id, properties{}, createdAt, updatedAt }, paging }. Use `properties` to pick fields (e.g. name, domain, industry). Page with `after`. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/companies",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "description": "Max 100 (default 10)" },
+          "after": { "type": "string" },
+          "properties": { "type": "array", "items": { "type": "string" }, "description": "e.g. ['name','domain','industry','numberofemployees']" },
+          "associations": { "type": "array", "items": { "type": "string" } },
+          "archived": { "type": "boolean" }
+        }
+      }
+    },
+    {
+      "id": "getCompany",
+      "label": "Get Company",
+      "description": "Get one company by record id. Returns { id, properties{}, associations{} }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/companies/{companyId}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["companyId"],
+        "properties": {
+          "companyId": { "type": "string" },
+          "properties": { "type": "array", "items": { "type": "string" } },
+          "associations": { "type": "array", "items": { "type": "string" } },
+          "idProperty": { "type": "string", "description": "e.g. 'domain'" },
+          "archived": { "type": "boolean" }
+        }
+      }
+    },
+    {
+      "id": "searchCompanies",
+      "label": "Search Companies",
+      "description": "Search companies with filterGroups/sorts/properties/query/limit/after (same shape as searchContacts). Common: filter by domain CONTAINS_TOKEN or name. Returns { total, results[], paging }. Free read.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/companies/search",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "filterGroups": { "type": "array", "items": { "type": "object" } },
+          "sorts": { "type": "array", "items": { "type": "object" } },
+          "properties": { "type": "array", "items": { "type": "string" } },
+          "query": { "type": "string" },
+          "limit": { "type": "integer", "description": "Max 100" },
+          "after": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "createCompany",
+      "label": "Create Company",
+      "description": "Create a company. Body: { properties:{ name, domain, ... }, associations? }. `domain` is the standard unique key. Returns created { id, properties }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/companies",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["properties"],
+        "properties": {
+          "properties": { "type": "object", "description": "e.g. { name, domain, industry, city }" },
+          "associations": { "type": "array", "items": { "type": "object" } }
+        }
+      }
+    },
+    {
+      "id": "updateCompany",
+      "label": "Update Company",
+      "description": "Update a company by id. Body: { properties:{} }. Returns updated record. Write — 1 credit.",
+      "verb": "PATCH",
+      "path": "/crm/v3/objects/companies/{companyId}",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["companyId", "properties"],
+        "properties": {
+          "companyId": { "type": "string" },
+          "properties": { "type": "object" },
+          "idProperty": { "type": "string", "description": "e.g. 'domain'" }
+        }
+      }
+    },
+    {
+      "id": "archiveCompany",
+      "label": "Archive Company",
+      "description": "Archive (soft-delete) a company by id. Returns 204. Write — 1 credit.",
+      "verb": "DELETE",
+      "path": "/crm/v3/objects/companies/{companyId}",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["companyId"],
+        "properties": { "companyId": { "type": "string" } }
+      }
+    },
+    {
+      "id": "batchReadCompanies",
+      "label": "Batch Read Companies",
+      "description": "Read up to 100 companies by id (or idProperty like 'domain'). Body: { inputs:[{ id }], properties:[], idProperty? }. Returns { results[] }. 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/companies/batch/read",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["inputs"],
+        "properties": {
+          "inputs": { "type": "array", "items": { "type": "object" } },
+          "properties": { "type": "array", "items": { "type": "string" } },
+          "idProperty": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "batchCreateCompanies",
+      "label": "Batch Create Companies",
+      "description": "Create up to 100 companies. Body: { inputs:[{ properties:{} }] }. Returns { results[] }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/companies/batch/create",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["inputs"],
+        "properties": { "inputs": { "type": "array", "items": { "type": "object" } } }
+      }
+    },
+    {
+      "id": "batchUpdateCompanies",
+      "label": "Batch Update Companies",
+      "description": "Update up to 100 companies. Body: { inputs:[{ id, properties:{} }] }. Returns { results[] }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/companies/batch/update",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["inputs"],
+        "properties": { "inputs": { "type": "array", "items": { "type": "object" } } }
+      }
+    },
+
+    {
+      "id": "listDeals",
+      "label": "List Deals",
+      "description": "List deals (paginated). Returns { results[]{ id, properties{}, ... }, paging }. Useful properties: dealname, amount, dealstage, pipeline, closedate. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/deals",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "description": "Max 100" },
+          "after": { "type": "string" },
+          "properties": { "type": "array", "items": { "type": "string" }, "description": "e.g. ['dealname','amount','dealstage','pipeline','closedate']" },
+          "associations": { "type": "array", "items": { "type": "string" } },
+          "archived": { "type": "boolean" }
+        }
+      }
+    },
+    {
+      "id": "getDeal",
+      "label": "Get Deal",
+      "description": "Get one deal by record id. Returns { id, properties{}, associations{} }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/deals/{dealId}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["dealId"],
+        "properties": {
+          "dealId": { "type": "string" },
+          "properties": { "type": "array", "items": { "type": "string" } },
+          "associations": { "type": "array", "items": { "type": "string" } },
+          "archived": { "type": "boolean" }
+        }
+      }
+    },
+    {
+      "id": "searchDeals",
+      "label": "Search Deals",
+      "description": "Search deals with filterGroups/sorts/properties/query/limit/after. Common: filter by dealstage, pipeline, amount GT, or hs_lastmodifieddate. Returns { total, results[], paging }. Free read.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/deals/search",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "filterGroups": { "type": "array", "items": { "type": "object" } },
+          "sorts": { "type": "array", "items": { "type": "object" } },
+          "properties": { "type": "array", "items": { "type": "string" } },
+          "query": { "type": "string" },
+          "limit": { "type": "integer", "description": "Max 100" },
+          "after": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "createDeal",
+      "label": "Create Deal",
+      "description": "Create a deal. Body: { properties:{ dealname, amount, dealstage, pipeline, ... }, associations? }. dealstage must be a valid stage id for the chosen pipeline (see listDealPipelines). Returns created { id, properties }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/deals",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["properties"],
+        "properties": {
+          "properties": { "type": "object", "description": "e.g. { dealname, amount, dealstage, pipeline, closedate }" },
+          "associations": { "type": "array", "items": { "type": "object" }, "description": "Associate to contacts/companies on create" }
+        }
+      }
+    },
+    {
+      "id": "updateDeal",
+      "label": "Update Deal",
+      "description": "Update a deal by id (e.g. move stage, set amount). Body: { properties:{} }. Returns updated record. Write — 1 credit.",
+      "verb": "PATCH",
+      "path": "/crm/v3/objects/deals/{dealId}",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["dealId", "properties"],
+        "properties": {
+          "dealId": { "type": "string" },
+          "properties": { "type": "object" }
+        }
+      }
+    },
+    {
+      "id": "archiveDeal",
+      "label": "Archive Deal",
+      "description": "Archive (soft-delete) a deal by id. Returns 204. Write — 1 credit.",
+      "verb": "DELETE",
+      "path": "/crm/v3/objects/deals/{dealId}",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["dealId"],
+        "properties": { "dealId": { "type": "string" } }
+      }
+    },
+    {
+      "id": "batchReadDeals",
+      "label": "Batch Read Deals",
+      "description": "Read up to 100 deals by id. Body: { inputs:[{ id }], properties:[] }. Returns { results[] }. 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/deals/batch/read",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["inputs"],
+        "properties": {
+          "inputs": { "type": "array", "items": { "type": "object" } },
+          "properties": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "id": "batchCreateDeals",
+      "label": "Batch Create Deals",
+      "description": "Create up to 100 deals. Body: { inputs:[{ properties:{} }] }. Returns { results[] }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/deals/batch/create",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["inputs"],
+        "properties": { "inputs": { "type": "array", "items": { "type": "object" } } }
+      }
+    },
+    {
+      "id": "batchUpdateDeals",
+      "label": "Batch Update Deals",
+      "description": "Update up to 100 deals. Body: { inputs:[{ id, properties:{} }] }. Returns { results[] }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/deals/batch/update",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["inputs"],
+        "properties": { "inputs": { "type": "array", "items": { "type": "object" } } }
+      }
+    },
+
+    {
+      "id": "listTickets",
+      "label": "List Tickets",
+      "description": "List support tickets (paginated). Returns { results[]{ id, properties{}, ... }, paging }. Useful properties: subject, content, hs_pipeline, hs_pipeline_stage, hs_ticket_priority. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/tickets",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "description": "Max 100" },
+          "after": { "type": "string" },
+          "properties": { "type": "array", "items": { "type": "string" }, "description": "e.g. ['subject','hs_pipeline_stage','hs_ticket_priority']" },
+          "associations": { "type": "array", "items": { "type": "string" } },
+          "archived": { "type": "boolean" }
+        }
+      }
+    },
+    {
+      "id": "getTicket",
+      "label": "Get Ticket",
+      "description": "Get one ticket by record id. Returns { id, properties{}, associations{} }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/tickets/{ticketId}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ticketId"],
+        "properties": {
+          "ticketId": { "type": "string" },
+          "properties": { "type": "array", "items": { "type": "string" } },
+          "associations": { "type": "array", "items": { "type": "string" } },
+          "archived": { "type": "boolean" }
+        }
+      }
+    },
+    {
+      "id": "searchTickets",
+      "label": "Search Tickets",
+      "description": "Search tickets with filterGroups/sorts/properties/query/limit/after. Common: filter by hs_pipeline_stage or hs_ticket_priority. Returns { total, results[], paging }. Free read.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/tickets/search",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "filterGroups": { "type": "array", "items": { "type": "object" } },
+          "sorts": { "type": "array", "items": { "type": "object" } },
+          "properties": { "type": "array", "items": { "type": "string" } },
+          "query": { "type": "string" },
+          "limit": { "type": "integer", "description": "Max 100" },
+          "after": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "createTicket",
+      "label": "Create Ticket",
+      "description": "Create a ticket. Body: { properties:{ subject, hs_pipeline, hs_pipeline_stage, ... }, associations? }. hs_pipeline_stage must be valid for the ticket pipeline (see listTicketPipelines). Returns created { id, properties }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/tickets",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["properties"],
+        "properties": {
+          "properties": { "type": "object", "description": "e.g. { subject, content, hs_pipeline, hs_pipeline_stage, hs_ticket_priority }" },
+          "associations": { "type": "array", "items": { "type": "object" } }
+        }
+      }
+    },
+    {
+      "id": "updateTicket",
+      "label": "Update Ticket",
+      "description": "Update a ticket by id (e.g. change stage/priority). Body: { properties:{} }. Returns updated record. Write — 1 credit.",
+      "verb": "PATCH",
+      "path": "/crm/v3/objects/tickets/{ticketId}",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["ticketId", "properties"],
+        "properties": {
+          "ticketId": { "type": "string" },
+          "properties": { "type": "object" }
+        }
+      }
+    },
+    {
+      "id": "archiveTicket",
+      "label": "Archive Ticket",
+      "description": "Archive (soft-delete) a ticket by id. Returns 204. Write — 1 credit.",
+      "verb": "DELETE",
+      "path": "/crm/v3/objects/tickets/{ticketId}",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["ticketId"],
+        "properties": { "ticketId": { "type": "string" } }
+      }
+    },
+    {
+      "id": "batchReadTickets",
+      "label": "Batch Read Tickets",
+      "description": "Read up to 100 tickets by id. Body: { inputs:[{ id }], properties:[] }. Returns { results[] }. 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/tickets/batch/read",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["inputs"],
+        "properties": {
+          "inputs": { "type": "array", "items": { "type": "object" } },
+          "properties": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "id": "batchCreateTickets",
+      "label": "Batch Create Tickets",
+      "description": "Create up to 100 tickets. Body: { inputs:[{ properties:{} }] }. Returns { results[] }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/tickets/batch/create",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["inputs"],
+        "properties": { "inputs": { "type": "array", "items": { "type": "object" } } }
+      }
+    },
+    {
+      "id": "batchUpdateTickets",
+      "label": "Batch Update Tickets",
+      "description": "Update up to 100 tickets. Body: { inputs:[{ id, properties:{} }] }. Returns { results[] }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/tickets/batch/update",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["inputs"],
+        "properties": { "inputs": { "type": "array", "items": { "type": "object" } } }
+      }
+    },
+
+    {
+      "id": "listLineItems",
+      "label": "List Line Items",
+      "description": "List line items (products attached to deals/quotes). Returns { results[]{ id, properties{} }, paging }. Useful properties: name, quantity, price, hs_product_id. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/line_items",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "description": "Max 100" },
+          "after": { "type": "string" },
+          "properties": { "type": "array", "items": { "type": "string" } },
+          "associations": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "id": "getLineItem",
+      "label": "Get Line Item",
+      "description": "Get one line item by record id. Returns { id, properties{} }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/line_items/{lineItemId}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["lineItemId"],
+        "properties": {
+          "lineItemId": { "type": "string" },
+          "properties": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "id": "createLineItem",
+      "label": "Create Line Item",
+      "description": "Create a line item. Body: { properties:{ name, price, quantity, hs_product_id? }, associations? } — associate to a deal to add it to that deal. Returns created { id, properties }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/line_items",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["properties"],
+        "properties": {
+          "properties": { "type": "object", "description": "e.g. { name, price, quantity, hs_product_id }" },
+          "associations": { "type": "array", "items": { "type": "object" } }
+        }
+      }
+    },
+
+    {
+      "id": "listProducts",
+      "label": "List Products",
+      "description": "List products from the product library. Returns { results[]{ id, properties{} }, paging }. Useful properties: name, price, hs_sku, description. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/products",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "description": "Max 100" },
+          "after": { "type": "string" },
+          "properties": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "id": "getProduct",
+      "label": "Get Product",
+      "description": "Get one product by record id. Returns { id, properties{} }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/products/{productId}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["productId"],
+        "properties": {
+          "productId": { "type": "string" },
+          "properties": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "id": "createProduct",
+      "label": "Create Product",
+      "description": "Create a product in the product library. Body: { properties:{ name, price, hs_sku?, description? } }. Returns created { id, properties }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/products",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["properties"],
+        "properties": {
+          "properties": { "type": "object", "description": "e.g. { name, price, hs_sku, description }" }
+        }
+      }
+    },
+
+    {
+      "id": "listQuotes",
+      "label": "List Quotes",
+      "description": "List quotes. Returns { results[]{ id, properties{} }, paging }. Useful properties: hs_title, hs_status, hs_expiration_date. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/quotes",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "description": "Max 100" },
+          "after": { "type": "string" },
+          "properties": { "type": "array", "items": { "type": "string" } },
+          "associations": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "id": "getQuote",
+      "label": "Get Quote",
+      "description": "Get one quote by record id. Returns { id, properties{} }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/quotes/{quoteId}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["quoteId"],
+        "properties": {
+          "quoteId": { "type": "string" },
+          "properties": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "id": "createQuote",
+      "label": "Create Quote",
+      "description": "Create a quote. Body: { properties:{ hs_title, hs_expiration_date, ... }, associations? }. Quotes typically associate to a deal, line items and a quote template. Returns created { id, properties }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/quotes",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["properties"],
+        "properties": {
+          "properties": { "type": "object", "description": "e.g. { hs_title, hs_expiration_date, hs_status }" },
+          "associations": { "type": "array", "items": { "type": "object" } }
+        }
+      }
+    },
+
+    {
+      "id": "listObjects",
+      "label": "List Records (Any Object)",
+      "description": "Generic list for ANY object type — standard (contacts/companies/deals/tickets) or a custom object by its objectType/objectTypeId (e.g. 'p_my_object' or '2-12345'). Returns { results[], paging }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/{objectType}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["objectType"],
+        "properties": {
+          "objectType": { "type": "string", "description": "Object name or objectTypeId, e.g. 'contacts','companies','tickets','p_pets','2-12345'" },
+          "limit": { "type": "integer", "description": "Max 100" },
+          "after": { "type": "string" },
+          "properties": { "type": "array", "items": { "type": "string" } },
+          "associations": { "type": "array", "items": { "type": "string" } },
+          "archived": { "type": "boolean" }
+        }
+      }
+    },
+    {
+      "id": "searchObjects",
+      "label": "Search Records (Any Object)",
+      "description": "Generic search for ANY object type. Body: filterGroups/sorts/properties/query/limit/after. Path takes the objectType (name or objectTypeId). Returns { total, results[], paging }. Free read.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/{objectType}/search",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["objectType"],
+        "properties": {
+          "objectType": { "type": "string", "description": "Object name or objectTypeId" },
+          "filterGroups": { "type": "array", "items": { "type": "object" } },
+          "sorts": { "type": "array", "items": { "type": "object" } },
+          "properties": { "type": "array", "items": { "type": "string" } },
+          "query": { "type": "string" },
+          "limit": { "type": "integer", "description": "Max 100" },
+          "after": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "createObject",
+      "label": "Create Record (Any Object)",
+      "description": "Generic create for ANY object type. Path takes objectType; body { properties:{}, associations? }. Returns created { id, properties }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/{objectType}",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["objectType", "properties"],
+        "properties": {
+          "objectType": { "type": "string", "description": "Object name or objectTypeId" },
+          "properties": { "type": "object" },
+          "associations": { "type": "array", "items": { "type": "object" } }
+        }
+      }
+    },
+
+    {
+      "id": "listAssociations",
+      "label": "List Associations (v4)",
+      "description": "List all records of toObjectType associated with a given record. Returns { results[]{ toObjectId, associationTypes[]{ category, typeId, label } }, paging }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v4/objects/{fromObjectType}/{fromObjectId}/associations/{toObjectType}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["fromObjectType", "fromObjectId", "toObjectType"],
+        "properties": {
+          "fromObjectType": { "type": "string", "description": "e.g. 'contacts'" },
+          "fromObjectId": { "type": "string", "description": "Source record id" },
+          "toObjectType": { "type": "string", "description": "e.g. 'companies'" },
+          "limit": { "type": "integer", "description": "Max 500 (default 10)" },
+          "after": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "createDefaultAssociation",
+      "label": "Create Default Association (v4)",
+      "description": "PUT a default (unlabeled) association between two records — HubSpot picks the standard association type. Path: from/{id}/associations/default/to/{id}. No body needed. Returns the created association. Write — 1 credit.",
+      "verb": "PUT",
+      "path": "/crm/v4/objects/{fromObjectType}/{fromObjectId}/associations/default/{toObjectType}/{toObjectId}",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["fromObjectType", "fromObjectId", "toObjectType", "toObjectId"],
+        "properties": {
+          "fromObjectType": { "type": "string" },
+          "fromObjectId": { "type": "string" },
+          "toObjectType": { "type": "string" },
+          "toObjectId": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "createLabeledAssociation",
+      "label": "Create Labeled Association (v4)",
+      "description": "PUT a labeled association between two records. Body is an ARRAY of { associationCategory: 'HUBSPOT_DEFINED'|'USER_DEFINED', associationTypeId }. Use listAssociationLabels to find valid typeIds. Returns the created association. Write — 1 credit.",
+      "verb": "PUT",
+      "path": "/crm/v4/objects/{fromObjectType}/{fromObjectId}/associations/{toObjectType}/{toObjectId}",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["fromObjectType", "fromObjectId", "toObjectType", "toObjectId"],
+        "properties": {
+          "fromObjectType": { "type": "string" },
+          "fromObjectId": { "type": "string" },
+          "toObjectType": { "type": "string" },
+          "toObjectId": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "deleteAssociation",
+      "label": "Delete Association (v4)",
+      "description": "DELETE all associations between two specific records (you can't target a single label with v4 — it removes all). Returns 204. Write — 1 credit.",
+      "verb": "DELETE",
+      "path": "/crm/v4/objects/{fromObjectType}/{fromObjectId}/associations/{toObjectType}/{toObjectId}",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["fromObjectType", "fromObjectId", "toObjectType", "toObjectId"],
+        "properties": {
+          "fromObjectType": { "type": "string" },
+          "fromObjectId": { "type": "string" },
+          "toObjectType": { "type": "string" },
+          "toObjectId": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "listAssociationLabels",
+      "label": "List Association Labels (v4 Schema)",
+      "description": "List the valid association types/labels between two object types, with their associationTypeId and category. Use these ids in createLabeledAssociation. Returns { results[]{ category, typeId, label } }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v4/associations/{fromObjectType}/{toObjectType}/labels",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["fromObjectType", "toObjectType"],
+        "properties": {
+          "fromObjectType": { "type": "string", "description": "e.g. 'contacts'" },
+          "toObjectType": { "type": "string", "description": "e.g. 'companies'" }
+        }
+      }
+    },
+
+    {
+      "id": "listProperties",
+      "label": "List Properties",
+      "description": "List all properties defined for an object type (their name, label, type, fieldType, options for enums). Essential for knowing valid property names before reads/writes/searches. Returns { results[] }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/properties/{objectType}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["objectType"],
+        "properties": {
+          "objectType": { "type": "string", "description": "e.g. 'contacts','companies','deals','tickets'" },
+          "archived": { "type": "boolean" }
+        }
+      }
+    },
+    {
+      "id": "getProperty",
+      "label": "Get Property",
+      "description": "Get a single property definition for an object type by property name. Returns { name, label, type, fieldType, options[] }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/properties/{objectType}/{propertyName}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["objectType", "propertyName"],
+        "properties": {
+          "objectType": { "type": "string" },
+          "propertyName": { "type": "string", "description": "e.g. 'lifecyclestage'" }
+        }
+      }
+    },
+    {
+      "id": "createProperty",
+      "label": "Create Property",
+      "description": "Create a custom property on an object type. Body: { name, label, type, fieldType, groupName, options? }. type ∈ string|number|date|datetime|enumeration|bool; fieldType ∈ text|textarea|number|select|checkbox|date|... Returns created property. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/properties/{objectType}",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["objectType", "name", "label", "type", "fieldType", "groupName"],
+        "properties": {
+          "objectType": { "type": "string" },
+          "name": { "type": "string", "description": "Internal property name (lowercase, no spaces)" },
+          "label": { "type": "string", "description": "Human-readable label" },
+          "type": { "type": "string", "description": "string | number | date | datetime | enumeration | bool" },
+          "fieldType": { "type": "string", "description": "text | textarea | number | select | radio | checkbox | date" },
+          "groupName": { "type": "string", "description": "Property group to place it in, e.g. 'contactinformation'" },
+          "options": { "type": "array", "items": { "type": "object" }, "description": "For enumeration types: [{ label, value, displayOrder }]" }
+        }
+      }
+    },
+
+    {
+      "id": "listOwners",
+      "label": "List Owners",
+      "description": "List CRM owners (users who can own records). Returns { results[]{ id, email, firstName, lastName, userId } }. Use the owner `id` to set hubspot_owner_id on a record. Optionally filter by email. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/owners",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "email": { "type": "string", "description": "Filter to the owner with this email" },
+          "limit": { "type": "integer", "description": "Max 500 (default 100)" },
+          "after": { "type": "string" },
+          "archived": { "type": "boolean" }
+        }
+      }
+    },
+    {
+      "id": "getOwner",
+      "label": "Get Owner",
+      "description": "Get one owner by owner id. Returns { id, email, firstName, lastName, userId, teams[] }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/owners/{ownerId}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["ownerId"],
+        "properties": {
+          "ownerId": { "type": "string", "description": "Owner id (the value used in hubspot_owner_id)" }
+        }
+      }
+    },
+
+    {
+      "id": "listPipelines",
+      "label": "List Pipelines",
+      "description": "List all pipelines and their stages for an object type (deals or tickets). Returns { results[]{ id, label, stages[]{ id, label, displayOrder, metadata } } }. Use stage ids when setting dealstage/hs_pipeline_stage. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/pipelines/{objectType}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["objectType"],
+        "properties": {
+          "objectType": { "type": "string", "description": "'deals' or 'tickets'" }
+        }
+      }
+    },
+    {
+      "id": "getPipeline",
+      "label": "Get Pipeline",
+      "description": "Get one pipeline (and its stages) by id for an object type. Returns { id, label, stages[] }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/pipelines/{objectType}/{pipelineId}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["objectType", "pipelineId"],
+        "properties": {
+          "objectType": { "type": "string", "description": "'deals' or 'tickets'" },
+          "pipelineId": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "listPipelineStages",
+      "label": "List Pipeline Stages",
+      "description": "List the stages of a single pipeline. Returns { results[]{ id, label, displayOrder, metadata{ isClosed, probability } } }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/pipelines/{objectType}/{pipelineId}/stages",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["objectType", "pipelineId"],
+        "properties": {
+          "objectType": { "type": "string", "description": "'deals' or 'tickets'" },
+          "pipelineId": { "type": "string" }
+        }
+      }
+    },
+
+    {
+      "id": "listNotes",
+      "label": "List Notes",
+      "description": "List note engagements. Returns { results[]{ id, properties{ hs_note_body, hs_timestamp } }, paging }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/notes",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "description": "Max 100" },
+          "after": { "type": "string" },
+          "properties": { "type": "array", "items": { "type": "string" } },
+          "associations": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "id": "createNote",
+      "label": "Create Note",
+      "description": "Create a note engagement. Body: { properties:{ hs_note_body, hs_timestamp }, associations? } — associate to a contact/company/deal to log it on that record's timeline. hs_timestamp is epoch ms or ISO. Returns created { id }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/notes",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["properties"],
+        "properties": {
+          "properties": { "type": "object", "description": "{ hs_note_body, hs_timestamp }" },
+          "associations": { "type": "array", "items": { "type": "object" }, "description": "Associate to the record(s) this note belongs to" }
+        }
+      }
+    },
+    {
+      "id": "listTasks",
+      "label": "List Tasks",
+      "description": "List task engagements. Returns { results[]{ id, properties{ hs_task_subject, hs_task_status, hs_task_priority, hs_timestamp } }, paging }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/tasks",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "description": "Max 100" },
+          "after": { "type": "string" },
+          "properties": { "type": "array", "items": { "type": "string" } },
+          "associations": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "id": "createTask",
+      "label": "Create Task",
+      "description": "Create a task engagement. Body: { properties:{ hs_task_subject, hs_task_body, hs_task_status, hs_task_priority, hs_timestamp, hubspot_owner_id }, associations? }. Returns created { id }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/tasks",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["properties"],
+        "properties": {
+          "properties": { "type": "object", "description": "{ hs_task_subject, hs_task_status, hs_task_priority, hs_timestamp, hubspot_owner_id }" },
+          "associations": { "type": "array", "items": { "type": "object" } }
+        }
+      }
+    },
+    {
+      "id": "listCalls",
+      "label": "List Calls",
+      "description": "List call engagements. Returns { results[]{ id, properties{ hs_call_title, hs_call_body, hs_call_duration, hs_timestamp } }, paging }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/calls",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "description": "Max 100" },
+          "after": { "type": "string" },
+          "properties": { "type": "array", "items": { "type": "string" } },
+          "associations": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "id": "createCall",
+      "label": "Create Call",
+      "description": "Log a call engagement. Body: { properties:{ hs_call_title, hs_call_body, hs_call_duration, hs_call_direction, hs_timestamp }, associations? }. Returns created { id }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/calls",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["properties"],
+        "properties": {
+          "properties": { "type": "object", "description": "{ hs_call_title, hs_call_body, hs_call_duration, hs_call_direction, hs_timestamp }" },
+          "associations": { "type": "array", "items": { "type": "object" } }
+        }
+      }
+    },
+    {
+      "id": "listEmails",
+      "label": "List Emails",
+      "description": "List email engagements (logged emails). Returns { results[]{ id, properties{ hs_email_subject, hs_email_text, hs_timestamp } }, paging }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/emails",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "description": "Max 100" },
+          "after": { "type": "string" },
+          "properties": { "type": "array", "items": { "type": "string" } },
+          "associations": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "id": "createEmail",
+      "label": "Create Email",
+      "description": "Log an email engagement. Body: { properties:{ hs_email_subject, hs_email_text, hs_email_direction, hs_timestamp }, associations? }. Returns created { id }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/emails",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["properties"],
+        "properties": {
+          "properties": { "type": "object", "description": "{ hs_email_subject, hs_email_text, hs_email_direction, hs_timestamp }" },
+          "associations": { "type": "array", "items": { "type": "object" } }
+        }
+      }
+    },
+    {
+      "id": "listMeetings",
+      "label": "List Meetings",
+      "description": "List meeting engagements. Returns { results[]{ id, properties{ hs_meeting_title, hs_meeting_start_time, hs_meeting_end_time, hs_timestamp } }, paging }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/objects/meetings",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "description": "Max 100" },
+          "after": { "type": "string" },
+          "properties": { "type": "array", "items": { "type": "string" } },
+          "associations": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "id": "createMeeting",
+      "label": "Create Meeting",
+      "description": "Log a meeting engagement. Body: { properties:{ hs_meeting_title, hs_meeting_body, hs_meeting_start_time, hs_meeting_end_time, hs_timestamp }, associations? }. Returns created { id }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/objects/meetings",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["properties"],
+        "properties": {
+          "properties": { "type": "object", "description": "{ hs_meeting_title, hs_meeting_start_time, hs_meeting_end_time, hs_timestamp }" },
+          "associations": { "type": "array", "items": { "type": "object" } }
+        }
+      }
+    },
+
+    {
+      "id": "createList",
+      "label": "Create List",
+      "description": "Create a list (segment). Body: { name, objectTypeId (e.g. '0-1' contacts, '0-2' companies), processingType: 'MANUAL'|'SNAPSHOT'|'DYNAMIC', filterBranch? }. Only MANUAL/SNAPSHOT lists accept manual membership changes. Returns { list{ listId, ... } }. Write — 1 credit.",
+      "verb": "POST",
+      "path": "/crm/v3/lists",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["name", "objectTypeId", "processingType"],
+        "properties": {
+          "name": { "type": "string" },
+          "objectTypeId": { "type": "string", "description": "e.g. '0-1' (contacts), '0-2' (companies)" },
+          "processingType": { "type": "string", "description": "MANUAL | SNAPSHOT | DYNAMIC" },
+          "filterBranch": { "type": "object", "description": "Filter definition for DYNAMIC lists" }
+        }
+      }
+    },
+    {
+      "id": "getList",
+      "label": "Get List",
+      "description": "Get a list by listId. Returns { list{ listId, name, objectTypeId, processingType, size, ... } }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/lists/{listId}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["listId"],
+        "properties": {
+          "listId": { "type": "string" },
+          "includeFilters": { "type": "boolean", "description": "Include the list's filter definition" }
+        }
+      }
+    },
+    {
+      "id": "searchLists",
+      "label": "Search Lists",
+      "description": "Search lists by name/type. Body: { query?, processingTypes?[], listIds?[], count?, offset? }. Returns { lists[], total, offset }. Free read.",
+      "verb": "POST",
+      "path": "/crm/v3/lists/search",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "Match against list names" },
+          "processingTypes": { "type": "array", "items": { "type": "string" }, "description": "MANUAL | SNAPSHOT | DYNAMIC" },
+          "listIds": { "type": "array", "items": { "type": "string" } },
+          "count": { "type": "integer", "description": "Page size" },
+          "offset": { "type": "integer" }
+        }
+      }
+    },
+    {
+      "id": "getListMemberships",
+      "label": "Get List Memberships",
+      "description": "Get the record ids that are members of a list (paginated). Returns { results[]{ recordId, membershipTimestamp }, paging }. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/lists/{listId}/memberships",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["listId"],
+        "properties": {
+          "listId": { "type": "string" },
+          "limit": { "type": "integer", "description": "Max 250" },
+          "after": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "addListMemberships",
+      "label": "Add Records to List",
+      "description": "Add records to a MANUAL/SNAPSHOT list. Body is a JSON ARRAY of record ids (strings), e.g. ['101','102']. Returns { recordsIdsAdded[], recordIdsDidNotExist[] }. Write — 1 credit.",
+      "verb": "PUT",
+      "path": "/crm/v3/lists/{listId}/memberships/add",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["listId"],
+        "properties": {
+          "listId": { "type": "string" }
+        }
+      }
+    },
+    {
+      "id": "removeListMemberships",
+      "label": "Remove Records from List",
+      "description": "Remove records from a MANUAL/SNAPSHOT list. Body is a JSON ARRAY of record ids (strings). Returns { recordsIdsRemoved[] }. Write — 1 credit.",
+      "verb": "PUT",
+      "path": "/crm/v3/lists/{listId}/memberships/remove",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["listId"],
+        "properties": {
+          "listId": { "type": "string" }
+        }
+      }
+    }
+  ]
+}
