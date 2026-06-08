@@ -4,7 +4,7 @@ name: Release
 # tag v<version>, then build the downloadable cross-platform desktop binaries and
 # attach them to a published GitHub Release.
 #
-# Platforms (4): macOS arm64 + macOS Intel + Linux + Windows.
+# Platforms (4): macOS arm64 + macOS Intel + Linux (.deb) + Windows.
 # macOS Intel is CROSS-COMPILED on the arm64 runner (macos-13 Intel runners are
 # scarce and hung a release): the Rust target is x86_64-apple-darwin and the
 # sidecar bundler downloads the x64 node + x64 better-sqlite3 (GTMGRID_SIDECAR_ARCH).
@@ -91,7 +91,12 @@ jobs:
           - platform: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
             sidecar_arch: ""
-            args: "--bundles deb,appimage"
+            # `.deb` only. The AppImage bundler downloads `linuxdeploy-x86_64.AppImage`
+            # from tauri-apps/binary-releases at build time, which has been returning
+            # persistent HTTP 504s and failing the whole Linux job. The `.deb` needs no
+            # external tool download, so Linux ships reliably (re-add `,appimage` once
+            # that upstream download is stable).
+            args: "--bundles deb"
           - platform: windows-latest
             rust_target: x86_64-pc-windows-msvc
             sidecar_arch: ""
