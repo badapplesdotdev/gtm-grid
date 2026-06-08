@@ -29,6 +29,13 @@
       "when": 1780849293441,
       "tag": "0003_sparkling_odin",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1780922282150,
+      "tag": "0004_outgoing_omega_sentinel",
+      "breakpoints": true
     }
   ]
 }
