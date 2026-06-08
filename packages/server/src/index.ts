@@ -32,6 +32,7 @@ import {
   deleteBinding,
   newBinding,
   syncBinding,
+  warmUpBinding,
   startSignalPoller,
   syncDue,
   type SignalDeps,
@@ -493,6 +494,8 @@ route("POST", "/api/signals", async (_p, body) => {
   const binding = newBinding({ tableId: table.id, source, config: { name, ...config }, schedule, searchId });
   upsertBinding(current.projectDb, binding);
   const sync = await syncBinding(signalDeps(), binding);
+  // Results populate async — keep retrying in the background until rows land.
+  if (!sync.error && sync.added === 0) void warmUpBinding(signalDeps(), binding.id);
   return { tableId: table.id, bindingId: binding.id, searchId, added: sync.added, error: sync.error ?? null };
 });
 

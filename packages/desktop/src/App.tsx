@@ -441,7 +441,7 @@ function NewTableChooser({
             <button className="acx-item" onClick={() => { onSignals(); onClose(); }}>
               <span className="acx-item-icon">{SignalIcon}</span>
               <span className="acx-item-text">
-                <span className="acx-item-title">From Signals</span>
+                <span className="acx-item-title">From Social Signals</span>
                 <span className="acx-item-sub">Trigify social signals on a schedule — auto-fills rows.</span>
               </span>
               <span className="acx-item-caret">{Caret}</span>
@@ -512,6 +512,8 @@ export default function App() {
   // straight-to-blank entry points.
   const [showNewTableChooser, setShowNewTableChooser] = useState(false);
   const [showSignals, setShowSignals] = useState(false);
+  const [warmingTableId, setWarmingTableId] = useState<string | null>(null);
+  const warmTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Bumped to ask the CloudGrid to auto-open the webhook setup form (the chooser's
   // Webhook flow). A monotonic token so each request re-triggers cleanly.
   const [openWebhookToken, setOpenWebhookToken] = useState(0);
@@ -882,6 +884,30 @@ export default function App() {
     if (selectedTableId) loadTable(selectedTableId);
     else setTableData(null);
   }, [selectedTableId, loadTable]);
+
+  // A freshly-created social-signal table populates asynchronously (Trigify
+  // scrapes results over ~10-60s). Poll until rows land, showing a skeleton.
+  const startWarming = useCallback((tableId: string) => {
+    setWarmingTableId(tableId);
+    if (warmTimerRef.current) clearInterval(warmTimerRef.current);
+    let ticks = 0;
+    warmTimerRef.current = setInterval(async () => {
+      ticks++;
+      try {
+        const data = await api.table(tableId);
+        if (data.rows.length > 0) {
+          setTableData((cur) => (cur && cur.id === tableId ? data : cur));
+          setWarmingTableId(null);
+          if (warmTimerRef.current) clearInterval(warmTimerRef.current);
+          return;
+        }
+      } catch { /* keep polling */ }
+      if (ticks >= 40) {
+        setWarmingTableId(null);
+        if (warmTimerRef.current) clearInterval(warmTimerRef.current);
+      }
+    }, 8000);
+  }, []);
 
   // Live refresh when the in-app agent mutates the grid (Phase D).
   const refreshAll = useCallback(async () => {
@@ -1771,6 +1797,12 @@ export default function App() {
               <Icon.Plus /> Add first column
             </button>
           </div>
+        ) : tableData && tableData.rows.length === 0 && warmingTableId === tableData.id ? (
+          <div className="empty-state">
+            <div className="cell-spinner" style={{ width: 22, height: 22, borderWidth: 2, marginBottom: 14 }} />
+            <div className="empty-title">Pulling results from Trigify…</div>
+            <p className="empty-sub">Trigify is scraping your signal — first results can take a few minutes. They'll appear here automatically, and keep updating on your schedule.</p>
+          </div>
         ) : tableData ? (
           <div className="grid-wrap">
             <table
@@ -2019,13 +2051,14 @@ export default function App() {
         <SignalsModal
           onClose={() => setShowSignals(false)}
           onConnectTrigify={() => { setShowSignals(false); setView({ kind: "extension", id: "trigify" }); }}
-          onCreated={(tableId) => {
+          onCreated={(tableId, added) => {
             setShowSignals(false);
             api.tables().then((t) => {
               setTables(t);
               setSelectedTableId(tableId);
               setView({ kind: "table" });
             }).catch(() => {});
+            if (!added) startWarming(tableId);
           }}
         />
       )}

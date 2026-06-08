@@ -60,20 +60,19 @@ export interface SignalBinding {
 // Column sets: people who posted (post sources + profile monitors) vs engagers.
 const POST_COLUMNS: SignalColumn[] = [
   { key: "__name", name: "Name" },
-  { key: "linkedin_url", name: "Profile URL" },
-  { key: "company", name: "Company" },
-  { key: "job_title", name: "Title" },
-  { key: "post.text", name: "Post" },
-  { key: "post.url", name: "Post URL" },
-  { key: "post.created_at", name: "Posted At" },
+  { key: "author.profile_url|author.url|author.username|author.handle", name: "Profile URL" },
+  { key: "content.text|content.body|content.title|text", name: "Post" },
+  { key: "content.url|content.permalink|url|link", name: "Post URL" },
+  { key: "published_at|created_at|date", name: "Posted At" },
+  { key: "engagement.likes|engagement.upvotes|engagement.reactions|likes", name: "Likes" },
+  { key: "engagement.comments|engagement.replies|comments", name: "Comments" },
 ];
 const ENGAGE_COLUMNS: SignalColumn[] = [
   { key: "__name", name: "Name" },
-  { key: "linkedin_url", name: "Profile URL" },
-  { key: "company", name: "Company" },
-  { key: "job_title", name: "Title" },
-  { key: "reaction_type", name: "Engagement" },
-  { key: "post.url", name: "Post URL" },
+  { key: "author.profile_url|author.url|profile_url", name: "Profile URL" },
+  { key: "reaction_type|engagement_type|type", name: "Engagement" },
+  { key: "content.url|post.url|url", name: "Post URL" },
+  { key: "published_at|created_at|date", name: "Date" },
 ];
 
 const post = (id: string, label: string, group: string, method: string): SignalSource => ({
@@ -95,7 +94,6 @@ export const SIGNAL_SOURCES: SignalSource[] = [
   post("subreddit", "Subreddit Monitor", "Posts & keywords", "createSubredditPostsSearch"),
   post("substack-posts", "Substack Posts", "Posts & keywords", "createSubstackPostsSearch"),
   post("youtube-videos", "YouTube Videos", "Posts & keywords", "createYouTubeVideosSearch"),
-  post("tiktok-videos", "TikTok Videos", "Posts & keywords", "createTikTokVideosSearch"),
   post("bluesky-posts", "Bluesky Posts", "Posts & keywords", "createBlueskyPostsSearch"),
   post("hackernews", "Hacker News Stories", "Posts & keywords", "createHackerNewsStoriesSearch"),
   post("github-issues", "GitHub Issues", "Posts & keywords", "createGitHubIssuesSearch"),
@@ -108,7 +106,6 @@ export const SIGNAL_SOURCES: SignalSource[] = [
   post("x-profile", "X Profile", "Profile & company", "createTwitterProfileSearch"),
   post("youtube-channel", "YouTube Channel", "Profile & company", "createYouTubeChannelSearch"),
   post("substack-profile", "Substack Publication", "Profile & company", "createSubstackProfileSearch"),
-  post("tiktok-profile", "TikTok Profile", "Profile & company", "createTikTokProfileSearch"),
   post("bluesky-profile", "Bluesky Profile", "Profile & company", "createBlueskyProfileSearch"),
   post("podcast-episodes", "Podcast Episodes", "Profile & company", "createPodcastEpisodesSearch"),
   // Engagement
@@ -162,13 +159,20 @@ export function deleteBinding(projectDb: Db, id: string): boolean {
 }
 
 // ── Result field extraction ───────────────────────────────────────
-function getPath(obj: any, path: string): unknown {
+function getOne(obj: any, path: string): unknown {
   if (path === "__name") {
-    if (obj?.name) return obj.name;
-    const fn = [obj?.first_name, obj?.last_name].filter(Boolean).join(" ");
-    return fn || obj?.author?.name || obj?.full_name || "";
+    return obj?.author?.name || obj?.name || [obj?.first_name, obj?.last_name].filter(Boolean).join(" ") || obj?.full_name || obj?.author?.username || "";
   }
   return path.split(".").reduce((o, k) => (o == null ? undefined : o[k]), obj);
+}
+/** Resolve the first non-empty value across `a.b|c.d` fallback paths — different
+ *  Trigify sources (LinkedIn, Reddit, X, …) shape fields slightly differently. */
+function getPath(obj: any, key: string): unknown {
+  for (const p of key.split("|")) {
+    const v = getOne(obj, p.trim());
+    if (v != null && v !== "") return v;
+  }
+  return undefined;
 }
 
 /** A stable-ish dedupe key for a result row. */
@@ -209,8 +213,10 @@ export async function syncBinding(deps: SignalDeps, binding: SignalBinding): Pro
     if (binding.kind === "search" && !binding.searchId) {
       throw new Error("search not created yet");
     }
+    // NOTE: do NOT pass `from` — Trigify filters by the post's PUBLISH date, so a
+    // since-last-sync window would drop posts that were just collected but published
+    // earlier. Dedupe is handled entirely by the `seen` keys below.
     const input: Record<string, unknown> = { limit: 100 };
-    if (binding.lastSyncedAt) input.from = new Date(binding.lastSyncedAt).toISOString();
     if (binding.kind === "search") input.id = binding.searchId;
     else input.config = binding.config; // profile engagement results keyed by tracked set
 
@@ -275,6 +281,21 @@ function isDue(b: SignalBinding, now: number): boolean {
   if (!b.enabled || b.schedule === "manual") return false;
   if (b.lastSyncedAt == null) return true;
   return now - b.lastSyncedAt >= INTERVAL_MS[b.schedule];
+}
+
+/**
+ * After a search is created its results populate asynchronously (often 10-30s),
+ * so the immediate pull can be empty. Retry a handful of times until rows land.
+ * Fire-and-forget from the create route; writes straight to the project db.
+ */
+export async function warmUpBinding(deps: SignalDeps, bindingId: string, attempts = 30, delayMs = 12000): Promise<void> {
+  for (let i = 0; i < attempts; i++) {
+    await new Promise((r) => setTimeout(r, delayMs));
+    const b = listBindings(deps.projectDb).find((x) => x.id === bindingId);
+    if (!b) return; // binding deleted — stop
+    const { added } = await syncBinding(deps, b);
+    if (added > 0) return; // results landed
+  }
 }
 
 /** Sync every due binding in the given project. Used by the tick + catch-up. */

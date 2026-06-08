@@ -35,8 +35,8 @@
 - `trigify.profileEngagementRemove` — stop tracking a profile.
 
 **Create a saved search per platform (async)**
-- Posts/keywords: `trigify.createLinkedInPostsSearch`, `createTwitterPostsSearch`, `createRedditPostsSearch`, `createSubredditPostsSearch`, `createYouTubeVideosSearch`, `createSubstackPostsSearch`, `createSubstackNotesSearch`, `createPodcastKeywordsSearch`, `createHackerNewsStoriesSearch`, `createNewsApiAiPostsSearch`, `createDailyDevPostsSearch`, `createTikTokVideosSearch`, `createGitHubIssuesSearch`, `createGitHubDiscussionsSearch`, `createBlueskyPostsSearch`.
-- Profile/channel monitors: `trigify.createLinkedInProfileSearch`, `createTwitterProfileSearch`, `createYouTubeChannelSearch`, `createSubstackProfileSearch`, `createTikTokProfileSearch`, `createBlueskyProfileSearch`, `createPodcastEpisodesSearch`.
+- Posts/keywords: `trigify.createLinkedInPostsSearch`, `createTwitterPostsSearch`, `createRedditPostsSearch`, `createSubredditPostsSearch`, `createYouTubeVideosSearch`, `createSubstackPostsSearch`, `createSubstackNotesSearch`, `createPodcastKeywordsSearch`, `createHackerNewsStoriesSearch`, `createNewsApiAiPostsSearch`, `createDailyDevPostsSearch`, `createGitHubIssuesSearch`, `createGitHubDiscussionsSearch`, `createBlueskyPostsSearch`.
+- Profile/channel monitors: `trigify.createLinkedInProfileSearch`, `createTwitterProfileSearch`, `createYouTubeChannelSearch`, `createSubstackProfileSearch`, `createBlueskyProfileSearch`, `createPodcastEpisodesSearch`.
 - Each takes Boolean keywords/handles and returns a search `id`; results populate asynchronously.
 
 **Read / manage searches & their results**

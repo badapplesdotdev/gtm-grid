@@ -3,6 +3,7 @@
 // Local scope tabs, a "CONNECTIONS" add-card, and collapsible info sections.
 
 import { useState, useEffect, useCallback, ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { api, ExtensionDetail, ExtensionInfo, AiProviderInfo, CredentialScope, SkillInfo, SkillDetail } from "./api";
 import { aiProviderCredId } from "./cloud/credentials";
 import { Markdown } from "./AgentPanel";
@@ -107,6 +108,26 @@ const I = {
   Search: () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </svg>
+  ),
+  X: ({ s = 16 }: { s?: number }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  ),
+  Check: ({ s = 14 }: { s?: number }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  ),
+  Tag: ({ s = 15 }: { s?: number }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L3 13V3h10l7.59 7.59a2 2 0 0 1 0 2.82z" /><circle cx="7.5" cy="7.5" r="1.5" fill="currentColor" stroke="none" />
+    </svg>
+  ),
+  Copy: ({ s = 14 }: { s?: number }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
     </svg>
   ),
 };
@@ -400,7 +421,87 @@ export function ExtensionPanel({ id, onConnected, onBack, workspaceCreds }: { id
 
 // ─── Extensions gallery (Browse all) ─────────────────────
 
+interface Perk {
+  /** Discount code the user redeems on the partner's checkout. */
+  code: string;
+  /** Short discount label, e.g. "50% off" (uppercased for the card badge). */
+  pct: string;
+  /** One-line terms / context shown under the partner name in the modal. */
+  sub: string;
+}
+
+/**
+ * Hand-picked partner discounts, keyed by extension id. Each perk surfaces three
+ * ways in Browse all: a quiet "% OFF" badge on the matching card (in-context
+ * discovery), a "Partner perks" button under the search that opens
+ * {@link PerksModal}, and a copyable code chip in that modal. Codes are redeemed
+ * on the partner's own billing page — GTM Grid doesn't process the discount.
+ * Add or remove a perk by editing this object and {@link PERK_ORDER}; the button
+ * count and card badges update automatically.
+ */
+const PERKS: Record<string, Perk> = {
+  smuggler: { code: "MAX50", pct: "50% off", sub: "First 3 months on any plan · LinkedIn engagement intelligence" },
+  trigify: { code: "MAX30", pct: "30% off", sub: "Any annual plan · social listening + engagement signals" },
+  avtrz: { code: "MAX10", pct: "10% off", sub: "Stacks with usage credits · profile-photo enrichment" },
+};
+const PERK_ORDER = ["smuggler", "trigify", "avtrz"];
+
+/** A click-to-copy code chip; flips to a green "Copied" confirmation briefly. */
+function CodeChip({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    if (navigator.clipboard) navigator.clipboard.writeText(code).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  };
+  return (
+    <button className={`perk-code${copied ? " copied" : ""}`} onClick={copy} title="Copy code">
+      <span className="perk-code-label">Code</span>
+      <span className="perk-code-val">{copied ? "Copied" : code}</span>
+      <span className="perk-code-copy">{copied ? <I.Check /> : <I.Copy />}</span>
+    </button>
+  );
+}
+
+/** Modal listing every partner perk with its discount and a copyable code. */
+function PerksModal({ extensions, onClose }: { extensions: ExtensionInfo[]; onClose: () => void }) {
+  const rows = PERK_ORDER.flatMap((id) => {
+    const ext = extensions.find((e) => e.id === id);
+    return ext ? [{ ext, perk: PERKS[id] }] : [];
+  });
+  // Portal to <body> so the overlay escapes the main-area stacking context
+  // (otherwise it's trapped below the sidebar — a partial dim + dead click-off).
+  return createPortal(
+    <div className="ppm-scrim" onMouseDown={(ev) => ev.target === ev.currentTarget && onClose()}>
+      <div className="ppm" role="dialog" aria-modal="true" aria-label="Partner perks" onMouseDown={(ev) => ev.stopPropagation()}>
+        <div className="ppm-head">
+          <div className="ppm-head-text">
+            <div className="ppm-title"><span className="tag-ic"><I.Tag s={17} /></span>Partner perks</div>
+            <div className="ppm-sub">Exclusive codes for GTM Grid users. Copy a code and apply it at the partner's checkout.</div>
+          </div>
+          <button className="ppm-close" onClick={onClose} aria-label="Close"><I.X s={17} /></button>
+        </div>
+        <div className="ppm-body">
+          {rows.map(({ ext, perk }) => (
+            <div key={ext.id} className="ppm-row">
+              <span className="browse-card-icon ppm-row-icon"><BrandIcon logo={ext.logo} name={ext.name} size={26} /></span>
+              <div className="ppm-row-body">
+                <div className="ppm-row-name"><strong>{ext.name}</strong><span className="ppm-pct">{perk.pct}</span></div>
+                <div className="ppm-row-sub">{perk.sub}</div>
+              </div>
+              <CodeChip code={perk.code} />
+            </div>
+          ))}
+        </div>
+        <div className="ppm-foot">Codes are redeemed on the partner's own billing page — GTM Grid doesn't process the discount.</div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function ExtensionCard({ e, onOpen, featured = false }: { e: ExtensionInfo; onOpen: (id: string) => void; featured?: boolean }) {
+  const perk = PERKS[e.id];
   return (
     <button className={`browse-card${featured ? " featured" : ""}`} onClick={() => onOpen(e.id)}>
       <div className="browse-card-icon"><BrandIcon logo={e.logo} name={e.name} size={26} /></div>
@@ -408,6 +509,7 @@ function ExtensionCard({ e, onOpen, featured = false }: { e: ExtensionInfo; onOp
         <div className="browse-card-top">
           <span className="browse-card-name">{e.name}</span>
           {e.connected && <span className="ext-badge connected">connected</span>}
+          {perk && <span className="deal-badge">{perk.pct.toUpperCase()}</span>}
         </div>
         <div className="browse-card-desc">{e.description ?? `${e.category} · ${e.methods} methods`}</div>
       </div>
@@ -424,6 +526,7 @@ export function ExtensionsBrowse({
   onOpen: (id: string) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [perksOpen, setPerksOpen] = useState(false);
   const q = query.trim().toLowerCase();
   const filtered = q
     ? extensions.filter(
@@ -437,6 +540,7 @@ export function ExtensionsBrowse({
   const featured = extensions.filter((e) => e.featured);
   const rest = extensions.filter((e) => !e.featured);
   const searching = q.length > 0;
+  const availablePerks = PERK_ORDER.filter((id) => extensions.some((e) => e.id === id));
 
   return (
     <div className="browse">
@@ -452,6 +556,16 @@ export function ExtensionsBrowse({
           autoFocus
         />
       </div>
+
+      {availablePerks.length > 0 && (
+        <div className="perks-bar">
+          <button className="perks-btn" onClick={() => setPerksOpen(true)}>
+            <span className="tag-ic"><I.Tag s={14} /></span>
+            Partner perks
+            <span className="perks-btn-count">{availablePerks.length}</span>
+          </button>
+        </div>
+      )}
 
       {searching ? (
         <>
@@ -482,6 +596,8 @@ export function ExtensionsBrowse({
           </div>
         </>
       )}
+
+      {perksOpen && <PerksModal extensions={extensions} onClose={() => setPerksOpen(false)} />}
     </div>
   );
 }

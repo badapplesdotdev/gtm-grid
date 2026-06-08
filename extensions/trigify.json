@@ -3,7 +3,7 @@
   "name": "Trigify",
   "version": "2.0.0",
   "category": "social",
-  "description": "Social listening + engagement intelligence — monitor profiles, companies, posts and topics across LinkedIn, X/Twitter, Reddit, YouTube, TikTok, Substack, Bluesky, GitHub, Hacker News, Daily.dev, Podcasts and News.",
+  "description": "Social listening + engagement intelligence — monitor profiles, companies, posts and topics across LinkedIn, X/Twitter, Reddit, YouTube, Substack, Bluesky, GitHub, Hacker News, Daily.dev, Podcasts and News.",
   "featured": true,
   "baseUrl": "https://api.trigify.io",
   "logo": "https://www.google.com/s2/favicons?domain=trigify.io&sz=128",
@@ -432,23 +432,6 @@
       }}
     },
     {
-      "id": "createTikTokVideosSearch",
-      "label": "Create TikTok Videos Search",
-      "description": "Monitor TikTok videos. TikTok has no boolean logic — each keyword runs as an independent search and results are merged. past-year is NOT supported. Costs 1 credit.",
-      "verb": "POST", "path": "/v1/searches/tiktok/videos", "credits": 1,
-      "input": { "type": "object", "required": ["name", "keywords"], "properties": {
-        "name": { "type": "string" },
-        "keywords": { "type": "array", "items": { "type": "string" }, "description": "1-10 keywords" },
-        "keywords_not": { "type": "array", "items": { "type": "string" } },
-        "time_frame": { "type": "string", "description": "past-24h | past-week | past-month | past-6-months | all-time (no past-year)" },
-        "max_results": { "type": "number" },
-        "frequency": { "type": "string" },
-        "country": { "type": "string", "description": "ISO 3166-1 alpha-2" },
-        "match_exactly": { "type": "boolean" },
-        "sorting": { "type": "string", "description": "0 (relevance) | 1 (most liked) | 2 (most recent)" }
-      }}
-    },
-    {
       "id": "createGitHubIssuesSearch",
       "label": "Create GitHub Issues Search",
       "description": "Monitor GitHub issues by keywords. Optionally scope to specific repos (owner/repo format). Costs 1 credit.",
@@ -545,18 +528,6 @@
         "max_results": { "type": "number" },
         "frequency": { "type": "string" },
         "time_frame": { "type": "string" }
-      }}
-    },
-    {
-      "id": "createTikTokProfileSearch",
-      "label": "Monitor TikTok Profile",
-      "description": "Monitor new videos from a TikTok creator. Accepts URL (https://tiktok.com/@handle) or @handle. Costs 1 credit.",
-      "verb": "POST", "path": "/v1/searches/tiktok/profile", "credits": 1,
-      "input": { "type": "object", "required": ["name", "profile_url"], "properties": {
-        "name": { "type": "string" },
-        "profile_url": { "type": "string" },
-        "max_results": { "type": "number" },
-        "frequency": { "type": "string" }
       }}
     },
     {

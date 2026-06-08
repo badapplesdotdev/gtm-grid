@@ -1,7 +1,7 @@
 // "From Signals" — pick a Trigify signal source, configure its criteria, and
 // create a table that a local poller keeps filling with new results.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, SignalSource } from "./api";
 
 const SCHEDULES: { id: string; label: string }[] = [
@@ -21,13 +21,123 @@ function humanize(key: string): string {
   return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+/** Turn one option token into {value,label}. "every-12h" → Every 12h; "0 (relevance)" → 0 — relevance. */
+function optionOf(token: string): { value: string; label: string } {
+  const t = token.trim();
+  const paren = /^(\S+)\s*\((.+)\)$/.exec(t);
+  if (paren) return { value: paren[1], label: `${paren[1]} — ${paren[2]}` };
+  return { value: t, label: t.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) };
+}
+
+// Canonical Trigify option sets — used when the manifest field has no enum/description
+// (many do not). Keyed by field name so every source gets consistent dropdowns.
+const KNOWN_FIELD_OPTIONS: Record<string, string[]> = {
+  time_frame: ["past-24h", "past-week", "past-month", "past-6-months", "past-year", "all-time"],
+  frequency: ["hourly", "every-12h", "daily", "weekly", "monthly", "quarterly"],
+  max_results: ["10", "25", "50", "100"],
+};
+
+/** Derive dropdown options for a field: explicit enum, a "a | b | c" description, a numeric range, or a known field. */
+function fieldOptions(key: string, spec: any): { value: string; label: string }[] | null {
+  if (Array.isArray(spec?.enum)) return spec.enum.map((o: string) => optionOf(String(o)));
+  const desc = String(spec?.description ?? "");
+  if (desc.includes(" | ")) return desc.split("|").map(optionOf);
+  if ((spec?.type === "number" || spec?.type === "integer") && /(\d+)\s*-\s*(\d+)/.test(desc)) {
+    const m = /(\d+)\s*-\s*(\d+)/.exec(desc)!;
+    const min = +m[1], max = +m[2];
+    const opts = [10, 25, 50, 100, 250, 500].filter((n) => n >= min && n <= max);
+    return (opts.length ? opts : [min, max]).map((n) => ({ value: String(n), label: String(n) }));
+  }
+  if (KNOWN_FIELD_OPTIONS[key]) return KNOWN_FIELD_OPTIONS[key].map(optionOf);
+  return null;
+}
+
+/** Chip/tag input: type a keyword, commit on Enter / comma / blur; × or Backspace removes. */
+function TagInput({ tags, onChange, placeholder }: { tags: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
+  const [text, setText] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const commit = (raw: string) => {
+    const parts = raw.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+    if (!parts.length) return;
+    const next = [...tags];
+    for (const p of parts) if (!next.includes(p)) next.push(p);
+    onChange(next);
+    setText("");
+  };
+  return (
+    <div className="sig-tags" onClick={() => inputRef.current?.focus()}>
+      {tags.map((t, i) => (
+        <span className="sig-tag" key={`${t}-${i}`}>
+          {t}
+          <button type="button" className="sig-tag-x" onClick={(e) => { e.stopPropagation(); onChange(tags.filter((_, j) => j !== i)); }}>×</button>
+        </span>
+      ))}
+      <input
+        ref={inputRef}
+        className="sig-tags-input"
+        value={text}
+        placeholder={tags.length ? "" : placeholder}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === ",") { e.preventDefault(); commit(text); }
+          else if (e.key === "Backspace" && !text && tags.length) onChange(tags.slice(0, -1));
+        }}
+        onBlur={() => commit(text)}
+      />
+    </div>
+  );
+}
+
+/** Custom in-app dropdown (replaces the native <select>) with a styled popover menu. */
+function Dropdown({
+  value,
+  options,
+  placeholder = "Default",
+  onChange,
+}: {
+  value: string;
+  options: { value: string; label: string }[];
+  placeholder?: string;
+  onChange: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  const selected = options.find((o) => o.value === value);
+  return (
+    <div className={`sig-dd${open ? " open" : ""}`} ref={ref}>
+      <button type="button" className="sig-dd-btn" onClick={() => setOpen((o) => !o)}>
+        <span className={selected ? "" : "sig-dd-ph"}>{selected ? selected.label : placeholder}</span>
+        <svg className="sig-dd-caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+      </button>
+      {open && (
+        <div className="sig-dd-menu">
+          <button type="button" className={`sig-dd-opt${!value ? " active" : ""}`} onClick={() => { onChange(""); setOpen(false); }}>{placeholder}</button>
+          {options.map((o) => (
+            <button type="button" key={o.value} className={`sig-dd-opt${o.value === value ? " active" : ""}`} onClick={() => { onChange(o.value); setOpen(false); }}>
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SignalsModal({
   onClose,
   onCreated,
   onConnectTrigify,
 }: {
   onClose: () => void;
-  onCreated: (tableId: string) => void;
+  onCreated: (tableId: string, added: number) => void;
   onConnectTrigify: () => void;
 }) {
   const [loading, setLoading] = useState(true);
@@ -36,7 +146,7 @@ export function SignalsModal({
   const [selected, setSelected] = useState<SignalSource | null>(null);
   const [name, setName] = useState("");
   const [schedule, setSchedule] = useState("daily");
-  const [values, setValues] = useState<Record<string, string | boolean>>({});
+  const [values, setValues] = useState<Record<string, string | boolean | string[]>>({});
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,8 +176,33 @@ export function SignalsModal({
   const props = selected?.inputSchema?.properties ?? {};
   const required = new Set(selected?.inputSchema?.required ?? []);
   const fieldKeys = Object.keys(props).filter((k) => k !== "name");
-  const mainKeys = fieldKeys.filter((k) => required.has(k) || COMMON.has(k));
-  const advancedKeys = fieldKeys.filter((k) => !required.has(k) && !COMMON.has(k));
+  // Social-listening (keyword) searches get a Boolean OR/AND/NOT builder instead
+  // of raw fields; everything else (time frame, max results, …) drops to Advanced.
+  const BOOL_FIELDS = ["keywords", "keywords_and", "keywords_not"];
+  const isKeywordSearch = "keywords" in props;
+  const builderKeys = isKeywordSearch ? BOOL_FIELDS.filter((k) => k in props) : [];
+  const nonBuilder = fieldKeys.filter((k) => !builderKeys.includes(k));
+  // Scan settings (look-back, limit, scan frequency) get their own dropdown row in
+  // the main form for keyword searches; the rest stay under Advanced.
+  const SCAN_FIELDS = ["time_frame", "max_results", "frequency"];
+  const mainKeys = isKeywordSearch ? [] : nonBuilder.filter((k) => required.has(k) || COMMON.has(k));
+  const advancedKeys = isKeywordSearch
+    ? nonBuilder.filter((k) => !SCAN_FIELDS.includes(k))
+    : nonBuilder.filter((k) => !required.has(k) && !COMMON.has(k));
+
+  const splitTerms = (raw: unknown): string[] =>
+    Array.isArray(raw)
+      ? raw.map((s) => String(s).trim()).filter(Boolean)
+      : String(raw ?? "").split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+  const queryPreview = (): string => {
+    const or = splitTerms(values.keywords);
+    const and = splitTerms(values.keywords_and);
+    const not = splitTerms(values.keywords_not);
+    let q = or.length > 1 ? `(${or.join(" OR ")})` : or[0] ?? "";
+    for (const t of and) q = q ? `${q} AND ${t}` : t;
+    if (not.length) q += `${q ? " " : ""}NOT (${not.join(" OR ")})`;
+    return q;
+  };
 
   const pick = (s: SignalSource) => {
     setSelected(s);
@@ -77,16 +212,16 @@ export function SignalsModal({
     setShowAdvanced(false);
   };
 
-  const setVal = (k: string, v: string | boolean) => setValues((p) => ({ ...p, [k]: v }));
+  const setVal = (k: string, v: string | boolean | string[]) => setValues((p) => ({ ...p, [k]: v }));
 
   const buildConfig = (): Record<string, unknown> => {
     const out: Record<string, unknown> = {};
     for (const k of fieldKeys) {
       const spec = props[k] || {};
       const raw = values[k];
-      if (raw === undefined || raw === "" || raw === false) continue;
+      if (raw === undefined || raw === "" || raw === false || (Array.isArray(raw) && raw.length === 0)) continue;
       if (spec.type === "array") {
-        const arr = String(raw).split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+        const arr = splitTerms(raw);
         if (arr.length) out[k] = arr;
       } else if (spec.type === "number" || spec.type === "integer") {
         const n = Number(raw);
@@ -100,8 +235,9 @@ export function SignalsModal({
     return out;
   };
 
+  const isEmptyVal = (v: unknown) => v === undefined || v === "" || (Array.isArray(v) && v.length === 0);
   const missingRequired = selected
-    ? [...required].filter((k) => k !== "name" && (values[k] === undefined || values[k] === "")).map(humanize)
+    ? [...required].filter((k) => k !== "name" && isEmptyVal(values[k])).map(humanize)
     : [];
 
   const submit = async () => {
@@ -111,12 +247,35 @@ export function SignalsModal({
     try {
       const r = await api.createSignal({ sourceId: selected.id, name: name.trim() || selected.label, config: buildConfig(), schedule });
       if (r.error) { setError(r.error); return; }
-      if (r.tableId) onCreated(r.tableId);
+      if (r.tableId) onCreated(r.tableId, r.added ?? 0);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not create the signal.");
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const renderBool = (k: string, title: string, op: "OR" | "AND" | "NOT", hint: string, req: boolean, ph: string) => (
+    <div className="sig-field" key={k}>
+      <label className="sig-label">
+        {title} <span className={`sig-op sig-op-${op.toLowerCase()}`}>{op}</span>
+        {req && <span className="sig-req">*</span>}
+      </label>
+      <TagInput tags={splitTerms(values[k])} onChange={(v) => setVal(k, v)} placeholder={ph} />
+      <div className="sig-hint">{hint}</div>
+    </div>
+  );
+
+  const renderSelect = (k: string, label: string) => {
+    const spec = props[k];
+    const opts = spec ? fieldOptions(k, spec) : null;
+    if (!opts) return null;
+    return (
+      <div className="sig-field" key={k}>
+        <label className="sig-label">{label}</label>
+        <Dropdown value={String(values[k] ?? "")} options={opts} placeholder="Default" onChange={(v) => setVal(k, v)} />
+      </div>
+    );
   };
 
   const renderField = (k: string) => {
@@ -135,14 +294,12 @@ export function SignalsModal({
         </div>
       );
     }
-    if (Array.isArray(spec.enum)) {
+    const opts = fieldOptions(k, spec);
+    if (opts) {
       return (
         <div className="sig-field" key={k}>
           {label}
-          <select className="sig-input" value={String(values[k] ?? "")} onChange={(e) => setVal(k, e.target.value)}>
-            <option value="">—</option>
-            {spec.enum.map((o: string) => <option key={o} value={o}>{o}</option>)}
-          </select>
+          <Dropdown value={String(values[k] ?? "")} options={opts} placeholder="—" onChange={(v) => setVal(k, v)} />
         </div>
       );
     }
@@ -177,7 +334,7 @@ export function SignalsModal({
       <div className="modal sig-modal" onClick={(e) => e.stopPropagation()}>
         <div className="sig-head">
           <div>
-            <div className="sig-title">From Signals</div>
+            <div className="sig-title">From Social Signals</div>
             <div className="sig-sub">Create a table that fills itself from a Trigify social signal.</div>
           </div>
           <button className="sig-x" onClick={onClose}>✕</button>
@@ -208,13 +365,35 @@ export function SignalsModal({
           </div>
         ) : (
           <div className="sig-body">
-            <button className="sig-back" onClick={() => setSelected(null)}>‹ All signals</button>
+            <button className="sig-back" onClick={() => setSelected(null)}>‹ All social signals</button>
             <div className="sig-config-head">{selected.label}</div>
 
             <div className="sig-field">
               <label className="sig-label">Table name</label>
               <input className="sig-input" value={name} onChange={(e) => setName(e.target.value)} />
             </div>
+
+            {isKeywordSearch && (
+              <div className="sig-bool">
+                {renderBool("keywords", "Any of these", "OR", "Match posts containing ANY of these terms.", true, "react, next.js, remix")}
+                {"keywords_and" in props &&
+                  renderBool("keywords_and", "Must also include", "AND", "Narrow to posts that ALSO contain all of these.", false, "hiring")}
+                {"keywords_not" in props &&
+                  renderBool("keywords_not", "Exclude", "NOT", "Drop posts that contain any of these.", false, "intern, junior")}
+                <div className="sig-preview">
+                  <span className="sig-preview-label">Query preview</span>
+                  <code className="sig-preview-q">{queryPreview() || "—"}</code>
+                </div>
+              </div>
+            )}
+
+            {isKeywordSearch && (
+              <div className="sig-scan">
+                {renderSelect("time_frame", "Look back")}
+                {renderSelect("max_results", "Limit")}
+                {renderSelect("frequency", "Scan frequency")}
+              </div>
+            )}
 
             {mainKeys.map(renderField)}
 
