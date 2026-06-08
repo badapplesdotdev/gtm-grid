@@ -31,6 +31,8 @@ import type {
   WorkspaceQuota,
 } from "../repositories/webhook-repo.js";
 import { webhookRepoLayer } from "../repositories/webhook-repo.js";
+import { workspaceRepoLayer } from "../repositories/workspace-repo.js";
+import { EntitlementService } from "./entitlement-service.js";
 import { WebhookService } from "./webhook-service.js";
 
 const WS = "ws-1";
@@ -83,6 +85,8 @@ function harness(opts: {
   deliveries?: WebhookDelivery[];
   currentUserId?: string | null;
   crypto?: Layer.Layer<CredentialCryptoService>;
+  /** The workspace's cached plan; `undefined` defaults to "team" (cloud on). */
+  plan?: string | null;
 }) {
   const webhookRepo = webhookRepoLayer({
     webhooks: opts.webhooks ?? [{ ...webhook }],
@@ -98,12 +102,27 @@ function harness(opts: {
     Layer.provide(cloudIdentityLayer(opts.currentUserId ?? "member")),
     Layer.provide(cloudMemberRepoLayer(memberships)),
   );
+  // EntitlementService reads the workspace plan; default "team" (cloud on).
+  // Pass `plan: null` to exercise a lapsed/Free workspace (cloud locked).
+  const entitlement = EntitlementService.Default.pipe(
+    Layer.provide(
+      workspaceRepoLayer([
+        {
+          id: WS,
+          name: "WS",
+          ownerId: "owner",
+          currentPlanId: opts.plan === undefined ? "team" : opts.plan,
+        },
+      ]),
+    ),
+  );
   const layer = WebhookService.Default.pipe(
     Layer.provide(webhookRepo),
     Layer.provide(deliveryRepo),
     Layer.provide(membership),
     Layer.provide(CellMerge.Default),
     Layer.provide(opts.crypto ?? credentialCryptoTest()),
+    Layer.provide(entitlement),
   );
   const run = <A, E>(program: Effect.Effect<A, E, WebhookService>) =>
     Effect.runPromiseExit(program.pipe(Effect.provide(layer)));
@@ -141,6 +160,14 @@ describe("WebhookService.resolveToken", () => {
     const { run } = harness({});
     const exit = await run(
       svc.pipe(Effect.flatMap((s) => s.resolveToken("nope"))),
+    );
+    expect(Exit.isSuccess(exit) && exit.value).toBe(null);
+  });
+
+  it("returns null when the workspace's cloud plan lapsed (inbound locked)", async () => {
+    const { run } = harness({ plan: null });
+    const exit = await run(
+      svc.pipe(Effect.flatMap((s) => s.resolveToken("tok-123"))),
     );
     expect(Exit.isSuccess(exit) && exit.value).toBe(null);
   });

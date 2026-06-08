@@ -56,10 +56,17 @@ const webhook: Webhook = {
   receivedCount: 0,
 };
 
+// Default the workspace to a cloud-enabled plan ("team") so createWebhook's
+// cloud-access gate passes; override `workspaces` to test a locked workspace.
 const callerFor = (fixtures: TestLayerFixtures) =>
   createCaller(
     createTestContext({
-      layer: TestLayer(fixtures),
+      layer: TestLayer({
+        workspaces: [
+          { id: WS, name: "WS", ownerId: "member", currentPlanId: "team" },
+        ],
+        ...fixtures,
+      }),
       userId: fixtures.currentUserId ?? null,
     }),
   );

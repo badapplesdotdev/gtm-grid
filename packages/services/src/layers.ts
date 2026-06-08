@@ -252,19 +252,20 @@ export const appLayer = (params: {
     Layer.provide(membershipService),
     Layer.provide(CredentialOwnershipService.Default),
   );
+  const entitlementService = EntitlementService.Default.pipe(
+    Layer.provide(workspaceRepo),
+  );
   const webhookService = WebhookService.Default.pipe(
     Layer.provide(webhookRepo),
     Layer.provide(webhookDeliveryRepo),
     Layer.provide(membershipService),
     Layer.provide(CellMerge.Default),
     Layer.provide(credentialCryptoLive),
+    Layer.provide(entitlementService),
   );
   const extensionService = ExtensionService.Default.pipe(
     Layer.provide(extensionRepo),
     Layer.provide(membershipService),
-  );
-  const entitlementService = EntitlementService.Default.pipe(
-    Layer.provide(workspaceRepo),
   );
   const gridService = GridService.Default.pipe(
     Layer.provide(projectRepo),
@@ -549,19 +550,20 @@ export const TestLayer = (
     Layer.provide(membershipService),
     Layer.provide(CredentialOwnershipService.Default),
   );
+  const entitlementService = EntitlementService.Default.pipe(
+    Layer.provide(workspaceRepo),
+  );
   const webhookService = WebhookService.Default.pipe(
     Layer.provide(webhookRepo),
     Layer.provide(webhookDeliveryRepo),
     Layer.provide(membershipService),
     Layer.provide(CellMerge.Default),
     Layer.provide(fixtures.crypto ?? credentialCryptoTest()),
+    Layer.provide(entitlementService),
   );
   const extensionService = ExtensionService.Default.pipe(
     Layer.provide(extensionRepo),
     Layer.provide(membershipService),
-  );
-  const entitlementService = EntitlementService.Default.pipe(
-    Layer.provide(workspaceRepo),
   );
   const gridService = GridService.Default.pipe(
     Layer.provide(projectRepo),
