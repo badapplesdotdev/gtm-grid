@@ -16,6 +16,7 @@ import {
   identityLayer,
   memberRepoLayer,
   MembershipService,
+  planName,
   SeatsService,
 } from "@gtmgrid/cloud";
 import { Cause, Effect, Exit, Layer, Option } from "effect";
@@ -130,13 +131,13 @@ describe("BillingService.checkout", () => {
       Layer.provide(identityLayer("user_owner")),
       Layer.provide(memberRepoLayer(ownerMembership)),
     );
-    const seats = SeatsService.Default.pipe(
-      Layer.provide(failingAutumnLayer("attach")),
-    );
+    const autumn = failingAutumnLayer("attach");
+    const seats = SeatsService.Default.pipe(Layer.provide(autumn));
     const billing = BillingService.Default.pipe(
       Layer.provide(membership),
       Layer.provide(workspaceRepoLayer(workspaces, users)),
       Layer.provide(seats),
+      Layer.provide(autumn),
     );
     const exit = await Effect.runPromiseExit(
       Effect.gen(function* () {
@@ -145,5 +146,82 @@ describe("BillingService.checkout", () => {
       }).pipe(Effect.provide(billing)),
     );
     expect(failureTag(exit)).toBe("AutumnError");
+  });
+});
+
+describe("BillingService.syncPlan", () => {
+  const ownerMembership: readonly Membership[] = [
+    { workspaceId: WS_ID, userId: "user_owner", role: "owner" },
+  ];
+
+  const runSync = (fixtures: TestLayerFixtures) =>
+    Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const svc = yield* BillingService;
+        return yield* svc.syncPlan(WS_ID);
+      }).pipe(Effect.provide(TestLayer(fixtures))),
+    );
+
+  it("reflects the active paid plan reported by Autumn", async () => {
+    const exit = await runSync({
+      workspaces,
+      users,
+      memberships: ownerMembership,
+      currentUserId: "user_owner",
+      autumn: { activePlanIds: ["business"] },
+    });
+    if (!Exit.isSuccess(exit)) throw new Error("expected success");
+    expect(exit.value).toEqual({ id: "business", name: planName("business") });
+  });
+
+  it("normalises an annual plan id to its tier name", async () => {
+    const exit = await runSync({
+      workspaces,
+      users,
+      memberships: ownerMembership,
+      currentUserId: "user_owner",
+      autumn: { activePlanIds: ["business_annual"] },
+    });
+    if (!Exit.isSuccess(exit)) throw new Error("expected success");
+    expect(exit.value).toEqual({
+      id: "business_annual",
+      name: planName("business_annual"),
+    });
+  });
+
+  it("resolves to Free when Autumn has no active paid plan", async () => {
+    const exit = await runSync({
+      workspaces,
+      users,
+      memberships: ownerMembership,
+      currentUserId: "user_owner",
+      autumn: { activePlanIds: ["free"] },
+    });
+    if (!Exit.isSuccess(exit)) throw new Error("expected success");
+    expect(exit.value).toEqual({ id: null, name: "Free" });
+  });
+
+  it("allows any member (not only owner/admin) to refresh the plan", async () => {
+    const exit = await runSync({
+      workspaces,
+      users,
+      memberships: [
+        { workspaceId: WS_ID, userId: "user_member", role: "member" },
+      ],
+      currentUserId: "user_member",
+      autumn: { activePlanIds: ["team"] },
+    });
+    expect(failureTag(exit)).toBeUndefined();
+  });
+
+  it("rejects a non-member with NotAMemberError", async () => {
+    const exit = await runSync({
+      workspaces,
+      users,
+      memberships: [],
+      currentUserId: "user_stranger",
+      autumn: { activePlanIds: ["team"] },
+    });
+    expect(failureTag(exit)).toBe("NotAMemberError");
   });
 });

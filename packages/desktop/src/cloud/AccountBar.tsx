@@ -18,10 +18,10 @@
  * shown so local-only usage is unchanged.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { type BillingCycle, resolvePlanId } from "@gtmgrid/cloud";
 import type { Id } from "./ids";
-import { cloudEnabled } from "./client";
+import { cloudEnabled, syncWorkspacePlan } from "./client";
 import {
   useAccountActions,
   useActiveWorkspace,
@@ -406,6 +406,13 @@ function PlanBillingModal(props: {
   onClose: () => void;
 }) {
   const { workspace, isAuthenticated, onClose } = props;
+
+  // Opening this panel should always show the current plan: reconcile with Autumn
+  // (writes back `currentPlanId`) then refetch `me`, so a manual upgrade in Autumn
+  // or a just-completed checkout is reflected immediately.
+  useEffect(() => {
+    void syncWorkspacePlan(workspace._id);
+  }, [workspace._id]);
 
   const checkoutLayer = useCheckoutLayer();
 

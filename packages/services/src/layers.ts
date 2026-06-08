@@ -236,6 +236,7 @@ export const appLayer = (params: {
     Layer.provide(membershipService),
     Layer.provide(workspaceRepo),
     Layer.provide(seatsService),
+    Layer.provide(autumnLayer),
   );
   const invitationService = InvitationService.Default.pipe(
     Layer.provide(invitationRepo),
@@ -524,6 +525,7 @@ export const TestLayer = (
     Layer.provide(membershipService),
     Layer.provide(workspaceRepo),
     Layer.provide(seatsService),
+    Layer.provide(autumn),
   );
   const invitationService = InvitationService.Default.pipe(
     Layer.provide(invitationRepo),

@@ -23,7 +23,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import { createAuthClient } from "better-auth/react";
 import { emailOTPClient } from "better-auth/client/plugins";
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 // TYPE-ONLY import of the server router contract over a relative path; importing
 // the type erases at build time so no server code is bundled into the desktop app.
 import type { AppRouter } from "../../../../apps/web/lib/trpc/root";
@@ -175,6 +175,24 @@ export const apiClient: ReturnType<typeof makeTrpcClient> | null = cloudViaApi
   : null;
 
 /**
+ * Reconcile a workspace's cached plan with its live Autumn subscription, then
+ * refetch `me` so the plan badge / billing panel reflect the result. Best-effort:
+ * the desktop calls this on load, on window focus, and when billing opens so a
+ * plan changed in Autumn (manual upgrade OR completed checkout) shows up without
+ * a restart. Swallows errors (Autumn down / not a member) — the cached plan just
+ * stays as-is. A no-op when the cloud layer is off.
+ */
+export async function syncWorkspacePlan(workspaceId: string): Promise<void> {
+  if (apiClient === null) return;
+  try {
+    await apiClient.billing.syncPlan.mutate({ workspaceId });
+    await queryClient.invalidateQueries({ queryKey: ["workspaces", "me"] });
+  } catch {
+    /* best-effort refresh — leave the cached plan untouched on failure */
+  }
+}
+
+/**
  * Build the react-query `QueryClient`. Defaults mirror a desktop app: no
  * window-focus refetch (the Tauri webview's focus events are noisy) and a short
  * stale time so cloud reads stay fresh without thrashing. A factory (not a
@@ -209,6 +227,28 @@ function ApiDeepLinkOAuthBridge({ children }: { children: ReactNode }) {
 }
 
 /**
+ * Invalidate the react-query cache whenever the Better Auth session IDENTITY
+ * changes (sign-in, sign-up, OAuth completion, sign-out). The `me` query — which
+ * carries the user, workspaces AND the Autumn plan — is cached as `null` while
+ * signed out and react-query has no idea a bearer token just appeared, so without
+ * this the app stays "signed out" after an in-app sign-up and the plan badge goes
+ * stale. Driven off the reactive `useSession` so it covers every auth path in one
+ * place. Mounted only when the cloud layer is on (so `authClient` is non-null).
+ */
+function AuthQuerySync(): null {
+  const session = authClient!.useSession();
+  const userId = session.data?.user?.id ?? null;
+  const prev = useRef<string | null>(null);
+  useEffect(() => {
+    if (prev.current !== userId) {
+      prev.current = userId;
+      void queryClient.invalidateQueries();
+    }
+  }, [userId]);
+  return null;
+}
+
+/**
  * Wrap the app in the cloud providers (react-query). The tRPC + Better Auth
  * clients are module singletons consumed directly by hooks, so the only React
  * provider needed is react-query's.
@@ -225,7 +265,10 @@ export function CloudProvider({ children }: { children: ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       {cloudEnabled ? (
-        <ApiDeepLinkOAuthBridge>{children}</ApiDeepLinkOAuthBridge>
+        <>
+          <AuthQuerySync />
+          <ApiDeepLinkOAuthBridge>{children}</ApiDeepLinkOAuthBridge>
+        </>
       ) : (
         children
       )}

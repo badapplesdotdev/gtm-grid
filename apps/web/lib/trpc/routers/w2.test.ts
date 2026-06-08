@@ -199,3 +199,45 @@ describe("billing.checkout", () => {
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 });
+
+describe("billing.syncPlan", () => {
+  it("returns the live Autumn plan for a member", async () => {
+    const caller = callerFor({
+      users,
+      workspaces,
+      members,
+      memberships: ownerMembership,
+      currentUserId: "user_owner",
+      autumn: { activePlanIds: ["business"] },
+    });
+    const result = await caller.billing.syncPlan({ workspaceId: WS_ID });
+    expect(result).toEqual({ id: "business", name: "Business" });
+  });
+
+  it("resolves to Free when Autumn has no active paid plan", async () => {
+    const caller = callerFor({
+      users,
+      workspaces,
+      members,
+      memberships: ownerMembership,
+      currentUserId: "user_owner",
+      autumn: { activePlanIds: ["free"] },
+    });
+    const result = await caller.billing.syncPlan({ workspaceId: WS_ID });
+    expect(result).toEqual({ id: null, name: "Free" });
+  });
+
+  it("rejects a non-member with FORBIDDEN", async () => {
+    const caller = callerFor({
+      users,
+      workspaces,
+      members: [],
+      memberships: [],
+      currentUserId: "user_stranger",
+      autumn: { activePlanIds: ["team"] },
+    });
+    await expect(
+      caller.billing.syncPlan({ workspaceId: WS_ID }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
