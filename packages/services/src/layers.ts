@@ -60,6 +60,12 @@ import {
   InvitationRepoLive,
   invitationRepoLayer,
 } from "./repositories/invitation-repo.js";
+import {
+  ShareRepo,
+  ShareRepoLive,
+  shareRepoLayer,
+  type TableShare,
+} from "./repositories/share-repo.js";
 import { MemberRepoLive } from "./repositories/member-repo.js";
 import {
   CellRepo,
@@ -127,6 +133,7 @@ import {
 import { ExtensionService } from "./services/extension-service.js";
 import { EntitlementService } from "./services/entitlement-service.js";
 import { GridService } from "./services/grid-service.js";
+import { ShareService } from "./services/share-service.js";
 import {
   type MeterQuota,
   MeterService,
@@ -296,6 +303,13 @@ export const appLayer = (params: {
     Layer.provide(realtimePublisher),
     Layer.provide(entitlementService),
   );
+  const shareRepo = ShareRepoLive.pipe(Layer.provide(dbLayer));
+  const shareService = ShareService.Default.pipe(
+    Layer.provide(shareRepo),
+    Layer.provide(gridService),
+    Layer.provide(membershipService),
+    Layer.provide(identity),
+  );
   // Merge so callers can resolve any repo or service from one Layer.
   return Layer.mergeAll(
     entitlementService,
@@ -308,6 +322,8 @@ export const appLayer = (params: {
     signalService,
     signalRepo,
     gridService,
+    shareService,
+    shareRepo,
     workspaceRepo,
     workspaceMemberRepo,
     invitationRepo,
@@ -383,6 +399,8 @@ export interface TestLayerFixtures {
   readonly webhooks?: Webhook[];
   /** Signal bindings visible to {@link SignalRepo} (MUTATED by insert/patch/delete). */
   readonly signalBindings?: SignalBinding[];
+  /** Table shares visible to {@link ShareRepo} (MUTATED by insert/revoke). */
+  readonly shares?: TableShare[];
   /** Tables backing the webhook worker grid paths. */
   readonly tables?: GridTable[];
   /** Columns backing mapping validation + getTable. */
@@ -608,6 +626,19 @@ export const TestLayer = (
     Layer.provide(realtimePublisher),
     Layer.provide(entitlementService),
   );
+  const shareRepo = shareRepoLayer({
+    shares: fixtures.shares,
+    tables: (fixtures.gridTables ?? []).map((t) => ({
+      id: t.id,
+      workspaceId: t.workspaceId,
+    })),
+  });
+  const shareService = ShareService.Default.pipe(
+    Layer.provide(shareRepo),
+    Layer.provide(gridService),
+    Layer.provide(membershipService),
+    Layer.provide(identity),
+  );
   return Layer.mergeAll(
     workspaceService,
     billingService,
@@ -618,6 +649,8 @@ export const TestLayer = (
     signalService,
     signalRepo,
     gridService,
+    shareService,
+    shareRepo,
     entitlementService,
     workspaceRepo,
     workspaceMemberRepo,
@@ -662,6 +695,8 @@ export type AppServices =
   | ExtensionService
   | ExtensionRepo
   | GridService
+  | ShareService
+  | ShareRepo
   | EntitlementService
   | ProjectRepo
   | TableRepo

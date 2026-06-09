@@ -599,6 +599,55 @@ export const signalSeenKeys = pgTable(
   ],
 );
 
+/**
+ * A shareable, FROZEN snapshot of a cloud table — the "share a table via URL"
+ * feature. `token` is the public capability in the `/share/<token>` URL; the
+ * `snapshot` jsonb is a secret-free table snapshot (see
+ * packages/services/src/share-snapshot.ts) captured at create time, so later
+ * edits to the source table never change what a recipient sees. `tableId` is
+ * `set null` (NOT cascade) so deleting the source table leaves the frozen
+ * snapshot intact. Anyone with the token can read it until it is disabled
+ * (`enabled=false`) or `expiresAt` passes; the unique `token` index backs the
+ * by-token public lookup.
+ */
+export const tableShares = pgTable(
+  "table_shares",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    /** Source table; null once that table is deleted (snapshot survives). */
+    tableId: uuid("table_id").references(() => tables.id, {
+      onDelete: "set null",
+    }),
+    /** High-entropy public token (the URL segment). */
+    token: text("token").notNull(),
+    /** Optional human label for the share. */
+    name: text("name"),
+    /** Frozen secret-free table snapshot. v.any() -> jsonb. */
+    snapshot: jsonb("snapshot").notNull(),
+    /** Snapshot format version (SHARE_SNAPSHOT_VERSION at create time). */
+    snapshotVersion: integer("snapshot_version").notNull(),
+    /** Revocation flag — false hides the share without deleting the row. */
+    enabled: boolean("enabled").notNull(),
+    /** Optional epoch-ms expiry; null never expires. */
+    expiresAt: bigint("expires_at", { mode: "number" }),
+    /** Better Auth user id of the creator; null once that user is deleted. */
+    createdBy: text("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    /** Epoch ms the share was revoked, or null while still live. */
+    revokedAt: bigint("revoked_at", { mode: "number" }),
+  },
+  (t) => [
+    index("table_shares_by_workspace").on(t.workspaceId),
+    index("table_shares_by_table").on(t.tableId),
+    uniqueIndex("table_shares_by_token").on(t.token),
+  ],
+);
+
 /** Per-event webhook delivery log (convex/schema.ts:380). */
 export const webhookDeliveries = pgTable(
   "webhook_deliveries",

@@ -249,6 +249,42 @@ export {
   InvalidCellError as GridInvalidCellError,
   type TablePage,
 } from "./services/grid-service.js";
+// --- Share-a-table-via-URL: snapshot format + repo + service -----------------
+export {
+  referencedProviders,
+  SHARE_SNAPSHOT_MAX_BYTES,
+  SHARE_SNAPSHOT_VERSION,
+  type SnapshotCell,
+  type SnapshotColumn,
+  type SnapshotColumnKind,
+  type SnapshotColumnType,
+  type SnapshotSourceGrid,
+  snapshotFromFullGrid,
+  type SnapshotValidation,
+  type TableShareSnapshot,
+  validateSnapshot,
+} from "./share-snapshot.js";
+export {
+  type InMemoryShareTable,
+  type InsertShareInput,
+  ShareRepo,
+  ShareRepoError,
+  type ShareRepoFixtures,
+  ShareRepoLive,
+  shareRepoLayer,
+  type TableShare,
+} from "./repositories/share-repo.js";
+export {
+  type CloneResult,
+  type CreateShareResult,
+  InvalidShareSnapshotError,
+  ShareNotFoundError,
+  type SharePreview,
+  ShareService,
+  type ShareSummary,
+  ShareTooLargeError,
+  shareUrlFor,
+} from "./services/share-service.js";
 export {
   type MeterQuota,
   MeterService,
