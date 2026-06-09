@@ -9,7 +9,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, API_BASE, type AgentSession, type AgentStatus } from "./api";
 import { abortInFlight, agentAbortKey } from "./agentAbort";
 
-type AgentKind = "claude" | "codex";
+type AgentKind = "claude" | "codex" | "hermes";
 
 interface ToolCallT {
   name: string;
@@ -23,7 +23,7 @@ interface Message {
   error?: boolean;
 }
 
-const AGENT_LABEL: Record<AgentKind, string> = { claude: "Claude Code", codex: "Codex" };
+const AGENT_LABEL: Record<AgentKind, string> = { claude: "Claude Code", codex: "Codex", hermes: "Hermes" };
 
 function relativeTime(ts: number): string {
   const s = Math.floor((Date.now() - ts) / 1000);
@@ -44,9 +44,10 @@ function loadModels(): Record<AgentKind, string> {
     return {
       claude: typeof obj?.claude === "string" ? obj.claude : "",
       codex: typeof obj?.codex === "string" ? obj.codex : "",
+      hermes: typeof obj?.hermes === "string" ? obj.hermes : "",
     };
   } catch {
-    return { claude: "", codex: "" };
+    return { claude: "", codex: "", hermes: "" };
   }
 }
 
@@ -68,8 +69,15 @@ const MODEL_OPTIONS: Record<AgentKind, { value: string; label: string }[]> = {
     { value: "o3", label: "o3" },
     { value: "o4-mini", label: "o4-mini" },
   ],
+  // Hermes exposes its models as ACP modelIds (provider:vendor/model).
+  hermes: [
+    { value: "", label: "Default" },
+    { value: "openrouter:anthropic/claude-opus-4.8", label: "Opus" },
+    { value: "openrouter:anthropic/claude-sonnet-4.6", label: "Sonnet" },
+    { value: "openrouter:anthropic/claude-haiku-4.5", label: "Haiku" },
+  ],
 };
-const AGENT_SHORT: Record<AgentKind, string> = { claude: "Claude", codex: "Codex" };
+const AGENT_SHORT: Record<AgentKind, string> = { claude: "Claude", codex: "Codex", hermes: "Hermes" };
 
 const PROMPTS = [
   "Enrich every row with their Trigify profile and company",
@@ -115,6 +123,14 @@ const IconStop = ({ s = 13 }: { s?: number }) => (
 
 // Brand logomarks for the agent tabs (inline SVG — no network, ships offline).
 const AGENT_LOGO: Record<AgentKind, ReactNode> = {
+  hermes: (
+    <svg className="agent-logo" viewBox="0 0 24 24" fill="none" stroke="#C8A24A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 4v17" />
+      <path d="M12 8c-2.4-2.6-6-3-9-1 2.4 2.2 6 2.6 9 1Z" />
+      <path d="M12 8c2.4-2.6 6-3 9-1-2.4 2.2-6 2.6-9 1Z" />
+      <circle cx="12" cy="4.2" r="1.5" fill="#C8A24A" stroke="none" />
+    </svg>
+  ),
   claude: (
     <svg className="agent-logo" viewBox="0 0 24 24" aria-hidden="true">
       <path
@@ -134,6 +150,13 @@ const AGENT_LOGO: Record<AgentKind, ReactNode> = {
 };
 
 const AGENT_MARK: Record<AgentKind, ReactNode> = {
+  hermes: (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#C8A24A" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 4v17" />
+      <path d="M12 8c-2.4-2.6-6-3-9-1 2.4 2.2 6 2.6 9 1Z" />
+      <path d="M12 8c2.4-2.6 6-3 9-1-2.4 2.2-6 2.6-9 1Z" />
+    </svg>
+  ),
   claude: (
     <svg width="11" height="11" viewBox="0 0 24 24" aria-hidden="true">
       <path fill="#D97757" d="M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.541Zm-.3712 10.2456 2.2914-5.9456 2.2914 5.9456Z" />
@@ -334,14 +357,14 @@ export default function AgentPanel({
   const [agent, setAgent] = useState<AgentKind>("claude");
   // Which model each agent's CLI runs with ("" = the plan's default). Persisted.
   const [models, setModels] = useState<Record<AgentKind, string>>(loadModels);
-  const [status, setStatus] = useState<{ claude?: AgentStatus; codex?: AgentStatus }>({});
-  const [threads, setThreads] = useState<Record<AgentKind, Message[]>>({ claude: [], codex: [] });
+  const [status, setStatus] = useState<{ claude?: AgentStatus; codex?: AgentStatus; hermes?: AgentStatus }>({});
+  const [threads, setThreads] = useState<Record<AgentKind, Message[]>>({ claude: [], codex: [], hermes: [] });
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [pathInput, setPathInput] = useState("");
   const [connecting, setConnecting] = useState(false);
-  const sessionRef = useRef<Record<AgentKind, string | undefined>>({ claude: undefined, codex: undefined });
+  const sessionRef = useRef<Record<AgentKind, string | undefined>>({ claude: undefined, codex: undefined, hermes: undefined });
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // History dropdown: past conversations from the agent's OWN native transcript
@@ -368,7 +391,8 @@ export default function AgentPanel({
     if (!showHistory) return;
     setSessions(null);
     let live = true;
-    api.agentSessions(agent).then((r) => live && setSessions(r.sessions)).catch(() => live && setSessions([]));
+    if (agent === "hermes") setSessions([]); // Hermes has no native CLI transcript store
+    else api.agentSessions(agent).then((r) => live && setSessions(r.sessions)).catch(() => live && setSessions([]));
     const onDoc = (e: MouseEvent) => {
       if (historyRef.current && !historyRef.current.contains(e.target as Node)) setShowHistory(false);
     };
@@ -387,6 +411,7 @@ export default function AgentPanel({
    * adopt its session id so the next turn resumes the CLI's own session. */
   const openSession = async (s: AgentSession) => {
     setShowHistory(false);
+    if (agent === "hermes") return; // Hermes has no native CLI transcript to reopen
     try {
       const { messages: msgs } = await api.agentSession(agent, s.id);
       setThreads((t) => ({ ...t, [agent]: msgs as Message[] }));
@@ -544,7 +569,7 @@ export default function AgentPanel({
             </button>
           </div>
           <div className="agent-rail-sep" />
-          {(["claude", "codex"] as AgentKind[]).map((k) => (
+          {(["claude", "codex", "hermes"] as AgentKind[]).map((k) => (
             <button
               key={k}
               className={`agent-rail-btn tab ${status[k]?.installed ? "on" : "off"}${agent === k ? " active" : ""}`}
@@ -562,7 +587,7 @@ export default function AgentPanel({
   return (
     <aside className="agent-panel">
       <div className="agent-tabs">
-        {(["claude", "codex"] as AgentKind[]).map((k) => (
+        {(["claude", "codex", "hermes"] as AgentKind[]).map((k) => (
           <button key={k} className={`agent-tab ${agent === k ? "active" : ""}`} onClick={() => setAgent(k)}>
             <span
               className={`agent-logo-wrap ${status[k]?.installed ? "on" : "off"}`}
@@ -590,8 +615,9 @@ export default function AgentPanel({
           <div className="agent-empty-mark"><IconZap s={20} /></div>
           <div className="agent-empty-title">Connect {AGENT_LABEL[agent]}</div>
           <p>
-            Sign in to your {agent === "claude" ? "Max" : "Codex"} plan in the {AGENT_LABEL[agent]} CLI — gtmgrid drives
-            the CLI you've already authed. No keys stored.
+            {agent === "hermes"
+              ? "Run the local `hermes` binary — gtmgrid drives it over ACP and mounts the grid's tools. This coding-agent path is local-only; no keys stored here. (The remote gateway is for the Hermes AI model provider, not this agent.)"
+              : `Sign in to your ${agent === "claude" ? "Max" : "Codex"} plan in the ${AGENT_LABEL[agent]} CLI — gtmgrid drives the CLI you've already authed. No keys stored.`}
           </p>
           <button className="agent-connect-btn" onClick={() => connect()} disabled={connecting}>
             {connecting ? "Detecting…" : `Detect ${AGENT_LABEL[agent]}`}
@@ -611,8 +637,15 @@ export default function AgentPanel({
             </button>
           </div>
           <p className="agent-connect-hint">
-            Find it with <code>which {agent}</code> in your terminal. Or install:{" "}
-            <code>{agent === "claude" ? "npm i -g @anthropic-ai/claude-code" : "npm i -g @openai/codex"}</code>
+            Find it with <code>which {agent}</code> in your terminal.{" "}
+            {agent === "hermes" ? (
+              <>Install the Nous Research <code>hermes</code> agent and make sure it's on your <code>PATH</code>.</>
+            ) : (
+              <>
+                Or install:{" "}
+                <code>{agent === "claude" ? "npm i -g @anthropic-ai/claude-code" : "npm i -g @openai/codex"}</code>
+              </>
+            )}
           </p>
         </div>
       ) : (
@@ -632,7 +665,7 @@ export default function AgentPanel({
                   </button>
                 ))}
               </div>
-              <span className="agent-plan">Using your {agent === "claude" ? "Max" : "Codex"} plan · {current?.version}</span>
+              <span className="agent-plan">{agent === "hermes" ? "Hermes" : `Using your ${agent === "claude" ? "Max" : "Codex"} plan`} · {current?.version}</span>
             </div>
           ) : (
           <div className="agent-stream" ref={scrollRef}>

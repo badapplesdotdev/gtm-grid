@@ -20,9 +20,10 @@ import {
   projectPath,
   migrateGlobals,
   listProjects,
+  DEFAULT_HERMES_BASE_URL,
 } from "@gtmgrid/engine";
 import type { CellProgress } from "@gtmgrid/engine";
-import { detectAgents, streamClaude, streamCodex, setAgentPath, rescanAgents, generateWithAgent, parseAgentCloud, type AgentKind } from "./agent.js";
+import { detectAgents, streamClaude, streamCodex, streamHermes, setAgentPath, rescanAgents, generateWithAgent, parseAgentCloud, type AgentKind } from "./agent.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
 import { runCloudPush, defaultCloudPushDeps } from "./cloud-push.js";
@@ -601,6 +602,9 @@ route("DELETE", "/api/signals/:id", (p) =>
 // --- AI providers (bring-your-own-key for AI step functions) ---
 // `fallbackModels` is only used if the live /v1/models fetch fails (offline,
 // bad key). When connected, the real model list is pulled from the provider.
+// `DEFAULT_HERMES_BASE_URL` (the SSH tunnel to the mac-mini api_server,
+// localhost:18642 -> mac-mini:8642) is shared from @gtmgrid/engine so the
+// connector and these provider routes can't drift. Overridable per connection.
 const AI_PROVIDERS = [
   {
     id: "anthropic",
@@ -629,6 +633,13 @@ const AI_PROVIDERS = [
       "meta-llama/llama-3.3-70b-instruct",
     ],
   },
+  {
+    id: "hermes",
+    name: "Hermes",
+    description: "Your Hermes agent gateway (OpenAI-compatible). Each call runs the full agent — tools, skills, memory.",
+    domain: "nousresearch.com",
+    fallbackModels: ["hermes-4"],
+  },
 ] as const;
 
 type AiProviderId = (typeof AI_PROVIDERS)[number]["id"];
@@ -638,9 +649,15 @@ type AiProviderId = (typeof AI_PROVIDERS)[number]["id"];
 const modelCache = new Map<string, { key: string; models: string[]; ts: number }>();
 const MODEL_TTL_MS = 10 * 60 * 1000;
 
-async function fetchModels(provider: AiProviderId, apiKey: string): Promise<string[] | null> {
+async function fetchModels(
+  provider: AiProviderId,
+  apiKey: string,
+  baseURL?: string,
+): Promise<string[] | null> {
+  // Hermes' model list is per-gateway, so key the cache by (apiKey, baseURL).
+  const cacheKey = provider === "hermes" ? `${apiKey}|${baseURL ?? ""}` : apiKey;
   const cached = modelCache.get(provider);
-  if (cached && cached.key === apiKey && Date.now() - cached.ts < MODEL_TTL_MS) return cached.models;
+  if (cached && cached.key === cacheKey && Date.now() - cached.ts < MODEL_TTL_MS) return cached.models;
   try {
     let models: string[] = [];
     if (provider === "anthropic") {
@@ -659,6 +676,13 @@ async function fetchModels(provider: AiProviderId, apiKey: string): Promise<stri
       const data = (await r.json()) as { data: { id: string }[] };
       // Namespaced ids ("vendor/model"); sort alphabetically for a stable list.
       models = data.data.map((m) => m.id).sort();
+    } else if (provider === "hermes") {
+      // OpenAI-compatible gateway: GET {baseURL}/models with a bearer token.
+      const base = (baseURL || DEFAULT_HERMES_BASE_URL).replace(/\/+$/, "");
+      const r = await fetch(`${base}/models`, { headers: { authorization: `Bearer ${apiKey}` } });
+      if (!r.ok) return null;
+      const data = (await r.json()) as { data: { id: string }[] };
+      models = data.data.map((m) => m.id);
     } else {
       const r = await fetch("https://api.openai.com/v1/models", {
         headers: { authorization: `Bearer ${apiKey}` },
@@ -674,7 +698,7 @@ async function fetchModels(provider: AiProviderId, apiKey: string): Promise<stri
         .reverse();
     }
     if (!models.length) return null;
-    modelCache.set(provider, { key: apiKey, models, ts: Date.now() });
+    modelCache.set(provider, { key: cacheKey, models, ts: Date.now() });
     return models;
   } catch {
     return null;
@@ -691,7 +715,9 @@ route("GET", "/api/ai-providers", async () => {
       ? "openai"
       : process.env.OPENROUTER_API_KEY
         ? "openrouter"
-        : undefined;
+        : process.env.HERMES_BASE_URL
+          ? "hermes"
+          : undefined;
   const envKeyFor = (id: string) =>
     id === "anthropic"
       ? process.env.ANTHROPIC_API_KEY
@@ -699,7 +725,9 @@ route("GET", "/api/ai-providers", async () => {
         ? process.env.OPENAI_API_KEY
         : id === "openrouter"
           ? process.env.OPENROUTER_API_KEY
-          : undefined;
+          : id === "hermes"
+            ? process.env.HERMES_API_KEY ?? "hermes"
+            : undefined;
   return Promise.all(
     AI_PROVIDERS.map(async (p) => {
       const cred = globalDb.getCredential(`ai:${p.id}`);
@@ -712,10 +740,19 @@ route("GET", "/api/ai-providers", async () => {
         (current.engine.config.aiProviders ?? []).find((a) => a.provider === p.id)?.apiKey ??
         cred?.secrets.apiKey ??
         (viaEnv ? envKeyFor(p.id) : undefined);
+      // Hermes is a configurable gateway — resolve its base URL (stored cred,
+      // then env, then the default tunnel) so live model fetch + the UI prefill work.
+      const baseUrl =
+        p.id === "hermes"
+          ? ((current.engine.config.aiProviders ?? []).find((a) => a.provider === "hermes")?.baseURL ??
+            cred?.secrets.baseUrl ??
+            process.env.HERMES_BASE_URL ??
+            DEFAULT_HERMES_BASE_URL)
+          : null;
       // Pull the real model list when connected; fall back to the static list.
       let models: string[] = [...p.fallbackModels];
       if (connected && apiKey) {
-        const live = await fetchModels(p.id, apiKey);
+        const live = await fetchModels(p.id, apiKey, baseUrl ?? undefined);
         if (live?.length) models = live;
       }
       return {
@@ -726,6 +763,7 @@ route("GET", "/api/ai-providers", async () => {
         models,
         connected,
         viaEnv,
+        baseUrl,
         connectedScopes: hasKey ? globalDb.credentialScopes(`ai:${p.id}`) : [],
       };
     }),
@@ -733,11 +771,19 @@ route("GET", "/api/ai-providers", async () => {
 });
 
 route("POST", "/api/ai-providers/:id/connect", (p, body) => {
-  if (p.id !== "anthropic" && p.id !== "openai" && p.id !== "openrouter")
+  if (p.id !== "anthropic" && p.id !== "openai" && p.id !== "openrouter" && p.id !== "hermes")
     return { error: "unsupported provider" };
-  const apiKey = String(body?.apiKey ?? "").trim();
-  if (!apiKey) return { error: "apiKey required" };
-  connectAi(globalDb, p.id, apiKey, undefined, normScope(body?.scope));
+  const apiKeyIn = String(body?.apiKey ?? "").trim();
+  const baseURLIn = String(body?.baseURL ?? body?.baseUrl ?? "").trim();
+  // Preserve existing values on partial updates: changing only the URL must NOT
+  // wipe the saved key (and vice-versa).
+  const prev = globalDb.getCredential(`ai:${p.id}`)?.secrets ?? {};
+  const apiKey = apiKeyIn || prev.apiKey || "";
+  // Hermes (a local/LAN gateway) accepts any bearer when API_SERVER_KEY is unset,
+  // so it can connect with just a base URL; the other providers require a key.
+  if (!apiKey && p.id !== "hermes") return { error: "apiKey required" };
+  const baseURL = p.id === "hermes" ? baseURLIn || prev.baseUrl || DEFAULT_HERMES_BASE_URL : undefined;
+  connectAi(globalDb, p.id, apiKey || "hermes", undefined, normScope(body?.scope), baseURL);
   // Refresh the live engine so AI columns work immediately — both the active
   // provider and the full set used for model-based routing.
   current.engine.config.ai = storedAiConfig(globalDb);
@@ -933,7 +979,7 @@ route("GET", "/api/agent/sessions/:agent/:id", (p) => ({
 // Manually connect a CLI (set its path) and/or rescan after install.
 route("POST", "/api/agents/connect", (_p, body) => {
   const agent = body?.agent as AgentKind;
-  if ((agent === "claude" || agent === "codex") && typeof body?.path === "string" && body.path.trim()) {
+  if ((agent === "claude" || agent === "codex" || agent === "hermes") && typeof body?.path === "string" && body.path.trim()) {
     setAgentPath(agent, body.path.trim());
   }
   rescanAgents();
@@ -1031,7 +1077,10 @@ const server = createServer(async (req, res) => {
       // and the MCP opens the local SQLite project exactly as before. The token
       // rides the MCP child env (set by agent.ts), never a log line here.
       const cloud = parseAgentCloud(body?.cloud);
-      if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context, origin, model, cloud });
+      // Hermes is LOCAL-only by design — it drives the local SQLite project via
+      // ACP and is never threaded the cloud context.
+      if (agent === "hermes") streamHermes(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model });
+      else if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context, origin, model, cloud });
       else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model, cloud });
     } catch (e) {
       send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
