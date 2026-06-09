@@ -53,6 +53,18 @@ export const CLOUD_REFS: CloudFunctionRefs = {
 /** The metadata-only worker ref for resolving a table's workspace id. */
 const GET_TABLE_META_REF = "/api/worker/getTableMeta";
 
+/**
+ * The member-attributed WRITE/LIST worker refs the agent's cloud table tools use
+ * (TRI-3299). Unlike {@link CLOUD_REFS} (the engine cloud store's table-scoped
+ * refs), these are MCP-tool-specific routes secured by the same worker bearer
+ * PLUS the `X-Gtmgrid-Member` attribution, so each verifies the member belongs to
+ * the target project/table workspace and meters server-side.
+ */
+const LIST_TABLES_REF = "/api/worker/listTables";
+const CREATE_TABLE_REF = "/api/worker/createTable";
+const CREATE_COLUMN_REF = "/api/worker/createColumn";
+const ADD_ROWS_REF = "/api/worker/addRows";
+
 /** Raised when a cloud MCP tool needs a worker route that does not exist yet. */
 export class CloudToolUnsupportedError extends Error {
   readonly _tag = "CloudToolUnsupportedError";
@@ -159,10 +171,10 @@ export async function buildCloudStore(
 /**
  * The subset of grid operations the MCP table tools call, so the tool handlers
  * are written ONCE against this interface and the local/cloud sources differ
- * only here. `get_table` and `run_column` are the read/run surface the cloud
- * worker boundary supports; the create/list-all/add-rows mutators are declared
- * so the local source serves them unchanged while the cloud source rejects them
- * with {@link CloudToolUnsupportedError}.
+ * only here. `get_table`/`run_column` are the read/run surface and
+ * `create_table`/`add_column`/`add_rows`/project-wide `list_tables` the
+ * write/list surface — ALL now served on cloud through the member-attributed
+ * worker routes (TRI-3299), so the cloud source no longer rejects the mutators.
  */
 export interface CloudGridSource {
   /** Columns of the active cloud table, mapped to MCP `get_table`'s shape. */
@@ -173,10 +185,42 @@ export interface CloudGridSource {
     columns: { name: string; kind: string; fn: string | null }[];
     rows: Record<string, unknown>[];
   }>;
-  /** List the project's tables — only the active cloud table is reachable. */
+  /**
+   * List ALL of the cloud PROJECT's tables (not just the active one) with their
+   * column + row counts, via the project-scoped `listTables` worker route.
+   */
   readonly listTables: () => Promise<
     { id: string; name: string; columns: number; rows: number }[]
   >;
+  /** Create a new table in the active cloud project. Returns its id + name. */
+  readonly createTable: (
+    name: string,
+  ) => Promise<{ id: string; name: string }>;
+  /**
+   * Add a column to a cloud table. `fn` ('provider.method') and/or `code`
+   * determine the column kind; `fn` is validated against the registry exactly as
+   * the local source does. Returns the new column id, name, kind, and resolved
+   * `fn`.
+   */
+  readonly addColumn: (
+    tableRef: string,
+    spec: {
+      name: string;
+      fn?: string;
+      code?: string;
+      type?: string;
+      params?: Record<string, unknown>;
+    },
+  ) => Promise<{ id: string; name: string; kind: string; fn: string | null }>;
+  /**
+   * Add rows to a cloud table. Each row is `{ ColumnName: value }`; the column
+   * NAMES are resolved to ids against the table's grid before the worker write.
+   * Returns how many rows were added.
+   */
+  readonly addRows: (
+    tableRef: string,
+    rows: Record<string, unknown>[],
+  ) => Promise<{ added: number }>;
   /** Run a function column on the active cloud table by column name/id. */
   readonly runColumn: (
     tableRef: string,
@@ -259,12 +303,55 @@ function columnFn(c: CloudColumnDoc): string | null {
   return c.code ? "code" : null;
 }
 
+/** Narrow an unknown worker payload to a `{ id, name }` create result. */
+function readCreated(payload: unknown): { id: string; name: string } {
+  if (
+    typeof payload === "object" &&
+    payload !== null &&
+    "id" in payload &&
+    typeof payload.id === "string" &&
+    "name" in payload &&
+    typeof payload.name === "string"
+  ) {
+    return { id: payload.id, name: payload.name };
+  }
+  throw new Error("worker create payload missing id/name");
+}
+
+/** Narrow an unknown `listTables` payload to the project-wide table list. */
+function readTableList(
+  payload: unknown,
+): { id: string; name: string; columns: number; rows: number }[] {
+  if (!Array.isArray(payload)) {
+    throw new Error("listTables payload was not an array");
+  }
+  return payload.map((t) => {
+    if (
+      typeof t === "object" &&
+      t !== null &&
+      "id" in t &&
+      typeof t.id === "string" &&
+      "name" in t &&
+      typeof t.name === "string" &&
+      "columns" in t &&
+      typeof t.columns === "number" &&
+      "rows" in t &&
+      typeof t.rows === "number"
+    ) {
+      return { id: t.id, name: t.name, columns: t.columns, rows: t.rows };
+    }
+    throw new Error("listTables entry missing id/name/columns/rows");
+  });
+}
+
 /**
- * Build the CLOUD {@link CloudGridSource} for the active cloud table. Reads come
- * from the table's `getTable` grid; `run_column` resolves the column by name/id
- * in that grid, then runs it through a Db-free {@link Engine} over the reused
- * {@link cloudGridStoreShape} (exactly as `cloud-run.ts` constructs it). The
- * create/list-all/add-rows tools reject with {@link CloudToolUnsupportedError}.
+ * Build the CLOUD {@link CloudGridSource} for the active cloud project/table.
+ * Reads come from the table's `getTable` grid; `run_column` resolves the column
+ * by name/id in that grid, then runs it through a Db-free {@link Engine} over the
+ * reused {@link cloudGridStoreShape} (exactly as `cloud-run.ts` constructs it).
+ * `create_table`/`add_column`/`add_rows` + project-wide `list_tables` go through
+ * the member-attributed worker routes (TRI-3299) so the agent's write tools
+ * operate on Supabase in cloud mode, never silently on local SQLite.
  */
 export function makeCloudSource(
   context: CloudContext,
@@ -319,18 +406,90 @@ export function makeCloudSource(
     },
 
     listTables: async () => {
-      // The worker boundary is table-scoped; only the active cloud table is
-      // reachable. Report it (with live column/row counts) so the agent can
-      // still orient on the table the user is viewing.
+      // Project-wide list via the member-attributed worker route: ALL of the
+      // cloud project's tables with their column + row counts, not just the
+      // active one (TRI-3299).
+      const payload = await client.query(LIST_TABLES_REF, {
+        projectId: context.projectId,
+      });
+      return readTableList(payload);
+    },
+
+    createTable: async (name) => {
+      const payload = await client.mutation(CREATE_TABLE_REF, {
+        projectId: context.projectId,
+        name,
+      });
+      return readCreated(payload);
+    },
+
+    addColumn: async (_tableRef, spec) => {
+      // Resolve the function reference exactly as the LOCAL source does: a
+      // `fn` must be 'provider.method' and exist in the registry; `code` (or a
+      // resolved provider) makes it a function column, else manual.
+      let provider: string | null = null;
+      let method: string | null = null;
+      if (spec.fn !== undefined && spec.fn !== "") {
+        const [p, m] = spec.fn.split(".");
+        if (!p || !m) throw new Error("fn must be 'provider.method'");
+        if (!deps.registry.method(p, m)) {
+          throw new Error(`Unknown function ${spec.fn}. Use list_functions.`);
+        }
+        provider = p;
+        method = m;
+      }
+      const kind = provider !== null || spec.code ? "function" : "manual";
+      const created = readCreated(
+        await client.mutation(CREATE_COLUMN_REF, {
+          tableId: context.tableId,
+          name: spec.name,
+          type: spec.type ?? "text",
+          kind,
+          provider,
+          method,
+          code: spec.code ?? null,
+          params: spec.params ?? {},
+        }),
+      );
+      return {
+        id: created.id,
+        name: created.name,
+        kind,
+        fn: spec.fn ?? null,
+      };
+    },
+
+    addRows: async (_tableRef, rows) => {
+      // The agent sends `{ ColumnName: value }`; resolve each name to its cloud
+      // column id against the active table's grid before the worker write (the
+      // worker route speaks column ids, mirroring grid.addRowsWithCells). An
+      // unknown column name is a hard error — the same contract as local.
       const grid = await fetchGrid();
-      return [
-        {
-          id: context.tableId,
-          name: context.tableId,
-          columns: grid.columns.length,
-          rows: grid.rows.length,
-        },
-      ];
+      const idByName = new Map<string, string>();
+      for (const c of grid.columns) idByName.set(c.name, c._id);
+      const mapped = rows.map((row) => {
+        const out: Record<string, unknown> = {};
+        for (const [colName, value] of Object.entries(row)) {
+          const columnId = idByName.get(colName);
+          if (columnId === undefined) {
+            throw new Error(`No column "${colName}" in the cloud table.`);
+          }
+          out[columnId] = value;
+        }
+        return out;
+      });
+      const payload = await client.mutation(ADD_ROWS_REF, {
+        tableId: context.tableId,
+        rows: mapped,
+      });
+      const rowIds =
+        typeof payload === "object" &&
+        payload !== null &&
+        "rowIds" in payload &&
+        Array.isArray(payload.rowIds)
+          ? payload.rowIds
+          : [];
+      return { added: rowIds.length };
     },
 
     runColumn: async (_tableRef, columnRef, opts) => {

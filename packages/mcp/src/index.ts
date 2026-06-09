@@ -141,7 +141,7 @@ server.tool("list_tables", "List all tables in the project with their column and
 });
 
 server.tool("create_table", "Create a new table.", { name: z.string() }, async ({ name }) => {
-  if (cloudSource) return cloudUnsupported("create_table");
+  if (cloudSource) return ok(await cloudSource.createTable(name));
   const t = local!.db.createTable(name);
   return ok({ id: t.id, name: t.name });
 });
@@ -158,7 +158,17 @@ server.tool(
     params: z.record(z.string(), z.any()).optional(),
   },
   async ({ table, name, fn, code, type, params }) => {
-    if (cloudSource) return cloudUnsupported("add_column");
+    if (cloudSource) {
+      return ok(
+        await cloudSource.addColumn(table, {
+          name,
+          ...(fn !== undefined ? { fn } : {}),
+          ...(code !== undefined ? { code } : {}),
+          ...(type !== undefined ? { type } : {}),
+          ...(params !== undefined ? { params } : {}),
+        }),
+      );
+    }
     const t = localTableOr(table);
     let provider: string | null = null;
     let method: string | null = null;
@@ -180,7 +190,7 @@ server.tool(
   "Add one or more rows. Each row is an object of { ColumnName: value } for manual columns, e.g. [{ Username: 'torvalds' }].",
   { table: z.string(), rows: z.array(z.record(z.string(), z.any())) },
   async ({ table, rows }) => {
-    if (cloudSource) return cloudUnsupported("add_rows");
+    if (cloudSource) return ok(await cloudSource.addRows(table, rows));
     const t = localTableOr(table);
     const created: string[] = [];
     for (const r of rows) {
