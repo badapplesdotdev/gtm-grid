@@ -701,6 +701,15 @@ route("POST", "/api/ai-providers/:id/connect", (p, body) => {
   return { ok: true };
 });
 
+// Persisted local↔cloud sync links for the CURRENT project (TRI-3311). Returns
+// `{ [localTableId]: cloudTableId }` straight from the project's SQLite meta
+// (the authoritative store `setCloudTableLink` writes on push), so the desktop
+// hydrates synced-table status from the source of truth instead of a localStorage
+// mirror that can drift. A plain JSON route — it inherits the loopback-`Host` /
+// allowed-`Origin` gate every route is wrapped in (the server's request handler),
+// so it is not LAN-reachable and not callable from a disallowed browser origin.
+route("GET", "/api/cloud/tables/links", () => current.projectDb.listCloudTableLinks());
+
 route("GET", "/api/tables", () => current.projectDb.listTables().map(tableSummary));
 route("POST", "/api/tables", (_p, body) => tableSummary(current.projectDb.createTable(body?.name ?? "Untitled")));
 route("GET", "/api/tables/:id", (p) => fullTable(p.id) ?? { error: "not found" });

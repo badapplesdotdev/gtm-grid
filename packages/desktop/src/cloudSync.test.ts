@@ -30,6 +30,9 @@ import {
   upsertSyncLink,
   hydrateSyncLinksForProject,
   shouldCloseConflictPopover,
+  mergeServerSyncLinks,
+  isCloudTableMissing,
+  resolveStaleCloudTableFallback,
   type TableSyncFacts,
 } from "./cloudSync";
 
@@ -429,5 +432,117 @@ describe("shouldCloseConflictPopover (TRI-3310 bug D)", () => {
     expect(
       shouldCloseConflictPopover({ modalTableId: "t1", openPopoverTableId: null }),
     ).toBe(false);
+  });
+});
+
+// ── Server-backed sync-link hydration merge (TRI-3311) ─────────────────────
+//
+// On load the desktop seeds `syncLinks` from the localStorage MIRROR, then
+// overlays the sidecar's authoritative map — the SERVER must WIN on conflict so
+// a stale mirror can never drift the displayed status.
+describe("mergeServerSyncLinks (TRI-3311 — server wins)", () => {
+  it("server value wins over a STALE mirror entry for the same local table", () => {
+    // The mirror points local-a at a stale cloud id; the server is authoritative.
+    const mirror = { "local-a": "cloud-stale" };
+    const server = { "local-a": "cloud-current" };
+    expect(mergeServerSyncLinks(server, mirror)).toEqual({ "local-a": "cloud-current" });
+  });
+
+  it("keeps a mirror-only link the server has not (yet) reported (fast-path gap-fill)", () => {
+    const mirror = { "local-a": "cloud-a", "local-b": "cloud-b" };
+    const server = { "local-a": "cloud-a" };
+    // local-b survives (offline gap-fill); local-a stays the agreed value.
+    expect(mergeServerSyncLinks(server, mirror)).toEqual({
+      "local-a": "cloud-a",
+      "local-b": "cloud-b",
+    });
+  });
+
+  it("adds a server link the mirror is missing", () => {
+    expect(mergeServerSyncLinks({ "local-c": "cloud-c" }, {})).toEqual({
+      "local-c": "cloud-c",
+    });
+  });
+
+  it("an empty server map leaves the offline mirror intact", () => {
+    const mirror = { "local-a": "cloud-a" };
+    expect(mergeServerSyncLinks({}, mirror)).toEqual({ "local-a": "cloud-a" });
+  });
+
+  it("does not mutate its inputs", () => {
+    const mirror = { "local-a": "cloud-stale" };
+    const server = { "local-a": "cloud-current" };
+    mergeServerSyncLinks(server, mirror);
+    expect(mirror).toEqual({ "local-a": "cloud-stale" });
+    expect(server).toEqual({ "local-a": "cloud-current" });
+  });
+});
+
+// ── Open-cloud-table 404 self-heal (TRI-3312) ──────────────────────────────
+describe("isCloudTableMissing (TRI-3312 — 404 detection)", () => {
+  it("treats null (404 / not-found) as missing", () => {
+    expect(isCloudTableMissing(null)).toBe(true);
+  });
+
+  it("treats undefined (still loading) as NOT missing", () => {
+    expect(isCloudTableMissing(undefined)).toBe(false);
+  });
+
+  it("treats a loaded table as NOT missing", () => {
+    expect(isCloudTableMissing({ id: "t", name: "T", columns: [], rows: [] })).toBe(false);
+  });
+});
+
+describe("resolveStaleCloudTableFallback (TRI-3312 — recover to linked id)", () => {
+  const links = { "local-a": { cloudTableId: "cloud-current" } };
+
+  it("recovers to the local table's CURRENT linked cloud id when the open id is stale", () => {
+    expect(
+      resolveStaleCloudTableFallback({
+        openCloudTableId: "cloud-deleted",
+        localTableId: "local-a",
+        links,
+      }),
+    ).toBe("cloud-current");
+  });
+
+  it("returns null when the link still points at the same (dead) id — no loop", () => {
+    expect(
+      resolveStaleCloudTableFallback({
+        openCloudTableId: "cloud-current",
+        localTableId: "local-a",
+        links,
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null when the local table has no link to recover to", () => {
+    expect(
+      resolveStaleCloudTableFallback({
+        openCloudTableId: "cloud-deleted",
+        localTableId: "local-unlinked",
+        links,
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null when the open view's local table is unknown", () => {
+    expect(
+      resolveStaleCloudTableFallback({
+        openCloudTableId: "cloud-deleted",
+        localTableId: null,
+        links,
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null when there is no open cloud table", () => {
+    expect(
+      resolveStaleCloudTableFallback({
+        openCloudTableId: null,
+        localTableId: "local-a",
+        links,
+      }),
+    ).toBeNull();
   });
 });
