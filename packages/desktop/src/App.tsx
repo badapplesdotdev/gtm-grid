@@ -7,7 +7,18 @@ import { BrandIcon } from "./BrandIcon";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { AccountBar, PlanBillingModal } from "./cloud/AccountBar";
 import { PendingInvites } from "./cloud/PendingInvites";
-import { cloudEnabled, queryClient, syncWorkspacePlan, apiClient } from "./cloud/client";
+import { cloudEnabled, queryClient, syncWorkspacePlan, apiClient, API_URL, getStoredAuthToken } from "./cloud/client";
+import {
+  SYNC_META,
+  mapSyncStatus,
+  syncUiVisible,
+  decidePush,
+  isOverwriteConfirmNeeded,
+  overwriteConfirmMessage,
+  pendingCount,
+  type SyncStatus,
+} from "./cloudSync";
+import { CloudPushHttpError } from "./api";
 import { useMe, useActiveWorkspace, useAuthState } from "./cloud/auth";
 import {
   useMyPendingInvitations,
@@ -161,6 +172,41 @@ export const Icon = {
   More: () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
       <circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>
+    </svg>
+  ),
+  // ── Table-sync icons (TRI-3297) — Feather/Lucide stroke-2, currentColor.
+  //    Path data copied verbatim from the design handoff app/icons.jsx.
+  Cloud: ({ size = 14 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
+    </svg>
+  ),
+  CloudUp: ({ size = 14 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 16.2A4.5 4.5 0 0 0 17.5 8h-1.8A7 7 0 1 0 4 14.9"/><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/>
+    </svg>
+  ),
+  CloudOff: ({ size = 14 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"/><line x1="1" y1="1" x2="23" y2="23"/>
+    </svg>
+  ),
+  Refresh: ({ size = 14 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+    </svg>
+  ),
+  Check: ({ size = 14 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+  ),
+  CheckCircle: ({ size = 14 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+    </svg>
+  ),
+  Alert: ({ size = 14 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
     </svg>
   ),
 };
@@ -641,6 +687,136 @@ function NewTableChooser({
         </div>
       </div>
     </div>
+  );
+}
+
+// ─── Sync popover (TRI-3297) ──────────────────────────────
+// The per-table sync dialog, anchored to the right of the clicked sidebar row.
+// Head = table name + status pill; a workspace row; and a state-varying body
+// (synced / ahead|local / syncing / conflict-as-overwrite-confirm / offline).
+// Recreated from the design's `SyncPopover` (app/SyncPanel.jsx + app/sync.css),
+// mapped onto the live app's tokens.
+
+const SyncDot = ({ status }: { status: SyncStatus }) => (
+  <span className={`sync-dot is-${status}`} aria-label={SYNC_META[status].label} />
+);
+
+function SyncPopover({
+  tableName,
+  rowCount,
+  status,
+  workspaceName,
+  memberCount,
+  anchorTop,
+  sidebarWidth,
+  cloudRowCount,
+  error,
+  onPush,
+  onConfirmOverwrite,
+  onCheckUpdates,
+  onClose,
+}: {
+  tableName: string;
+  rowCount: number;
+  status: SyncStatus;
+  workspaceName: string;
+  memberCount: number;
+  anchorTop: number;
+  sidebarWidth: number;
+  cloudRowCount: number | null;
+  error: string | null;
+  onPush: () => void;
+  onConfirmOverwrite: () => void;
+  onCheckUpdates: () => void;
+  onClose: () => void;
+}) {
+  const meta = SYNC_META[status];
+  const top = Math.min(anchorTop, window.innerHeight - 330);
+  return (
+    <>
+      <div className="popover-scrim" onMouseDown={onClose} />
+      <div
+        className="sync-pop"
+        style={{ top, left: sidebarWidth + 8 }}
+        onMouseDown={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label={`Sync ${tableName}`}
+      >
+        <div className="sync-pop-head">
+          <span className="sync-pop-table">
+            <span className="sync-pop-table-ic"><Icon.Table /></span>
+            {tableName}
+          </span>
+          <span className={`sync-pill is-${meta.tone}`}>
+            <SyncDot status={status} />
+            {meta.label}
+          </span>
+        </div>
+
+        <div className="sync-pop-ws">
+          <span className="sync-pop-ws-text">
+            <span className="sync-pop-ws-name">{workspaceName}</span>
+            <span className="sync-pop-ws-sub">{memberCount} member{memberCount === 1 ? "" : "s"} · realtime</span>
+          </span>
+        </div>
+
+        {status === "syncing" ? (
+          <div className="sync-prog">
+            <div className="sync-prog-top">
+              <span className="cell-spinner" />
+              <span>Uploading rows…</span>
+            </div>
+            <div className="sync-prog-bar"><span style={{ width: "60%" }} /></div>
+            <div className="sync-prog-note">execution stays local — only table data is uploaded</div>
+          </div>
+        ) : status === "synced" ? (
+          <div className="sync-body">
+            <div className="sync-row"><span className="sync-row-k">Rows in cloud</span><span className="sync-row-v mono">{(cloudRowCount ?? rowCount).toLocaleString()}</span></div>
+            <button className="btn btn-outline sync-act" onClick={onCheckUpdates}>
+              <Icon.Refresh size={13} /> Check for updates
+            </button>
+            {error && <div className="account-menu-error" role="alert">{error}</div>}
+          </div>
+        ) : status === "conflict" ? (
+          <div className="sync-body">
+            <div className="sync-conflict-note">
+              <Icon.Alert size={13} />
+              <span>Re-syncing <strong>{tableName}</strong> overwrites the cloud copy ({rowCount.toLocaleString()} row{rowCount === 1 ? "" : "s"}) with your local version.</span>
+            </div>
+            <div className="sync-choices">
+              <button className="sync-choice" onClick={onConfirmOverwrite}>
+                <span className="sync-choice-t">Keep my version</span>
+                <span className="sync-choice-s">overwrite the cloud copy</span>
+              </button>
+              <button className="sync-choice" onClick={onClose}>
+                <span className="sync-choice-t">Cancel</span>
+                <span className="sync-choice-s">leave the cloud copy as-is</span>
+              </button>
+            </div>
+            {error && <div className="account-menu-error" role="alert">{error}</div>}
+          </div>
+        ) : status === "offline" ? (
+          <div className="sync-body">
+            <div className="sync-offline-note">
+              <Icon.CloudOff size={14} />
+              <span>Engine offline. Changes are saved locally and will push when you reconnect.</span>
+            </div>
+          </div>
+        ) : (
+          /* ahead OR local */
+          <div className="sync-body">
+            <div className="sync-diff">
+              <div className="sync-diff-line new"><span className="sync-diff-ic">↑</span>{rowCount.toLocaleString()} row{rowCount === 1 ? "" : "s"} · not in cloud yet</div>
+            </div>
+            <button className="btn btn-primary sync-act" onClick={onPush}>
+              <Icon.CloudUp size={14} /> Push table to cloud
+            </button>
+            <div className="sync-prog-note">teammates get your changes in realtime</div>
+            {error && <div className="account-menu-error" role="alert">{error}</div>}
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -1352,6 +1528,115 @@ export default function App() {
     setView({ kind: "table" });
   }, []);
 
+  // ── Table sync (TRI-3297) ────────────────────────────────────────────────
+  // Per local-table sync facts, tracked CLIENT-SIDE: a table is `linked` once a
+  // push succeeds; a push that returns its row count marks it synced. The link
+  // state is also confirmed by the server — a 409 re-routes through the
+  // destructive-overwrite confirm. `pushingTableId` is the in-flight row (busy
+  // dot); `syncErrors` surfaces a failed push inline (no toast system).
+  const [syncLinks, setSyncLinks] = useState<Record<string, { cloudTableId: string; rowCount: number }>>({});
+  const [pushingTableId, setPushingTableId] = useState<string | null>(null);
+  const [syncErrors, setSyncErrors] = useState<Record<string, string>>({});
+  // The open sync popover: the table id + the clicked row's viewport top, so the
+  // popover anchors to the right of the row (design's `.sync-pop`).
+  const [syncPopover, setSyncPopover] = useState<{ tableId: string; anchorTop: number } | null>(null);
+  // A pending destructive-overwrite confirm: a linked table whose re-push would
+  // overwrite cloud data. Holds the table + cloud row count for the warning copy.
+  const [overwriteConfirm, setOverwriteConfirm] = useState<{ tableId: string; name: string; rowCount: number } | null>(null);
+
+  // The sync UI (dots + popover + sync-all) is visible only for cloud-enabled,
+  // signed-in users with a cloud project open. Hidden in pure-local builds.
+  const showSyncUi = syncUiVisible({ cloudEnabled, inCloud, isAuthenticated });
+
+  // Derive a table's design SYNC_META status from its client-tracked facts.
+  const syncStatusFor = useCallback(
+    (tableId: string): SyncStatus =>
+      mapSyncStatus({
+        linked: syncLinks[tableId] !== undefined,
+        // v1 cannot diff local edits against the last push without a backend
+        // GET, so a linked table is treated as `synced` until the user pushes
+        // again; an unlinked table is `local`. (No fabricated change counts.)
+        hasLocalChanges: false,
+        pushing: pushingTableId === tableId,
+        offline: healthStatus === "offline",
+        needsOverwriteConfirm: overwriteConfirm?.tableId === tableId,
+      }),
+    [syncLinks, pushingTableId, healthStatus, overwriteConfirm],
+  );
+
+  // Run a single table push. `confirmOverwrite` is supplied by the confirm flow.
+  // A 409 (LinkConflictError) means the server demands explicit confirmation:
+  // surface the destructive-overwrite confirm instead of a generic error.
+  const runPush = useCallback(
+    async (tableId: string, confirmOverwrite: boolean) => {
+      const apiUrl = API_URL;
+      const token = getStoredAuthToken();
+      const projectId = cloudProject?._id ?? null;
+      if (!apiUrl || !token || !projectId) {
+        setSyncErrors((m) => ({ ...m, [tableId]: "Sign in to a cloud workspace to sync." }));
+        return;
+      }
+      setPushingTableId(tableId);
+      setSyncErrors((m) => { const next = { ...m }; delete next[tableId]; return next; });
+      try {
+        const result = await api.pushTable({ apiUrl, token, projectId, localTableId: tableId, confirmOverwrite });
+        setSyncLinks((m) => ({ ...m, [tableId]: { cloudTableId: result.cloudTableId, rowCount: result.rowCount } }));
+        setOverwriteConfirm((c) => (c?.tableId === tableId ? null : c));
+      } catch (e) {
+        if (e instanceof CloudPushHttpError && isOverwriteConfirmNeeded(e)) {
+          // Server says this table is linked and a re-push overwrites it. Route
+          // into the destructive-overwrite confirm (naming the table + rows).
+          const t = tables.find((x) => x.id === tableId);
+          setOverwriteConfirm({ tableId, name: t?.name ?? "table", rowCount: t?.rows ?? 0 });
+        } else {
+          setSyncErrors((m) => ({ ...m, [tableId]: e instanceof Error ? e.message : "Push failed." }));
+        }
+      } finally {
+        setPushingTableId(null);
+      }
+    },
+    [cloudProject, tables],
+  );
+
+  // Push entry point from the popover / sync-all. Decides create-vs-overwrite:
+  // an unlinked table pushes straight through; a linked table prompts the
+  // destructive-overwrite confirm first (it only pushes after the user accepts).
+  const onPushTable = useCallback(
+    (tableId: string) => {
+      const linked = syncLinks[tableId] !== undefined;
+      const decision = decidePush({ linked, userConfirmed: false });
+      if (decision.needsConfirm) {
+        const t = tables.find((x) => x.id === tableId);
+        setOverwriteConfirm({ tableId, name: t?.name ?? "table", rowCount: t?.rows ?? 0 });
+        return;
+      }
+      void runPush(tableId, decision.confirmOverwrite);
+    },
+    [syncLinks, tables, runPush],
+  );
+
+  // User accepted the destructive overwrite — re-push with confirmOverwrite.
+  const onConfirmOverwrite = useCallback(() => {
+    const target = overwriteConfirm;
+    if (!target) return;
+    void runPush(target.tableId, true);
+  }, [overwriteConfirm, runPush]);
+
+  // Push every table that has un-pushed work (the sync-all header control).
+  const onSyncAll = useCallback(() => {
+    for (const t of tables) {
+      if (syncStatusFor(t.id) !== "synced" && syncStatusFor(t.id) !== "syncing") {
+        onPushTable(t.id);
+      }
+    }
+  }, [tables, syncStatusFor, onPushTable]);
+
+  // How many local tables have un-pushed work (drives `.sync-all-btn.has-pending`).
+  const syncPending = useMemo(
+    () => (showSyncUi ? pendingCount(tables.map((t) => syncStatusFor(t.id))) : 0),
+    [showSyncUi, tables, syncStatusFor],
+  );
+
   // Default the active cloud table to the first one once the list loads.
   useEffect(() => {
     if (!inCloud) return;
@@ -1788,14 +2073,29 @@ export default function App() {
             </div>
           )}
 
-          {/* Tables section (local) — hidden while a cloud project is open. */}
-          {!inCloud && <>
+          {/* Tables section (local). Hidden while a cloud project is open UNLESS
+              the user is a connected cloud user — then it stays visible so local
+              tables can be pushed to the open cloud workspace (TRI-3297). */}
+          {(!inCloud || showSyncUi) && <>
           <div className="sidebar-section">
             <div className="sidebar-section-label">
-              Tables
-              <button onClick={() => setShowNewTableChooser(true)} title="New table">
-                <Icon.Plus />
-              </button>
+              <span className="sidebar-label-text">Tables</span>
+              <span className="sidebar-label-actions">
+                {showSyncUi && (
+                  <button
+                    className={`sync-all-btn${syncPending ? " has-pending" : ""}`}
+                    title={syncPending ? `Sync ${syncPending} table${syncPending > 1 ? "s" : ""}` : "All tables synced"}
+                    disabled={pushingTableId !== null}
+                    onClick={onSyncAll}
+                  >
+                    {pushingTableId !== null ? <span className="cell-spinner" /> : <Icon.CloudUp size={13} />}
+                    {syncPending ? <span className="sync-all-count">{syncPending}</span> : null}
+                  </button>
+                )}
+                <button onClick={() => setShowNewTableChooser(true)} title="New table">
+                  <Icon.Plus />
+                </button>
+              </span>
             </div>
             {tables.length === 0 ? (
               <div style={{ padding: "4px 16px", fontSize: 12, color: "var(--text-3)" }}>No tables yet</div>
@@ -1839,7 +2139,21 @@ export default function App() {
                 >
                   <Icon.More />
                 </button>
-                <span className="sidebar-item-count">{t.rows}</span>
+                {showSyncUi ? (
+                  <button
+                    className={`row-sync is-${syncStatusFor(t.id)}`}
+                    title={SYNC_META[syncStatusFor(t.id)].label}
+                    onClick={e => {
+                      e.stopPropagation();
+                      const top = (e.currentTarget.closest(".sidebar-item") as HTMLElement | null)?.getBoundingClientRect().top ?? 80;
+                      setSyncPopover({ tableId: t.id, anchorTop: top });
+                    }}
+                  >
+                    <SyncDot status={syncStatusFor(t.id)} />
+                  </button>
+                ) : (
+                  <span className="sidebar-item-count">{t.rows}</span>
+                )}
               </div>
               )
             ))}
@@ -2664,6 +2978,55 @@ export default function App() {
                 }}
               >
                 Delete table
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Per-table sync popover (TRI-3297). */}
+      {showSyncUi && syncPopover && (() => {
+        const t = tables.find((x) => x.id === syncPopover.tableId);
+        if (!t) return null;
+        const status = syncStatusFor(t.id);
+        return (
+          <SyncPopover
+            tableName={t.name}
+            rowCount={t.rows}
+            status={status}
+            workspaceName={activeWorkspace?.name ?? "Workspace"}
+            memberCount={activeWorkspace?.seatUsage.used ?? 1}
+            anchorTop={syncPopover.anchorTop}
+            sidebarWidth={sidebarWidth}
+            cloudRowCount={syncLinks[t.id]?.rowCount ?? null}
+            error={syncErrors[t.id] ?? null}
+            onPush={() => onPushTable(t.id)}
+            onConfirmOverwrite={() => { setSyncPopover(null); onPushTable(t.id); }}
+            onCheckUpdates={() => onPushTable(t.id)}
+            onClose={() => setSyncPopover(null)}
+          />
+        );
+      })()}
+
+      {/* Destructive-overwrite confirm (TRI-3297): a re-push of a LINKED table
+          overwrites cloud data, so name the table + row count before sending
+          confirmOverwrite. A first push (unlinked → create) never reaches here. */}
+      {overwriteConfirm && (
+        <div className="overlay" onMouseDown={e => e.target === e.currentTarget && setOverwriteConfirm(null)}>
+          <div className="modal" style={{ width: 400 }}>
+            <div className="modal-header">
+              <span className="modal-title">Overwrite cloud copy?</span>
+              <button className="modal-close" onClick={() => setOverwriteConfirm(null)}><Icon.X /></button>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>
+                {overwriteConfirmMessage(overwriteConfirm.name, overwriteConfirm.rowCount)}
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setOverwriteConfirm(null)}>Cancel</button>
+              <button className="btn btn-danger" onClick={() => { onConfirmOverwrite(); setOverwriteConfirm(null); }}>
+                Keep my version — overwrite the cloud copy
               </button>
             </div>
           </div>
