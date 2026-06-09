@@ -49,6 +49,14 @@ const CLOUD_REFS: CloudFunctionRefs = {
   getCredential: "/api/worker/getCredential",
 };
 
+/**
+ * The metadata-only worker ref `resolveWorkspaceId` reads the table's workspace
+ * id from. Distinct from {@link CLOUD_REFS}.getTable (the full per-run grid
+ * snapshot the cloud store needs): this fast path ships only `{ table.id,
+ * table.workspaceId }`, never the columns/rows/cells. (TRI-3273.)
+ */
+const GET_TABLE_META_REF = "/api/worker/getTableMeta";
+
 /** Inputs the desktop forwards to run a column on a cloud project. */
 export interface CloudRunRequest {
   /** The apps/web API base URL (the desktop's `VITE_API_URL`). */
@@ -146,24 +154,38 @@ export function defaultCloudRunDeps(
   };
 }
 
-/** The (subset of the) `getTable` payload we read the workspace id from. */
-interface CloudTablePayload {
-  readonly table: { readonly workspaceId: string };
+/** Narrow an unknown worker payload to its `table.workspaceId` string. */
+function readWorkspaceId(payload: unknown): string {
+  if (
+    typeof payload === "object" &&
+    payload !== null &&
+    "table" in payload &&
+    typeof payload.table === "object" &&
+    payload.table !== null &&
+    "workspaceId" in payload.table &&
+    typeof payload.table.workspaceId === "string"
+  ) {
+    return payload.table.workspaceId;
+  }
+  throw new Error("getTableMeta payload missing table.workspaceId");
 }
 
 /**
- * Resolve the workspace id a table belongs to, via `getTable`. A cloud run
- * resolves the workspace's SHARED connector credentials, so the run must know
- * which workspace to decrypt them for; that binding lives on the table doc.
+ * Resolve the workspace id a table belongs to. A cloud run resolves the
+ * workspace's SHARED connector credentials, so the run must know which workspace
+ * to decrypt them for; that binding lives on the table doc.
+ *
+ * Reads the workspace id through the metadata-only `/api/worker/getTableMeta`
+ * fast path ({@link GET_TABLE_META_REF}) — NOT the full-grid `getTable` — so a
+ * run start no longer ships the table's columns/rows/cells just to learn one
+ * UUID. (TRI-3273.)
  */
 export async function resolveWorkspaceId(
   client: CloudClientLike,
   tableId: string,
 ): Promise<string> {
-  const payload = (await client.query(CLOUD_REFS.getTable, {
-    tableId,
-  })) as CloudTablePayload;
-  return payload.table.workspaceId;
+  const payload = await client.query(GET_TABLE_META_REF, { tableId });
+  return readWorkspaceId(payload);
 }
 
 /**

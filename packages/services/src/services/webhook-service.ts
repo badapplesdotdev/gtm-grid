@@ -97,6 +97,16 @@ export interface ResolvedWebhook {
   readonly upsertKey: string | null;
 }
 
+/**
+ * The lightweight table-metadata payload `getTableMeta` returns to the worker.
+ * A cloud run start only needs the table's `workspaceId` (to resolve shared
+ * connector credentials), so this fast path skips the columns/rows/cells the
+ * full {@link WorkerGrid} ships — see {@link WorkerGrid} for the full shape.
+ */
+export interface WorkerTableMeta {
+  readonly table: { readonly id: string; readonly workspaceId: string };
+}
+
 /** The grid payload `getTable` returns to the worker. */
 export interface WorkerGrid {
   readonly table: { readonly id: string; readonly workspaceId: string };
@@ -607,6 +617,26 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         });
 
       /**
+       * Table metadata only (worker getTableMeta shape). A cloud run start reads
+       * just the table's `workspaceId` to resolve shared connector credentials,
+       * so this reuses the same `findTable` lookup as {@link getTable} but skips
+       * the columns/rows/cells loads entirely — no full-grid payload over the
+       * wire. (TRI-3273.)
+       */
+      const getTableMeta = (tableId: string) =>
+        Effect.gen(function* () {
+          const table = yield* repo.findTable(tableId);
+          if (table._tag === "None") {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({ message: `Table ${tableId} not found.` }),
+            );
+          }
+          return {
+            table: { id: table.value.id, workspaceId: table.value.workspaceId },
+          } satisfies WorkerTableMeta;
+        });
+
+      /**
        * Resolve + assert a (row, column) pair share a table, returning the
        * row's table + workspace. ONE query (resolveCellTarget joins row→table
        * and the column), replacing the prior findRow + findColumn + findCell +
@@ -757,6 +787,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         insertRow,
         upsertRow,
         getTable,
+        getTableMeta,
         setCell,
         setCells,
         setCellStatus,
