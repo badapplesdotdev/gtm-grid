@@ -24,6 +24,12 @@ export interface RunFunctionOpts {
   /** provider -> method names. Materialises the `sdk` object inside the guest. */
   providers: Record<string, string[]>;
   dispatch: SandboxDispatch;
+  /**
+   * Extra JS evaluated into the guest before the body runs — used by formula columns to
+   * inject helper-library sources (lodash, moment, FormulaJS) and expose their globals.
+   * Evaluated once per call; globals it defines are visible to `code`.
+   */
+  prelude?: string;
   timeoutMs?: number;
   memoryLimitBytes?: number;
 }
@@ -98,6 +104,10 @@ export async function runFunction(opts: RunFunctionOpts): Promise<unknown> {
         }
       })();`;
     ctx.unwrapResult(await ctx.evalCodeAsync(prelude)).dispose();
+
+    // Formula helper libraries (lodash/moment/FormulaJS), injected on demand. They attach
+    // their globals (`_`, `moment`, the spreadsheet functions) which the body then uses.
+    if (opts.prelude) ctx.unwrapResult(await ctx.evalCodeAsync(opts.prelude)).dispose();
 
     // Run synchronously at the top-level eval entry, where asyncify can suspend safely.
     const runner = `JSON.stringify( ((${code}))(${JSON.stringify(inputs)}, globalThis.__sdk) ?? null )`;

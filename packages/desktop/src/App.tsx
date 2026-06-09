@@ -5,7 +5,7 @@ import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import CellDetails, { extractCode } from "./CellDetails";
 import { ExtensionPanel, AiProviderPanel, ExtensionsBrowse, SkillsBrowse, SkillPanel, BrandIcon } from "./Panels";
-import { AddColumnPopover, FunctionsModal } from "./AddColumn";
+import { AddColumnPopover, FunctionsModal, ColumnSettingsModal } from "./AddColumn";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { AccountBar, PlanBillingModal } from "./cloud/AccountBar";
 import { PendingInvites } from "./cloud/PendingInvites";
@@ -513,6 +513,7 @@ export default function App() {
   const [showAddCol, setShowAddCol] = useState(false);
   const [addColAnchor, setAddColAnchor] = useState<{ left: number; top: number } | null>(null);
   const [showFunctions, setShowFunctions] = useState(false);
+  const [editCol, setEditCol] = useState<Column | null>(null);
   const [showNewTable, setShowNewTable] = useState(false);
   // The "New table" chooser (Blank / CSV / Webhook) replaces the old
   // straight-to-blank entry points.
@@ -2004,7 +2005,10 @@ export default function App() {
                       className="grid-th"
                       style={{ width: colW(col.id), minWidth: MIN_COL_W, maxWidth: MAX_COL_W }}
                       onContextMenu={(e) =>
-                        openCtx(e, [{ label: `Delete column “${col.name}”`, danger: true, onClick: () => deleteColumn(col.id) }])
+                        openCtx(e, [
+                          { label: `Edit column “${col.name}”`, onClick: () => setEditCol(col) },
+                          { label: `Delete column “${col.name}”`, danger: true, onClick: () => deleteColumn(col.id) },
+                        ])
                       }
                     >
                       <div className="th-inner">
@@ -2244,6 +2248,15 @@ export default function App() {
             const target = aiProviders[0]?.id ?? "anthropic";
             setView({ kind: "ai", id: target });
           }}
+        />
+      )}
+
+      {editCol && tableData && (
+        <ColumnSettingsModal
+          column={editCol}
+          columns={tableData.columns.map((c) => c.name)}
+          onClose={() => setEditCol(null)}
+          onSaved={() => loadTable(tableData.id)}
         />
       )}
 

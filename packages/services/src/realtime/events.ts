@@ -35,6 +35,7 @@ export interface GridEventColumn {
   readonly method: string | null;
   readonly code: string | null;
   readonly params: unknown;
+  readonly condition: string | null;
 }
 
 /** A row as it appears in the `getTable` snapshot (mirrors `FullGrid.rows`). */

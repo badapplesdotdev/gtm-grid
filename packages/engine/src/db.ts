@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS columns (
   method TEXT,
   code TEXT,
   params TEXT NOT NULL DEFAULT '{}',
+  condition TEXT,
   position INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
 );
@@ -89,6 +90,7 @@ interface ColumnRow {
   method: string | null;
   code: string | null;
   params: string;
+  condition: string | null;
   position: number;
   created_at: number;
 }
@@ -116,6 +118,22 @@ export class Db {
     this.raw.pragma("journal_mode = WAL");
     this.raw.pragma("foreign_keys = ON");
     this.raw.exec(SCHEMA);
+    this.migrate();
+  }
+
+  /**
+   * Lightweight, idempotent migrations for project .db files created before a column was
+   * added. SQLite has no `ADD COLUMN IF NOT EXISTS`, so we run the ALTER and swallow the
+   * "duplicate column name" error when the column already exists.
+   */
+  private migrate(): void {
+    for (const sql of ["ALTER TABLE columns ADD COLUMN condition TEXT"]) {
+      try {
+        this.raw.exec(sql);
+      } catch (e) {
+        if (!/duplicate column name/i.test(e instanceof Error ? e.message : String(e))) throw e;
+      }
+    }
   }
 
   close(): void {
@@ -187,6 +205,7 @@ export class Db {
     method?: string | null;
     code?: string | null;
     params?: Record<string, unknown>;
+    condition?: string | null;
   }): Column {
     const col: Column = {
       id: randomUUID(),
@@ -198,13 +217,14 @@ export class Db {
       method: input.method ?? null,
       code: input.code ?? null,
       params: input.params ?? {},
+      condition: input.condition ?? null,
       position: this.nextPos("columns", "table_id", input.tableId),
       created_at: Date.now(),
     };
     this.raw
       .prepare(
-        `INSERT INTO columns (id, table_id, name, type, kind, provider, method, code, params, position, created_at)
-         VALUES (@id, @table_id, @name, @type, @kind, @provider, @method, @code, @params, @position, @created_at)`,
+        `INSERT INTO columns (id, table_id, name, type, kind, provider, method, code, params, condition, position, created_at)
+         VALUES (@id, @table_id, @name, @type, @kind, @provider, @method, @code, @params, @condition, @position, @created_at)`,
       )
       .run({ ...col, params: JSON.stringify(col.params) });
     return col;
@@ -241,6 +261,7 @@ export class Db {
       method: string | null;
       code: string | null;
       params: Record<string, unknown>;
+      condition: string | null;
     }>,
   ): Column | undefined {
     const existing = this.getColumn(id);
@@ -253,10 +274,11 @@ export class Db {
       method: patch.method !== undefined ? patch.method : existing.method,
       code: patch.code !== undefined ? patch.code : existing.code,
       params: patch.params ?? existing.params,
+      condition: patch.condition !== undefined ? patch.condition : existing.condition,
     };
     this.raw
       .prepare(
-        `UPDATE columns SET name=@name, type=@type, kind=@kind, provider=@provider, method=@method, code=@code, params=@params WHERE id=@id`,
+        `UPDATE columns SET name=@name, type=@type, kind=@kind, provider=@provider, method=@method, code=@code, params=@params, condition=@condition WHERE id=@id`,
       )
       .run({ id, ...next, params: JSON.stringify(next.params) });
     return this.getColumn(id);

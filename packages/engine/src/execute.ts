@@ -4,6 +4,13 @@
 
 import { Effect } from "effect";
 import type { Db } from "./db.js";
+import {
+  buildFormulaPrelude,
+  compileExpression,
+  formulaExpression,
+  isFormulaColumn,
+  type CompiledFormula,
+} from "./formula.js";
 import { Registry, defaultRegistry } from "./registry.js";
 import { runFunction, type SandboxDispatch } from "./sandbox.js";
 import {
@@ -136,8 +143,29 @@ export class Engine {
     });
   }
 
-  /** The JS body for a column: custom code, or synthesized from provider/method. */
+  /**
+   * Resolve a row into a typed `{ columnName: value }` object for formula / condition
+   * evaluation. Unlike {@link resolveParams} (which splices raw cell *text* into prompt
+   * strings), this preserves value TYPES so `{{Score}} + 1` sees the number and
+   * `{{Email}}.split(...)` sees the string.
+   */
+  private resolveCells(
+    col: Column,
+    rowId: string,
+    store: GridStoreShape,
+  ): Effect.Effect<Record<string, unknown>, GridStoreError, never> {
+    return Effect.gen(this, function* () {
+      const cells = yield* store.rowCells(rowId);
+      const columns = yield* store.listColumns(col.table_id);
+      const out: Record<string, unknown> = {};
+      for (const c of columns) out[c.name] = cells.get(c.id)?.value ?? null;
+      return out;
+    });
+  }
+
+  /** The JS body for a column: a compiled formula, custom code, or provider/method. */
   private columnCode(col: Column): string {
+    if (isFormulaColumn(col)) return compileExpression(formulaExpression(col)).body;
     if (col.code) return col.code;
     return `function(inputs, sdk){ return sdk[${JSON.stringify(col.provider)}][${JSON.stringify(col.method)}](inputs); }`;
   }
@@ -160,18 +188,71 @@ export class Engine {
 
     const rowIds =
       opts.rowIds ?? (await Effect.runPromise(reads.listRows(col.table_id))).map((r) => r.id);
-    const code = this.columnCode(col);
     const providers = this.registry.providerMap();
+
+    // Precompile the formula body and the "only run if" condition ONCE — both are the same
+    // for every row, and each carries the helper-library prelude it needs.
+    const formula: CompiledFormula | null = isFormulaColumn(col)
+      ? compileExpression(formulaExpression(col))
+      : null;
+    const condition: CompiledFormula | null = col.condition?.trim()
+      ? compileExpression(col.condition)
+      : null;
+    const code = formula ? formula.body : this.columnCode(col);
+    const formulaPrelude = formula ? buildFormulaPrelude(formula.libs) : undefined;
+    const conditionPrelude = condition ? buildFormulaPrelude(condition.libs) : undefined;
 
     let ran = 0;
     let errors = 0;
     await mapConcurrent(rowIds, opts.concurrency ?? 5, async (rowId) => {
       const existing = await Effect.runPromise(reads.getCell(rowId, columnId));
       if (!opts.force && existing?.status === "done") return;
+
+      // Conditional-run gate: evaluate "only run if" before any work. A falsy result skips
+      // the row (no dispatch → no credits spent); a thrown condition surfaces as an error.
+      if (condition) {
+        try {
+          const cinputs = await Effect.runPromise(this.resolveCells(col, rowId, reads));
+          const pass = await runFunction({
+            code: condition.body,
+            inputs: cinputs,
+            providers,
+            dispatch: this.dispatch,
+            prelude: conditionPrelude,
+          });
+          if (!pass) {
+            // Clear any stale value so the skip is visible; avoid a write if already empty.
+            if (existing && existing.status !== "empty") {
+              await Effect.runPromise(
+                this.store.setCell(rowId, columnId, { value: null, status: "empty", error: null }),
+              );
+            }
+            return;
+          }
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          await Effect.runPromise(
+            this.store.setCell(rowId, columnId, { status: "error", error: `condition: ${message}` }),
+          );
+          errors++;
+          return;
+        }
+      }
+
       await Effect.runPromise(this.store.setCell(rowId, columnId, { status: "running", error: null }));
       try {
-        const inputs = await Effect.runPromise(this.resolveParams(col, rowId, reads));
-        const result = await runFunction({ code, inputs, providers, dispatch: this.dispatch });
+        // Formulas run over a typed row object; other function columns use {{...}} prompt
+        // templating (resolveParams). formulaPrelude is undefined for non-formula columns.
+        const inputs = formula
+          ? await Effect.runPromise(this.resolveCells(col, rowId, reads))
+          : await Effect.runPromise(this.resolveParams(col, rowId, reads));
+        const result = await runFunction({
+          code,
+          inputs,
+          providers,
+          dispatch: this.dispatch,
+          prelude: formulaPrelude,
+        });
         await Effect.runPromise(
           this.store.setCell(rowId, columnId, { value: simplify(result), status: "done", error: null }),
         );

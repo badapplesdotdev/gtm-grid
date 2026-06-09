@@ -39,6 +39,7 @@ const CATEGORY_ICON: Record<string, ReactNode> = {
     </svg>
   ),
   Formatting: <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 13, lineHeight: 1 }}>Aa</span>,
+  Formula: <span style={{ fontFamily: "var(--font-mono)", fontStyle: "italic", fontWeight: 700, fontSize: 13, lineHeight: 1 }}>fx</span>,
   Scoring: I("M3 3v18h18|m19 9-5 5-4-4-3 3"),
   Verification: I("M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z|m9 12 2 2 4-4"),
   Scraping: I("M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z|M2 12h20|M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20z"),
@@ -156,6 +157,14 @@ export function AddColumnPopover({
             </span>
             <span className="acx-item-caret">{Chevron}</span>
           </button>
+          <button className="acx-item" onClick={onUseFunction}>
+            <span className="acx-item-icon"><span style={{ fontFamily: "var(--font-mono)", fontStyle: "italic", fontWeight: 700 }}>fx</span></span>
+            <span className="acx-item-text">
+              <span className="acx-item-title">Formula</span>
+              <span className="acx-item-sub">Compute a value with JavaScript</span>
+            </span>
+            <span className="acx-item-caret">{Chevron}</span>
+          </button>
         </div>
 
         {/* Basic column types — single click adds */}
@@ -195,6 +204,7 @@ interface Fn {
 const CONNECTOR_CATEGORY: Record<string, string> = {
   formatting: "Formatting",
   ai: "AI",
+  formula: "Formula",
   scoring: "Scoring",
   verification: "Verification",
   scraping: "Scraping",
@@ -203,6 +213,7 @@ const CONNECTOR_CATEGORY: Record<string, string> = {
 
 const CATEGORY_ORDER = [
   "AI",
+  "Formula",
   "Enrich people",
   "Enrich company",
   "Find email",
@@ -222,7 +233,7 @@ const CATEGORY_ORDER = [
 // Nav clusters — categories grouped with a divider line between each group.
 // "All" is rendered first and sits with the AI cluster (no line in between).
 const NAV_CLUSTERS: string[][] = [
-  ["AI"],
+  ["AI", "Formula"],
   ["Enrich people", "Enrich company", "Find email", "Verify email", "Find phone", "Search"],
   ["Formatting", "Scoring", "Verification", "Scraping", "Extraction"],
   ["Ads", "Jobs", "Signals"],
@@ -230,6 +241,7 @@ const NAV_CLUSTERS: string[][] = [
 
 function categorize(provider: string, connectorCategory: string, label: string, description: string): string {
   if (provider === "ai") return "AI";
+  if (provider === "formula") return "Formula";
   if (CONNECTOR_CATEGORY[connectorCategory]) return CONNECTOR_CATEGORY[connectorCategory];
   const s = `${label} ${description}`.toLowerCase();
   const has = (...ws: string[]) => ws.some((w) => s.includes(w));
@@ -395,6 +407,8 @@ export function FunctionsModal({
                   onAdded={() => { onAdded(); onClose(); }}
                   onOpenAiSettings={onOpenAiSettings}
                 />
+              ) : selected.provider === "formula" ? (
+                <FormulaDetail key={selected.fnKey} tableId={tableId} columns={columns} onAdded={() => { onAdded(); onClose(); }} />
               ) : (
                 <FunctionDetail key={selected.fnKey} fn={selected} tableId={tableId} columns={columns} onAdded={() => { onAdded(); onClose(); }} />
               )
@@ -431,6 +445,7 @@ function FunctionDetail({
   const [tab, setTab] = useState<"details" | "configure">("details");
   const [colName, setColName] = useState(fn.label);
   const [values, setValues] = useState<Record<string, string>>({});
+  const [condition, setCondition] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
@@ -443,7 +458,7 @@ function FunctionDetail({
     try {
       const params: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(values)) if (v.trim()) params[k] = v.trim();
-      await api.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, params });
+      await api.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, params, condition: condition.trim() || null });
       onAdded();
     } catch (e: any) {
       setErr(e?.message ?? "Failed to add column");
@@ -534,6 +549,7 @@ function FunctionDetail({
               <p className="params-hint">Map each input to a value, or reference a column with <code>{"{{Column name}}"}</code>.</p>
             </>
           )}
+          <RunSettings condition={condition} setCondition={setCondition} columns={columns} />
           {err && <div className="conn-err">{err}</div>}
         </div>
       )}
@@ -580,6 +596,7 @@ function AiGenerateDetail({
   const [prompt, setPrompt] = useState("");
   const [maxTokens, setMaxTokens] = useState("512");
   const [advOpen, setAdvOpen] = useState(false);
+  const [condition, setCondition] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
@@ -651,7 +668,7 @@ function AiGenerateDetail({
       if (model) params.model = model;
       const mt = parseInt(maxTokens, 10);
       if (!Number.isNaN(mt) && mt > 0) params.maxTokens = mt;
-      await api.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, params });
+      await api.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, params, condition: condition.trim() || null });
       onAdded();
     } catch (e: any) {
       setErr(e?.message ?? "Failed to add column");
@@ -764,6 +781,8 @@ function AiGenerateDetail({
         </div>
       )}
 
+      <RunSettings condition={condition} setCondition={setCondition} columns={columns} />
+
       {err && <div className="conn-err">{err}</div>}
 
       <div className="ai-cfg-foot">
@@ -771,6 +790,406 @@ function AiGenerateDetail({
         <button className="btn btn-primary fnx-cfg-add" onClick={add} disabled={saving || !hasProvider}>
           {saving ? "Adding…" : "Add column"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Formula column (shared building blocks) ─────────────
+
+const SparkleIcon = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8" /></svg>
+);
+const FxGlyph = <span style={{ fontFamily: "var(--font-mono)", fontStyle: "italic", fontWeight: 700 }}>fx</span>;
+
+/** A textarea with the shared "/" column-insertion menu (mirrors AiGenerateDetail).
+ *  Pass `footer` to render an in-box footer bar (a hint + e.g. a Generate button),
+ *  which also draws the border around the textarea+footer as one box. */
+function SlashTextarea({
+  value, onChange, columns, placeholder, rows = 4, className = "", footer,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  columns: string[];
+  placeholder?: string;
+  rows?: number;
+  className?: string;
+  footer?: ReactNode;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const [slash, setSlash] = useState<{ index: number; query: string } | null>(null);
+
+  function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    const v = e.target.value;
+    onChange(v);
+    const caret = e.target.selectionStart ?? v.length;
+    const m = v.slice(0, caret).match(/\/([\w .-]*)$/);
+    setSlash(m ? { index: caret - m[0].length, query: m[1] } : null);
+  }
+  function insert(col: string) {
+    if (!slash) return;
+    const before = value.slice(0, slash.index);
+    const after = value.slice(slash.index + 1 + slash.query.length);
+    const token = `{{${col}}}`;
+    onChange(before + token + after);
+    setSlash(null);
+    requestAnimationFrame(() => {
+      const pos = (before + token).length;
+      ref.current?.focus();
+      ref.current?.setSelectionRange(pos, pos);
+    });
+  }
+  const matches = slash
+    ? columns.filter((c) => c.toLowerCase().includes(slash.query.toLowerCase())).slice(0, 8)
+    : [];
+
+  return (
+    <div className={`ai-prompt-wrap${footer ? " formula-box" : ""}`}>
+      <textarea
+        ref={ref}
+        className={footer ? `formula-box-area ${className}` : `form-input ai-textarea ${className}`}
+        rows={rows}
+        spellCheck={false}
+        placeholder={placeholder}
+        value={value}
+        onChange={handleChange}
+        onBlur={() => setTimeout(() => setSlash(null), 120)}
+      />
+      {slash && matches.length > 0 && (
+        <div className="ai-slash-menu">
+          {matches.map((c) => (
+            <button key={c} className="ai-slash-item" onMouseDown={(e) => { e.preventDefault(); insert(c); }}>
+              <span className="ai-slash-chip">{c}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {footer}
+    </div>
+  );
+}
+
+/** A formula/expression editor: a "/"-aware box with an in-box footer ("Type / to
+ *  insert column" + a Generate button). Clicking Generate reveals a one-line
+ *  natural-language prompt that fills the box via the AI generator. Manual or AI. */
+function FormulaInput({
+  value, setValue, columns, mode = "formula", rows = 4, placeholder,
+}: {
+  value: string;
+  setValue: (v: string) => void;
+  columns: string[];
+  mode?: "formula" | "condition";
+  rows?: number;
+  placeholder?: string;
+}) {
+  const [genOpen, setGenOpen] = useState(false);
+  const [desc, setDesc] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const generate = async () => {
+    if (!desc.trim()) { setErr("Describe it first"); return; }
+    setBusy(true);
+    setErr("");
+    try {
+      const r = await api.generateFormula(desc.trim(), columns, mode);
+      if (r.error) throw new Error(r.error);
+      if (r.formula) { setValue(r.formula); setGenOpen(false); setDesc(""); }
+    } catch (e: any) {
+      setErr(e?.message ?? "Generation failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <SlashTextarea
+        value={value}
+        onChange={setValue}
+        columns={columns}
+        rows={rows}
+        className="formula-mono"
+        placeholder={placeholder}
+        footer={
+          <div className="formula-box-foot">
+            <span className="formula-box-hint">Type <code>/</code> to insert column</span>
+            <button type="button" className="formula-gen-btn" onClick={() => setGenOpen((o) => !o)}>
+              <span className="formula-gen-spark">{SparkleIcon}</span>
+              Generate
+            </button>
+          </div>
+        }
+      />
+      {genOpen && (
+        <div className="formula-gen-row">
+          <input
+            className="form-input formula-gen-input"
+            autoFocus
+            placeholder={mode === "condition" ? "Describe when it should run…" : "Describe the formula…"}
+            value={desc}
+            onChange={(e) => setDesc(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); generate(); } }}
+          />
+          <button type="button" className="btn btn-primary formula-gen-go" onClick={generate} disabled={busy}>
+            {busy ? "…" : "Generate"}
+          </button>
+          <button type="button" className="formula-ai-cancel" onClick={() => { setGenOpen(false); setErr(""); }}>{X}</button>
+        </div>
+      )}
+      {err && <div className="conn-err">{err}</div>}
+    </>
+  );
+}
+
+/** "Run settings → Add run condition" — gates per-row execution (mirrors Clay).
+ *  A natural-language box (with "/" insertion + Generate) drives the resolved
+ *  boolean formula below it; either field can also be edited manually. */
+function RunSettings({
+  condition, setCondition, columns,
+}: {
+  condition: string;
+  setCondition: (v: string) => void;
+  columns: string[];
+}) {
+  const [enabled, setEnabled] = useState(!!condition.trim());
+  const [desc, setDesc] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const toggle = (on: boolean) => {
+    setEnabled(on);
+    if (!on) { setCondition(""); setDesc(""); setErr(""); }
+  };
+
+  const generate = async () => {
+    if (!desc.trim()) { setErr("Describe the condition first"); return; }
+    setBusy(true);
+    setErr("");
+    try {
+      const r = await api.generateFormula(desc.trim(), columns, "condition");
+      if (r.error) throw new Error(r.error);
+      if (r.formula) setCondition(r.formula);
+    } catch (e: any) {
+      setErr(e?.message ?? "Generation failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="run-settings">
+      <div className="run-settings-title">Run settings</div>
+      <label className="run-cond-check">
+        <input type="checkbox" checked={enabled} onChange={(e) => toggle(e.target.checked)} />
+        <span className="run-cond-check-text">
+          <span className="run-cond-check-name">Add run condition</span>
+          <span className="run-cond-check-sub">Only run if this formula resolves to true.</span>
+        </span>
+      </label>
+      {enabled && (
+        <div className="run-cond-body">
+          <SlashTextarea
+            value={desc}
+            onChange={setDesc}
+            columns={columns}
+            rows={4}
+            placeholder="E.g., Only run when {{Score}} is over 4.2"
+            footer={
+              <div className="formula-box-foot">
+                <span className="formula-box-hint">Type <code>/</code> to insert column</span>
+                <button type="button" className="formula-gen-btn" onClick={generate} disabled={busy}>
+                  <span className="formula-gen-spark">{SparkleIcon}</span>
+                  {busy ? "Generating…" : "Generate"}
+                </button>
+              </div>
+            }
+          />
+          <input
+            className="form-input formula-mono run-cond-formula"
+            placeholder="E.g., !!{{Company Domain}}"
+            value={condition}
+            onChange={(e) => setCondition(e.target.value)}
+            spellCheck={false}
+          />
+          {err && <div className="conn-err">{err}</div>}
+          <p className="params-hint">A JavaScript boolean expression — describe it above and Generate, or write it directly. When false, the column skips that row (no run, no credits).</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const FX_TYPES: Array<[string, string]> = [
+  ["text", "Text"],
+  ["number", "Number"],
+  ["boolean", "Boolean"],
+  ["date", "Date"],
+  ["json", "JSON"],
+];
+
+// ─── Formula (dedicated rich form) ───────────────────────
+// Column name + a monospace expression editor (with "/" column chips and AI
+// generation) + an output-type picker + optional "only run if" run settings.
+
+function FormulaDetail({
+  tableId, columns, onAdded,
+}: {
+  tableId: string;
+  columns: string[];
+  onAdded: () => void;
+}) {
+  const [colName, setColName] = useState("Formula");
+  const [expression, setExpression] = useState("");
+  const [type, setType] = useState("text");
+  const [condition, setCondition] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  const add = async () => {
+    if (!colName.trim()) { setErr("Column name is required"); return; }
+    if (!expression.trim()) { setErr("A formula is required"); return; }
+    setSaving(true);
+    setErr("");
+    try {
+      await api.addColumn(tableId, {
+        name: colName.trim(),
+        type,
+        fn: "formula.eval",
+        params: { expression: expression.trim() },
+        condition: condition.trim() || null,
+      });
+      onAdded();
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to add column");
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fnx-cfg ai-cfg">
+      <div className="fnx-cfg-head">
+        <div className="fnx-cfg-icon ai-cfg-icon">{FxGlyph}</div>
+        <div>
+          <div className="fnx-cfg-title">Formula</div>
+          <div className="fnx-cfg-sub">Compute a value per row with JavaScript</div>
+        </div>
+      </div>
+
+      <label className="form-label">Column name</label>
+      <input className="form-input" value={colName} onChange={(e) => setColName(e.target.value)} placeholder="Column name" />
+
+      <label className="form-label">Formula</label>
+      <FormulaInput value={expression} setValue={setExpression} columns={columns} mode="formula" placeholder={'{{Email}}.split("@")[1]'} />
+      <p className="params-hint">
+        Reference a column with <code>{"{{Column}}"}</code> or type <code>/</code>. Lodash <code>_</code>, <code>moment</code>, and Excel functions (<code>VLOOKUP</code>, <code>SUM</code>…) are available.
+      </p>
+
+      <label className="form-label">Output type</label>
+      <div className="fx-types">
+        {FX_TYPES.map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className={`fx-type${type === id ? " active" : ""}`}
+            onClick={() => setType(id)}
+          >
+            <span className="fx-type-icon">{TYPE_ICONS[id]}</span>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <RunSettings condition={condition} setCondition={setCondition} columns={columns} />
+
+      {err && <div className="conn-err">{err}</div>}
+
+      <button className="btn btn-primary fnx-cfg-add" onClick={add} disabled={saving}>
+        {saving ? "Adding…" : "Add column"}
+      </button>
+    </div>
+  );
+}
+
+// ─── Column settings (edit an existing column) ───────────
+// Reachable from the column header menu — edit the name, a formula column's
+// expression, and the "only run if" condition on any function column.
+
+export function ColumnSettingsModal({
+  column, columns, onClose, onSaved,
+}: {
+  column: {
+    id: string;
+    name: string;
+    provider: string | null;
+    fn: string | null;
+    params: Record<string, unknown>;
+    condition?: string | null;
+  };
+  columns: string[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const isFormula = column.provider === "formula" || column.fn === "formula.eval";
+  const isFunction = !!column.provider || !!column.fn;
+  const [name, setName] = useState(column.name);
+  const [expression, setExpression] = useState(isFormula ? String(column.params?.expression ?? "") : "");
+  const [condition, setCondition] = useState(column.condition ?? "");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  // A column should never reference itself in an expression/condition.
+  const otherColumns = columns.filter((c) => c !== column.name);
+
+  const save = async () => {
+    if (!name.trim()) { setErr("Column name is required"); return; }
+    setSaving(true);
+    setErr("");
+    try {
+      const patch: Parameters<typeof api.updateColumn>[1] = {
+        name: name.trim(),
+        condition: condition.trim() || null,
+      };
+      if (isFormula) patch.params = { ...column.params, expression: expression.trim() };
+      await api.updateColumn(column.id, patch);
+      onSaved();
+      onClose();
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to save");
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="popover-scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="col-settings" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="col-settings-head">
+          <div className="col-settings-title">Column settings</div>
+          <button className="fnx-x" onClick={onClose}>{X}</button>
+        </div>
+        <div className="col-settings-body">
+          <label className="form-label">Column name</label>
+          <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} />
+
+          {isFormula && (
+            <>
+              <label className="form-label">Formula</label>
+              <FormulaInput value={expression} setValue={setExpression} columns={otherColumns} mode="formula" placeholder={'{{Email}}.split("@")[1]'} />
+            </>
+          )}
+
+          {isFunction ? (
+            <RunSettings condition={condition} setCondition={setCondition} columns={otherColumns} />
+          ) : (
+            <p className="params-hint">Run settings apply to function columns (enrichments, AI, and formulas).</p>
+          )}
+
+          {err && <div className="conn-err">{err}</div>}
+        </div>
+        <div className="col-settings-foot">
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
+        </div>
       </div>
     </div>
   );

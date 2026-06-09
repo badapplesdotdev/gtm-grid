@@ -99,6 +99,7 @@ export interface FullGrid {
     readonly method: string | null;
     readonly code: string | null;
     readonly params: unknown;
+    readonly condition: string | null;
   }[];
   readonly rows: readonly { readonly _id: string }[];
   readonly cells: readonly {
@@ -282,6 +283,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
             method: c.method,
             code: c.code,
             params: c.params,
+            condition: c.condition,
           })),
           rows: rws.map((r) => ({ _id: r.id })),
           cells: cls.map((c) => ({
@@ -330,6 +332,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       readonly method?: string | null;
       readonly code?: string | null;
       readonly params?: unknown;
+      readonly condition?: string | null;
     }) =>
       Effect.gen(function* () {
         const table = yield* requireTable(args.tableId);
@@ -345,6 +348,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
           method: args.method ?? null,
           code: args.code ?? null,
           params: args.params ?? {},
+          condition: args.condition ?? null,
           position: nextPosition(siblings),
           createdAt: Date.now(),
         });
@@ -360,6 +364,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
             method: args.method ?? null,
             code: args.code ?? null,
             params: args.params ?? {},
+            condition: args.condition ?? null,
           },
         });
         return id;

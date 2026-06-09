@@ -43,6 +43,13 @@
       "when": 1780925359459,
       "tag": "0005_vengeful_rockslide",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1780990206636,
+      "tag": "0006_thin_sphinx",
+      "breakpoints": true
     }
   ]
 }

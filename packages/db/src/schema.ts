@@ -395,6 +395,8 @@ export const columns = pgTable(
     code: text("code"),
     /** Input mapping; templated with {{Column Name}}. v.any() -> jsonb. */
     params: jsonb("params"),
+    /** Optional "only run if" boolean expression; null/empty means always run. */
+    condition: text("condition"),
     position: doublePrecision("position").notNull(),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
   },

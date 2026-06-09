@@ -202,6 +202,7 @@ function fullTable(tableId: string) {
     method: c.method,
     fn: c.provider ? `${c.provider}.${c.method}` : c.code ? "code" : null,
     params: c.params,
+    condition: c.condition,
   }));
   const rows = current.projectDb.listRows(t.id).map((r) => {
     const cells = current.projectDb.rowCells(r.id);
@@ -215,6 +216,49 @@ function fullTable(tableId: string) {
     return { id: r.id, cells: out };
   });
   return { id: t.id, name: t.name, columns, rows };
+}
+
+/** Treat a blank "only run if" input as no condition (always run). */
+function normalizeCondition(v: unknown): string | null {
+  const s = typeof v === "string" ? v.trim() : "";
+  return s ? s : null;
+}
+
+/** Strip Markdown fences / leading `return` / trailing `;` an LLM may wrap output in. */
+function cleanFormulaOutput(text: string): string {
+  let s = text.trim();
+  const fence = s.match(/^```(?:[a-z]*)?\n?([\s\S]*?)\n?```$/i);
+  if (fence) s = fence[1].trim();
+  s = s.replace(/^return\s+/, "").replace(/;+\s*$/, "");
+  return s.trim();
+}
+
+/** System prompt steering the AI to emit a bare formula / boolean expression. */
+function formulaSystemPrompt(mode: "formula" | "condition", columns: string[]): string {
+  const cols = columns.length ? columns.map((c) => `{{${c}}}`).join(", ") : "(none yet)";
+  const shared =
+    `Reference other columns with {{Column Name}} (double braces). Available columns: ${cols}. ` +
+    `Each {{Column}} is replaced with that row's typed value (string/number/boolean/object). ` +
+    `You may use standard JavaScript, Lodash as \`_\`, Moment as \`moment\`, and Excel/Google-Sheets ` +
+    `functions (VLOOKUP, IF, SUM, CONCATENATE, LEFT, RIGHT, TEXT, …) by their bare UPPERCASE names. ` +
+    `Output ONLY the expression — no explanation, no code fences, no \`return\`, no trailing semicolon.`;
+  if (mode === "condition") {
+    return (
+      `You write a single JavaScript boolean expression that decides whether an enrichment should ` +
+      `run for a row ("only run if"). It must evaluate to true (run) or false (skip). ${shared}\n\n` +
+      `Examples:\n` +
+      `- Only run if title contains "VP" → /VP/i.test({{Title}})\n` +
+      `- Only run if company size is over 100 → Number({{Company Size}}) > 100\n` +
+      `- Only run if a news article was found → Boolean({{News Article}})`
+    );
+  }
+  return (
+    `You write a single JavaScript expression for a spreadsheet "formula column", evaluated per row. ${shared}\n\n` +
+    `Examples:\n` +
+    `- Extract the domain from {{Email}} → {{Email}}.split("@")[1]\n` +
+    `- Use {{LinkedIn URL}} if available; otherwise {{LinkedIn Profile}}.url → {{LinkedIn URL}} || {{LinkedIn Profile}}.url\n` +
+    `- Days between {{Created Date}} and {{Closed Date}} → moment({{Closed Date}}).diff(moment({{Created Date}}), "days")`
+  );
 }
 
 // --- routes ---
@@ -698,6 +742,7 @@ route("POST", "/api/tables/:id/columns", (p, body) => {
     method,
     code: body.code ?? null,
     params: body.params ?? {},
+    condition: normalizeCondition(body.condition),
   });
   return { id: col.id };
 });
@@ -775,8 +820,30 @@ route("POST", "/api/cloud/columns/run", async (_p, body) => {
 });
 
 route("POST", "/api/columns/:id/update", (p, body) => {
-  const col = current.projectDb.updateColumn(p.id, body ?? {});
+  const patch = { ...body };
+  if ("condition" in patch) patch.condition = normalizeCondition(patch.condition);
+  const col = current.projectDb.updateColumn(p.id, patch);
   return col ? { ok: true, tableId: col.table_id, id: col.id } : { error: "not found" };
+});
+
+// Generate a formula expression (or an "only run if" boolean) from a natural-language
+// description, via the connected AI provider. Reuses the engine's AI dispatch path.
+route("POST", "/api/ai/generate-formula", async (_p, body) => {
+  const description = String(body?.description ?? "").trim();
+  if (!description) return { error: "description is required" };
+  const columns: string[] = Array.isArray(body?.columns) ? body.columns.map(String) : [];
+  const mode = body?.mode === "condition" ? "condition" : "formula";
+  try {
+    const result = await current.engine.dispatch("ai", "generate", {
+      prompt: description,
+      system: formulaSystemPrompt(mode, columns),
+      maxTokens: 400,
+    });
+    const text = result && typeof result === "object" && "text" in result ? String((result as { text: unknown }).text) : String(result);
+    return { formula: cleanFormulaOutput(text) };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
 });
 
 route("POST", "/api/columns/:id/delete", (p) => {

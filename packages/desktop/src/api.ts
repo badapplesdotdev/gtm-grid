@@ -35,6 +35,8 @@ export interface Column {
   method: string | null;
   fn: string | null;
   params: Record<string, unknown>;
+  /** Optional "only run if" expression gating per-row execution. */
+  condition?: string | null;
 }
 export interface Cell {
   value: unknown;
@@ -202,7 +204,7 @@ export const api = {
     http<{ ok: boolean; favorite: boolean }>(`/api/tables/${id}/favorite`, { method: "POST", body: JSON.stringify({ favorite }) }),
   addColumn: (
     tableId: string,
-    body: { name: string; type?: string; fn?: string; code?: string; params?: Record<string, unknown> },
+    body: { name: string; type?: string; fn?: string; code?: string; params?: Record<string, unknown>; condition?: string | null },
   ) => http<{ id: string }>(`/api/tables/${tableId}/columns`, { method: "POST", body: JSON.stringify(body) }),
   addRow: (tableId: string, cells?: Record<string, unknown>) =>
     http<{ id: string }>(`/api/tables/${tableId}/rows`, { method: "POST", body: JSON.stringify({ cells }) }),
@@ -217,8 +219,13 @@ export const api = {
     }),
   updateColumn: (
     columnId: string,
-    patch: { name?: string; type?: string; kind?: string; provider?: string | null; method?: string | null; code?: string | null; params?: Record<string, unknown> },
+    patch: { name?: string; type?: string; kind?: string; provider?: string | null; method?: string | null; code?: string | null; params?: Record<string, unknown>; condition?: string | null },
   ) => http<{ ok: boolean; tableId?: string; id?: string }>(`/api/columns/${columnId}/update`, { method: "POST", body: JSON.stringify(patch) }),
+  generateFormula: (description: string, columns: string[], mode: "formula" | "condition" = "formula") =>
+    http<{ formula?: string; error?: string }>("/api/ai/generate-formula", {
+      method: "POST",
+      body: JSON.stringify({ description, columns, mode }),
+    }),
   deleteColumn: (columnId: string) => http<{ ok: boolean }>(`/api/columns/${columnId}/delete`, { method: "POST" }),
   deleteRow: (rowId: string) => http<{ ok: boolean }>(`/api/rows/${rowId}/delete`, { method: "POST" }),
   clearCell: (rowId: string, columnId: string) =>

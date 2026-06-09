@@ -36,6 +36,7 @@ const baseSnapshot = (): NonNullable<Snapshot> =>
         method: null,
         code: null,
         params: {},
+        condition: null,
       },
     ],
     rows: [{ _id: "r1" }],
@@ -257,6 +258,7 @@ describe("patchGridCache — realtime cache-patch integration (pure reducer)", (
         method: "score",
         code: null,
         params: {},
+        condition: null,
       },
     });
     expect(next?.columns.map((c) => c._id)).toEqual(["c1", "c2"]);
