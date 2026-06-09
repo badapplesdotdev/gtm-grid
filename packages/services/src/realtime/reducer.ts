@@ -49,6 +49,17 @@ const cellIndexCache = new WeakMap<
   ReadonlyMap<string, number>
 >();
 
+/**
+ * Test-only: counts full O(N) index BUILDS (cache misses). The O(1)-per-event
+ * guarantee is that a stream of upserts builds the index a BOUNDED number of
+ * times regardless of grid size (the first build is reused/maintained
+ * incrementally thereafter). An O(N) `findIndex` regression — which can't use
+ * this cache — would force a scan per event; reverting to it also removes this
+ * counter and breaks the importing test at compile time. Asserted deterministically
+ * in reducer.test.ts instead of a flaky wall-clock measurement.
+ */
+export const __cellIndexBuilds = { count: 0 };
+
 /** Build (or reuse the cached) `${rowId}:${columnId}` → position index. */
 const cellIndex = (
   cells: readonly GridEventCell[],
@@ -61,6 +72,7 @@ const cellIndex = (
     index.set(cellKey(c.rowId, c.columnId), i);
   }
   cellIndexCache.set(cells, index);
+  __cellIndexBuilds.count++;
   return index;
 };
 

@@ -13,7 +13,7 @@ import type {
   GridEventColumn,
   GridSnapshot,
 } from "./events.js";
-import { applyGridEvent } from "./reducer.js";
+import { __cellIndexBuilds, applyGridEvent } from "./reducer.js";
 
 const column = (over: Partial<GridEventColumn> = {}): GridEventColumn => ({
   _id: "c1",
@@ -237,33 +237,32 @@ describe("applyGridEvent · cell.upsert is O(1) + preserves untouched identity",
     expect(snap!.cells.find((c) => c.rowId === "r0")?.value).toBe(0);
   });
 
-  it("upsert lookup is O(1) — per-event cost does not grow with cell count", () => {
-    // The keyed index makes the LOOKUP O(1) regardless of grid size. With an
-    // O(N) findIndex the per-event cost would scale with the cell count, so the
-    // large grid would take dramatically longer per upsert than the small one.
-    // (The immutable array copy is linear in both and cancels in the ratio.)
-    const measure = (cellCount: number, upserts: number): number => {
+  it("upsert lookup is O(1) — index is built a bounded number of times regardless of grid size", () => {
+    // DETERMINISTIC O(1) proof (no wall-clock): the keyed index is built once on
+    // the first upsert, then reused/maintained incrementally — so a long stream
+    // of upserts triggers the full O(N) build a BOUNDED number of times,
+    // independent of grid size. An O(N) findIndex regression would scan per event
+    // (and reverting to it would delete __cellIndexBuilds, breaking this import).
+    const buildsFor = (cellCount: number): number => {
       let snap: GridSnapshot | null = withCells(cellCount);
-      const start = performance.now();
-      for (let i = 0; i < upserts; i++) {
-        // Always re-upsert the SAME (rowId,columnId) so the array length is
-        // fixed; only the lookup+slice cost is exercised.
+      __cellIndexBuilds.count = 0; // reset AFTER setup; count only the stream
+      for (let i = 0; i < 2_000; i++) {
+        // Re-upsert the SAME (rowId,columnId): steady-state enrichment stream.
         snap = applyGridEvent(snap, {
           type: "cell.upsert",
           cell: cell({ rowId: "r0", value: i }),
         });
       }
-      return performance.now() - start;
+      return __cellIndexBuilds.count;
     };
 
-    const upserts = 2_000;
-    const small = measure(100, upserts);
-    const large = measure(20_000, upserts);
+    const smallBuilds = buildsFor(100);
+    const largeBuilds = buildsFor(20_000);
 
-    // With O(1) lookup the only size-dependent term is the array slice; the
-    // lookup contributes nothing extra. A regression to findIndex would make the
-    // 200×-larger grid wildly slower per event. Allow generous headroom for the
-    // linear slice + GC jitter; an O(N²) findIndex regression blows past this.
-    expect(large).toBeLessThan(small * 60 + 250);
+    // 2,000 upserts cost at most one full index build each, regardless of size.
+    expect(smallBuilds).toBeLessThanOrEqual(1);
+    expect(largeBuilds).toBeLessThanOrEqual(1);
+    // And crucially: the count does NOT grow with the 200×-larger grid.
+    expect(largeBuilds).toBe(smallBuilds);
   });
 });
