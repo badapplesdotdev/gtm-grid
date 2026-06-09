@@ -13,16 +13,18 @@
  *     `setCellStatus` meter ONLY on a TERMINAL status (done/error), never on
  *     running. Deliveries are recorded with a 50-row prune (recordDelivery).
  *
- * Reuses the pure kernel `findUpsertRowId` (upsert match) from `@gtmgrid/cloud`;
- * the COALESCE cell merge + terminal meter are collapsed into the repo's single
- * `upsertCell` statement. Authz uses the same `MembershipService.requireMember`
- * port as the worked example.
+ * The upsert match is resolved by the repo's INDEXED `findRowByCellValue` point
+ * lookup (guarded by `isValidUpsertKeyValue` from `@gtmgrid/cloud`), replacing
+ * the old full-table `listCellsByTable` scan + JS filter. The COALESCE cell
+ * merge + terminal meter are collapsed into the repo's single `upsertCell`
+ * statement. Authz uses the same `MembershipService.requireMember` port as the
+ * worked example.
  */
 
 import {
   type CloudCellStatus,
   CredentialCryptoService,
-  findUpsertRowId,
+  isValidUpsertKeyValue,
   MembershipService,
   type NotAMemberError,
   type SecretMap,
@@ -538,13 +540,16 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           const now = Date.now();
           const incoming = args.cells[args.upsertKey];
 
-          // Server-side match: scan the upsert-key column's cells.
-          const keyCells = (
-            yield* repo.listCellsByTable(webhook.tableId)
-          )
-            .filter((c) => c.columnId === args.upsertKey)
-            .map((c) => ({ rowId: c.rowId, value: c.value }));
-          const matchedRowId = findUpsertRowId(keyCells, incoming);
+          // Server-side match via a single INDEXED point lookup on
+          // (tableId, columnId, value) over `cells_by_table_column` — no
+          // full-table cell load / JS filter. A non-scalar or empty incoming
+          // key can never identify an existing row (mirrors the pure
+          // `findUpsertRowId` kernel), so we skip the query and insert fresh.
+          const matchedRowId = isValidUpsertKeyValue(incoming)
+            ? yield* repo
+                .findRowByCellValue(webhook.tableId, args.upsertKey, incoming)
+                .pipe(Effect.map((o) => (o._tag === "Some" ? o.value : null)))
+            : null;
 
           let rowId: string;
           let existingByColumn: ReadonlyMap<string, string>;

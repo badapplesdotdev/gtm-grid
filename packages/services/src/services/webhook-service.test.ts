@@ -19,6 +19,7 @@ import {
 } from "@gtmgrid/cloud";
 import { Cause, Effect, Exit, Layer } from "effect";
 import { describe, expect, it } from "vitest";
+import { WebhookRepo } from "../repositories/webhook-repo.js";
 import { credentialCryptoTest } from "../credential-crypto-test.js";
 import type { WebhookDelivery } from "../repositories/webhook-delivery-repo.js";
 import { webhookDeliveryRepoLayer } from "../repositories/webhook-delivery-repo.js";
@@ -313,6 +314,128 @@ describe("WebhookService.upsertRow", () => {
       const f = Cause.failureOption(exit.cause);
       expect(f._tag === "Some" && f.value._tag).toBe("InvalidMappingError");
     }
+  });
+});
+
+describe("WebhookService.upsertRow — TRI-3270 indexed point lookup", () => {
+  // Regression: the upsert match must resolve the row with a single INDEXED
+  // lookup (repo.findRowByCellValue), NOT a full-table cell scan that loads
+  // every cell and filters in JS. We prove it on a multi-thousand-row table by
+  // poisoning `listCellsByTable` so any fallback to the old O(rows×cols) scan
+  // hard-fails, then asserting the correct row is still found.
+  const ROW_COUNT = 5000;
+  const TARGET_INDEX = 4242;
+
+  function bigGrid() {
+    const rows: GridRow[] = Array.from({ length: ROW_COUNT }, (_, i) => ({
+      id: `row-${i}`,
+      tableId: TABLE,
+      position: i,
+    }));
+    // One email cell per row; the target row holds the value we upsert on.
+    const cells: GridCell[] = rows.map((r, i) => ({
+      id: `cell-${i}`,
+      rowId: r.id,
+      columnId: COL_EMAIL,
+      value: `user-${i}@b.com`,
+      status: "done",
+      error: null,
+      updatedAt: 1,
+    }));
+    return { rows, cells };
+  }
+
+  /** Wrap the live fake repo so `listCellsByTable` is a tripwire. */
+  function noScanHarness(rows: GridRow[], cells: GridCell[]) {
+    const base = webhookRepoLayer({
+      webhooks: [{ ...webhook, mode: "upsert", upsertKey: COL_EMAIL }],
+      tables: [baseTable],
+      columns,
+      rows,
+      cells,
+      quotas: new Map(),
+      credentials: new Map(),
+    });
+    const guarded = Layer.effect(
+      WebhookRepo,
+      Effect.map(WebhookRepo, (repo) => ({
+        ...repo,
+        listCellsByTable: () =>
+          Effect.die(
+            new Error(
+              "TRI-3270 regression: upsertRow performed a full-table cell scan",
+            ),
+          ),
+      })),
+    ).pipe(Layer.provide(base));
+    const membership = MembershipService.Default.pipe(
+      Layer.provide(cloudIdentityLayer("member")),
+      Layer.provide(cloudMemberRepoLayer(memberships)),
+    );
+    const entitlement = EntitlementService.Default.pipe(
+      Layer.provide(
+        workspaceRepoLayer([
+          { id: WS, name: "WS", ownerId: "owner", currentPlanId: "team" },
+        ]),
+      ),
+    );
+    const layer = WebhookService.Default.pipe(
+      Layer.provide(guarded),
+      Layer.provide(webhookDeliveryRepoLayer([])),
+      Layer.provide(membership),
+      Layer.provide(CellMerge.Default),
+      Layer.provide(credentialCryptoTest()),
+      Layer.provide(entitlement),
+    );
+    const run = <A, E>(program: Effect.Effect<A, E, WebhookService>) =>
+      Effect.runPromiseExit(program.pipe(Effect.provide(layer)));
+    return { run };
+  }
+
+  it("finds the correct row on a 5000-row table without loading all cells", async () => {
+    const { rows, cells } = bigGrid();
+    const { run } = noScanHarness(rows, cells);
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.upsertRow({
+            webhookId: "wh-1",
+            upsertKey: COL_EMAIL,
+            cells: {
+              [COL_EMAIL]: `user-${TARGET_INDEX}@b.com`,
+              [COL_NAME]: "Patched",
+            },
+          }),
+        ),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      // Matched the existing target row (no new row inserted).
+      expect(exit.value.rowId).toBe(`row-${TARGET_INDEX}`);
+    }
+    expect(rows).toHaveLength(ROW_COUNT);
+    expect(cells.find((c) => c.columnId === COL_NAME)?.rowId).toBe(
+      `row-${TARGET_INDEX}`,
+    );
+  });
+
+  it("inserts a fresh row (no scan) when no indexed match exists", async () => {
+    const { rows, cells } = bigGrid();
+    const { run } = noScanHarness(rows, cells);
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.upsertRow({
+            webhookId: "wh-1",
+            upsertKey: COL_EMAIL,
+            cells: { [COL_EMAIL]: "brand-new@b.com" },
+          }),
+        ),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(rows).toHaveLength(ROW_COUNT + 1);
   });
 });
 

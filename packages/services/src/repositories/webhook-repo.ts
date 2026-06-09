@@ -18,6 +18,11 @@
  *     the service + procedures are exercised with NO live database.
  */
 
+import {
+  type UpsertScalar,
+  isValidUpsertKeyValue,
+  matchesUpsertKey,
+} from "@gtmgrid/cloud";
 import { schema } from "@gtmgrid/db";
 import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
@@ -242,6 +247,21 @@ export class WebhookRepo extends Context.Tag("WebhookRepo")<
       rowId: string,
       columnId: string,
     ) => Effect.Effect<Option.Option<GridCell>, WebhookRepoError>;
+    /**
+     * The `rowId` of the FIRST row in `tableId` whose cell in `columnId` holds
+     * `value`, or `None` — the indexed point lookup behind the webhook UPSERT
+     * match. Serves the same role the old `listCellsByTable(...).filter(...)`
+     * scan did, but resolves the match with a single `(tableId, columnId, value)`
+     * equality query over the `cells_by_table_column` index instead of loading
+     * every cell of the table and matching in JS (O(rows×cols) per record).
+     * Equality is jsonb-strict, so `1 !== "1"` and `true !== "true"`, mirroring
+     * the scalar `===` rule the pure `findUpsertRowId` kernel applied.
+     */
+    readonly findRowByCellValue: (
+      tableId: string,
+      columnId: string,
+      value: UpsertScalar,
+    ) => Effect.Effect<Option.Option<string>, WebhookRepoError>;
     /** Insert a row, returning its id. */
     readonly insertRow: (values: {
       readonly workspaceId: string;
@@ -635,6 +655,36 @@ export const WebhookRepoLive: Layer.Layer<WebhookRepo, never, DbClient> =
             catch: fail("cell lookup failed"),
           }),
 
+        findRowByCellValue: (tableId, columnId, value) =>
+          Effect.tryPromise({
+            try: async () => {
+              // Unsupported (non-scalar / empty) keys never identify a row —
+              // mirror the pure kernel and short-circuit before touching the DB.
+              if (!isValidUpsertKeyValue(value)) return Option.none<string>();
+              // Single indexed point lookup on (table_id, column_id) +
+              // jsonb-strict value equality, ordered for a deterministic FIRST
+              // match. No full-table cell load, no JS filter.
+              const matches = await db
+                .select({
+                  rowId: schema.cells.rowId,
+                  position: schema.rows.position,
+                })
+                .from(schema.cells)
+                .innerJoin(schema.rows, eq(schema.rows.id, schema.cells.rowId))
+                .where(
+                  and(
+                    eq(schema.cells.tableId, tableId),
+                    eq(schema.cells.columnId, columnId),
+                    eq(schema.cells.value, value),
+                  ),
+                )
+                .orderBy(asc(schema.rows.position), asc(schema.cells.rowId))
+                .limit(1);
+              return Option.fromNullable(matches[0]?.rowId ?? null);
+            },
+            catch: fail("upsert row lookup failed"),
+          }),
+
         insertRow: (values) =>
           Effect.tryPromise({
             try: async () => {
@@ -942,6 +992,28 @@ export const webhookRepoLayer = (fixtures: {
         Option.fromNullable(
           cells.find((c) => c.rowId === rowId && c.columnId === columnId),
         ),
+      ),
+    findRowByCellValue: (tableId, columnId, value) =>
+      Effect.succeed(
+        (() => {
+          if (!isValidUpsertKeyValue(value)) return Option.none<string>();
+          const candidates = cells
+            .filter((c) => c.columnId === columnId && matchesUpsertKey(c.value, value))
+            .map((c) => ({
+              rowId: c.rowId,
+              row: rows.find((r) => r.id === c.rowId),
+            }))
+            .filter(
+              (m): m is { rowId: string; row: GridRow } =>
+                m.row !== undefined && m.row.tableId === tableId,
+            )
+            .sort(
+              (a, b) =>
+                a.row.position - b.row.position ||
+                a.rowId.localeCompare(b.rowId),
+            );
+          return Option.fromNullable(candidates[0]?.rowId ?? null);
+        })(),
       ),
     insertRow: (values) =>
       Effect.sync(() => {
