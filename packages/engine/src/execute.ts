@@ -28,6 +28,14 @@ export interface EngineConfig {
   ai?: AiConfig;
   /** All connected AI providers (for model-based routing). */
   aiProviders?: AiConfig[];
+  /**
+   * Enforce the SSRF guard on every connector HTTP call this engine makes. Set
+   * true ONLY on server-side run paths (the Vercel webhook-enrichment worker),
+   * where a workspace member's custom manifest `baseUrl` is attacker-controlled
+   * shared-infra input. Local/sidecar runs leave it unset (the call runs on the
+   * user's own machine, so localhost/LAN connectors stay valid).
+   */
+  guardSsrf?: boolean;
 }
 
 /** A cell's state as observed during a run, for per-cell progress streaming. */
@@ -134,7 +142,12 @@ export class Engine {
             ? [this.config.ai]
             : [];
         return yield* Effect.promise(() =>
-          m.run(input, { secrets: cred?.secrets ?? {}, ai: this.config.ai, aiProviders }),
+          m.run(input, {
+            secrets: cred?.secrets ?? {},
+            ai: this.config.ai,
+            aiProviders,
+            guardSsrf: this.config.guardSsrf,
+          }),
         );
       }),
     );
@@ -383,7 +396,12 @@ export class Engine {
       : this.config.ai
         ? [this.config.ai]
         : [];
-    return m.runBatch(inputs, { secrets: cred?.secrets ?? {}, ai: this.config.ai, aiProviders });
+    return m.runBatch(inputs, {
+      secrets: cred?.secrets ?? {},
+      ai: this.config.ai,
+      aiProviders,
+      guardSsrf: this.config.guardSsrf,
+    });
   }
 }
 

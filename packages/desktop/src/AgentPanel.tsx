@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, API_BASE, type AgentSession, type AgentStatus } from "./api";
+import { abortInFlight, agentAbortKey } from "./agentAbort";
 
 type AgentKind = "claude" | "codex";
 
@@ -306,12 +307,29 @@ function ModelPicker({ agent, value, onChange }: { agent: AgentKind; value: stri
   );
 }
 
+/**
+ * The CLOUD context forwarded to the agent so its MCP table tools operate on the
+ * user's CLOUD (Supabase) project instead of local SQLite (TRI-3296). `null`
+ * whenever a cloud project is NOT active (local mode, or signed-out / no
+ * `VITE_API_URL`), in which case the agent keeps its local SQLite behaviour.
+ */
+export interface AgentCloudContext {
+  readonly apiUrl: string;
+  readonly token: string;
+  readonly workspaceId: string;
+  readonly projectId: string;
+  readonly tableId: string;
+}
+
 export default function AgentPanel({
   onGridChange,
   activeTable,
+  cloud,
 }: {
   onGridChange: () => void;
   activeTable: { name: string; columns: string[] } | null;
+  /** Cloud context when a cloud project is active; `null` in local mode. */
+  cloud?: AgentCloudContext | null;
 }) {
   const [agent, setAgent] = useState<AgentKind>("claude");
   // Which model each agent's CLI runs with ("" = the plan's default). Persisted.
@@ -405,8 +423,27 @@ export default function AgentPanel({
     setThreads((t) => ({ ...t, [agent]: fn(t[agent]) }));
 
   function stop() {
-    abortRef.current?.abort();
+    abortInFlight(abortRef);
   }
+
+  // Abort the in-flight turn when the panel UNMOUNTS (closing it) or when the
+  // active agent / table changes — otherwise the SSE fetch keeps streaming and
+  // the server keeps the spawned CLI (+ MCP tree) alive, leaking memory
+  // (TRI-3305). The empty effect body means the abort only runs on cleanup,
+  // never tearing down a turn just started against the current context.
+  //
+  // TRI-3306: depend on a STABLE SCALAR key derived from `agent` +
+  // `activeTable.name`, NOT the `activeTable`/`cloud` OBJECT identities.
+  // `activeTable` is passed as an inline object literal from App.tsx so its
+  // identity changes on every App re-render (e.g. react-query cloud polling);
+  // depending on it made the cleanup fire on every unrelated re-render and abort
+  // the live turn mid-stream. The cloud project name is reflected in
+  // `activeTable.name`, so the key still changes when the user actually switches
+  // context. See `agentAbortKey` for the keying rationale + regression test.
+  const abortKey = agentAbortKey(agent, activeTable);
+  useEffect(() => {
+    return () => abortInFlight(abortRef);
+  }, [abortKey]);
 
   async function send(preset?: string) {
     const text = (preset ?? input).trim();
@@ -430,6 +467,10 @@ export default function AgentPanel({
           model: models[agent] || undefined,
           sessionId: sessionRef.current[agent],
           context: activeTable ? { tableName: activeTable.name, columns: activeTable.columns } : undefined,
+          // CLOUD context (TRI-3296): forwarded only when a cloud project is
+          // active so the agent's table tools operate on Supabase; omitted in
+          // local mode so the agent keeps local-SQLite behaviour.
+          cloud: cloud ?? undefined,
         }),
         signal: controller.signal,
       });

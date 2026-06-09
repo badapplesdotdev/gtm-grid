@@ -8,7 +8,7 @@
  */
 
 import { schema } from "@gtmgrid/db";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, max } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
 import { cascadeDeleteColumn, type GridStore } from "./grid-store.js";
@@ -76,6 +76,14 @@ export class ColumnRepo extends Context.Tag("ColumnRepo")<
     readonly listByTable: (
       tableId: string,
     ) => Effect.Effect<readonly Column[], ColumnRepoError>;
+    /**
+     * The position for the NEXT appended column: `MAX(position) + 1`, or `0` when
+     * the table has no columns. Computed server-side (one `MAX` aggregate) so
+     * adding a column never loads every column just to find the tail.
+     */
+    readonly nextPosition: (
+      tableId: string,
+    ) => Effect.Effect<number, ColumnRepoError>;
     /** Insert a column and return its id. */
     readonly insert: (
       values: NewColumn,
@@ -136,6 +144,20 @@ export const ColumnRepoLive: Layer.Layer<ColumnRepo, never, DbClient> =
                 catch: fail("column list"),
               })
             : Effect.succeed([] as readonly Column[]),
+        nextPosition: (tableId) =>
+          !UUID_RE.test(tableId)
+            ? Effect.succeed(0)
+            : Effect.tryPromise({
+                try: async () => {
+                  const rows = await db
+                    .select({ max: max(schema.columns.position) })
+                    .from(schema.columns)
+                    .where(eq(schema.columns.tableId, tableId));
+                  const m = rows[0]?.max;
+                  return m === null || m === undefined ? 0 : Number(m) + 1;
+                },
+                catch: fail("column next position"),
+              }),
         insert: (values) =>
           Effect.tryPromise({
             try: async () => {
@@ -189,6 +211,12 @@ export const columnRepoLayer = (store: GridStore): Layer.Layer<ColumnRepo> =>
           .sort(
             (a, b) => a.position - b.position || a.createdAt - b.createdAt,
           ),
+      ),
+    nextPosition: (tableId) =>
+      Effect.succeed(
+        store.columns
+          .filter((c) => c.tableId === tableId)
+          .reduce((m, c) => Math.max(m, c.position + 1), 0),
       ),
     insert: (values) =>
       Effect.sync(() => {

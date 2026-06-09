@@ -95,10 +95,18 @@ export function parseWebhookRecordData(
   };
 }
 
-/** Build the engine AI config from the worker's environment (optional). */
+/**
+ * Build the engine config for the worker. `guardSsrf: true` is ALWAYS set here:
+ * this engine runs connector HTTP on SHARED Vercel infrastructure with a
+ * workspace member's custom manifest `baseUrl`, so the SSRF guard must block any
+ * URL that targets a private/reserved/metadata address. (The desktop sidecar runs
+ * on the user's own machine and intentionally leaves this off.)
+ */
 function engineConfig(): EngineConfig {
   const ai = aiConfigFromEnv();
-  return ai === undefined ? {} : { ai, aiProviders: [ai] };
+  return ai === undefined
+    ? { guardSsrf: true }
+    : { ai, aiProviders: [ai], guardSsrf: true };
 }
 
 /**

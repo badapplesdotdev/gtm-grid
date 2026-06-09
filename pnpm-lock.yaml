@@ -318,6 +318,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.0.4
         version: 1.29.0(zod@3.25.76)
+      effect:
+        specifier: ^3.21.3
+        version: 3.21.3
       zod:
         specifier: ^3.24.1
         version: 3.25.76

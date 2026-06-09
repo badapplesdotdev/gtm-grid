@@ -74,6 +74,73 @@ async function runColumnStream(
   return summary;
 }
 
+/**
+ * An HTTP error from a cloud push (TRI-3295's `/api/cloud/tables/push`) carrying
+ * the status + typed error code, so the UI can detect a 409 LinkConflictError
+ * (overwrite-needs-confirmation) and route into the destructive-overwrite confirm
+ * instead of treating it as a generic failure.
+ */
+export class CloudPushHttpError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+  constructor(message: string, status: number, code: string | null) {
+    super(message);
+    this.name = "CloudPushHttpError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+/** What a single table push did to the cloud project (mirrors the engine's PushResult). */
+export type PushOutcome = "created" | "overwritten";
+/** The structured result of a successful push (mirrors the engine's PushResult). */
+export interface PushTableResult {
+  outcome: PushOutcome;
+  cloudTableId: string;
+  rowCount: number;
+  columnCount: number;
+}
+/** Inputs the desktop must supply to the sidecar push route. */
+export interface PushTableArgs {
+  apiUrl: string;
+  token: string;
+  projectId: string;
+  localTableId: string;
+  confirmOverwrite?: boolean;
+}
+
+/**
+ * Push the named LOCAL table to the active cloud project via the sidecar's
+ * TRI-3295 route. Resolves the structured {@link PushTableResult} on 200, and
+ * throws a {@link CloudPushHttpError} (carrying status + code) otherwise — a 409
+ * means the server demands explicit overwrite confirmation.
+ */
+async function pushTable(args: PushTableArgs): Promise<PushTableResult> {
+  const res = await fetch(BASE + "/api/cloud/tables/push", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      apiUrl: args.apiUrl,
+      token: args.token,
+      projectId: args.projectId,
+      localTableId: args.localTableId,
+      confirmOverwrite: args.confirmOverwrite ?? false,
+    }),
+  });
+  if (!res.ok) {
+    const payload = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      code?: string | null;
+    };
+    throw new CloudPushHttpError(
+      payload.error ?? res.statusText,
+      res.status,
+      payload.code ?? null,
+    );
+  }
+  return res.json();
+}
+
 export type CellStatus = "empty" | "pending" | "running" | "done" | "error";
 
 export interface ProjectInfo {
@@ -307,6 +374,23 @@ export const api = {
     http<{ ok: boolean }>("/api/cells/delete", { method: "POST", body: JSON.stringify({ rowId, columnId }) }),
   connect: (extId: string, secrets: Record<string, string>, scope?: CredentialScope) =>
     http<{ ok: boolean }>(`/api/extensions/${extId}/connect`, { method: "POST", body: JSON.stringify({ secrets, scope }) }),
+  // Local→cloud one-way table push (TRI-3295). Throws CloudPushHttpError on a
+  // non-2xx (409 = overwrite-needs-confirmation) so the UI can warn before a
+  // destructive re-push.
+  pushTable,
+  // Server-backed sync links (TRI-3311): the authoritative `{ [localTableId]:
+  // cloudTableId }` map from the CURRENT project's SQLite meta. The desktop
+  // hydrates its synced-table status from this on load / project change instead
+  // of the (drift-prone) localStorage mirror — server wins on conflict.
+  cloudTableLinks: () => http<Record<string, string>>("/api/cloud/tables/links"),
+  // Auto-sync global setting (TRI-3298). Default OFF; reads/writes the global
+  // meta flag via the sidecar. Enabling is gated behind a confirm in the UI.
+  getAutoSync: () => http<{ enabled: boolean }>("/api/settings/auto-sync"),
+  setAutoSync: (enabled: boolean) =>
+    http<{ ok: boolean; enabled: boolean }>("/api/settings/auto-sync", {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    }),
   agents: () =>
     http<{ claude: AgentStatus; codex: AgentStatus }>("/api/agents"),
   connectAgent: (agent: "claude" | "codex", path?: string) =>

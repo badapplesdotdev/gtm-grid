@@ -23,6 +23,7 @@ export {
   type RetryOptions,
 } from "./http-retry.js";
 export { parseManifest, connectorFromManifest, manifestSchema, type ExtensionManifest } from "./connectors/manifest.js";
+export { assertPublicUrl, isBlockedIp, SsrfBlockedError, type SsrfOptions } from "./ssrf.js";
 export * from "./types.js";
 // Canonical Effect-TS service pattern (see docs/effect-conventions.md). Later
 // business-logic services (e.g. GridStore) follow this same Service + typed-error + Layer shape.
@@ -61,6 +62,30 @@ export {
   type CloudCredentialResolution,
   type CloudCredentialForRunResult,
 } from "./store-cloud.js";
+// The local→cloud one-way table push orchestrator (TRI-3295). A scoped Effect
+// service owning its own resilience (retry/jitter/timeout/rate-limit/bounded
+// concurrency) over a THIN, NON-retrying injected transport — so the engine
+// build stays backend-agnostic and the sidecar wires the tRPC grid surface.
+export {
+  CloudPushService,
+  TransientPushError,
+  FatalPushError,
+  CloudActionsLimitError,
+  LinkConflictError,
+  PUSH_ROW_CHUNK,
+  PUSH_MAX_CONCURRENCY,
+  PUSH_RATE_LIMIT,
+  PUSH_TIMEOUT,
+  PUSH_MAX_RETRIES,
+  type CloudPushTransport,
+  type CloudPushError,
+  type CloudPushConfig,
+  type CloudCellMap,
+  type CloudColumnSpec,
+  type PushOutcome,
+  type PushResult,
+  type PushTableInput,
+} from "./cloud-push.js";
 
 export interface OpenProjectResult {
   db: Db;

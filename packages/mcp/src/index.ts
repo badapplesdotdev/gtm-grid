@@ -1,24 +1,60 @@
 #!/usr/bin/env node
-// gtmgrid MCP server — exposes the local grid (tables, columns, connectors, runs)
-// as MCP tools over stdio, so Claude Code / Codex can build and run GTM pipelines.
+// gtmgrid MCP server — exposes the grid (tables, columns, connectors, runs) as
+// MCP tools over stdio, so Claude Code / Codex can build and run GTM pipelines.
 //
-// The project to operate on comes from GTMGRID_PROJECT (a name or .db path).
+// DATA SOURCE (TRI-3296): the project to operate on is resolved from the
+// environment by `selectGridEnv`. In LOCAL mode (the default, and every
+// pure-local build with no cloud context) the tools open the SQLite project
+// named by GTMGRID_PROJECT via `openProject` — byte-identical to before. In
+// CLOUD mode (GTMGRID_MODE=cloud + the threaded apiUrl/token/workspace/project/
+// table) the table tools operate on the user's CLOUD (Supabase) project through
+// the engine's cloud GridStore + the apps/web worker API. The mode is EXPLICIT
+// (read from GTMGRID_MODE), never guessed inside a tool, and the bearer token is
+// never logged.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { openProject, parseManifest, connectorFromManifest } from "@gtmgrid/engine";
+import { describeGridEnv, selectGridEnv } from "./cloud-context.js";
+import {
+  CloudToolUnsupportedError,
+  defaultCloudSourceDeps,
+  makeCloudSource,
+} from "./cloud-source.js";
 
-const projectRef = process.env.GTMGRID_PROJECT ?? "default";
-const { db, engine } = openProject(projectRef);
+const gridEnv = selectGridEnv(process.env);
+
+// LOCAL mode opens the SQLite project (and exposes its registry of connectors).
+// CLOUD mode opens NO SQLite file (the engine is Db-free, backed by the cloud
+// store); it still needs a registry for connector discovery + cloud runs, so we
+// reuse the cloud source's registry/config and skip `openProject` entirely.
+const local = gridEnv.mode === "local" ? openProject(gridEnv.project) : undefined;
+const cloudDeps = gridEnv.mode === "cloud" ? defaultCloudSourceDeps() : undefined;
+const cloudSource =
+  gridEnv.mode === "cloud" && cloudDeps
+    ? makeCloudSource(gridEnv.context, cloudDeps)
+    : undefined;
+
+// The registry the discovery + run_function tools read from. In local mode it is
+// the project's (with uploaded extensions loaded); in cloud mode it is the
+// default registry on the cloud deps.
+const registry = local ? local.engine.registry : cloudDeps!.registry;
 
 const server = new McpServer({ name: "gtmgrid", version: "0.0.1" });
 
 const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] });
-const tableOr = (ref: string) => {
-  const t = db.resolveTable(ref);
+
+/** LOCAL-only helper: resolve a table by id/name on the SQLite project. */
+const localTableOr = (ref: string) => {
+  const t = local!.db.resolveTable(ref);
   if (!t) throw new Error(`No table "${ref}". Use list_tables.`);
   return t;
+};
+
+/** Reject a write tool that the cloud worker boundary does not yet expose. */
+const cloudUnsupported = (tool: string): never => {
+  throw new CloudToolUnsupportedError(tool);
 };
 
 // --- Discovery: what enrichments/functions exist ---
@@ -30,7 +66,7 @@ server.tool(
   {},
   async () =>
     ok(
-      engine.registry.list().map((c) => ({
+      registry.list().map((c) => ({
         provider: c.id,
         name: c.name,
         category: c.category,
@@ -52,7 +88,7 @@ server.tool(
     const q = query.toLowerCase().trim();
     const terms = q.split(/\s+/).filter(Boolean);
     const hits: { fn: string; label: string; description: string; score: number }[] = [];
-    for (const c of engine.registry.list()) {
+    for (const c of registry.list()) {
       if (provider && c.id !== provider) continue;
       for (const m of c.methods) {
         const hay = `${m.id} ${m.label} ${m.description} ${c.id} ${c.name} ${c.category}`.toLowerCase();
@@ -73,7 +109,7 @@ server.tool(
   { provider: z.string().optional().describe("Restrict to one provider id (recommended)") },
   async ({ provider }) =>
     ok(
-      engine.registry
+      registry
         .list()
         .filter((c) => !provider || c.id === provider)
         .map((c) => ({
@@ -92,19 +128,21 @@ server.tool(
     ),
 );
 
-server.tool("list_tables", "List all tables in the project with their column and row counts.", {}, async () =>
-  ok(
-    db.listTables().map((t) => ({
+server.tool("list_tables", "List all tables in the project with their column and row counts.", {}, async () => {
+  if (cloudSource) return ok(await cloudSource.listTables());
+  return ok(
+    local!.db.listTables().map((t) => ({
       id: t.id,
       name: t.name,
-      columns: db.listColumns(t.id).length,
-      rows: db.listRows(t.id).length,
+      columns: local!.db.listColumns(t.id).length,
+      rows: local!.db.listRows(t.id).length,
     })),
-  ),
-);
+  );
+});
 
 server.tool("create_table", "Create a new table.", { name: z.string() }, async ({ name }) => {
-  const t = db.createTable(name);
+  if (cloudSource) return ok(await cloudSource.createTable(name));
+  const t = local!.db.createTable(name);
   return ok({ id: t.id, name: t.name });
 });
 
@@ -128,7 +166,20 @@ server.tool(
       .describe("'Only run if' JS boolean expression with {{Column}} refs, e.g. 'Boolean({{Email}})'. Falsy rows are skipped (no credits)."),
   },
   async ({ table, name, formula, fn, code, type, params, condition }) => {
-    const t = tableOr(table);
+    if (cloudSource) {
+      return ok(
+        await cloudSource.addColumn(table, {
+          name,
+          ...(formula !== undefined ? { formula } : {}),
+          ...(fn !== undefined ? { fn } : {}),
+          ...(code !== undefined ? { code } : {}),
+          ...(type !== undefined ? { type } : {}),
+          ...(params !== undefined ? { params } : {}),
+          ...(condition !== undefined ? { condition } : {}),
+        }),
+      );
+    }
+    const t = localTableOr(table);
     let provider: string | null = null;
     let method: string | null = null;
     let colParams: Record<string, unknown> = params ?? {};
@@ -140,12 +191,12 @@ server.tool(
     } else if (fn) {
       const [p, m] = fn.split(".");
       if (!p || !m) throw new Error("fn must be 'provider.method'");
-      if (!engine.registry.method(p, m)) throw new Error(`Unknown function ${fn}. Use list_functions.`);
+      if (!registry.method(p, m)) throw new Error(`Unknown function ${fn}. Use list_functions.`);
       provider = p;
       method = m;
     }
     const kind = provider || code ? "function" : "manual";
-    const col = db.createColumn({
+    const col = local!.db.createColumn({
       tableId: t.id,
       name,
       type: type ?? "text",
@@ -165,14 +216,15 @@ server.tool(
   "Add one or more rows. Each row is an object of { ColumnName: value } for manual columns, e.g. [{ Username: 'torvalds' }].",
   { table: z.string(), rows: z.array(z.record(z.string(), z.any())) },
   async ({ table, rows }) => {
-    const t = tableOr(table);
+    if (cloudSource) return ok(await cloudSource.addRows(table, rows));
+    const t = localTableOr(table);
     const created: string[] = [];
     for (const r of rows) {
-      const row = db.createRow(t.id);
+      const row = local!.db.createRow(t.id);
       for (const [colName, val] of Object.entries(r)) {
-        const col = db.resolveColumn(t.id, colName);
+        const col = local!.db.resolveColumn(t.id, colName);
         if (!col) throw new Error(`No column "${colName}" in "${t.name}"`);
-        db.setCell(row.id, col.id, { value: val, status: "done" });
+        local!.db.setCell(row.id, col.id, { value: val, status: "done" });
       }
       created.push(row.id);
     }
@@ -185,10 +237,11 @@ server.tool(
   "Run a function column over its rows (enriching cells). Returns how many ran and errored.",
   { table: z.string(), column: z.string(), force: z.boolean().optional(), concurrency: z.number().optional() },
   async ({ table, column, force, concurrency }) => {
-    const t = tableOr(table);
-    const col = db.resolveColumn(t.id, column);
+    if (cloudSource) return ok(await cloudSource.runColumn(table, column, { force, concurrency }));
+    const t = localTableOr(table);
+    const col = local!.db.resolveColumn(t.id, column);
     if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
-    const res = await engine.runColumn(col.id, { force, concurrency: concurrency ?? 5 });
+    const res = await local!.engine.runColumn(col.id, { force, concurrency: concurrency ?? 5 });
     return ok({ column: col.name, ...res });
   },
 );
@@ -198,10 +251,11 @@ server.tool(
   "Get a table's full contents: columns and every row's cell values + statuses.",
   { table: z.string() },
   async ({ table }) => {
-    const t = tableOr(table);
-    const cols = db.listColumns(t.id);
-    const rows = db.listRows(t.id).map((r) => {
-      const cells = db.rowCells(r.id);
+    if (cloudSource) return ok(await cloudSource.getTable(table));
+    const t = localTableOr(table);
+    const cols = local!.db.listColumns(t.id);
+    const rows = local!.db.listRows(t.id).map((r) => {
+      const cells = local!.db.rowCells(r.id);
       const obj: Record<string, unknown> = {};
       for (const c of cols) {
         const cell = cells.get(c.id);
@@ -218,9 +272,10 @@ server.tool(
   "Upload a JSON-manifest extension (a connector defined as data: baseUrl, auth, and HTTP methods). Its methods become callable via sdk.<id>.<method> and appear in list_functions. Pass the manifest JSON as a string.",
   { manifestJson: z.string().describe("The extension manifest as a JSON string.") },
   async ({ manifestJson }) => {
+    if (cloudSource) return cloudUnsupported("upload_extension");
     const manifest = parseManifest(manifestJson);
-    db.saveExtension(manifest as any);
-    engine.registry.add(connectorFromManifest(manifest));
+    local!.db.saveExtension({ ...manifest });
+    registry.add(connectorFromManifest(manifest));
     return ok({ id: manifest.id, name: manifest.name, methods: manifest.methods.map((m) => `${manifest.id}.${m.id}`) });
   },
 );
@@ -234,12 +289,14 @@ server.tool(
     input: z.record(z.string(), z.any()).optional().describe("Method inputs object"),
   },
   async ({ provider, method, input }) => {
-    if (!engine.registry.method(provider, method)) throw new Error(`Unknown function ${provider}.${method}. Use list_functions.`);
-    const result = await engine.dispatch(provider, method, input ?? {});
+    if (cloudSource) return cloudUnsupported("run_function");
+    if (!registry.method(provider, method)) throw new Error(`Unknown function ${provider}.${method}. Use list_functions.`);
+    const result = await local!.engine.dispatch(provider, method, input ?? {});
     return ok(result);
   },
 );
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error(`gtmgrid MCP server connected (project: ${projectRef})`);
+// Token-free banner: report the mode + project only — never the bearer token.
+console.error(`gtmgrid MCP server connected (${describeGridEnv(gridEnv)})`);

@@ -256,6 +256,52 @@ export function useCloudProjectMutations() {
   return { createProject, createTable, deleteTable };
 }
 
+/**
+ * Cache-refresh helpers used after a local→cloud sync push (TRI-3309 / TRI-3310).
+ *
+ * A successful push mutates the cloud project OUTSIDE the tRPC mutation hooks
+ * (it goes through the sidecar's push route, not `grid.createTable`), so the
+ * cloud-tables react-query is never invalidated and the "TABLES (CLOUD)" list
+ * stays stale ("No tables yet") until a manual reload (bug A). A re-sync also
+ * SWAPS the cloud table for a new id and deletes the old one, so the open
+ * table's `getTable` query must be invalidated too or the grid shows "this cloud
+ * table no longer exists" (bug E). These wrappers centralise those invalidations
+ * so App.tsx targets the exact same keys the hooks read.
+ */
+export function useCloudSyncRefresh() {
+  const qc = useQueryClient();
+  /**
+   * Invalidate the cloud-tables list so a freshly-pushed table appears without a
+   * reload. The push only knows the cloud project id; invalidate by key prefix so
+   * whichever project's list is loaded refetches (mirrors `deleteTable`).
+   */
+  const invalidateCloudTables = useCallback(
+    () =>
+      qc.invalidateQueries({
+        predicate: (query) =>
+          query.queryKey[0] === "grid" && query.queryKey[1] === "tables",
+      }),
+    [qc],
+  );
+  /**
+   * Invalidate the open cloud table's grid query (both the unpaged `getTable`
+   * and the paged `tablePaged` seeds) after a re-sync repoints to a NEW cloud
+   * table id, so the live grid re-seeds against the surviving table instead of
+   * the deleted old one.
+   */
+  const invalidateCloudTable = useCallback(
+    (tableId: string) =>
+      qc.invalidateQueries({
+        predicate: (query) =>
+          query.queryKey[0] === "grid" &&
+          (query.queryKey[1] === "table" || query.queryKey[1] === "tablePaged") &&
+          query.queryKey[2] === tableId,
+      }),
+    [qc],
+  );
+  return { invalidateCloudTables, invalidateCloudTable };
+}
+
 /** Map a column doc (from `getTable`) onto the desktop `Column`. */
 function toColumn(c: {
   _id: string;

@@ -122,3 +122,37 @@ export function isOriginAllowed(
     ),
   );
 }
+
+/** Hostnames that resolve to this machine's loopback interface. */
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+
+/**
+ * Whether a request's `Host` header names the loopback interface — the
+ * DNS-REBINDING defense. The sidecar binds to `127.0.0.1` only and is privileged
+ * (it runs connectors with the user's credentials and spawns their authenticated
+ * CLIs), so a browser must never be able to reach it under an attacker-controlled
+ * name. CORS alone is insufficient: an attacker page on `evil.com` can lower its
+ * DNS TTL and re-resolve `evil.com` to `127.0.0.1`, after which its fetches are
+ * "same-origin" and skip CORS — but the request still carries `Host: evil.com`
+ * (the `Host` header is browser-forbidden, so page JS cannot forge it). Rejecting
+ * any non-loopback `Host` therefore blocks rebinding on EVERY route, while the
+ * loopback bind keeps the legitimate desktop/dev callers (`127.0.0.1`/`localhost`)
+ * working. The optional `:port` is stripped; bracketed IPv6 (`[::1]:8787`) is
+ * unwrapped.
+ */
+export function isLoopbackHost(hostHeader: string | undefined): boolean {
+  if (hostHeader === undefined || hostHeader === "") return false;
+  let host = hostHeader.trim();
+  if (host.startsWith("[")) {
+    // Bracketed IPv6 literal: `[::1]:8787` -> `::1`.
+    const end = host.indexOf("]");
+    host = end === -1 ? host.slice(1) : host.slice(1, end);
+  } else {
+    // `host:port` -> `host` (a bare IPv6 has multiple colons and no brackets, but
+    // browsers always bracket IPv6 authorities, so a single trailing `:port` here
+    // is the only port form we see).
+    const colon = host.indexOf(":");
+    if (colon !== -1) host = host.slice(0, colon);
+  }
+  return LOOPBACK_HOSTS.has(host.toLowerCase());
+}
