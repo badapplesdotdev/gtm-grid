@@ -12,6 +12,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  createIncrementalTableView,
   deriveColumnKind,
   gridQueryKeys,
   patchGridCache,
@@ -297,5 +298,92 @@ describe("patchGridCache — realtime cache-patch integration (pure reducer)", (
       tableId: "t999",
     });
     expect(next).toEqual(snap);
+  });
+});
+
+describe("createIncrementalTableView — incremental derivation + row identity", () => {
+  /** A snapshot with `rows`×`cols` cells (every cell populated). */
+  const grid = (rows: number, cols: number): NonNullable<Snapshot> =>
+    ({
+      table: { _id: "t1", name: "Grid" },
+      columns: Array.from({ length: cols }, (_, c) => ({
+        _id: `c${c}`,
+        name: `C${c}`,
+        type: "text",
+        kind: "manual",
+        provider: null,
+        method: null,
+        code: null,
+        params: {},
+      })),
+      rows: Array.from({ length: rows }, (_, r) => ({ _id: `r${r}` })),
+      cells: Array.from({ length: rows }, (_, r) =>
+        Array.from({ length: cols }, (_, c) => ({
+          rowId: `r${r}`,
+          columnId: `c${c}`,
+          value: `${r}-${c}`,
+          status: "done",
+          error: null,
+        })),
+      ).flat(),
+    }) as NonNullable<Snapshot>;
+
+  it("produces the same FullTable shape as a one-shot derivation", () => {
+    const snap = grid(3, 2);
+    const a = createIncrementalTableView().derive(snap);
+    const b = createIncrementalTableView().derive(snap);
+    expect(a).toEqual(b);
+    expect(a.rows.map((r) => r.id)).toEqual(["r0", "r1", "r2"]);
+    expect(a.rows[0].cells.c1.value).toBe("0-1");
+  });
+
+  it("rebuilds ONLY the touched row; untouched rows keep their identity", () => {
+    const view = createIncrementalTableView();
+    const snap0 = grid(4, 2);
+    const v0 = view.derive(snap0);
+
+    // One cell.upsert on r1/c0, fed through the SAME reducer the live cache uses.
+    const snap1 = patchGridCache(snap0, {
+      type: "cell.upsert",
+      cell: {
+        rowId: "r1",
+        columnId: "c0",
+        value: "edited",
+        status: "done",
+        error: null,
+      },
+    });
+    const v1 = view.derive(snap1!);
+
+    // The changed row is a new object with the new value.
+    expect(v1.rows[1]).not.toBe(v0.rows[1]);
+    expect(v1.rows[1].cells.c0.value).toBe("edited");
+    // Every untouched row keeps referential identity (memo-friendly).
+    expect(v1.rows[0]).toBe(v0.rows[0]);
+    expect(v1.rows[2]).toBe(v0.rows[2]);
+    expect(v1.rows[3]).toBe(v0.rows[3]);
+    // The columns array identity is preserved when columns are unchanged.
+    expect(v1.columns).toBe(v0.columns);
+  });
+
+  it("keeps a row's identity when an UNRELATED row changes only", () => {
+    const view = createIncrementalTableView();
+    const snap0 = grid(3, 1);
+    const v0 = view.derive(snap0);
+    const snap1 = patchGridCache(snap0, {
+      type: "cell.upsert",
+      cell: {
+        rowId: "r2",
+        columnId: "c0",
+        value: "z",
+        status: "running",
+        error: null,
+      },
+    });
+    const v1 = view.derive(snap1!);
+    expect(v1.rows[0]).toBe(v0.rows[0]);
+    expect(v1.rows[1]).toBe(v0.rows[1]);
+    expect(v1.rows[2]).not.toBe(v0.rows[2]);
+    expect(v1.rows[2].cells.c0.status).toBe("running");
   });
 });
