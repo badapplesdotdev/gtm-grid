@@ -42,6 +42,10 @@ const CLOUD_REFS: CloudFunctionRefs = {
   getTable: "/api/worker/getTable",
   setCell: "/api/worker/setCell",
   setCellStatus: "/api/worker/setCellStatus",
+  // Batched cell writes: the cloud store buffers terminal writes and flushes
+  // them in chunks through this route (bounded in-flight + backpressure) so a
+  // large column run is not one HTTP POST per cell.
+  setCells: "/api/worker/setCells",
   getCredential: "/api/worker/getCredential",
 };
 

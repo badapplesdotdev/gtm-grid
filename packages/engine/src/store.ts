@@ -87,6 +87,24 @@ export interface GridStoreShape {
    * engine reads directly, preserving their exact behaviour.
    */
   readonly snapshot?: () => Effect.Effect<GridStoreShape, GridStoreError>;
+  /**
+   * Optional: when `true`, the engine SKIPS the interim `running` cell write at
+   * the start of each row (`runColumn`), writing only the terminal `done`/
+   * `error` result. A store sets this when an interim status stream is not worth
+   * the extra write — e.g. the cloud store, which batches terminal writes and
+   * would otherwise issue two HTTP POSTs per cell (running, then done). Cheap
+   * synchronous stores (SQLite) leave it unset so their live status stream is
+   * preserved exactly.
+   */
+  readonly coalesceRunningWrites?: boolean;
+  /**
+   * Optional: flush any writes the store has BUFFERED during a run. Batching
+   * stores (e.g. the cloud store) buffer `setCell` writes and flush them in
+   * chunks; the engine calls `drain()` once after the row loop to flush the
+   * final partial chunk and await all in-flight writes. Stores that write
+   * synchronously omit it (a no-op).
+   */
+  readonly drain?: () => Effect.Effect<void, GridStoreError>;
 }
 
 /**

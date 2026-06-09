@@ -387,6 +387,49 @@ describe("WebhookService.setCell metering", () => {
   });
 });
 
+describe("WebhookService.setCells (batched)", () => {
+  const rows: GridRow[] = [
+    { id: "row-1", tableId: TABLE, position: 0 },
+    { id: "row-2", tableId: TABLE, position: 1 },
+  ];
+
+  it("writes every cell in the array and meters once per terminal cell", async () => {
+    const quotas = new Map<string, WorkspaceQuota>();
+    const cells: GridCell[] = [];
+    const { run } = harness({ rows: [...rows], cells, quotas });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.setCells({
+            cells: [
+              {
+                rowId: "row-1",
+                columnId: COL_EMAIL,
+                hasValue: true,
+                value: "a",
+                status: "done",
+              },
+              {
+                rowId: "row-2",
+                columnId: COL_EMAIL,
+                hasValue: true,
+                value: "b",
+                status: "done",
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) expect(exit.value.written).toBe(2);
+    expect(cells).toHaveLength(2);
+    expect(cells.map((c) => c.value).sort()).toEqual(["a", "b"]);
+    // Two terminal writes => metered twice.
+    expect(quotas.get(WS)?.cloudActionsUsed).toBe(2);
+  });
+});
+
 describe("WebhookService.getCredential", () => {
   it("decrypts a shared credential round-trip", async () => {
     // Encrypt a secret map with the SAME test crypto layer, store the envelope.

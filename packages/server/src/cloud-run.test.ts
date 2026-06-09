@@ -7,10 +7,12 @@
  * without any real backend. We inject a FAKE cloud client (a `CloudClientLike`)
  * that:
  *   - serves `/api/worker/getTable` from an in-memory grid, and
- *   - records `/api/worker/setCell` / `/api/worker/setCellStatus` mutations.
+ *   - records `/api/worker/setCell` / `/api/worker/setCellStatus` / batched
+ *     `/api/worker/setCells` mutations.
  * Then we assert the engine produced the right `{ ran, errors }` and that the
- * final `setCell` carried the computed value + `done` status — i.e. the run
- * really flowed through the cloud store, not local SQLite.
+ * terminal cell write carried the computed value + `done` status (flushed via
+ * the batched setCells route, with the interim `running` write coalesced away)
+ * — i.e. the run really flowed through the cloud store, not local SQLite.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -136,6 +138,13 @@ function fakeConvex(
         upsert(args);
         return "cell-id";
       }
+      // Batched path: apply every cell write in the array (the cloud store
+      // flushes terminal writes here in chunks).
+      if (name === "/api/worker/setCells") {
+        const cells = (args.cells ?? []) as Array<Record<string, unknown>>;
+        for (const c of cells) upsert(c);
+        return { written: cells.length };
+      }
       throw new Error(`unexpected mutation ${name}`);
     },
     action: async (ref, args) => {
@@ -204,9 +213,18 @@ describe("runCloudColumn", () => {
     expect(r2Upper?.value).toBe("GRACE");
     expect(r2Upper?.status).toBe("done");
 
-    // Each row streamed a running status before its done write (live multiplayer).
+    // Terminal writes flush through the BATCHED setCells route — not one POST
+    // per cell — and the interim `running` write is coalesced away (no separate
+    // setCellStatus running write), so a cell is a single write.
     const statusCalls = mutations.filter((m) => m.name === "/api/worker/setCellStatus");
-    expect(statusCalls.map((m) => m.args.status)).toContain("running");
+    expect(statusCalls).toHaveLength(0);
+    const batchCalls = mutations.filter((m) => m.name === "/api/worker/setCells");
+    expect(batchCalls.length).toBeGreaterThan(0);
+    const writtenStatuses = batchCalls.flatMap((m) =>
+      ((m.args.cells ?? []) as Array<{ status?: string }>).map((c) => c.status),
+    );
+    expect(writtenStatuses).toEqual(["done", "done"]);
+    expect(writtenStatuses).not.toContain("running");
     // No local SQLite write happened — the unused db has no such table/column.
     expect(db.getCell("r1", "c_upper")).toBeUndefined();
   });
