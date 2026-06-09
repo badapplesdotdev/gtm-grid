@@ -21,6 +21,8 @@ import { CellContent, Icon } from "../App";
 import type { Cell } from "../api";
 import { VirtualGridBody } from "../VirtualGridBody";
 import { resolveRowHeight } from "../gridVirtual";
+import { useColumnWindow } from "../useColumnWindow";
+import { GridColSpacer } from "../GridColSpacer";
 import { runCloudColumn } from "./cloud-run";
 import { WebhookModal } from "./WebhookModal";
 import {
@@ -28,6 +30,13 @@ import {
   useCloudSession,
   useCloudTablePaged,
 } from "./useCloudGrid";
+
+/** Fixed cloud column width (px) — cloud columns are not resizable. */
+const CLOUD_COL_W = 180;
+/** Row-number gutter width (px) — matches `.col-row-num` in styles.css. */
+const CLOUD_GUTTER_W = 48;
+/** Trailing add/delete column width (px) — matches `.add-col-th`. */
+const CLOUD_ADD_COL_W = 44;
 
 interface CloudGridProps {
   /** The active cloud table to render, or `null` when none is selected. */
@@ -64,6 +73,20 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
   // virtualizer reads from, and the resolved per-density row height.
   const gridScrollRef = useRef<HTMLDivElement>(null);
   const rowHeight = resolveRowHeight();
+
+  // Column virtualization (TRI-3286): window the DATA columns horizontally so a
+  // cloud table with hundreds of columns mounts only the visible columns ×
+  // visible rows. Cloud columns are a fixed width (no resize). The gutter is NOT
+  // part of this window — it is the always-present sticky gutter cell rendered
+  // once below, so it is reserved exactly once and `spacers.left` is the first
+  // visible data column's offset (gutter excluded). The hook runs
+  // unconditionally (count 0 when no table) to keep hook order stable.
+  const cloudColumns = data?.columns ?? [];
+  const columnWindow = useColumnWindow({
+    count: cloudColumns.length,
+    scrollRef: gridScrollRef,
+    getColumnWidth: () => CLOUD_COL_W,
+  });
 
   // Tie page fetching to the virtualization viewport (TRI-3272): when the user
   // scrolls within ~10 row-heights of the bottom and another page exists, pull
@@ -239,15 +262,28 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
         </div>
       ) : (
         <div className="grid-wrap" ref={gridScrollRef} onScroll={onGridScroll}>
-          <table className="grid-table">
+          <table
+            className="grid-table"
+            style={{
+              // Reserve the gutter EXACTLY ONCE: gutter (rendered cell) + all
+              // data columns (the virtualizer's total) + the trailing add-col.
+              width:
+                CLOUD_GUTTER_W +
+                data.columns.length * CLOUD_COL_W +
+                CLOUD_ADD_COL_W,
+            }}
+          >
             <thead>
               <tr>
                 <th className="grid-th row-num-th col-row-num" />
-                {data.columns.map((col) => (
+                <GridColSpacer side="left" width={columnWindow.spacers.left} as="th" />
+                {columnWindow.virtualColumns.map((vc) => {
+                  const col = data.columns[vc.index];
+                  return (
                   <th
                     key={col.id}
                     className="grid-th"
-                    style={{ width: 180, minWidth: 80 }}
+                    style={{ width: CLOUD_COL_W, minWidth: 80 }}
                     onContextMenu={(e) => {
                       e.preventDefault();
                       deleteColumn(col.id as Id<"columns">);
@@ -277,7 +313,9 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
                       )}
                     </div>
                   </th>
-                ))}
+                  );
+                })}
+                <GridColSpacer side="right" width={columnWindow.spacers.right} as="th" />
                 <th className="grid-th add-col-th">
                   <button
                     className="add-col-btn"
@@ -295,11 +333,16 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
               <tbody>
                 <tr>
                   <td className="grid-td row-num-td" />
-                  {data.columns.map((col) => (
+                  <GridColSpacer side="left" width={columnWindow.spacers.left} />
+                  {columnWindow.virtualColumns.map((vc) => {
+                    const col = data.columns[vc.index];
+                    return (
                     <td key={col.id} className="grid-td">
                       <div className="cell-wrap"><span className="cell-empty">—</span></div>
                     </td>
-                  ))}
+                    );
+                  })}
+                  <GridColSpacer side="right" width={columnWindow.spacers.right} />
                   <td className="grid-td" />
                 </tr>
               </tbody>
@@ -309,10 +352,13 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
                 scrollRef={gridScrollRef}
                 rowHeight={rowHeight}
                 colSpan={data.columns.length + 2}
-                renderRow={(row, idx) => (
+                columnWindow={columnWindow}
+                renderRow={(row, idx, cw) => (
                   <tr key={row.id} className="grid-tr">
                     <td className="grid-td row-num-td">{idx + 1}</td>
-                    {data.columns.map((col) => {
+                    <GridColSpacer side="left" width={cw.spacers.left} />
+                    {cw.virtualColumns.map((vc) => {
+                      const col = data.columns[vc.index];
                       const cell: Cell | undefined = row.cells[col.id];
                       return (
                         <td key={col.id} className="grid-td">
@@ -336,6 +382,7 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
                         </td>
                       );
                     })}
+                    <GridColSpacer side="right" width={cw.spacers.right} />
                     <td className="grid-td">
                       <button
                         className="th-run-btn"
