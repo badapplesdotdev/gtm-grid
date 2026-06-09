@@ -4,6 +4,7 @@
 
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { fetchWithRetry } from "../http-retry.js";
 import type { Connector, ConnectorMethod, MethodContext } from "../types.js";
 
 export interface HttpMethodDef {
@@ -70,7 +71,10 @@ export function defineHttpConnector(def: HttpConnectorDef): Connector {
         init.body = JSON.stringify(m.body ? m.body(input) : input);
       }
 
-      const resp = await fetch(url, init);
+      // Retry transient upstream failures (429/503/5xx) with exponential backoff
+      // + jitter, honouring Retry-After, and abort any hung request via a per-
+      // attempt timeout. 402/other-4xx fall through unretried for the throw below.
+      const resp = await fetchWithRetry(url, init);
       const text = await resp.text();
       let data: unknown;
       try {

@@ -25,6 +25,7 @@ import {
   Engine,
   cloudGridStoreShape,
   defaultRegistry,
+  fetchWithRetry,
   Registry,
   type CloudClientLike,
   type CloudFunctionRefs,
@@ -117,7 +118,13 @@ export function makeWorkerClient(
     if (typeof ref !== "string") {
       throw new Error(`Unsupported worker function ref: ${String(ref)}`);
     }
-    const res = await fetch(`${base}${ref}`, {
+    // Retry transient worker failures (429/503/5xx) with exponential backoff +
+    // jitter, honour Retry-After, and abort a hung worker via a per-attempt
+    // timeout so it cannot pin this run forever. A 402 (CloudActionsLimitError —
+    // see the worker boundary's `workerErrorStatus`) is FATAL: the helper does
+    // not retry it, and we surface it with its tag so the run stops rather than
+    // hammering an exhausted quota. Other 4xx are likewise fatal (no retry).
+    const res = await fetchWithRetry(`${base}${ref}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -128,8 +135,11 @@ export function makeWorkerClient(
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      // The apps/web worker boundary maps CloudActionsLimitError → HTTP 402.
+      // Tag the thrown error so callers/engine can recognise the fatal stop.
+      const tag = res.status === 402 ? "CloudActionsLimitError: " : "";
       throw new Error(
-        `Worker route ${ref} failed: ${res.status} ${res.statusText} ${text}`.trim(),
+        `${tag}Worker route ${ref} failed: ${res.status} ${res.statusText} ${text}`.trim(),
       );
     }
     const text = await res.text();

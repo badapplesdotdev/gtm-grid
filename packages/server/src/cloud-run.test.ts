@@ -18,7 +18,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   Db,
   Registry,
@@ -27,6 +27,7 @@ import {
   type CloudClientLike,
 } from "@gtmgrid/engine";
 import {
+  makeWorkerClient,
   resolveWorkspaceId,
   runCloudColumn,
   type CloudRunDeps,
@@ -428,5 +429,55 @@ describe("resolveWorkspaceId — metadata-only fast path (TRI-3273)", () => {
     // The regression: it must hit the metadata-only ref and NEVER the full grid.
     expect(queryRefs).toContain("/api/worker/getTableMeta");
     expect(queryRefs).not.toContain("/api/worker/getTable");
+  });
+});
+
+describe("makeWorkerClient — transient retry + 402 fatal (TRI-3276)", () => {
+  const OLD_SECRET = process.env.WEBHOOK_WORKER_SECRET;
+
+  beforeEach(() => {
+    process.env.WEBHOOK_WORKER_SECRET = "test-secret";
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (OLD_SECRET === undefined) delete process.env.WEBHOOK_WORKER_SECRET;
+    else process.env.WEBHOOK_WORKER_SECRET = OLD_SECRET;
+  });
+
+  /** A scripted global fetch returning the given Responses in order. */
+  function scriptFetch(steps: Response[]): { calls: number } {
+    const state = { calls: 0 };
+    const queue = [...steps];
+    vi.stubGlobal("fetch", async () => {
+      state.calls++;
+      const next = queue.shift();
+      if (next === undefined) throw new Error("fetch over-called");
+      return next;
+    });
+    return state;
+  }
+
+  it("retries a 503 then returns the eventual success payload", async () => {
+    const state = scriptFetch([
+      new Response("{}", { status: 503 }),
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    ]);
+    const client = makeWorkerClient("https://app.test", "jwt");
+    const out = await client.query("/api/worker/getTableMeta", { tableId: "t1" });
+    expect(out).toEqual({ ok: true });
+    expect(state.calls).toBe(2);
+  });
+
+  it("does NOT retry a 402 and surfaces it as a CloudActionsLimitError fatal stop", async () => {
+    const state = scriptFetch([
+      new Response("over quota", { status: 402, statusText: "Payment Required" }),
+      new Response("{}", { status: 200 }),
+    ]);
+    const client = makeWorkerClient("https://app.test", "jwt");
+    await expect(
+      client.mutation("/api/worker/setCells", { cells: [] }),
+    ).rejects.toThrow("CloudActionsLimitError");
+    // Exactly one attempt — a 402 is fatal, never retried.
+    expect(state.calls).toBe(1);
   });
 });
