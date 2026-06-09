@@ -7,10 +7,12 @@
  * without any real backend. We inject a FAKE cloud client (a `CloudClientLike`)
  * that:
  *   - serves `/api/worker/getTable` from an in-memory grid, and
- *   - records `/api/worker/setCell` / `/api/worker/setCellStatus` mutations.
+ *   - records `/api/worker/setCell` / `/api/worker/setCellStatus` / batched
+ *     `/api/worker/setCells` mutations.
  * Then we assert the engine produced the right `{ ran, errors }` and that the
- * final `setCell` carried the computed value + `done` status — i.e. the run
- * really flowed through the cloud store, not local SQLite.
+ * terminal cell write carried the computed value + `done` status (flushed via
+ * the batched setCells route, with the interim `running` write coalesced away)
+ * — i.e. the run really flowed through the cloud store, not local SQLite.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -24,7 +26,11 @@ import {
   type Connector,
   type CloudClientLike,
 } from "@gtmgrid/engine";
-import { runCloudColumn, type CloudRunDeps } from "./cloud-run.js";
+import {
+  resolveWorkspaceId,
+  runCloudColumn,
+  type CloudRunDeps,
+} from "./cloud-run.js";
 
 let dir: string;
 let db: Db;
@@ -93,9 +99,11 @@ function fakeConvex(
   client: CloudClientLike;
   mutations: RecordedMutation[];
   credentialCalls: Array<Record<string, unknown>>;
+  queryRefs: string[];
 } {
   const mutations: RecordedMutation[] = [];
   const credentialCalls: Array<Record<string, unknown>> = [];
+  const queryRefs: string[] = [];
 
   const upsert = (args: Record<string, unknown>) => {
     const rowId = args.rowId as string;
@@ -117,6 +125,12 @@ function fakeConvex(
   const client: CloudClientLike = {
     query: async (ref) => {
       const name = String(ref);
+      queryRefs.push(name);
+      if (name === "/api/worker/getTableMeta") {
+        // The metadata-only fast path: resolveWorkspaceId reads ONLY the table's
+        // workspace id from here — no columns/rows/cells (TRI-3273).
+        return { table: { id: "t1", workspaceId: "wks_1" } };
+      }
       if (name === "/api/worker/getTable") {
         return {
           // The run resolves the workspace it should decrypt shared creds for
@@ -136,6 +150,13 @@ function fakeConvex(
         upsert(args);
         return "cell-id";
       }
+      // Batched path: apply every cell write in the array (the cloud store
+      // flushes terminal writes here in chunks).
+      if (name === "/api/worker/setCells") {
+        const cells = (args.cells ?? []) as Array<Record<string, unknown>>;
+        for (const c of cells) upsert(c);
+        return { written: cells.length };
+      }
       throw new Error(`unexpected mutation ${name}`);
     },
     action: async (ref, args) => {
@@ -149,7 +170,7 @@ function fakeConvex(
     },
   };
 
-  return { client, mutations, credentialCalls };
+  return { client, mutations, credentialCalls, queryRefs };
 }
 
 /** Deps whose `makeClient` ignores url/token and returns the given fake client. */
@@ -204,9 +225,18 @@ describe("runCloudColumn", () => {
     expect(r2Upper?.value).toBe("GRACE");
     expect(r2Upper?.status).toBe("done");
 
-    // Each row streamed a running status before its done write (live multiplayer).
+    // Terminal writes flush through the BATCHED setCells route — not one POST
+    // per cell — and the interim `running` write is coalesced away (no separate
+    // setCellStatus running write), so a cell is a single write.
     const statusCalls = mutations.filter((m) => m.name === "/api/worker/setCellStatus");
-    expect(statusCalls.map((m) => m.args.status)).toContain("running");
+    expect(statusCalls).toHaveLength(0);
+    const batchCalls = mutations.filter((m) => m.name === "/api/worker/setCells");
+    expect(batchCalls.length).toBeGreaterThan(0);
+    const writtenStatuses = batchCalls.flatMap((m) =>
+      ((m.args.cells ?? []) as Array<{ status?: string }>).map((c) => c.status),
+    );
+    expect(writtenStatuses).toEqual(["done", "done"]);
+    expect(writtenStatuses).not.toContain("running");
     // No local SQLite write happened — the unused db has no such table/column.
     expect(db.getCell("r1", "c_upper")).toBeUndefined();
   });
@@ -371,5 +401,32 @@ describe("runCloudColumn — workspace-shared credentials (#18)", () => {
     expect(grid.cells.find((c) => c.rowId === "r1" && c.columnId === "c_key")?.value).toBe(
       "<none>",
     );
+  });
+});
+
+describe("resolveWorkspaceId — metadata-only fast path (TRI-3273)", () => {
+  /** An empty grid; resolveWorkspaceId must never need its cells. */
+  const emptyGrid = () => ({
+    columns: [] as Array<Record<string, unknown>>,
+    rows: [] as Array<Record<string, unknown>>,
+    cells: [] as Array<{
+      rowId: string;
+      columnId: string;
+      value: unknown;
+      status: string;
+      error: string | null;
+      updatedAt: number | null;
+    }>,
+  });
+
+  it("reads the workspace id from getTableMeta WITHOUT calling the full-grid getTable", async () => {
+    const { client, queryRefs } = fakeConvex(emptyGrid());
+
+    const workspaceId = await resolveWorkspaceId(client, "t1");
+
+    expect(workspaceId).toBe("wks_1");
+    // The regression: it must hit the metadata-only ref and NEVER the full grid.
+    expect(queryRefs).toContain("/api/worker/getTableMeta");
+    expect(queryRefs).not.toContain("/api/worker/getTable");
   });
 });

@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
-import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource } from "./api";
+import { useState, useEffect, useCallback, useMemo, useRef, memo, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource, type CellProgressEvent } from "./api";
 import AgentPanel from "./AgentPanel";
 import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
@@ -36,6 +36,8 @@ import { ImportCsvModal } from "./ImportCsvModal";
 import { SignalsModal, type SignalsCloud } from "./SignalsModal";
 import type { ImportWriter } from "./csvImport";
 import type { Id } from "./cloud/ids";
+import { VirtualGridBody } from "./VirtualGridBody";
+import { resolveRowHeight } from "./gridVirtual";
 import "./styles.css";
 
 // What the main area is showing.
@@ -148,7 +150,7 @@ const ExpandIcon = () => (
   </svg>
 );
 
-export function CellContent({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running }: {
+type CellContentProps = {
   cell: Cell | undefined;
   col: Column;
   onEdit: (value: string) => void;
@@ -156,7 +158,9 @@ export function CellContent({ cell, col, onEdit, onOpenDetails, onExpand, onRunC
   onExpand?: (anchor: { left: number; top: number; width: number }) => void;
   onRunCell?: () => void;
   running?: boolean;
-}) {
+};
+
+function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running }: CellContentProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -268,6 +272,34 @@ export function CellContent({ cell, col, onEdit, onOpenDetails, onExpand, onRunC
     </div>
   );
 }
+
+/**
+ * Memoized cell renderer. A grid has thousands of cells; without this, any App
+ * state change (e.g. a single cell edit, an unrelated panel toggle) re-renders
+ * EVERY mounted cell. The comparator skips re-render unless this cell's own
+ * data changed: its value/status/error, its `running` flag, or its `col`
+ * identity. Callback props (`onEdit`, `onRunCell`, …) are intentionally NOT
+ * compared — call sites create fresh closures per render, so comparing them
+ * would defeat memoization. They are safe to ignore because each closure only
+ * captures the cell's stable `row.id`/`col.id`, so a stale closure still writes
+ * the correct cell. `running` and `onRunCell`-presence are the only render-
+ * affecting inputs derived from those props, and both are compared.
+ */
+function cellPropsEqual(prev: CellContentProps, next: CellContentProps): boolean {
+  return (
+    prev.col === next.col &&
+    prev.running === next.running &&
+    prev.cell?.value === next.cell?.value &&
+    prev.cell?.status === next.cell?.status &&
+    prev.cell?.error === next.cell?.error &&
+    // Run/expand/details affordances are gated on whether the handler exists.
+    !prev.onRunCell === !next.onRunCell &&
+    !prev.onExpand === !next.onExpand &&
+    !prev.onOpenDetails === !next.onOpenDetails
+  );
+}
+
+export const CellContent = memo(CellContentInner, cellPropsEqual);
 
 // ─── Expanded cell editor ─────────────────────────────────
 // A popover for viewing / editing long cell content (transcripts, summaries…)
@@ -886,11 +918,16 @@ export default function App() {
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try { return (localStorage.getItem("gtmgrid:theme") as "light" | "dark") || "light"; } catch { return "light"; }
   });
+  // Row-virtualization plumbing (TRI-3267): the scroll container ref the
+  // virtualizer reads, and the resolved per-density row height it estimates with.
+  const gridScrollRef = useRef<HTMLDivElement>(null);
+  const [rowHeight, setRowHeight] = useState(resolveRowHeight);
   useEffect(() => {
     const root = document.documentElement;
     root.setAttribute("data-theme", theme);
     root.setAttribute("data-density", "compact");
     root.setAttribute("data-accent", "green");
+    setRowHeight(resolveRowHeight());
     try { localStorage.setItem("gtmgrid:theme", theme); } catch { /* ignore */ }
   }, [theme]);
 
@@ -1015,6 +1052,23 @@ export default function App() {
     if (selectedTableId) loadTable(selectedTableId);
     else setTableData(null);
   }, [selectedTableId, loadTable]);
+
+  // Patch a single cell in place from a streamed run progress event. Keeps the
+  // rest of the grid untouched so a local run updates only the cells that
+  // actually changed (no full setTableData replacement / loadTable refetch).
+  // Ignores events for a table other than the one currently loaded.
+  const patchCell = useCallback((tableId: string, e: CellProgressEvent) => {
+    setTableData((cur) => {
+      if (!cur || cur.id !== tableId) return cur;
+      let touched = false;
+      const rows = cur.rows.map((row) => {
+        if (row.id !== e.rowId) return row;
+        touched = true;
+        return { ...row, cells: { ...row.cells, [e.columnId]: e.cell } };
+      });
+      return touched ? { ...cur, rows } : cur;
+    });
+  }, []);
 
   // A freshly-created social-signal table populates asynchronously (Trigify
   // scrapes results over ~10-60s). Poll until rows land, showing a skeleton.
@@ -1223,35 +1277,39 @@ export default function App() {
 
   const runAll = async () => {
     if (!tableData) return;
+    const tableId = tableData.id;
     const fnCols = tableData.columns.filter(c => c.kind === "function");
     if (!fnCols.length) return;
     setRunProgress({ current: 0, total: fnCols.length });
     for (let i = 0; i < fnCols.length; i++) {
       setRunProgress({ current: i + 1, total: fnCols.length });
-      try { await api.runColumn(fnCols[i].id); } catch { /* continue */ }
+      // Stream per-cell progress and patch each cell as it lands — no full refetch.
+      try { await api.runColumnStream(fnCols[i].id, (e) => patchCell(tableId, e)); } catch { /* continue */ }
     }
     setRunProgress(null);
-    await loadTable(tableData.id);
   };
 
   // ── Run single column ──────────────────────
 
   const runColumn = async (colId: string) => {
+    const tableId = selectedTableId;
+    if (!tableId) return;
     setRunningColId(colId);
-    try { await api.runColumn(colId); } catch { /* ignore */ }
+    // Patch cells in place as the sidecar streams per-cell progress (SSE),
+    // instead of refetching+replacing the whole grid after the run.
+    try { await api.runColumnStream(colId, (e) => patchCell(tableId, e)); } catch { /* ignore */ }
     setRunningColId(null);
-    if (selectedTableId) await loadTable(selectedTableId);
   };
 
   // ── Run a single cell (this row × this function column) ──
   const runCell = async (rowId: string, colId: string) => {
+    const tableId = selectedTableId;
+    if (!tableId) return;
     const key = `${rowId}:${colId}`;
     setRunningCells(s => new Set(s).add(key));
-    try { await api.runColumn(colId, { force: true, rowIds: [rowId] }); } catch { /* ignore */ }
-    if (selectedTableId) {
-      const updated = await api.table(selectedTableId);
-      setTableData(updated);
-    }
+    try {
+      await api.runColumnStream(colId, (e) => patchCell(tableId, e), { force: true, rowIds: [rowId] });
+    } catch { /* ignore */ }
     setRunningCells(s => { const n = new Set(s); n.delete(key); return n; });
   };
 
@@ -2033,7 +2091,7 @@ export default function App() {
             <p className="empty-sub">Trigify is scraping your signal — first results can take a few minutes. They'll appear here automatically, and keep updating on your schedule.</p>
           </div>
         ) : tableData ? (
-          <div className="grid-wrap">
+          <div className="grid-wrap" ref={gridScrollRef}>
             <table
               className="grid-table"
               style={{ width: GUTTER_W + tableData.columns.reduce((s, c) => s + colW(c.id), 0) + ADD_COL_W }}
@@ -2087,8 +2145,8 @@ export default function App() {
                   </th>
                 </tr>
               </thead>
-              <tbody>
-                {tableData.rows.length === 0 ? (
+              {tableData.rows.length === 0 ? (
+                <tbody>
                   <tr>
                     <td className="grid-td row-num-td" />
                     {tableData.columns.map(col => (
@@ -2098,57 +2156,65 @@ export default function App() {
                     ))}
                     <td className="grid-td" />
                   </tr>
-                ) : tableData.rows.map((row, idx) => (
-                  <tr key={row.id} className="grid-tr">
-                    <td
-                      className="grid-td row-num-td"
-                      onContextMenu={(e) => openCtx(e, [{ label: "Delete row", danger: true, onClick: () => deleteRow(row.id) }])}
-                    >
-                      {idx + 1}
-                    </td>
-                    {tableData.columns.map(col => {
-                      const cell: Cell | undefined = row.cells[col.id];
-                      return (
-                        <td
-                          key={col.id}
-                          className="grid-td"
-                          onContextMenu={(e) =>
-                            openCtx(e, [
-                              { label: "Clear cell", onClick: () => clearCell(row.id, col.id) },
-                              { label: "Delete row", danger: true, onClick: () => deleteRow(row.id) },
-                            ])
-                          }
-                        >
-                          <CellContent
-                            cell={cell}
-                            col={col}
-                            onEdit={v => setCell(row.id, col.id, v)}
-                            onOpenDetails={() =>
-                              setDetail({
-                                columnName: col.name,
-                                value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
-                              })
+                </tbody>
+              ) : (
+                <VirtualGridBody
+                  rows={tableData.rows}
+                  scrollRef={gridScrollRef}
+                  rowHeight={rowHeight}
+                  colSpan={tableData.columns.length + 2}
+                  renderRow={(row, idx) => (
+                    <tr key={row.id} className="grid-tr">
+                      <td
+                        className="grid-td row-num-td"
+                        onContextMenu={(e) => openCtx(e, [{ label: "Delete row", danger: true, onClick: () => deleteRow(row.id) }])}
+                      >
+                        {idx + 1}
+                      </td>
+                      {tableData.columns.map(col => {
+                        const cell: Cell | undefined = row.cells[col.id];
+                        return (
+                          <td
+                            key={col.id}
+                            className="grid-td"
+                            onContextMenu={(e) =>
+                              openCtx(e, [
+                                { label: "Clear cell", onClick: () => clearCell(row.id, col.id) },
+                                { label: "Delete row", danger: true, onClick: () => deleteRow(row.id) },
+                              ])
                             }
-                            onExpand={(anchor) =>
-                              setExpandCell({
-                                rowId: row.id,
-                                colId: col.id,
-                                columnName: col.name,
-                                value: cell?.value != null ? String(cell.value) : "",
-                                editable: col.kind === "manual",
-                                anchor,
-                              })
-                            }
-                            onRunCell={col.kind === "function" ? () => runCell(row.id, col.id) : undefined}
-                            running={runningCells.has(`${row.id}:${col.id}`)}
-                          />
-                        </td>
-                      );
-                    })}
-                    <td className="grid-td" />
-                  </tr>
-                ))}
-              </tbody>
+                          >
+                            <CellContent
+                              cell={cell}
+                              col={col}
+                              onEdit={v => setCell(row.id, col.id, v)}
+                              onOpenDetails={() =>
+                                setDetail({
+                                  columnName: col.name,
+                                  value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
+                                })
+                              }
+                              onExpand={(anchor) =>
+                                setExpandCell({
+                                  rowId: row.id,
+                                  colId: col.id,
+                                  columnName: col.name,
+                                  value: cell?.value != null ? String(cell.value) : "",
+                                  editable: col.kind === "manual",
+                                  anchor,
+                                })
+                              }
+                              onRunCell={col.kind === "function" ? () => runCell(row.id, col.id) : undefined}
+                              running={runningCells.has(`${row.id}:${col.id}`)}
+                            />
+                          </td>
+                        );
+                      })}
+                      <td className="grid-td" />
+                    </tr>
+                  )}
+                />
+              )}
             </table>
           </div>
         ) : null}

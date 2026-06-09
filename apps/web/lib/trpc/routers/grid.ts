@@ -29,6 +29,25 @@ const columnType = z.enum(["text", "number", "boolean", "date", "json"]);
 /** A column kind — manual cell or function column (mirrors `columnKind`). */
 const columnKind = z.enum(["manual", "function"]);
 
+/**
+ * A keyset page cursor for {@link gridRouter.getTablePage} — the
+ * `(position, createdAt, id)` of the last row of the prior page. Mirrors the
+ * service's `RowCursor`. `null`/omitted requests the first page.
+ */
+const rowCursor = z.object({
+  position: z.number(),
+  createdAt: z.number(),
+  id: z.string(),
+});
+
+/**
+ * Max rows accepted in one {@link gridRouter.addRowsWithCells} call. Bounds the
+ * payload so a wide CSV (rows × columns cells) stays well under Postgres' 65535
+ * bind-parameter cap even before cell-repo chunks each statement. The desktop
+ * imports in chunks far smaller than this, so the cap only fires on abuse.
+ */
+const MAX_ROWS_PER_IMPORT = 5000;
+
 export const gridRouter = router({
   // ── projects ────────────────────────────────────────────────────────────
 
@@ -85,6 +104,34 @@ export const gridRouter = router({
         Effect.gen(function* () {
           const svc = yield* GridService;
           return yield* svc.getTable(input.tableId);
+        }),
+      ),
+    ),
+
+  /**
+   * One PAGE of a table's grid by ROW POSITION (keyset). Returns table +
+   * columns + only this page's rows/cells + a `nextCursor` (`null` on the last
+   * page). The cloud grid loads pages lazily so no single response carries the
+   * whole grid. Members-only. (TRI-3272.)
+   */
+  getTablePage: protectedProcedure
+    .input(
+      z.object({
+        tableId: z.string().min(1),
+        cursor: rowCursor.nullish(),
+        limit: z.number().int().positive().max(1000).optional(),
+      }),
+    )
+    .query(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* GridService;
+          return yield* svc.getTablePage({
+            tableId: input.tableId,
+            cursor: input.cursor ?? null,
+            ...(input.limit !== undefined ? { limit: input.limit } : {}),
+          });
         }),
       ),
     ),
@@ -156,7 +203,11 @@ export const gridRouter = router({
     .input(
       z.object({
         tableId: z.string().min(1),
-        rows: z.array(z.record(z.string(), z.unknown())),
+        rows: z
+          .array(z.record(z.string(), z.unknown()))
+          .max(MAX_ROWS_PER_IMPORT, {
+            message: `Too many rows in one import (max ${MAX_ROWS_PER_IMPORT}). Split the request into smaller chunks.`,
+          }),
       }),
     )
     .mutation(({ ctx, input }) =>

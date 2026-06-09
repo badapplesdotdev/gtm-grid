@@ -92,6 +92,8 @@ export const gridQueryKeys = {
   projects: (workspaceId: string) => ["grid", "projects", workspaceId] as const,
   tables: (projectId: string) => ["grid", "tables", projectId] as const,
   table: (tableId: string) => ["grid", "table", tableId] as const,
+  /** The keyset-paginated grid (an infinite query of {@link gridRouter.getTablePage}). */
+  tablePaged: (tableId: string) => ["grid", "tablePaged", tableId] as const,
   webhooks: (tableId: string) => ["webhooks", "list", tableId] as const,
   deliveries: (webhookId: string) =>
     ["webhooks", "deliveries", webhookId] as const,
@@ -105,6 +107,19 @@ export const gridQueryKeys = {
 type GridCacheSnapshot = Awaited<
   ReturnType<NonNullable<typeof apiClient>["grid"]["getTable"]["query"]>
 >;
+
+/**
+ * One PAGE of the keyset-paginated grid (the `grid.getTablePage` result):
+ * table + columns + only this page's rows/cells + a `nextCursor`. The infinite
+ * query holds an array of these — only the LOADED pages are resident, so a 10k
+ * row table never lives in memory all at once (TRI-3272).
+ */
+type GridPage = Awaited<
+  ReturnType<NonNullable<typeof apiClient>["grid"]["getTablePage"]["query"]>
+>;
+
+/** The keyset cursor carried between pages (the `nextCursor` field's shape). */
+type GridPageCursor = GridPage["nextCursor"];
 
 /**
  * Mint the Supabase realtime JWT via the tRPC `realtime.token` MUTATION. Thrown
@@ -279,11 +294,8 @@ function toCell(c: {
   };
 }
 
-/**
- * Project a `getTable`-shaped snapshot onto the desktop `FullTable` (columns
- * ordered, rows with a `cells` map keyed by column id). Pure.
- */
-function toFullTable(data: {
+/** The `getTable`-shaped snapshot {@link createIncrementalTableView} projects. */
+type GetTableData = {
   table: { _id: string; name: string };
   columns: readonly {
     _id: string;
@@ -303,33 +315,115 @@ function toFullTable(data: {
     status: string;
     error: string | null;
   }[];
-}): FullTable {
-  const columns = data.columns.map((c) =>
-    toColumn({ ...c, kind: c.kind as "manual" | "function" }),
-  );
-  // Index cells by (rowId, columnId) once, then build each row's cell map.
-  const byRow = new Map<string, Map<string, Cell>>();
-  for (const cell of data.cells) {
-    let m = byRow.get(cell.rowId);
-    if (!m) {
-      m = new Map();
-      byRow.set(cell.rowId, m);
+};
+
+/** The source cell shape, indexed per row (the reducer preserves its identity). */
+type SourceCell = GetTableData["cells"][number];
+
+/** One derived row plus the source cells it was built from (for reuse checks). */
+interface DerivedRow {
+  readonly row: FullTable["rows"][number];
+  /** The source `SourceCell` each column was projected from (`null` = empty). */
+  readonly sources: ReadonlyMap<string, SourceCell | null>;
+}
+
+/**
+ * Build an INCREMENTAL `getTable` → `FullTable` projector that reuses unchanged
+ * row objects across successive snapshots.
+ *
+ * Rebuilding the whole grid on every realtime patch is O(rows×cols) per single
+ * cell change AND breaks referential identity for every row (forcing a full
+ * re-render). This deriver instead keeps the previous `FullTable` plus, per row,
+ * the SOURCE cell each column was projected from. Because the reducer preserves
+ * the identity of untouched cell objects, a row whose every column maps to the
+ * same source cell (and the same column list) is UNCHANGED — we hand back the
+ * exact same row object, so `React.memo`'d rows skip re-rendering. Only the row
+ * whose cell actually changed is rebuilt.
+ *
+ * Stateful (holds the previous derivation), so each grid view owns one instance.
+ * Exported (unit-tested) so the incremental row-identity invariant is verifiable
+ * without React or Supabase.
+ */
+export function createIncrementalTableView(): {
+  derive: (data: GetTableData) => FullTable;
+} {
+  let prevColumns: FullTable["columns"] | null = null;
+  let prevColumnsSource: GetTableData["columns"] | null = null;
+  let prevByRow = new Map<string, DerivedRow>();
+
+  const derive = (data: GetTableData): FullTable => {
+    // Reuse the projected columns array (and thus its identity) when the source
+    // columns array is unchanged — the common case during a cell-edit stream.
+    const columns =
+      prevColumnsSource === data.columns && prevColumns !== null
+        ? prevColumns
+        : data.columns.map((c) =>
+            toColumn({ ...c, kind: c.kind as "manual" | "function" }),
+          );
+    const columnsChanged = columns !== prevColumns;
+    prevColumns = columns;
+    prevColumnsSource = data.columns;
+
+    // Index source cells by (rowId, columnId) once.
+    const byRow = new Map<string, Map<string, SourceCell>>();
+    for (const cell of data.cells) {
+      let m = byRow.get(cell.rowId);
+      if (!m) {
+        m = new Map();
+        byRow.set(cell.rowId, m);
+      }
+      m.set(cell.columnId, cell);
     }
-    m.set(cell.columnId, toCell(cell));
+
+    const nextByRow = new Map<string, DerivedRow>();
+    const rows = data.rows.map((r) => {
+      const m = byRow.get(r._id);
+      // Resolve each column's source cell (or `null` for a synthesized empty).
+      const sources = new Map<string, SourceCell | null>();
+      for (const col of columns) sources.set(col.id, m?.get(col.id) ?? null);
+
+      // Reuse the previous row object when neither the column list nor any of
+      // this row's source cells changed (all by reference — the reducer keeps
+      // untouched cell identity).
+      const prev = prevByRow.get(r._id);
+      if (
+        prev !== undefined &&
+        !columnsChanged &&
+        sameSources(prev.sources, sources)
+      ) {
+        nextByRow.set(r._id, prev);
+        return prev.row;
+      }
+
+      const cells: Record<string, Cell> = {};
+      for (const col of columns) {
+        const src = sources.get(col.id);
+        cells[col.id] = src
+          ? toCell(src)
+          : { value: null, status: "empty", error: null };
+      }
+      const row = { id: r._id, cells };
+      nextByRow.set(r._id, { row, sources });
+      return row;
+    });
+
+    prevByRow = nextByRow;
+    return { id: data.table._id, name: data.table.name, columns, rows };
+  };
+
+  return { derive };
+}
+
+/** Two per-row source maps are equal when every column maps to the same cell ref. */
+function sameSources(
+  a: ReadonlyMap<string, SourceCell | null>,
+  b: ReadonlyMap<string, SourceCell | null>,
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const [key, value] of b) {
+    if (a.get(key) !== value) return false;
   }
-  const rows = data.rows.map((r) => {
-    const m = byRow.get(r._id);
-    const cells: Record<string, Cell> = {};
-    for (const col of columns) {
-      cells[col.id] = m?.get(col.id) ?? {
-        value: null,
-        status: "empty",
-        error: null,
-      };
-    }
-    return { id: r._id, cells };
-  });
-  return { id: data.table._id, name: data.table.name, columns, rows };
+  return true;
 }
 
 /**
@@ -355,12 +449,92 @@ export function useCloudTable(
   // workspace handle the switcher sets (the snapshot itself omits it).
   useGridRealtime(tableId, q.data ? activeWorkspaceIdRef.current : null);
 
+  // One incremental projector per view: a cell-edit stream then rebuilds only
+  // the changed row and keeps every untouched row object's identity (so memoised
+  // rows skip re-rendering). Reset when the table changes so a new table starts
+  // from a clean slate rather than reusing the prior table's rows.
+  const viewRef = useRef(createIncrementalTableView());
+  const lastTableRef = useRef(tableId);
+  if (lastTableRef.current !== tableId) {
+    lastTableRef.current = tableId;
+    viewRef.current = createIncrementalTableView();
+  }
+
   return useMemo<FullTable | null | undefined>(() => {
     if (q.isLoading && q.data === undefined) return undefined;
     if (q.data === undefined) return undefined;
     if (q.data === null) return null;
-    return toFullTable(q.data);
+    return viewRef.current.derive(q.data);
   }, [q.data, q.isLoading]);
+}
+
+/**
+ * The LAZILY-PAGED reactive grid for a cloud table (TRI-3272).
+ *
+ * Unlike {@link useCloudTable} (which seeds the WHOLE grid in one read), this
+ * hook drives a react-query `useInfiniteQuery` over the keyset `grid.getTablePage`
+ * query: it loads the first page on mount and fetches further pages ONLY when
+ * `loadMore` is called (the C1 virtualization viewport ties scroll → `loadMore`).
+ * Only the LOADED pages are resident, so combined with row virtualization a
+ * 10k-row table's memory is bounded — never the whole grid.
+ *
+ * Live reactivity is preserved (TRI-3268): it subscribes to the table's W3 grid
+ * channel and applies each event through {@link patchPagedGridCache}, so
+ * incremental cell upserts / row + column inserts/deletes still patch the loaded
+ * pages exactly as the unpaged path patches its snapshot.
+ *
+ * Returns the projected `FullTable` (of the loaded pages), plus `loadMore`,
+ * `hasMore` and `isLoadingMore` for the viewport. `data` is `undefined` while the
+ * first page loads, `null` if the table no longer exists.
+ */
+export function useCloudTablePaged(tableId: Id<"tables"> | null): {
+  readonly data: FullTable | null | undefined;
+  readonly loadMore: () => void;
+  readonly hasMore: boolean;
+  readonly isLoadingMore: boolean;
+} {
+  const q = useInfiniteQuery({
+    queryKey: gridQueryKeys.tablePaged(tableId ?? ""),
+    enabled: apiClient !== null && tableId !== null,
+    initialPageParam: null as GridPageCursor,
+    queryFn: ({ pageParam }) =>
+      apiClient!.grid.getTablePage.query({
+        tableId: tableId!,
+        cursor: pageParam,
+      }),
+    getNextPageParam: (last) => last.nextCursor,
+  });
+
+  // Subscribe once a page is loaded; patch the PAGED cache per event.
+  usePagedGridRealtime(tableId, q.data ? activeWorkspaceIdRef.current : null);
+
+  // One incremental projector per view (same identity-preserving reuse as the
+  // unpaged path); reset when the table changes.
+  const viewRef = useRef(createIncrementalTableView());
+  const lastTableRef = useRef(tableId);
+  if (lastTableRef.current !== tableId) {
+    lastTableRef.current = tableId;
+    viewRef.current = createIncrementalTableView();
+  }
+
+  const data = useMemo<FullTable | null | undefined>(() => {
+    if (q.isLoading && q.data === undefined) return undefined;
+    if (q.data === undefined) return undefined;
+    const snapshot = mergePagesToSnapshot(q.data.pages);
+    if (snapshot === null) return null;
+    return viewRef.current.derive(snapshot);
+  }, [q.data, q.isLoading]);
+
+  const loadMore = useCallback(() => {
+    if (q.hasNextPage && !q.isFetchingNextPage) void q.fetchNextPage();
+  }, [q.hasNextPage, q.isFetchingNextPage, q.fetchNextPage]);
+
+  return {
+    data,
+    loadMore,
+    hasMore: q.hasNextPage,
+    isLoadingMore: q.isFetchingNextPage,
+  };
 }
 
 /**
@@ -408,6 +582,26 @@ function useGridRealtime(
     let disposed = false;
     let teardown: (() => Promise<void>) | null = null;
 
+    // Coalescing buffer: a single enrichment cell publishes ≥2 events (running →
+    // done) and a bulk run fires thousands; writing the cache per event causes a
+    // full grid re-render each time. Instead we BUFFER inbound events and flush
+    // them as ONE cache write per animation frame (≈60/s), merging every queued
+    // event into the snapshot in arrival order via the pure reducer. This caps
+    // re-renders at frame rate regardless of event throughput.
+    const buffer: Array<Parameters<typeof patchGridCache>[1]> = [];
+    const flush = scheduleFlush(() => {
+      if (disposed || buffer.length === 0) return;
+      const events = buffer.splice(0, buffer.length);
+      qcRef.current.setQueryData<GridCacheSnapshot | null>(
+        gridQueryKeys.table(tableId),
+        (prev) => {
+          let next = prev ?? null;
+          for (const event of events) next = patchGridCache(next, event);
+          return next;
+        },
+      );
+    });
+
     void (async () => {
       const token = await mintRealtimeToken(workspaceId).catch(() => null);
       if (token === null || disposed) return;
@@ -417,10 +611,8 @@ function useGridRealtime(
         workspaceId,
         tableId,
         onEvent: (event) => {
-          qcRef.current.setQueryData<GridCacheSnapshot | null>(
-            gridQueryKeys.table(tableId),
-            (prev) => patchGridCache(prev ?? null, event),
-          );
+          buffer.push(event);
+          flush.schedule();
         },
       });
       teardown = sub.unsubscribe;
@@ -429,9 +621,125 @@ function useGridRealtime(
 
     return () => {
       disposed = true;
+      flush.cancel();
       if (teardown) void teardown();
     };
   }, [tableId, workspaceId]);
+}
+
+/**
+ * The PAGED counterpart of {@link useGridRealtime}: subscribes to the table's W3
+ * grid channel and patches the `useInfiniteQuery` page list via
+ * {@link patchPagedGridCache} (page-aware so a live event never duplicates a row
+ * or revives an unloaded page). Same coalescing-per-frame + teardown semantics,
+ * so live reactivity (TRI-3268) holds for the lazily-paged grid too. No-op when
+ * realtime is unconfigured / there is no table / the workspace is unknown.
+ */
+function usePagedGridRealtime(
+  tableId: Id<"tables"> | null,
+  workspaceId: string | null,
+): void {
+  const qc = useQueryClient();
+  const qcRef = useRef(qc);
+  qcRef.current = qc;
+
+  useEffect(() => {
+    if (
+      !realtimeConfigured ||
+      tableId === null ||
+      workspaceId === null ||
+      PARTY_URL === undefined
+    ) {
+      return;
+    }
+    let disposed = false;
+    let teardown: (() => Promise<void>) | null = null;
+
+    const buffer: Array<Parameters<typeof patchPagedGridCache>[1]> = [];
+    const flush = scheduleFlush(() => {
+      if (disposed || buffer.length === 0) return;
+      const events = buffer.splice(0, buffer.length);
+      qcRef.current.setQueryData<{
+        pages: GridPage[];
+        pageParams: unknown[];
+      }>(gridQueryKeys.tablePaged(tableId), (prev) => {
+        if (prev === undefined) return prev;
+        let pages: readonly GridPage[] = prev.pages;
+        for (const event of events) pages = patchPagedGridCache(pages, event);
+        return pages === prev.pages ? prev : { ...prev, pages: [...pages] };
+      });
+    });
+
+    void (async () => {
+      const token = await mintRealtimeToken(workspaceId).catch(() => null);
+      if (token === null || disposed) return;
+      const sub = subscribeToGrid({
+        url: PARTY_URL,
+        token,
+        workspaceId,
+        tableId,
+        onEvent: (event) => {
+          buffer.push(event);
+          flush.schedule();
+        },
+      });
+      teardown = sub.unsubscribe;
+      if (disposed) void sub.unsubscribe();
+    })();
+
+    return () => {
+      disposed = true;
+      flush.cancel();
+      if (teardown) void teardown();
+    };
+  }, [tableId, workspaceId]);
+}
+
+/**
+ * A debounced flush primitive for the realtime coalescing buffer. Coalesces
+ * bursts of inbound events into ONE `run` per animation frame: the first
+ * `schedule()` after a flush arms a `requestAnimationFrame` callback, and any
+ * further `schedule()` calls before it fires are no-ops (the already-pending
+ * frame will drain the shared buffer). Falls back to a ~100ms `setTimeout` when
+ * `requestAnimationFrame` is unavailable (non-DOM / test environments), so the
+ * coalescing behaviour holds everywhere. `cancel()` clears any pending flush on
+ * teardown so a unmounted subscription never writes the cache.
+ */
+function scheduleFlush(run: () => void): {
+  schedule: () => void;
+  cancel: () => void;
+} {
+  const hasRaf = typeof requestAnimationFrame === "function";
+  let rafHandle: number | null = null;
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+  const fire = () => {
+    rafHandle = null;
+    timeoutHandle = null;
+    run();
+  };
+
+  const schedule = () => {
+    if (rafHandle !== null || timeoutHandle !== null) return;
+    if (hasRaf) {
+      rafHandle = requestAnimationFrame(fire);
+    } else {
+      timeoutHandle = setTimeout(fire, 100);
+    }
+  };
+
+  const cancel = () => {
+    if (rafHandle !== null) {
+      cancelAnimationFrame(rafHandle);
+      rafHandle = null;
+    }
+    if (timeoutHandle !== null) {
+      clearTimeout(timeoutHandle);
+      timeoutHandle = null;
+    }
+  };
+
+  return { schedule, cancel };
 }
 
 /**
@@ -455,13 +763,132 @@ export function patchGridCache(
 }
 
 /**
+ * Flatten the LOADED pages of the keyset infinite query into ONE
+ * `getTable`-shaped snapshot the existing {@link createIncrementalTableView}
+ * projector consumes — table + columns come from the first page (identical on
+ * every page), rows + cells are the concatenation of the loaded pages (in page
+ * order, i.e. ascending row position). Only loaded pages contribute, so the
+ * snapshot is bounded by how far the viewport has paged, never the whole grid.
+ * Pure; returns `null` when no page is loaded yet. Unit-tested.
+ */
+export function mergePagesToSnapshot(
+  pages: readonly GridPage[],
+): GetTableData | null {
+  const first = pages[0];
+  if (first === undefined) return null;
+  const rows: GetTableData["rows"][number][] = [];
+  const cells: GetTableData["cells"][number][] = [];
+  for (const page of pages) {
+    for (const r of page.rows) rows.push(r);
+    for (const c of page.cells) cells.push(c);
+  }
+  return { table: first.table, columns: first.columns, rows, cells };
+}
+
+/**
+ * The PURE cache updater for a live grid event over the PAGED infinite query.
+ *
+ * Applies the SAME `applyGridEvent` reducer used by the unpaged path, but
+ * page-aware so resident memory stays bounded and no event duplicates a row:
+ *  - cell.upsert: patched ONLY into the loaded page that already contains the
+ *    row (a cell for an unloaded row is dropped — it arrives when that page
+ *    loads), so a cell never appends a phantom row to an unrelated page.
+ *  - row.insert: appended ONLY to the last page AND only when that page is the
+ *    final one (`nextCursor === null`); otherwise the new row belongs to an
+ *    unloaded tail and surfaces when the viewport pages to it.
+ *  - row.delete / column.insert / column.delete: applied to EVERY loaded page
+ *    (idempotent; columns are duplicated per page so a column change must hit
+ *    all of them).
+ *  - table.delete: collapses the whole paged result to an empty page list.
+ *
+ * Returns the next pages array (new identity only for changed pages). Pure +
+ * unit-tested without React or Supabase.
+ */
+export function patchPagedGridCache(
+  pages: readonly GridPage[],
+  event: Parameters<typeof applyGridEvent>[1],
+): readonly GridPage[] {
+  if (pages.length === 0) return pages;
+
+  // A table.delete drops the entire grid → no loaded pages remain.
+  if (event.type === "table.delete") {
+    const first = pages[0];
+    if (first !== undefined && event.tableId === first.table._id) return [];
+    return pages;
+  }
+
+  // row.insert only lands on the final loaded page (the one with no next page).
+  if (event.type === "row.insert") {
+    const lastIdx = pages.length - 1;
+    const last = pages[lastIdx];
+    if (last === undefined || last.nextCursor !== null) return pages;
+    const patched = applyEventToPage(last, event);
+    if (patched === last) return pages;
+    const next = pages.slice();
+    next[lastIdx] = patched;
+    return next;
+  }
+
+  // cell.upsert only patches the page that already holds the target row.
+  if (event.type === "cell.upsert") {
+    const idx = pages.findIndex((p) =>
+      p.rows.some((r) => r._id === event.cell.rowId),
+    );
+    if (idx < 0) return pages; // row not loaded — the page owns it when it loads
+    const patched = applyEventToPage(pages[idx]!, event);
+    if (patched === pages[idx]) return pages;
+    const next = pages.slice();
+    next[idx] = patched;
+    return next;
+  }
+
+  // row.delete / column.* — apply to every page (idempotent on pages that don't
+  // hold the target). table.insert is a no-op for this table's pages.
+  let changed = false;
+  const next = pages.map((p) => {
+    const patched = applyEventToPage(p, event);
+    if (patched !== p) changed = true;
+    return patched;
+  });
+  return changed ? next : pages;
+}
+
+/** Apply one event to a single page via the shared reducer (page = a snapshot). */
+function applyEventToPage(
+  page: GridPage,
+  event: Parameters<typeof applyGridEvent>[1],
+): GridPage {
+  // A page is shaped like the reducer's `GridSnapshot` (table/columns/rows/cells)
+  // plus `nextCursor`; bridge through `unknown` (tRPC makes `params` optional)
+  // and re-attach the page's own cursor afterwards.
+  const patched = applyGridEvent(
+    page as Parameters<typeof applyGridEvent>[0],
+    event,
+  );
+  if (patched === null) return page;
+  const nextPage = patched as unknown as GridPage;
+  return nextPage === (page as unknown)
+    ? page
+    : { ...nextPage, nextCursor: page.nextCursor };
+}
+
+/**
  * Mutation wrappers for cloud grid edits — cell edits, add row, add column, plus
  * the structural deletes.
  *
- * These call the tRPC `grid.*` mutations; the server broadcasts the change so
- * every OTHER subscribed client patches its cache via the realtime reducer. This
- * client invalidates its own `getTable` query so its write is reflected
- * immediately even before the broadcast round-trips.
+ * These call the tRPC `grid.*` mutations; the server broadcasts the change on
+ * the table's W3 channel so EVERY subscribed client — including this writer —
+ * patches its `getTable` cache via the realtime reducer (the writer is itself a
+ * subscriber). Structural ADDs (`addRow`/`addColumn`/`addRowsWithCells`) still
+ * invalidate the owning table's query because the caller already knows its
+ * `tableId` and the immediate refetch keeps the just-created row/column visible
+ * without waiting on the broadcast round-trip.
+ *
+ * `setCell`/`deleteRow`/`deleteColumn` do NOT refetch: they carry only a
+ * cell/row/column id, so a refetch would have to invalidate ALL loaded tables (a
+ * full network refetch of every grid). The realtime broadcast already patches
+ * the exact snapshot, so the manual refetch is redundant — removed per TRI-3274
+ * (C5) to keep manual writes O(1) on a large table instead of O(loaded tables).
  */
 export function useCloudGridMutations() {
   const qc = useQueryClient();
@@ -471,18 +898,6 @@ export function useCloudGridMutations() {
     [qc],
   );
 
-  // setCell/deleteRow/deleteColumn carry only the cell/row/column id (matching
-  // the component API), not the owning table, so they invalidate ALL loaded
-  // `getTable` queries by key prefix — the live realtime broadcast patches the
-  // exact snapshot; this just guarantees the writer sees its own change.
-  const refreshAllTables = useCallback(
-    () =>
-      qc.invalidateQueries({
-        predicate: (query) =>
-          query.queryKey[0] === "grid" && query.queryKey[1] === "table",
-      }),
-    [qc],
-  );
   const setCell = useCallback(
     async (rowId: Id<"rows">, columnId: Id<"columns">, value: unknown) => {
       const res = await apiClient!.grid.setCell.mutate({
@@ -492,10 +907,9 @@ export function useCloudGridMutations() {
         status: "done",
         error: null,
       });
-      await refreshAllTables();
       return res;
     },
-    [refreshAllTables],
+    [],
   );
   const addRow = useCallback(
     async (tableId: Id<"tables">) => {
@@ -557,22 +971,14 @@ export function useCloudGridMutations() {
     },
     [refresh],
   );
-  const deleteRow = useCallback(
-    async (rowId: Id<"rows">) => {
-      const res = await apiClient!.grid.deleteRow.mutate({ rowId });
-      await refreshAllTables();
-      return res;
-    },
-    [refreshAllTables],
-  );
-  const deleteColumn = useCallback(
-    async (columnId: Id<"columns">) => {
-      const res = await apiClient!.grid.deleteColumn.mutate({ columnId });
-      await refreshAllTables();
-      return res;
-    },
-    [refreshAllTables],
-  );
+  const deleteRow = useCallback(async (rowId: Id<"rows">) => {
+    const res = await apiClient!.grid.deleteRow.mutate({ rowId });
+    return res;
+  }, []);
+  const deleteColumn = useCallback(async (columnId: Id<"columns">) => {
+    const res = await apiClient!.grid.deleteColumn.mutate({ columnId });
+    return res;
+  }, []);
 
   return { setCell, addRow, addRowsWithCells, addColumn, deleteRow, deleteColumn };
 }

@@ -104,5 +104,8 @@ export const WORKER_REFS: CloudFunctionRefs = {
   getTable: "/api/worker/getTable",
   setCell: "/api/worker/setCell",
   setCellStatus: "/api/worker/setCellStatus",
+  // Batched cell writes: the cloud store buffers terminal writes and flushes
+  // them here in chunks (bounded in-flight + backpressure).
+  setCells: "/api/worker/setCells",
   getCredential: "/api/worker/getCredential",
 };

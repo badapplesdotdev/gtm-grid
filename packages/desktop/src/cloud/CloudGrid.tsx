@@ -19,12 +19,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Id } from "./ids";
 import { CellContent, Icon } from "../App";
 import type { Cell } from "../api";
+import { VirtualGridBody } from "../VirtualGridBody";
+import { resolveRowHeight } from "../gridVirtual";
 import { runCloudColumn } from "./cloud-run";
 import { WebhookModal } from "./WebhookModal";
 import {
   useCloudGridMutations,
   useCloudSession,
-  useCloudTable,
+  useCloudTablePaged,
 } from "./useCloudGrid";
 
 interface CloudGridProps {
@@ -45,7 +47,11 @@ interface CloudGridProps {
  * in-flight request to disable the trigger).
  */
 export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
-  const data = useCloudTable(tableId);
+  // Lazily-paged grid (TRI-3272): only the loaded pages are resident, and the
+  // viewport scroll handler below pulls the next page as the user nears the end —
+  // so combined with the C1 virtualization a 10k-row table's memory is bounded.
+  const { data, loadMore, hasMore, isLoadingMore } =
+    useCloudTablePaged(tableId);
   const session = useCloudSession();
   const { setCell, addRow, addColumn, deleteRow, deleteColumn } =
     useCloudGridMutations();
@@ -53,6 +59,26 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
   const [runningColId, setRunningColId] = useState<string | null>(null);
   const [runningCells, setRunningCells] = useState<Set<string>>(new Set());
   const [showWebhook, setShowWebhook] = useState(false);
+
+  // Row-virtualization plumbing (TRI-3267): the scroll container the
+  // virtualizer reads from, and the resolved per-density row height.
+  const gridScrollRef = useRef<HTMLDivElement>(null);
+  const rowHeight = resolveRowHeight();
+
+  // Tie page fetching to the virtualization viewport (TRI-3272): when the user
+  // scrolls within ~10 row-heights of the bottom and another page exists, pull
+  // it. The infinite query + `loadMore` guards against concurrent fetches, so a
+  // burst of scroll events triggers at most one in-flight page load.
+  const onGridScroll = useCallback(
+    (e: React.UIEvent<HTMLDivElement>) => {
+      if (!hasMore || isLoadingMore) return;
+      const el = e.currentTarget;
+      const nearBottom =
+        el.scrollHeight - el.scrollTop - el.clientHeight < rowHeight * 10;
+      if (nearBottom) loadMore();
+    },
+    [hasMore, isLoadingMore, loadMore, rowHeight],
+  );
 
   // Auto-open the webhook form when the chooser's "Webhook" flow bumps the token
   // (and a table is actually present to bind it to).
@@ -209,7 +235,7 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
           </button>
         </div>
       ) : (
-        <div className="grid-wrap">
+        <div className="grid-wrap" ref={gridScrollRef} onScroll={onGridScroll}>
           <table className="grid-table">
             <thead>
               <tr>
@@ -262,8 +288,8 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
                 </th>
               </tr>
             </thead>
-            <tbody>
-              {data.rows.length === 0 ? (
+            {data.rows.length === 0 ? (
+              <tbody>
                 <tr>
                   <td className="grid-td row-num-td" />
                   {data.columns.map((col) => (
@@ -273,8 +299,14 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
                   ))}
                   <td className="grid-td" />
                 </tr>
-              ) : (
-                data.rows.map((row, idx) => (
+              </tbody>
+            ) : (
+              <VirtualGridBody
+                rows={data.rows}
+                scrollRef={gridScrollRef}
+                rowHeight={rowHeight}
+                colSpan={data.columns.length + 2}
+                renderRow={(row, idx) => (
                   <tr key={row.id} className="grid-tr">
                     <td className="grid-td row-num-td">{idx + 1}</td>
                     {data.columns.map((col) => {
@@ -311,9 +343,9 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
                       </button>
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
+                )}
+              />
+            )}
           </table>
         </div>
       )}

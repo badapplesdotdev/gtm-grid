@@ -140,6 +140,9 @@ export {
 export {
   type NewRow,
   type Row,
+  type RowCursor,
+  type RowPage,
+  ROW_PAGE_SIZE,
   RowRepo,
   RowRepoError,
   RowRepoLive,
@@ -224,6 +227,7 @@ export {
   WebhookNotFoundError,
   WebhookService,
   type WorkerGrid,
+  type WorkerTableMeta,
 } from "./services/webhook-service.js";
 export { ExtensionService } from "./services/extension-service.js";
 // --- Cloud-access gate (entitlement) -----------------------------------------
@@ -243,6 +247,7 @@ export {
   GridNotFoundError,
   GridService,
   InvalidCellError as GridInvalidCellError,
+  type TablePage,
 } from "./services/grid-service.js";
 export {
   type MeterQuota,

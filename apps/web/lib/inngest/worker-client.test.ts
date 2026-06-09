@@ -123,6 +123,7 @@ describe("WORKER_REFS", () => {
       getTable: "/api/worker/getTable",
       setCell: "/api/worker/setCell",
       setCellStatus: "/api/worker/setCellStatus",
+      setCells: "/api/worker/setCells",
       getCredential: "/api/worker/getCredential",
     });
   });

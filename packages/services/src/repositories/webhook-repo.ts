@@ -18,6 +18,11 @@
  *     the service + procedures are exercised with NO live database.
  */
 
+import {
+  type UpsertScalar,
+  isValidUpsertKeyValue,
+  matchesUpsertKey,
+} from "@gtmgrid/cloud";
 import { schema } from "@gtmgrid/db";
 import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
@@ -122,6 +127,47 @@ export interface CellWrite {
   readonly updatedAt: number | null;
 }
 
+/** The table/workspace a (row, column) cell write targets — resolveCellTarget. */
+export interface CellTarget {
+  /** The table the ROW belongs to. */
+  readonly rowTableId: string;
+  /** The table the COLUMN belongs to (must equal `rowTableId` for a valid cell). */
+  readonly columnTableId: string;
+  /** The workspace the row's table belongs to (the meter target). */
+  readonly workspaceId: string;
+}
+
+/**
+ * A merge patch for {@link WebhookRepo.upsertCell}. `hasValue` carries the
+ * COALESCE presence of `value` (its presence in the body, even `null`, means
+ * overwrite); `status` is optional (kept when omitted); `error` is taken as-is
+ * (absent => null), mirroring the engine's `error = @error` write.
+ */
+export interface CellMergePatch {
+  readonly hasValue: boolean;
+  readonly value?: unknown;
+  readonly status?: string;
+  readonly error?: string | null;
+}
+
+/** Args for the collapsed upsert-cell-and-meter statement. */
+export interface UpsertCellArgs {
+  readonly workspaceId: string;
+  readonly tableId: string;
+  readonly rowId: string;
+  readonly columnId: string;
+  readonly patch: CellMergePatch;
+  /**
+   * When set, increment the workspace's cloud-actions counter by 1 IFF the
+   * RESULTING (merged) status is terminal (`done`/`error`) — mirroring the old
+   * `isTerminalStatus(merged.status)` gate, evaluated on the post-merge status
+   * so it matches behaviour even when the patch omits `status`.
+   */
+  readonly meter: boolean;
+  /** The timestamp to stamp the write with. */
+  readonly updatedAt: number;
+}
+
 /** A workspace's cloud-actions quota snapshot the worker pre-checks. */
 export interface WorkspaceQuota {
   readonly cloudActionsUsed: number | null;
@@ -201,6 +247,21 @@ export class WebhookRepo extends Context.Tag("WebhookRepo")<
       rowId: string,
       columnId: string,
     ) => Effect.Effect<Option.Option<GridCell>, WebhookRepoError>;
+    /**
+     * The `rowId` of the FIRST row in `tableId` whose cell in `columnId` holds
+     * `value`, or `None` — the indexed point lookup behind the webhook UPSERT
+     * match. Serves the same role the old `listCellsByTable(...).filter(...)`
+     * scan did, but resolves the match with a single `(tableId, columnId, value)`
+     * equality query over the `cells_by_table_column` index instead of loading
+     * every cell of the table and matching in JS (O(rows×cols) per record).
+     * Equality is jsonb-strict, so `1 !== "1"` and `true !== "true"`, mirroring
+     * the scalar `===` rule the pure `findUpsertRowId` kernel applied.
+     */
+    readonly findRowByCellValue: (
+      tableId: string,
+      columnId: string,
+      value: UpsertScalar,
+    ) => Effect.Effect<Option.Option<string>, WebhookRepoError>;
     /** Insert a row, returning its id. */
     readonly insertRow: (values: {
       readonly workspaceId: string;
@@ -221,6 +282,33 @@ export class WebhookRepo extends Context.Tag("WebhookRepo")<
       cellId: string,
       cell: CellWrite,
     ) => Effect.Effect<void, WebhookRepoError>;
+    /**
+     * Resolve the table/workspace a (row, column) write targets in ONE query.
+     * Returns the row's tableId, the column's tableId (so the caller can assert
+     * they share a table), and the row's workspace. `None` when EITHER the row
+     * or the column does not exist. This replaces the prior findRow + findColumn
+     * + findTable trio so a worker cell write resolves its target in a single
+     * round-trip.
+     */
+    readonly resolveCellTarget: (
+      rowId: string,
+      columnId: string,
+    ) => Effect.Effect<Option.Option<CellTarget>, WebhookRepoError>;
+    /**
+     * Upsert a cell at (rowId, columnId) with COALESCE merge semantics AND
+     * (when `meter` is set) increment the workspace's cloud-actions counter — in
+     * ONE statement (an `INSERT ... ON CONFLICT (row_id, column_id) DO UPDATE`
+     * over the `cells_by_row_column` unique index, with the meter folded in as a
+     * CTE). This collapses the prior read (findCell) + write (insert/patch) +
+     * meter (findTable + update) into a single query. The merge mirrors
+     * {@link CellMerge.mergeCellPatch}: `value`/`status` are kept when the patch
+     * omits them, `error` is always taken from the patch (absent => null), and
+     * `updatedAt` is always stamped. Returns the cell's id.
+     */
+    readonly upsertCell: (args: UpsertCellArgs) => Effect.Effect<
+      string,
+      WebhookRepoError
+    >;
 
     // --- worker credential fetch ---
     /**
@@ -567,6 +655,36 @@ export const WebhookRepoLive: Layer.Layer<WebhookRepo, never, DbClient> =
             catch: fail("cell lookup failed"),
           }),
 
+        findRowByCellValue: (tableId, columnId, value) =>
+          Effect.tryPromise({
+            try: async () => {
+              // Unsupported (non-scalar / empty) keys never identify a row —
+              // mirror the pure kernel and short-circuit before touching the DB.
+              if (!isValidUpsertKeyValue(value)) return Option.none<string>();
+              // Single indexed point lookup on (table_id, column_id) +
+              // jsonb-strict value equality, ordered for a deterministic FIRST
+              // match. No full-table cell load, no JS filter.
+              const matches = await db
+                .select({
+                  rowId: schema.cells.rowId,
+                  position: schema.rows.position,
+                })
+                .from(schema.cells)
+                .innerJoin(schema.rows, eq(schema.rows.id, schema.cells.rowId))
+                .where(
+                  and(
+                    eq(schema.cells.tableId, tableId),
+                    eq(schema.cells.columnId, columnId),
+                    eq(schema.cells.value, value),
+                  ),
+                )
+                .orderBy(asc(schema.rows.position), asc(schema.cells.rowId))
+                .limit(1);
+              return Option.fromNullable(matches[0]?.rowId ?? null);
+            },
+            catch: fail("upsert row lookup failed"),
+          }),
+
         insertRow: (values) =>
           Effect.tryPromise({
             try: async () => {
@@ -620,6 +738,112 @@ export const WebhookRepoLive: Layer.Layer<WebhookRepo, never, DbClient> =
                 .where(eq(schema.cells.id, cellId));
             },
             catch: fail("cell patch failed"),
+          }),
+
+        resolveCellTarget: (rowId, columnId) =>
+          UUID_RE.test(rowId) && UUID_RE.test(columnId)
+            ? Effect.tryPromise({
+                try: async () => {
+                  // One round-trip: the row joined to its table (for the
+                  // workspace) plus the column's table id. A cross join of the
+                  // single matching row + single matching column yields one row
+                  // when BOTH exist, none otherwise.
+                  const out = await db
+                    .select({
+                      rowTableId: schema.rows.tableId,
+                      workspaceId: schema.tables.workspaceId,
+                      columnTableId: schema.columns.tableId,
+                    })
+                    .from(schema.rows)
+                    .innerJoin(
+                      schema.tables,
+                      eq(schema.tables.id, schema.rows.tableId),
+                    )
+                    .innerJoin(
+                      schema.columns,
+                      eq(schema.columns.id, columnId),
+                    )
+                    .where(eq(schema.rows.id, rowId))
+                    .limit(1);
+                  const r = out[0];
+                  return r === undefined
+                    ? Option.none<CellTarget>()
+                    : Option.some<CellTarget>({
+                        rowTableId: r.rowTableId,
+                        columnTableId: r.columnTableId,
+                        workspaceId: r.workspaceId,
+                      });
+                },
+                catch: fail("cell target resolve failed"),
+              })
+            : Effect.succeed(Option.none<CellTarget>()),
+
+        upsertCell: (args) =>
+          Effect.tryPromise({
+            try: async () => {
+              const { sql } = schema;
+              const { patch } = args;
+              // COALESCE merge expressed in SQL on the (row_id, column_id)
+              // unique index, with the meter increment folded into the same
+              // statement as a CTE so a terminal cell write is a SINGLE query.
+              //
+              // value : overwrite only when the patch carries it (`hasValue`).
+              // status: overwrite only when the patch carries it.
+              // error : always from the patch (absent => null).
+              // updatedAt: always stamped.
+              const valueJson =
+                patch.hasValue && patch.value !== undefined
+                  ? JSON.stringify(patch.value)
+                  : null;
+              // On a fresh cell with no status patch, the COALESCE base is the
+              // engine's empty default ("empty"); on update, an omitted status
+              // keeps the existing one.
+              const insertStatus = patch.status ?? "empty";
+              const errorVal = patch.error ?? null;
+              // Meter only when this path meters AND the RESULTING status is
+              // terminal — folded into the same statement as a CTE keyed off the
+              // upserted row's final status.
+              const meterCte = args.meter
+                ? sql`, metered AS (
+                    UPDATE workspaces
+                    SET cloud_actions_used = coalesce(cloud_actions_used, 0) + 1
+                    WHERE id = ${args.workspaceId}
+                      AND EXISTS (
+                        SELECT 1 FROM upserted
+                        WHERE upserted.status IN ('done', 'error')
+                      )
+                  )`
+                : sql``;
+              const rows = await db.execute<{ id: string }>(sql`
+                WITH upserted AS (
+                  INSERT INTO cells
+                    (workspace_id, table_id, row_id, column_id, value, status, error, updated_at)
+                  VALUES (
+                    ${args.workspaceId},
+                    ${args.tableId},
+                    ${args.rowId},
+                    ${args.columnId},
+                    ${patch.hasValue ? sql`${valueJson}::jsonb` : sql`NULL`},
+                    ${insertStatus},
+                    ${errorVal},
+                    ${args.updatedAt}
+                  )
+                  ON CONFLICT (row_id, column_id) DO UPDATE SET
+                    value = ${patch.hasValue ? sql`${valueJson}::jsonb` : sql`cells.value`},
+                    status = ${patch.status !== undefined ? sql`${insertStatus}` : sql`cells.status`},
+                    error = ${errorVal},
+                    updated_at = ${args.updatedAt}
+                  RETURNING id, status
+                )${meterCte}
+                SELECT id FROM upserted
+              `);
+              const id = rows[0]?.id;
+              if (id === undefined) {
+                throw new Error("cell upsert returned no id");
+              }
+              return id;
+            },
+            catch: fail("cell upsert failed"),
           }),
 
         findSharedCredentialEnc: (workspaceId, extensionId) =>
@@ -769,6 +993,28 @@ export const webhookRepoLayer = (fixtures: {
           cells.find((c) => c.rowId === rowId && c.columnId === columnId),
         ),
       ),
+    findRowByCellValue: (tableId, columnId, value) =>
+      Effect.succeed(
+        (() => {
+          if (!isValidUpsertKeyValue(value)) return Option.none<string>();
+          const candidates = cells
+            .filter((c) => c.columnId === columnId && matchesUpsertKey(c.value, value))
+            .map((c) => ({
+              rowId: c.rowId,
+              row: rows.find((r) => r.id === c.rowId),
+            }))
+            .filter(
+              (m): m is { rowId: string; row: GridRow } =>
+                m.row !== undefined && m.row.tableId === tableId,
+            )
+            .sort(
+              (a, b) =>
+                a.row.position - b.row.position ||
+                a.rowId.localeCompare(b.rowId),
+            );
+          return Option.fromNullable(candidates[0]?.rowId ?? null);
+        })(),
+      ),
     insertRow: (values) =>
       Effect.sync(() => {
         const id = nextId("row");
@@ -801,6 +1047,63 @@ export const webhookRepoLayer = (fixtures: {
             updatedAt: cell.updatedAt,
           };
         }
+      }),
+    resolveCellTarget: (rowId, columnId) =>
+      Effect.succeed(
+        ((): Option.Option<CellTarget> => {
+          const row = rows.find((r) => r.id === rowId);
+          const column = columns.find((c) => c.id === columnId);
+          if (row === undefined || column === undefined) {
+            return Option.none<CellTarget>();
+          }
+          const table = tables.find((t) => t.id === row.tableId);
+          return Option.some<CellTarget>({
+            rowTableId: row.tableId,
+            columnTableId: column.tableId,
+            workspaceId: table?.workspaceId ?? "",
+          });
+        })(),
+      ),
+    upsertCell: (args) =>
+      Effect.sync(() => {
+        const { patch } = args;
+        const idx = cells.findIndex(
+          (c) => c.rowId === args.rowId && c.columnId === args.columnId,
+        );
+        // COALESCE merge mirroring the SQL path: value/status kept when the
+        // patch omits them, error always taken from the patch, updatedAt always
+        // stamped.
+        const prev = idx >= 0 ? cells[idx] : undefined;
+        const merged = {
+          value: patch.hasValue ? patch.value : (prev?.value ?? null),
+          status: patch.status ?? prev?.status ?? "empty",
+          error: patch.error ?? null,
+          updatedAt: args.updatedAt,
+        };
+        let id: string;
+        if (idx >= 0 && prev !== undefined) {
+          id = prev.id;
+          cells[idx] = { ...prev, ...merged };
+        } else {
+          id = nextId("cell");
+          cells.push({
+            id,
+            rowId: args.rowId,
+            columnId: args.columnId,
+            ...merged,
+          });
+        }
+        if (
+          args.meter &&
+          (merged.status === "done" || merged.status === "error")
+        ) {
+          const q = quotas.get(args.workspaceId);
+          quotas.set(args.workspaceId, {
+            cloudActionsUsed: (q?.cloudActionsUsed ?? 0) + 1,
+            cloudActionsLimit: q?.cloudActionsLimit ?? null,
+          });
+        }
+        return id;
       }),
     findSharedCredentialEnc: (workspaceId, extensionId) =>
       Effect.succeed(

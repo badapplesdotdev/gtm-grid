@@ -74,11 +74,21 @@ function harness(opts: {
   const entitlement = EntitlementService.Default.pipe(
     Layer.provide(workspaceRepoLayer(workspaces)),
   );
+  // Wire the in-memory bulk-import meter step to the SAME quotas Map the
+  // MeterService uses, so addRowsWithCells' atomic meter bump is observable —
+  // and rolled back together with the rows on a simulated failure.
+  const meterIncrement = (workspaceId: string, n: number) => {
+    const q = quotas.get(workspaceId);
+    quotas.set(workspaceId, {
+      cloudActionsUsed: (q?.cloudActionsUsed ?? 0) + n,
+      cloudActionsLimit: q?.cloudActionsLimit ?? null,
+    });
+  };
   const layer = GridService.Default.pipe(
     Layer.provide(projectRepoLayer(store)),
     Layer.provide(tableRepoLayer(store)),
     Layer.provide(columnRepoLayer(store)),
-    Layer.provide(rowRepoLayer(store)),
+    Layer.provide(rowRepoLayer(store, meterIncrement)),
     Layer.provide(cellRepoLayer(store)),
     Layer.provide(CellMerge.Default),
     Layer.provide(membership),
@@ -140,6 +150,82 @@ describe("GridService.getTable", () => {
   it("fails GridNotFoundError for a missing table", async () => {
     const { run } = harness({});
     const exit = await run(Effect.flatMap(GridService, (s) => s.getTable("missing")));
+    expect(failTag(exit)).toBe("GridNotFoundError");
+  });
+});
+
+describe("GridService.getTablePage — keyset pagination (TRI-3272)", () => {
+  const pageStore = () =>
+    makeGridStore({
+      tables: [table()],
+      columns: [column()],
+      rows: [
+        row({ id: "r1", position: 0 }),
+        row({ id: "r2", position: 1 }),
+        row({ id: "r3", position: 2 }),
+      ],
+      cells: [
+        { id: "cell1", workspaceId: WS, tableId: "t1", rowId: "r1", columnId: "c1", value: "a", status: "done", error: null, updatedAt: 1 },
+        { id: "cell2", workspaceId: WS, tableId: "t1", rowId: "r2", columnId: "c1", value: "b", status: "done", error: null, updatedAt: 1 },
+        { id: "cell3", workspaceId: WS, tableId: "t1", rowId: "r3", columnId: "c1", value: "c", status: "done", error: null, updatedAt: 1 },
+      ],
+    });
+
+  it("returns a page of rows + ONLY their cells + a nextCursor (not the whole grid)", async () => {
+    const { run } = harness({ store: pageStore() });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.getTablePage({ tableId: "t1", limit: 2 })),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.rows).toEqual([{ _id: "r1" }, { _id: "r2" }]);
+      expect(exit.value.cells.map((c) => c.value).sort()).toEqual(["a", "b"]);
+      expect(exit.value.columns[0]).toMatchObject({ _id: "c1" });
+      expect(exit.value.table).toEqual({ _id: "t1", name: "T1" });
+      expect(exit.value.nextCursor).not.toBeNull();
+    }
+  });
+
+  it("follows the nextCursor to the last page, which reports nextCursor=null", async () => {
+    const { run } = harness({ store: pageStore() });
+    const first = await run(
+      Effect.flatMap(GridService, (s) => s.getTablePage({ tableId: "t1", limit: 2 })),
+    );
+    if (!Exit.isSuccess(first)) throw new Error("first page failed");
+    const second = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.getTablePage({ tableId: "t1", limit: 2, cursor: first.value.nextCursor }),
+      ),
+    );
+    expect(Exit.isSuccess(second)).toBe(true);
+    if (Exit.isSuccess(second)) {
+      expect(second.value.rows).toEqual([{ _id: "r3" }]);
+      expect(second.value.cells.map((c) => c.value)).toEqual(["c"]);
+      expect(second.value.nextCursor).toBeNull();
+    }
+  });
+
+  it("rejects a non-member with NotAMemberError (authz before any page read)", async () => {
+    const { run } = harness({ store: pageStore(), currentUserId: "stranger" });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.getTablePage({ tableId: "t1" })),
+    );
+    expect(failTag(exit)).toBe("NotAMemberError");
+  });
+
+  it("blocks a lapsed/Free workspace with PlanRequiredError", async () => {
+    const { run } = harness({ store: pageStore(), plan: null });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.getTablePage({ tableId: "t1" })),
+    );
+    expect(failTag(exit)).toBe("PlanRequiredError");
+  });
+
+  it("fails GridNotFoundError for a missing table", async () => {
+    const { run } = harness({});
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.getTablePage({ tableId: "missing" })),
+    );
     expect(failTag(exit)).toBe("GridNotFoundError");
   });
 });

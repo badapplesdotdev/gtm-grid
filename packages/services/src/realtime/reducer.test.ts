@@ -13,7 +13,7 @@ import type {
   GridEventColumn,
   GridSnapshot,
 } from "./events.js";
-import { applyGridEvent } from "./reducer.js";
+import { __cellIndexBuilds, applyGridEvent } from "./reducer.js";
 
 const column = (over: Partial<GridEventColumn> = {}): GridEventColumn => ({
   _id: "c1",
@@ -171,5 +171,98 @@ describe("applyGridEvent · null snapshot", () => {
     expect(
       applyGridEvent(null, { type: "cell.upsert", cell: cell() }),
     ).toBeNull();
+  });
+});
+
+describe("applyGridEvent · cell.upsert is O(1) + preserves untouched identity", () => {
+  /** A snapshot with `n` distinct cells (one per row, all on column c1). */
+  const withCells = (n: number): GridSnapshot =>
+    snapshot({
+      rows: Array.from({ length: n }, (_, i) => ({ _id: `r${i}` })),
+      cells: Array.from({ length: n }, (_, i) =>
+        cell({ rowId: `r${i}`, value: i }),
+      ),
+    });
+
+  it("copies ONLY the touched cell — every other cell keeps its reference", () => {
+    const base = withCells(5);
+    const next = applyGridEvent(base, {
+      type: "cell.upsert",
+      cell: cell({ rowId: "r2", value: "changed" }),
+    });
+    expect(next).not.toBeNull();
+    const after = next!.cells;
+    expect(after).toHaveLength(5);
+    for (let i = 0; i < 5; i++) {
+      if (i === 2) {
+        // The touched cell is a NEW object holding the new value.
+        expect(after[i]).not.toBe(base.cells[i]);
+        expect(after[i].value).toBe("changed");
+      } else {
+        // Untouched cells are carried over by reference (memo-friendly).
+        expect(after[i]).toBe(base.cells[i]);
+      }
+    }
+  });
+
+  it("appends a new key without re-copying existing cell objects", () => {
+    const base = withCells(3);
+    const next = applyGridEvent(base, {
+      type: "cell.upsert",
+      cell: cell({ rowId: "r9", columnId: "c1", value: "new" }),
+    });
+    const after = next!.cells;
+    expect(after).toHaveLength(4);
+    for (let i = 0; i < 3; i++) expect(after[i]).toBe(base.cells[i]);
+    expect(after[3].value).toBe("new");
+  });
+
+  it("a stream of upserts stays correct across the carried-forward index", () => {
+    let snap: GridSnapshot | null = withCells(4);
+    snap = applyGridEvent(snap, {
+      type: "cell.upsert",
+      cell: cell({ rowId: "r1", value: "a" }),
+    });
+    snap = applyGridEvent(snap, {
+      type: "cell.upsert",
+      cell: cell({ rowId: "r1", value: "b" }),
+    });
+    snap = applyGridEvent(snap, {
+      type: "cell.upsert",
+      cell: cell({ rowId: "r3", value: "c" }),
+    });
+    expect(snap!.cells).toHaveLength(4);
+    expect(snap!.cells.find((c) => c.rowId === "r1")?.value).toBe("b");
+    expect(snap!.cells.find((c) => c.rowId === "r3")?.value).toBe("c");
+    expect(snap!.cells.find((c) => c.rowId === "r0")?.value).toBe(0);
+  });
+
+  it("upsert lookup is O(1) — index is built a bounded number of times regardless of grid size", () => {
+    // DETERMINISTIC O(1) proof (no wall-clock): the keyed index is built once on
+    // the first upsert, then reused/maintained incrementally — so a long stream
+    // of upserts triggers the full O(N) build a BOUNDED number of times,
+    // independent of grid size. An O(N) findIndex regression would scan per event
+    // (and reverting to it would delete __cellIndexBuilds, breaking this import).
+    const buildsFor = (cellCount: number): number => {
+      let snap: GridSnapshot | null = withCells(cellCount);
+      __cellIndexBuilds.count = 0; // reset AFTER setup; count only the stream
+      for (let i = 0; i < 2_000; i++) {
+        // Re-upsert the SAME (rowId,columnId): steady-state enrichment stream.
+        snap = applyGridEvent(snap, {
+          type: "cell.upsert",
+          cell: cell({ rowId: "r0", value: i }),
+        });
+      }
+      return __cellIndexBuilds.count;
+    };
+
+    const smallBuilds = buildsFor(100);
+    const largeBuilds = buildsFor(20_000);
+
+    // 2,000 upserts cost at most one full index build each, regardless of size.
+    expect(smallBuilds).toBeLessThanOrEqual(1);
+    expect(largeBuilds).toBeLessThanOrEqual(1);
+    // And crucially: the count does NOT grow with the 200×-larger grid.
+    expect(largeBuilds).toBe(smallBuilds);
   });
 });
