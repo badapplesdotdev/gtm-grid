@@ -141,6 +141,69 @@ describe("rowRepoLayer", () => {
     expect(store.rows.map((r) => r.id)).toEqual(["r2"]);
     expect(store.cells.map((c) => c.rowId)).toEqual(["r2"]);
   });
+
+  // TRI-3271: addRowsWithCells now uses the atomic bulkImport (one bulk row
+  // insert + cells + meter in one transaction) instead of N per-row INSERTs.
+  it("bulkImport inserts a multi-row payload via ONE bulk path (rows + cells + meter), ids in input order", async () => {
+    const store = makeGridStore();
+    let metered = 0;
+    const r = run(rowRepoLayer(store, (_ws, n) => (metered += n)));
+    const exit = await r(
+      Effect.flatMap(RowRepo, (s) =>
+        s.bulkImport({
+          rows: [
+            { workspaceId: WS, tableId: "t1", position: 0, createdAt: 1 },
+            { workspaceId: WS, tableId: "t1", position: 1, createdAt: 1 },
+            { workspaceId: WS, tableId: "t1", position: 2, createdAt: 1 },
+          ],
+          // Cells reference rows by their returned id (input order), so the
+          // mapping below proves ids came back aligned to the input rows.
+          buildCells: (ids) =>
+            ids.map((rowId, i) => ({
+              workspaceId: WS, tableId: "t1", rowId, columnId: "c1",
+              value: `v${i}`, status: "done", error: null, updatedAt: 1,
+            })),
+          meter: { workspaceId: WS, n: 3 },
+        }),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    const ids = Exit.isSuccess(exit) ? exit.value : [];
+    // All 3 rows + 3 cells committed in one go; meter bumped once by N.
+    expect(store.rows).toHaveLength(3);
+    expect(store.cells).toHaveLength(3);
+    expect(metered).toBe(3);
+    // Cells point at the row ids in input order.
+    expect(store.cells.map((c) => c.rowId)).toEqual([...ids]);
+    expect(store.cells.map((c) => c.value)).toEqual(["v0", "v1", "v2"]);
+  });
+
+  it("bulkImport is atomic: a mid-import failure leaves ZERO rows, cells and no meter bump", async () => {
+    const store = makeGridStore({ rows: seedRows() });
+    let metered = 0;
+    const r = run(rowRepoLayer(store, (_ws, n) => (metered += n)));
+    const exit = await r(
+      Effect.flatMap(RowRepo, (s) =>
+        s.bulkImport({
+          rows: [
+            { workspaceId: WS, tableId: "t1", position: 1, createdAt: 1 },
+            { workspaceId: WS, tableId: "t1", position: 2, createdAt: 1 },
+          ],
+          // Simulate a failure mid-import (e.g. a bad cell status / DB error).
+          buildCells: () => {
+            throw new Error("boom mid-import");
+          },
+          meter: { workspaceId: WS, n: 2 },
+        }),
+      ),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    // Nothing from THIS import committed: only the pre-seeded row remains, no
+    // new cells, and the meter was never bumped — no orphaned rows.
+    expect(store.rows.map((row) => row.id)).toEqual(["r1"]);
+    expect(store.cells).toHaveLength(0);
+    expect(metered).toBe(0);
+  });
 });
 
 describe("cellRepoLayer", () => {

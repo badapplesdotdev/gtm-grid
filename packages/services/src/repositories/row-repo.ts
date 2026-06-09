@@ -11,6 +11,10 @@ import { schema } from "@gtmgrid/db";
 import { asc, eq } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
+import {
+  CELL_INSERT_CHUNK_SIZE,
+  type NewCell,
+} from "./cell-repo.js";
 import { cascadeDeleteRow, type GridStore } from "./grid-store.js";
 
 /** A row row projection the grid domain uses. */
@@ -28,6 +32,22 @@ export interface NewRow {
   readonly tableId: string;
   readonly position: number;
   readonly createdAt: number;
+}
+
+/**
+ * The atomic bulk-import unit for a CSV import: the rows to insert, a builder
+ * that maps the freshly-returned row ids (in input order) to their cell
+ * inserts, and the metering increment to apply. {@link RowRepo.bulkImport} runs
+ * all three — row insert, cell insert and meter — inside ONE `db.transaction`
+ * so a mid-import failure rolls back atomically (no orphaned rows or cells, no
+ * leaked meter count).
+ */
+export interface BulkImport {
+  readonly rows: readonly NewRow[];
+  /** Build the cell inserts from the inserted row ids (input order). */
+  readonly buildCells: (rowIds: readonly string[]) => readonly NewCell[];
+  /** The workspace + cloud-actions count to increment after the writes. */
+  readonly meter: { readonly workspaceId: string; readonly n: number };
 }
 
 /** Raised when a row read/write fails (DB/transport error). */
@@ -63,6 +83,14 @@ const fail = (op: string) => (cause: unknown) =>
     cause,
   });
 
+/** The `cell_status` enum union, narrowed from a free `string` with no cast. */
+type CellStatus = (typeof schema.cellStatus.enumValues)[number];
+const toCellStatus = (s: string): CellStatus => {
+  const found = schema.cellStatus.enumValues.find((v) => v === s);
+  if (found === undefined) throw new Error(`invalid cell status: ${s}`);
+  return found;
+};
+
 /** Reads/writes the `rows` table. */
 export class RowRepo extends Context.Tag("RowRepo")<
   RowRepo,
@@ -80,6 +108,14 @@ export class RowRepo extends Context.Tag("RowRepo")<
     /** Insert many rows in one call, returning ids in input order. */
     readonly insertMany: (
       values: readonly NewRow[],
+    ) => Effect.Effect<readonly string[], RowRepoError>;
+    /**
+     * Atomically insert rows, their cells, and the meter increment in ONE
+     * `db.transaction`, returning the new row ids in input order. A failure at
+     * any step rolls the whole import back — no orphaned rows.
+     */
+    readonly bulkImport: (
+      input: BulkImport,
     ) => Effect.Effect<readonly string[], RowRepoError>;
     /** Delete a row (FK cascade drops its cells). */
     readonly remove: (id: string) => Effect.Effect<void, RowRepoError>;
@@ -161,6 +197,58 @@ export const RowRepoLive: Layer.Layer<RowRepo, never, DbClient> = Layer.effect(
               },
               catch: fail("row bulk insert"),
             }),
+      bulkImport: (input) =>
+        input.rows.length === 0
+          ? Effect.succeed([] as readonly string[])
+          : Effect.tryPromise({
+              try: () =>
+                // ONE transaction (one pooled connection) so the import is
+                // atomic: a failure in any chunk rolls back the rows, cells and
+                // meter together — no orphaned rows. Kept short (insert-only,
+                // no app round-trips) so it is Supavisor transaction-pooler safe.
+                db.transaction(async (tx) => {
+                  // Bulk-insert rows, chunked, preserving input order in ids.
+                  const ids: string[] = [];
+                  for (const batch of chunk(input.rows, ROW_INSERT_CHUNK_SIZE)) {
+                    const inserted = await tx
+                      .insert(schema.rows)
+                      .values([...batch])
+                      .returning({ id: schema.rows.id });
+                    for (const r of inserted) ids.push(r.id);
+                  }
+
+                  // Build cells from the returned ids and bulk-insert, chunked.
+                  const cells = input.buildCells(ids);
+                  for (const batch of chunk(cells, CELL_INSERT_CHUNK_SIZE)) {
+                    await tx.insert(schema.cells).values(
+                      batch.map((c) => ({
+                        workspaceId: c.workspaceId,
+                        tableId: c.tableId,
+                        rowId: c.rowId,
+                        columnId: c.columnId,
+                        value: c.value,
+                        status: toCellStatus(c.status),
+                        error: c.error,
+                        updatedAt: c.updatedAt,
+                      })),
+                    );
+                  }
+
+                  // Meter the cloud-actions increment inside the same tx so a
+                  // rolled-back import never leaks a billable count.
+                  if (input.meter.n > 0) {
+                    await tx
+                      .update(schema.workspaces)
+                      .set({
+                        cloudActionsUsed: schema.sql`coalesce(${schema.workspaces.cloudActionsUsed}, 0) + ${input.meter.n}`,
+                      })
+                      .where(eq(schema.workspaces.id, input.meter.workspaceId));
+                  }
+
+                  return ids;
+                }),
+              catch: fail("row bulk import"),
+            }),
       remove: (id) =>
         Effect.tryPromise({
           try: async () => {
@@ -172,8 +260,18 @@ export const RowRepoLive: Layer.Layer<RowRepo, never, DbClient> = Layer.effect(
   }),
 );
 
-/** An in-memory `RowRepo` Layer over a shared {@link GridStore}. */
-export const rowRepoLayer = (store: GridStore): Layer.Layer<RowRepo> =>
+/**
+ * An in-memory `RowRepo` Layer over a shared {@link GridStore}.
+ *
+ * `meterIncrement` mirrors the live {@link RowRepo.bulkImport} transaction's
+ * meter step: a test can pass the SAME function the in-memory `MeterService`
+ * uses so the bulk import's meter bump is part of the same atomic unit (and a
+ * simulated failure leaves the meter, like the rows and cells, untouched).
+ */
+export const rowRepoLayer = (
+  store: GridStore,
+  meterIncrement: (workspaceId: string, n: number) => void = () => {},
+): Layer.Layer<RowRepo> =>
   Layer.succeed(RowRepo, {
     findById: (id) =>
       Effect.succeed(Option.fromNullable(store.rows.find((r) => r.id === id))),
@@ -199,5 +297,30 @@ export const rowRepoLayer = (store: GridStore): Layer.Layer<RowRepo> =>
           return id;
         }),
       ),
+    bulkImport: (input) =>
+      Effect.try({
+        try: () => {
+          // Stage the whole import OFF the store, then commit in one shot, so a
+          // throw in buildCells/narrowing leaves rows, cells AND the meter
+          // untouched — the in-memory mirror of the live tx rollback.
+          const staged = input.rows.map((v) => ({
+            id: store.nextId("row"),
+            ...v,
+          }));
+          const ids = staged.map((r) => r.id);
+          const cells = input
+            .buildCells(ids)
+            .map((c) => ({ id: store.nextId("cell"), ...c }));
+          // Commit: rows + cells + meter together.
+          for (const r of staged) store.rows.push(r);
+          for (const c of cells) store.cells.push(c);
+          if (input.meter.n > 0) {
+            meterIncrement(input.meter.workspaceId, input.meter.n);
+          }
+          const out: readonly string[] = ids;
+          return out;
+        },
+        catch: fail("row bulk import"),
+      }),
     remove: (id) => Effect.sync(() => cascadeDeleteRow(store, id)),
   });

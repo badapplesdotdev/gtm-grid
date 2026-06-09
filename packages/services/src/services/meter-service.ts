@@ -58,6 +58,16 @@ export class MeterService extends Context.Tag("MeterService")<
       workspaceId: string,
       n: number,
     ) => Effect.Effect<void, MeterServiceError>;
+    /**
+     * Best-effort track `n` cloud actions to the Autumn port WITHOUT touching the
+     * DB counter. For callers (bulk import) that already incremented
+     * `cloudActionsUsed` inside their own transaction and only need the external
+     * usage track, run AFTER the commit. Never fails on a transport error.
+     */
+    readonly trackActions: (
+      workspaceId: string,
+      n: number,
+    ) => Effect.Effect<void, never>;
     /** A workspace's quota snapshot for the atomic bulk pre-check, or `None`. */
     readonly readQuota: (
       workspaceId: string,
@@ -86,6 +96,18 @@ export const MeterServiceLive: Layer.Layer<
   Effect.gen(function* () {
     const db = yield* DbClient;
     const autumn = yield* AutumnClient;
+    // Best-effort: track to Autumn, but never fail the grid write on a metering
+    // transport error (the DB counter is authoritative).
+    const trackActions = (workspaceId: string, n: number) =>
+      n <= 0 || !UUID_RE.test(workspaceId)
+        ? Effect.void
+        : autumn
+            .trackUsage({
+              customerId: workspaceId,
+              featureId: "cloud_actions",
+              value: n,
+            })
+            .pipe(Effect.ignore);
     return {
       meterActions: (workspaceId, n) =>
         n <= 0 || !UUID_RE.test(workspaceId)
@@ -102,16 +124,9 @@ export const MeterServiceLive: Layer.Layer<
                 },
                 catch: fail("meter increment"),
               });
-              // Best-effort: track to Autumn, but never fail the grid write on a
-              // metering transport error (the DB counter is authoritative).
-              yield* autumn
-                .trackUsage({
-                  customerId: workspaceId,
-                  featureId: "cloud_actions",
-                  value: n,
-                })
-                .pipe(Effect.ignore);
+              yield* trackActions(workspaceId, n);
             }),
+      trackActions,
       readQuota: (workspaceId) =>
         UUID_RE.test(workspaceId)
           ? Effect.tryPromise({
@@ -153,6 +168,9 @@ export const meterServiceLayer = (
               cloudActionsLimit: q?.cloudActionsLimit ?? null,
             });
           }),
+    // No Autumn port in-memory; the DB-equivalent increment is the quota Map,
+    // bumped by the bulk import's own meter step (see rowRepoLayer).
+    trackActions: () => Effect.void,
     readQuota: (workspaceId) =>
       Effect.succeed(Option.fromNullable(quotas.get(workspaceId))),
   });

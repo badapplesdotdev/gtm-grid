@@ -74,11 +74,21 @@ function harness(opts: {
   const entitlement = EntitlementService.Default.pipe(
     Layer.provide(workspaceRepoLayer(workspaces)),
   );
+  // Wire the in-memory bulk-import meter step to the SAME quotas Map the
+  // MeterService uses, so addRowsWithCells' atomic meter bump is observable —
+  // and rolled back together with the rows on a simulated failure.
+  const meterIncrement = (workspaceId: string, n: number) => {
+    const q = quotas.get(workspaceId);
+    quotas.set(workspaceId, {
+      cloudActionsUsed: (q?.cloudActionsUsed ?? 0) + n,
+      cloudActionsLimit: q?.cloudActionsLimit ?? null,
+    });
+  };
   const layer = GridService.Default.pipe(
     Layer.provide(projectRepoLayer(store)),
     Layer.provide(tableRepoLayer(store)),
     Layer.provide(columnRepoLayer(store)),
-    Layer.provide(rowRepoLayer(store)),
+    Layer.provide(rowRepoLayer(store, meterIncrement)),
     Layer.provide(cellRepoLayer(store)),
     Layer.provide(CellMerge.Default),
     Layer.provide(membership),
