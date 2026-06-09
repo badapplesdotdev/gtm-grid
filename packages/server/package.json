@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@gtmgrid/engine": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.0.4",
     "effect": "^3.21.3"
   }
 }

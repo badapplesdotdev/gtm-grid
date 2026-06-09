@@ -1,17 +1,26 @@
-// Built-in AI Generate connector. Bring-your-own-key (Anthropic, OpenAI, or
-// OpenRouter), resolved from the engine's AI provider config — never leaves the
-// machine.
+// Built-in AI Generate connector. Bring-your-own-key (Anthropic, OpenAI,
+// OpenRouter, or a Hermes gateway), resolved from the engine's AI provider
+// config — never leaves the machine.
 
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import type { Connector, MethodContext } from "../types.js";
+import type { Connector, MethodContext, AiConfig } from "../types.js";
+
+// Default Hermes gateway base URL — the user's SSH tunnel to the mac-mini
+// api_server (localhost:18642 -> mac-mini:8642). Overridable per connection;
+// for a gateway running locally, point it at :8642 directly.
+const DEFAULT_HERMES_BASE_URL = "http://localhost:18642/v1";
 
 const generateInput = z.object({
   prompt: z.string().describe("The prompt. Use {{Column Name}} in the column mapping to inject row values."),
   system: z.string().optional().describe("Optional system instruction."),
   model: z.string().optional().describe("Override the model id (must belong to the connected provider)."),
+  provider: z
+    .enum(["anthropic", "openai", "openrouter", "hermes"])
+    .optional()
+    .describe("Pin the AI provider. If omitted, it's inferred from the model id (e.g. 'hermes-*' -> Hermes)."),
   maxTokens: z.coerce.number().optional().describe("Max output tokens (default 512)."),
 });
 
@@ -36,16 +45,22 @@ export const aiConnector: Connector = {
             "No AI provider connected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY.",
           );
         const wantModel = input.model?.trim();
-        // Route to the provider that owns the requested model. OpenRouter model
-        // ids are namespaced ("vendor/model"); Anthropic models are "claude-*";
-        // everything else (gpt-*, o*, etc.) is OpenAI.
-        const wantProvider: "anthropic" | "openai" | "openrouter" | undefined = wantModel
-          ? wantModel.includes("/")
-            ? "openrouter"
-            : wantModel.startsWith("claude")
-              ? "anthropic"
-              : "openai"
-          : undefined;
+        // Route to the provider that owns the requested model. An explicit
+        // `provider` wins; otherwise infer from the model id. Order preserves the
+        // existing rules: namespaced ids ("vendor/model") are OpenRouter and
+        // "claude-*" is Anthropic — a bare "hermes-*" id is the Hermes gateway,
+        // everything else (gpt-*, o*, etc.) is OpenAI. When in doubt, set `provider`.
+        const wantProvider: AiConfig["provider"] | undefined =
+          input.provider ??
+          (wantModel
+            ? wantModel.includes("/")
+              ? "openrouter"
+              : wantModel.startsWith("claude")
+                ? "anthropic"
+                : /^hermes/i.test(wantModel)
+                  ? "hermes"
+                  : "openai"
+            : undefined);
         const ai =
           (wantProvider && all.find((a) => a.provider === wantProvider)) || ctx.ai || all[0];
         const maxTokens = input.maxTokens ?? 512;
@@ -66,10 +81,19 @@ export const aiConnector: Connector = {
           return { text };
         }
 
-        // OpenRouter is OpenAI-API-compatible — same client, different base URL.
+        // OpenRouter and Hermes are OpenAI-API-compatible — same client, different
+        // base URL. Hermes is a local/LAN gateway so its base URL is configurable
+        // (defaults to the tunnel port); it accepts any bearer when the gateway has
+        // no API_SERVER_KEY set, so fall back to a placeholder token.
+        const baseURL =
+          ai.provider === "openrouter"
+            ? "https://openrouter.ai/api/v1"
+            : ai.provider === "hermes"
+              ? ai.baseURL || DEFAULT_HERMES_BASE_URL
+              : undefined;
         const client = new OpenAI({
-          apiKey: ai.apiKey,
-          ...(ai.provider === "openrouter" ? { baseURL: "https://openrouter.ai/api/v1" } : {}),
+          apiKey: ai.apiKey || "hermes",
+          ...(baseURL ? { baseURL } : {}),
         });
         const r = await client.chat.completions.create({
           model,

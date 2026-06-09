@@ -1469,7 +1469,7 @@ dependencies = [
 
 [[package]]
 name = "gtmgrid"
-version = "0.3.8"
+version = "0.3.17"
 dependencies = [
  "serde_json",
  "tauri",

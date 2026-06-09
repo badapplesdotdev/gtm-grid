@@ -164,9 +164,13 @@ const DEFAULT_MODEL = {
   anthropic: "claude-haiku-4-5-20251001",
   openai: "gpt-4o-mini",
   openrouter: "openai/gpt-4o-mini",
+  // The Hermes gateway reports its real model id via /v1/models once connected;
+  // this is only the fallback before the user picks one. Keep "hermes" in the id
+  // so AI Generate's model-based routing sends it to the hermes provider.
+  hermes: "hermes-4",
 } as const;
 
-const AI_PROVIDER_IDS = ["anthropic", "openai", "openrouter"] as const;
+const AI_PROVIDER_IDS = ["anthropic", "openai", "openrouter", "hermes"] as const;
 type AiProvider = (typeof AI_PROVIDER_IDS)[number];
 
 /** Resolve the stored key for one provider (new per-provider slot, with legacy fallback). */
@@ -178,13 +182,24 @@ function storedKeyFor(db: Db, provider: AiProvider): string | undefined {
   return undefined;
 }
 
+/** Resolve a stored OpenAI-compatible base URL for a provider (e.g. hermes). */
+function storedBaseUrlFor(db: Db, provider: AiProvider): string | undefined {
+  return db.getCredential(`ai:${provider}`)?.secrets.baseUrl || undefined;
+}
+
 /** Resolve the default/active AI config (provider/model in meta, key encrypted in credentials). */
 export function storedAiConfig(db: Db): EngineConfig["ai"] {
   const provider = db.getMeta("ai_provider") as AiProvider | undefined;
   if (!provider) return undefined;
   const apiKey = storedKeyFor(db, provider);
   if (!apiKey) return undefined;
-  return { provider, apiKey, model: db.getMeta("ai_model") ?? DEFAULT_MODEL[provider] };
+  const baseURL = storedBaseUrlFor(db, provider);
+  return {
+    provider,
+    apiKey,
+    model: db.getMeta("ai_model") ?? DEFAULT_MODEL[provider],
+    ...(baseURL ? { baseURL } : {}),
+  };
 }
 
 /** Resolve every connected AI provider (for model-based routing in AI Generate). */
@@ -192,7 +207,9 @@ export function storedAiProviders(db: Db): AiConfig[] {
   const out: AiConfig[] = [];
   for (const provider of AI_PROVIDER_IDS) {
     const apiKey = storedKeyFor(db, provider);
-    if (apiKey) out.push({ provider, apiKey, model: DEFAULT_MODEL[provider] });
+    if (!apiKey) continue;
+    const baseURL = storedBaseUrlFor(db, provider);
+    out.push({ provider, apiKey, model: DEFAULT_MODEL[provider], ...(baseURL ? { baseURL } : {}) });
   }
   return out;
 }
@@ -204,10 +221,17 @@ export function connectAi(
   apiKey: string,
   model?: string,
   scope: "personal" | "team" | "local" = "local",
+  baseURL?: string,
 ): void {
   // Track the most-recently-connected provider as the default active one.
   db.setMeta("ai_provider", provider);
   db.setMeta("ai_model", model ?? DEFAULT_MODEL[provider]);
   // Store under a per-provider slot so multiple providers can be connected at once.
-  db.saveCredential({ extensionId: `ai:${provider}`, scope, name: provider, secrets: { apiKey } });
+  // `baseUrl` is persisted alongside the key for OpenAI-compatible providers (hermes).
+  db.saveCredential({
+    extensionId: `ai:${provider}`,
+    scope,
+    name: provider,
+    secrets: { apiKey, ...(baseURL ? { baseUrl: baseURL } : {}) },
+  });
 }

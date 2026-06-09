@@ -76,7 +76,7 @@ function renderConnectorsSection(providers?: AgentContext["providers"]): string 
 
 /** Operating context for the agent: how gtm grid works + the active table.
  *  This IS the GTM Grid skill — the agent reads this on every turn. */
-function contextPreamble(ctx?: AgentContext): string {
+export function contextPreamble(ctx?: AgentContext): string {
   const base = `# GTM Grid — operating manual
 
 You are operating **GTM Grid**, a Clay-style local spreadsheet where every column is a function. Tables live in a local SQLite project. The user runs you to build GTM pipelines: source prospects, enrich them, score/personalize, push to outreach tools.
@@ -165,7 +165,7 @@ ${renderSkillsSection(ctx?.skills)}
   );
 }
 
-export type AgentKind = "claude" | "codex";
+export type AgentKind = "claude" | "codex" | "hermes";
 
 // ── Locating the user's CLIs ──────────────────────────────────────────────
 // GUI apps launch with a minimal PATH and version managers (nvm) only set up
@@ -281,13 +281,26 @@ function versionOf(kind: AgentKind): { installed: boolean; version: string | nul
 }
 
 export function detectAgents() {
-  return { claude: versionOf("claude"), codex: versionOf("codex") };
+  return { claude: versionOf("claude"), codex: versionOf("codex"), hermes: detectHermes() };
+}
+
+/** Hermes status: a configured remote (SSH) gateway, else the local `hermes` binary. */
+function detectHermes(): { installed: boolean; version: string | null; path: string | null } {
+  const cfg = loadAgentsConfig();
+  // Remote "brain" gateway (URL + key): GTM Grid runs the grid tools locally and
+  // uses this gateway as the model.
+  if (cfg.hermesConn?.mode === "remote" && cfg.hermesConn.url)
+    return { installed: true, version: `remote · ${cfg.hermesConn.url}`, path: cfg.hermesConn.url };
+  if (cfg.hermesRemote?.sshHost)
+    return { installed: true, version: `remote · ${cfg.hermesRemote.sshHost}`, path: `ssh:${cfg.hermesRemote.sshHost}` };
+  return versionOf("hermes");
 }
 
 /** Clear caches so the next detect re-resolves (after install / manual connect). */
 export function rescanAgents(): void {
   resolveCache.claude = undefined;
   resolveCache.codex = undefined;
+  resolveCache.hermes = undefined;
   cachedLoginPath = undefined;
 }
 
@@ -319,14 +332,19 @@ function sseClient(res: ServerResponse, origin?: string): SseClient {
 export const __sseClientForTest = sseClient;
 
 /** Path to the gtmgrid MCP launcher — bundled in the packaged app, repo/bin in dev. */
-function mcpLauncher(repoRoot: string): string {
+export function mcpLauncher(repoRoot: string): string {
   return process.env.GTMGRID_MCP_LAUNCHER ?? join(repoRoot, "bin", "gtmgrid-mcp");
 }
 
-function mcpConfig(repoRoot: string, project: string): string {
+type ExtraMcpServer = { command: string; args?: string[]; env?: Record<string, string> };
+
+/** Build the MCP config for claude. `extra` merges in additional servers (e.g.
+ *  Hermes-as-a-tool when enabled). Exported for tests. */
+export function mcpConfig(repoRoot: string, project: string, extra?: Record<string, ExtraMcpServer>): string {
   return JSON.stringify({
     mcpServers: {
       gtmgrid: { command: mcpLauncher(repoRoot), env: { GTMGRID_PROJECT: project } },
+      ...extra,
     },
   });
 }
@@ -337,6 +355,9 @@ export function streamClaude(
   opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext; origin?: string; model?: string },
 ): void {
   const sse = sseClient(res, opts.origin);
+  // Optionally also expose the user's Hermes agent as an MCP tool (off unless
+  // `hermesAsTool` is set in ~/.gtmgrid/agents.json) so Claude can delegate to it.
+  const hermesTool = hermesToolServer();
   const args = [
     "-p",
     opts.message,
@@ -344,13 +365,14 @@ export function streamClaude(
     "stream-json",
     "--verbose",
     "--mcp-config",
-    mcpConfig(opts.repoRoot, opts.project),
-    // Use ONLY gtmgrid's MCP server — ignore the user's other Claude Code MCP
-    // servers (Trigify/Clay/etc.) so the agent drives gtmgrid's own tools and
-    // connectors instead of reaching for an external MCP (and hitting auth walls).
+    mcpConfig(opts.repoRoot, opts.project, hermesTool ? { hermes: hermesTool } : undefined),
+    // Use ONLY gtmgrid's MCP server (+ Hermes when enabled) — ignore the user's
+    // other Claude Code MCP servers (Trigify/Clay/etc.) so the agent drives
+    // gtmgrid's own tools instead of reaching for an external MCP (auth walls).
     "--strict-mcp-config",
     "--allowedTools",
     ...GTM_TOOLS.map((t) => `mcp__gtmgrid__${t}`),
+    ...(hermesTool ? ["mcp__hermes"] : []),
   ];
   const preamble = contextPreamble(opts.context);
   if (preamble) args.push("--append-system-prompt", preamble);
@@ -449,14 +471,20 @@ export function streamCodex(
   const launcher = mcpLauncher(opts.repoRoot);
   const preamble = contextPreamble(opts.context);
   const message = preamble ? `${preamble}\n\n${opts.message}` : opts.message;
+  // Optionally also expose the user's Hermes agent as an MCP tool (off unless
+  // `hermesAsTool` is set in ~/.gtmgrid/agents.json).
+  const hermesTool = hermesToolServer();
+  const hermesToml = hermesTool
+    ? `, hermes = { command = "${hermesTool.command}", args = [${(hermesTool.args ?? []).map((a) => `"${a}"`).join(", ")}] }`
+    : "";
   const flags = [
     "--json",
     "--skip-git-repo-check",
     "--dangerously-bypass-approvals-and-sandbox",
-    // Replace Codex's whole MCP table with ONLY gtmgrid, so it ignores the
-    // user's other registered servers (Trigify/exa/etc.) and drives gtmgrid.
+    // Replace Codex's whole MCP table with ONLY gtmgrid (+ Hermes when enabled),
+    // so it ignores the user's other registered servers and drives gtmgrid.
     "-c",
-    `mcp_servers={ gtmgrid = { command = "${launcher}", env = { GTMGRID_PROJECT = "${opts.project}" } } }`,
+    `mcp_servers={ gtmgrid = { command = "${launcher}", env = { GTMGRID_PROJECT = "${opts.project}" } }${hermesToml} }`,
     ...(opts.model ? ["-m", opts.model] : []),
   ];
   const args = opts.threadId
@@ -518,5 +546,280 @@ export function streamCodex(
     sse.write({ type: "end", sessionId: threadId });
     sse.end();
   });
+  res.on("close", () => child.kill());
+}
+
+// ── Hermes (ACP) bridge ────────────────────────────────────────────────────
+// Hermes speaks the Agent Client Protocol — JSON-RPC 2.0 over stdio with
+// newline-delimited framing. We `hermes acp`, `initialize`, open a session with
+// the gtmgrid MCP server mounted INLINE (so the agent drives the same grid tools
+// claude/codex get), then `session/prompt`. The agent's `session/update`
+// notifications (assistant text, tool_call / tool_call_update) map onto the
+// exact SSE shape the panel already renders. Local by default; a configured
+// `hermesRemote` runs it over SSH against a LAN gateway (e.g. the mac-mini).
+
+/** Hermes connection: local binary (ACP) or a remote gateway "brain" (URL + key). */
+export interface HermesConn {
+  mode: "local" | "remote";
+  /** Gateway base URL ending in /v1 (remote mode), e.g. http://localhost:18642/v1. */
+  url?: string;
+  apiKey?: string;
+  model?: string;
+}
+
+interface AgentsConfig {
+  claude?: string;
+  codex?: string;
+  hermes?: string;
+  /** Remote (LAN/SSH) Hermes gateway. `backHost` is how the remote reaches THIS
+   *  machine's gtmgrid MCP — it SSHes back; omit if gtmgrid runs on the gateway. */
+  hermesRemote?: { sshHost: string; remoteBin?: string; backHost?: string; backLauncher?: string };
+  /** When set, also expose Hermes (`hermes mcp serve`) as a tool to claude/codex. */
+  hermesAsTool?: boolean;
+  /** Local-vs-remote brain selection + the remote gateway URL/key. */
+  hermesConn?: HermesConn;
+}
+
+function loadAgentsConfig(): AgentsConfig {
+  try {
+    return JSON.parse(readFileSync(AGENTS_CONFIG, "utf8")) as AgentsConfig;
+  } catch {
+    return {};
+  }
+}
+
+/** The persisted Hermes connection (mode + remote URL/key). */
+export function getHermesConn(): HermesConn | undefined {
+  return loadAgentsConfig().hermesConn;
+}
+
+/** Persist the Hermes connection to ~/.gtmgrid/agents.json. */
+export function setHermesConn(conn: HermesConn): void {
+  const cfg = loadAgentsConfig();
+  cfg.hermesConn = conn;
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(AGENTS_CONFIG, JSON.stringify(cfg, null, 2));
+  resolveCache.hermes = undefined;
+}
+
+type AcpMcpServer = { name: string; command: string; args: string[]; env: { name: string; value: string }[] };
+interface HermesTransport {
+  argv: string[];
+  gtmgridMcp: AcpMcpServer;
+  label: string;
+}
+
+/** Resolve how to launch Hermes (local binary vs SSH) and how its session reaches
+ *  the gtmgrid MCP server. Returns null if there's no local binary and no remote. */
+function resolveHermesTransport(repoRoot: string, project: string): HermesTransport | null {
+  const remote = loadAgentsConfig().hermesRemote;
+  if (remote?.sshHost) {
+    const remoteBin = remote.remoteBin || "hermes";
+    const launcher = remote.backLauncher || mcpLauncher(repoRoot);
+    // ssh doesn't forward env, so inline GTMGRID_PROJECT into the remote command.
+    const gtmgridMcp: AcpMcpServer = remote.backHost
+      ? { name: "gtmgrid", command: "ssh", args: [remote.backHost, `GTMGRID_PROJECT=${project} ${launcher}`], env: [] }
+      : { name: "gtmgrid", command: launcher, args: [], env: [{ name: "GTMGRID_PROJECT", value: project }] };
+    return { argv: ["ssh", remote.sshHost, remoteBin, "acp"], gtmgridMcp, label: `ssh:${remote.sshHost}` };
+  }
+  const bin = resolveAgentPath("hermes");
+  if (!bin) return null;
+  return {
+    argv: [bin, "acp"],
+    gtmgridMcp: { name: "gtmgrid", command: mcpLauncher(repoRoot), args: [], env: [{ name: "GTMGRID_PROJECT", value: project }] },
+    label: "local",
+  };
+}
+
+/** When `hermesAsTool` is set, expose the user's Hermes agent as an MCP server
+ *  (`hermes mcp serve`) to the claude/codex grid agent — local binary or SSH. */
+function hermesToolServer(): ExtraMcpServer | null {
+  const cfg = loadAgentsConfig();
+  if (!cfg.hermesAsTool) return null;
+  const r = cfg.hermesRemote;
+  if (r?.sshHost) return { command: "ssh", args: [r.sshHost, r.remoteBin || "hermes", "mcp", "serve"] };
+  const bin = resolveAgentPath("hermes") || "hermes";
+  return { command: bin, args: ["mcp", "serve"] };
+}
+
+function acpToolName(u: Record<string, any>): string {
+  const t = String(u?.title ?? u?.kind ?? "tool").trim();
+  // Hermes titles MCP tools "mcp_<server>_<tool>" (and sometimes "gtmgrid: <tool>").
+  return t.replace(/^mcp_[a-z0-9-]+_/i, "").replace(/^gtmgrid[:_\s]*/i, "").trim() || "tool";
+}
+function acpToolResultText(u: Record<string, any>): string {
+  if (typeof u?.rawOutput === "string" && u.rawOutput) return u.rawOutput.slice(0, 600);
+  const blocks = Array.isArray(u?.content) ? u.content : [];
+  const txt = blocks
+    .map((b: any) => (typeof b?.content?.text === "string" ? b.content.text : typeof b?.text === "string" ? b.text : ""))
+    .join("");
+  return String(txt).slice(0, 600);
+}
+
+/** Map one ACP `session/update` payload onto SSE events. Pure; exported for tests. */
+export function mapAcpUpdate(update: Record<string, any> | undefined | null): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  switch (update?.sessionUpdate) {
+    case "agent_message_chunk": {
+      const text = update?.content?.text;
+      if (typeof text === "string" && text) out.push({ type: "text", text });
+      break;
+    }
+    case "tool_call":
+      out.push({ type: "tool", name: acpToolName(update), raw: update?.toolCallId, input: update?.rawInput ?? {} });
+      break;
+    case "tool_call_update":
+      if (update?.status === "completed" || update?.status === "failed") {
+        out.push({ type: "tool_result", result: acpToolResultText(update) });
+        out.push({ type: "grid" }); // a tool finished — nudge the UI to refetch
+      }
+      break;
+    // available_commands_update / usage_update / plan / current_mode_update: ignored.
+  }
+  return out;
+}
+
+/** Choose a permission option that allows the action (headless auto-run, mirrors
+ *  the bypass posture of the claude/codex bridges). */
+export function pickAllowOption(options: unknown): string | null {
+  if (!Array.isArray(options)) return null;
+  const byKind = (k: string) => options.find((o: any) => o?.kind === k)?.optionId;
+  return (
+    byKind("allow_once") ??
+    byKind("allow_always") ??
+    options.find((o: any) => /allow/i.test(String(o?.optionId ?? o?.kind ?? "")))?.optionId ??
+    null
+  );
+}
+
+/** Stream a Hermes turn over SSE via the Agent Client Protocol. */
+export function streamHermes(
+  res: ServerResponse,
+  opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext; origin?: string; model?: string },
+): void {
+  const sse = sseClient(res, opts.origin);
+  const transport = resolveHermesTransport(opts.repoRoot, opts.project);
+  if (!transport) {
+    sse.write({
+      type: "error",
+      message:
+        "Hermes not found. Connect the local `hermes` binary in the panel, or configure a remote gateway (hermesRemote in ~/.gtmgrid/agents.json).",
+    });
+    sse.write({ type: "end" });
+    return sse.end();
+  }
+
+  const [cmd, ...args] = transport.argv;
+  const child = spawn(cmd, args, { env: agentSpawnEnv(cmd), cwd: opts.repoRoot });
+
+  // ── Minimal JSON-RPC 2.0 client over the child's stdio (NDJSON) ──
+  let nextId = 1;
+  const pending = new Map<number, (msg: any) => void>();
+  const sendRaw = (obj: unknown) => child.stdin?.write(JSON.stringify(obj) + "\n");
+  const request = (method: string, params: unknown) =>
+    new Promise<any>((resolve) => {
+      const id = nextId++;
+      pending.set(id, resolve);
+      sendRaw({ jsonrpc: "2.0", id, method, params });
+    });
+  const respond = (id: number, result: unknown) => sendRaw({ jsonrpc: "2.0", id, result });
+  const respondError = (id: number, message: string) => sendRaw({ jsonrpc: "2.0", id, error: { code: -32601, message } });
+  const failAllPending = (message: string) => {
+    for (const [, resolve] of pending) resolve({ error: { message } });
+    pending.clear();
+  };
+
+  let sessionId = opts.sessionId ?? null;
+  // Suppress `session/update` events until our prompt is in flight — this drops
+  // setup notifications AND the history replay that session/load streams back.
+  let forwarding = false;
+
+  let buf = "";
+  child.stdout.on("data", (chunk) => {
+    buf += chunk.toString();
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      let m: any;
+      try {
+        m = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      // Response to one of our requests (has id + result/error, no method).
+      if (m.id !== undefined && m.method === undefined && pending.has(m.id)) {
+        pending.get(m.id)!(m);
+        pending.delete(m.id);
+        continue;
+      }
+      // Agent → client request. Auto-allow permission; reject anything else so
+      // Hermes never hangs waiting on us.
+      if (m.method && m.id !== undefined) {
+        if (m.method === "session/request_permission") {
+          const optId = pickAllowOption(m.params?.options);
+          respond(m.id, { outcome: optId ? { outcome: "selected", optionId: optId } : { outcome: "cancelled" } });
+        } else {
+          respondError(m.id, `unsupported: ${m.method}`);
+        }
+        continue;
+      }
+      // Notifications.
+      if (m.method === "session/update" && forwarding) {
+        for (const ev of mapAcpUpdate(m.params?.update)) sse.write(ev);
+      }
+    }
+  });
+
+  let stderr = "";
+  child.stderr.on("data", (d) => (stderr += d.toString()));
+  child.on("error", (err) => {
+    failAllPending(`failed to launch hermes (${transport.label}): ${err.message}`);
+  });
+  child.on("close", () => failAllPending("hermes exited"));
+
+  (async () => {
+    try {
+      const init = await request("initialize", {
+        protocolVersion: 1,
+        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+      });
+      if (init?.error) throw new Error(init.error.message ?? "initialize failed");
+
+      const mcpServers = [transport.gtmgridMcp];
+      // Resume the prior session when we have one (re-registering gtmgrid); fall
+      // back to a fresh session if it's unknown/expired.
+      let sess: any = null;
+      if (sessionId) {
+        sess = await request("session/load", { sessionId, cwd: opts.repoRoot, mcpServers });
+        if (sess?.error) sess = null;
+      }
+      if (!sess) sess = await request("session/new", { cwd: opts.repoRoot, mcpServers });
+      if (sess?.error) throw new Error(sess.error.message ?? "session failed");
+      sessionId = sess.result?.sessionId ?? sessionId;
+      if (sessionId) sse.write({ type: "session", sessionId });
+
+      // Best-effort model switch (panel passes an ACP modelId); keep default on failure.
+      if (opts.model) await request("session/set_model", { sessionId, modelId: opts.model });
+
+      const preamble = contextPreamble(opts.context);
+      const text = preamble ? `${preamble}\n\n${opts.message}` : opts.message;
+      forwarding = true;
+      const result = await request("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
+      const stop = result?.result?.stopReason;
+      const isError = !!result?.error || (typeof stop === "string" && stop !== "end_turn");
+      if (result?.error) sse.write({ type: "error", message: result.error.message ?? "prompt failed" });
+      sse.write({ type: "done", result: "", sessionId, isError });
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      sse.write({ type: "error", message: detail + (stderr ? ` — ${stderr.slice(-300)}` : "") });
+    } finally {
+      sse.write({ type: "end", sessionId });
+      sse.end();
+      child.kill();
+    }
+  })();
+
   res.on("close", () => child.kill());
 }

@@ -172,6 +172,8 @@ export interface AiProviderInfo {
   models: string[];
   connected: boolean;
   viaEnv: boolean;
+  /** Resolved base URL for OpenAI-compatible gateways (hermes); null otherwise. */
+  baseUrl?: string | null;
   connectedScopes: CredentialScope[];
 }
 export interface SkillInfo {
@@ -248,8 +250,10 @@ export const api = {
     http<{ ok: boolean; enabled: boolean }>(`/api/signals/${id}/toggle`, { method: "POST", body: JSON.stringify({ enabled }) }),
   deleteSignal: (id: string) => http<{ ok: boolean }>(`/api/signals/${id}`, { method: "DELETE" }),
   aiProviders: () => http<AiProviderInfo[]>("/api/ai-providers"),
-  connectAiProvider: (id: string, body: { apiKey: string; scope?: CredentialScope }) =>
-    http<{ ok: boolean }>(`/api/ai-providers/${id}/connect`, { method: "POST", body: JSON.stringify(body) }),
+  connectAiProvider: (
+    id: string,
+    body: { apiKey?: string; baseURL?: string; scope?: CredentialScope },
+  ) => http<{ ok: boolean }>(`/api/ai-providers/${id}/connect`, { method: "POST", body: JSON.stringify(body) }),
   projects: () => http<ProjectInfo[]>("/api/projects"),
   createProject: (name: string) =>
     http<{ ok: boolean; project: string }>("/api/projects", { method: "POST", body: JSON.stringify({ name }) }),
@@ -301,9 +305,9 @@ export const api = {
   connect: (extId: string, secrets: Record<string, string>, scope?: CredentialScope) =>
     http<{ ok: boolean }>(`/api/extensions/${extId}/connect`, { method: "POST", body: JSON.stringify({ secrets, scope }) }),
   agents: () =>
-    http<{ claude: AgentStatus; codex: AgentStatus }>("/api/agents"),
-  connectAgent: (agent: "claude" | "codex", path?: string) =>
-    http<{ claude: AgentStatus; codex: AgentStatus }>("/api/agents/connect", {
+    http<{ claude: AgentStatus; codex: AgentStatus; hermes: AgentStatus }>("/api/agents"),
+  connectAgent: (agent: "claude" | "codex" | "hermes", path?: string) =>
+    http<{ claude: AgentStatus; codex: AgentStatus; hermes: AgentStatus }>("/api/agents/connect", {
       method: "POST",
       body: JSON.stringify({ agent, path }),
     }),
@@ -312,6 +316,18 @@ export const api = {
     http<{ sessions: AgentSession[] }>(`/api/agent/sessions/${agent}`),
   agentSession: (agent: "claude" | "codex", id: string) =>
     http<{ messages: AgentHistoryMessage[] }>(`/api/agent/sessions/${agent}/${encodeURIComponent(id)}`),
+  hermesConfig: () =>
+    http<{ mode: "local" | "remote"; url: string; model: string; hasKey: boolean }>("/api/agents/hermes-config"),
+  saveHermesConfig: (body: { mode: "local" | "remote"; url?: string; apiKey?: string; model?: string }) =>
+    http<{ ok: boolean; agents: { claude: AgentStatus; codex: AgentStatus; hermes: AgentStatus } }>(
+      "/api/agents/hermes-config",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  testHermes: (body: { url: string; apiKey?: string }) =>
+    http<{ ok: boolean; models?: string[]; error?: string }>("/api/agents/hermes-test", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };
 
 /** A past conversation summary (from the agent's native transcript store). */

@@ -597,15 +597,42 @@ export function ExtensionsBrowse({
 
 export function AiProviderPanel({ provider, onConnected, workspaceCreds }: { provider: AiProviderInfo; onConnected: () => void; workspaceCreds?: WorkspaceCredSource }) {
   const meta = `AI Provider  ·  ${provider.models.length} model${provider.models.length !== 1 ? "s" : ""}`;
+  // Hermes is a self-hosted gateway, so its OpenAI-compatible base URL is
+  // user-configurable (unlike the fixed cloud providers).
+  const isHermes = provider.id === "hermes";
+  const [baseUrl, setBaseUrl] = useState(provider.baseUrl ?? "");
 
   const onSave = async (apiKey: string, scope: CredentialScope) => {
-    await api.connectAiProvider(provider.id, { apiKey, scope });
+    await api.connectAiProvider(provider.id, {
+      apiKey,
+      scope,
+      ...(isHermes ? { baseURL: baseUrl.trim() || undefined } : {}),
+    });
     onConnected();
   };
 
   return (
     <div className="detail">
       <PanelHeader logo={provider.logo} title={provider.name} description={provider.description} meta={meta} />
+
+      {isHermes && (
+        <div className="detail-section">
+          <div className="conn-label">Gateway</div>
+          <label className="form-label">OpenAI-compatible base URL</label>
+          <input
+            className="form-input"
+            value={baseUrl}
+            placeholder={provider.baseUrl ?? "http://localhost:18642/v1"}
+            spellCheck={false}
+            onChange={(e) => setBaseUrl(e.target.value)}
+          />
+          <p className="conn-hint" style={{ margin: "6px 0 0" }}>
+            Your Hermes gateway's <code>/v1</code> endpoint — the SSH-tunnel port for a remote
+            (mac-mini) gateway, or <code>:8642</code> for a local one. Add the gateway's API key
+            below (any value works if it has no <code>API_SERVER_KEY</code> set).
+          </p>
+        </div>
+      )}
 
       <ConnectionsSection
         name={provider.name}
