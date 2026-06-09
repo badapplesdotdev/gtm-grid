@@ -5,6 +5,7 @@
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { fetchWithRetry } from "../http-retry.js";
+import { assertPublicUrl } from "../ssrf.js";
 import type { Connector, ConnectorMethod, MethodContext } from "../types.js";
 
 export interface HttpMethodDef {
@@ -89,6 +90,17 @@ export function defineHttpConnector(def: HttpConnectorDef): Connector {
       if (verb === "POST") {
         headers["content-type"] = "application/json";
         init.body = JSON.stringify(body);
+      }
+
+      // SSRF guard for SERVER-SIDE runs (the Vercel enrichment worker): a
+      // workspace member's custom manifest `baseUrl` is untrusted shared-infra
+      // input, so refuse any URL whose host is — or resolves to — a private/
+      // reserved address BEFORE the request leaves the box, and fail closed on
+      // redirects so a 3xx into an internal host can't bypass the check. Unset on
+      // local/sidecar runs, where the call targets the user's own machine/network.
+      if (ctx.guardSsrf) {
+        await assertPublicUrl(url);
+        init.redirect = "error";
       }
 
       // Retry transient upstream failures (429/503/5xx) with exponential backoff
