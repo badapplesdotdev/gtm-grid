@@ -572,6 +572,31 @@ export const signalBindings = pgTable(
   ],
 );
 
+/**
+ * Durable per-binding dedupe set: every result key a binding has ever ingested.
+ * Replaces the bounded `signal_bindings.seen` jsonb array (capped at 1000 keys),
+ * whose truncation re-inserted duplicates once a binding crossed that cap. The
+ * `(binding_id, key)` unique index lets the worker dedupe a poll's results with a
+ * single indexed lookup AND insert only the genuinely-new keys via an
+ * `ON CONFLICT DO NOTHING` bulk upsert, so the set stays correct without ever
+ * loading the whole history into memory.
+ */
+export const signalSeenKeys = pgTable(
+  "signal_seen_keys",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    bindingId: uuid("binding_id")
+      .notNull()
+      .references(() => signalBindings.id, { onDelete: "cascade" }),
+    /** The dedupe key (`resultKey`) for one ingested result. */
+    key: text("key").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("signal_seen_keys_by_binding_key").on(t.bindingId, t.key),
+  ],
+);
+
 /** Per-event webhook delivery log (convex/schema.ts:380). */
 export const webhookDeliveries = pgTable(
   "webhook_deliveries",

@@ -350,5 +350,5 @@ export {
 } from "@gtmgrid/cloud";
 
 export * from "./signals/catalog.js";
-export { SignalRepo, SignalRepoLive, signalRepoLayer, SignalRepoError, type SignalBinding, type SignalBindingColumn, type SignalBindingInsert, type SignalBindingPatch } from "./repositories/signal-repo.js";
+export { SignalRepo, SignalRepoLive, signalRepoLayer, SignalRepoError, type SignalBinding, type SignalBindingColumn, type SignalBindingInsert, type SignalBindingPatch, type SignalDueCursor, type DueBinding, type DueBindingPage } from "./repositories/signal-repo.js";
 export { SignalService, SignalError } from "./services/signal-service.js";
