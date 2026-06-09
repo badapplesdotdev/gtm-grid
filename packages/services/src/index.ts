@@ -224,6 +224,7 @@ export {
   WebhookNotFoundError,
   WebhookService,
   type WorkerGrid,
+  type WorkerTableMeta,
 } from "./services/webhook-service.js";
 export { ExtensionService } from "./services/extension-service.js";
 // --- Cloud-access gate (entitlement) -----------------------------------------

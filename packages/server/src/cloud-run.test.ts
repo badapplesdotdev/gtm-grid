@@ -26,7 +26,11 @@ import {
   type Connector,
   type CloudClientLike,
 } from "@gtmgrid/engine";
-import { runCloudColumn, type CloudRunDeps } from "./cloud-run.js";
+import {
+  resolveWorkspaceId,
+  runCloudColumn,
+  type CloudRunDeps,
+} from "./cloud-run.js";
 
 let dir: string;
 let db: Db;
@@ -95,9 +99,11 @@ function fakeConvex(
   client: CloudClientLike;
   mutations: RecordedMutation[];
   credentialCalls: Array<Record<string, unknown>>;
+  queryRefs: string[];
 } {
   const mutations: RecordedMutation[] = [];
   const credentialCalls: Array<Record<string, unknown>> = [];
+  const queryRefs: string[] = [];
 
   const upsert = (args: Record<string, unknown>) => {
     const rowId = args.rowId as string;
@@ -119,6 +125,12 @@ function fakeConvex(
   const client: CloudClientLike = {
     query: async (ref) => {
       const name = String(ref);
+      queryRefs.push(name);
+      if (name === "/api/worker/getTableMeta") {
+        // The metadata-only fast path: resolveWorkspaceId reads ONLY the table's
+        // workspace id from here — no columns/rows/cells (TRI-3273).
+        return { table: { id: "t1", workspaceId: "wks_1" } };
+      }
       if (name === "/api/worker/getTable") {
         return {
           // The run resolves the workspace it should decrypt shared creds for
@@ -158,7 +170,7 @@ function fakeConvex(
     },
   };
 
-  return { client, mutations, credentialCalls };
+  return { client, mutations, credentialCalls, queryRefs };
 }
 
 /** Deps whose `makeClient` ignores url/token and returns the given fake client. */
@@ -389,5 +401,32 @@ describe("runCloudColumn — workspace-shared credentials (#18)", () => {
     expect(grid.cells.find((c) => c.rowId === "r1" && c.columnId === "c_key")?.value).toBe(
       "<none>",
     );
+  });
+});
+
+describe("resolveWorkspaceId — metadata-only fast path (TRI-3273)", () => {
+  /** An empty grid; resolveWorkspaceId must never need its cells. */
+  const emptyGrid = () => ({
+    columns: [] as Array<Record<string, unknown>>,
+    rows: [] as Array<Record<string, unknown>>,
+    cells: [] as Array<{
+      rowId: string;
+      columnId: string;
+      value: unknown;
+      status: string;
+      error: string | null;
+      updatedAt: number | null;
+    }>,
+  });
+
+  it("reads the workspace id from getTableMeta WITHOUT calling the full-grid getTable", async () => {
+    const { client, queryRefs } = fakeConvex(emptyGrid());
+
+    const workspaceId = await resolveWorkspaceId(client, "t1");
+
+    expect(workspaceId).toBe("wks_1");
+    // The regression: it must hit the metadata-only ref and NEVER the full grid.
+    expect(queryRefs).toContain("/api/worker/getTableMeta");
+    expect(queryRefs).not.toContain("/api/worker/getTable");
   });
 });
