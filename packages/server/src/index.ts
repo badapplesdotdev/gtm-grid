@@ -26,7 +26,7 @@ import { detectAgents, streamClaude, streamCodex, setAgentPath, rescanAgents, pa
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
 import { runCloudPush, defaultCloudPushDeps } from "./cloud-push.js";
-import { corsHeadersFor, isOriginAllowed } from "./cors.js";
+import { corsHeadersFor, isLoopbackHost, isOriginAllowed } from "./cors.js";
 import { Semaphore } from "./semaphore.js";
 import {
   SIGNAL_SOURCES,
@@ -894,6 +894,27 @@ async function readBody(req: IncomingMessage): Promise<any> {
 
 const server = createServer(async (req, res) => {
   const origin = req.headers.origin;
+
+  // ── CSRF / DNS-rebinding defense (applies to EVERY route, before any work).
+  // The sidecar is loopback-only and privileged (runs connectors with the user's
+  // credentials, spawns their authenticated CLIs). CORS alone is not enough: a
+  // hostile page can issue a cross-origin "simple" POST (e.g. `text/plain`, which
+  // `readBody` still parses as JSON) and — though it cannot READ the response —
+  // the side effect (delete a table, overwrite a key, fire a credit-burning run)
+  // still lands; and DNS rebinding makes a hostile page "same-origin" to skip CORS
+  // entirely. So we REJECT, not merely omit ACAO:
+  //   1. any `Host` that is not the loopback interface (rebinding still carries
+  //      the attacker's own `Host`, which page JS cannot forge), and
+  //   2. any present-but-disallowed browser `Origin` (a missing Origin = a
+  //      non-browser/local caller, which the loopback bind already gates).
+  // The previously chat-only `isOriginAllowed` gate now covers the whole surface.
+  if (!isLoopbackHost(req.headers.host)) {
+    return send(res, 403, { error: "host not allowed" }, origin);
+  }
+  if (!isOriginAllowed(origin)) {
+    return send(res, 403, { error: "origin not allowed" }, origin);
+  }
+
   if (req.method === "OPTIONS") return send(res, 204, {}, origin);
   const url = new URL(req.url ?? "/", "http://localhost");
 
