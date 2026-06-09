@@ -12,7 +12,10 @@ import { schema } from "@gtmgrid/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
+import { chunk } from "./_chunk.js";
 import type { GridStore } from "./grid-store.js";
+
+export { chunk } from "./_chunk.js";
 
 /** A cell row projection the grid domain uses (the getTable cell shape). */
 export interface Cell {
@@ -63,16 +66,6 @@ const UUID_RE =
  * 1000 leaves a wide safety margin so a single bulk import never hits the wall.
  */
 export const CELL_INSERT_CHUNK_SIZE = 1000;
-
-/** Split `items` into consecutive chunks of at most `size`, preserving order. */
-export const chunk = <T>(items: readonly T[], size: number): T[][] => {
-  if (size <= 0) throw new Error("chunk size must be positive");
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    out.push(items.slice(i, i + size));
-  }
-  return out;
-};
 
 const fail = (op: string) => (cause: unknown) =>
   new CellRepoError({

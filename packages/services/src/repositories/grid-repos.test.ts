@@ -5,8 +5,11 @@
  * and the FK-cascade mirror (deleting a table/column/row removes its children).
  */
 
+import { drizzle } from "drizzle-orm/postgres-js";
+import { schema } from "@gtmgrid/db";
 import { Effect, Exit, Option } from "effect";
 import { describe, expect, it } from "vitest";
+import { dbClientLayer } from "../db-client.js";
 import {
   cascadeDeleteColumn,
   cascadeDeleteRow,
@@ -19,6 +22,7 @@ import {
 } from "./grid-store.js";
 import {
   cellRepoLayer,
+  CellRepoLive,
   CELL_INSERT_CHUNK_SIZE,
   chunk,
   type NewCell,
@@ -393,6 +397,91 @@ describe("chunk (cell-repo bulk-insert batching)", () => {
   it("returns no batches for an empty input and rejects a non-positive size", () => {
     expect(chunk([], CELL_INSERT_CHUNK_SIZE)).toEqual([]);
     expect(() => chunk([1, 2, 3], 0)).toThrow();
+  });
+});
+
+// TRI-3285 regression: the in-memory cellRepoLayer pushes cells one-by-one, so
+// it can NOT catch a regression that drops chunking from the LIVE Drizzle path.
+// This binds the assertion to CellRepoLive itself: a real Drizzle client over a
+// recording fake (the same shape `dbClientLayer` accepts in production) captures
+// the rows handed to each `INSERT`. If chunking is removed, a >chunk-size import
+// collapses to ONE oversized statement (which would blow Postgres' 65535
+// bind-parameter cap) and these assertions fail.
+describe("CellRepoLive.insertMany chunks the live Drizzle insert (TRI-3285)", () => {
+  // A real Drizzle handle whose `insert(...).values(rows)` is intercepted to
+  // record the batch size and resolve without a database. Typed as the same
+  // `Db` `dbClientLayer` takes (Proxy preserves the target type) — no `as`.
+  const recordingDb = (batches: number[]) => {
+    const base = drizzle.mock({ schema });
+    const values = (rows: unknown) => {
+      batches.push(Array.isArray(rows) ? rows.length : 1);
+      return Promise.resolve([] as unknown[]);
+    };
+    return new Proxy(base, {
+      get(target, prop, receiver) {
+        if (prop === "insert") return () => ({ values });
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+  };
+
+  const makeCells = (total: number): NewCell[] =>
+    Array.from({ length: total }, (_, i) => ({
+      workspaceId: WS,
+      tableId: "t1",
+      rowId: `r${i}`,
+      columnId: "c1",
+      value: i,
+      status: "done",
+      error: null,
+      updatedAt: 1,
+    }));
+
+  it("splits a >chunk-size import into batches of at most CELL_INSERT_CHUNK_SIZE", async () => {
+    const batches: number[] = [];
+    const total = CELL_INSERT_CHUNK_SIZE * 2 + 5;
+    const exit = await Effect.runPromiseExit(
+      Effect.flatMap(CellRepo, (s) => s.insertMany(makeCells(total))).pipe(
+        Effect.provide(CellRepoLive),
+        Effect.provide(dbClientLayer(recordingDb(batches))),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    // >1 statement, none over the bind-parameter-safe size, summing to total:
+    // the exact signature a chunked bulk insert leaves and a single oversized
+    // INSERT (the regression) would not.
+    expect(batches.length).toBeGreaterThan(1);
+    for (const n of batches) expect(n).toBeLessThanOrEqual(CELL_INSERT_CHUNK_SIZE);
+    expect(batches.reduce((a, b) => a + b, 0)).toBe(total);
+    expect(batches).toEqual([
+      CELL_INSERT_CHUNK_SIZE,
+      CELL_INSERT_CHUNK_SIZE,
+      5,
+    ]);
+  });
+
+  it("emits exactly one statement when the import fits in a single chunk", async () => {
+    const batches: number[] = [];
+    const exit = await Effect.runPromiseExit(
+      Effect.flatMap(CellRepo, (s) => s.insertMany(makeCells(10))).pipe(
+        Effect.provide(CellRepoLive),
+        Effect.provide(dbClientLayer(recordingDb(batches))),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(batches).toEqual([10]);
+  });
+
+  it("touches the database for ZERO statements on an empty import", async () => {
+    const batches: number[] = [];
+    const exit = await Effect.runPromiseExit(
+      Effect.flatMap(CellRepo, (s) => s.insertMany([])).pipe(
+        Effect.provide(CellRepoLive),
+        Effect.provide(dbClientLayer(recordingDb(batches))),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(batches).toEqual([]);
   });
 });
 

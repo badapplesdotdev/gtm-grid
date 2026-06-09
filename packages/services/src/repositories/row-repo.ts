@@ -11,6 +11,7 @@ import { schema } from "@gtmgrid/db";
 import { and, asc, eq, gt, or } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
+import { chunk } from "./_chunk.js";
 import {
   CELL_INSERT_CHUNK_SIZE,
   type NewCell,
@@ -90,16 +91,6 @@ const UUID_RE =
  * import (which inserts one row per CSV line) never hits the wall.
  */
 export const ROW_INSERT_CHUNK_SIZE = 1000;
-
-/** Split `items` into consecutive chunks of at most `size`, preserving order. */
-export const chunk = <T>(items: readonly T[], size: number): T[][] => {
-  if (size <= 0) throw new Error("chunk size must be positive");
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    out.push(items.slice(i, i + size));
-  }
-  return out;
-};
 
 const fail = (op: string) => (cause: unknown) =>
   new RowRepoError({
