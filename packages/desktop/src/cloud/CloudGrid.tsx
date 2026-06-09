@@ -19,6 +19,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Id } from "./ids";
 import { CellContent, Icon } from "../App";
 import type { Cell } from "../api";
+import { VirtualGridBody } from "../VirtualGridBody";
+import { resolveRowHeight } from "../gridVirtual";
 import { runCloudColumn } from "./cloud-run";
 import { WebhookModal } from "./WebhookModal";
 import {
@@ -53,6 +55,11 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
   const [runningColId, setRunningColId] = useState<string | null>(null);
   const [runningCells, setRunningCells] = useState<Set<string>>(new Set());
   const [showWebhook, setShowWebhook] = useState(false);
+
+  // Row-virtualization plumbing (TRI-3267): the scroll container the
+  // virtualizer reads from, and the resolved per-density row height.
+  const gridScrollRef = useRef<HTMLDivElement>(null);
+  const rowHeight = resolveRowHeight();
 
   // Auto-open the webhook form when the chooser's "Webhook" flow bumps the token
   // (and a table is actually present to bind it to).
@@ -209,7 +216,7 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
           </button>
         </div>
       ) : (
-        <div className="grid-wrap">
+        <div className="grid-wrap" ref={gridScrollRef}>
           <table className="grid-table">
             <thead>
               <tr>
@@ -262,8 +269,8 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
                 </th>
               </tr>
             </thead>
-            <tbody>
-              {data.rows.length === 0 ? (
+            {data.rows.length === 0 ? (
+              <tbody>
                 <tr>
                   <td className="grid-td row-num-td" />
                   {data.columns.map((col) => (
@@ -273,8 +280,14 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
                   ))}
                   <td className="grid-td" />
                 </tr>
-              ) : (
-                data.rows.map((row, idx) => (
+              </tbody>
+            ) : (
+              <VirtualGridBody
+                rows={data.rows}
+                scrollRef={gridScrollRef}
+                rowHeight={rowHeight}
+                colSpan={data.columns.length + 2}
+                renderRow={(row, idx) => (
                   <tr key={row.id} className="grid-tr">
                     <td className="grid-td row-num-td">{idx + 1}</td>
                     {data.columns.map((col) => {
@@ -311,9 +324,9 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
                       </button>
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
+                )}
+              />
+            )}
           </table>
         </div>
       )}

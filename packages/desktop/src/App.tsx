@@ -36,6 +36,8 @@ import { ImportCsvModal } from "./ImportCsvModal";
 import { SignalsModal, type SignalsCloud } from "./SignalsModal";
 import type { ImportWriter } from "./csvImport";
 import type { Id } from "./cloud/ids";
+import { VirtualGridBody } from "./VirtualGridBody";
+import { resolveRowHeight } from "./gridVirtual";
 import "./styles.css";
 
 // What the main area is showing.
@@ -886,11 +888,16 @@ export default function App() {
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try { return (localStorage.getItem("gtmgrid:theme") as "light" | "dark") || "light"; } catch { return "light"; }
   });
+  // Row-virtualization plumbing (TRI-3267): the scroll container ref the
+  // virtualizer reads, and the resolved per-density row height it estimates with.
+  const gridScrollRef = useRef<HTMLDivElement>(null);
+  const [rowHeight, setRowHeight] = useState(resolveRowHeight);
   useEffect(() => {
     const root = document.documentElement;
     root.setAttribute("data-theme", theme);
     root.setAttribute("data-density", "compact");
     root.setAttribute("data-accent", "green");
+    setRowHeight(resolveRowHeight());
     try { localStorage.setItem("gtmgrid:theme", theme); } catch { /* ignore */ }
   }, [theme]);
 
@@ -2033,7 +2040,7 @@ export default function App() {
             <p className="empty-sub">Trigify is scraping your signal — first results can take a few minutes. They'll appear here automatically, and keep updating on your schedule.</p>
           </div>
         ) : tableData ? (
-          <div className="grid-wrap">
+          <div className="grid-wrap" ref={gridScrollRef}>
             <table
               className="grid-table"
               style={{ width: GUTTER_W + tableData.columns.reduce((s, c) => s + colW(c.id), 0) + ADD_COL_W }}
@@ -2087,8 +2094,8 @@ export default function App() {
                   </th>
                 </tr>
               </thead>
-              <tbody>
-                {tableData.rows.length === 0 ? (
+              {tableData.rows.length === 0 ? (
+                <tbody>
                   <tr>
                     <td className="grid-td row-num-td" />
                     {tableData.columns.map(col => (
@@ -2098,57 +2105,65 @@ export default function App() {
                     ))}
                     <td className="grid-td" />
                   </tr>
-                ) : tableData.rows.map((row, idx) => (
-                  <tr key={row.id} className="grid-tr">
-                    <td
-                      className="grid-td row-num-td"
-                      onContextMenu={(e) => openCtx(e, [{ label: "Delete row", danger: true, onClick: () => deleteRow(row.id) }])}
-                    >
-                      {idx + 1}
-                    </td>
-                    {tableData.columns.map(col => {
-                      const cell: Cell | undefined = row.cells[col.id];
-                      return (
-                        <td
-                          key={col.id}
-                          className="grid-td"
-                          onContextMenu={(e) =>
-                            openCtx(e, [
-                              { label: "Clear cell", onClick: () => clearCell(row.id, col.id) },
-                              { label: "Delete row", danger: true, onClick: () => deleteRow(row.id) },
-                            ])
-                          }
-                        >
-                          <CellContent
-                            cell={cell}
-                            col={col}
-                            onEdit={v => setCell(row.id, col.id, v)}
-                            onOpenDetails={() =>
-                              setDetail({
-                                columnName: col.name,
-                                value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
-                              })
+                </tbody>
+              ) : (
+                <VirtualGridBody
+                  rows={tableData.rows}
+                  scrollRef={gridScrollRef}
+                  rowHeight={rowHeight}
+                  colSpan={tableData.columns.length + 2}
+                  renderRow={(row, idx) => (
+                    <tr key={row.id} className="grid-tr">
+                      <td
+                        className="grid-td row-num-td"
+                        onContextMenu={(e) => openCtx(e, [{ label: "Delete row", danger: true, onClick: () => deleteRow(row.id) }])}
+                      >
+                        {idx + 1}
+                      </td>
+                      {tableData.columns.map(col => {
+                        const cell: Cell | undefined = row.cells[col.id];
+                        return (
+                          <td
+                            key={col.id}
+                            className="grid-td"
+                            onContextMenu={(e) =>
+                              openCtx(e, [
+                                { label: "Clear cell", onClick: () => clearCell(row.id, col.id) },
+                                { label: "Delete row", danger: true, onClick: () => deleteRow(row.id) },
+                              ])
                             }
-                            onExpand={(anchor) =>
-                              setExpandCell({
-                                rowId: row.id,
-                                colId: col.id,
-                                columnName: col.name,
-                                value: cell?.value != null ? String(cell.value) : "",
-                                editable: col.kind === "manual",
-                                anchor,
-                              })
-                            }
-                            onRunCell={col.kind === "function" ? () => runCell(row.id, col.id) : undefined}
-                            running={runningCells.has(`${row.id}:${col.id}`)}
-                          />
-                        </td>
-                      );
-                    })}
-                    <td className="grid-td" />
-                  </tr>
-                ))}
-              </tbody>
+                          >
+                            <CellContent
+                              cell={cell}
+                              col={col}
+                              onEdit={v => setCell(row.id, col.id, v)}
+                              onOpenDetails={() =>
+                                setDetail({
+                                  columnName: col.name,
+                                  value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
+                                })
+                              }
+                              onExpand={(anchor) =>
+                                setExpandCell({
+                                  rowId: row.id,
+                                  colId: col.id,
+                                  columnName: col.name,
+                                  value: cell?.value != null ? String(cell.value) : "",
+                                  editable: col.kind === "manual",
+                                  anchor,
+                                })
+                              }
+                              onRunCell={col.kind === "function" ? () => runCell(row.id, col.id) : undefined}
+                              running={runningCells.has(`${row.id}:${col.id}`)}
+                            />
+                          </td>
+                        );
+                      })}
+                      <td className="grid-td" />
+                    </tr>
+                  )}
+                />
+              )}
             </table>
           </div>
         ) : null}
