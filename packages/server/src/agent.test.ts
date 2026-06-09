@@ -1,12 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ServerResponse } from "node:http";
 import {
   appendCapped,
   codexEnvToml,
   manageChildLifecycle,
   mcpEnv,
   parseAgentCloud,
+  streamHermes,
   STDERR_CAP,
   type AgentCloud,
+  type HermesChild,
+  type HermesTransport,
   type ManagedChild,
   type ProcessControl,
 } from "./agent.js";
@@ -246,6 +250,122 @@ describe("manageChildLifecycle — group-kill cleanup (TRI-3305)", () => {
     control.runTimer(3000);
 
     expect(control.kills).toEqual([]);
+  });
+});
+
+// ── streamHermes spawn/cleanup (TRI-3305 regression) ──────────────────────
+// The Hermes ACP bridge spawns a detached `hermes` child + its MCP server. On
+// cleanup it must group-kill the WHOLE tree (negative pid: SIGTERM→SIGKILL), not
+// `child.kill()` the parent alone — the leak that previously shipped untested.
+// We inject a fake spawn (so no process is launched), a fake ProcessControl with
+// hand-driven timers, and a fake transport (so no `hermes` binary is required).
+
+/** A fake HermesChild whose close/error listeners + stdout/stderr we drive. */
+function fakeHermesChild(pid: number | undefined = 7373): HermesChild & {
+  close: () => void;
+  error: (err: Error) => void;
+} {
+  // Real ChildProcess is an EventEmitter — BOTH manageChildLifecycle (dispose)
+  // and streamHermes (failAllPending) subscribe to "close", so we keep arrays.
+  const closeListeners: Array<() => void> = [];
+  const errorListeners: Array<(err: Error) => void> = [];
+  const noop = { on() {} } as { on(event: "data", listener: (chunk: Buffer | string) => void): unknown };
+  const child: HermesChild & { close: () => void; error: (err: Error) => void } = {
+    pid,
+    stdin: { write: () => true },
+    stdout: noop,
+    stderr: noop,
+    on(event: "close" | "error", listener: (...a: any[]) => void) {
+      if (event === "close") closeListeners.push(listener as () => void);
+      else if (event === "error") errorListeners.push(listener as (err: Error) => void);
+      return this;
+    },
+    close() {
+      for (const l of closeListeners) l();
+    },
+    error(err: Error) {
+      for (const l of errorListeners) l(err);
+    },
+  };
+  return child;
+}
+
+/** A fake ServerResponse: records SSE writes + lets the test fire `res.close`. */
+function fakeRes(): ServerResponse & { closeRes: () => void } {
+  let onClose: (() => void) | null = null;
+  const res = {
+    writeHead() {
+      return res;
+    },
+    write() {
+      return true;
+    },
+    end() {
+      return res;
+    },
+    on(event: string, listener: () => void) {
+      if (event === "close") onClose = listener;
+      return res;
+    },
+    closeRes() {
+      onClose?.();
+    },
+  };
+  return res as unknown as ServerResponse & { closeRes: () => void };
+}
+
+const FAKE_TRANSPORT: HermesTransport = {
+  argv: ["/fake/hermes", "acp"],
+  gtmgridMcp: { name: "gtmgrid", command: "/fake/launcher", args: [], env: [{ name: "GTMGRID_PROJECT", value: "p" }] },
+  label: "local",
+};
+
+function runStreamHermes(child: HermesChild, control: ProcessControl, res: ServerResponse) {
+  streamHermes(
+    res,
+    { message: "hi", project: "p", repoRoot: "/repo" },
+    { spawn: () => child, control, resolveTransport: () => FAKE_TRANSPORT },
+  );
+}
+
+describe("streamHermes — group-kill cleanup (TRI-3305 regression)", () => {
+  it("group-kills the WHOLE tree (negative pid SIGTERM→SIGKILL) on res close, not child.kill()", () => {
+    const child = fakeHermesChild(7373);
+    const control = fakeControl();
+    const res = fakeRes();
+    runStreamHermes(child, control, res);
+
+    res.closeRes(); // panel unmount / Stop / new send
+    expect(control.kills).toEqual([{ pid: -7373, signal: "SIGTERM" }]);
+
+    control.runTimer(3000); // child ignores SIGTERM through the grace
+    expect(control.kills).toEqual([
+      { pid: -7373, signal: "SIGTERM" },
+      { pid: -7373, signal: "SIGKILL" },
+    ]);
+  });
+
+  it("sends NO kill once the hermes child has already exited (avoids killing a recycled pid)", () => {
+    const child = fakeHermesChild(7373);
+    const control = fakeControl();
+    const res = fakeRes();
+    runStreamHermes(child, control, res);
+
+    child.close(); // hermes exits on its own
+    res.closeRes(); // late cleanup must be a no-op
+    control.runTimer(3000);
+
+    expect(control.kills).toEqual([]);
+  });
+
+  it("max-run timeout group-kills the tree exactly once", () => {
+    const child = fakeHermesChild(7373);
+    const control = fakeControl();
+    const res = fakeRes();
+    runStreamHermes(child, control, res);
+
+    control.runTimer(5 * 60_000); // MAX_RUN_MS elapses
+    expect(control.kills).toEqual([{ pid: -7373, signal: "SIGTERM" }]);
   });
 });
 

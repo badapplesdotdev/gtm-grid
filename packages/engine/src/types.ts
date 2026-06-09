@@ -102,9 +102,13 @@ export interface MethodContext {
 }
 
 export interface AiConfig {
-  provider: "anthropic" | "openai" | "openrouter";
+  provider: "anthropic" | "openai" | "openrouter" | "hermes";
   apiKey: string;
   model: string;
+  /** OpenAI-compatible base URL. Used by providers that aren't a fixed cloud
+   *  endpoint — e.g. `hermes` (a local/LAN gateway). Anthropic ignores it;
+   *  openrouter hardcodes its own. */
+  baseURL?: string;
 }
 
 export interface Connector {
