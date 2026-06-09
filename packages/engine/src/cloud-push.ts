@@ -10,8 +10,12 @@
  *
  *   - First push of an UNLINKED local table CREATES a cloud table and stores a
  *     local↔cloud link in the local `meta` store ({@link Db.setCloudTableLink}).
- *   - Re-push of a LINKED local table OVERWRITES the cloud table's data from
- *     local (detected via the stored link).
+ *   - Re-push of a LINKED local table OVERWRITES the cloud data from local
+ *     (detected via the stored link) using CREATE-NEW-THEN-SWAP (TRI-3302): it
+ *     builds a fresh replacement cloud table FULLY (columns + rows), then
+ *     atomically repoints the link to it and deletes the OLD table. A mid-flight
+ *     failure therefore leaves the OLD table fully intact — there is no
+ *     clear-then-rebuild window that could destroy data on failure.
  *
  * RESILIENCE (the load-bearing constraint): this is an Effect orchestrator that
  * OWNS its own resilience around a THIN, NON-RETRYING transport:
@@ -149,10 +153,12 @@ export interface CloudPushTransport {
     rows: readonly CloudCellMap[],
   ) => Effect.Effect<void, CloudPushError>;
   /**
-   * Clear an existing cloud table's data for a re-push OVERWRITE (drop its rows;
-   * columns are reconciled by the push). Resolves when the table is empty.
+   * Delete a cloud table outright (rows + columns cascade). Used by a re-push
+   * OVERWRITE to remove the OLD table AFTER the replacement has been built and
+   * the local↔cloud link repointed — so a mid-flight build failure never
+   * touches the prior table (TRI-3302). Resolves when the table is gone.
    */
-  readonly clearTable: (
+  readonly deleteTable: (
     cloudTableId: string,
   ) => Effect.Effect<void, CloudPushError>;
   /** Whether a cloud table still exists (re-push link validation). */
@@ -327,12 +333,17 @@ export class CloudPushService extends Effect.Service<CloudPushService>()(
           ): Effect.Effect<A, CloudPushError> =>
             limiter(resilient(operation, effect));
 
+          // ── A re-push (OVERWRITE) must be validated + confirmed BEFORE any
+          //    cloud write. We then build a brand-new replacement table and only
+          //    repoint/delete the old one once the new one is fully populated —
+          //    so a mid-flight failure can NEVER destroy the prior data (TRI-3302).
           let outcome: PushOutcome;
-          let cloudTableId: string;
+          let oldCloudTableId: string | undefined;
 
           if (existingLink !== undefined) {
-            // ── Re-push (OVERWRITE). Validate the link still resolves, require
-            //    explicit confirmation (destructive), then clear the cloud data.
+            outcome = "overwritten";
+            oldCloudTableId = existingLink;
+            // Validate the link still resolves.
             const exists = yield* request(
               "tableExists",
               transport.tableExists(existingLink),
@@ -346,6 +357,8 @@ export class CloudPushService extends Effect.Service<CloudPushService>()(
                 }),
               );
             }
+            // Require explicit confirmation (destructive — the old table will be
+            // deleted once the replacement is in place).
             if (input.confirmOverwrite !== true) {
               return yield* Effect.fail(
                 new LinkConflictError({
@@ -355,17 +368,19 @@ export class CloudPushService extends Effect.Service<CloudPushService>()(
                 }),
               );
             }
-            yield* request("clearTable", transport.clearTable(existingLink));
-            cloudTableId = existingLink;
-            outcome = "overwritten";
           } else {
-            // ── First push (CREATE). Build a new cloud table.
-            cloudTableId = yield* request(
-              "createTable",
-              transport.createTable(table.name),
-            );
             outcome = "created";
           }
+
+          // ── Build the replacement (or first) cloud table FULLY — create the
+          //    table, then its columns, then all its rows — BEFORE touching the
+          //    link or the old table. Any failure here (incl. a 402 quota inside
+          //    addRowsWithCells) leaves the OLD table intact and the link still
+          //    pointing at it: no data-loss window. This is create-new-then-swap.
+          const newCloudTableId = yield* request(
+            "createTable",
+            transport.createTable(table.name),
+          );
 
           // ── Build the cloud columns (fresh each push so the cloud schema
           //    mirrors local), mapping local column id → cloud column id.
@@ -373,7 +388,7 @@ export class CloudPushService extends Effect.Service<CloudPushService>()(
           for (const col of localColumns) {
             const cloudColumnId = yield* request(
               "addColumn",
-              transport.addColumn(cloudTableId, {
+              transport.addColumn(newCloudTableId, {
                 name: col.name,
                 type: cloudColumnType(col.type),
               }),
@@ -404,18 +419,33 @@ export class CloudPushService extends Effect.Service<CloudPushService>()(
             (rowChunk) =>
               request(
                 "addRowsWithCells",
-                transport.addRowsWithCells(cloudTableId, rowChunk),
+                transport.addRowsWithCells(newCloudTableId, rowChunk),
               ),
             { concurrency, discard: true },
           );
 
-          // ── Persist the link only AFTER a successful push, so a failed first
-          //    push leaves no dangling link (the next attempt re-creates cleanly).
-          db.setCloudTableLink(input.localTableId, cloudTableId);
+          // ── THE SWAP. The replacement is fully built and populated. Repoint the
+          //    local↔cloud link to it FIRST so the link always resolves a table
+          //    that actually has the data (a crash after this still leaves valid
+          //    data linked). Persisting only after a successful build also means a
+          //    failed FIRST push leaves no dangling link.
+          db.setCloudTableLink(input.localTableId, newCloudTableId);
+
+          // ── Now (and only now) remove the OLD table on an overwrite. This is
+          //    best-effort cleanup: the link already points at the new table, so a
+          //    failure to delete the old one is NOT data-loss — it just leaves an
+          //    orphan cloud table. We swallow its failure so a successful push is
+          //    not reported as failed over a stale orphan.
+          if (oldCloudTableId !== undefined) {
+            yield* request(
+              "deleteTable",
+              transport.deleteTable(oldCloudTableId),
+            ).pipe(Effect.ignore);
+          }
 
           return {
             outcome,
-            cloudTableId,
+            cloudTableId: newCloudTableId,
             rowCount: cloudRows.length,
             columnCount: localColumns.length,
           };

@@ -110,13 +110,9 @@ class FakeTransport implements CloudPushTransport {
     });
   }
 
-  clearTable(cloudTableId: string): Effect.Effect<void, CloudPushError> {
-    return this.guarded("clearTable", () => {
-      const t = this.tables.get(cloudTableId);
-      if (t) {
-        t.rows = [];
-        t.columns = [];
-      }
+  deleteTable(cloudTableId: string): Effect.Effect<void, CloudPushError> {
+    return this.guarded("deleteTable", () => {
+      this.tables.delete(cloudTableId);
     });
   }
 
@@ -233,7 +229,7 @@ describe("CloudPushService.pushTable", () => {
   });
 
   describe("re-push (linked → overwrite)", () => {
-    it("detects the link and OVERWRITES with explicit confirmation", async () => {
+    it("detects the link and OVERWRITES with explicit confirmation (create-new-then-swap)", async () => {
       const tableId = seedTable({ rows: 3 });
       const transport = new FakeTransport();
 
@@ -241,7 +237,7 @@ describe("CloudPushService.pushTable", () => {
       const first = await runPush(transport, { localTableId: tableId });
       expect(Exit.isSuccess(first)).toBe(true);
       if (!Exit.isSuccess(first)) return;
-      const cloudTableId = first.value.cloudTableId;
+      const firstCloudTableId = first.value.cloudTableId;
 
       // Add a local row so the overwrite reflects the new local state.
       const cols = db.listColumns(tableId);
@@ -256,12 +252,18 @@ describe("CloudPushService.pushTable", () => {
       if (!Exit.isSuccess(second)) return;
 
       expect(second.value.outcome).toBe("overwritten");
-      expect(second.value.cloudTableId).toBe(cloudTableId);
       expect(second.value.rowCount).toBe(4);
-      // Still ONE created table total (the re-push did NOT create a new one).
-      expect(transport.createdCount).toBe(1);
-      // Overwrite cleared then re-wrote: the cloud table holds exactly 4 rows.
-      expect(transport.tables.get(cloudTableId)?.rows.length).toBe(4);
+      // Create-new-then-swap: the re-push built a NEW table (2 created total) and
+      // repointed the link to it, then deleted the OLD table.
+      expect(transport.createdCount).toBe(2);
+      expect(second.value.cloudTableId).not.toBe(firstCloudTableId);
+      // The link resolves the NEW table, which holds exactly 4 rows.
+      expect(db.getCloudTableLink(tableId)).toBe(second.value.cloudTableId);
+      expect(transport.tables.get(second.value.cloudTableId)?.rows.length).toBe(
+        4,
+      );
+      // The OLD table was deleted (no orphan left behind on success).
+      expect(transport.tables.has(firstCloudTableId)).toBe(false);
     });
 
     it("FAILS LinkConflictError when a re-push is not confirmed (destructive)", async () => {
@@ -277,6 +279,49 @@ describe("CloudPushService.pushTable", () => {
       if (Exit.isSuccess(first)) {
         expect(transport.tables.get(first.value.cloudTableId)?.rows.length).toBe(2);
       }
+    });
+
+    it("REGRESSION (TRI-3302): a fatal failure mid re-push leaves PRIOR cloud data intact (no data loss)", async () => {
+      // Seed + first push: the cloud table now holds the table's prior data.
+      const tableId = seedTable({ rows: 3 });
+      const transport = new FakeTransport();
+      const first = await runPush(transport, { localTableId: tableId });
+      expect(Exit.isSuccess(first)).toBe(true);
+      if (!Exit.isSuccess(first)) return;
+      const priorCloudTableId = first.value.cloudTableId;
+      const priorRowCount =
+        transport.tables.get(priorCloudTableId)?.rows.length;
+      expect(priorRowCount).toBe(3);
+
+      // Simulate the exact failure from the bug: a 402 quota raised INSIDE
+      // addRowsWithCells on a CONFIRMED re-push — i.e. a fatal failure at the
+      // point where the OLD clear-then-rebuild design would already have wiped
+      // the cloud table.
+      transport.fatalOn.set(
+        "addRowsWithCells",
+        new CloudActionsLimitError({ message: "quota exhausted" }),
+      );
+
+      const second = await runPush(transport, {
+        localTableId: tableId,
+        confirmOverwrite: true,
+      });
+
+      // The push fails with the quota error (surfaced unchanged for the 402 route).
+      const err = expectFailureTag(second, "CloudActionsLimitError");
+      expect(err.message).toMatch(/quota/i);
+
+      // THE INVARIANT: the PRIOR cloud table still exists with all 3 rows — the
+      // failure destroyed NOTHING. (Old design: clearTable ran first → 0 rows.)
+      expect(transport.tables.has(priorCloudTableId)).toBe(true);
+      expect(transport.tables.get(priorCloudTableId)?.rows.length).toBe(3);
+
+      // The link still resolves the table that actually has the data, so a retry
+      // (or the user) sees the intact prior table — not an emptied one.
+      expect(db.getCloudTableLink(tableId)).toBe(priorCloudTableId);
+
+      // The OLD table was never cleared/deleted on the failed attempt.
+      expect(transport.attempts.get("deleteTable") ?? 0).toBe(0);
     });
 
     it("FAILS LinkConflictError when the linked cloud table no longer exists", async () => {

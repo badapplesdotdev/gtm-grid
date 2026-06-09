@@ -138,7 +138,7 @@ describe("runCloudPush — deps wiring + typed-error propagation", () => {
     createTable: () => Effect.succeed("cloud-t1"),
     addColumn: () => Effect.succeed("cloud-c1"),
     addRowsWithCells: () => Effect.void,
-    clearTable: () => Effect.void,
+    deleteTable: () => Effect.void,
     tableExists: () => Effect.succeed(true),
     ...overrides,
   });

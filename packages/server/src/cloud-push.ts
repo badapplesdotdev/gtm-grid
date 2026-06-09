@@ -219,32 +219,6 @@ export function makeTrpcPushTransport(
           }),
         );
 
-  /** Narrow a `grid.getTable` payload to its row/column ids (no casts). */
-  const readGridIds = (
-    data: unknown,
-  ): { rowIds: string[]; columnIds: string[] } => {
-    const idsFrom = (value: unknown): string[] =>
-      Array.isArray(value)
-        ? value.flatMap((entry) =>
-            typeof entry === "object" &&
-            entry !== null &&
-            "_id" in entry &&
-            typeof entry._id === "string"
-              ? [entry._id]
-              : [],
-          )
-        : [];
-    const rows =
-      typeof data === "object" && data !== null && "rows" in data
-        ? idsFrom(data.rows)
-        : [];
-    const columns =
-      typeof data === "object" && data !== null && "columns" in data
-        ? idsFrom(data.columns)
-        : [];
-    return { rowIds: rows, columnIds: columns };
-  };
-
   return {
     createTable: (name) =>
       mutate("grid.createTable", { projectId, name }).pipe(
@@ -273,22 +247,14 @@ export function makeTrpcPushTransport(
         Effect.catchTag("FatalPushError", () => Effect.succeed(false)),
       ),
 
-    clearTable: (cloudTableId) =>
-      Effect.gen(function* () {
-        const data = yield* queryGet("grid.getTable", {
-          tableId: cloudTableId,
-        });
-        const { rowIds, columnIds } = readGridIds(data);
-        // Drop existing rows (cells cascade) then columns, so the re-push
-        // rebuilds the cloud schema + data fresh from local (one-way). Sequential
-        // here is fine: the orchestrator rate-limits each call as one token.
-        for (const rowId of rowIds) {
-          yield* mutate("grid.deleteRow", { rowId });
-        }
-        for (const columnId of columnIds) {
-          yield* mutate("grid.deleteColumn", { columnId });
-        }
-      }),
+    deleteTable: (cloudTableId) =>
+      // Drop the OLD cloud table outright (rows/columns/cells cascade on the
+      // server). The orchestrator only calls this AFTER the replacement table is
+      // fully built and the link repointed (create-new-then-swap, TRI-3302), so
+      // this is non-destructive cleanup of a now-orphaned table — never the data
+      // the link points at. ONE mutation (vs the old per-row/per-column deletes),
+      // so there is no half-cleared intermediate state.
+      mutate("grid.deleteTable", { tableId: cloudTableId }).pipe(Effect.asVoid),
   };
 }
 
