@@ -296,6 +296,114 @@ interface SseClient {
   end: () => void;
 }
 
+// ── Process-group lifecycle (TRI-3305) ────────────────────────────────────
+// Agent turns spawn the CLI (`claude`/`codex`), which in turn spawns the gtmgrid
+// MCP server + its own subprocesses. Killing only the direct child orphans that
+// whole tree, which accumulates to multiple GB. We spawn each child `detached`
+// so it becomes its own process-group/session leader, then on cleanup signal the
+// ENTIRE group (negative pid) — SIGTERM, then SIGKILL after a grace if it ignores
+// the term — using only native `process.kill` (no `tree-kill` dependency).
+
+/** How long to wait after SIGTERM before escalating to SIGKILL. */
+export const KILL_GRACE_MS = 3000;
+/** Hard ceiling on a single turn; a hung agent is terminated and surfaced. */
+export const MAX_RUN_MS = 5 * 60_000;
+/** Keep only the last ~32KB of stderr so a chatty/looping child can't grow the heap. */
+export const STDERR_CAP = 32 * 1024;
+
+/** Minimal slice of a spawned child the lifecycle manager needs (so tests can fake it). */
+export interface ManagedChild {
+  readonly pid?: number;
+  on(event: "close", listener: () => void): unknown;
+}
+
+/** Injectable seam for the OS calls, so the lifecycle is unit-testable offline. */
+export interface ProcessControl {
+  kill: (pid: number, signal: NodeJS.Signals) => void;
+  setTimeout: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  clearTimeout: (handle: ReturnType<typeof setTimeout>) => void;
+}
+
+const defaultProcessControl: ProcessControl = {
+  kill: (pid, signal) => process.kill(pid, signal),
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: (handle) => clearTimeout(handle),
+};
+
+/**
+ * Wire group-kill cleanup + a max-run timeout to a detached child. Returns a
+ * `terminate()` to invoke on `res.on("close")` (panel unmount / Stop / new send)
+ * and a `dispose()` the `child.on("close")` handler calls so timers are cleared.
+ *
+ * Guarantees (the regression-test contract):
+ *  - `terminate()` signals the whole GROUP: `kill(-pid, "SIGTERM")`, then
+ *    `kill(-pid, "SIGKILL")` after {@link KILL_GRACE_MS} if the child hasn't closed.
+ *  - Once the child closes, `exited` is set and the escalation timer is cleared —
+ *    so NO signal is ever sent after exit (avoids killing a recycled pid).
+ *  - The max-run timeout terminates the group and invokes `onTimeout` (to emit an
+ *    SSE error+end) exactly once.
+ *  - Every `kill` is wrapped so an already-dead group (`ESRCH`) is a no-op.
+ */
+export function manageChildLifecycle(
+  child: ManagedChild,
+  opts: { onTimeout: () => void; control?: ProcessControl; graceMs?: number; maxRunMs?: number },
+): { terminate: () => void; dispose: () => void } {
+  const ctrl = opts.control ?? defaultProcessControl;
+  const graceMs = opts.graceMs ?? KILL_GRACE_MS;
+  const maxRunMs = opts.maxRunMs ?? MAX_RUN_MS;
+
+  let exited = false;
+  let killTimer: ReturnType<typeof setTimeout> | null = null;
+  let runTimer: ReturnType<typeof setTimeout> | null = ctrl.setTimeout(() => {
+    runTimer = null;
+    terminate();
+    opts.onTimeout();
+  }, maxRunMs);
+
+  const signalGroup = (signal: NodeJS.Signals): void => {
+    const pid = child.pid;
+    if (exited || pid === undefined) return;
+    try {
+      // Negative pid → the whole process group (CLI + MCP server + grandchildren).
+      ctrl.kill(-pid, signal);
+    } catch {
+      /* ESRCH: the group is already gone — nothing to kill. */
+    }
+  };
+
+  function terminate(): void {
+    if (exited) return;
+    signalGroup("SIGTERM");
+    if (killTimer === null) {
+      killTimer = ctrl.setTimeout(() => {
+        killTimer = null;
+        signalGroup("SIGKILL");
+      }, graceMs);
+    }
+  }
+
+  function dispose(): void {
+    exited = true;
+    if (killTimer !== null) {
+      ctrl.clearTimeout(killTimer);
+      killTimer = null;
+    }
+    if (runTimer !== null) {
+      ctrl.clearTimeout(runTimer);
+      runTimer = null;
+    }
+  }
+
+  child.on("close", dispose);
+  return { terminate, dispose };
+}
+
+/** Append `chunk` to `buf` but keep only the trailing {@link STDERR_CAP} bytes. */
+export function appendCapped(buf: string, chunk: string, cap = STDERR_CAP): string {
+  const next = buf + chunk;
+  return next.length > cap ? next.slice(next.length - cap) : next;
+}
+
 // The agent SSE stream is the most privileged route (it spawns the user's CLI),
 // so it carries the SAME allowlisted CORS as the JSON routes — NEVER `*` (#22).
 // A disallowed Origin gets no `access-control-allow-origin` header (and is
@@ -433,10 +541,19 @@ export function streamClaude(
     sse.write({ type: "end" });
     return sse.end();
   }
-  const child = spawn(bin, args, { env: agentSpawnEnv(bin), cwd: opts.repoRoot });
+  // `detached` makes the child its own process-group leader so we can later
+  // signal the WHOLE tree (CLI + MCP server + grandchildren) via `-pid` (TRI-3305).
+  const child = spawn(bin, args, { env: agentSpawnEnv(bin), cwd: opts.repoRoot, detached: true });
   let sessionId = opts.sessionId ?? null;
   let buf = "";
   let gridDirty = false;
+  const lifecycle = manageChildLifecycle(child, {
+    onTimeout: () => {
+      sse.write({ type: "error", message: `claude turn exceeded ${Math.round(MAX_RUN_MS / 1000)}s and was terminated` });
+      sse.write({ type: "end", sessionId });
+      sse.end();
+    },
+  });
 
   child.stdout.on("data", (chunk) => {
     buf += chunk.toString();
@@ -486,9 +603,10 @@ export function streamClaude(
   });
 
   let stderr = "";
-  child.stderr.on("data", (d) => (stderr += d.toString()));
+  child.stderr.on("data", (d) => (stderr = appendCapped(stderr, d.toString())));
 
   child.on("error", (err) => {
+    lifecycle.dispose();
     sse.write({ type: "error", message: `Failed to launch claude: ${err.message}` });
     sse.end();
   });
@@ -500,7 +618,8 @@ export function streamClaude(
     sse.end();
   });
 
-  res.on("close", () => child.kill());
+  // Panel unmount / Stop / new send closes the response → kill the whole group.
+  res.on("close", () => lifecycle.terminate());
 }
 
 function resultText(result: any): string {
@@ -553,11 +672,20 @@ export function streamCodex(
     sse.write({ type: "end" });
     return sse.end();
   }
-  const child = spawn(bin, args, { env: agentSpawnEnv(bin), cwd: opts.repoRoot });
+  // `detached` → own process group, so cleanup can kill the CLI + the gtmgrid
+  // MCP server + their subprocesses as one group, not just the codex parent.
+  const child = spawn(bin, args, { env: agentSpawnEnv(bin), cwd: opts.repoRoot, detached: true });
   child.stdin?.end(); // codex exec otherwise waits on stdin
 
   let threadId = opts.threadId ?? null;
   let buf = "";
+  const lifecycle = manageChildLifecycle(child, {
+    onTimeout: () => {
+      sse.write({ type: "error", message: `codex turn exceeded ${Math.round(MAX_RUN_MS / 1000)}s and was terminated` });
+      sse.write({ type: "end", sessionId: threadId });
+      sse.end();
+    },
+  });
   child.stdout.on("data", (chunk) => {
     buf += chunk.toString();
     let nl: number;
@@ -589,8 +717,9 @@ export function streamCodex(
   });
 
   let stderr = "";
-  child.stderr.on("data", (d) => (stderr += d.toString()));
+  child.stderr.on("data", (d) => (stderr = appendCapped(stderr, d.toString())));
   child.on("error", (err) => {
+    lifecycle.dispose();
     sse.write({ type: "error", message: `Failed to launch codex: ${err.message}` });
     sse.end();
   });
@@ -602,5 +731,6 @@ export function streamCodex(
     sse.write({ type: "end", sessionId: threadId });
     sse.end();
   });
-  res.on("close", () => child.kill());
+  // Panel unmount / Stop / new send closes the response → kill the whole group.
+  res.on("close", () => lifecycle.terminate());
 }
