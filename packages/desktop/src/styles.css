@@ -749,6 +749,16 @@ html, body, #root {
 
 /* ── Body rows ────────────────────────────── */
 
+/* Row-virtualization spacers (TRI-3267): zero-content <tr>s that pad the
+   <tbody> for the offscreen rows above/below the rendered window so the
+   scrollbar height and column layout stay correct. No borders/hover. */
+.grid-spacer-row,
+.grid-spacer-row > td {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
 .grid-tr {
   transition: background 0.08s;
 }
