@@ -13,13 +13,13 @@
  *     `setCellStatus` meter ONLY on a TERMINAL status (done/error), never on
  *     running. Deliveries are recorded with a 50-row prune (recordDelivery).
  *
- * Reuses the pure kernels from `@gtmgrid/cloud`: `findUpsertRowId` (upsert match)
- * and `CellMerge.mergeCellPatch` (COALESCE cell merge). Authz uses the same
- * `MembershipService.requireMember` port as the worked example.
+ * Reuses the pure kernel `findUpsertRowId` (upsert match) from `@gtmgrid/cloud`;
+ * the COALESCE cell merge + terminal meter are collapsed into the repo's single
+ * `upsertCell` statement. Authz uses the same `MembershipService.requireMember`
+ * port as the worked example.
  */
 
 import {
-  CellMerge,
   type CloudCellStatus,
   CredentialCryptoService,
   findUpsertRowId,
@@ -110,10 +110,6 @@ export interface WorkerGrid {
   }[];
 }
 
-/** A terminal cell status meters; `running` never does (no double-count). */
-const isTerminalStatus = (status: CloudCellStatus): boolean =>
-  status === "done" || status === "error";
-
 /**
  * Webhook domain service. CRUD methods assert membership first; worker methods
  * skip membership (the route's worker-secret bearer is their trust boundary) but
@@ -127,7 +123,6 @@ export class WebhookService extends Effect.Service<WebhookService>()(
       const repo = yield* WebhookRepo;
       const deliveries = yield* WebhookDeliveryRepo;
       const membership = yield* MembershipService;
-      const cellMerge = yield* CellMerge;
       const crypto = yield* CredentialCryptoService;
       const entitlement = yield* EntitlementService;
 
@@ -611,31 +606,40 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           } satisfies WorkerGrid;
         });
 
-      /** Resolve + assert a (row, column) pair share a table; return the cell. */
+      /**
+       * Resolve + assert a (row, column) pair share a table, returning the
+       * row's table + workspace. ONE query (resolveCellTarget joins row→table
+       * and the column), replacing the prior findRow + findColumn + findCell +
+       * findTable fan-out. The merge no longer reads the existing cell here: the
+       * COALESCE merge is performed atomically inside {@link upsertCell}.
+       */
       const resolveCell = (rowId: string, columnId: string) =>
         Effect.gen(function* () {
-          const row = yield* repo.findRow(rowId);
-          const column = yield* repo.findColumn(columnId);
-          if (row._tag === "None" || column._tag === "None") {
+          const target = yield* repo.resolveCellTarget(rowId, columnId);
+          if (target._tag === "None") {
             return yield* Effect.fail(
               new WebhookNotFoundError({ message: "Row or column not found." }),
             );
           }
-          if (row.value.tableId !== column.value.tableId) {
+          if (target.value.rowTableId !== target.value.columnTableId) {
             return yield* Effect.fail(
               new InvalidCellError({
                 message: "Row and column belong to different tables.",
               }),
             );
           }
-          const existing = yield* repo.findCell(rowId, columnId);
           return {
-            row: row.value,
-            existing: existing._tag === "None" ? null : existing.value,
+            tableId: target.value.rowTableId,
+            workspaceId: target.value.workspaceId,
           };
         });
 
-      /** Worker cell upsert (COALESCE merge; meters only terminal). */
+      /**
+       * Worker cell upsert (COALESCE merge; meters only terminal). Two queries:
+       * resolveCell (validate + workspace) then a single
+       * INSERT…ON CONFLICT DO UPDATE that merges value/status/error and folds the
+       * terminal-status meter increment into the same statement.
+       */
       const setCell = (args: {
         readonly rowId: string;
         readonly columnId: string;
@@ -645,40 +649,24 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         readonly error?: string | null;
       }) =>
         Effect.gen(function* () {
-          const { row, existing } = yield* resolveCell(
+          const { tableId, workspaceId } = yield* resolveCell(
             args.rowId,
             args.columnId,
           );
-          const merged = yield* cellMerge.mergeCellPatch(
-            existing === null
-              ? null
-              : {
-                  value: existing.value,
-                  status: existing.status as CloudCellStatus,
-                  error: existing.error,
-                  updatedAt: existing.updatedAt,
-                },
-            {
+          return yield* repo.upsertCell({
+            workspaceId,
+            tableId,
+            rowId: args.rowId,
+            columnId: args.columnId,
+            patch: {
+              hasValue: args.hasValue,
               ...(args.hasValue ? { value: args.value } : {}),
               ...(args.status !== undefined ? { status: args.status } : {}),
               ...(args.error !== undefined ? { error: args.error } : {}),
             },
-            Date.now(),
-          );
-
-          // Meter ONLY on a terminal status (done/error), keyed on the row's
-          // WORKSPACE (resolved via its table) — never on `running`.
-          if (isTerminalStatus(merged.status)) {
-            yield* meterTableWorkspace(row.tableId);
-          }
-
-          const cell = {
-            value: merged.value,
-            status: merged.status,
-            error: merged.error,
-            updatedAt: merged.updatedAt,
-          };
-          return yield* persistCell(args.rowId, args.columnId, existing, cell);
+            meter: true,
+            updatedAt: Date.now(),
+          });
         });
 
       /** Worker status-only cell write (meters only terminal). */
@@ -689,78 +677,48 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         readonly error?: string | null;
       }) =>
         Effect.gen(function* () {
-          const { row, existing } = yield* resolveCell(
+          const { tableId, workspaceId } = yield* resolveCell(
             args.rowId,
             args.columnId,
           );
-          const merged = yield* cellMerge.mergeCellPatch(
-            existing === null
-              ? null
-              : {
-                  value: existing.value,
-                  status: existing.status as CloudCellStatus,
-                  error: existing.error,
-                  updatedAt: existing.updatedAt,
-                },
-            {
+          return yield* repo.upsertCell({
+            workspaceId,
+            tableId,
+            rowId: args.rowId,
+            columnId: args.columnId,
+            patch: {
+              hasValue: false,
               status: args.status,
               ...(args.error !== undefined ? { error: args.error } : {}),
             },
-            Date.now(),
-          );
-          if (isTerminalStatus(merged.status)) {
-            yield* meterTableWorkspace(row.tableId);
-          }
-          const cell = {
-            value: merged.value,
-            status: merged.status,
-            error: merged.error,
-            updatedAt: merged.updatedAt,
-          };
-          return yield* persistCell(args.rowId, args.columnId, existing, cell);
+            meter: true,
+            updatedAt: Date.now(),
+          });
         });
 
-      /** Resolve a table's workspace and bump its pending cloud-actions +1. */
-      const meterTableWorkspace = (tableId: string) =>
+      /**
+       * Batched worker cell upsert: apply an ARRAY of cell writes in one call,
+       * each through the same {@link setCell} path (resolve + single
+       * upsert-and-meter statement). The cloud store buffers terminal writes and
+       * POSTs them here in chunks, so a large column run is one request per chunk
+       * instead of one per cell. Writes are applied in order; the count of cells
+       * written is returned.
+       */
+      const setCells = (args: {
+        readonly cells: ReadonlyArray<{
+          readonly rowId: string;
+          readonly columnId: string;
+          readonly value?: unknown;
+          readonly hasValue: boolean;
+          readonly status?: CloudCellStatus;
+          readonly error?: string | null;
+        }>;
+      }) =>
         Effect.gen(function* () {
-          const table = yield* repo.findTable(tableId);
-          if (table._tag === "None") return;
-          yield* repo.meterActions(table.value.workspaceId, 1);
-        });
-
-      /** Insert or patch a cell to the merged fields, returning its id. */
-      const persistCell = (
-        rowId: string,
-        columnId: string,
-        existing: { readonly id: string } | null,
-        cell: {
-          value: unknown;
-          status: CloudCellStatus;
-          error: string | null;
-          updatedAt: number | null;
-        },
-      ) =>
-        Effect.gen(function* () {
-          const row = yield* repo.findRow(rowId);
-          if (row._tag === "None") {
-            return yield* Effect.fail(
-              new WebhookNotFoundError({ message: "Row not found." }),
-            );
+          for (const cell of args.cells) {
+            yield* setCell(cell);
           }
-          const table = yield* repo.findTable(row.value.tableId);
-          const workspaceId =
-            table._tag === "None" ? "" : table.value.workspaceId;
-          if (existing === null) {
-            return yield* repo.insertCell({
-              workspaceId,
-              tableId: row.value.tableId,
-              rowId,
-              columnId,
-              cell,
-            });
-          }
-          yield* repo.patchCell(existing.id, cell);
-          return existing.id;
+          return { written: args.cells.length };
         });
 
       /**
@@ -800,6 +758,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         upsertRow,
         getTable,
         setCell,
+        setCells,
         setCellStatus,
         getCredential,
       } as const;

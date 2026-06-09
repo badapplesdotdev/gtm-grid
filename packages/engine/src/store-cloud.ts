@@ -81,6 +81,14 @@ export interface CloudFunctionRefs {
   /** `api.cells.setCellStatus` — status-only upsert (run lifecycle). */
   readonly setCellStatus: unknown;
   /**
+   * Optional BATCHED cell upsert — accepts an array of cell writes in one POST.
+   * When wired, the cloud store buffers terminal writes and flushes them in
+   * chunks through this ref (with a bounded in-flight queue + backpressure)
+   * instead of one POST per cell, so a large column run is not 1 request/cell.
+   * When omitted, the store falls back to per-cell `setCell` writes.
+   */
+  readonly setCells?: unknown;
+  /**
    * Optional ACTION resolving the decrypted secrets for a connector during a
    * run — the T7 `credentials:getCredentialForRun` decrypt-for-run path, gated
    * to an authorized workspace member. When wired (together with
@@ -126,6 +134,25 @@ interface ConvexCellArgs {
   readonly rowId: string;
   readonly columnId: string;
 }
+
+/**
+ * One buffered cell write awaiting a batched flush. `value` is OPTIONAL and its
+ * PRESENCE means "overwrite" (the COALESCE semantics the worker honours), so we
+ * carry a `hasValue` flag rather than relying on `value === undefined`.
+ */
+interface BatchedCellWrite {
+  readonly rowId: string;
+  readonly columnId: string;
+  readonly hasValue: boolean;
+  readonly value?: unknown;
+  readonly status?: string;
+  readonly error?: string | null;
+}
+
+/** Cells per batched `setCells` POST (50–100 per chunk). */
+const FLUSH_CHUNK = 100;
+/** Max concurrent in-flight `setCells` POSTs (bounds memory + pooler load). */
+const MAX_IN_FLIGHT = 4;
 
 /** A Convex column doc as returned by `getTable` (camelCase, string ids). */
 interface ConvexColumnDoc {
@@ -269,9 +296,64 @@ export const cloudGridStoreShape = (
       ).pipe(Effect.map((r) => r as ConvexGetTableResult));
 
     /**
+     * Batched-write state for a run. Buffers terminal cell writes and flushes
+     * them in chunks of {@link FLUSH_CHUNK} through the `setCells` ref, with at
+     * most {@link MAX_IN_FLIGHT} POSTs in flight. Plain TS (the engine is not
+     * Effect-managed for this transient state); `writeCell` wraps the async
+     * `enqueue`/`drainAll` in `fromClient` so failures surface as typed
+     * {@link GridStoreError}s.
+     */
+    const pending: BatchedCellWrite[] = [];
+    const inFlight = new Set<Promise<unknown>>();
+
+    /** POST one chunk; track it as in-flight, removing it on settle. */
+    const startFlush = (chunk: readonly BatchedCellWrite[]): void => {
+      const body = chunk.map((w) => ({
+        rowId: w.rowId,
+        columnId: w.columnId,
+        ...(w.hasValue ? { value: w.value } : {}),
+        ...(w.status !== undefined ? { status: w.status } : {}),
+        ...(w.error !== undefined ? { error: w.error } : {}),
+      }));
+      const p = client.mutation(refs.setCells, { cells: body }).finally(() => {
+        inFlight.delete(p);
+      });
+      inFlight.add(p);
+    };
+
+    /**
+     * Buffer a write; once a full chunk has accumulated, flush it. Backpressure:
+     * when the in-flight set is at its cap, await the soonest-settling POST
+     * before scheduling another — so the engine's per-row `await setCell` blocks
+     * here, throttling how fast rows are scheduled.
+     */
+    const enqueue = async (write: BatchedCellWrite): Promise<void> => {
+      pending.push(write);
+      while (pending.length >= FLUSH_CHUNK) {
+        if (inFlight.size >= MAX_IN_FLIGHT) {
+          await Promise.race(inFlight);
+        }
+        startFlush(pending.splice(0, FLUSH_CHUNK));
+      }
+    };
+
+    /** Flush the final partial chunk and await every in-flight POST. */
+    const drainAll = async (): Promise<void> => {
+      while (pending.length > 0) {
+        if (inFlight.size >= MAX_IN_FLIGHT) {
+          await Promise.race(inFlight);
+        }
+        startFlush(pending.splice(0, FLUSH_CHUNK));
+      }
+      await Promise.all(inFlight);
+    };
+
+    /**
      * Validate the patch's status against the cloud literal union (reusing
-     * CloudSchemaMapping), then call the matching mutation. A status-only patch
-     * uses `setCellStatus`; any patch carrying a value uses `setCell`.
+     * CloudSchemaMapping), then persist the write. When a batched `setCells` ref
+     * is wired, the write is BUFFERED (flushed in chunks by {@link drainAll});
+     * otherwise it falls back to a per-cell POST (status-only → setCellStatus,
+     * value-bearing → setCell), preserving the prior behaviour.
      */
     const writeCell = (
       rowId: string,
@@ -297,8 +379,24 @@ export const cloudGridStoreShape = (
                 );
 
         const hasValue = "value" in patch;
-        // Status-only updates take the lighter setCellStatus path (the run
-        // lifecycle's running→done/error), which preserves value via COALESCE.
+
+        // Batched path: buffer the write; chunks flush with backpressure.
+        if (refs.setCells !== undefined) {
+          yield* fromClient("setCell", () =>
+            enqueue({
+              rowId,
+              columnId,
+              hasValue,
+              ...(hasValue ? { value: patch.value } : {}),
+              ...(status !== undefined ? { status } : {}),
+              ...(patch.error !== undefined ? { error: patch.error } : {}),
+            }),
+          );
+          return;
+        }
+
+        // Fallback (no batch ref): status-only updates take the lighter
+        // setCellStatus path; value-bearing patches use setCell.
         if (!hasValue && status !== undefined) {
           yield* fromClient("setCell", () =>
             client.mutation(refs.setCellStatus, {
@@ -318,6 +416,12 @@ export const cloudGridStoreShape = (
           }),
         );
       });
+
+    /** Flush buffered writes — the engine's `drain` hook (no-op when no batch). */
+    const drain = (): Effect.Effect<void, GridStoreError> =>
+      refs.setCells === undefined
+        ? Effect.void
+        : fromClient("setCells", () => drainAll());
 
     /**
      * Resolve the DECRYPTED workspace credential for a connector during a run.
@@ -404,6 +508,12 @@ export const cloudGridStoreShape = (
         ),
       setCell: (rowId, columnId, patch) => writeCell(rowId, columnId, patch),
       getCredential,
+      // When batched writes are wired, coalesce the interim `running` write away
+      // (the engine writes only the terminal result) and expose `drain` so the
+      // engine flushes the final partial chunk after the row loop.
+      ...(refs.setCells !== undefined
+        ? { coalesceRunningWrites: true, drain }
+        : {}),
       // Snapshot the grid ONCE for a run: every per-row read below is served
       // from this in-memory grid, so an N-row `runColumn` issues one getTable
       // query instead of one-per-read (O(N) total, not O(N^2)). Writes and
@@ -416,6 +526,9 @@ export const cloudGridStoreShape = (
               setCell: (rowId, columnId, patch) =>
                 writeCell(rowId, columnId, patch),
               getCredential,
+              ...(refs.setCells !== undefined
+                ? { coalesceRunningWrites: true, drain }
+                : {}),
             }),
           ),
         ),

@@ -165,10 +165,16 @@ export class Engine {
 
     let ran = 0;
     let errors = 0;
+    // Stores that batch terminal writes (the cloud store) coalesce the interim
+    // `running` write away so a cell is ONE write, not two HTTP POSTs. Cheap
+    // synchronous stores leave the flag unset and keep streaming `running`.
+    const skipRunning = this.store.coalesceRunningWrites === true;
     await mapConcurrent(rowIds, opts.concurrency ?? 5, async (rowId) => {
       const existing = await Effect.runPromise(reads.getCell(rowId, columnId));
       if (!opts.force && existing?.status === "done") return;
-      await Effect.runPromise(this.store.setCell(rowId, columnId, { status: "running", error: null }));
+      if (!skipRunning) {
+        await Effect.runPromise(this.store.setCell(rowId, columnId, { status: "running", error: null }));
+      }
       try {
         const inputs = await Effect.runPromise(this.resolveParams(col, rowId, reads));
         const result = await runFunction({ code, inputs, providers, dispatch: this.dispatch });
@@ -182,6 +188,9 @@ export class Engine {
         errors++;
       }
     });
+    // Flush the final partial batch + await all in-flight writes (no-op for
+    // synchronous stores).
+    if (this.store.drain) await Effect.runPromise(this.store.drain());
     return { ran, errors };
   }
 }
