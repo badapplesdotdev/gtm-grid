@@ -707,19 +707,17 @@ route("GET", "/api/ai-providers", async () => {
 route("POST", "/api/ai-providers/:id/connect", (p, body) => {
   if (p.id !== "anthropic" && p.id !== "openai" && p.id !== "openrouter" && p.id !== "hermes")
     return { error: "unsupported provider" };
-  const apiKey = String(body?.apiKey ?? "").trim();
-  const baseURL = String(body?.baseURL ?? body?.baseUrl ?? "").trim() || undefined;
+  const apiKeyIn = String(body?.apiKey ?? "").trim();
+  const baseURLIn = String(body?.baseURL ?? body?.baseUrl ?? "").trim();
+  // Preserve existing values on partial updates: changing only the URL must NOT
+  // wipe the saved key (and vice-versa).
+  const prev = globalDb.getCredential(`ai:${p.id}`)?.secrets ?? {};
+  const apiKey = apiKeyIn || prev.apiKey || "";
   // Hermes (a local/LAN gateway) accepts any bearer when API_SERVER_KEY is unset,
   // so it can connect with just a base URL; the other providers require a key.
   if (!apiKey && p.id !== "hermes") return { error: "apiKey required" };
-  connectAi(
-    globalDb,
-    p.id,
-    apiKey || "hermes",
-    undefined,
-    normScope(body?.scope),
-    p.id === "hermes" ? (baseURL ?? DEFAULT_HERMES_BASE_URL) : undefined,
-  );
+  const baseURL = p.id === "hermes" ? baseURLIn || prev.baseUrl || DEFAULT_HERMES_BASE_URL : undefined;
+  connectAi(globalDb, p.id, apiKey || "hermes", undefined, normScope(body?.scope), baseURL);
   // Refresh the live engine so AI columns work immediately — both the active
   // provider and the full set used for model-based routing.
   current.engine.config.ai = storedAiConfig(globalDb);
