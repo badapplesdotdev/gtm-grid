@@ -296,6 +296,112 @@ server.tool(
   },
 );
 
+server.tool(
+  "import_table_from_share",
+  "Set up a table from a GTM Grid SHARE LINK. Give it a share URL (https://…/share/<token>) or just the <token> that someone sent you; it rebuilds that table's columns — and, by default, all its rows — in THIS project so you can run them with your own connector credentials. Function columns are recreated with their setup intact but stay empty until you run them (use run_column). Reports any connectors you still need to connect.",
+  {
+    url_or_token: z
+      .string()
+      .describe("A gtmgrid share URL (https://…/share/<token>) or the bare <token>."),
+    table_name: z.string().optional().describe("Override the imported table's name."),
+    include_data: z
+      .boolean()
+      .optional()
+      .describe("Also copy all row data (default true). Set false for structure only."),
+  },
+  async ({ url_or_token, table_name, include_data }) => {
+    // A share token is base64url (no "/"); anything with a slash is a URL, so
+    // take the last non-empty path segment (stripping any query/hash).
+    const raw = url_or_token.trim();
+    const token = raw.includes("/")
+      ? (raw.split(/[?#]/)[0].split("/").filter(Boolean).pop() ?? raw)
+      : raw;
+
+    const apiBase = (process.env.GTMGRID_API_URL ?? "https://gtmgrid.com").replace(/\/+$/, "");
+    const res = await fetch(`${apiBase}/api/share/${encodeURIComponent(token)}`);
+    if (!res.ok) {
+      throw new Error(
+        `Couldn't fetch that share link (HTTP ${res.status}). Check the URL/token, or that it hasn't been revoked.`,
+      );
+    }
+    const body = (await res.json()) as {
+      valid?: boolean;
+      name?: string | null;
+      snapshot?: {
+        version?: number;
+        table?: { name?: string };
+        columns?: {
+          name?: string;
+          type?: string;
+          kind?: string;
+          provider?: string | null;
+          method?: string | null;
+          code?: string | null;
+          params?: unknown;
+        }[];
+        rows?: number;
+        cells?: { row?: number; column?: number; value?: unknown }[];
+      };
+    };
+    const snap = body.snapshot;
+    if (!body.valid || !snap) throw new Error("This share link is no longer valid.");
+    if (snap.version !== 1 || !Array.isArray(snap.columns) || !Array.isArray(snap.cells)) {
+      throw new Error("Unsupported share snapshot format.");
+    }
+
+    const COL_TYPES = ["text", "number", "boolean", "date", "json"];
+    const t = db.createTable(table_name ?? snap.table?.name ?? "Imported table");
+    const colIds: string[] = [];
+    const missingProviders = new Set<string>();
+    for (const c of snap.columns) {
+      const provider = typeof c.provider === "string" ? c.provider : null;
+      const method = typeof c.method === "string" ? c.method : null;
+      if (provider && method && !engine.registry.method(provider, method)) {
+        missingProviders.add(provider);
+      }
+      const col = db.createColumn({
+        tableId: t.id,
+        name: String(c.name ?? "Column"),
+        type: (typeof c.type === "string" && COL_TYPES.includes(c.type)
+          ? c.type
+          : "text") as "text" | "number" | "boolean" | "date" | "json",
+        kind: c.kind === "function" ? "function" : "manual",
+        provider,
+        method,
+        code: typeof c.code === "string" ? c.code : null,
+        params: c.params && typeof c.params === "object" ? (c.params as Record<string, unknown>) : {},
+      });
+      colIds.push(col.id);
+    }
+
+    let rowsCreated = 0;
+    const rowCount = typeof snap.rows === "number" ? snap.rows : 0;
+    if (include_data !== false && rowCount > 0) {
+      const rowIds: string[] = [];
+      for (let i = 0; i < rowCount; i++) rowIds.push(db.createRow(t.id).id);
+      for (const cell of snap.cells) {
+        const colId = typeof cell.column === "number" ? colIds[cell.column] : undefined;
+        const rowId = typeof cell.row === "number" ? rowIds[cell.row] : undefined;
+        if (colId === undefined || rowId === undefined) continue;
+        db.setCell(rowId, colId, { value: cell.value, status: "done" });
+      }
+      rowsCreated = rowIds.length;
+    }
+
+    const missing = [...missingProviders];
+    return ok({
+      table: t.name,
+      columns: colIds.length,
+      rows: rowsCreated,
+      missingProviders: missing,
+      note:
+        missing.length > 0
+          ? `Connect these connectors, then run the function columns: ${missing.join(", ")}`
+          : "Imported. Run the function columns (run_column) to enrich the rows.",
+    });
+  },
+);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
 // Token-free banner: report the mode + project only — never the bearer token.
