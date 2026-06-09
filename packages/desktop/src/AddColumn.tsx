@@ -1135,7 +1135,7 @@ export function ColumnSettingsModal({
   const isAi = column.provider === "ai";
   const isFunction = !!column.provider || !!column.fn;
   const isEnrichment = isFunction && !isFormula && !isAi; // connector/enrichment column
-  const p = (column.params ?? {}) as Record<string, unknown>;
+  const p: Record<string, unknown> = column.params ?? {};
 
   const [name, setName] = useState(column.name);
   const [type, setType] = useState(column.type ?? "text");

@@ -328,6 +328,11 @@ export class Engine {
         if (condition) {
           try {
             const cinputs = await Effect.runPromise(this.resolveCells(col, rowId, reads));
+            // NOTE: a condition expression runs in the same sandbox as a code/formula
+            // column, so it CAN call `sdk.<connector>.<method>` — meaning the gate itself
+            // can dispatch a connector call and thus spend credits, bounded by the same
+            // registry allow-list that constrains code columns. This is intentional (lets
+            // a gate consult an enrichment before deciding to run), not a leak.
             const pass = await runFunction({
               code: condition.body,
               inputs: cinputs,

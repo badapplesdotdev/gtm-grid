@@ -34,9 +34,16 @@ export function isFormulaColumn(col: Pick<Column, "provider">): boolean {
   return col.provider === "formula";
 }
 
+/** Read one key off a column's params blob without an `as` cast. `Column.params` is
+ *  typed as a record already, so this is just a null-safe indexed lookup that keeps
+ *  the value `unknown` for the caller to narrow. */
+export function readParam(col: Pick<Column, "params">, key: string): unknown {
+  return col.params?.[key];
+}
+
 /** The raw expression for a formula column (from params.expression). */
 export function formulaExpression(col: Pick<Column, "params">): string {
-  const expr = (col.params as Record<string, unknown> | undefined)?.expression;
+  const expr = readParam(col, "expression");
   return typeof expr === "string" ? expr : "";
 }
 

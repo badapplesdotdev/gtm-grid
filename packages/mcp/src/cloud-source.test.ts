@@ -230,6 +230,30 @@ describe("makeCloudSource.addColumn — resolves fn/code to a kind, maps to crea
     expect(call?.args).toMatchObject({ kind: "manual", provider: null, method: null });
   });
 
+  it("forwards a formula column as provider:'formula'/method:'eval' with params.expression + trimmed condition", async () => {
+    const grid: FakeGrid = { columns: [], rows: [], cells: [] };
+    const { deps, client } = depsFor(grid);
+    const out = await makeCloudSource(CTX, deps).addColumn("t1", {
+      name: "Domain",
+      formula: '{{Email}}.split("@")[1]',
+      condition: "  !!{{Email}}  ",
+    });
+    expect(out).toEqual({ id: "c_new", name: "Domain", kind: "function", fn: "formula.eval" });
+    const call = client.mutations.find(
+      (m) => m.name === "/api/worker/createColumn",
+    );
+    expect(call?.args).toMatchObject({
+      tableId: "t1",
+      name: "Domain",
+      kind: "function",
+      provider: "formula",
+      method: "eval",
+      params: { expression: '{{Email}}.split("@")[1]' },
+      // the run condition is forwarded trimmed (not raw with its padding)
+      condition: "!!{{Email}}",
+    });
+  });
+
   it("rejects an unknown fn before any worker write", async () => {
     const grid: FakeGrid = { columns: [], rows: [], cells: [] };
     const { deps, client } = depsFor(grid);
