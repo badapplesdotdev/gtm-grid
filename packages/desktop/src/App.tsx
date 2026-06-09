@@ -27,6 +27,8 @@ import {
   upsertSyncLink,
   hydrateSyncLinksForProject,
   shouldCloseConflictPopover,
+  mergeServerSyncLinks,
+  resolveStaleCloudTableFallback,
   type SyncStatus,
 } from "./cloudSync";
 import { CloudPushHttpError } from "./api";
@@ -1158,6 +1160,12 @@ export default function App() {
   const cloudProjects = useCloudProjects(activeWorkspace?._id ?? null);
   const [cloudProject, setCloudProject] = useState<CloudProject | null>(null);
   const [cloudTableId, setCloudTableId] = useState<Id<"tables"> | null>(null);
+  // The LOCAL table the open cloud view corresponds to, when known (set on a
+  // sync push / swap repoint). Drives the open-cloud-table 404 self-heal
+  // (TRI-3312): if the open cloud id is a stale deleted id, we recover to this
+  // local table's CURRENT linked cloud id. `null` for a cloud table opened with
+  // no known local link (nothing to recover to → leave the existing behaviour).
+  const [cloudTableLocalId, setCloudTableLocalId] = useState<string | null>(null);
   const cloudTables = useCloudTables(cloudProject?._id ?? null);
   const { createProject: createCloudProject, createTable: createCloudTable, deleteTable: deleteCloudTable } =
     useCloudProjectMutations();
@@ -1698,35 +1706,62 @@ export default function App() {
   // of the linked tables push (the unlinked creates are non-destructive).
   const [bulkOverwriteConfirm, setBulkOverwriteConfirm] = useState<{ toOverwrite: string[]; toCreate: string[] } | null>(null);
 
-  // Hydrate the in-memory sync links from the localStorage MIRROR (TRI-3309 bug
-  // B) whenever the open cloud project changes. The sidecar meta is the
-  // authoritative link (and the source of truth for overwrite/409 detection),
-  // but `/api/tables` doesn't expose it and we may not add a server route in this
-  // lane — so this client mirror restores the Synced/ahead status that would
-  // otherwise read "Local only" after a reload. Drift is self-correcting: a stale
-  // mirror at worst shows a wrong dot until the next push re-routes through the
-  // server's 409. A future server-backed hydration should supersede this.
+  // Hydrate the in-memory sync links from the SIDECAR meta — the source of truth
+  // (TRI-3311) — whenever the open cloud project changes. The localStorage mirror
+  // (TRI-3309 bug B) is kept ONLY as an offline/fast-path cache: we seed from it
+  // synchronously so the Synced/ahead status paints immediately, then overlay the
+  // server's authoritative `{ [localTableId]: cloudTableId }` map with the SERVER
+  // WINNING on every conflict (mergeServerSyncLinks), so a stale mirror can never
+  // drift the displayed status. The mirror is namespaced per cloud project; the
+  // server route returns the CURRENT project's links (the sidecar follows the
+  // active project), so we only overlay when this remains the active project.
   useEffect(() => {
     const projectKey = cloudProject?._id ?? null;
     if (projectKey === null) {
       setSyncLinks({});
       return;
     }
+    // 1) Fast-path: seed from the local mirror for this project (sync, offline).
     let stored: Record<string, string> = {};
     try {
       stored = parseSyncLinks(localStorage.getItem(SYNC_LINKS_STORAGE_KEY));
     } catch {
       stored = {};
     }
-    const forProject = hydrateSyncLinksForProject(stored, projectKey);
+    const mirror = hydrateSyncLinksForProject(stored, projectKey);
     setSyncLinks(
       Object.fromEntries(
-        Object.entries(forProject).map(([localId, cloudTableId]) => [
+        Object.entries(mirror).map(([localId, cloudTableId]) => [
           localId,
           { cloudTableId },
         ]),
       ),
     );
+    // 2) Source of truth: overlay the sidecar's persisted links (server wins).
+    let cancelled = false;
+    api
+      .cloudTableLinks()
+      .then((server) => {
+        if (cancelled) return;
+        const merged = mergeServerSyncLinks(server, mirror);
+        setSyncLinks((cur) =>
+          Object.fromEntries(
+            Object.entries(merged).map(([localId, cloudTableId]) => [
+              localId,
+              // Preserve any rowCount already known from a this-session push.
+              cur[localId]?.cloudTableId === cloudTableId
+                ? cur[localId]!
+                : { cloudTableId },
+            ]),
+          ),
+        );
+      })
+      .catch(() => {
+        /* offline / sidecar unreachable → keep the mirror-seeded links */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [cloudProject?._id]);
 
   // ── Auto-sync setting (TRI-3298) ─────────────────────────────────────────
@@ -1900,7 +1935,13 @@ export default function App() {
         // re-point it to the new id; either way invalidate the new table's grid
         // so it re-seeds against the surviving table.
         if (prevCloudTableId !== null && prevCloudTableId !== result.cloudTableId) {
-          setCloudTableId((cur) => (cur === prevCloudTableId ? result.cloudTableId : cur));
+          setCloudTableId((cur) => {
+            if (cur !== prevCloudTableId) return cur;
+            // The open view followed this local table — remember the association
+            // so a later stale-id 404 can self-heal to its current link (TRI-3312).
+            setCloudTableLocalId(tableId);
+            return result.cloudTableId as Id<"tables">;
+          });
         }
         void invalidateCloudTable(result.cloudTableId);
       } catch (e) {
@@ -2039,12 +2080,30 @@ export default function App() {
     }
   }, [inCloud, cloudTables, cloudTableId]);
 
+  // Open-cloud-table 404 self-heal (TRI-3312). When the open cloud table's load
+  // returns 404 / not-found (CloudGrid reports it via `onMissing`), the open id
+  // is a STALE deleted id (a swap before this session's link state, or a
+  // teammate re-synced). Rather than leave the dead-id error, fall back to the
+  // open view's local table's CURRENT linked cloud id (from the now
+  // server-hydrated `syncLinks`) and open that. `resolveStaleCloudTableFallback`
+  // returns `null` when there is nothing to recover to (no link, or the link
+  // still points at the same dead id), so we never loop on the same dead id.
+  const onCloudTableMissing = useCallback(() => {
+    const fallback = resolveStaleCloudTableFallback({
+      openCloudTableId: cloudTableId,
+      localTableId: cloudTableLocalId,
+      links: syncLinks,
+    });
+    if (fallback !== null) setCloudTableId(fallback as Id<"tables">);
+  }, [cloudTableId, cloudTableLocalId, syncLinks]);
+
   // Switch to a different LOCAL project: also exit cloud mode so the sidecar
   // grid is shown. Tables change; global creds/extensions stay.
   const onProjectSwitched = useCallback(async (name: string) => {
     setShowProjects(false);
     setCloudProject(null);
     setCloudTableId(null);
+    setCloudTableLocalId(null);
     setProjectName(name);
     setView({ kind: "table" });
     const [t, e, ai] = await Promise.all([
@@ -2819,7 +2878,7 @@ export default function App() {
             CSV import is open in this pane. */}
         {!importMode && inCloud && !cloudLocked && view.kind === "table" && (
           <Suspense fallback={<PanelFallback />}>
-            <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} />
+            <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} onMissing={onCloudTableMissing} />
           </Suspense>
         )}
 

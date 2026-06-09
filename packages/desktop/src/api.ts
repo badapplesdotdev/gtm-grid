@@ -371,6 +371,11 @@ export const api = {
   // non-2xx (409 = overwrite-needs-confirmation) so the UI can warn before a
   // destructive re-push.
   pushTable,
+  // Server-backed sync links (TRI-3311): the authoritative `{ [localTableId]:
+  // cloudTableId }` map from the CURRENT project's SQLite meta. The desktop
+  // hydrates its synced-table status from this on load / project change instead
+  // of the (drift-prone) localStorage mirror — server wins on conflict.
+  cloudTableLinks: () => http<Record<string, string>>("/api/cloud/tables/links"),
   // Auto-sync global setting (TRI-3298). Default OFF; reads/writes the global
   // meta flag via the sidecar. Enabling is gated behind a confirm in the UI.
   getAutoSync: () => http<{ enabled: boolean }>("/api/settings/auto-sync"),
