@@ -134,12 +134,15 @@ export async function resolveRow(
 export const processWebhookRecord = inngest.createFunction(
   {
     id: "process-webhook-record",
-    // Bound per-workspace so one busy workspace can't starve others; retries
-    // cover transient worker/engine failures (step memoization makes them safe).
-    concurrency: {
-      key: "event.data.workspaceId",
-      limit: 5,
-    },
+    // Two-tier concurrency: a GLOBAL account-scoped cap bounds total in-flight
+    // runs across ALL workspaces (per-workspace limits otherwise multiply
+    // unbounded as the number of workspaces grows), while the per-workspace key
+    // still prevents one busy workspace from starving others. Retries cover
+    // transient worker/engine failures (step memoization makes them safe).
+    concurrency: [
+      { scope: "account", limit: 50 },
+      { key: "event.data.workspaceId", limit: 5 },
+    ],
     retries: 3,
     triggers: [{ event: "webhook/record.received" }],
   },
