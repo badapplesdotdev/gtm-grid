@@ -21,6 +21,12 @@ import {
   parseAutoSyncFlag,
   AUTO_SYNC_DEBOUNCE_MS,
   AUTO_SYNC_ENABLE_WARNING,
+  SYNC_LINKS_STORAGE_KEY,
+  parseSyncLinks,
+  serializeSyncLinks,
+  upsertSyncLink,
+  hydrateSyncLinksForProject,
+  shouldCloseConflictPopover,
   type SyncStatus,
 } from "./cloudSync";
 import { CloudPushHttpError } from "./api";
@@ -54,6 +60,7 @@ import {
   useCloudTables,
   useCloudProjectMutations,
   useCloudGridMutations,
+  useCloudSyncRefresh,
   useCloudSession,
   type CloudProject,
 } from "./cloud/useCloudGrid";
@@ -1156,6 +1163,9 @@ export default function App() {
     useCloudProjectMutations();
   const { addColumn: cloudAddColumn, addRowsWithCells: cloudAddRowsWithCells } =
     useCloudGridMutations();
+  // Post-push cache invalidations (TRI-3309 A/E): refetch the cloud-tables list
+  // and re-seed the open cloud table's grid after a push / re-sync swap.
+  const { invalidateCloudTables, invalidateCloudTable } = useCloudSyncRefresh();
   // CSV import: which mode's modal is open (null = closed). Local writes via the
   // sidecar; cloud writes via Convex (metered). Writers are built below.
   const [importMode, setImportMode] = useState<null | "local" | "cloud">(null);
@@ -1666,7 +1676,11 @@ export default function App() {
   // state is also confirmed by the server — a 409 re-routes through the
   // destructive-overwrite confirm. `pushingTableId` is the in-flight row (busy
   // dot); `syncErrors` surfaces a failed push inline (no toast system).
-  const [syncLinks, setSyncLinks] = useState<Record<string, { cloudTableId: string; rowCount: number }>>({});
+  // `rowCount` is the LAST-PUSHED cloud row count, known only for links
+  // established this session; a link HYDRATED from the localStorage mirror
+  // (TRI-3309 bug B) carries no count (the popover then falls back to the live
+  // local count). `undefined` rowCount = linked-but-count-unknown.
+  const [syncLinks, setSyncLinks] = useState<Record<string, { cloudTableId: string; rowCount?: number }>>({});
   // Set of table ids with a push in flight (TRI-3307): a bulk "Sync all" pushes
   // many tables concurrently, so each pushing row must show its own busy dot — a
   // single id would only mark one row. Single-push adds/removes its one id here.
@@ -1683,6 +1697,37 @@ export default function App() {
   // confirm covers ALL linked tables so none are silently skipped; on cancel none
   // of the linked tables push (the unlinked creates are non-destructive).
   const [bulkOverwriteConfirm, setBulkOverwriteConfirm] = useState<{ toOverwrite: string[]; toCreate: string[] } | null>(null);
+
+  // Hydrate the in-memory sync links from the localStorage MIRROR (TRI-3309 bug
+  // B) whenever the open cloud project changes. The sidecar meta is the
+  // authoritative link (and the source of truth for overwrite/409 detection),
+  // but `/api/tables` doesn't expose it and we may not add a server route in this
+  // lane — so this client mirror restores the Synced/ahead status that would
+  // otherwise read "Local only" after a reload. Drift is self-correcting: a stale
+  // mirror at worst shows a wrong dot until the next push re-routes through the
+  // server's 409. A future server-backed hydration should supersede this.
+  useEffect(() => {
+    const projectKey = cloudProject?._id ?? null;
+    if (projectKey === null) {
+      setSyncLinks({});
+      return;
+    }
+    let stored: Record<string, string> = {};
+    try {
+      stored = parseSyncLinks(localStorage.getItem(SYNC_LINKS_STORAGE_KEY));
+    } catch {
+      stored = {};
+    }
+    const forProject = hydrateSyncLinksForProject(stored, projectKey);
+    setSyncLinks(
+      Object.fromEntries(
+        Object.entries(forProject).map(([localId, cloudTableId]) => [
+          localId,
+          { cloudTableId },
+        ]),
+      ),
+    );
+  }, [cloudProject?._id]);
 
   // ── Auto-sync setting (TRI-3298) ─────────────────────────────────────────
   // The global `auto_sync_offline_tables` flag (default OFF), loaded from the
@@ -1829,13 +1874,50 @@ export default function App() {
       setSyncErrors((m) => { const next = { ...m }; delete next[tableId]; return next; });
       try {
         const result = await api.pushTable({ apiUrl, token, projectId, localTableId: tableId, confirmOverwrite });
+        // The cloud id this local table previously pointed at (if any), so we can
+        // detect a re-sync SWAP (TRI-3309 bug E): a re-push builds a NEW cloud
+        // table and deletes the old one, so the open grid would otherwise point
+        // at a now-deleted id.
+        const prevCloudTableId = syncLinks[tableId]?.cloudTableId ?? null;
         setSyncLinks((m) => ({ ...m, [tableId]: { cloudTableId: result.cloudTableId, rowCount: result.rowCount } }));
+        // Persist the link to the localStorage MIRROR (TRI-3309 bug B) so the
+        // Synced status survives a reload (sidecar meta stays authoritative for
+        // overwrite detection — this only drives the UI status).
+        try {
+          const stored = parseSyncLinks(localStorage.getItem(SYNC_LINKS_STORAGE_KEY));
+          localStorage.setItem(
+            SYNC_LINKS_STORAGE_KEY,
+            serializeSyncLinks(upsertSyncLink(stored, projectId, tableId, result.cloudTableId)),
+          );
+        } catch { /* mirror is best-effort; a write failure only loses hydration */ }
         setOverwriteConfirm((c) => (c?.tableId === tableId ? null : c));
+        // TRI-3309 bug A: the push mutated the cloud project outside the tRPC
+        // mutation hooks, so refetch the "TABLES (CLOUD)" list (it stays "No
+        // tables yet" until reload otherwise).
+        void invalidateCloudTables();
+        // TRI-3309 bug E: a re-sync swap repointed the link to a NEW cloud id and
+        // deleted the old one. If the open cloud table was the deleted old id,
+        // re-point it to the new id; either way invalidate the new table's grid
+        // so it re-seeds against the surviving table.
+        if (prevCloudTableId !== null && prevCloudTableId !== result.cloudTableId) {
+          setCloudTableId((cur) => (cur === prevCloudTableId ? result.cloudTableId : cur));
+        }
+        void invalidateCloudTable(result.cloudTableId);
       } catch (e) {
         if (e instanceof CloudPushHttpError && isOverwriteConfirmNeeded(e)) {
           // Server says this table is linked and a re-push overwrites it. Route
           // into the destructive-overwrite confirm (naming the table + rows).
+          // TRI-3310 bug D: show EXACTLY ONE confirmation. `syncStatusFor` maps a
+          // pending overwriteConfirm to the `conflict` state, so an OPEN sync
+          // popover for this same table would ALSO render the conflict confirm
+          // body — two overlapping confirms. Close that popover so only the modal
+          // shows (never both).
           const t = tables.find((x) => x.id === tableId);
+          setSyncPopover((p) =>
+            p !== null && shouldCloseConflictPopover({ modalTableId: tableId, openPopoverTableId: p.tableId })
+              ? null
+              : p,
+          );
           setOverwriteConfirm({ tableId, name: t?.name ?? "table", rowCount: t?.rows ?? 0 });
         } else {
           setSyncErrors((m) => ({ ...m, [tableId]: e instanceof Error ? e.message : "Push failed." }));
@@ -1844,7 +1926,7 @@ export default function App() {
         setPushingTableIds((s) => { const next = new Set(s); next.delete(tableId); return next; });
       }
     },
-    [cloudProject, tables],
+    [cloudProject, tables, syncLinks, invalidateCloudTables, invalidateCloudTable],
   );
 
   // Push entry point from the popover / sync-all. Decides create-vs-overwrite:
@@ -1856,6 +1938,15 @@ export default function App() {
       const decision = decidePush({ linked, userConfirmed: false });
       if (decision.needsConfirm) {
         const t = tables.find((x) => x.id === tableId);
+        // TRI-3310 bug D: opening the overwrite-confirm modal flips this table's
+        // sync status to `conflict`, which would ALSO render the conflict-confirm
+        // body inside an open sync popover for the same table (two overlapping
+        // confirms). Close that popover so only the modal shows — never both.
+        setSyncPopover((p) =>
+          p !== null && shouldCloseConflictPopover({ modalTableId: tableId, openPopoverTableId: p.tableId })
+            ? null
+            : p,
+        );
         setOverwriteConfirm({ tableId, name: t?.name ?? "table", rowCount: t?.rows ?? 0 });
         return;
       }
@@ -2452,6 +2543,12 @@ export default function App() {
                       e.stopPropagation();
                       const top = (e.currentTarget.closest(".sidebar-item") as HTMLElement | null)?.getBoundingClientRect().top ?? 80;
                       setSyncPopover({ tableId: t.id, anchorTop: top });
+                      // TRI-3310 bug C: the popover diff + the overwrite-confirm
+                      // copy read the row count from the cached TableSummary,
+                      // which goes stale after edits. Refresh the summary at
+                      // popover-open so the count reflects the table's real
+                      // current rows (the push itself always sends the live rows).
+                      void reloadTables();
                     }}
                   >
                     <SyncDot status={syncStatusFor(t.id)} />
@@ -3295,7 +3392,12 @@ export default function App() {
       )}
 
       {/* Per-table sync popover (TRI-3297). */}
-      {showSyncUi && syncPopover && (() => {
+      {/* TRI-3310 bug D: NEVER render the popover while the overwrite-confirm
+          modal is open for the SAME table — the popover would show the
+          conflict-confirm body alongside the modal (two overlapping confirms).
+          The call sites also close the popover when the modal opens; this render
+          guard makes the "exactly one confirmation" invariant structural. */}
+      {showSyncUi && syncPopover && overwriteConfirm?.tableId !== syncPopover.tableId && (() => {
         const t = tables.find((x) => x.id === syncPopover.tableId);
         if (!t) return null;
         const status = syncStatusFor(t.id);

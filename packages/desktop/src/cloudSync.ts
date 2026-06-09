@@ -273,3 +273,126 @@ export function shouldAutoPush(gate: {
  */
 export const AUTO_SYNC_ENABLE_WARNING =
   "Turn on auto-sync? Your local tables will AUTOMATICALLY and REPEATEDLY overwrite their cloud copies whenever you create or edit them. The local version always wins — cloud edits to these tables will be lost.";
+
+// ── localStorage sync-link mirror (TRI-3309 bug B) ─────────────────────────
+//
+// The authoritative local↔cloud link lives in the sidecar meta, but `/api/tables`
+// does NOT expose it and we may not add a server route in this lane. Without a
+// hydration source, a synced local table renders "Local only" after reload (the
+// `syncLinks` state only tracks links established in the current session).
+//
+// To restore the correct status on load we keep a CLIENT-SIDE MIRROR of the
+// links in localStorage: on each successful push we record
+// `${projectKey}:${localTableId}` → cloudTableId, and on mount we hydrate the
+// in-memory `syncLinks` from it. This mirror ONLY drives the UI status (dot /
+// pill / sync-all badge) — the sidecar meta stays the source of truth for actual
+// overwrite detection (the server still returns 409 if a push would clobber a
+// cloud copy). DRIFT TRADEOFF: if the mirror and the sidecar disagree (e.g. the
+// cloud table was deleted out-of-band, or the mirror is stale), the worst case is
+// a momentarily-wrong dot that self-corrects on the next push (a 409 re-routes
+// through the overwrite confirm). A future server-backed hydration (once the
+// concurrent server WIP lands a link-list endpoint) should supersede this mirror.
+
+/** The localStorage key holding the serialized sync-link mirror. */
+export const SYNC_LINKS_STORAGE_KEY = "gtmgrid:syncLinks";
+
+/** Compose the flat mirror key for a (project, local table) pair. */
+export function syncLinkKey(projectKey: string, localTableId: string): string {
+  return `${projectKey}:${localTableId}`;
+}
+
+/**
+ * Parse the serialized mirror into a flat `{ "projectKey:localTableId":
+ * cloudTableId }` map. Defensive: a missing / malformed / non-string-valued
+ * entry is dropped rather than throwing, so a corrupt localStorage value can
+ * never crash hydration (worst case = empty map → tables render "Local only"
+ * until the next push, same as having no mirror).
+ */
+export function parseSyncLinks(
+  raw: string | null | undefined,
+): Record<string, string> {
+  if (raw === null || raw === undefined || raw === "") return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return {};
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {};
+  }
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (typeof value === "string" && value !== "") out[key] = value;
+  }
+  return out;
+}
+
+/** Serialize the flat mirror back to its persisted JSON string. */
+export function serializeSyncLinks(links: Record<string, string>): string {
+  return JSON.stringify(links);
+}
+
+/**
+ * Return a NEW mirror with the (project, local table) → cloud table link
+ * recorded. Pure (does not mutate the input) so it is trivially testable and
+ * safe to feed a React state updater.
+ */
+export function upsertSyncLink(
+  links: Record<string, string>,
+  projectKey: string,
+  localTableId: string,
+  cloudTableId: string,
+): Record<string, string> {
+  return { ...links, [syncLinkKey(projectKey, localTableId)]: cloudTableId };
+}
+
+/**
+ * Project the flat persisted mirror onto the in-memory `syncLinks` shape for ONE
+ * cloud project: `{ [localTableId]: cloudTableId }`. Only entries prefixed with
+ * `${projectKey}:` are included (so switching projects shows the right links),
+ * and the in-memory record carries no row count (the cloud row count is unknown
+ * until the next push — the popover falls back to the local count meanwhile).
+ */
+export function hydrateSyncLinksForProject(
+  links: Record<string, string>,
+  projectKey: string,
+): Record<string, string> {
+  const prefix = `${projectKey}:`;
+  const out: Record<string, string> = {};
+  for (const [key, cloudTableId] of Object.entries(links)) {
+    if (key.startsWith(prefix)) {
+      out[key.slice(prefix.length)] = cloudTableId;
+    }
+  }
+  return out;
+}
+
+// ── Single-confirm decision on a 409 (TRI-3310 bug D) ──────────────────────
+//
+// When a push hits server 409 (LinkConflictError) the client opens the
+// `overwriteConfirm` modal. But `syncStatusFor` also maps a pending
+// `overwriteConfirm` to the `conflict` design state, so if the sync popover is
+// open for that same table its body ALSO renders the conflict confirm — two
+// overlapping confirmation UIs. EXACTLY ONE confirmation must show. We prefer the
+// modal and suppress the popover: this helper decides whether an open popover
+// must be closed when the 409 modal opens for the same table.
+
+/**
+ * Decide, on a 409 re-route, whether the currently-open sync popover must be
+ * closed so it does not double up with the overwrite-confirm modal. Returns true
+ * ONLY when the open popover targets the SAME table the modal is opening for — a
+ * popover for a different table is unrelated and stays open. Pure + testable so
+ * the "never both" invariant is verifiable offline.
+ */
+export function shouldCloseConflictPopover(args: {
+  /** The table the 409 modal is opening for. */
+  readonly modalTableId: string;
+  /** The table the sync popover is currently open for, if any. */
+  readonly openPopoverTableId: string | null;
+}): boolean {
+  return (
+    args.openPopoverTableId !== null &&
+    args.openPopoverTableId === args.modalTableId
+  );
+}

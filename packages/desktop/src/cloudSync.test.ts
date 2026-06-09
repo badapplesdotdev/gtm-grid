@@ -23,6 +23,13 @@ import {
   shouldAutoPush,
   AUTO_SYNC_DEBOUNCE_MS,
   AUTO_SYNC_ENABLE_WARNING,
+  SYNC_LINKS_STORAGE_KEY,
+  syncLinkKey,
+  parseSyncLinks,
+  serializeSyncLinks,
+  upsertSyncLink,
+  hydrateSyncLinksForProject,
+  shouldCloseConflictPopover,
   type TableSyncFacts,
 } from "./cloudSync";
 
@@ -309,5 +316,118 @@ describe("auto-sync constants", () => {
   it("the enable warning makes the repeated overwrite explicit", () => {
     expect(AUTO_SYNC_ENABLE_WARNING.toLowerCase()).toContain("overwrite");
     expect(AUTO_SYNC_ENABLE_WARNING.toLowerCase()).toContain("automatically");
+  });
+});
+
+// ── localStorage sync-link mirror (TRI-3309 bug B) ─────────────────────────
+//
+// The mirror restores Synced/ahead status after a reload (otherwise a synced
+// table reads "Local only" — bug B). These tests pin the parse/serialize +
+// per-project hydrate so a corrupt or cross-project value can never crash
+// hydration or leak another project's links.
+describe("syncLinkKey", () => {
+  it("namespaces a local table id under its project", () => {
+    expect(syncLinkKey("proj1", "tblA")).toBe("proj1:tblA");
+  });
+});
+
+describe("parseSyncLinks (TRI-3309 bug B)", () => {
+  it("returns an empty map for missing / empty values", () => {
+    expect(parseSyncLinks(null)).toEqual({});
+    expect(parseSyncLinks(undefined)).toEqual({});
+    expect(parseSyncLinks("")).toEqual({});
+  });
+
+  it("returns an empty map for malformed JSON (never throws)", () => {
+    expect(parseSyncLinks("{not json")).toEqual({});
+    expect(parseSyncLinks("[1,2,3]")).toEqual({});
+    expect(parseSyncLinks("42")).toEqual({});
+    expect(parseSyncLinks("null")).toEqual({});
+  });
+
+  it("keeps only string-valued entries (drops malformed values)", () => {
+    expect(
+      parseSyncLinks(JSON.stringify({ "p:a": "cloudA", "p:b": 5, "p:c": "", "p:d": null })),
+    ).toEqual({ "p:a": "cloudA" });
+  });
+
+  it("round-trips through serialize", () => {
+    const links = { "p:a": "cloudA", "p:b": "cloudB" };
+    expect(parseSyncLinks(serializeSyncLinks(links))).toEqual(links);
+  });
+});
+
+describe("upsertSyncLink (TRI-3309 bug B)", () => {
+  it("records a (project, local table) → cloud table link without mutating the input", () => {
+    const before = { "p:a": "cloudA" };
+    const after = upsertSyncLink(before, "p", "b", "cloudB");
+    expect(after).toEqual({ "p:a": "cloudA", "p:b": "cloudB" });
+    expect(before).toEqual({ "p:a": "cloudA" }); // pure — input untouched
+  });
+
+  it("overwrites an existing link (a re-sync swap repoints to a new cloud id)", () => {
+    const after = upsertSyncLink({ "p:a": "oldCloud" }, "p", "a", "newCloud");
+    expect(after).toEqual({ "p:a": "newCloud" });
+  });
+});
+
+describe("hydrateSyncLinksForProject (TRI-3309 bug B)", () => {
+  const mirror = {
+    "proj1:tblA": "cloudA",
+    "proj1:tblB": "cloudB",
+    "proj2:tblC": "cloudC",
+  };
+
+  it("projects only the open project's links onto { localId: cloudId }", () => {
+    expect(hydrateSyncLinksForProject(mirror, "proj1")).toEqual({
+      tblA: "cloudA",
+      tblB: "cloudB",
+    });
+  });
+
+  it("does not leak another project's links", () => {
+    const hydrated = hydrateSyncLinksForProject(mirror, "proj2");
+    expect(hydrated).toEqual({ tblC: "cloudC" });
+    expect(hydrated).not.toHaveProperty("tblA");
+  });
+
+  it("is empty for a project with no persisted links", () => {
+    expect(hydrateSyncLinksForProject(mirror, "proj-unknown")).toEqual({});
+  });
+
+  it("round-trips a pushed link back to a hydrated link (status survives reload)", () => {
+    // Simulate: push tblA in proj1 → write mirror → reload → hydrate.
+    const written = upsertSyncLink({}, "proj1", "tblA", "cloudA");
+    const reloaded = parseSyncLinks(serializeSyncLinks(written));
+    expect(hydrateSyncLinksForProject(reloaded, "proj1")).toEqual({ tblA: "cloudA" });
+  });
+
+  it("exposes a stable storage key", () => {
+    expect(SYNC_LINKS_STORAGE_KEY).toBe("gtmgrid:syncLinks");
+  });
+});
+
+// ── Single-confirm decision on a 409 (TRI-3310 bug D) ──────────────────────
+//
+// On a 409 the overwrite-confirm MODAL opens; an open sync popover for the SAME
+// table would also render the conflict-confirm body → two overlapping confirms.
+// The helper decides whether the popover must close so EXACTLY ONE confirm shows.
+describe("shouldCloseConflictPopover (TRI-3310 bug D)", () => {
+  it("closes the popover when it targets the same table the modal opens for", () => {
+    expect(
+      shouldCloseConflictPopover({ modalTableId: "t1", openPopoverTableId: "t1" }),
+    ).toBe(true);
+  });
+
+  it("leaves a popover for a DIFFERENT table open (unrelated)", () => {
+    expect(
+      shouldCloseConflictPopover({ modalTableId: "t1", openPopoverTableId: "t2" }),
+    ).toBe(false);
+  });
+
+  it("is a no-op when no popover is open", () => {
+    expect(
+      shouldCloseConflictPopover({ modalTableId: "t1", openPopoverTableId: null }),
+    ).toBe(false);
   });
 });
