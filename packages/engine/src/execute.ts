@@ -320,9 +320,9 @@ export class Engine {
             });
             if (!pass) {
               // Clear any stale value so the skip is visible; skip the write if already empty.
+              // (No progress event — CellProgress streams running/done/error transitions only.)
               if (existing && existing.status !== "empty") {
                 await Effect.runPromise(this.store.setCell(rowId, columnId, { value: null, status: "empty", error: null }));
-                emit({ rowId, columnId, value: null, status: "empty", error: null });
               }
               return;
             }

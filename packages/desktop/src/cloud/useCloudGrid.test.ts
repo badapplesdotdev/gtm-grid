@@ -319,6 +319,7 @@ describe("createIncrementalTableView — incremental derivation + row identity",
         method: null,
         code: null,
         params: {},
+        condition: null,
       })),
       rows: Array.from({ length: rows }, (_, r) => ({ _id: `r${r}` })),
       cells: Array.from({ length: rows }, (_, r) =>
@@ -412,6 +413,7 @@ const page = (
         method: null,
         code: null,
         params: {},
+        condition: null,
       },
     ],
     rows: rowIds.map((_id) => ({ _id })),
@@ -507,6 +509,7 @@ describe("patchPagedGridCache — page-aware realtime patch (TRI-3272)", () => {
       method: null,
       code: null,
       params: {},
+      condition: null,
     };
     const next = patchPagedGridCache(pages, { type: "column.insert", column: col });
     expect(next[0]?.columns.map((c) => c._id)).toEqual(["c1", "c2"]);
