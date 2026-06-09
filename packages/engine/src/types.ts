@@ -26,6 +26,12 @@ export interface Column {
   code: string | null;
   /** Input mapping. String values are templated with {{Column Name}} against the row. */
   params: Record<string, unknown>;
+  /**
+   * Optional "only run if" expression — a JS boolean expression (with {{Column Name}}
+   * references) evaluated per row before the column runs. When it is falsy the row is
+   * skipped (no dispatch, no credits). Null/empty means always run.
+   */
+  condition: string | null;
   position: number;
   created_at: number;
 }

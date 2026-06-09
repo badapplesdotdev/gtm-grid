@@ -312,6 +312,7 @@ function toColumn(c: {
   method: string | null;
   code: string | null;
   params?: unknown;
+  condition?: string | null;
 }): Column {
   return {
     id: c._id,
@@ -324,6 +325,7 @@ function toColumn(c: {
     // renders identically for cloud and local columns.
     fn: c.provider ? `${c.provider}.${c.method}` : c.code ? "code" : null,
     params: (c.params ?? {}) as Record<string, unknown>,
+    condition: c.condition ?? null,
   };
 }
 
@@ -352,6 +354,7 @@ type GetTableData = {
     method: string | null;
     code: string | null;
     params?: unknown;
+    condition?: string | null;
   }[];
   rows: readonly { _id: string }[];
   cells: readonly {

@@ -55,7 +55,7 @@ const table = (over: Partial<StoreTable> = {}): StoreTable => ({
 const column = (over: Partial<StoreColumn> = {}): StoreColumn => ({
   id: "c1", workspaceId: WS, tableId: "t1", name: "A", type: "text",
   kind: "manual", provider: null, method: null, code: null, params: {},
-  position: 0, createdAt: 1, ...over,
+  condition: null, position: 0, createdAt: 1, ...over,
 });
 const row = (over: Partial<StoreRow> = {}): StoreRow => ({
   id: "r1", workspaceId: WS, tableId: "t1", position: 0, createdAt: 1, ...over,

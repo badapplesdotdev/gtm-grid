@@ -1976,6 +1976,9 @@ html, body, #root {
 .conn-add-btn { margin-top: 16px; gap: 6px; }
 
 .conn-add-form { display: flex; flex-direction: column; gap: 10px; }
+.conn-field { display: flex; flex-direction: column; gap: 6px; }
+.conn-field-help { font-size: 11.5px; color: var(--text-3); line-height: 1.4; }
+.conn-textarea { min-height: 72px; resize: vertical; font-family: var(--font-mono); line-height: 1.45; }
 .conn-add-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 2px; }
 
 .conn-connected { display: flex; align-items: center; gap: 12px; }
@@ -3243,6 +3246,142 @@ button.import-type:hover { background: var(--surface-3); }
 .celebrate__title { margin: 0 0 8px; font-size: 20px; }
 .celebrate__body { margin: 0 0 20px; color: var(--text-2); line-height: 1.55; font-size: 14px; }
 
+/* Update-available banner (top of the app shell). */
+.update-banner { display: flex; align-items: center; gap: 10px; padding: 8px 16px; background: var(--surface-2, rgba(34,197,94,0.10)); border-bottom: 1px solid var(--border-1, rgba(0,0,0,0.08)); font-size: 13px; }
+.update-banner__text { flex: 1; min-width: 0; color: var(--text-1); }
+
+/* ── Formula columns + run settings ─────────────────────── */
+.formula-mono { font-family: var(--font-mono); font-size: 12.5px; line-height: 1.5; }
+
+/* Output-type picker (formula columns). */
+.fx-types { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.fx-type {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px;
+  border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface);
+  color: var(--text-2); font-size: 12.5px; cursor: pointer; transition: all 0.12s;
+}
+.fx-type:hover { border-color: var(--border-2); color: var(--text-1); }
+.fx-type.active { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+.fx-type-icon { display: inline-flex; width: 14px; justify-content: center; opacity: 0.85; }
+
+/* "Generate with AI" inline affordance. */
+.formula-ai-row { margin: 8px 0 2px; }
+.formula-ai-toggle {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 4px;
+  background: none; border: none; color: var(--accent); font-size: 12.5px; cursor: pointer;
+}
+.formula-ai-toggle:hover { text-decoration: underline; }
+.formula-ai-spark { display: inline-flex; }
+.formula-ai { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0 2px; }
+.formula-ai-input { flex: 1; min-width: 180px; height: 32px; }
+.formula-ai-go { height: 32px; padding: 0 12px; }
+.formula-ai-cancel {
+  display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+  background: none; border: none; color: var(--text-3); cursor: pointer; border-radius: var(--r-sm);
+}
+.formula-ai-cancel:hover { color: var(--text-1); background: var(--surface-2); }
+.formula-ai-err { flex-basis: 100%; }
+
+/* Run settings ("only run if"). */
+.run-settings { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
+.run-settings-head {
+  display: inline-flex; align-items: center; gap: 6px; background: none; border: none;
+  color: var(--text-2); font-size: 12.5px; font-weight: 500; cursor: pointer; padding: 2px 0;
+}
+.run-settings-head:hover { color: var(--text-1); }
+.run-settings-body { margin-top: 8px; }
+
+/* Column settings modal (edit an existing column). */
+.col-settings {
+  position: fixed; top: 12vh; left: 50%; transform: translateX(-50%);
+  width: 460px; max-width: calc(100vw - 32px); max-height: 76vh; display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-lg);
+}
+.col-settings-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid var(--border);
+}
+.col-settings-title { font-size: 14px; font-weight: 600; color: var(--text-1); }
+.col-settings-body { padding: 16px; overflow-y: auto; }
+.col-settings-foot {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 12px 16px; border-top: 1px solid var(--border);
+}
+.fnx-x {
+  display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+  background: none; border: none; color: var(--text-3); cursor: pointer; border-radius: var(--r-sm);
+}
+.fnx-x:hover { color: var(--text-1); background: var(--surface-2); }
+
+/* ── Run-condition editor (Clay-style: checkbox + NL box + Generate + formula) ── */
+.run-settings-title { font-size: 13px; font-weight: 600; color: var(--text-1); margin-bottom: 10px; }
+
+.run-cond-check { display: flex; align-items: flex-start; gap: 9px; cursor: pointer; user-select: none; }
+.run-cond-check input[type="checkbox"] { margin-top: 2px; width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+.run-cond-check-text { display: flex; flex-direction: column; gap: 1px; }
+.run-cond-check-name { font-size: 13px; font-weight: 500; color: var(--text-1); }
+.run-cond-check-sub { font-size: 12px; color: var(--text-3); }
+.run-cond-body { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.run-cond-formula { font-size: 12.5px; }
+
+/* A bordered box wrapping a textarea + an in-box footer bar. */
+.formula-box {
+  border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface);
+  overflow: hidden; transition: border-color 0.12s, box-shadow 0.12s;
+}
+.formula-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring, rgba(59,130,246,0.15)); }
+.formula-box-area {
+  width: 100%; border: none; background: transparent; resize: vertical;
+  padding: 10px 11px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.5; color: var(--text-1);
+  display: block; outline: none; min-height: 38px;
+}
+.formula-box-area::placeholder { color: var(--text-3); }
+.formula-box-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 8px 6px 11px; border-top: 1px solid var(--border); background: var(--surface-2);
+}
+.formula-box-hint { font-size: 11.5px; color: var(--text-3); }
+.formula-box-hint code {
+  font-family: var(--font-mono); font-size: 11px; padding: 0 3px; border-radius: var(--r-xs);
+  background: var(--surface-3, rgba(0,0,0,0.05)); color: var(--text-2);
+}
+.formula-gen-btn {
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px;
+  border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface);
+  color: var(--accent); font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.12s;
+}
+.formula-gen-btn:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-bg); }
+.formula-gen-btn:disabled { opacity: 0.6; cursor: default; }
+.formula-gen-spark { display: inline-flex; }
+
+/* The reveal: a one-line NL prompt + Generate, shown under the box. */
+.formula-gen-row { display: flex; align-items: center; gap: 6px; }
+.formula-gen-input { flex: 1; min-width: 0; height: 32px; }
+.formula-gen-go { height: 32px; padding: 0 12px; }
+
+/* Spinning wheel shown in the AI Generate buttons while a formula/condition is being generated. */
+.gen-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: -2px;
+  flex-shrink: 0;
+}
+
+/* A cell whose row was gated off by the column's run condition ("Condition not met"). */
+.cell-skipped {
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+}
 /* ─────────────────────────────────────────────────────────
    Table-sync feature (TRI-3297) — recreated from the design
    handoff (app/sync.css), with design tokens mapped onto this

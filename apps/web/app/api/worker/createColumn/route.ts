@@ -26,6 +26,7 @@ interface CreateColumnBody {
   method?: string | null;
   code?: string | null;
   params?: unknown;
+  condition?: string | null;
 }
 
 export function POST(req: Request): Promise<Response> {
@@ -41,6 +42,7 @@ export function POST(req: Request): Promise<Response> {
         method: body.method ?? null,
         code: body.code ?? null,
         params: body.params ?? {},
+        condition: body.condition ?? null,
       });
       return { id, name: body.name, kind: body.kind };
     }),

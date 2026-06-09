@@ -45,6 +45,7 @@ export interface StoreColumn {
   method: string | null;
   code: string | null;
   params: unknown;
+  condition: string | null;
   position: number;
   createdAt: number;
 }

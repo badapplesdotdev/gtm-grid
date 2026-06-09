@@ -101,6 +101,7 @@ export interface GridColumn {
   readonly method: string | null;
   readonly code: string | null;
   readonly params: unknown;
+  readonly condition: string | null;
 }
 
 /** A cell projection in the desktop `getTable` shape. */
@@ -152,6 +153,7 @@ const toGridColumn = (c: Column): GridColumn => ({
   method: c.method,
   code: c.code,
   params: c.params,
+  condition: c.condition,
 });
 
 /** Project a repo `Cell` onto the desktop `getTable` cell shape. */
@@ -439,6 +441,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       readonly method?: string | null;
       readonly code?: string | null;
       readonly params?: unknown;
+      readonly condition?: string | null;
     }) =>
       Effect.gen(function* () {
         const table = yield* requireTable(args.tableId);
@@ -454,6 +457,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
           method: args.method ?? null,
           code: args.code ?? null,
           params: args.params ?? {},
+          condition: args.condition ?? null,
           position,
           createdAt: Date.now(),
         });
@@ -469,6 +473,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
             method: args.method ?? null,
             code: args.code ?? null,
             params: args.params ?? {},
+            condition: args.condition ?? null,
           },
         });
         return id;

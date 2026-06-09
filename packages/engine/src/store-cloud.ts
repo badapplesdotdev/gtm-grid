@@ -165,6 +165,7 @@ interface ConvexColumnDoc {
   readonly method: string | null;
   readonly code: string | null;
   readonly params: Record<string, unknown>;
+  readonly condition: string | null;
   readonly position: number;
   readonly createdAt: number;
 }
@@ -215,6 +216,7 @@ const toColumn = (c: ConvexColumnDoc): Column => ({
   method: c.method,
   code: c.code,
   params: c.params,
+  condition: c.condition,
   position: c.position,
   created_at: c.createdAt,
 });

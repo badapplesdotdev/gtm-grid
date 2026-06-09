@@ -28,6 +28,7 @@ export interface Column {
   readonly method: string | null;
   readonly code: string | null;
   readonly params: unknown;
+  readonly condition: string | null;
   readonly position: number;
   readonly createdAt: number;
 }
@@ -43,6 +44,7 @@ export interface NewColumn {
   readonly method: string | null;
   readonly code: string | null;
   readonly params: unknown;
+  readonly condition: string | null;
   readonly position: number;
   readonly createdAt: number;
 }
@@ -108,6 +110,7 @@ export const ColumnRepoLive: Layer.Layer<ColumnRepo, never, DbClient> =
         method: schema.columns.method,
         code: schema.columns.code,
         params: schema.columns.params,
+        condition: schema.columns.condition,
         position: schema.columns.position,
         createdAt: schema.columns.createdAt,
       } as const;
@@ -170,6 +173,7 @@ export const ColumnRepoLive: Layer.Layer<ColumnRepo, never, DbClient> =
                   method: values.method,
                   code: values.code,
                   params: values.params,
+                  condition: values.condition,
                   position: values.position,
                   createdAt: values.createdAt,
                 })

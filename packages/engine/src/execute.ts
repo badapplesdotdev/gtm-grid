@@ -4,6 +4,13 @@
 
 import { Effect } from "effect";
 import type { Db } from "./db.js";
+import {
+  buildFormulaPrelude,
+  compileExpression,
+  formulaExpression,
+  isFormulaColumn,
+  type CompiledFormula,
+} from "./formula.js";
 import { Registry, defaultRegistry } from "./registry.js";
 import { runFunction, type SandboxDispatch } from "./sandbox.js";
 import {
@@ -12,6 +19,10 @@ import {
   type GridStoreShape,
 } from "./store.js";
 import type { AiConfig, Column, ConnectorMethod } from "./types.js";
+
+/** Stored on a cell's `error` (with status "empty") when a run condition gates the
+ *  row off, so the grid can show a muted "Condition not met" note instead of a dash. */
+export const CONDITION_SKIP_NOTE = "Condition not met";
 
 export interface EngineConfig {
   ai?: AiConfig;
@@ -172,8 +183,29 @@ export class Engine {
     });
   }
 
-  /** The JS body for a column: custom code, or synthesized from provider/method. */
+  /**
+   * Resolve a row into a typed `{ columnName: value }` object for formula / condition
+   * evaluation. Unlike {@link resolveParams} (which splices raw cell *text* into prompt
+   * strings), this preserves value TYPES so `{{Score}} + 1` sees the number and
+   * `{{Email}}.split(...)` sees the string.
+   */
+  private resolveCells(
+    col: Column,
+    rowId: string,
+    store: GridStoreShape,
+  ): Effect.Effect<Record<string, unknown>, GridStoreError, never> {
+    return Effect.gen(this, function* () {
+      const cells = yield* store.rowCells(rowId);
+      const columns = yield* store.listColumns(col.table_id);
+      const out: Record<string, unknown> = {};
+      for (const c of columns) out[c.name] = cells.get(c.id)?.value ?? null;
+      return out;
+    });
+  }
+
+  /** The JS body for a column: a compiled formula, custom code, or provider/method. */
   private columnCode(col: Column): string {
+    if (isFormulaColumn(col)) return compileExpression(formulaExpression(col)).body;
     if (col.code) return col.code;
     return `function(inputs, sdk){ return sdk[${JSON.stringify(col.provider)}][${JSON.stringify(col.method)}](inputs); }`;
   }
@@ -196,8 +228,19 @@ export class Engine {
 
     const rowIds =
       opts.rowIds ?? (await Effect.runPromise(reads.listRows(col.table_id))).map((r) => r.id);
-    const code = this.columnCode(col);
     const providers = this.registry.providerMap();
+
+    // Precompile the formula body and the "only run if" condition ONCE (same for every
+    // row); each carries the helper-library prelude it needs.
+    const formula: CompiledFormula | null = isFormulaColumn(col)
+      ? compileExpression(formulaExpression(col))
+      : null;
+    const condition: CompiledFormula | null = col.condition?.trim()
+      ? compileExpression(col.condition)
+      : null;
+    const code = formula ? formula.body : this.columnCode(col);
+    const formulaPrelude = formula ? buildFormulaPrelude(formula.libs) : undefined;
+    const conditionPrelude = condition ? buildFormulaPrelude(condition.libs) : undefined;
 
     // Emit a per-cell progress event, never letting a bad callback abort the run.
     const emit = (cell: CellProgress): void => {
@@ -221,7 +264,9 @@ export class Engine {
     // declare batchSize > 1 plus a `runBatch` implementation. Otherwise every
     // row goes through the per-row sandbox path, identical to before — so the
     // batchSize:1 / custom-code / runBatch-less cases are completely unchanged.
-    const batchMethod = this.batchableMethod(col);
+    // Conditional-run columns must run per-row so the gate can skip individual rows.
+    // Formula columns have no runBatch and are already excluded by batchableMethod.
+    const batchMethod = condition ? null : this.batchableMethod(col);
 
     // Mark a cell `running` (unless the store coalesces it) and stream progress.
     const markRunning = async (rowId: string): Promise<void> => {
@@ -277,10 +322,50 @@ export class Engine {
       await mapConcurrent(rowIds, concurrency, async (rowId) => {
         const existing = await Effect.runPromise(reads.getCell(rowId, columnId));
         if (!opts.force && existing?.status === "done") return;
+
+        // Conditional-run gate: evaluate "only run if" before any work. A falsy result
+        // skips the row (no dispatch → no credits); a thrown condition is a cell error.
+        if (condition) {
+          try {
+            const cinputs = await Effect.runPromise(this.resolveCells(col, rowId, reads));
+            // NOTE: a condition expression runs in the same sandbox as a code/formula
+            // column, so it CAN call `sdk.<connector>.<method>` — meaning the gate itself
+            // can dispatch a connector call and thus spend credits, bounded by the same
+            // registry allow-list that constrains code columns. This is intentional (lets
+            // a gate consult an enrichment before deciding to run), not a leak.
+            const pass = await runFunction({
+              code: condition.body,
+              inputs: cinputs,
+              providers,
+              dispatch: this.dispatch,
+              prelude: conditionPrelude,
+            });
+            if (!pass) {
+              // Mark the cell so the user can SEE why it's blank — gated off by the run
+              // condition. We reuse the `error` text with status "empty" (not "error"), so
+              // the grid shows a muted "Condition not met" note instead of a bare dash.
+              // Skip the write when it already shows that note. (No progress event —
+              // CellProgress streams running/done/error transitions only.)
+              if (existing?.status !== "empty" || existing?.error !== CONDITION_SKIP_NOTE) {
+                await Effect.runPromise(
+                  this.store.setCell(rowId, columnId, { value: null, status: "empty", error: CONDITION_SKIP_NOTE }),
+                );
+              }
+              return;
+            }
+          } catch (e) {
+            await markError(rowId, `condition: ${e instanceof Error ? e.message : String(e)}`);
+            return;
+          }
+        }
+
         await markRunning(rowId);
         try {
-          const inputs = await Effect.runPromise(this.resolveParams(col, rowId, reads));
-          const result = await runFunction({ code, inputs, providers, dispatch: this.dispatch });
+          // Formulas run over a typed row object; other columns use {{...}} templating.
+          const inputs = formula
+            ? await Effect.runPromise(this.resolveCells(col, rowId, reads))
+            : await Effect.runPromise(this.resolveParams(col, rowId, reads));
+          const result = await runFunction({ code, inputs, providers, dispatch: this.dispatch, prelude: formulaPrelude });
           await markDone(rowId, simplify(result));
         } catch (e) {
           await markError(rowId, e);

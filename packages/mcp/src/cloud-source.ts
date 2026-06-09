@@ -206,10 +206,12 @@ export interface CloudGridSource {
     tableRef: string,
     spec: {
       name: string;
+      formula?: string;
       fn?: string;
       code?: string;
       type?: string;
       params?: Record<string, unknown>;
+      condition?: string;
     },
   ) => Promise<{ id: string; name: string; kind: string; fn: string | null }>;
   /**
@@ -429,7 +431,14 @@ export function makeCloudSource(
       // resolved provider) makes it a function column, else manual.
       let provider: string | null = null;
       let method: string | null = null;
-      if (spec.fn !== undefined && spec.fn !== "") {
+      let colParams: Record<string, unknown> = spec.params ?? {};
+      if (spec.formula !== undefined && spec.formula !== "") {
+        // A formula column is a function column backed by the built-in `formula`
+        // connector — same mapping the local source applies.
+        provider = "formula";
+        method = "eval";
+        colParams = { ...colParams, expression: spec.formula };
+      } else if (spec.fn !== undefined && spec.fn !== "") {
         const [p, m] = spec.fn.split(".");
         if (!p || !m) throw new Error("fn must be 'provider.method'");
         if (!deps.registry.method(p, m)) {
@@ -439,6 +448,10 @@ export function makeCloudSource(
         method = m;
       }
       const kind = provider !== null || spec.code ? "function" : "manual";
+      const condition =
+        spec.condition !== undefined && spec.condition.trim() !== ""
+          ? spec.condition.trim()
+          : null;
       const created = readCreated(
         await client.mutation(CREATE_COLUMN_REF, {
           tableId: context.tableId,
@@ -448,14 +461,15 @@ export function makeCloudSource(
           provider,
           method,
           code: spec.code ?? null,
-          params: spec.params ?? {},
+          params: colParams,
+          condition,
         }),
       );
       return {
         id: created.id,
         name: created.name,
         kind,
-        fn: spec.fn ?? null,
+        fn: spec.formula ? "formula.eval" : (spec.fn ?? null),
       };
     },
 

@@ -112,6 +112,9 @@ const AddColumnPopover = lazy(() =>
 const FunctionsModal = lazy(() =>
   import("./AddColumn").then((m) => ({ default: m.FunctionsModal })),
 );
+const ColumnSettingsModal = lazy(() =>
+  import("./AddColumn").then((m) => ({ default: m.ColumnSettingsModal })),
+);
 const SignalsModal = lazy(() =>
   import("./SignalsModal").then((m) => ({ default: m.SignalsModal })),
 );
@@ -270,6 +273,9 @@ const LAST_CLOUD_PROJECT_KEY = "gtmgrid:lastCloudProject";
 // True if any of a function column's params reference {{columnName}}.
 function columnDependsOn(col: Column, columnName: string): boolean {
   const re = new RegExp(`\\{\\{\\s*${columnName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\}\\}`);
+  // References live in the input params (incl. a formula column's params.expression)
+  // OR in the column's run condition — both should make it a dependent for auto-run.
+  if (typeof col.condition === "string" && re.test(col.condition)) return true;
   return Object.values(col.params ?? {}).some((v) => typeof v === "string" && re.test(v));
 }
 
@@ -446,6 +452,16 @@ function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCel
   }
 
   if (!cell || cell.status === "empty" || cell.status === "pending") {
+    // A row gated off by the column's run condition carries a note on an empty cell —
+    // surface it ("Condition not met") so it's clear why the cell is blank.
+    if (cell?.status === "empty" && cell.error) {
+      return (
+        <div className="cell-wrap" title={cell.error}>
+          {runBtn}
+          <span className="cell-skipped">{cell.error}</span>
+        </div>
+      );
+    }
     if (col.kind === "function") {
       return <div className="cell-wrap">{runBtn}<span className="cell-empty">—</span></div>;
     }
@@ -967,6 +983,7 @@ export default function App() {
   const [showAddCol, setShowAddCol] = useState(false);
   const [addColAnchor, setAddColAnchor] = useState<{ left: number; top: number } | null>(null);
   const [showFunctions, setShowFunctions] = useState(false);
+  const [editCol, setEditCol] = useState<Column | null>(null);
   const [showNewTable, setShowNewTable] = useState(false);
   // The "New table" chooser (Blank / CSV / Webhook) replaces the old
   // straight-to-blank entry points.
@@ -1401,6 +1418,12 @@ export default function App() {
   const [autoRun, setAutoRun] = useState<boolean>(() => {
     try { return localStorage.getItem("gtmgrid:autoRun") !== "off"; } catch { return true; }
   });
+  // Mirror into a ref so the per-cell `onEdit` closure always reads the CURRENT
+  // value. Cells are memoized (cellPropsEqual ignores onEdit), so they keep a stale
+  // closure across a toggle — without this the toggle wouldn't take effect until the
+  // cell re-rendered for another reason, so "Auto-run off" was being ignored.
+  const autoRunRef = useRef(autoRun);
+  autoRunRef.current = autoRun;
   const toggleAutoRun = useCallback(() => {
     setAutoRun((v) => {
       const next = !v;
@@ -2296,7 +2319,8 @@ export default function App() {
     setTableData(updated);
 
     // Auto-run: re-run function columns that reference the edited column, for this row.
-    if (autoRun) {
+    // Read via the ref so a stale (memoized) onEdit closure still respects the toggle.
+    if (autoRunRef.current) {
       const changed = updated.columns.find((c) => c.id === colId);
       if (changed) {
         const deps = updated.columns.filter((c) => c.kind === "function" && columnDependsOn(c, changed.name));
@@ -3066,7 +3090,10 @@ export default function App() {
                       className="grid-th"
                       style={{ width: colW(col.id), minWidth: MIN_COL_W, maxWidth: MAX_COL_W }}
                       onContextMenu={(e) =>
-                        openCtx(e, [{ label: `Delete column “${col.name}”`, danger: true, onClick: () => deleteColumn(col.id) }])
+                        openCtx(e, [
+                          { label: `Edit column “${col.name}”`, onClick: () => setEditCol(col) },
+                          { label: `Delete column “${col.name}”`, danger: true, onClick: () => deleteColumn(col.id) },
+                        ])
                       }
                     >
                       <div className="th-inner">
@@ -3335,6 +3362,17 @@ export default function App() {
               const target = aiProviders[0]?.id ?? "anthropic";
               setView({ kind: "ai", id: target });
             }}
+          />
+        </Suspense>
+      )}
+
+      {editCol && tableData && (
+        <Suspense fallback={<PanelFallback />}>
+          <ColumnSettingsModal
+            column={editCol}
+            columns={tableData.columns.map((c) => c.name)}
+            onClose={() => setEditCol(null)}
+            onSaved={() => loadTable(tableData.id)}
           />
         </Suspense>
       )}

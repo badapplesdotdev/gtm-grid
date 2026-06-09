@@ -148,31 +148,47 @@ server.tool("create_table", "Create a new table.", { name: z.string() }, async (
 
 server.tool(
   "add_column",
-  "Add a column. For a function column, set `fn` to 'provider.method' (see list_functions) OR provide custom `code` (a JS body: function(inputs, sdk){...}). `params` maps inputs to values; use {{Column Name}} templates to inject other cells, e.g. { username: '{{Username}}' }.",
+  "Add a column. Computed columns come in three flavours: (1) a FORMULA — set `formula` to a JS expression evaluated per row (reference other columns with {{Column Name}}; standard JS plus Lodash `_`, Moment `moment`, and Excel/Sheets functions VLOOKUP/IF/SUM/CONCATENATE/… available by their bare UPPERCASE names); (2) a connector FUNCTION — set `fn` to 'provider.method' (see list_functions); or (3) custom `code` (a JS body: function(inputs, sdk){...}). `params` maps inputs to values; use {{Column Name}} templates, e.g. { username: '{{Username}}' }. Set `condition` (an 'only run if' JS boolean expression, e.g. 'Number({{Headcount}}) > 40') to skip rows that don't match — the column won't run or spend credits on them.",
   {
     table: z.string(),
     name: z.string(),
+    formula: z
+      .string()
+      .optional()
+      .describe('A formula expression, e.g. \'{{Email}}.split("@")[1]\' or \'UPPER({{Name}})\'. Creates a formula column.'),
     fn: z.string().optional().describe("'provider.method', e.g. 'github.getUser' or 'ai.generate'"),
     code: z.string().optional().describe("Custom QuickJS body: function(inputs, sdk){ ... }"),
     type: z.enum(["text", "number", "boolean", "date", "json"]).optional(),
     params: z.record(z.string(), z.any()).optional(),
+    condition: z
+      .string()
+      .optional()
+      .describe("'Only run if' JS boolean expression with {{Column}} refs, e.g. 'Boolean({{Email}})'. Falsy rows are skipped (no credits)."),
   },
-  async ({ table, name, fn, code, type, params }) => {
+  async ({ table, name, formula, fn, code, type, params, condition }) => {
     if (cloudSource) {
       return ok(
         await cloudSource.addColumn(table, {
           name,
+          ...(formula !== undefined ? { formula } : {}),
           ...(fn !== undefined ? { fn } : {}),
           ...(code !== undefined ? { code } : {}),
           ...(type !== undefined ? { type } : {}),
           ...(params !== undefined ? { params } : {}),
+          ...(condition !== undefined ? { condition } : {}),
         }),
       );
     }
     const t = localTableOr(table);
     let provider: string | null = null;
     let method: string | null = null;
-    if (fn) {
+    let colParams: Record<string, unknown> = params ?? {};
+    if (formula) {
+      // A formula column is a function column backed by the built-in `formula` connector.
+      provider = "formula";
+      method = "eval";
+      colParams = { ...colParams, expression: formula };
+    } else if (fn) {
       const [p, m] = fn.split(".");
       if (!p || !m) throw new Error("fn must be 'provider.method'");
       if (!registry.method(p, m)) throw new Error(`Unknown function ${fn}. Use list_functions.`);
@@ -180,8 +196,18 @@ server.tool(
       method = m;
     }
     const kind = provider || code ? "function" : "manual";
-    const col = local!.db.createColumn({ tableId: t.id, name, type: type ?? "text", kind, provider, method, code: code ?? null, params: params ?? {} });
-    return ok({ id: col.id, name: col.name, kind, fn: fn ?? null });
+    const col = local!.db.createColumn({
+      tableId: t.id,
+      name,
+      type: type ?? "text",
+      kind,
+      provider,
+      method,
+      code: code ?? null,
+      params: colParams,
+      condition: condition?.trim() ? condition.trim() : null,
+    });
+    return ok({ id: col.id, name: col.name, kind, fn: formula ? "formula.eval" : (fn ?? null), condition: col.condition });
   },
 );
 
