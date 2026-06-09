@@ -1,18 +1,13 @@
-import { useState, useEffect, useCallback, useMemo, useRef, memo, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, memo, lazy, Suspense, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource, type CellProgressEvent } from "./api";
-import AgentPanel from "./AgentPanel";
 import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import CellDetails, { extractCode } from "./CellDetails";
-import { ExtensionPanel, AiProviderPanel, ExtensionsBrowse, SkillsBrowse, SkillPanel, BrandIcon } from "./Panels";
-import { AddColumnPopover, FunctionsModal } from "./AddColumn";
+import { BrandIcon } from "./BrandIcon";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { AccountBar, PlanBillingModal } from "./cloud/AccountBar";
 import { PendingInvites } from "./cloud/PendingInvites";
-import { WorkspaceSettings } from "./cloud/WorkspaceSettings";
-import { OnboardingFlow } from "./cloud/onboarding/OnboardingFlow";
 import { cloudEnabled, queryClient, syncWorkspacePlan, apiClient } from "./cloud/client";
-import { CloudGrid } from "./cloud/CloudGrid";
 import { useMe, useActiveWorkspace, useAuthState } from "./cloud/auth";
 import {
   useMyPendingInvitations,
@@ -32,13 +27,63 @@ import {
   useCloudGridMutations,
   type CloudProject,
 } from "./cloud/useCloudGrid";
-import { ImportCsvModal } from "./ImportCsvModal";
-import { SignalsModal, type SignalsCloud } from "./SignalsModal";
+import { type SignalsCloud } from "./SignalsModal";
 import type { ImportWriter } from "./csvImport";
 import type { Id } from "./cloud/ids";
 import { VirtualGridBody } from "./VirtualGridBody";
 import { resolveRowHeight } from "./gridVirtual";
 import "./styles.css";
+
+// ── Lazy-loaded panels (TRI-3287) ─────────────────────────────────────
+// Heavy, non-initial UI is code-split out of the initial bundle so first
+// paint (the core grid + shell) stays small. Each is rendered inside a
+// <Suspense> with a lightweight fallback.
+const AgentPanel = lazy(() => import("./AgentPanel"));
+const OnboardingFlow = lazy(() =>
+  import("./cloud/onboarding/OnboardingFlow").then((m) => ({ default: m.OnboardingFlow })),
+);
+const CloudGrid = lazy(() =>
+  import("./cloud/CloudGrid").then((m) => ({ default: m.CloudGrid })),
+);
+const WorkspaceSettings = lazy(() =>
+  import("./cloud/WorkspaceSettings").then((m) => ({ default: m.WorkspaceSettings })),
+);
+const ExtensionsBrowse = lazy(() =>
+  import("./Panels").then((m) => ({ default: m.ExtensionsBrowse })),
+);
+const ExtensionPanel = lazy(() =>
+  import("./Panels").then((m) => ({ default: m.ExtensionPanel })),
+);
+const AiProviderPanel = lazy(() =>
+  import("./Panels").then((m) => ({ default: m.AiProviderPanel })),
+);
+const SkillsBrowse = lazy(() =>
+  import("./Panels").then((m) => ({ default: m.SkillsBrowse })),
+);
+const SkillPanel = lazy(() =>
+  import("./Panels").then((m) => ({ default: m.SkillPanel })),
+);
+const AddColumnPopover = lazy(() =>
+  import("./AddColumn").then((m) => ({ default: m.AddColumnPopover })),
+);
+const FunctionsModal = lazy(() =>
+  import("./AddColumn").then((m) => ({ default: m.FunctionsModal })),
+);
+const SignalsModal = lazy(() =>
+  import("./SignalsModal").then((m) => ({ default: m.SignalsModal })),
+);
+const ImportCsvModal = lazy(() =>
+  import("./ImportCsvModal").then((m) => ({ default: m.ImportCsvModal })),
+);
+
+/** Lightweight fallback shown while a lazy panel chunk loads. */
+function PanelFallback() {
+  return (
+    <div className="panel-fallback" role="status" aria-live="polite">
+      <span className="cell-spinner" style={{ width: 16, height: 16 }} />
+    </div>
+  );
+}
 
 // What the main area is showing.
 type View =
@@ -1546,17 +1591,19 @@ export default function App() {
   }
   if (mustAuth) {
     return (
-      <OnboardingFlow
-        forced
-        initialScreen={pendingInviteToken !== null ? "signup" : "signin"}
-        hasSession={false}
-        onClose={() => {
-          // Opting out clears the invite so the gate doesn't re-fire in a loop.
-          if (pendingInviteToken !== null) clearPendingInviteToken();
-          continueLocally();
-        }}
-        onDone={() => {}}
-      />
+      <Suspense fallback={<AppLoader inShell label="Signing you in…" />}>
+        <OnboardingFlow
+          forced
+          initialScreen={pendingInviteToken !== null ? "signup" : "signin"}
+          hasSession={false}
+          onClose={() => {
+            // Opting out clears the invite so the gate doesn't re-fire in a loop.
+            if (pendingInviteToken !== null) clearPendingInviteToken();
+            continueLocally();
+          }}
+          onDone={() => {}}
+        />
+      </Suspense>
     );
   }
 
@@ -1997,37 +2044,45 @@ export default function App() {
             Closing returns to the grid. Local writes via the sidecar; cloud via
             Convex. */}
         {importMode === "local" && (
-          <ImportCsvModal
-            inline
-            writer={localImportWriter}
-            onClose={() => setImportMode(null)}
-            onImported={() => { api.tables().then(setTables); }}
-            onOpenTable={id => {
-              api.tables().then(t => {
-                setTables(t);
-                setSelectedTableId(id);
-                setView({ kind: "table" });
-              });
-              setImportMode(null);
-            }}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <ImportCsvModal
+              inline
+              writer={localImportWriter}
+              onClose={() => setImportMode(null)}
+              onImported={() => { api.tables().then(setTables); }}
+              onOpenTable={id => {
+                api.tables().then(t => {
+                  setTables(t);
+                  setSelectedTableId(id);
+                  setView({ kind: "table" });
+                });
+                setImportMode(null);
+              }}
+            />
+          </Suspense>
         )}
         {importMode === "cloud" && cloudImportWriter && (
-          <ImportCsvModal
-            inline
-            writer={cloudImportWriter}
-            onClose={() => setImportMode(null)}
-            onOpenTable={id => {
-              setCloudTableId(id as Id<"tables">);
-              setImportMode(null);
-            }}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <ImportCsvModal
+              inline
+              writer={cloudImportWriter}
+              onClose={() => setImportMode(null)}
+              onOpenTable={id => {
+                setCloudTableId(id as Id<"tables">);
+                setImportMode(null);
+              }}
+            />
+          </Suspense>
         )}
 
         {/* Cloud project: the LIVE multiplayer grid (Convex). Replaces the local
             sidecar grid entirely while a cloud project is open. Hidden while a
             CSV import is open in this pane. */}
-        {!importMode && inCloud && !cloudLocked && view.kind === "table" && <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} />}
+        {!importMode && inCloud && !cloudLocked && view.kind === "table" && (
+          <Suspense fallback={<PanelFallback />}>
+            <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} />
+          </Suspense>
+        )}
 
         {/* Cloud locked: the trial lapsed / Free plan. Cloud data stays safe but
             inaccessible until the user upgrades; local tables are unaffected. */}
@@ -2053,22 +2108,30 @@ export default function App() {
             scope, so they must take precedence over the CloudGrid (which only
             renders for the "table" view). */}
         {!importMode && view.kind === "extensions" && (
-          <ExtensionsBrowse
-            extensions={extensions}
-            onOpen={(id) => setView({ kind: "extension", id })}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <ExtensionsBrowse
+              extensions={extensions}
+              onOpen={(id) => setView({ kind: "extension", id })}
+            />
+          </Suspense>
         )}
         {!importMode && view.kind === "extension" && (
-          <ExtensionPanel
-            id={view.id}
-            onConnected={refreshConnections}
-            onBack={() => setView({ kind: "extensions" })}
-            workspaceCreds={workspaceCreds}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <ExtensionPanel
+              id={view.id}
+              onConnected={refreshConnections}
+              onBack={() => setView({ kind: "extensions" })}
+              workspaceCreds={workspaceCreds}
+            />
+          </Suspense>
         )}
         {!importMode && view.kind === "ai" && (() => {
           const p = aiProviders.find(x => x.id === view.id);
-          return p ? <AiProviderPanel provider={p} onConnected={refreshConnections} workspaceCreds={workspaceCreds} /> : null;
+          return p ? (
+            <Suspense fallback={<PanelFallback />}>
+              <AiProviderPanel provider={p} onConnected={refreshConnections} workspaceCreds={workspaceCreds} />
+            </Suspense>
+          ) : null;
         })()}
 
         {/* Skills gallery + detail panels. Like the extension/AI panels, these
@@ -2077,18 +2140,22 @@ export default function App() {
             "table" view — otherwise selecting a skill in a cloud workspace would
             hide the grid and render nothing (a blank dead-end). */}
         {!importMode && view.kind === "skills" && (
-          <SkillsBrowse
-            skills={skills}
-            onOpen={(id) => setView({ kind: "skill", id })}
-            onChanged={() => api.skills().then(setSkills).catch(() => {})}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <SkillsBrowse
+              skills={skills}
+              onOpen={(id) => setView({ kind: "skill", id })}
+              onChanged={() => api.skills().then(setSkills).catch(() => {})}
+            />
+          </Suspense>
         )}
         {!importMode && view.kind === "skill" && (
-          <SkillPanel
-            id={view.id}
-            onBack={() => setView({ kind: "skills" })}
-            onChanged={() => api.skills().then(setSkills).catch(() => {})}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <SkillPanel
+              id={view.id}
+              onBack={() => setView({ kind: "skills" })}
+              onChanged={() => api.skills().then(setSkills).catch(() => {})}
+            />
+          </Suspense>
         )}
 
         {!importMode && !inCloud && view.kind === "table" && <>
@@ -2314,10 +2381,12 @@ export default function App() {
       </div>
 
       {/* ── Agent panel (Claude Code / Codex) ─ */}
-      <AgentPanel
-        onGridChange={refreshAll}
-        activeTable={tableData ? { name: tableData.name, columns: tableData.columns.map((c) => c.name) } : null}
-      />
+      <Suspense fallback={null}>
+        <AgentPanel
+          onGridChange={refreshAll}
+          activeTable={tableData ? { name: tableData.name, columns: tableData.columns.map((c) => c.name) } : null}
+        />
+      </Suspense>
 
       {/* ── Cell details drawer ─ */}
       {detail && (
@@ -2365,25 +2434,29 @@ export default function App() {
 
       {/* ── Cloud onboarding (full-screen, C28) ─────────────── */}
       {onboarding && (
-        <OnboardingFlow
-          initialScreen={onboarding.initialScreen}
-          hasSession={onboarding.hasSession}
-          onClose={() => setOnboarding(null)}
-          onDone={(workspaceId) => {
-            if (workspaceId !== null) setActiveWorkspaceId(workspaceId);
-            setOnboarding(null);
-            refreshAppState(workspaceId);
-          }}
-        />
+        <Suspense fallback={<AppLoader inShell label="Loading…" />}>
+          <OnboardingFlow
+            initialScreen={onboarding.initialScreen}
+            hasSession={onboarding.hasSession}
+            onClose={() => setOnboarding(null)}
+            onDone={(workspaceId) => {
+              if (workspaceId !== null) setActiveWorkspaceId(workspaceId);
+              setOnboarding(null);
+              refreshAppState(workspaceId);
+            }}
+          />
+        </Suspense>
       )}
 
       {/* ── Modals ──────────────────────── */}
       {showWorkspaceSettings && activeWorkspace && (
-        <WorkspaceSettings
-          workspaceId={activeWorkspace._id}
-          workspaceName={activeWorkspace.name}
-          onClose={() => setShowWorkspaceSettings(false)}
-        />
+        <Suspense fallback={<PanelFallback />}>
+          <WorkspaceSettings
+            workspaceId={activeWorkspace._id}
+            workspaceName={activeWorkspace.name}
+            onClose={() => setShowWorkspaceSettings(false)}
+          />
+        </Suspense>
       )}
 
       {/* Invite-accepted celebration: confetti fires on accept; this confirms it. */}
@@ -2425,28 +2498,32 @@ export default function App() {
       )}
 
       {showAddCol && tableData && (
-        <AddColumnPopover
-          tableId={tableData.id}
-          anchor={addColAnchor}
-          onClose={() => setShowAddCol(false)}
-          onAdded={() => loadTable(tableData.id)}
-          onUseFunction={() => { setShowAddCol(false); setShowFunctions(true); }}
-        />
+        <Suspense fallback={<PanelFallback />}>
+          <AddColumnPopover
+            tableId={tableData.id}
+            anchor={addColAnchor}
+            onClose={() => setShowAddCol(false)}
+            onAdded={() => loadTable(tableData.id)}
+            onUseFunction={() => { setShowAddCol(false); setShowFunctions(true); }}
+          />
+        </Suspense>
       )}
 
       {showFunctions && tableData && (
-        <FunctionsModal
-          tableId={tableData.id}
-          connectors={connectors}
-          columns={tableData.columns.map((c) => c.name)}
-          onClose={() => setShowFunctions(false)}
-          onAdded={() => loadTable(tableData.id)}
-          onOpenAiSettings={() => {
-            setShowFunctions(false);
-            const target = aiProviders[0]?.id ?? "anthropic";
-            setView({ kind: "ai", id: target });
-          }}
-        />
+        <Suspense fallback={<PanelFallback />}>
+          <FunctionsModal
+            tableId={tableData.id}
+            connectors={connectors}
+            columns={tableData.columns.map((c) => c.name)}
+            onClose={() => setShowFunctions(false)}
+            onAdded={() => loadTable(tableData.id)}
+            onOpenAiSettings={() => {
+              setShowFunctions(false);
+              const target = aiProviders[0]?.id ?? "anthropic";
+              setView({ kind: "ai", id: target });
+            }}
+          />
+        </Suspense>
       )}
 
       {showNewTableChooser && (
@@ -2464,25 +2541,27 @@ export default function App() {
       )}
 
       {showSignals && (
-        <SignalsModal
-          cloud={inCloud ? signalsCloud : undefined}
-          onClose={() => setShowSignals(false)}
-          onConnectTrigify={() => { setShowSignals(false); setView({ kind: "extension", id: "trigify" }); }}
-          onCreated={(tableId, added) => {
-            setShowSignals(false);
-            if (inCloud) {
-              setCloudTableId(tableId as Id<"tables">);
-              setView({ kind: "table" });
-            } else {
-              api.tables().then((t) => {
-                setTables(t);
-                setSelectedTableId(tableId);
+        <Suspense fallback={<PanelFallback />}>
+          <SignalsModal
+            cloud={inCloud ? signalsCloud : undefined}
+            onClose={() => setShowSignals(false)}
+            onConnectTrigify={() => { setShowSignals(false); setView({ kind: "extension", id: "trigify" }); }}
+            onCreated={(tableId, added) => {
+              setShowSignals(false);
+              if (inCloud) {
+                setCloudTableId(tableId as Id<"tables">);
                 setView({ kind: "table" });
-              }).catch(() => {});
-              if (!added) startWarming(tableId);
-            }
-          }}
-        />
+              } else {
+                api.tables().then((t) => {
+                  setTables(t);
+                  setSelectedTableId(tableId);
+                  setView({ kind: "table" });
+                }).catch(() => {});
+                if (!added) startWarming(tableId);
+              }
+            }}
+          />
+        </Suspense>
       )}
 
       {showNewTable && (

@@ -7,6 +7,7 @@ import { createPortal } from "react-dom";
 import { api, ExtensionDetail, ExtensionInfo, AiProviderInfo, CredentialScope, SkillInfo, SkillDetail } from "./api";
 import { aiProviderCredId } from "./cloud/credentials";
 import { Markdown } from "./AgentPanel";
+import { BrandIcon } from "./BrandIcon";
 
 /**
  * The scope a credential is saved under in the panels. Extends the local-only
@@ -148,21 +149,11 @@ const WORKSPACE_SCOPE: { id: "workspace"; label: string; icon: ReactNode } = {
   icon: <I.Users />,
 };
 
-function initials(name: string): string {
-  return name.replace(/[^A-Za-z0-9]/g, "").slice(0, 2).toUpperCase() || "··";
-}
-
-/** Brand logo with a graceful fallback to monogram initials if it fails to load. */
-export function BrandIcon({ logo, name, size = 18 }: { logo: string | null; name: string; size?: number }) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [logo]);
-  if (logo && !failed) {
-    return (
-      <img className="brand-img" src={logo} alt="" width={size} height={size} loading="lazy" onError={() => setFailed(true)} />
-    );
-  }
-  return <span className="brand-fallback" style={{ width: size, height: size }}>{initials(name)}</span>;
-}
+// BrandIcon (and its `initials` helper) live in ./BrandIcon so they can be
+// eagerly imported into the initial bundle while the rest of Panels is
+// lazy-loaded. Re-exported here to preserve existing import sites; also used
+// internally by the panel/header components below.
+export { BrandIcon };
 
 function PanelHeader({ logo, title, description, meta }: { logo: string | null; title: string; description: string; meta: string }) {
   return (
