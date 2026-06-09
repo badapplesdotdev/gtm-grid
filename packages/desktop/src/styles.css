@@ -877,6 +877,16 @@ html, body, #root {
   flex-shrink: 0;
 }
 
+/* Fallback shown while a lazy-loaded panel chunk is fetched (TRI-3287). */
+.panel-fallback {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  min-height: 80px;
+  padding: 24px;
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
