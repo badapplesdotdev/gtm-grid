@@ -56,11 +56,19 @@ export const pollTrigifySignals = inngest.createFunction(
   },
 );
 
-/** Per-binding sync, fanned out from the cron. Per-workspace concurrency. */
+/**
+ * Per-binding sync, fanned out from the cron. Two-tier concurrency: a GLOBAL
+ * account-scoped cap bounds total in-flight syncs across ALL workspaces
+ * (per-workspace limits otherwise multiply unbounded as workspaces grow), while
+ * the per-workspace key still keeps any single workspace from monopolising runs.
+ */
 export const processSignalBinding = inngest.createFunction(
   {
     id: "process-signal-binding",
-    concurrency: { key: "event.data.workspaceId", limit: 2 },
+    concurrency: [
+      { scope: "account", limit: 50 },
+      { key: "event.data.workspaceId", limit: 2 },
+    ],
     retries: 2,
     triggers: [{ event: "signals/binding.due" }],
   },
