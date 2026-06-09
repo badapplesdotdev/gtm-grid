@@ -371,6 +371,14 @@ export const api = {
   // non-2xx (409 = overwrite-needs-confirmation) so the UI can warn before a
   // destructive re-push.
   pushTable,
+  // Auto-sync global setting (TRI-3298). Default OFF; reads/writes the global
+  // meta flag via the sidecar. Enabling is gated behind a confirm in the UI.
+  getAutoSync: () => http<{ enabled: boolean }>("/api/settings/auto-sync"),
+  setAutoSync: (enabled: boolean) =>
+    http<{ ok: boolean; enabled: boolean }>("/api/settings/auto-sync", {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    }),
   agents: () =>
     http<{ claude: AgentStatus; codex: AgentStatus }>("/api/agents"),
   connectAgent: (agent: "claude" | "codex", path?: string) =>

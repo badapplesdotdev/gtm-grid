@@ -113,6 +113,19 @@ function listCustomSkills(): CustomSkill[] {
 function saveCustomSkills(skills: CustomSkill[]): void {
   globalDb.setMeta("custom_skills", JSON.stringify(skills));
 }
+
+// ── Auto-sync setting (TRI-3298): a GLOBAL meta flag, like custom_skills above.
+//    When ON, the desktop auto-links + pushes local tables on create/edit. It
+//    DEFAULTS OFF: only the canonical string "true" enables it, so an unset or
+//    non-"true" value can NEVER silently turn auto-sync on. The desktop mirrors
+//    this exact parse (packages/desktop/src/cloudSync.ts parseAutoSyncFlag).
+const AUTO_SYNC_META_KEY = "auto_sync_offline_tables";
+function getAutoSync(): boolean {
+  return globalDb.getMeta(AUTO_SYNC_META_KEY) === "true";
+}
+function setAutoSync(on: boolean): void {
+  globalDb.setMeta(AUTO_SYNC_META_KEY, on ? "true" : "false");
+}
 function wordCount(s: string): number {
   return s.trim() ? s.trim().split(/\s+/).length : 0;
 }
@@ -453,6 +466,14 @@ route("DELETE", "/api/skills/:id", (p) => {
   if (next.length === skills.length) return { error: "no such custom skill" };
   saveCustomSkills(next);
   return { ok: true };
+});
+
+// Auto-sync setting (TRI-3298): read/write the global flag. Default OFF.
+route("GET", "/api/settings/auto-sync", () => ({ enabled: getAutoSync() }));
+route("POST", "/api/settings/auto-sync", (_p, body) => {
+  const enabled = (body as { enabled?: unknown } | null)?.enabled === true;
+  setAutoSync(enabled);
+  return { ok: true, enabled };
 });
 
 // --- Signals: bind a table to a Trigify saved search + poll new results in ---

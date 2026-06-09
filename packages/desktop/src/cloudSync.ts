@@ -143,3 +143,84 @@ export function pendingCount(statuses: readonly SyncStatus[]): number {
     (s) => s === "ahead" || s === "local" || s === "conflict",
   ).length;
 }
+
+// ── Auto-sync setting (TRI-3298) ───────────────────────────────────────────
+//
+// `auto_sync_offline_tables` is a GLOBAL meta flag (default OFF). When ON, the
+// app auto-links + pushes ALL local tables on create and on debounced edit,
+// reusing TRI-3295's push route. The settings toggle gates enabling behind an
+// explicit destructive-overwrite confirm (turning it ON means local tables will
+// AUTOMATICALLY and REPEATEDLY overwrite their cloud copies). These PURE helpers
+// keep persistence parsing, eligibility, the trigger gate, and the debounce
+// window unit-testable offline (no DOM, no live sidecar).
+
+/** Debounce window (ms) for auto-pushing a table after a local edit. */
+export const AUTO_SYNC_DEBOUNCE_MS = 1500;
+
+/**
+ * Parse the persisted `auto_sync_offline_tables` meta value into a boolean.
+ * The flag DEFAULTS OFF: only the canonical string `"true"` enables it, so a
+ * missing/empty/unset/garbage value is always OFF. This is the single source of
+ * truth for the default so the server, the sidecar endpoint, and the client all
+ * agree (a non-"true" value can never silently turn auto-sync on).
+ */
+export function parseAutoSyncFlag(raw: string | null | undefined): boolean {
+  return raw === "true";
+}
+
+/** Serialize the auto-sync flag back to its canonical persisted string. */
+export function serializeAutoSyncFlag(on: boolean): string {
+  return on ? "true" : "false";
+}
+
+/**
+ * Whether the auto-sync NUDGE may be shown. It nudges ONLY eligible cloud users
+ * — cloud-enabled + signed in + a cloud project open (same gate as the sync UI)
+ * — and ONLY when auto-sync is still OFF (nothing to nudge once it's on) and the
+ * user hasn't dismissed it. Dismissal persists across sessions (the caller backs
+ * `dismissed` with localStorage), so once dismissed it stays dismissed.
+ */
+export function autoSyncNudgeVisible(gate: {
+  readonly cloudEnabled: boolean;
+  readonly inCloud: boolean;
+  readonly isAuthenticated: boolean;
+  readonly autoSyncOn: boolean;
+  readonly dismissed: boolean;
+}): boolean {
+  if (gate.autoSyncOn || gate.dismissed) return false;
+  return syncUiVisible({
+    cloudEnabled: gate.cloudEnabled,
+    inCloud: gate.inCloud,
+    isAuthenticated: gate.isAuthenticated,
+  });
+}
+
+/**
+ * The trigger gate: whether a local-table create/edit should auto-push. Returns
+ * true ONLY when the setting is ON and the user is an eligible cloud target
+ * (signed in with a cloud project open) — so with the setting OFF, or signed
+ * out, or no cloud project, ZERO automatic push traffic is produced. App.tsx
+ * checks this before scheduling any auto-push.
+ */
+export function shouldAutoPush(gate: {
+  readonly autoSyncOn: boolean;
+  readonly cloudEnabled: boolean;
+  readonly inCloud: boolean;
+  readonly isAuthenticated: boolean;
+}): boolean {
+  if (!gate.autoSyncOn) return false;
+  return syncUiVisible({
+    cloudEnabled: gate.cloudEnabled,
+    inCloud: gate.inCloud,
+    isAuthenticated: gate.isAuthenticated,
+  });
+}
+
+/**
+ * The enable-time destructive-overwrite warning shown before turning auto-sync
+ * ON. Makes the repeated-overwrite behaviour explicit so consent happens once at
+ * enable-time (per-edit prompts would defeat the automation). Toggling OFF is
+ * immediate and needs no warning.
+ */
+export const AUTO_SYNC_ENABLE_WARNING =
+  "Turn on auto-sync? Your local tables will AUTOMATICALLY and REPEATEDLY overwrite their cloud copies whenever you create or edit them. The local version always wins — cloud edits to these tables will be lost.";

@@ -16,6 +16,11 @@ import {
   isOverwriteConfirmNeeded,
   overwriteConfirmMessage,
   pendingCount,
+  autoSyncNudgeVisible,
+  shouldAutoPush,
+  parseAutoSyncFlag,
+  AUTO_SYNC_DEBOUNCE_MS,
+  AUTO_SYNC_ENABLE_WARNING,
   type SyncStatus,
 } from "./cloudSync";
 import { CloudPushHttpError } from "./api";
@@ -231,6 +236,9 @@ const RUN_ALL_CONCURRENCY = 4;
 // Persisted id of the last cloud project the user had open, so a relaunch
 // reopens it (default-to-cloud for signed-in users).
 const LAST_CLOUD_PROJECT_KEY = "gtmgrid:lastCloudProject";
+// Persisted dismissal of the auto-sync nudge (TRI-3298) — stays dismissed across
+// sessions once the user closes the nudge.
+const AUTO_SYNC_NUDGE_DISMISSED_KEY = "gtmgrid:autoSyncNudgeDismissed";
 
 // True if any of a function column's params reference {{columnName}}.
 function columnDependsOn(col: Column, columnName: string): boolean {
@@ -1544,9 +1552,58 @@ export default function App() {
   // overwrite cloud data. Holds the table + cloud row count for the warning copy.
   const [overwriteConfirm, setOverwriteConfirm] = useState<{ tableId: string; name: string; rowCount: number } | null>(null);
 
+  // ── Auto-sync setting (TRI-3298) ─────────────────────────────────────────
+  // The global `auto_sync_offline_tables` flag (default OFF), loaded from the
+  // sidecar. When ON, local tables auto-link + push on create / debounced edit.
+  // `autoSyncEnable` holds a pending enable-time destructive-overwrite confirm:
+  // turning it ON requires confirming local tables will REPEATEDLY overwrite
+  // their cloud copies. Toggling OFF is immediate (no confirm).
+  const [autoSyncOn, setAutoSyncOn] = useState(false);
+  const [autoSyncEnableConfirm, setAutoSyncEnableConfirm] = useState(false);
+  // The nudge is dismissible and STAYS dismissed across sessions (localStorage).
+  const [autoSyncNudgeDismissed, setAutoSyncNudgeDismissed] = useState<boolean>(() => {
+    try { return localStorage.getItem(AUTO_SYNC_NUDGE_DISMISSED_KEY) === "1"; } catch { return false; }
+  });
+
+  // Load the persisted flag once the sidecar is reachable. Defaults OFF on any
+  // failure (parseAutoSyncFlag treats a missing value as OFF).
+  useEffect(() => {
+    let cancelled = false;
+    api.getAutoSync()
+      .then((r) => { if (!cancelled) setAutoSyncOn(parseAutoSyncFlag(r.enabled ? "true" : "false")); })
+      .catch(() => { /* default OFF */ });
+    return () => { cancelled = true; };
+  }, []);
+
   // The sync UI (dots + popover + sync-all) is visible only for cloud-enabled,
   // signed-in users with a cloud project open. Hidden in pure-local builds.
   const showSyncUi = syncUiVisible({ cloudEnabled, inCloud, isAuthenticated });
+
+  // Whether the auto-sync nudge should show: eligible cloud user, flag still
+  // OFF, and not previously dismissed.
+  const showAutoSyncNudge = autoSyncNudgeVisible({
+    cloudEnabled, inCloud, isAuthenticated, autoSyncOn, dismissed: autoSyncNudgeDismissed,
+  });
+
+  // Dismiss the nudge — persist so it stays dismissed across sessions.
+  const dismissAutoSyncNudge = useCallback(() => {
+    setAutoSyncNudgeDismissed(true);
+    try { localStorage.setItem(AUTO_SYNC_NUDGE_DISMISSED_KEY, "1"); } catch { /* ignore */ }
+  }, []);
+
+  // Persist the flag to the sidecar. Toggling OFF is immediate; toggling ON must
+  // go through `requestAutoSyncToggle` (which shows the enable-time confirm).
+  const persistAutoSync = useCallback(async (next: boolean) => {
+    setAutoSyncOn(next);
+    try { await api.setAutoSync(next); } catch { setAutoSyncOn(!next); }
+  }, []);
+
+  // Toggle entry point. OFF→ON opens the destructive-overwrite confirm and only
+  // enables on accept. ON→OFF disables immediately.
+  const requestAutoSyncToggle = useCallback(() => {
+    if (autoSyncOn) { void persistAutoSync(false); return; }
+    setAutoSyncEnableConfirm(true);
+  }, [autoSyncOn, persistAutoSync]);
 
   // Derive a table's design SYNC_META status from its client-tracked facts.
   const syncStatusFor = useCallback(
@@ -1621,6 +1678,42 @@ export default function App() {
     if (!target) return;
     void runPush(target.tableId, true);
   }, [overwriteConfirm, runPush]);
+
+  // ── Auto-push trigger (TRI-3298) ─────────────────────────────────────────
+  // When auto-sync is ON, local tables auto-link + push on create and (debounced)
+  // on edit. Auto-pushes always send `confirmOverwrite: true` because the user
+  // gave one-time consent at enable-time — per-edit prompts would defeat the
+  // automation. Re-pushes REUSE the stored TRI-3295 link, so no duplicate cloud
+  // tables are created. The gate is recomputed at fire time (via a ref) so a
+  // setting flip / sign-out cancels pending pushes — when OFF, zero auto traffic.
+  const autoPushGateRef = useRef({ autoSyncOn, cloudEnabled, inCloud, isAuthenticated });
+  autoPushGateRef.current = { autoSyncOn, cloudEnabled, inCloud, isAuthenticated };
+  const autoPushTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  // Fire an auto-push immediately if the gate is satisfied at THIS moment.
+  const autoPushNow = useCallback((tableId: string) => {
+    if (!shouldAutoPush(autoPushGateRef.current)) return;
+    void runPush(tableId, true);
+  }, [runPush]);
+
+  // Schedule a debounced auto-push for an edited table (coalesces rapid edits).
+  const scheduleAutoPush = useCallback((tableId: string) => {
+    if (!shouldAutoPush(autoPushGateRef.current)) return;
+    const timers = autoPushTimers.current;
+    if (timers[tableId]) clearTimeout(timers[tableId]);
+    timers[tableId] = setTimeout(() => {
+      delete timers[tableId];
+      autoPushNow(tableId);
+    }, AUTO_SYNC_DEBOUNCE_MS);
+  }, [autoPushNow]);
+
+  // Drop any pending debounced pushes when auto-sync turns OFF (or eligibility is
+  // lost) so no straggler push fires after the user opts out — zero auto traffic.
+  useEffect(() => {
+    if (shouldAutoPush({ autoSyncOn, cloudEnabled, inCloud, isAuthenticated })) return;
+    const timers = autoPushTimers.current;
+    for (const id of Object.keys(timers)) { clearTimeout(timers[id]); delete timers[id]; }
+  }, [autoSyncOn, cloudEnabled, inCloud, isAuthenticated]);
 
   // Push every table that has un-pushed work (the sync-all header control).
   const onSyncAll = useCallback(() => {
@@ -1760,6 +1853,7 @@ export default function App() {
     if (!tableData) return;
     await api.addRow(tableData.id);
     await loadTable(tableData.id);
+    scheduleAutoPush(tableData.id);
   };
 
   // ── Promote a JSON field to a column (from the Cell details drawer) ──
@@ -1859,6 +1953,8 @@ export default function App() {
         }
       }
     }
+    // Auto-sync (TRI-3298): a debounced push after the edit settles.
+    scheduleAutoPush(selectedTableId);
   };
 
   // ── Sidebar: connector groups ──────────────
@@ -1960,6 +2056,30 @@ export default function App() {
             onClick={() => setShowUpgrade(true)}
           >
             Upgrade now
+          </button>
+        </div>
+      )}
+      {/* Auto-sync nudge (TRI-3298) — clones the .trial-banner pattern. Shown to
+          eligible cloud users while auto-sync is still OFF; dismissible and stays
+          dismissed across sessions. Enabling routes through the same enable-time
+          overwrite confirm as the settings toggle. */}
+      {showAutoSyncNudge && (
+        <div className="trial-banner auto-sync-nudge" role="status">
+          <span className="trial-banner__text">
+            Keep your local tables backed up — turn on auto-sync to push them to
+            the cloud automatically. Your local version always overwrites the cloud copy.
+          </span>
+          <button
+            className="btn btn--primary btn-sm"
+            onClick={() => setAutoSyncEnableConfirm(true)}
+          >
+            Turn on auto-sync
+          </button>
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={dismissAutoSyncNudge}
+          >
+            Dismiss
           </button>
         </div>
       )}
@@ -2097,6 +2217,23 @@ export default function App() {
                 </button>
               </span>
             </div>
+            {/* Auto-sync setting (TRI-3298): default OFF. Turning it ON requires
+                confirming the destructive overwrite warning; OFF is immediate. */}
+            {showSyncUi && (
+              <label className="auto-sync-toggle">
+                <span className="auto-sync-toggle__label">Auto-sync to cloud</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={autoSyncOn}
+                  className={`switch${autoSyncOn ? " is-on" : ""}`}
+                  title={autoSyncOn ? "Auto-sync is on — local tables overwrite the cloud copy on every change" : "Turn on auto-sync (will overwrite cloud copies)"}
+                  onClick={requestAutoSyncToggle}
+                >
+                  <span className="switch__knob" />
+                </button>
+              </label>
+            )}
             {tables.length === 0 ? (
               <div style={{ padding: "4px 16px", fontSize: 12, color: "var(--text-3)" }}>No tables yet</div>
             ) : [...tables].sort((a, b) => Number(b.favorite) - Number(a.favorite)).map(t => (
@@ -2923,6 +3060,10 @@ export default function App() {
               setTables(t);
               setSelectedTableId(id);
             });
+            // Auto-sync (TRI-3298): a new local table auto-links + pushes
+            // immediately when the setting is ON (first push creates the cloud
+            // table; the link is reused on later auto-pushes — no duplicates).
+            autoPushNow(id);
           }}
         />
       )}
@@ -3027,6 +3168,34 @@ export default function App() {
               <button className="btn btn-outline" onClick={() => setOverwriteConfirm(null)}>Cancel</button>
               <button className="btn btn-danger" onClick={() => { onConfirmOverwrite(); setOverwriteConfirm(null); }}>
                 Keep my version — overwrite the cloud copy
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Auto-sync enable-time confirm (TRI-3298): turning the setting ON
+          requires confirming the repeated-overwrite behaviour. Only enables on
+          accept; cancelling leaves it OFF. */}
+      {autoSyncEnableConfirm && (
+        <div className="overlay" onMouseDown={e => e.target === e.currentTarget && setAutoSyncEnableConfirm(false)}>
+          <div className="modal" style={{ width: 420 }}>
+            <div className="modal-header">
+              <span className="modal-title">Turn on auto-sync?</span>
+              <button className="modal-close" onClick={() => setAutoSyncEnableConfirm(false)}><Icon.X /></button>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>
+                {AUTO_SYNC_ENABLE_WARNING}
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setAutoSyncEnableConfirm(false)}>Cancel</button>
+              <button
+                className="btn btn-danger"
+                onClick={() => { setAutoSyncEnableConfirm(false); void persistAutoSync(true); }}
+              >
+                Turn on — overwrite cloud copies automatically
               </button>
             </div>
           </div>
