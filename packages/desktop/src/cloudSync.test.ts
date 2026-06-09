@@ -16,6 +16,7 @@ import {
   isOverwriteConfirmNeeded,
   overwriteConfirmMessage,
   pendingCount,
+  planSyncAll,
   parseAutoSyncFlag,
   serializeAutoSyncFlag,
   autoSyncNudgeVisible,
@@ -143,6 +144,94 @@ describe("pendingCount", () => {
 
   it("is zero when everything is synced", () => {
     expect(pendingCount(["synced", "synced"])).toBe(0);
+  });
+});
+
+// ── Sync-all planner (TRI-3307) ────────────────────────────────────────────
+//
+// The bug: the old "Sync all" loop called the single-table push per table, and
+// each LINKED table clobbered the one `overwriteConfirm` state, so all-but-one
+// linked+ahead table was silently dropped. planSyncAll returns the FULL linked
+// set up front so the caller can confirm once and push EVERY linked table.
+describe("planSyncAll", () => {
+  it("splits unlinked (create) vs linked (overwrite)", () => {
+    const plan = planSyncAll([
+      { id: "a", linked: false, status: "local" },
+      { id: "b", linked: true, status: "ahead" },
+      { id: "c", linked: false, status: "local" },
+      { id: "d", linked: true, status: "ahead" },
+    ]);
+    expect(plan.toCreate).toEqual(["a", "c"]);
+    expect(plan.toOverwrite).toEqual(["b", "d"]);
+  });
+
+  it("excludes synced and in-flight syncing tables", () => {
+    const plan = planSyncAll([
+      { id: "a", linked: true, status: "synced" },
+      { id: "b", linked: true, status: "syncing" },
+      { id: "c", linked: false, status: "syncing" },
+      { id: "d", linked: true, status: "ahead" },
+    ]);
+    expect(plan.toCreate).toEqual([]);
+    expect(plan.toOverwrite).toEqual(["d"]);
+  });
+
+  it("excludes offline tables (cannot push)", () => {
+    const plan = planSyncAll([
+      { id: "a", linked: false, status: "offline" },
+      { id: "b", linked: true, status: "offline" },
+      { id: "c", linked: false, status: "local" },
+    ]);
+    expect(plan.toCreate).toEqual(["c"]);
+    expect(plan.toOverwrite).toEqual([]);
+  });
+
+  it("buckets a conflict-flagged linked table as overwrite", () => {
+    const plan = planSyncAll([{ id: "a", linked: true, status: "conflict" }]);
+    expect(plan.toOverwrite).toEqual(["a"]);
+    expect(plan.toCreate).toEqual([]);
+  });
+
+  it("returns the FULL linked set — NO linked table is omitted (TRI-3307)", () => {
+    const linked = ["b", "d", "e", "g"];
+    const tables = [
+      { id: "a", linked: false, status: "local" as const },
+      { id: "b", linked: true, status: "ahead" as const },
+      { id: "c", linked: true, status: "synced" as const },
+      { id: "d", linked: true, status: "ahead" as const },
+      { id: "e", linked: true, status: "conflict" as const },
+      { id: "f", linked: false, status: "syncing" as const },
+      { id: "g", linked: true, status: "ahead" as const },
+    ];
+    const plan = planSyncAll(tables);
+    expect(plan.toOverwrite).toEqual(linked);
+    // Every linked+pending table is accounted for — none silently skipped.
+    expect(plan.toOverwrite).toHaveLength(linked.length);
+  });
+
+  it("pendingCount matches toCreate + toOverwrite for the same tables", () => {
+    const tables = [
+      { id: "a", linked: false, status: "local" as const },
+      { id: "b", linked: true, status: "ahead" as const },
+      { id: "c", linked: true, status: "conflict" as const },
+      { id: "d", linked: true, status: "synced" as const },
+      { id: "e", linked: false, status: "syncing" as const },
+    ];
+    const plan = planSyncAll(tables);
+    // pendingCount excludes synced/syncing/offline — same exclusions the planner
+    // applies — so the two views of "pending" agree.
+    expect(plan.toCreate.length + plan.toOverwrite.length).toBe(
+      pendingCount(tables.map((t) => t.status)),
+    );
+  });
+
+  it("is empty when everything is synced", () => {
+    const plan = planSyncAll([
+      { id: "a", linked: true, status: "synced" },
+      { id: "b", linked: true, status: "synced" },
+    ]);
+    expect(plan.toCreate).toEqual([]);
+    expect(plan.toOverwrite).toEqual([]);
   });
 });
 

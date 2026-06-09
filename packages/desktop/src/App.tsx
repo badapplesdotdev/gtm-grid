@@ -16,6 +16,7 @@ import {
   isOverwriteConfirmNeeded,
   overwriteConfirmMessage,
   pendingCount,
+  planSyncAll,
   autoSyncNudgeVisible,
   shouldAutoPush,
   parseAutoSyncFlag,
@@ -1578,7 +1579,10 @@ export default function App() {
   // destructive-overwrite confirm. `pushingTableId` is the in-flight row (busy
   // dot); `syncErrors` surfaces a failed push inline (no toast system).
   const [syncLinks, setSyncLinks] = useState<Record<string, { cloudTableId: string; rowCount: number }>>({});
-  const [pushingTableId, setPushingTableId] = useState<string | null>(null);
+  // Set of table ids with a push in flight (TRI-3307): a bulk "Sync all" pushes
+  // many tables concurrently, so each pushing row must show its own busy dot — a
+  // single id would only mark one row. Single-push adds/removes its one id here.
+  const [pushingTableIds, setPushingTableIds] = useState<ReadonlySet<string>>(new Set());
   const [syncErrors, setSyncErrors] = useState<Record<string, string>>({});
   // The open sync popover: the table id + the clicked row's viewport top, so the
   // popover anchors to the right of the row (design's `.sync-pop`).
@@ -1586,6 +1590,11 @@ export default function App() {
   // A pending destructive-overwrite confirm: a linked table whose re-push would
   // overwrite cloud data. Holds the table + cloud row count for the warning copy.
   const [overwriteConfirm, setOverwriteConfirm] = useState<{ tableId: string; name: string; rowCount: number } | null>(null);
+  // A pending BULK destructive-overwrite confirm for "Sync all" (TRI-3307): holds
+  // the linked table ids to re-push and the unlinked ids to create on accept. ONE
+  // confirm covers ALL linked tables so none are silently skipped; on cancel none
+  // of the linked tables push (the unlinked creates are non-destructive).
+  const [bulkOverwriteConfirm, setBulkOverwriteConfirm] = useState<{ toOverwrite: string[]; toCreate: string[] } | null>(null);
 
   // ── Auto-sync setting (TRI-3298) ─────────────────────────────────────────
   // The global `auto_sync_offline_tables` flag (default OFF), loaded from the
@@ -1649,11 +1658,11 @@ export default function App() {
         // GET, so a linked table is treated as `synced` until the user pushes
         // again; an unlinked table is `local`. (No fabricated change counts.)
         hasLocalChanges: false,
-        pushing: pushingTableId === tableId,
+        pushing: pushingTableIds.has(tableId),
         offline: healthStatus === "offline",
         needsOverwriteConfirm: overwriteConfirm?.tableId === tableId,
       }),
-    [syncLinks, pushingTableId, healthStatus, overwriteConfirm],
+    [syncLinks, pushingTableIds, healthStatus, overwriteConfirm],
   );
 
   // Run a single table push. `confirmOverwrite` is supplied by the confirm flow.
@@ -1668,7 +1677,7 @@ export default function App() {
         setSyncErrors((m) => ({ ...m, [tableId]: "Sign in to a cloud workspace to sync." }));
         return;
       }
-      setPushingTableId(tableId);
+      setPushingTableIds((s) => { const next = new Set(s); next.add(tableId); return next; });
       setSyncErrors((m) => { const next = { ...m }; delete next[tableId]; return next; });
       try {
         const result = await api.pushTable({ apiUrl, token, projectId, localTableId: tableId, confirmOverwrite });
@@ -1684,7 +1693,7 @@ export default function App() {
           setSyncErrors((m) => ({ ...m, [tableId]: e instanceof Error ? e.message : "Push failed." }));
         }
       } finally {
-        setPushingTableId(null);
+        setPushingTableIds((s) => { const next = new Set(s); next.delete(tableId); return next; });
       }
     },
     [cloudProject, tables],
@@ -1751,13 +1760,31 @@ export default function App() {
   }, [autoSyncOn, cloudEnabled, inCloud, isAuthenticated]);
 
   // Push every table that has un-pushed work (the sync-all header control).
+  // TRI-3307: split pending tables into unlinked (create) vs linked (overwrite)
+  // via the pure planner. Unlinked tables create straight through (non-
+  // destructive). If ANY linked tables are pending, gate ALL of them behind ONE
+  // bulk destructive-overwrite confirm — so no linked table is silently skipped
+  // (the old per-table loop clobbered the single `overwriteConfirm`, surfacing
+  // only the LAST linked table). On cancel, NONE of the linked tables push.
   const onSyncAll = useCallback(() => {
-    for (const t of tables) {
-      if (syncStatusFor(t.id) !== "synced" && syncStatusFor(t.id) !== "syncing") {
-        onPushTable(t.id);
-      }
+    const plan = planSyncAll(
+      tables.map((t) => ({ id: t.id, linked: syncLinks[t.id] !== undefined, status: syncStatusFor(t.id) })),
+    );
+    for (const id of plan.toCreate) void runPush(id, false);
+    if (plan.toOverwrite.length > 0) {
+      setBulkOverwriteConfirm({ toOverwrite: [...plan.toOverwrite], toCreate: [...plan.toCreate] });
     }
-  }, [tables, syncStatusFor, onPushTable]);
+  }, [tables, syncLinks, syncStatusFor, runPush]);
+
+  // User accepted the bulk "Sync all" overwrite — re-push EVERY linked table with
+  // confirmOverwrite (the unlinked creates already fired in onSyncAll). None of
+  // the linked tables are omitted.
+  const onConfirmBulkOverwrite = useCallback(() => {
+    const target = bulkOverwriteConfirm;
+    setBulkOverwriteConfirm(null);
+    if (!target) return;
+    for (const id of target.toOverwrite) void runPush(id, true);
+  }, [bulkOverwriteConfirm, runPush]);
 
   // How many local tables have un-pushed work (drives `.sync-all-btn.has-pending`).
   const syncPending = useMemo(
@@ -2240,10 +2267,10 @@ export default function App() {
                   <button
                     className={`sync-all-btn${syncPending ? " has-pending" : ""}`}
                     title={syncPending ? `Sync ${syncPending} table${syncPending > 1 ? "s" : ""}` : "All tables synced"}
-                    disabled={pushingTableId !== null}
+                    disabled={pushingTableIds.size > 0}
                     onClick={onSyncAll}
                   >
-                    {pushingTableId !== null ? <span className="cell-spinner" /> : <Icon.CloudUp size={13} />}
+                    {pushingTableIds.size > 0 ? <span className="cell-spinner" /> : <Icon.CloudUp size={13} />}
                     {syncPending ? <span className="sync-all-count">{syncPending}</span> : null}
                   </button>
                 )}
@@ -3208,6 +3235,31 @@ export default function App() {
               <button className="btn btn-outline" onClick={() => setOverwriteConfirm(null)}>Cancel</button>
               <button className="btn btn-danger" onClick={() => { onConfirmOverwrite(); setOverwriteConfirm(null); }}>
                 Keep my version — overwrite the cloud copy
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk destructive-overwrite confirm (TRI-3307): "Sync all" with linked
+          tables pending shows ONE confirm naming the COUNT, then re-pushes ALL of
+          them on accept. On cancel none of the linked tables push. */}
+      {bulkOverwriteConfirm && (
+        <div className="overlay" onMouseDown={e => e.target === e.currentTarget && setBulkOverwriteConfirm(null)}>
+          <div className="modal" style={{ width: 400 }}>
+            <div className="modal-header">
+              <span className="modal-title">Re-push linked tables?</span>
+              <button className="modal-close" onClick={() => setBulkOverwriteConfirm(null)}><Icon.X /></button>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>
+                Re-push {bulkOverwriteConfirm.toOverwrite.length} linked table{bulkOverwriteConfirm.toOverwrite.length === 1 ? "" : "s"}? This overwrites their cloud copies with your local versions.
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setBulkOverwriteConfirm(null)}>Cancel</button>
+              <button className="btn btn-danger" onClick={onConfirmBulkOverwrite}>
+                Keep my versions — overwrite the cloud copies
               </button>
             </div>
           </div>
