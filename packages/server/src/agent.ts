@@ -4,7 +4,7 @@
 // This is the Revcode "connect your Claude Code / Codex" mechanism: no OAuth,
 // no key storage — the app drives the CLI the user already logged into.
 
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, execFile, execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import type { ServerResponse } from "node:http";
@@ -519,4 +519,92 @@ export function streamCodex(
     sse.end();
   });
   res.on("close", () => child.kill());
+}
+
+/**
+ * One-shot, NON-streaming text generation through the connected coding agent CLI
+ * (Claude Code preferred, then Codex) — NOT the engine's API AI provider. Used by
+ * the formula / "only run if" generator so it reuses whatever model the user has
+ * already authenticated in Claude Code / Codex. No MCP servers / tools are loaded:
+ * this is a pure prompt → text call. Returns the model's answer, or an `error`
+ * string telling the user to connect an agent when neither CLI is available.
+ */
+export async function generateWithAgent(
+  prompt: string,
+  system: string,
+): Promise<{ text: string } | { error: string }> {
+  const claude = resolveAgentPath("claude");
+  if (claude) return runClaudeOneShot(claude, prompt, system);
+  const codex = resolveAgentPath("codex");
+  if (codex) return runCodexOneShot(codex, prompt, system);
+  return { error: "Connect Claude Code or Codex to use AI generation." };
+}
+
+function runClaudeOneShot(bin: string, prompt: string, system: string): Promise<{ text: string } | { error: string }> {
+  return new Promise((resolve) => {
+    const args = [
+      "-p",
+      prompt,
+      "--output-format",
+      "json",
+      "--append-system-prompt",
+      system,
+      // No MCP servers / tools — a pure one-shot text generation.
+      "--strict-mcp-config",
+      "--mcp-config",
+      '{"mcpServers":{}}',
+    ];
+    execFile(bin, args, { env: agentSpawnEnv(bin), timeout: 90_000, maxBuffer: 8 << 20 }, (err, stdout, stderr) => {
+      const out = (stdout || "").trim();
+      if (!out) {
+        resolve({ error: `claude: ${(stderr || err?.message || "no output").trim().slice(0, 300)}` });
+        return;
+      }
+      try {
+        const j = JSON.parse(out) as { result?: unknown; is_error?: boolean; subtype?: string };
+        const text = typeof j.result === "string" ? j.result : resultText(j);
+        if (j.is_error || j.subtype === "error_during_execution") {
+          resolve({ error: (text || "claude returned an error").slice(0, 300) });
+          return;
+        }
+        resolve({ text });
+      } catch {
+        resolve({ text: out });
+      }
+    });
+  });
+}
+
+function runCodexOneShot(bin: string, prompt: string, system: string): Promise<{ text: string } | { error: string }> {
+  return new Promise((resolve) => {
+    const message = system ? `${system}\n\n${prompt}` : prompt;
+    const child = spawn(bin, ["exec", "--json", "--skip-git-repo-check", message], { env: agentSpawnEnv(bin) });
+    child.stdin?.end();
+    let buf = "";
+    let last = "";
+    let stderr = "";
+    const timer = setTimeout(() => child.kill(), 90_000);
+    child.stdout.on("data", (chunk) => {
+      buf += chunk.toString();
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        try {
+          const e = JSON.parse(line);
+          if (e.type === "item.completed" && e.item?.type === "agent_message" && e.item.text) last = e.item.text;
+        } catch {
+          /* skip non-JSON */
+        }
+      }
+    });
+    child.stderr.on("data", (d) => (stderr += d.toString()));
+    child.on("error", (e) => { clearTimeout(timer); resolve({ error: `codex: ${e.message}` }); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (last) resolve({ text: last });
+      else resolve({ error: `codex: ${stderr.split("\n").filter((l) => /error|fatal/i.test(l)).slice(-1)[0] || `exited ${code}`}`.slice(0, 300) });
+    });
+  });
 }

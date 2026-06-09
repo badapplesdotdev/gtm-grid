@@ -22,7 +22,7 @@ import {
   listProjects,
 } from "@gtmgrid/engine";
 import type { CellProgress } from "@gtmgrid/engine";
-import { detectAgents, streamClaude, streamCodex, setAgentPath, rescanAgents, type AgentKind } from "./agent.js";
+import { detectAgents, streamClaude, streamCodex, setAgentPath, rescanAgents, generateWithAgent, type AgentKind } from "./agent.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
 import { corsHeadersFor, isOriginAllowed } from "./cors.js";
@@ -852,22 +852,18 @@ route("POST", "/api/columns/:id/update", (p, body) => {
 
 // Generate a formula expression (or an "only run if" boolean) from a natural-language
 // description, via the connected AI provider. Reuses the engine's AI dispatch path.
+// Generate a formula / "only run if" expression from natural language using the
+// connected coding agent (Claude Code or Codex) — the model the user has already
+// authenticated, NOT a separate API AI key. Returns a "connect an agent" error when
+// neither CLI is available.
 route("POST", "/api/ai/generate-formula", async (_p, body) => {
   const description = String(body?.description ?? "").trim();
   if (!description) return { error: "description is required" };
   const columns: string[] = Array.isArray(body?.columns) ? body.columns.map(String) : [];
   const mode = body?.mode === "condition" ? "condition" : "formula";
-  try {
-    const result = await current.engine.dispatch("ai", "generate", {
-      prompt: description,
-      system: formulaSystemPrompt(mode, columns),
-      maxTokens: 400,
-    });
-    const text = result && typeof result === "object" && "text" in result ? String((result as { text: unknown }).text) : String(result);
-    return { formula: cleanFormulaOutput(text) };
-  } catch (e) {
-    return { error: e instanceof Error ? e.message : String(e) };
-  }
+  const r = await generateWithAgent(description, formulaSystemPrompt(mode, columns));
+  if ("error" in r) return { error: r.error };
+  return { formula: cleanFormulaOutput(r.text) };
 });
 
 route("POST", "/api/columns/:id/delete", (p) => {
