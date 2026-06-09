@@ -59,6 +59,18 @@ export async function runFunction(opts: RunFunctionOpts): Promise<unknown> {
   // Surfaces a host-side error through the bridge so the guest throws normally.
   let pendingError: unknown = null;
 
+  // The (provider, method) pairs this invocation may dispatch — the SAME set the
+  // `__sdk` prelude is built from. Enforced INSIDE the host bridge below, not only
+  // in the prelude, because `__hostCall` is reachable as a guest global: without
+  // this check a column body could call `__hostCall("other","method", …)` directly
+  // to reach a connector outside `providers`, defeating the allow-list. The prelude
+  // shapes the typed `sdk` surface; this set is the actual authorization boundary.
+  // (NUL-joined so a provider/method id can never collide across the separator.)
+  const allowed = new Set<string>();
+  for (const [provider, methods] of Object.entries(providers)) {
+    for (const method of methods) allowed.add(`${provider}\u0000${method}`);
+  }
+
   try {
     ctx.runtime.setMemoryLimit(memoryLimitBytes);
     const deadline = Date.now() + timeoutMs;
@@ -68,6 +80,16 @@ export async function runFunction(opts: RunFunctionOpts): Promise<unknown> {
     const hostFn = ctx.newAsyncifiedFunction("__hostCall", async (provH, methodH, inputH) => {
       const provider = ctx.getString(provH);
       const method = ctx.getString(methodH);
+      // Authorization gate: a call to a (provider, method) not in this run's
+      // allow-list never reaches `dispatch` (so it touches no connector and no
+      // credentials). Returned as the same `__hostError` sentinel a dispatch
+      // failure uses, so the `sdk` wrapper re-throws it as a normal Error. A
+      // blocked call can only arrive via a direct `__hostCall` (the `sdk` wrapper
+      // is built only for allowed pairs), so it is NOT stashed as `pendingError`.
+      if (!allowed.has(`${provider}\u0000${method}`)) {
+        const msg = `sdk call not permitted: ${provider}.${method}`;
+        return ctx.newString(JSON.stringify({ __hostError: msg }));
+      }
       const input = JSON.parse(ctx.getString(inputH) || "{}");
       try {
         const result = await dispatch(provider, method, input);
