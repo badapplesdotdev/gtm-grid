@@ -614,10 +614,19 @@ export function patchGridCache(
  * Mutation wrappers for cloud grid edits — cell edits, add row, add column, plus
  * the structural deletes.
  *
- * These call the tRPC `grid.*` mutations; the server broadcasts the change so
- * every OTHER subscribed client patches its cache via the realtime reducer. This
- * client invalidates its own `getTable` query so its write is reflected
- * immediately even before the broadcast round-trips.
+ * These call the tRPC `grid.*` mutations; the server broadcasts the change on
+ * the table's W3 channel so EVERY subscribed client — including this writer —
+ * patches its `getTable` cache via the realtime reducer (the writer is itself a
+ * subscriber). Structural ADDs (`addRow`/`addColumn`/`addRowsWithCells`) still
+ * invalidate the owning table's query because the caller already knows its
+ * `tableId` and the immediate refetch keeps the just-created row/column visible
+ * without waiting on the broadcast round-trip.
+ *
+ * `setCell`/`deleteRow`/`deleteColumn` do NOT refetch: they carry only a
+ * cell/row/column id, so a refetch would have to invalidate ALL loaded tables (a
+ * full network refetch of every grid). The realtime broadcast already patches
+ * the exact snapshot, so the manual refetch is redundant — removed per TRI-3274
+ * (C5) to keep manual writes O(1) on a large table instead of O(loaded tables).
  */
 export function useCloudGridMutations() {
   const qc = useQueryClient();
@@ -627,18 +636,6 @@ export function useCloudGridMutations() {
     [qc],
   );
 
-  // setCell/deleteRow/deleteColumn carry only the cell/row/column id (matching
-  // the component API), not the owning table, so they invalidate ALL loaded
-  // `getTable` queries by key prefix — the live realtime broadcast patches the
-  // exact snapshot; this just guarantees the writer sees its own change.
-  const refreshAllTables = useCallback(
-    () =>
-      qc.invalidateQueries({
-        predicate: (query) =>
-          query.queryKey[0] === "grid" && query.queryKey[1] === "table",
-      }),
-    [qc],
-  );
   const setCell = useCallback(
     async (rowId: Id<"rows">, columnId: Id<"columns">, value: unknown) => {
       const res = await apiClient!.grid.setCell.mutate({
@@ -648,10 +645,9 @@ export function useCloudGridMutations() {
         status: "done",
         error: null,
       });
-      await refreshAllTables();
       return res;
     },
-    [refreshAllTables],
+    [],
   );
   const addRow = useCallback(
     async (tableId: Id<"tables">) => {
@@ -713,22 +709,14 @@ export function useCloudGridMutations() {
     },
     [refresh],
   );
-  const deleteRow = useCallback(
-    async (rowId: Id<"rows">) => {
-      const res = await apiClient!.grid.deleteRow.mutate({ rowId });
-      await refreshAllTables();
-      return res;
-    },
-    [refreshAllTables],
-  );
-  const deleteColumn = useCallback(
-    async (columnId: Id<"columns">) => {
-      const res = await apiClient!.grid.deleteColumn.mutate({ columnId });
-      await refreshAllTables();
-      return res;
-    },
-    [refreshAllTables],
-  );
+  const deleteRow = useCallback(async (rowId: Id<"rows">) => {
+    const res = await apiClient!.grid.deleteRow.mutate({ rowId });
+    return res;
+  }, []);
+  const deleteColumn = useCallback(async (columnId: Id<"columns">) => {
+    const res = await apiClient!.grid.deleteColumn.mutate({ columnId });
+    return res;
+  }, []);
 
   return { setCell, addRow, addRowsWithCells, addColumn, deleteRow, deleteColumn };
 }

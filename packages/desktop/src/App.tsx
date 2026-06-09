@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, memo, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource } from "./api";
 import AgentPanel from "./AgentPanel";
 import { LogoMark } from "./Logo";
@@ -150,7 +150,7 @@ const ExpandIcon = () => (
   </svg>
 );
 
-export function CellContent({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running }: {
+type CellContentProps = {
   cell: Cell | undefined;
   col: Column;
   onEdit: (value: string) => void;
@@ -158,7 +158,9 @@ export function CellContent({ cell, col, onEdit, onOpenDetails, onExpand, onRunC
   onExpand?: (anchor: { left: number; top: number; width: number }) => void;
   onRunCell?: () => void;
   running?: boolean;
-}) {
+};
+
+function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running }: CellContentProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -270,6 +272,34 @@ export function CellContent({ cell, col, onEdit, onOpenDetails, onExpand, onRunC
     </div>
   );
 }
+
+/**
+ * Memoized cell renderer. A grid has thousands of cells; without this, any App
+ * state change (e.g. a single cell edit, an unrelated panel toggle) re-renders
+ * EVERY mounted cell. The comparator skips re-render unless this cell's own
+ * data changed: its value/status/error, its `running` flag, or its `col`
+ * identity. Callback props (`onEdit`, `onRunCell`, …) are intentionally NOT
+ * compared — call sites create fresh closures per render, so comparing them
+ * would defeat memoization. They are safe to ignore because each closure only
+ * captures the cell's stable `row.id`/`col.id`, so a stale closure still writes
+ * the correct cell. `running` and `onRunCell`-presence are the only render-
+ * affecting inputs derived from those props, and both are compared.
+ */
+function cellPropsEqual(prev: CellContentProps, next: CellContentProps): boolean {
+  return (
+    prev.col === next.col &&
+    prev.running === next.running &&
+    prev.cell?.value === next.cell?.value &&
+    prev.cell?.status === next.cell?.status &&
+    prev.cell?.error === next.cell?.error &&
+    // Run/expand/details affordances are gated on whether the handler exists.
+    !prev.onRunCell === !next.onRunCell &&
+    !prev.onExpand === !next.onExpand &&
+    !prev.onOpenDetails === !next.onOpenDetails
+  );
+}
+
+export const CellContent = memo(CellContentInner, cellPropsEqual);
 
 // ─── Expanded cell editor ─────────────────────────────────
 // A popover for viewing / editing long cell content (transcripts, summaries…)
