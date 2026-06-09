@@ -17,7 +17,12 @@ import {
   type StoreRow,
   type StoreTable,
 } from "./grid-store.js";
-import { cellRepoLayer } from "./cell-repo.js";
+import {
+  cellRepoLayer,
+  CELL_INSERT_CHUNK_SIZE,
+  chunk,
+  type NewCell,
+} from "./cell-repo.js";
 import { columnRepoLayer } from "./column-repo.js";
 import { projectRepoLayer } from "./project-repo.js";
 import { rowRepoLayer } from "./row-repo.js";
@@ -167,6 +172,53 @@ describe("cellRepoLayer", () => {
       Effect.flatMap(CellRepo, (s) => s.listByTable("t1")),
     );
     expect(Exit.isSuccess(exit) && exit.value.map((c) => c.id)).toEqual(["cell1"]);
+  });
+
+  // TRI-3266 regression: a wide CSV (>8191 cells) must insert across multiple
+  // statements without hitting Postgres' 65535 bind-parameter cap, and every
+  // cell must land.
+  it("insertMany lands all cells when the count exceeds the 8191/statement cap", async () => {
+    const store = makeGridStore();
+    const total = 8500; // > 65535 / 8 cols ≈ 8191, the single-statement ceiling
+    const cells: NewCell[] = Array.from({ length: total }, (_, i) => ({
+      workspaceId: WS,
+      tableId: "t1",
+      rowId: `r${i}`,
+      columnId: "c1",
+      value: i,
+      status: "done",
+      error: null,
+      updatedAt: 1,
+    }));
+    const exit = await run(cellRepoLayer(store))(
+      Effect.flatMap(CellRepo, (s) => s.insertMany(cells)),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(store.cells).toHaveLength(total);
+    // No cell was dropped or duplicated across the chunked batches.
+    expect(new Set(store.cells.map((c) => c.value)).size).toBe(total);
+  });
+});
+
+describe("chunk (cell-repo bulk-insert batching)", () => {
+  it("splits >8191 cells into batches of at most CELL_INSERT_CHUNK_SIZE", () => {
+    const total = 8500;
+    const items = Array.from({ length: total }, (_, i) => i);
+    const batches = chunk(items, CELL_INSERT_CHUNK_SIZE);
+    // Multiple statements, none over the bind-parameter-safe chunk size.
+    expect(batches.length).toBeGreaterThan(1);
+    for (const b of batches) {
+      expect(b.length).toBeLessThanOrEqual(CELL_INSERT_CHUNK_SIZE);
+    }
+    // Every item is covered exactly once, in order.
+    expect(batches.flat()).toEqual(items);
+    // Chosen chunk size stays well under the ~8191 cells/statement ceiling.
+    expect(CELL_INSERT_CHUNK_SIZE).toBeLessThanOrEqual(8000);
+  });
+
+  it("returns no batches for an empty input and rejects a non-positive size", () => {
+    expect(chunk([], CELL_INSERT_CHUNK_SIZE)).toEqual([]);
+    expect(() => chunk([1, 2, 3], 0)).toThrow();
   });
 });
 

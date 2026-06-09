@@ -140,6 +140,26 @@ describe("grid.addRowsWithCells — bulk quota", () => {
     expect(gridCells).toHaveLength(2);
   });
 
+  // TRI-3266: the rows array has a .max() so a runaway payload is rejected by
+  // input validation (BAD_REQUEST) before it can hit Postgres' 65535 bind-param
+  // cap, with a clear "chunk your request" message.
+  it("rejects a payload exceeding the rows .max() with BAD_REQUEST and a clear message", async () => {
+    const gridRows: StoreRow[] = [];
+    const caller = callerFor({
+      memberships, currentUserId: ALICE,
+      gridTables: [table()], gridColumns: [column()], gridRows,
+    });
+    const tooMany = Array.from({ length: 5001 }, () => ({ c1: "x" }));
+    const err = await caller.grid
+      .addRowsWithCells({ tableId: "t1", rows: tooMany })
+      .then(() => undefined)
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: "BAD_REQUEST" });
+    expect(err instanceof Error && err.message).toContain("Too many rows");
+    // Validation fires before the service runs — nothing is written.
+    expect(gridRows).toHaveLength(0);
+  });
+
   it("rejects an over-limit import with FORBIDDEN and writes nothing", async () => {
     const gridRows: StoreRow[] = [];
     const meterQuotas = new Map<string, MeterQuota>([
