@@ -30,6 +30,7 @@ import {
   useCloudSession,
   useCloudTablePaged,
 } from "./useCloudGrid";
+import { isCloudTableMissing } from "../cloudSync";
 
 /** Fixed cloud column width (px) — cloud columns are not resizable. */
 const CLOUD_COL_W = 180;
@@ -48,6 +49,13 @@ interface CloudGridProps {
    * after creating/selecting the cloud table. `0`/undefined = do nothing.
    */
   openWebhookToken?: number;
+  /**
+   * Fired when the open cloud table's load returns 404 / not-found (`data` is
+   * `null`). The open id is a STALE deleted id (a re-sync swap deleted it); the
+   * parent self-heals by re-pointing to the table's current linked cloud id
+   * (TRI-3312) instead of leaving the dead-id "no longer exists" error.
+   */
+  onMissing?: () => void;
 }
 
 /**
@@ -55,7 +63,7 @@ interface CloudGridProps {
  * state (the live `running` cell status comes from Convex, so we only track the
  * in-flight request to disable the trigger).
  */
-export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
+export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridProps) {
   // Lazily-paged grid (TRI-3272): only the loaded pages are resident, and the
   // viewport scroll handler below pulls the next page as the user nears the end —
   // so combined with the C1 virtualization a 10k-row table's memory is bounded.
@@ -111,6 +119,25 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
     lastTokenRef.current = openWebhookToken;
     if (tableId !== null) setShowWebhook(true);
   }, [openWebhookToken, tableId]);
+
+  // Open-cloud-table 404 self-heal (TRI-3312): when the load reports the table no
+  // longer exists (`data === null`, a 404 from `grid.getTable`), tell the parent
+  // ONCE per (table, missing) so it can re-point to the current linked cloud id
+  // instead of stranding the user on the dead-id "no longer exists" error. Guarded
+  // by a ref so a re-render with the same null `data` doesn't re-fire.
+  const missingFiredFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (tableId !== null && isCloudTableMissing(data)) {
+      if (missingFiredFor.current !== tableId) {
+        missingFiredFor.current = tableId;
+        onMissing?.();
+      }
+    } else if (!isCloudTableMissing(data)) {
+      // Reset once this table resolves (or we switch tables) so a future swap of
+      // the SAME id can self-heal again.
+      missingFiredFor.current = null;
+    }
+  }, [tableId, data, onMissing]);
 
   const runColumn = useCallback(
     async (columnId: string) => {

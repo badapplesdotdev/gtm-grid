@@ -8,7 +8,7 @@
  */
 
 import { schema } from "@gtmgrid/db";
-import { and, asc, eq, gt, or } from "drizzle-orm";
+import { and, asc, eq, gt, max, or } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
 import { chunk } from "./_chunk.js";
@@ -119,6 +119,16 @@ export class RowRepo extends Context.Tag("RowRepo")<
       tableId: string,
     ) => Effect.Effect<readonly Row[], RowRepoError>;
     /**
+     * The position for the NEXT appended row: `MAX(position) + 1`, or `0` when
+     * the table has no rows. Computed server-side (one `MAX` aggregate) so adding
+     * a row never loads the whole table just to find the tail — the previous
+     * `listByTable`-then-`max+1` made each `addRow` O(rows) and n sequential adds
+     * O(n²).
+     */
+    readonly nextPosition: (
+      tableId: string,
+    ) => Effect.Effect<number, RowRepoError>;
+    /**
      * One KEYSET page of a table's rows, ordered by position (then createdAt,
      * id) ascending. `limit` rows are fetched strictly after the optional
      * `cursor` (the last row of the prior page); the returned `nextCursor` is
@@ -191,6 +201,20 @@ export const RowRepoLive: Layer.Layer<RowRepo, never, DbClient> = Layer.effect(
               catch: fail("row list"),
             })
           : Effect.succeed([] as readonly Row[]),
+      nextPosition: (tableId) =>
+        !UUID_RE.test(tableId)
+          ? Effect.succeed(0)
+          : Effect.tryPromise({
+              try: async () => {
+                const rows = await db
+                  .select({ max: max(schema.rows.position) })
+                  .from(schema.rows)
+                  .where(eq(schema.rows.tableId, tableId));
+                const m = rows[0]?.max;
+                return m === null || m === undefined ? 0 : Number(m) + 1;
+              },
+              catch: fail("row next position"),
+            }),
       listKeysetByTable: ({ tableId, limit, cursor }) =>
         !UUID_RE.test(tableId)
           ? Effect.succeed<RowPage>({ rows: [], nextCursor: null })
@@ -364,6 +388,12 @@ export const rowRepoLayer = (
           .sort(
             (a, b) => a.position - b.position || a.createdAt - b.createdAt,
           ),
+      ),
+    nextPosition: (tableId) =>
+      Effect.succeed(
+        store.rows
+          .filter((r) => r.tableId === tableId)
+          .reduce((m, r) => Math.max(m, r.position + 1), 0),
       ),
     listKeysetByTable: ({ tableId, limit, cursor }) =>
       Effect.sync(() => {

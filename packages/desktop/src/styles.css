@@ -68,6 +68,11 @@
   --col-w:     180px;
   --col-w-sm:  120px;
 
+  /* Table-sync feature (TRI-3297): a pill radius the app lacked, and the
+     amber "changes to push" text the green palette doesn't expose. */
+  --r-pill:    999px;
+  --amber-700: #b45309;
+
   color-scheme: light;
 }
 
@@ -108,6 +113,8 @@
   --shadow-sm:   0 1px 2px rgba(0,0,0,.4);
   --shadow-md:   0 6px 18px rgba(0,0,0,.5);
   --shadow-lg:   0 16px 48px rgba(0,0,0,.6), 0 4px 12px rgba(0,0,0,.5);
+  /* Brighter amber for the "changes to push" text on dark surfaces (TRI-3297). */
+  --amber-700:   #f4b237;
 }
 /* Dark accent presets keep their hue but brighten for contrast. */
 [data-theme="dark"][data-accent="green"]  { --accent: #34d27e; --accent-2: #5be0a0; }
@@ -190,6 +197,40 @@ html, body, #root {
   width: 28px; height: 28px; border-radius: var(--r-sm); color: var(--text-3); flex-shrink: 0;
 }
 .sidebar-members:hover { background: var(--surface-2); color: var(--text); }
+.sidebar-members:focus-visible { box-shadow: 0 0 0 2px var(--accent-ring); color: var(--text); }
+
+/* Bell notification center (TRI-3308) — the bell reuses .sidebar-members; the
+   popover reuses the .account-menu shell. */
+.notif-anchor { position: relative; display: inline-flex; flex-shrink: 0; }
+.notif-bell { position: relative; }
+.notif-bell.has-unread { color: var(--text); }
+.notif-badge {
+  position: absolute; top: -2px; right: -2px; min-width: 15px; height: 15px; box-sizing: border-box;
+  padding: 0 4px; display: inline-flex; align-items: center; justify-content: center;
+  font: 600 9.5px var(--font-mono); line-height: 1; color: #fff; background: var(--accent);
+  border-radius: var(--r-pill); border: 1.5px solid var(--surface);
+}
+.notif-pop {
+  position: absolute; top: calc(100% + 6px); right: 0; left: auto; bottom: auto;
+  width: 320px; max-width: calc(100vw - 24px); z-index: 101; transform-origin: top right;
+}
+.notif-list { max-height: 380px; overflow-y: auto; padding: 6px; }
+.notif-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 26px 16px 30px; color: var(--text-3); font-size: 12.5px;
+}
+.notif-empty svg { color: var(--accent); }
+.notif-item {
+  display: flex; flex-direction: column; gap: 8px; padding: 11px 11px 12px;
+  border-radius: var(--r-md); border: 1px solid var(--border); background: var(--surface);
+}
+.notif-item + .notif-item { margin-top: 6px; }
+.notif-item.is-success { border-color: color-mix(in srgb, var(--accent) 28%, var(--border)); background: var(--accent-soft); }
+.notif-item.is-warning { border-color: color-mix(in srgb, var(--warn) 32%, var(--border)); background: var(--warn-bg); }
+.notif-item-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.notif-item-title { font: 600 12.5px var(--font-sans); color: var(--text); }
+.notif-item-text { font: 12px var(--font-sans); line-height: 1.45; color: var(--text-2); }
+.notif-item-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .sidebar-brand {
   display: flex;
   flex-direction: column;
@@ -3191,11 +3232,6 @@ button.import-type:hover { background: var(--surface-3); }
 .cloud-locked__card h2 { margin: 0 0 8px; font-size: 18px; }
 .cloud-locked__card p { margin: 0 0 18px; color: var(--text-2); line-height: 1.55; font-size: 14px; }
 
-/* Trial countdown banner (top of the app shell). */
-.trial-banner { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: var(--surface-2, rgba(34,197,94,0.10)); border-bottom: 1px solid var(--border-1, rgba(0,0,0,0.08)); font-size: 13px; }
-.trial-banner__text { flex: 1; min-width: 0; color: var(--text-1); }
-.trial-banner--urgent { background: rgba(234,88,12,0.12); }
-
 /* Seat-cost confirmation price. */
 .seat-price { display: flex; align-items: baseline; gap: 6px; padding: 12px 14px; border: 1px solid var(--border-1, rgba(0,0,0,0.08)); border-radius: 10px; background: var(--surface-2, rgba(0,0,0,0.02)); }
 .seat-price__amount { font-size: 24px; font-weight: 700; color: var(--text-1); }
@@ -3207,6 +3243,113 @@ button.import-type:hover { background: var(--surface-3); }
 .celebrate__title { margin: 0 0 8px; font-size: 20px; }
 .celebrate__body { margin: 0 0 20px; color: var(--text-2); line-height: 1.55; font-size: 14px; }
 
-/* Update-available banner (top of the app shell). */
-.update-banner { display: flex; align-items: center; gap: 10px; padding: 8px 16px; background: var(--surface-2, rgba(34,197,94,0.10)); border-bottom: 1px solid var(--border-1, rgba(0,0,0,0.08)); font-size: 13px; }
-.update-banner__text { flex: 1; min-width: 0; color: var(--text-1); }
+/* ─────────────────────────────────────────────────────────
+   Table-sync feature (TRI-3297) — recreated from the design
+   handoff (app/sync.css), with design tokens mapped onto this
+   app's existing variables (accent stays GREEN, not the design
+   RED). Only --r-pill / --amber-700 were added to :root above.
+───────────────────────────────────────────────────────── */
+
+/* ── Tables section header: label + actions ── */
+.sidebar-label-text { flex: 1; }
+.sidebar-label-actions { display: inline-flex; align-items: center; gap: 6px; }
+
+.sidebar-label-actions .sync-all-btn {
+  all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 3px;
+  height: 18px; padding: 0 5px; border-radius: var(--r-xs); color: var(--text-3);
+  transition: background 0.1s, color 0.1s;
+}
+.sidebar-label-actions .sync-all-btn:hover { background: var(--surface-2); color: var(--text-2); }
+.sidebar-label-actions .sync-all-btn.has-pending { color: var(--accent); }
+.sidebar-label-actions .sync-all-btn:disabled { cursor: default; opacity: 0.7; }
+.sync-all-count { font: 600 9.5px var(--font-mono); }
+.sync-all-btn .cell-spinner { width: 11px; height: 11px; }
+
+/* ── Per-row sync dot ── */
+.row-sync {
+  all: unset; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: var(--r-xs); flex-shrink: 0;
+  transition: background 0.1s;
+}
+.row-sync:hover { background: var(--surface-2); }
+
+.sync-dot {
+  display: inline-block; width: 9px; height: 9px; border-radius: 50%; box-sizing: border-box; flex-shrink: 0;
+}
+.sync-dot.is-synced  { background: var(--success); box-shadow: 0 0 0 2px var(--success-bg); }
+.sync-dot.is-ahead   { background: var(--warn); box-shadow: 0 0 0 2px var(--warn-bg); }
+.sync-dot.is-local   { background: transparent; border: 1.5px solid var(--border-2); }
+.sync-dot.is-conflict{ background: var(--danger); box-shadow: 0 0 0 2px var(--danger-bg); animation: sync-pulse 1.6s ease-in-out infinite; }
+.sync-dot.is-offline { background: var(--text-3); opacity: 0.5; }
+.sync-dot.is-syncing {
+  width: 11px; height: 11px; background: transparent; border: 1.5px solid var(--accent-soft);
+  border-top-color: var(--accent); box-shadow: none; animation: spin 0.7s linear infinite;
+}
+@keyframes sync-pulse { 0%, 100% { box-shadow: 0 0 0 2px var(--danger-bg); } 50% { box-shadow: 0 0 0 4px var(--danger-bg); } }
+
+/* ── Sync popover ── */
+.sync-pop {
+  position: fixed; width: 290px; z-index: 101;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg); overflow: hidden; animation: pop-in 0.16s ease; transform-origin: left top;
+}
+.sync-pop-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 13px 14px 11px; border-bottom: 1px solid var(--border); }
+.sync-pop-table { display: inline-flex; align-items: center; gap: 7px; font: 600 13px var(--font-sans); color: var(--text); min-width: 0; }
+.sync-pop-table-ic { color: var(--text-3); display: flex; flex-shrink: 0; }
+
+.sync-pill { display: inline-flex; align-items: center; gap: 6px; font: 600 11px var(--font-sans); padding: 3px 9px 3px 7px; border-radius: var(--r-pill); white-space: nowrap; }
+.sync-pill.is-synced   { background: var(--success-bg); color: var(--success-ink); }
+.sync-pill.is-ahead    { background: var(--warn-bg); color: var(--amber-700); }
+.sync-pill.is-local    { background: var(--surface-2); color: var(--text-2); }
+.sync-pill.is-conflict { background: var(--danger-bg); color: var(--danger); }
+.sync-pill.is-syncing  { background: var(--accent-soft); color: var(--accent); }
+.sync-pill .sync-dot { box-shadow: none; }
+
+.sync-pop-ws { box-sizing: border-box; width: 100%; display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--border); }
+.sync-pop-ws-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.sync-pop-ws-name { font: 600 12.5px var(--font-sans); color: var(--text); }
+.sync-pop-ws-sub { font: 11px var(--font-sans); color: var(--text-3); }
+
+.sync-body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 10px; }
+.sync-row { display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; }
+.sync-row-k { color: var(--text-3); }
+.sync-row-v { color: var(--text); font-weight: 500; }
+.sync-row-v.mono { font-family: var(--font-mono); font-weight: 400; }
+.sync-act { width: 100%; justify-content: center; height: 36px; font-size: 13px; font-weight: 600; }
+.sync-prog-note { font: 11px var(--font-sans); color: var(--text-3); text-align: center; }
+
+.sync-diff { display: flex; flex-direction: column; gap: 5px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 9px 11px; }
+.sync-diff-line { display: flex; align-items: center; gap: 8px; font: 12px var(--font-mono); color: var(--text-2); }
+.sync-diff-ic { width: 12px; text-align: center; font-weight: 700; flex-shrink: 0; }
+.sync-diff-line.add .sync-diff-ic { color: var(--success-ink); }
+.sync-diff-line.edit .sync-diff-ic { color: var(--amber-700); }
+.sync-diff-line.new .sync-diff-ic { color: var(--accent); }
+
+.sync-conflict-note { display: flex; align-items: flex-start; gap: 8px; font: 12.5px var(--font-sans); line-height: 1.5; color: var(--text-2); }
+.sync-conflict-note svg { color: var(--danger); flex-shrink: 0; margin-top: 1px; }
+.sync-conflict-note strong { color: var(--text); font-weight: 600; }
+.sync-choices { display: flex; flex-direction: column; gap: 6px; }
+.sync-choice { all: unset; cursor: pointer; display: flex; flex-direction: column; gap: 2px; padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--r-md); transition: border-color 0.1s, background 0.1s; }
+.sync-choice:hover { border-color: var(--accent); background: var(--accent-bg); }
+.sync-choice-t { display: flex; align-items: center; gap: 4px; font: 600 12.5px var(--font-sans); color: var(--text); }
+.sync-choice-s { font: 11.5px var(--font-sans); color: var(--text-3); }
+
+.sync-offline-note { display: flex; align-items: flex-start; gap: 8px; font: 12.5px var(--font-sans); line-height: 1.5; color: var(--text-2); }
+.sync-offline-note svg { color: var(--text-3); flex-shrink: 0; margin-top: 1px; }
+
+.sync-prog { padding: 14px; }
+.sync-prog-top { display: flex; align-items: center; gap: 8px; font: 12.5px var(--font-sans); color: var(--text-2); }
+.sync-prog-n { margin-left: auto; font: 12px var(--font-mono); color: var(--text); }
+.sync-prog-bar { height: 6px; border-radius: var(--r-pill); background: var(--surface-2); overflow: hidden; margin: 11px 0 9px; }
+.sync-prog-bar span { display: block; height: 100%; background: var(--accent); border-radius: var(--r-pill); transition: width 0.12s linear; }
+
+
+/* The settings toggle row, under the Tables section label. */
+.auto-sync-toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 16px 8px; cursor: default; }
+.auto-sync-toggle__label { font-size: 12px; color: var(--text-2); }
+
+/* A small accessible on/off switch (the app had no toggle control). */
+.switch { position: relative; flex: none; width: 30px; height: 17px; padding: 0; border: none; border-radius: var(--r-pill); background: var(--surface-2); cursor: pointer; transition: background var(--dur-fast, 0.12s) ease; }
+.switch.is-on { background: var(--accent); }
+.switch__knob { position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.25); transition: transform var(--dur-fast, 0.12s) ease; }
+.switch.is-on .switch__knob { transform: translateX(13px); }

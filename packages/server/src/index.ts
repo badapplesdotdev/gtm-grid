@@ -22,10 +22,11 @@ import {
   listProjects,
 } from "@gtmgrid/engine";
 import type { CellProgress } from "@gtmgrid/engine";
-import { detectAgents, streamClaude, streamCodex, streamHermes, setAgentPath, rescanAgents, type AgentKind } from "./agent.js";
+import { detectAgents, streamClaude, streamCodex, streamHermes, setAgentPath, rescanAgents, parseAgentCloud, type AgentKind } from "./agent.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
-import { corsHeadersFor, isOriginAllowed } from "./cors.js";
+import { runCloudPush, defaultCloudPushDeps } from "./cloud-push.js";
+import { corsHeadersFor, isLoopbackHost, isOriginAllowed } from "./cors.js";
 import { Semaphore } from "./semaphore.js";
 import {
   SIGNAL_SOURCES,
@@ -111,6 +112,19 @@ function listCustomSkills(): CustomSkill[] {
 }
 function saveCustomSkills(skills: CustomSkill[]): void {
   globalDb.setMeta("custom_skills", JSON.stringify(skills));
+}
+
+// ── Auto-sync setting (TRI-3298): a GLOBAL meta flag, like custom_skills above.
+//    When ON, the desktop auto-links + pushes local tables on create/edit. It
+//    DEFAULTS OFF: only the canonical string "true" enables it, so an unset or
+//    non-"true" value can NEVER silently turn auto-sync on. The desktop mirrors
+//    this exact parse (packages/desktop/src/cloudSync.ts parseAutoSyncFlag).
+const AUTO_SYNC_META_KEY = "auto_sync_offline_tables";
+function getAutoSync(): boolean {
+  return globalDb.getMeta(AUTO_SYNC_META_KEY) === "true";
+}
+function setAutoSync(on: boolean): void {
+  globalDb.setMeta(AUTO_SYNC_META_KEY, on ? "true" : "false");
 }
 function wordCount(s: string): number {
   return s.trim() ? s.trim().split(/\s+/).length : 0;
@@ -454,6 +468,14 @@ route("DELETE", "/api/skills/:id", (p) => {
   return { ok: true };
 });
 
+// Auto-sync setting (TRI-3298): read/write the global flag. Default OFF.
+route("GET", "/api/settings/auto-sync", () => ({ enabled: getAutoSync() }));
+route("POST", "/api/settings/auto-sync", (_p, body) => {
+  const enabled = (body as { enabled?: unknown } | null)?.enabled === true;
+  setAutoSync(enabled);
+  return { ok: true, enabled };
+});
+
 // --- Signals: bind a table to a Trigify saved search + poll new results in ---
 function signalDeps(): SignalDeps {
   return { dispatch: (pr, m, i) => current.engine.dispatch(pr, m, i), projectDb: current.projectDb };
@@ -724,6 +746,15 @@ route("POST", "/api/ai-providers/:id/connect", (p, body) => {
   return { ok: true };
 });
 
+// Persisted local↔cloud sync links for the CURRENT project (TRI-3311). Returns
+// `{ [localTableId]: cloudTableId }` straight from the project's SQLite meta
+// (the authoritative store `setCloudTableLink` writes on push), so the desktop
+// hydrates synced-table status from the source of truth instead of a localStorage
+// mirror that can drift. A plain JSON route — it inherits the loopback-`Host` /
+// allowed-`Origin` gate every route is wrapped in (the server's request handler),
+// so it is not LAN-reachable and not callable from a disallowed browser origin.
+route("GET", "/api/cloud/tables/links", () => current.projectDb.listCloudTableLinks());
+
 route("GET", "/api/tables", () => current.projectDb.listTables().map(tableSummary));
 route("POST", "/api/tables", (_p, body) => tableSummary(current.projectDb.createTable(body?.name ?? "Untitled")));
 route("GET", "/api/tables/:id", (p) => fullTable(p.id) ?? { error: "not found" });
@@ -917,6 +948,27 @@ async function readBody(req: IncomingMessage): Promise<any> {
 
 const server = createServer(async (req, res) => {
   const origin = req.headers.origin;
+
+  // ── CSRF / DNS-rebinding defense (applies to EVERY route, before any work).
+  // The sidecar is loopback-only and privileged (runs connectors with the user's
+  // credentials, spawns their authenticated CLIs). CORS alone is not enough: a
+  // hostile page can issue a cross-origin "simple" POST (e.g. `text/plain`, which
+  // `readBody` still parses as JSON) and — though it cannot READ the response —
+  // the side effect (delete a table, overwrite a key, fire a credit-burning run)
+  // still lands; and DNS rebinding makes a hostile page "same-origin" to skip CORS
+  // entirely. So we REJECT, not merely omit ACAO:
+  //   1. any `Host` that is not the loopback interface (rebinding still carries
+  //      the attacker's own `Host`, which page JS cannot forge), and
+  //   2. any present-but-disallowed browser `Origin` (a missing Origin = a
+  //      non-browser/local caller, which the loopback bind already gates).
+  // The previously chat-only `isOriginAllowed` gate now covers the whole surface.
+  if (!isLoopbackHost(req.headers.host)) {
+    return send(res, 403, { error: "host not allowed" }, origin);
+  }
+  if (!isOriginAllowed(origin)) {
+    return send(res, 403, { error: "origin not allowed" }, origin);
+  }
+
   if (req.method === "OPTIONS") return send(res, 204, {}, origin);
   const url = new URL(req.url ?? "/", "http://localhost");
 
@@ -955,9 +1007,17 @@ const server = createServer(async (req, res) => {
       // Pass `origin` through so the SSE stream emits the allowlisted CORS
       // header on this privileged route (#22).
       const model = typeof body?.model === "string" && body.model.trim() ? body.model.trim() : undefined;
+      // CLOUD context (TRI-3296): when the desktop is operating a CLOUD project
+      // it forwards apiUrl/token/workspace/project/table so the spawned MCP's
+      // table tools read/write Supabase. A partial/absent block ⇒ undefined,
+      // and the MCP opens the local SQLite project exactly as before. The token
+      // rides the MCP child env (set by agent.ts), never a log line here.
+      const cloud = parseAgentCloud(body?.cloud);
+      // Hermes is LOCAL-only by design — it drives the local SQLite project via
+      // ACP and is never threaded the cloud context.
       if (agent === "hermes") streamHermes(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model });
-      else if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context, origin, model });
-      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model });
+      else if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context, origin, model, cloud });
+      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model, cloud });
     } catch (e) {
       send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
     }
@@ -1003,6 +1063,60 @@ const server = createServer(async (req, res) => {
       }
       res.end();
       return;
+    }
+  }
+
+  // --- cloud push path (TRI-3295) ---
+  // Push the CURRENT local project's table to the active cloud project. The
+  // engine's CloudPushService orchestrator owns all resilience (retry/jitter/
+  // timeout/rate-limit/bounded-concurrency) over a thin tRPC transport that
+  // reuses the SAME `grid` mutations the CSV cloud import uses. Handled here
+  // (not via the JSON router) so we can return the right status code per typed
+  // error: 402 (quota), 409 (link conflict / overwrite-needs-confirmation), 404
+  // (local table missing), 200 with the structured result otherwise.
+  if (req.method === "POST" && url.pathname === "/api/cloud/tables/push") {
+    const body = await readBody(req);
+    const apiUrl = String(body?.apiUrl ?? "").trim();
+    const token = String(body?.token ?? "").trim();
+    const projectId = String(body?.projectId ?? "").trim();
+    const localTableId = String(body?.localTableId ?? "").trim();
+    if (!apiUrl || !token || !projectId || !localTableId) {
+      return send(
+        res,
+        400,
+        { error: "apiUrl, token, projectId and localTableId are required" },
+        origin,
+      );
+    }
+    try {
+      const result = await runCloudPush(
+        {
+          apiUrl,
+          token,
+          projectId,
+          localTableId,
+          confirmOverwrite: body?.confirmOverwrite === true,
+        },
+        defaultCloudPushDeps(current.projectDb),
+      );
+      return send(res, 200, result, origin);
+    } catch (e) {
+      // The orchestrator surfaces typed engine push errors; map each to the
+      // status the desktop expects so it can warn correctly.
+      const tag =
+        e !== null && typeof e === "object" && "_tag" in e
+          ? String((e as { _tag?: unknown })._tag)
+          : undefined;
+      const message = e instanceof Error ? e.message : String(e);
+      const status =
+        tag === "CloudActionsLimitError"
+          ? 402
+          : tag === "LinkConflictError"
+            ? 409
+            : tag === "FatalPushError" && /not found/i.test(message)
+              ? 404
+              : 500;
+      return send(res, status, { error: message, code: tag ?? null }, origin);
     }
   }
 

@@ -7,7 +7,31 @@ import { BrandIcon } from "./BrandIcon";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { AccountBar, PlanBillingModal } from "./cloud/AccountBar";
 import { PendingInvites } from "./cloud/PendingInvites";
-import { cloudEnabled, queryClient, syncWorkspacePlan, apiClient } from "./cloud/client";
+import { cloudEnabled, queryClient, syncWorkspacePlan, apiClient, API_URL, getStoredAuthToken } from "./cloud/client";
+import {
+  SYNC_META,
+  mapSyncStatus,
+  syncUiVisible,
+  decidePush,
+  isOverwriteConfirmNeeded,
+  overwriteConfirmMessage,
+  pendingCount,
+  planSyncAll,
+  shouldAutoPush,
+  parseAutoSyncFlag,
+  AUTO_SYNC_DEBOUNCE_MS,
+  AUTO_SYNC_ENABLE_WARNING,
+  SYNC_LINKS_STORAGE_KEY,
+  parseSyncLinks,
+  serializeSyncLinks,
+  upsertSyncLink,
+  hydrateSyncLinksForProject,
+  shouldCloseConflictPopover,
+  mergeServerSyncLinks,
+  resolveStaleCloudTableFallback,
+  type SyncStatus,
+} from "./cloudSync";
+import { CloudPushHttpError } from "./api";
 import { useMe, useActiveWorkspace, useAuthState } from "./cloud/auth";
 import {
   useMyPendingInvitations,
@@ -19,15 +43,32 @@ import {
 } from "./cloud/pendingInvite";
 import { fireConfetti } from "./cloud/confetti";
 import { useUpdateCheck } from "./useUpdateCheck";
+import {
+  buildNotifications,
+  unreadCount as countUnread,
+  markAllSeen,
+  dismissNotification,
+  parsePersistState,
+  serializePersistState,
+  NOTIFICATIONS_PERSIST_KEY,
+  LEGACY_AUTO_SYNC_NUDGE_KEY,
+  type NotificationPersistState,
+  type NotificationActionId,
+  type AppNotification,
+} from "./notifications";
 import { useWorkspaceCredentials } from "./cloud/useWorkspaceCredentials";
 import {
   useCloudProjects,
   useCloudTables,
   useCloudProjectMutations,
   useCloudGridMutations,
+  useCloudSyncRefresh,
+  useCloudSession,
   type CloudProject,
 } from "./cloud/useCloudGrid";
 import { type SignalsCloud } from "./SignalsModal";
+// Type-only import (erased at build) so the AgentPanel lazy chunk stays split.
+import type { AgentCloudContext } from "./AgentPanel";
 import type { ImportWriter } from "./csvImport";
 import type { Id } from "./cloud/ids";
 import { VirtualGridBody } from "./VirtualGridBody";
@@ -161,6 +202,46 @@ export const Icon = {
   More: () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
       <circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>
+    </svg>
+  ),
+  Bell: ({ size = 16 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+    </svg>
+  ),
+  // ── Table-sync icons (TRI-3297) — Feather/Lucide stroke-2, currentColor.
+  //    Path data copied verbatim from the design handoff app/icons.jsx.
+  Cloud: ({ size = 14 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
+    </svg>
+  ),
+  CloudUp: ({ size = 14 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 16.2A4.5 4.5 0 0 0 17.5 8h-1.8A7 7 0 1 0 4 14.9"/><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/>
+    </svg>
+  ),
+  CloudOff: ({ size = 14 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"/><line x1="1" y1="1" x2="23" y2="23"/>
+    </svg>
+  ),
+  Refresh: ({ size = 14 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+    </svg>
+  ),
+  Check: ({ size = 14 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+  ),
+  CheckCircle: ({ size = 14 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+    </svg>
+  ),
+  Alert: ({ size = 14 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
     </svg>
   ),
 };
@@ -644,6 +725,212 @@ function NewTableChooser({
   );
 }
 
+// ─── Sync popover (TRI-3297) ──────────────────────────────
+// The per-table sync dialog, anchored to the right of the clicked sidebar row.
+// Head = table name + status pill; a workspace row; and a state-varying body
+// (synced / ahead|local / syncing / conflict-as-overwrite-confirm / offline).
+// Recreated from the design's `SyncPopover` (app/SyncPanel.jsx + app/sync.css),
+// mapped onto the live app's tokens.
+
+const SyncDot = ({ status }: { status: SyncStatus }) => (
+  <span className={`sync-dot is-${status}`} aria-label={SYNC_META[status].label} />
+);
+
+function SyncPopover({
+  tableName,
+  rowCount,
+  status,
+  workspaceName,
+  memberCount,
+  anchorTop,
+  sidebarWidth,
+  cloudRowCount,
+  error,
+  onPush,
+  onConfirmOverwrite,
+  onRepush,
+  onClose,
+}: {
+  tableName: string;
+  rowCount: number;
+  status: SyncStatus;
+  workspaceName: string;
+  memberCount: number;
+  anchorTop: number;
+  sidebarWidth: number;
+  cloudRowCount: number | null;
+  error: string | null;
+  onPush: () => void;
+  onConfirmOverwrite: () => void;
+  // TRI-3306: v1 sync is one-way (local→cloud), so the synced state offers a
+  // re-push, not a "check for updates" (there is nothing to pull).
+  onRepush: () => void;
+  onClose: () => void;
+}) {
+  const meta = SYNC_META[status];
+  const top = Math.min(anchorTop, window.innerHeight - 330);
+  return (
+    <>
+      <div className="popover-scrim" onMouseDown={onClose} />
+      <div
+        className="sync-pop"
+        style={{ top, left: sidebarWidth + 8 }}
+        onMouseDown={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label={`Sync ${tableName}`}
+      >
+        <div className="sync-pop-head">
+          <span className="sync-pop-table">
+            <span className="sync-pop-table-ic"><Icon.Table /></span>
+            {tableName}
+          </span>
+          <span className={`sync-pill is-${meta.tone}`}>
+            <SyncDot status={status} />
+            {meta.label}
+          </span>
+        </div>
+
+        <div className="sync-pop-ws">
+          <span className="sync-pop-ws-text">
+            <span className="sync-pop-ws-name">{workspaceName}</span>
+            <span className="sync-pop-ws-sub">{memberCount} member{memberCount === 1 ? "" : "s"} · realtime</span>
+          </span>
+        </div>
+
+        {status === "syncing" ? (
+          <div className="sync-prog">
+            <div className="sync-prog-top">
+              <span className="cell-spinner" />
+              <span>Uploading rows…</span>
+            </div>
+            <div className="sync-prog-bar"><span style={{ width: "60%" }} /></div>
+            <div className="sync-prog-note">execution stays local — only table data is uploaded</div>
+          </div>
+        ) : status === "synced" ? (
+          <div className="sync-body">
+            <div className="sync-row"><span className="sync-row-k">Rows in cloud</span><span className="sync-row-v mono">{(cloudRowCount ?? rowCount).toLocaleString()}</span></div>
+            <button className="btn btn-outline sync-act" onClick={onRepush}>
+              <Icon.CloudUp size={13} /> Re-push to cloud
+            </button>
+            {error && <div className="account-menu-error" role="alert">{error}</div>}
+          </div>
+        ) : status === "conflict" ? (
+          <div className="sync-body">
+            <div className="sync-conflict-note">
+              <Icon.Alert size={13} />
+              <span>Re-syncing <strong>{tableName}</strong> overwrites the cloud copy ({rowCount.toLocaleString()} row{rowCount === 1 ? "" : "s"}) with your local version.</span>
+            </div>
+            <div className="sync-choices">
+              <button className="sync-choice" onClick={onConfirmOverwrite}>
+                <span className="sync-choice-t">Keep my version</span>
+                <span className="sync-choice-s">overwrite the cloud copy</span>
+              </button>
+              <button className="sync-choice" onClick={onClose}>
+                <span className="sync-choice-t">Cancel</span>
+                <span className="sync-choice-s">leave the cloud copy as-is</span>
+              </button>
+            </div>
+            {error && <div className="account-menu-error" role="alert">{error}</div>}
+          </div>
+        ) : status === "offline" ? (
+          <div className="sync-body">
+            <div className="sync-offline-note">
+              <Icon.CloudOff size={14} />
+              <span>Engine offline. Changes are saved locally and will push when you reconnect.</span>
+            </div>
+          </div>
+        ) : (
+          /* ahead OR local */
+          <div className="sync-body">
+            <div className="sync-diff">
+              <div className="sync-diff-line new"><span className="sync-diff-ic">↑</span>{rowCount.toLocaleString()} row{rowCount === 1 ? "" : "s"} · not in cloud yet</div>
+            </div>
+            <button className="btn btn-primary sync-act" onClick={onPush}>
+              <Icon.CloudUp size={14} /> Push table to cloud
+            </button>
+            <div className="sync-prog-note">teammates get your changes in realtime</div>
+            {error && <div className="account-menu-error" role="alert">{error}</div>}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ─── Notification center (TRI-3308) ───────────────────────
+// The bell popover. Reuses the account-menu shell (same surface / border /
+// radius / shadow tokens + green accent) so it matches the app's existing
+// popovers. Lists the active notifications newest-first; empty state when none.
+function NotificationCenter({
+  notifications,
+  onAction,
+  onDismiss,
+  onClose,
+}: {
+  notifications: readonly AppNotification[];
+  onAction: (id: NotificationActionId) => void;
+  onDismiss: (kind: AppNotification["kind"]) => void;
+  onClose: () => void;
+}) {
+  // Close on Escape for keyboard accessibility.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <>
+      <div className="popover-scrim" onMouseDown={onClose} />
+      <div
+        className="account-menu notif-pop"
+        role="dialog"
+        aria-label="Notifications"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="account-menu-head">
+          <div className="account-menu-head-text">
+            <strong>Notifications</strong>
+            <span>{notifications.length === 0 ? "Nothing needs your attention" : `${notifications.length} update${notifications.length === 1 ? "" : "s"}`}</span>
+          </div>
+        </div>
+        <div className="notif-list">
+          {notifications.length === 0 ? (
+            <div className="notif-empty">
+              <Icon.CheckCircle size={20} />
+              <span>You&apos;re all caught up</span>
+            </div>
+          ) : (
+            notifications.map((n) => (
+              <div key={n.id} className={`notif-item is-${n.severity}`}>
+                <div className="notif-item-body">
+                  <span className="notif-item-title">{n.title}</span>
+                  <span className="notif-item-text">{n.body}</span>
+                </div>
+                <div className="notif-item-actions">
+                  {n.actions.map((a) => (
+                    <button
+                      key={a.id}
+                      className={a.variant === "primary" ? "btn btn-primary btn-sm" : "btn btn-ghost btn-sm"}
+                      onClick={() => onAction(a.id)}
+                    >
+                      {a.label}
+                    </button>
+                  ))}
+                  {/* Fallback Dismiss for a dismissible item whose actions don't
+                      already include one (none today, but keeps the contract). */}
+                  {n.dismissible && !n.actions.some((a) => a.id.endsWith(".dismiss")) && (
+                    <button className="btn btn-ghost btn-sm" onClick={() => onDismiss(n.kind)}>Dismiss</button>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────
 
 export default function App() {
@@ -873,11 +1160,20 @@ export default function App() {
   const cloudProjects = useCloudProjects(activeWorkspace?._id ?? null);
   const [cloudProject, setCloudProject] = useState<CloudProject | null>(null);
   const [cloudTableId, setCloudTableId] = useState<Id<"tables"> | null>(null);
+  // The LOCAL table the open cloud view corresponds to, when known (set on a
+  // sync push / swap repoint). Drives the open-cloud-table 404 self-heal
+  // (TRI-3312): if the open cloud id is a stale deleted id, we recover to this
+  // local table's CURRENT linked cloud id. `null` for a cloud table opened with
+  // no known local link (nothing to recover to → leave the existing behaviour).
+  const [cloudTableLocalId, setCloudTableLocalId] = useState<string | null>(null);
   const cloudTables = useCloudTables(cloudProject?._id ?? null);
   const { createProject: createCloudProject, createTable: createCloudTable, deleteTable: deleteCloudTable } =
     useCloudProjectMutations();
   const { addColumn: cloudAddColumn, addRowsWithCells: cloudAddRowsWithCells } =
     useCloudGridMutations();
+  // Post-push cache invalidations (TRI-3309 A/E): refetch the cloud-tables list
+  // and re-seed the open cloud table's grid after a push / re-sync swap.
+  const { invalidateCloudTables, invalidateCloudTable } = useCloudSyncRefresh();
   // CSV import: which mode's modal is open (null = closed). Local writes via the
   // sidecar; cloud writes via Convex (metered). Writers are built below.
   const [importMode, setImportMode] = useState<null | "local" | "cloud">(null);
@@ -945,6 +1241,36 @@ export default function App() {
   const [cloudCreateError, setCloudCreateError] = useState<string | null>(null);
   // Whether the app is currently viewing a cloud project (vs. local).
   const inCloud = cloudProject !== null;
+  // CLOUD context for the agent (TRI-3296): the signed-in session + the active
+  // cloud workspace/project/table, so the agent's MCP table tools operate on
+  // Supabase. Null unless ALL are present (a cloud project + table is open and
+  // we have a session), in which case the agent keeps its local-SQLite path.
+  const cloudSession = useCloudSession();
+  const agentCloud = useMemo<AgentCloudContext | null>(() => {
+    if (!cloudSession || !activeWorkspace || !cloudProject || !cloudTableId) {
+      return null;
+    }
+    return {
+      apiUrl: cloudSession.apiUrl,
+      token: cloudSession.token,
+      workspaceId: activeWorkspace._id,
+      projectId: cloudProject._id,
+      tableId: cloudTableId,
+    };
+  }, [cloudSession, activeWorkspace, cloudProject, cloudTableId]);
+  // Stable `activeTable` for the agent panel (TRI-3306). Previously passed as an
+  // inline object literal, giving it a new identity on every App re-render
+  // (react-query cloud polling, etc.); the panel keyed an abort-on-change effect
+  // off it and so aborted the live agent turn on every unrelated re-render. The
+  // panel now depends on scalar keys, but we still memoize here for hygiene so
+  // the prop identity only changes when the table name or column set actually
+  // does.
+  const activeTableColumnNames = tableData?.columns.map((c) => c.name).join("\n") ?? null;
+  const activeTable = useMemo(
+    () => (tableData ? { name: tableData.name, columns: tableData.columns.map((c) => c.name) } : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the table name + serialized column names, not the FullTable identity
+    [tableData?.name, activeTableColumnNames],
+  );
   // Cloud-access lock: the active workspace's trial lapsed / it's on Free (no
   // plan id). Cloud tables/projects are shown but LOCKED — opening or editing
   // them prompts an upgrade; local tables are unaffected. The server enforces the
@@ -1352,6 +1678,400 @@ export default function App() {
     setView({ kind: "table" });
   }, []);
 
+  // ── Table sync (TRI-3297) ────────────────────────────────────────────────
+  // Per local-table sync facts, tracked CLIENT-SIDE: a table is `linked` once a
+  // push succeeds; a push that returns its row count marks it synced. The link
+  // state is also confirmed by the server — a 409 re-routes through the
+  // destructive-overwrite confirm. `pushingTableId` is the in-flight row (busy
+  // dot); `syncErrors` surfaces a failed push inline (no toast system).
+  // `rowCount` is the LAST-PUSHED cloud row count, known only for links
+  // established this session; a link HYDRATED from the localStorage mirror
+  // (TRI-3309 bug B) carries no count (the popover then falls back to the live
+  // local count). `undefined` rowCount = linked-but-count-unknown.
+  const [syncLinks, setSyncLinks] = useState<Record<string, { cloudTableId: string; rowCount?: number }>>({});
+  // Set of table ids with a push in flight (TRI-3307): a bulk "Sync all" pushes
+  // many tables concurrently, so each pushing row must show its own busy dot — a
+  // single id would only mark one row. Single-push adds/removes its one id here.
+  const [pushingTableIds, setPushingTableIds] = useState<ReadonlySet<string>>(new Set());
+  const [syncErrors, setSyncErrors] = useState<Record<string, string>>({});
+  // The open sync popover: the table id + the clicked row's viewport top, so the
+  // popover anchors to the right of the row (design's `.sync-pop`).
+  const [syncPopover, setSyncPopover] = useState<{ tableId: string; anchorTop: number } | null>(null);
+  // A pending destructive-overwrite confirm: a linked table whose re-push would
+  // overwrite cloud data. Holds the table + cloud row count for the warning copy.
+  const [overwriteConfirm, setOverwriteConfirm] = useState<{ tableId: string; name: string; rowCount: number } | null>(null);
+  // A pending BULK destructive-overwrite confirm for "Sync all" (TRI-3307): holds
+  // the linked table ids to re-push and the unlinked ids to create on accept. ONE
+  // confirm covers ALL linked tables so none are silently skipped; on cancel none
+  // of the linked tables push (the unlinked creates are non-destructive).
+  const [bulkOverwriteConfirm, setBulkOverwriteConfirm] = useState<{ toOverwrite: string[]; toCreate: string[] } | null>(null);
+
+  // Hydrate the in-memory sync links from the SIDECAR meta — the source of truth
+  // (TRI-3311) — whenever the open cloud project changes. The localStorage mirror
+  // (TRI-3309 bug B) is kept ONLY as an offline/fast-path cache: we seed from it
+  // synchronously so the Synced/ahead status paints immediately, then overlay the
+  // server's authoritative `{ [localTableId]: cloudTableId }` map with the SERVER
+  // WINNING on every conflict (mergeServerSyncLinks), so a stale mirror can never
+  // drift the displayed status. The mirror is namespaced per cloud project; the
+  // server route returns the CURRENT project's links (the sidecar follows the
+  // active project), so we only overlay when this remains the active project.
+  useEffect(() => {
+    const projectKey = cloudProject?._id ?? null;
+    if (projectKey === null) {
+      setSyncLinks({});
+      return;
+    }
+    // 1) Fast-path: seed from the local mirror for this project (sync, offline).
+    let stored: Record<string, string> = {};
+    try {
+      stored = parseSyncLinks(localStorage.getItem(SYNC_LINKS_STORAGE_KEY));
+    } catch {
+      stored = {};
+    }
+    const mirror = hydrateSyncLinksForProject(stored, projectKey);
+    setSyncLinks(
+      Object.fromEntries(
+        Object.entries(mirror).map(([localId, cloudTableId]) => [
+          localId,
+          { cloudTableId },
+        ]),
+      ),
+    );
+    // 2) Source of truth: overlay the sidecar's persisted links (server wins).
+    let cancelled = false;
+    api
+      .cloudTableLinks()
+      .then((server) => {
+        if (cancelled) return;
+        const merged = mergeServerSyncLinks(server, mirror);
+        setSyncLinks((cur) =>
+          Object.fromEntries(
+            Object.entries(merged).map(([localId, cloudTableId]) => [
+              localId,
+              // Preserve any rowCount already known from a this-session push.
+              cur[localId]?.cloudTableId === cloudTableId
+                ? cur[localId]!
+                : { cloudTableId },
+            ]),
+          ),
+        );
+      })
+      .catch(() => {
+        /* offline / sidecar unreachable → keep the mirror-seeded links */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cloudProject?._id]);
+
+  // ── Auto-sync setting (TRI-3298) ─────────────────────────────────────────
+  // The global `auto_sync_offline_tables` flag (default OFF), loaded from the
+  // sidecar. When ON, local tables auto-link + push on create / debounced edit.
+  // `autoSyncEnable` holds a pending enable-time destructive-overwrite confirm:
+  // turning it ON requires confirming local tables will REPEATEDLY overwrite
+  // their cloud copies. Toggling OFF is immediate (no confirm).
+  const [autoSyncOn, setAutoSyncOn] = useState(false);
+  const [autoSyncEnableConfirm, setAutoSyncEnableConfirm] = useState(false);
+  // Notification-center persistence (TRI-3308): dismissed/seen kinds, persisted
+  // across sessions. On first run we MIGRATE the legacy auto-sync-nudge flag
+  // (LEGACY_AUTO_SYNC_NUDGE_KEY) so a previously-dismissed nudge stays dismissed
+  // (no regression of TRI-3298's "stays dismissed across sessions").
+  const [notifPersist, setNotifPersist] = useState<NotificationPersistState>(() => {
+    try {
+      const legacy = localStorage.getItem(LEGACY_AUTO_SYNC_NUDGE_KEY) === "1";
+      return parsePersistState(localStorage.getItem(NOTIFICATIONS_PERSIST_KEY), legacy);
+    } catch {
+      return parsePersistState(null, false);
+    }
+  });
+  // Whether the bell's notification center popover is open.
+  const [notifOpen, setNotifOpen] = useState(false);
+
+  // Load the persisted flag once the sidecar is reachable. Defaults OFF on any
+  // failure (parseAutoSyncFlag treats a missing value as OFF).
+  useEffect(() => {
+    let cancelled = false;
+    api.getAutoSync()
+      .then((r) => { if (!cancelled) setAutoSyncOn(parseAutoSyncFlag(r.enabled ? "true" : "false")); })
+      .catch(() => { /* default OFF */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  // The sync UI (dots + popover + sync-all) is visible only for cloud-enabled,
+  // signed-in users with a cloud project open. Hidden in pure-local builds.
+  const showSyncUi = syncUiVisible({ cloudEnabled, inCloud, isAuthenticated });
+
+  // Build the active notification list (TRI-3308) from app state. Eligibility is
+  // unchanged from the banners these replace: the trial item mirrors
+  // `showTrialBanner`, the auto-sync nudge reuses `autoSyncNudgeVisible` (inside
+  // buildNotifications), and the update item mirrors the old `.update-banner`.
+  const notifications = useMemo(
+    () =>
+      buildNotifications({
+        trialDaysLeft: showTrialBanner ? trialDaysLeft : null,
+        autoSync: { cloudEnabled, inCloud, isAuthenticated, autoSyncOn },
+        updateVersion: update && !updateDismissed ? update.version : null,
+        updateError,
+        persist: notifPersist,
+      }),
+    [showTrialBanner, trialDaysLeft, cloudEnabled, inCloud, isAuthenticated, autoSyncOn, update, updateDismissed, updateError, notifPersist],
+  );
+  // Bell badge = active notifications not yet seen.
+  const unreadNotifs = countUnread(notifications, notifPersist);
+
+  // Persist the notification dismissed/seen state to localStorage.
+  const persistNotifState = useCallback((next: NotificationPersistState) => {
+    setNotifPersist(next);
+    try { localStorage.setItem(NOTIFICATIONS_PERSIST_KEY, serializePersistState(next)); } catch { /* ignore */ }
+  }, []);
+
+  // Opening the center marks every active item seen (clears the badge).
+  const openNotifications = useCallback(() => {
+    setNotifOpen(true);
+    persistNotifState(markAllSeen(notifications, notifPersist));
+  }, [notifications, notifPersist, persistNotifState]);
+
+  // Dismiss a notification — removes it + persists (stays dismissed next session).
+  const dismissNotif = useCallback((kind: AppNotification["kind"]) => {
+    persistNotifState(dismissNotification(kind, notifPersist));
+  }, [notifPersist, persistNotifState]);
+
+  // Map a notification action id to its behaviour. Each preserves the original
+  // banner's action — notably `autoSync.enable` still routes through the
+  // TRI-3298 enable-time overwrite confirm (setAutoSyncEnableConfirm) rather than
+  // enabling directly.
+  const runNotificationAction = useCallback((id: NotificationActionId) => {
+    switch (id) {
+      case "trial.upgrade":
+        setShowUpgrade(true);
+        setNotifOpen(false);
+        break;
+      case "autoSync.enable":
+        setAutoSyncEnableConfirm(true);
+        setNotifOpen(false);
+        break;
+      case "autoSync.dismiss":
+        dismissNotif("autoSyncNudge");
+        break;
+      case "update.install":
+        void runUpdate();
+        break;
+      case "update.dismiss":
+        setUpdateDismissed(true);
+        dismissNotif("update");
+        break;
+    }
+  }, [dismissNotif, runUpdate]);
+
+  // Persist the flag to the sidecar. Toggling OFF is immediate; toggling ON must
+  // go through `requestAutoSyncToggle` (which shows the enable-time confirm).
+  const persistAutoSync = useCallback(async (next: boolean) => {
+    setAutoSyncOn(next);
+    try { await api.setAutoSync(next); } catch { setAutoSyncOn(!next); }
+  }, []);
+
+  // Toggle entry point. OFF→ON opens the destructive-overwrite confirm and only
+  // enables on accept. ON→OFF disables immediately.
+  const requestAutoSyncToggle = useCallback(() => {
+    if (autoSyncOn) { void persistAutoSync(false); return; }
+    setAutoSyncEnableConfirm(true);
+  }, [autoSyncOn, persistAutoSync]);
+
+  // Derive a table's design SYNC_META status from its client-tracked facts.
+  const syncStatusFor = useCallback(
+    (tableId: string): SyncStatus =>
+      mapSyncStatus({
+        linked: syncLinks[tableId] !== undefined,
+        // v1 cannot diff local edits against the last push without a backend
+        // GET, so a linked table is treated as `synced` until the user pushes
+        // again; an unlinked table is `local`. (No fabricated change counts.)
+        hasLocalChanges: false,
+        pushing: pushingTableIds.has(tableId),
+        offline: healthStatus === "offline",
+        needsOverwriteConfirm: overwriteConfirm?.tableId === tableId,
+      }),
+    [syncLinks, pushingTableIds, healthStatus, overwriteConfirm],
+  );
+
+  // Run a single table push. `confirmOverwrite` is supplied by the confirm flow.
+  // A 409 (LinkConflictError) means the server demands explicit confirmation:
+  // surface the destructive-overwrite confirm instead of a generic error.
+  const runPush = useCallback(
+    async (tableId: string, confirmOverwrite: boolean) => {
+      const apiUrl = API_URL;
+      const token = getStoredAuthToken();
+      const projectId = cloudProject?._id ?? null;
+      if (!apiUrl || !token || !projectId) {
+        setSyncErrors((m) => ({ ...m, [tableId]: "Sign in to a cloud workspace to sync." }));
+        return;
+      }
+      setPushingTableIds((s) => { const next = new Set(s); next.add(tableId); return next; });
+      setSyncErrors((m) => { const next = { ...m }; delete next[tableId]; return next; });
+      try {
+        const result = await api.pushTable({ apiUrl, token, projectId, localTableId: tableId, confirmOverwrite });
+        // The cloud id this local table previously pointed at (if any), so we can
+        // detect a re-sync SWAP (TRI-3309 bug E): a re-push builds a NEW cloud
+        // table and deletes the old one, so the open grid would otherwise point
+        // at a now-deleted id.
+        const prevCloudTableId = syncLinks[tableId]?.cloudTableId ?? null;
+        setSyncLinks((m) => ({ ...m, [tableId]: { cloudTableId: result.cloudTableId, rowCount: result.rowCount } }));
+        // Persist the link to the localStorage MIRROR (TRI-3309 bug B) so the
+        // Synced status survives a reload (sidecar meta stays authoritative for
+        // overwrite detection — this only drives the UI status).
+        try {
+          const stored = parseSyncLinks(localStorage.getItem(SYNC_LINKS_STORAGE_KEY));
+          localStorage.setItem(
+            SYNC_LINKS_STORAGE_KEY,
+            serializeSyncLinks(upsertSyncLink(stored, projectId, tableId, result.cloudTableId)),
+          );
+        } catch { /* mirror is best-effort; a write failure only loses hydration */ }
+        setOverwriteConfirm((c) => (c?.tableId === tableId ? null : c));
+        // TRI-3309 bug A: the push mutated the cloud project outside the tRPC
+        // mutation hooks, so refetch the "TABLES (CLOUD)" list (it stays "No
+        // tables yet" until reload otherwise).
+        void invalidateCloudTables();
+        // TRI-3309 bug E: a re-sync swap repointed the link to a NEW cloud id and
+        // deleted the old one. If the open cloud table was the deleted old id,
+        // re-point it to the new id; either way invalidate the new table's grid
+        // so it re-seeds against the surviving table.
+        if (prevCloudTableId !== null && prevCloudTableId !== result.cloudTableId) {
+          setCloudTableId((cur) => {
+            if (cur !== prevCloudTableId) return cur;
+            // The open view followed this local table — remember the association
+            // so a later stale-id 404 can self-heal to its current link (TRI-3312).
+            setCloudTableLocalId(tableId);
+            return result.cloudTableId as Id<"tables">;
+          });
+        }
+        void invalidateCloudTable(result.cloudTableId);
+      } catch (e) {
+        if (e instanceof CloudPushHttpError && isOverwriteConfirmNeeded(e)) {
+          // Server says this table is linked and a re-push overwrites it. Route
+          // into the destructive-overwrite confirm (naming the table + rows).
+          // TRI-3310 bug D: show EXACTLY ONE confirmation. `syncStatusFor` maps a
+          // pending overwriteConfirm to the `conflict` state, so an OPEN sync
+          // popover for this same table would ALSO render the conflict confirm
+          // body — two overlapping confirms. Close that popover so only the modal
+          // shows (never both).
+          const t = tables.find((x) => x.id === tableId);
+          setSyncPopover((p) =>
+            p !== null && shouldCloseConflictPopover({ modalTableId: tableId, openPopoverTableId: p.tableId })
+              ? null
+              : p,
+          );
+          setOverwriteConfirm({ tableId, name: t?.name ?? "table", rowCount: t?.rows ?? 0 });
+        } else {
+          setSyncErrors((m) => ({ ...m, [tableId]: e instanceof Error ? e.message : "Push failed." }));
+        }
+      } finally {
+        setPushingTableIds((s) => { const next = new Set(s); next.delete(tableId); return next; });
+      }
+    },
+    [cloudProject, tables, syncLinks, invalidateCloudTables, invalidateCloudTable],
+  );
+
+  // Push entry point from the popover / sync-all. Decides create-vs-overwrite:
+  // an unlinked table pushes straight through; a linked table prompts the
+  // destructive-overwrite confirm first (it only pushes after the user accepts).
+  const onPushTable = useCallback(
+    (tableId: string) => {
+      const linked = syncLinks[tableId] !== undefined;
+      const decision = decidePush({ linked, userConfirmed: false });
+      if (decision.needsConfirm) {
+        const t = tables.find((x) => x.id === tableId);
+        // TRI-3310 bug D: opening the overwrite-confirm modal flips this table's
+        // sync status to `conflict`, which would ALSO render the conflict-confirm
+        // body inside an open sync popover for the same table (two overlapping
+        // confirms). Close that popover so only the modal shows — never both.
+        setSyncPopover((p) =>
+          p !== null && shouldCloseConflictPopover({ modalTableId: tableId, openPopoverTableId: p.tableId })
+            ? null
+            : p,
+        );
+        setOverwriteConfirm({ tableId, name: t?.name ?? "table", rowCount: t?.rows ?? 0 });
+        return;
+      }
+      void runPush(tableId, decision.confirmOverwrite);
+    },
+    [syncLinks, tables, runPush],
+  );
+
+  // User accepted the destructive overwrite — re-push with confirmOverwrite.
+  const onConfirmOverwrite = useCallback(() => {
+    const target = overwriteConfirm;
+    if (!target) return;
+    void runPush(target.tableId, true);
+  }, [overwriteConfirm, runPush]);
+
+  // ── Auto-push trigger (TRI-3298) ─────────────────────────────────────────
+  // When auto-sync is ON, local tables auto-link + push on create and (debounced)
+  // on edit. Auto-pushes always send `confirmOverwrite: true` because the user
+  // gave one-time consent at enable-time — per-edit prompts would defeat the
+  // automation. Re-pushes REUSE the stored TRI-3295 link, so no duplicate cloud
+  // tables are created. The gate is recomputed at fire time (via a ref) so a
+  // setting flip / sign-out cancels pending pushes — when OFF, zero auto traffic.
+  const autoPushGateRef = useRef({ autoSyncOn, cloudEnabled, inCloud, isAuthenticated });
+  autoPushGateRef.current = { autoSyncOn, cloudEnabled, inCloud, isAuthenticated };
+  const autoPushTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  // Fire an auto-push immediately if the gate is satisfied at THIS moment.
+  const autoPushNow = useCallback((tableId: string) => {
+    if (!shouldAutoPush(autoPushGateRef.current)) return;
+    void runPush(tableId, true);
+  }, [runPush]);
+
+  // Schedule a debounced auto-push for an edited table (coalesces rapid edits).
+  const scheduleAutoPush = useCallback((tableId: string) => {
+    if (!shouldAutoPush(autoPushGateRef.current)) return;
+    const timers = autoPushTimers.current;
+    if (timers[tableId]) clearTimeout(timers[tableId]);
+    timers[tableId] = setTimeout(() => {
+      delete timers[tableId];
+      autoPushNow(tableId);
+    }, AUTO_SYNC_DEBOUNCE_MS);
+  }, [autoPushNow]);
+
+  // Drop any pending debounced pushes when auto-sync turns OFF (or eligibility is
+  // lost) so no straggler push fires after the user opts out — zero auto traffic.
+  useEffect(() => {
+    if (shouldAutoPush({ autoSyncOn, cloudEnabled, inCloud, isAuthenticated })) return;
+    const timers = autoPushTimers.current;
+    for (const id of Object.keys(timers)) { clearTimeout(timers[id]); delete timers[id]; }
+  }, [autoSyncOn, cloudEnabled, inCloud, isAuthenticated]);
+
+  // Push every table that has un-pushed work (the sync-all header control).
+  // TRI-3307: split pending tables into unlinked (create) vs linked (overwrite)
+  // via the pure planner. Unlinked tables create straight through (non-
+  // destructive). If ANY linked tables are pending, gate ALL of them behind ONE
+  // bulk destructive-overwrite confirm — so no linked table is silently skipped
+  // (the old per-table loop clobbered the single `overwriteConfirm`, surfacing
+  // only the LAST linked table). On cancel, NONE of the linked tables push.
+  const onSyncAll = useCallback(() => {
+    const plan = planSyncAll(
+      tables.map((t) => ({ id: t.id, linked: syncLinks[t.id] !== undefined, status: syncStatusFor(t.id) })),
+    );
+    for (const id of plan.toCreate) void runPush(id, false);
+    if (plan.toOverwrite.length > 0) {
+      setBulkOverwriteConfirm({ toOverwrite: [...plan.toOverwrite], toCreate: [...plan.toCreate] });
+    }
+  }, [tables, syncLinks, syncStatusFor, runPush]);
+
+  // User accepted the bulk "Sync all" overwrite — re-push EVERY linked table with
+  // confirmOverwrite (the unlinked creates already fired in onSyncAll). None of
+  // the linked tables are omitted.
+  const onConfirmBulkOverwrite = useCallback(() => {
+    const target = bulkOverwriteConfirm;
+    setBulkOverwriteConfirm(null);
+    if (!target) return;
+    for (const id of target.toOverwrite) void runPush(id, true);
+  }, [bulkOverwriteConfirm, runPush]);
+
+  // How many local tables have un-pushed work (drives `.sync-all-btn.has-pending`).
+  const syncPending = useMemo(
+    () => (showSyncUi ? pendingCount(tables.map((t) => syncStatusFor(t.id))) : 0),
+    [showSyncUi, tables, syncStatusFor],
+  );
+
   // Default the active cloud table to the first one once the list loads.
   useEffect(() => {
     if (!inCloud) return;
@@ -1360,12 +2080,30 @@ export default function App() {
     }
   }, [inCloud, cloudTables, cloudTableId]);
 
+  // Open-cloud-table 404 self-heal (TRI-3312). When the open cloud table's load
+  // returns 404 / not-found (CloudGrid reports it via `onMissing`), the open id
+  // is a STALE deleted id (a swap before this session's link state, or a
+  // teammate re-synced). Rather than leave the dead-id error, fall back to the
+  // open view's local table's CURRENT linked cloud id (from the now
+  // server-hydrated `syncLinks`) and open that. `resolveStaleCloudTableFallback`
+  // returns `null` when there is nothing to recover to (no link, or the link
+  // still points at the same dead id), so we never loop on the same dead id.
+  const onCloudTableMissing = useCallback(() => {
+    const fallback = resolveStaleCloudTableFallback({
+      openCloudTableId: cloudTableId,
+      localTableId: cloudTableLocalId,
+      links: syncLinks,
+    });
+    if (fallback !== null) setCloudTableId(fallback as Id<"tables">);
+  }, [cloudTableId, cloudTableLocalId, syncLinks]);
+
   // Switch to a different LOCAL project: also exit cloud mode so the sidecar
   // grid is shown. Tables change; global creds/extensions stay.
   const onProjectSwitched = useCallback(async (name: string) => {
     setShowProjects(false);
     setCloudProject(null);
     setCloudTableId(null);
+    setCloudTableLocalId(null);
     setProjectName(name);
     setView({ kind: "table" });
     const [t, e, ai] = await Promise.all([
@@ -1475,6 +2213,7 @@ export default function App() {
     if (!tableData) return;
     await api.addRow(tableData.id);
     await loadTable(tableData.id);
+    scheduleAutoPush(tableData.id);
   };
 
   // ── Promote a JSON field to a column (from the Cell details drawer) ──
@@ -1574,6 +2313,8 @@ export default function App() {
         }
       }
     }
+    // Auto-sync (TRI-3298): a debounced push after the edit settles.
+    scheduleAutoPush(selectedTableId);
   };
 
   // ── Sidebar: connector groups ──────────────
@@ -1632,52 +2373,11 @@ export default function App() {
 
   return (
     <div className="app-shell" style={{ ["--sidebar-w"]: `${sidebarWidth}px` } as CSSProperties}>
-      {/* Update-available banner — a newer release than the running app. */}
-      {update && !updateDismissed && (
-        <div className="update-banner" role="status">
-          <span className="update-banner__text">
-            GTM Grid <strong>v{update.version}</strong> is available.
-            {updateError ? ` ${updateError}` : ""}
-          </span>
-          <button
-            className="btn btn--primary btn-sm"
-            disabled={updating}
-            onClick={() => void runUpdate()}
-          >
-            {updating ? "Updating…" : "Update & restart"}
-          </button>
-          {!updating && (
-            <button
-              className="btn btn-ghost btn-sm"
-              onClick={() => setUpdateDismissed(true)}
-            >
-              Later
-            </button>
-          )}
-        </div>
-      )}
-
       {/* Workspace-invite accept banner (email-matched + ?invite= URL token).
-          Self-gates: renders nothing when signed out / no pending invites. */}
+          Self-gates: renders nothing when signed out / no pending invites. The
+          trial / auto-sync nudge / update alerts that used to stack here now live
+          in the bell notification center (TRI-3308) in the sidebar header. */}
       <PendingInvites onAccepted={onInviteAccepted} />
-      {showTrialBanner && trialDaysLeft != null && (
-        <div
-          className={`trial-banner${trialDaysLeft <= 2 ? " trial-banner--urgent" : ""}`}
-          role="status"
-        >
-          <span className="trial-banner__text">
-            {trialDaysLeft === 0
-              ? "Your trial ends today — add a card to keep cloud sync, realtime & shared credentials."
-              : `Your trial ends in ${trialDaysLeft} day${trialDaysLeft === 1 ? "" : "s"} — add a card to keep your cloud features.`}
-          </span>
-          <button
-            className="btn btn--primary btn-sm"
-            onClick={() => setShowUpgrade(true)}
-          >
-            Upgrade now
-          </button>
-        </div>
-      )}
       <div className="app">
       {/* ── Sidebar ─────────────────────── */}
       <aside className="sidebar">
@@ -1694,6 +2394,29 @@ export default function App() {
             </span>
           </button>
           <span className="sidebar-head-spacer" />
+          <div className="notif-anchor">
+            <button
+              className={`sidebar-members notif-bell${unreadNotifs > 0 ? " has-unread" : ""}`}
+              onClick={openNotifications}
+              aria-label={unreadNotifs > 0 ? `Notifications, ${unreadNotifs} unread` : "Notifications"}
+              aria-haspopup="dialog"
+              aria-expanded={notifOpen}
+              title="Notifications"
+            >
+              <Icon.Bell size={15} />
+              {unreadNotifs > 0 && (
+                <span className="notif-badge" aria-hidden="true">{unreadNotifs > 9 ? "9+" : unreadNotifs}</span>
+              )}
+            </button>
+            {notifOpen && (
+              <NotificationCenter
+                notifications={notifications}
+                onAction={runNotificationAction}
+                onDismiss={dismissNotif}
+                onClose={() => setNotifOpen(false)}
+              />
+            )}
+          </div>
           {activeWorkspace && (
             <button className="sidebar-members" onClick={() => setShowWorkspaceSettings(true)} title="Workspace members & seats">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
@@ -1788,15 +2511,47 @@ export default function App() {
             </div>
           )}
 
-          {/* Tables section (local) — hidden while a cloud project is open. */}
-          {!inCloud && <>
+          {/* Tables section (local). Hidden while a cloud project is open UNLESS
+              the user is a connected cloud user — then it stays visible so local
+              tables can be pushed to the open cloud workspace (TRI-3297). */}
+          {(!inCloud || showSyncUi) && <>
           <div className="sidebar-section">
             <div className="sidebar-section-label">
-              Tables
-              <button onClick={() => setShowNewTableChooser(true)} title="New table">
-                <Icon.Plus />
-              </button>
+              <span className="sidebar-label-text">Tables</span>
+              <span className="sidebar-label-actions">
+                {showSyncUi && (
+                  <button
+                    className={`sync-all-btn${syncPending ? " has-pending" : ""}`}
+                    title={syncPending ? `Sync ${syncPending} table${syncPending > 1 ? "s" : ""}` : "All tables synced"}
+                    disabled={pushingTableIds.size > 0}
+                    onClick={onSyncAll}
+                  >
+                    {pushingTableIds.size > 0 ? <span className="cell-spinner" /> : <Icon.CloudUp size={13} />}
+                    {syncPending ? <span className="sync-all-count">{syncPending}</span> : null}
+                  </button>
+                )}
+                <button onClick={() => setShowNewTableChooser(true)} title="New table">
+                  <Icon.Plus />
+                </button>
+              </span>
             </div>
+            {/* Auto-sync setting (TRI-3298): default OFF. Turning it ON requires
+                confirming the destructive overwrite warning; OFF is immediate. */}
+            {showSyncUi && (
+              <label className="auto-sync-toggle">
+                <span className="auto-sync-toggle__label">Auto-sync to cloud</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={autoSyncOn}
+                  className={`switch${autoSyncOn ? " is-on" : ""}`}
+                  title={autoSyncOn ? "Auto-sync is on — local tables overwrite the cloud copy on every change" : "Turn on auto-sync (will overwrite cloud copies)"}
+                  onClick={requestAutoSyncToggle}
+                >
+                  <span className="switch__knob" />
+                </button>
+              </label>
+            )}
             {tables.length === 0 ? (
               <div style={{ padding: "4px 16px", fontSize: 12, color: "var(--text-3)" }}>No tables yet</div>
             ) : [...tables].sort((a, b) => Number(b.favorite) - Number(a.favorite)).map(t => (
@@ -1839,7 +2594,27 @@ export default function App() {
                 >
                   <Icon.More />
                 </button>
-                <span className="sidebar-item-count">{t.rows}</span>
+                {showSyncUi ? (
+                  <button
+                    className={`row-sync is-${syncStatusFor(t.id)}`}
+                    title={SYNC_META[syncStatusFor(t.id)].label}
+                    onClick={e => {
+                      e.stopPropagation();
+                      const top = (e.currentTarget.closest(".sidebar-item") as HTMLElement | null)?.getBoundingClientRect().top ?? 80;
+                      setSyncPopover({ tableId: t.id, anchorTop: top });
+                      // TRI-3310 bug C: the popover diff + the overwrite-confirm
+                      // copy read the row count from the cached TableSummary,
+                      // which goes stale after edits. Refresh the summary at
+                      // popover-open so the count reflects the table's real
+                      // current rows (the push itself always sends the live rows).
+                      void reloadTables();
+                    }}
+                  >
+                    <SyncDot status={syncStatusFor(t.id)} />
+                  </button>
+                ) : (
+                  <span className="sidebar-item-count">{t.rows}</span>
+                )}
               </div>
               )
             ))}
@@ -2103,7 +2878,7 @@ export default function App() {
             CSV import is open in this pane. */}
         {!importMode && inCloud && !cloudLocked && view.kind === "table" && (
           <Suspense fallback={<PanelFallback />}>
-            <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} />
+            <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} onMissing={onCloudTableMissing} />
           </Suspense>
         )}
 
@@ -2421,7 +3196,8 @@ export default function App() {
       <Suspense fallback={null}>
         <AgentPanel
           onGridChange={refreshAll}
-          activeTable={tableData ? { name: tableData.name, columns: tableData.columns.map((c) => c.name) } : null}
+          activeTable={activeTable}
+          cloud={agentCloud}
         />
       </Suspense>
 
@@ -2609,6 +3385,10 @@ export default function App() {
               setTables(t);
               setSelectedTableId(id);
             });
+            // Auto-sync (TRI-3298): a new local table auto-links + pushes
+            // immediately when the setting is ON (first push creates the cloud
+            // table; the link is reused on later auto-pushes — no duplicates).
+            autoPushNow(id);
           }}
         />
       )}
@@ -2664,6 +3444,117 @@ export default function App() {
                 }}
               >
                 Delete table
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Per-table sync popover (TRI-3297). */}
+      {/* TRI-3310 bug D: NEVER render the popover while the overwrite-confirm
+          modal is open for the SAME table — the popover would show the
+          conflict-confirm body alongside the modal (two overlapping confirms).
+          The call sites also close the popover when the modal opens; this render
+          guard makes the "exactly one confirmation" invariant structural. */}
+      {showSyncUi && syncPopover && overwriteConfirm?.tableId !== syncPopover.tableId && (() => {
+        const t = tables.find((x) => x.id === syncPopover.tableId);
+        if (!t) return null;
+        const status = syncStatusFor(t.id);
+        return (
+          <SyncPopover
+            tableName={t.name}
+            rowCount={t.rows}
+            status={status}
+            workspaceName={activeWorkspace?.name ?? "Workspace"}
+            memberCount={activeWorkspace?.seatUsage.used ?? 1}
+            anchorTop={syncPopover.anchorTop}
+            sidebarWidth={sidebarWidth}
+            cloudRowCount={syncLinks[t.id]?.rowCount ?? null}
+            error={syncErrors[t.id] ?? null}
+            onPush={() => onPushTable(t.id)}
+            // Conflict state already names the destructive overwrite and asks
+            // "Keep my version / Cancel", so push DIRECTLY here (TRI-3306) —
+            // routing through onPushTable would pop a second identical overwrite
+            // modal (double-confirm) for the one action the user just accepted.
+            onConfirmOverwrite={() => { setSyncPopover(null); void runPush(t.id, true); }}
+            onRepush={() => onPushTable(t.id)}
+            onClose={() => setSyncPopover(null)}
+          />
+        );
+      })()}
+
+      {/* Destructive-overwrite confirm (TRI-3297): a re-push of a LINKED table
+          overwrites cloud data, so name the table + row count before sending
+          confirmOverwrite. A first push (unlinked → create) never reaches here. */}
+      {overwriteConfirm && (
+        <div className="overlay" onMouseDown={e => e.target === e.currentTarget && setOverwriteConfirm(null)}>
+          <div className="modal" style={{ width: 400 }}>
+            <div className="modal-header">
+              <span className="modal-title">Overwrite cloud copy?</span>
+              <button className="modal-close" onClick={() => setOverwriteConfirm(null)}><Icon.X /></button>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>
+                {overwriteConfirmMessage(overwriteConfirm.name, overwriteConfirm.rowCount)}
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setOverwriteConfirm(null)}>Cancel</button>
+              <button className="btn btn-danger" onClick={() => { onConfirmOverwrite(); setOverwriteConfirm(null); }}>
+                Keep my version — overwrite the cloud copy
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk destructive-overwrite confirm (TRI-3307): "Sync all" with linked
+          tables pending shows ONE confirm naming the COUNT, then re-pushes ALL of
+          them on accept. On cancel none of the linked tables push. */}
+      {bulkOverwriteConfirm && (
+        <div className="overlay" onMouseDown={e => e.target === e.currentTarget && setBulkOverwriteConfirm(null)}>
+          <div className="modal" style={{ width: 400 }}>
+            <div className="modal-header">
+              <span className="modal-title">Re-push linked tables?</span>
+              <button className="modal-close" onClick={() => setBulkOverwriteConfirm(null)}><Icon.X /></button>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>
+                Re-push {bulkOverwriteConfirm.toOverwrite.length} linked table{bulkOverwriteConfirm.toOverwrite.length === 1 ? "" : "s"}? This overwrites their cloud copies with your local versions.
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setBulkOverwriteConfirm(null)}>Cancel</button>
+              <button className="btn btn-danger" onClick={onConfirmBulkOverwrite}>
+                Keep my versions — overwrite the cloud copies
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Auto-sync enable-time confirm (TRI-3298): turning the setting ON
+          requires confirming the repeated-overwrite behaviour. Only enables on
+          accept; cancelling leaves it OFF. */}
+      {autoSyncEnableConfirm && (
+        <div className="overlay" onMouseDown={e => e.target === e.currentTarget && setAutoSyncEnableConfirm(false)}>
+          <div className="modal" style={{ width: 420 }}>
+            <div className="modal-header">
+              <span className="modal-title">Turn on auto-sync?</span>
+              <button className="modal-close" onClick={() => setAutoSyncEnableConfirm(false)}><Icon.X /></button>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>
+                {AUTO_SYNC_ENABLE_WARNING}
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setAutoSyncEnableConfirm(false)}>Cancel</button>
+              <button
+                className="btn btn-danger"
+                onClick={() => { setAutoSyncEnableConfirm(false); void persistAutoSync(true); }}
+              >
+                Turn on — overwrite cloud copies automatically
               </button>
             </div>
           </div>

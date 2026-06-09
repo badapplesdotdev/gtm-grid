@@ -298,6 +298,114 @@ interface SseClient {
   end: () => void;
 }
 
+// ── Process-group lifecycle (TRI-3305) ────────────────────────────────────
+// Agent turns spawn the CLI (`claude`/`codex`), which in turn spawns the gtmgrid
+// MCP server + its own subprocesses. Killing only the direct child orphans that
+// whole tree, which accumulates to multiple GB. We spawn each child `detached`
+// so it becomes its own process-group/session leader, then on cleanup signal the
+// ENTIRE group (negative pid) — SIGTERM, then SIGKILL after a grace if it ignores
+// the term — using only native `process.kill` (no `tree-kill` dependency).
+
+/** How long to wait after SIGTERM before escalating to SIGKILL. */
+export const KILL_GRACE_MS = 3000;
+/** Hard ceiling on a single turn; a hung agent is terminated and surfaced. */
+export const MAX_RUN_MS = 5 * 60_000;
+/** Keep only the last ~32KB of stderr so a chatty/looping child can't grow the heap. */
+export const STDERR_CAP = 32 * 1024;
+
+/** Minimal slice of a spawned child the lifecycle manager needs (so tests can fake it). */
+export interface ManagedChild {
+  readonly pid?: number;
+  on(event: "close", listener: () => void): unknown;
+}
+
+/** Injectable seam for the OS calls, so the lifecycle is unit-testable offline. */
+export interface ProcessControl {
+  kill: (pid: number, signal: NodeJS.Signals) => void;
+  setTimeout: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  clearTimeout: (handle: ReturnType<typeof setTimeout>) => void;
+}
+
+const defaultProcessControl: ProcessControl = {
+  kill: (pid, signal) => process.kill(pid, signal),
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: (handle) => clearTimeout(handle),
+};
+
+/**
+ * Wire group-kill cleanup + a max-run timeout to a detached child. Returns a
+ * `terminate()` to invoke on `res.on("close")` (panel unmount / Stop / new send)
+ * and a `dispose()` the `child.on("close")` handler calls so timers are cleared.
+ *
+ * Guarantees (the regression-test contract):
+ *  - `terminate()` signals the whole GROUP: `kill(-pid, "SIGTERM")`, then
+ *    `kill(-pid, "SIGKILL")` after {@link KILL_GRACE_MS} if the child hasn't closed.
+ *  - Once the child closes, `exited` is set and the escalation timer is cleared —
+ *    so NO signal is ever sent after exit (avoids killing a recycled pid).
+ *  - The max-run timeout terminates the group and invokes `onTimeout` (to emit an
+ *    SSE error+end) exactly once.
+ *  - Every `kill` is wrapped so an already-dead group (`ESRCH`) is a no-op.
+ */
+export function manageChildLifecycle(
+  child: ManagedChild,
+  opts: { onTimeout: () => void; control?: ProcessControl; graceMs?: number; maxRunMs?: number },
+): { terminate: () => void; dispose: () => void } {
+  const ctrl = opts.control ?? defaultProcessControl;
+  const graceMs = opts.graceMs ?? KILL_GRACE_MS;
+  const maxRunMs = opts.maxRunMs ?? MAX_RUN_MS;
+
+  let exited = false;
+  let killTimer: ReturnType<typeof setTimeout> | null = null;
+  let runTimer: ReturnType<typeof setTimeout> | null = ctrl.setTimeout(() => {
+    runTimer = null;
+    terminate();
+    opts.onTimeout();
+  }, maxRunMs);
+
+  const signalGroup = (signal: NodeJS.Signals): void => {
+    const pid = child.pid;
+    if (exited || pid === undefined) return;
+    try {
+      // Negative pid → the whole process group (CLI + MCP server + grandchildren).
+      ctrl.kill(-pid, signal);
+    } catch {
+      /* ESRCH: the group is already gone — nothing to kill. */
+    }
+  };
+
+  function terminate(): void {
+    if (exited) return;
+    signalGroup("SIGTERM");
+    if (killTimer === null) {
+      killTimer = ctrl.setTimeout(() => {
+        killTimer = null;
+        signalGroup("SIGKILL");
+      }, graceMs);
+    }
+  }
+
+  function dispose(): void {
+    exited = true;
+    if (killTimer !== null) {
+      ctrl.clearTimeout(killTimer);
+      killTimer = null;
+    }
+    if (runTimer !== null) {
+      ctrl.clearTimeout(runTimer);
+      runTimer = null;
+    }
+  }
+
+  child.on("close", dispose);
+  return { terminate, dispose };
+}
+
+/** Append `chunk` to `buf` but keep only the trailing {@link STDERR_CAP} bytes. */
+export function appendCapped(buf: string, chunk: string, cap = STDERR_CAP): string {
+  const next = buf + chunk;
+  return next.length > cap ? next.slice(next.length - cap) : next;
+}
+
 // The agent SSE stream is the most privileged route (it spawns the user's CLI),
 // so it carries the SAME allowlisted CORS as the JSON routes — NEVER `*` (#22).
 // A disallowed Origin gets no `access-control-allow-origin` header (and is
@@ -327,12 +435,91 @@ export function mcpLauncher(repoRoot: string): string {
 
 type ExtraMcpServer = { command: string; args?: string[]; env?: Record<string, string> };
 
-/** Build the MCP config for claude. `extra` merges in additional servers (e.g.
- *  Hermes-as-a-tool when enabled). Exported for tests. */
-export function mcpConfig(repoRoot: string, project: string, extra?: Record<string, ExtraMcpServer>): string {
+/**
+ * Cloud context threaded to the spawned MCP server (TRI-3296) so its table tools
+ * operate on the user's CLOUD (Supabase) project instead of local SQLite. The
+ * desktop forwards this only when a cloud project is active; in local mode it is
+ * `undefined` and the MCP opens the local SQLite project exactly as before. The
+ * `token` is the signed-in member's bearer — passed via the spawned process'
+ * ENV (never a CLI arg) and never logged.
+ */
+export interface AgentCloud {
+  readonly apiUrl: string;
+  readonly token: string;
+  readonly workspaceId: string;
+  readonly projectId: string;
+  readonly tableId: string;
+}
+
+/**
+ * Validate the `cloud` block of an `/api/agent/chat` body into an
+ * {@link AgentCloud}, or `undefined` when it is absent/incomplete. A cloud
+ * context requires EVERY field (apiUrl/token/workspaceId/projectId/tableId) to
+ * be a non-empty string; any missing/blank field falls back to local mode (so a
+ * half-populated block never half-activates cloud routing). Trims each value.
+ */
+export function parseAgentCloud(raw: unknown): AgentCloud | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  // Spread into a plain record so each field can be read without an `as` cast.
+  const obj: Record<string, unknown> = { ...raw };
+  const read = (key: string): string | undefined => {
+    const value = obj[key];
+    if (typeof value !== "string") return undefined;
+    const trimmed = value.trim();
+    return trimmed === "" ? undefined : trimmed;
+  };
+  const apiUrl = read("apiUrl");
+  const token = read("token");
+  const workspaceId = read("workspaceId");
+  const projectId = read("projectId");
+  const tableId = read("tableId");
+  if (
+    apiUrl === undefined ||
+    token === undefined ||
+    workspaceId === undefined ||
+    projectId === undefined ||
+    tableId === undefined
+  ) {
+    return undefined;
+  }
+  return { apiUrl, token, workspaceId, projectId, tableId };
+}
+
+/**
+ * The env the MCP server is spawned with. LOCAL: only `GTMGRID_PROJECT`
+ * (byte-identical to before). CLOUD: `GTMGRID_MODE=cloud` plus the threaded
+ * apiUrl/token/workspace/project/table so `selectGridEnv` in the MCP resolves a
+ * cloud data source. The token rides the ENV, not the config string, so it
+ * never appears in a logged command line.
+ */
+export function mcpEnv(project: string, cloud?: AgentCloud): Record<string, string> {
+  if (!cloud) return { GTMGRID_PROJECT: project };
+  return {
+    GTMGRID_PROJECT: project,
+    GTMGRID_MODE: "cloud",
+    GTMGRID_API_URL: cloud.apiUrl,
+    GTMGRID_TOKEN: cloud.token,
+    GTMGRID_WORKSPACE_ID: cloud.workspaceId,
+    GTMGRID_CLOUD_PROJECT: cloud.projectId,
+    GTMGRID_CLOUD_TABLE: cloud.tableId,
+  };
+}
+
+/**
+ * Build the MCP config for claude. The gtmgrid server's env is resolved via
+ * {@link mcpEnv} so it carries the cloud context (TRI-3296) when `cloud` is set;
+ * `extra` merges in additional servers (e.g. Hermes-as-a-tool when enabled).
+ * Exported for tests.
+ */
+export function mcpConfig(
+  repoRoot: string,
+  project: string,
+  extra?: Record<string, ExtraMcpServer>,
+  cloud?: AgentCloud,
+): string {
   return JSON.stringify({
     mcpServers: {
-      gtmgrid: { command: mcpLauncher(repoRoot), env: { GTMGRID_PROJECT: project } },
+      gtmgrid: { command: mcpLauncher(repoRoot), env: mcpEnv(project, cloud) },
       ...extra,
     },
   });
@@ -341,7 +528,7 @@ export function mcpConfig(repoRoot: string, project: string, extra?: Record<stri
 /** Stream a Claude Code turn over SSE, driving gtmgrid via MCP. */
 export function streamClaude(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext; origin?: string; model?: string },
+  opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext; origin?: string; model?: string; cloud?: AgentCloud },
 ): void {
   const sse = sseClient(res, opts.origin);
   // Optionally also expose the user's Hermes agent as an MCP tool (off unless
@@ -354,10 +541,11 @@ export function streamClaude(
     "stream-json",
     "--verbose",
     "--mcp-config",
-    mcpConfig(opts.repoRoot, opts.project, hermesTool ? { hermes: hermesTool } : undefined),
+    mcpConfig(opts.repoRoot, opts.project, hermesTool ? { hermes: hermesTool } : undefined, opts.cloud),
     // Use ONLY gtmgrid's MCP server (+ Hermes when enabled) — ignore the user's
     // other Claude Code MCP servers (Trigify/Clay/etc.) so the agent drives
     // gtmgrid's own tools instead of reaching for an external MCP (auth walls).
+    // The gtmgrid server's env carries cloud context (TRI-3296) when in cloud mode.
     "--strict-mcp-config",
     "--allowedTools",
     ...GTM_TOOLS.map((t) => `mcp__gtmgrid__${t}`),
@@ -374,10 +562,19 @@ export function streamClaude(
     sse.write({ type: "end" });
     return sse.end();
   }
-  const child = spawn(bin, args, { env: agentSpawnEnv(bin), cwd: opts.repoRoot });
+  // `detached` makes the child its own process-group leader so we can later
+  // signal the WHOLE tree (CLI + MCP server + grandchildren) via `-pid` (TRI-3305).
+  const child = spawn(bin, args, { env: agentSpawnEnv(bin), cwd: opts.repoRoot, detached: true });
   let sessionId = opts.sessionId ?? null;
   let buf = "";
   let gridDirty = false;
+  const lifecycle = manageChildLifecycle(child, {
+    onTimeout: () => {
+      sse.write({ type: "error", message: `claude turn exceeded ${Math.round(MAX_RUN_MS / 1000)}s and was terminated` });
+      sse.write({ type: "end", sessionId });
+      sse.end();
+    },
+  });
 
   child.stdout.on("data", (chunk) => {
     buf += chunk.toString();
@@ -427,9 +624,10 @@ export function streamClaude(
   });
 
   let stderr = "";
-  child.stderr.on("data", (d) => (stderr += d.toString()));
+  child.stderr.on("data", (d) => (stderr = appendCapped(stderr, d.toString())));
 
   child.on("error", (err) => {
+    lifecycle.dispose();
     sse.write({ type: "error", message: `Failed to launch claude: ${err.message}` });
     sse.end();
   });
@@ -441,7 +639,8 @@ export function streamClaude(
     sse.end();
   });
 
-  res.on("close", () => child.kill());
+  // Panel unmount / Stop / new send closes the response → kill the whole group.
+  res.on("close", () => lifecycle.terminate());
 }
 
 function resultText(result: any): string {
@@ -452,9 +651,21 @@ function resultText(result: any): string {
 
 /** Stream a Codex turn over SSE. Wires gtmgrid's MCP server per-exec (dynamic
  *  project) and bypasses approval prompts for headless tool use. */
+/**
+ * Render an MCP env map as a Codex inline-TOML table (`{ KEY = "value", ... }`),
+ * escaping each value's backslashes and double-quotes so a token containing
+ * those characters cannot break out of the string or inject extra TOML. Keys are
+ * fixed `GTMGRID_*` identifiers, so only the values need escaping.
+ */
+export function codexEnvToml(env: Record<string, string>): string {
+  const esc = (v: string) => v.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const entries = Object.entries(env).map(([k, v]) => `${k} = "${esc(v)}"`);
+  return `{ ${entries.join(", ")} }`;
+}
+
 export function streamCodex(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; threadId?: string; context?: AgentContext; origin?: string; model?: string },
+  opts: { message: string; project: string; repoRoot: string; threadId?: string; context?: AgentContext; origin?: string; model?: string; cloud?: AgentCloud },
 ): void {
   const sse = sseClient(res, opts.origin);
   const launcher = mcpLauncher(opts.repoRoot);
@@ -471,9 +682,11 @@ export function streamCodex(
     "--skip-git-repo-check",
     "--dangerously-bypass-approvals-and-sandbox",
     // Replace Codex's whole MCP table with ONLY gtmgrid (+ Hermes when enabled),
-    // so it ignores the user's other registered servers and drives gtmgrid.
+    // so it ignores the user's other registered servers (Trigify/exa/etc.) and
+    // drives gtmgrid. The gtmgrid env (incl. cloud context in cloud mode) is
+    // rendered as TOML with every value safely quoted — see `codexEnvToml`.
     "-c",
-    `mcp_servers={ gtmgrid = { command = "${launcher}", env = { GTMGRID_PROJECT = "${opts.project}" } }${hermesToml} }`,
+    `mcp_servers={ gtmgrid = { command = "${launcher}", env = ${codexEnvToml(mcpEnv(opts.project, opts.cloud))} }${hermesToml} }`,
     ...(opts.model ? ["-m", opts.model] : []),
   ];
   const args = opts.threadId
@@ -486,11 +699,20 @@ export function streamCodex(
     sse.write({ type: "end" });
     return sse.end();
   }
-  const child = spawn(bin, args, { env: agentSpawnEnv(bin), cwd: opts.repoRoot });
+  // `detached` → own process group, so cleanup can kill the CLI + the gtmgrid
+  // MCP server + their subprocesses as one group, not just the codex parent.
+  const child = spawn(bin, args, { env: agentSpawnEnv(bin), cwd: opts.repoRoot, detached: true });
   child.stdin?.end(); // codex exec otherwise waits on stdin
 
   let threadId = opts.threadId ?? null;
   let buf = "";
+  const lifecycle = manageChildLifecycle(child, {
+    onTimeout: () => {
+      sse.write({ type: "error", message: `codex turn exceeded ${Math.round(MAX_RUN_MS / 1000)}s and was terminated` });
+      sse.write({ type: "end", sessionId: threadId });
+      sse.end();
+    },
+  });
   child.stdout.on("data", (chunk) => {
     buf += chunk.toString();
     let nl: number;
@@ -522,8 +744,9 @@ export function streamCodex(
   });
 
   let stderr = "";
-  child.stderr.on("data", (d) => (stderr += d.toString()));
+  child.stderr.on("data", (d) => (stderr = appendCapped(stderr, d.toString())));
   child.on("error", (err) => {
+    lifecycle.dispose();
     sse.write({ type: "error", message: `Failed to launch codex: ${err.message}` });
     sse.end();
   });
@@ -535,7 +758,8 @@ export function streamCodex(
     sse.write({ type: "end", sessionId: threadId });
     sse.end();
   });
-  res.on("close", () => child.kill());
+  // Panel unmount / Stop / new send closes the response → kill the whole group.
+  res.on("close", () => lifecycle.terminate());
 }
 
 // ── Hermes (ACP) bridge ────────────────────────────────────────────────────

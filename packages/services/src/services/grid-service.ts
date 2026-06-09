@@ -142,10 +142,6 @@ export interface TablePage {
 /** A `{ columnId: value }` map of one bulk-imported row's cells. */
 export type CellMap = Readonly<Record<string, unknown>>;
 
-/** Next sibling `position` = max(existing)+1 (0 when empty). */
-const nextPosition = (siblings: readonly { position: number }[]): number =>
-  siblings.reduce((max, s) => Math.max(max, s.position + 1), 0);
-
 /** Project a repo `Column` onto the desktop `getTable` column shape. */
 const toGridColumn = (c: Column): GridColumn => ({
   _id: c.id,
@@ -300,6 +296,38 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         return yield* tables.listByProject(projectId);
       });
 
+    /**
+     * A project's tables WITH their column + row counts (position order).
+     * Members-only. The agent's project-wide `list_tables` tool reports each
+     * table with `{ id, name, columns, rows }`, so this composes the existing
+     * `listByProject` read with a per-table `listColumns`/`listRows` count —
+     * reusing the same repo reads {@link getTable} uses rather than adding a new
+     * count primitive — and never touches a write or the meter (a pure read).
+     */
+    const listTablesWithCounts = (projectId: string) =>
+      Effect.gen(function* () {
+        const project = yield* requireProject(projectId);
+        yield* membership.requireMember(project.workspaceId);
+        const projectTables = yield* tables.listByProject(projectId);
+        const out: {
+          id: string;
+          name: string;
+          columns: number;
+          rows: number;
+        }[] = [];
+        for (const t of projectTables) {
+          const cols = yield* columns.listByTable(t.id);
+          const rws = yield* rows.listByTable(t.id);
+          out.push({
+            id: t.id,
+            name: t.name,
+            columns: cols.length,
+            rows: rws.length,
+          });
+        }
+        return out;
+      });
+
     /** The full grid for a table (table+columns+rows+cells). Members-only. */
     const getTable = (tableId: string): Effect.Effect<
       FullGrid,
@@ -383,12 +411,12 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       Effect.gen(function* () {
         const project = yield* requireProject(args.projectId);
         yield* requireCloudMember(project.workspaceId);
-        const siblings = yield* tables.listByProject(args.projectId);
+        const position = yield* tables.nextPosition(args.projectId);
         const id = yield* tables.insert({
           workspaceId: project.workspaceId,
           projectId: args.projectId,
           name: args.name,
-          position: nextPosition(siblings),
+          position,
           createdAt: Date.now(),
         });
         yield* meter.meterActions(project.workspaceId, 1);
@@ -415,7 +443,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       Effect.gen(function* () {
         const table = yield* requireTable(args.tableId);
         yield* requireCloudMember(table.workspaceId);
-        const siblings = yield* columns.listByTable(args.tableId);
+        const position = yield* columns.nextPosition(args.tableId);
         const id = yield* columns.insert({
           workspaceId: table.workspaceId,
           tableId: args.tableId,
@@ -426,7 +454,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
           method: args.method ?? null,
           code: args.code ?? null,
           params: args.params ?? {},
-          position: nextPosition(siblings),
+          position,
           createdAt: Date.now(),
         });
         yield* meter.meterActions(table.workspaceId, 1);
@@ -451,11 +479,11 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       Effect.gen(function* () {
         const table = yield* requireTable(tableId);
         yield* requireCloudMember(table.workspaceId);
-        const siblings = yield* rows.listByTable(tableId);
+        const position = yield* rows.nextPosition(tableId);
         const id = yield* rows.insert({
           workspaceId: table.workspaceId,
           tableId,
-          position: nextPosition(siblings),
+          position,
           createdAt: Date.now(),
         });
         yield* meter.meterActions(table.workspaceId, 1);
@@ -500,8 +528,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         const valid = new Set(
           (yield* columns.listByTable(args.tableId)).map((c) => c.id),
         );
-        const siblings = yield* rows.listByTable(args.tableId);
-        const basePosition = nextPosition(siblings);
+        const basePosition = yield* rows.nextPosition(args.tableId);
         const now = Date.now();
 
         // Build ALL row values up front (one bulk insert, not N), plus the
@@ -757,6 +784,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       listProjects,
       createProject,
       listTables,
+      listTablesWithCounts,
       getTable,
       getTablePage,
       createTable,

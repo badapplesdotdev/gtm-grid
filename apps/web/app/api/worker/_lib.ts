@@ -17,8 +17,15 @@
  * uses `node:crypto`.
  */
 
+import { getAuth, getSessionUserId } from "@gtmgrid/auth";
 import { type AppServices, appLayer, isAuthorizedWorker } from "@gtmgrid/services";
 import { Cause, type Effect, Exit, ManagedRuntime } from "effect";
+
+/** The member-attribution header the spawned MCP forwards (the agent's bearer). */
+const MEMBER_HEADER = "X-Gtmgrid-Member";
+
+/** The `Bearer ` prefix used when re-presenting the member token to Better Auth. */
+const BEARER_PREFIX = "Bearer ";
 
 /**
  * The worker's shared {@link ManagedRuntime}, built lazily ONCE on the first
@@ -100,15 +107,42 @@ export async function runWorker<T, A, E>(
   // this removes the per-request runtime build/dispose overhead.
   const runtime = await workerRuntime();
   const exit = await runtime.runPromiseExit(build(body));
+  return exitToResponse(exit);
+}
+
+/** Read a typed service failure's `_tag` + `message` without an unsafe cast. */
+function readTaggedError(value: unknown): {
+  readonly tag: string | undefined;
+  readonly message: string | undefined;
+} {
+  const tag =
+    typeof value === "object" &&
+    value !== null &&
+    "_tag" in value &&
+    typeof value._tag === "string"
+      ? value._tag
+      : undefined;
+  const message =
+    typeof value === "object" &&
+    value !== null &&
+    "message" in value &&
+    typeof value.message === "string"
+      ? value.message
+      : undefined;
+  return { tag, message };
+}
+
+/** Render an Effect {@link Exit} as the worker boundary's JSON response. */
+function exitToResponse<A, E>(exit: Exit.Exit<A, E>): Response {
   if (Exit.isSuccess(exit)) return ok(exit.value);
 
   const failure = Cause.failureOption(exit.cause);
   if (failure._tag === "Some") {
-    const err = failure.value as { _tag?: string; message?: string };
+    const { tag, message } = readTaggedError(failure.value);
     return new Response(
-      JSON.stringify({ error: err.message ?? "Worker request failed." }),
+      JSON.stringify({ error: message ?? "Worker request failed." }),
       {
-        status: workerErrorStatus(err._tag),
+        status: workerErrorStatus(tag),
         headers: { "Content-Type": "application/json" },
       },
     );
@@ -119,16 +153,78 @@ export async function runWorker<T, A, E>(
   );
 }
 
+/**
+ * Resolve the `X-Gtmgrid-Member` attribution token to an authenticated user id
+ * via Better Auth (the token is the member's session bearer the spawned MCP
+ * forwards), or `null` when absent/invalid. Fail-closed: an unresolved token
+ * yields `null`, and the member-authz Effect then rejects with
+ * `UnauthenticatedError` (→ 401) before any workspace data is touched.
+ */
+async function resolveMemberUserId(req: Request): Promise<string | null> {
+  const token = req.headers.get(MEMBER_HEADER);
+  if (token === null || token === "") return null;
+  const auth = await getAuth();
+  const headers = new Headers({ Authorization: `${BEARER_PREFIX}${token}` });
+  return getSessionUserId(auth, headers);
+}
+
+/**
+ * Guard + run a MEMBER-ATTRIBUTED worker handler — the agent's cloud WRITE/LIST
+ * tools (createTable / createColumn / addRows / listTables). Like
+ * {@link runWorker} it first rejects an unauthorized worker (401 on a bad
+ * `WEBHOOK_WORKER_SECRET` bearer) and parses the body (400), BUT it then resolves
+ * the forwarded `X-Gtmgrid-Member` token to a user id and runs the Effect against
+ * a PER-REQUEST runtime carrying that member's identity. The member-authz +
+ * cloud-actions metering live inside the domain service (`GridService` reuses
+ * `MembershipService.requireMember` + `MeterService`), so a non-member is
+ * rejected (403) and the quota is enforced (402) server-side — exactly as the
+ * authenticated tRPC grid path, with no parallel logic at the route. Fail-closed:
+ * a missing/invalid member token resolves to `null` and the service rejects with
+ * `UnauthenticatedError` (→ 401) before touching workspace data.
+ */
+export async function runWorkerAsMember<T, A, E>(
+  req: Request,
+  build: (body: T) => Effect.Effect<A, E, AppServices>,
+): Promise<Response> {
+  if (!isAuthorizedWorker(req)) return unauthorized();
+  const body = await readJson<T>(req);
+  if (body === null) return badRequest("Invalid JSON body");
+
+  const userId = await resolveMemberUserId(req);
+  const { db } = await import("@gtmgrid/db/client");
+  const runtime = ManagedRuntime.make(appLayer({ db, userId }));
+  try {
+    const exit = await runtime.runPromiseExit(build(body));
+    return exitToResponse(exit);
+  } finally {
+    await runtime.dispose();
+  }
+}
+
 /** Map a typed service-error tag to an HTTP status for the worker boundary. */
 function workerErrorStatus(tag: string | undefined): number {
   switch (tag) {
     case "WebhookNotFoundError":
+    // GridService's not-found (project/table/column/row missing). The agent's
+    // member-authz tools resolve the owning workspace from the parent doc, so a
+    // missing parent surfaces here as a 404, never a leak.
+    case "GridNotFoundError":
       return 404;
     case "InvalidMappingError":
     case "InvalidConfigError":
     case "InvalidCellError":
       return 400;
+    // No/invalid member bearer (fail-closed): the X-Gtmgrid-Member token did not
+    // resolve to an authenticated user, so the member-authz routes reject 401.
+    case "UnauthenticatedError":
+      return 401;
+    // An authenticated member who does not belong to the target workspace.
+    case "NotAMemberError":
+    case "InsufficientRoleError":
+      return 403;
     case "CloudActionsLimitError":
+    // The workspace's cloud plan lapsed / is Free — cloud access is required.
+    case "PlanRequiredError":
       return 402;
     default:
       return 500;

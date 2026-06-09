@@ -445,6 +445,46 @@ export class Db {
       .run(key, value, value);
   }
 
+  // ---- Cloud table links (local↔cloud push, TRI-3295) ----
+  // The one-way local→cloud push records the cloud `tables.id` a local table was
+  // pushed to, keyed by the local table id, in the `meta` store. A present link
+  // means a re-push OVERWRITES that cloud table (local is the source of truth); an
+  // absent link means the first push CREATES a new cloud table and stores the link.
+  // Stored under a `cloud_table_link:<localTableId>` meta key (single-purpose so it
+  // never collides with other meta entries like favorites or current_project).
+  private static cloudLinkKey(localTableId: string): string {
+    return `cloud_table_link:${localTableId}`;
+  }
+
+  /** The cloud `tables.id` a local table is linked to, or `undefined` if unpushed. */
+  getCloudTableLink(localTableId: string): string | undefined {
+    return this.getMeta(Db.cloudLinkKey(localTableId));
+  }
+
+  /** Record (or update) the cloud `tables.id` a local table was pushed to. */
+  setCloudTableLink(localTableId: string, cloudTableId: string): void {
+    this.setMeta(Db.cloudLinkKey(localTableId), cloudTableId);
+  }
+
+  /**
+   * All persisted local↔cloud links in this project, as `{ [localTableId]:
+   * cloudTableId }`. Reads the same `cloud_table_link:<localTableId>` meta rows
+   * `getCloudTableLink` reads (the prefix is the single source of truth), so the
+   * map is exactly the set of links any push has recorded. The sidecar's
+   * `GET /api/cloud/tables/links` returns this so the desktop can hydrate its
+   * synced-table status from the authoritative meta instead of a localStorage
+   * mirror that can drift (TRI-3311).
+   */
+  listCloudTableLinks(): Record<string, string> {
+    const prefix = "cloud_table_link:";
+    const rows = this.raw
+      .prepare(`SELECT key, value FROM meta WHERE key LIKE ? || '%'`)
+      .all(prefix) as { key: string; value: string }[];
+    const out: Record<string, string> = {};
+    for (const r of rows) out[r.key.slice(prefix.length)] = r.value;
+    return out;
+  }
+
   private nextPos(table: string, scopeCol?: string, scopeVal?: string): number {
     const where = scopeCol ? `WHERE ${scopeCol} = ?` : "";
     const stmt = this.raw.prepare(`SELECT COALESCE(MAX(position), -1) + 1 AS n FROM ${table} ${where}`);

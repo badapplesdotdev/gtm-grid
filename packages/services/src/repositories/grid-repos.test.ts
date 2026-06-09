@@ -91,6 +91,18 @@ describe("tableRepoLayer", () => {
     expect(Exit.isSuccess(exit) && exit.value.map((t) => t.id)).toEqual(["t2", "t1"]);
   });
 
+  it("nextPosition returns MAX(position)+1, and 0 for an empty project", async () => {
+    const store = makeGridStore({ tables: seedTables() });
+    const next = await run(tableRepoLayer(store))(
+      Effect.flatMap(TableRepo, (s) => s.nextPosition("p1")),
+    );
+    expect(Exit.isSuccess(next) && next.value).toBe(2); // max(0,1) + 1
+    const empty = await run(tableRepoLayer(store))(
+      Effect.flatMap(TableRepo, (s) => s.nextPosition("p-empty")),
+    );
+    expect(Exit.isSuccess(empty) && empty.value).toBe(0);
+  });
+
   it("remove cascades to the table's columns, rows, and cells", async () => {
     const store = makeGridStore({
       tables: seedTables(), columns: seedColumns(), rows: seedRows(), cells: seedCells(),
@@ -106,6 +118,18 @@ describe("tableRepoLayer", () => {
 });
 
 describe("columnRepoLayer", () => {
+  it("nextPosition returns MAX(position)+1 for the table, 0 when none", async () => {
+    const store = makeGridStore({ columns: seedColumns() }); // c1 at position 0 on t1
+    const next = await run(columnRepoLayer(store))(
+      Effect.flatMap(ColumnRepo, (s) => s.nextPosition("t1")),
+    );
+    expect(Exit.isSuccess(next) && next.value).toBe(1);
+    const empty = await run(columnRepoLayer(store))(
+      Effect.flatMap(ColumnRepo, (s) => s.nextPosition("t-empty")),
+    );
+    expect(Exit.isSuccess(empty) && empty.value).toBe(0);
+  });
+
   it("remove cascades to only that column's cells", async () => {
     const cells = [
       ...seedCells(),
@@ -120,6 +144,24 @@ describe("columnRepoLayer", () => {
 });
 
 describe("rowRepoLayer", () => {
+  it("nextPosition returns MAX(position)+1 for the table, 0 when none", async () => {
+    const store = makeGridStore({
+      rows: [
+        { id: "r1", workspaceId: WS, tableId: "t1", position: 0, createdAt: 1 },
+        { id: "r2", workspaceId: WS, tableId: "t1", position: 7, createdAt: 2 },
+        { id: "r3", workspaceId: WS, tableId: "t2", position: 3, createdAt: 3 },
+      ],
+    });
+    const next = await run(rowRepoLayer(store))(
+      Effect.flatMap(RowRepo, (s) => s.nextPosition("t1")),
+    );
+    expect(Exit.isSuccess(next) && next.value).toBe(8); // max(0,7) + 1, ignoring t2
+    const empty = await run(rowRepoLayer(store))(
+      Effect.flatMap(RowRepo, (s) => s.nextPosition("t-empty")),
+    );
+    expect(Exit.isSuccess(empty) && empty.value).toBe(0);
+  });
+
   it("insertMany returns ids in input order and appends to the store", async () => {
     const store = makeGridStore();
     const exit = await run(rowRepoLayer(store))(
