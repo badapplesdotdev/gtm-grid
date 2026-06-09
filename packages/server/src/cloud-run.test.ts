@@ -27,6 +27,7 @@ import {
   type CloudClientLike,
 } from "@gtmgrid/engine";
 import {
+  CloudActionsLimitError,
   makeWorkerClient,
   resolveWorkspaceId,
   runCloudColumn,
@@ -96,6 +97,12 @@ function fakeConvex(
   },
   /** Optional decrypt-for-run secrets, keyed by connector extension id (#18). */
   credentials: Record<string, Record<string, string>> = {},
+  /**
+   * Optional pre-flight quota gate (TRI-3277). Invoked for the
+   * `/api/worker/assertColumnRunQuota` ref with the run args; throw to simulate
+   * the server's 402 rejection. Defaults to a no-op (always within quota).
+   */
+  quotaGate: (args: Record<string, unknown>) => void = () => {},
 ): {
   client: CloudClientLike;
   mutations: RecordedMutation[];
@@ -124,9 +131,16 @@ function fakeConvex(
 
   // Refs are now `/api/worker/*` route-path strings; the fake matches on those.
   const client: CloudClientLike = {
-    query: async (ref) => {
+    query: async (ref, args) => {
       const name = String(ref);
       queryRefs.push(name);
+      if (name === "/api/worker/assertColumnRunQuota") {
+        // The pre-flight quota gate (TRI-3277): the server computes the cells the
+        // run would meter and 402s when over quota. The fake delegates to the
+        // injected `quotaGate` so a test can simulate the rejection.
+        quotaGate((args ?? {}) as Record<string, unknown>);
+        return null;
+      }
       if (name === "/api/worker/getTableMeta") {
         // The metadata-only fast path: resolveWorkspaceId reads ONLY the table's
         // workspace id from here — no columns/rows/cells (TRI-3273).
@@ -479,5 +493,78 @@ describe("makeWorkerClient — transient retry + 402 fatal (TRI-3276)", () => {
     ).rejects.toThrow("CloudActionsLimitError");
     // Exactly one attempt — a 402 is fatal, never retried.
     expect(state.calls).toBe(1);
+  });
+});
+
+describe("runCloudColumn — pre-flight quota gate (TRI-3277)", () => {
+  /** A one-function-column, two-row grid the run would fan out over. */
+  const twoRowGrid = () => ({
+    columns: [
+      {
+        _id: "c_x",
+        tableId: "t1",
+        name: "X",
+        type: "text",
+        kind: "function",
+        provider: null,
+        method: null,
+        code: "function(inputs, sdk){ return { text: 'x' }; }",
+        params: {},
+        position: 0,
+        createdAt: 1,
+      },
+    ],
+    rows: [
+      { _id: "r1", tableId: "t1", position: 0, createdAt: 1 },
+      { _id: "r2", tableId: "t1", position: 1, createdAt: 2 },
+    ],
+    cells: [] as Array<{
+      rowId: string;
+      columnId: string;
+      value: unknown;
+      status: string;
+      error: string | null;
+      updatedAt: number | null;
+    }>,
+  });
+
+  it("rejects an over-quota run up-front and never fans out (no cell writes)", async () => {
+    const grid = twoRowGrid();
+    // The server's pre-flight 402s the run; the worker HTTP client tags 402 with
+    // `CloudActionsLimitError:`, so the fake throws that tagged error.
+    const { client, mutations, queryRefs } = fakeConvex(grid, {}, () => {
+      throw new Error(
+        "CloudActionsLimitError: Worker route /api/worker/assertColumnRunQuota failed: 402 Payment Required",
+      );
+    });
+
+    await expect(
+      runCloudColumn(
+        { apiUrl: "https://app.gtmgrid.dev", token: "jwt", tableId: "t1", columnId: "c_x" },
+        depsFor(client, upperRegistry()),
+      ),
+    ).rejects.toBeInstanceOf(CloudActionsLimitError);
+
+    // The gate ran BEFORE fan-out: no cell was written, and the full grid was
+    // never fetched for the rejected run.
+    expect(mutations).toHaveLength(0);
+    expect(grid.cells).toHaveLength(0);
+    expect(queryRefs).toContain("/api/worker/assertColumnRunQuota");
+    expect(queryRefs).not.toContain("/api/worker/getTable");
+  });
+
+  it("lets a run within quota proceed unchanged", async () => {
+    const grid = twoRowGrid();
+    // Default quotaGate is a no-op → within quota → the run proceeds.
+    const { client, queryRefs } = fakeConvex(grid);
+
+    const res = await runCloudColumn(
+      { apiUrl: "https://app.gtmgrid.dev", token: "jwt", tableId: "t1", columnId: "c_x" },
+      depsFor(client, upperRegistry()),
+    );
+
+    expect(res).toEqual({ ran: 2, errors: 0 });
+    expect(queryRefs).toContain("/api/worker/assertColumnRunQuota");
+    expect(grid.cells.filter((c) => c.columnId === "c_x")).toHaveLength(2);
   });
 });
