@@ -57,6 +57,13 @@
       "when": 1781015266440,
       "tag": "0007_cheerful_young_avengers",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1781077381884,
+      "tag": "0008_smooth_sheva_callister",
+      "breakpoints": true
     }
   ]
 }

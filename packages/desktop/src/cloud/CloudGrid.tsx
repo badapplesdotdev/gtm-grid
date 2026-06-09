@@ -25,6 +25,7 @@ import { useColumnWindow } from "../useColumnWindow";
 import { GridColSpacer } from "../GridColSpacer";
 import { runCloudColumn } from "./cloud-run";
 import { WebhookModal } from "./WebhookModal";
+import { ShareModal } from "./ShareModal";
 import {
   useCloudGridMutations,
   useCloudSession,
@@ -76,6 +77,7 @@ export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridPro
   const [runningColId, setRunningColId] = useState<string | null>(null);
   const [runningCells, setRunningCells] = useState<Set<string>>(new Set());
   const [showWebhook, setShowWebhook] = useState(false);
+  const [showShare, setShowShare] = useState(false);
 
   // Row-virtualization plumbing (TRI-3267): the scroll container the
   // virtualizer reads from, and the resolved per-density row height.
@@ -227,6 +229,19 @@ export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridPro
     );
   }
 
+  // Share panel also renders INLINE in this pane (replacing the grid).
+  if (showShare) {
+    return (
+      <ShareModal
+        inline
+        tableId={data.id as Id<"tables">}
+        tableName={data.name}
+        rowCount={data.rows.length}
+        onClose={() => setShowShare(false)}
+      />
+    );
+  }
+
   return (
     <>
       <div className="toolbar">
@@ -249,6 +264,14 @@ export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridPro
         >
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17a4 4 0 0 1 3.6-3.98" /><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06" /><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8" /></svg>{" "}
           Webhook
+        </button>
+        <button
+          className="btn btn-outline btn-sm"
+          onClick={() => setShowShare(true)}
+          title="Share this table as a public read-only link"
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" /><polyline points="16 6 12 2 8 6" /><line x1="12" y1="2" x2="12" y2="15" /></svg>{" "}
+          Share
         </button>
         <div className="toolbar-sep" />
         <button

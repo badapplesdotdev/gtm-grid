@@ -22,6 +22,7 @@ import { extensionsRouter } from "./routers/extensions";
 import { gridRouter } from "./routers/grid";
 import { invitationsRouter } from "./routers/invitations";
 import { realtimeRouter } from "./routers/realtime";
+import { shareRouter } from "./routers/share";
 import { webhooksRouter } from "./routers/webhooks";
 import { signalsRouter } from "./routers/signals";
 import { workspacesRouter } from "./routers/workspaces";
@@ -91,6 +92,12 @@ export const appRouter = router({
    * server-gated PartyKit grid connection for live grid + presence (TRI-3261).
    */
   realtime: realtimeRouter,
+
+  /**
+   * Share a cloud table via a public URL: `getByToken` (public) renders a
+   * frozen snapshot; `create`/`listByTable`/`revoke`/`clone` are member-gated.
+   */
+  share: shareRouter,
 });
 
 /** The API type the typed client (W2) consumes. */
