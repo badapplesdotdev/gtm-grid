@@ -26,6 +26,7 @@ import { detectAgents, streamClaude, streamCodex, setAgentPath, rescanAgents, ty
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
 import { corsHeadersFor, isOriginAllowed } from "./cors.js";
+import { Semaphore } from "./semaphore.js";
 import {
   SIGNAL_SOURCES,
   getSource,
@@ -42,6 +43,18 @@ import {
 const PORT = Number(process.env.GTMGRID_PORT ?? 8787);
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(SERVER_DIR, "..", "..", "..");
+
+// ── Process-wide run limiter (M6). The engine's per-run `mapConcurrent` only
+// bounds ONE column run's row fan-out; it does NOT cap how many runs execute at
+// once. A couple of simultaneous device runs (auto-run + manual) therefore push
+// many sandboxed executions through this single sidecar at once. This semaphore
+// is shared by BOTH the local and cloud run routes so the TOTAL number of
+// in-flight runs is bounded regardless of how many start simultaneously.
+// Overridable via GTMGRID_MAX_CONCURRENT_RUNS for tuning; defaults to 4.
+const MAX_CONCURRENT_RUNS = Number(
+  process.env.GTMGRID_MAX_CONCURRENT_RUNS ?? 4,
+);
+const runLimiter = new Semaphore(MAX_CONCURRENT_RUNS);
 
 // ── Shared global db: credentials, extensions, AI config (across all projects).
 const globalDb = new Db(globalDbPath());
@@ -748,8 +761,12 @@ route("POST", "/api/cells", (_p, body) => {
 
 route("POST", "/api/columns/:id/run", async (p, body) => {
   const rowIds = Array.isArray(body?.rowIds) && body.rowIds.length ? (body.rowIds as string[]) : undefined;
-  const res = await current.engine.runColumn(p.id, { force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds });
-  return res;
+  // Bound the number of simultaneous runs process-wide (M6): a run waits for a
+  // permit before fanning out, so concurrent runs queue instead of all spiking
+  // the single sidecar at once.
+  return runLimiter.run(() =>
+    current.engine.runColumn(p.id, { force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds }),
+  );
 });
 
 // --- cloud run path (T9) ---
@@ -769,10 +786,15 @@ route("POST", "/api/cloud/columns/run", async (_p, body) => {
   const rowIds = Array.isArray(body?.rowIds) && body.rowIds.length ? (body.rowIds as string[]) : undefined;
   const deps = defaultCloudRunDeps(registry, aiConfig());
   // The cloud path is Db-free: the engine is built with no Db and reads/writes
-  // through the injected cloud store, so no SQLite file is opened here.
-  return runCloudColumn(
-    { apiUrl, token, tableId, columnId, force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds },
-    deps,
+  // through the injected cloud store, so no SQLite file is opened here. The run
+  // waits for a process-wide permit first (M6) so simultaneous cloud + local
+  // runs are bounded; `runCloudColumn` additionally clamps `concurrency` to a
+  // safe per-run ceiling.
+  return runLimiter.run(() =>
+    runCloudColumn(
+      { apiUrl, token, tableId, columnId, force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds },
+      deps,
+    ),
   );
 });
 

@@ -20,6 +20,37 @@
 import { type AppServices, appLayer, isAuthorizedWorker } from "@gtmgrid/services";
 import { Cause, type Effect, Exit, ManagedRuntime } from "effect";
 
+/**
+ * The worker's shared {@link ManagedRuntime}, built lazily ONCE on the first
+ * request and reused across every subsequent POST (M5). The underlying
+ * connection pool is already module-shared, so constructing + disposing a fresh
+ * runtime per request was pure overhead (runtime build + dispose) and GC churn
+ * — a 10k-row run drove ~20k POSTs, each paying that cost. We therefore cache
+ * the runtime (and the dynamically-imported db client it wraps) at module scope
+ * and NEVER dispose it per request: the Node serverless instance owns it for its
+ * whole lifetime, exactly as the pool is owned.
+ *
+ * Kept as a module-scoped promise so concurrent first requests share one build
+ * (the import + `ManagedRuntime.make` happen once) rather than racing to make
+ * several runtimes. `appLayer` is invoked with `userId: null` because the worker
+ * carries no member identity — the shared secret, not membership, gates it.
+ */
+let sharedRuntimePromise:
+  | Promise<ManagedRuntime.ManagedRuntime<AppServices, never>>
+  | undefined;
+
+/** Build (once) and reuse the worker's shared {@link ManagedRuntime}. */
+function workerRuntime(): Promise<
+  ManagedRuntime.ManagedRuntime<AppServices, never>
+> {
+  if (sharedRuntimePromise === undefined) {
+    sharedRuntimePromise = import("@gtmgrid/db/client").then(({ db }) =>
+      ManagedRuntime.make(appLayer({ db, userId: null })),
+    );
+  }
+  return sharedRuntimePromise;
+}
+
 /** 401 for an unauthorized worker (missing/incorrect bearer). */
 export const unauthorized = (): Response =>
   new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -64,30 +95,28 @@ export async function runWorker<T, A, E>(
   const body = await readJson<T>(req);
   if (body === null) return badRequest("Invalid JSON body");
 
-  const { db } = await import("@gtmgrid/db/client");
-  const runtime = ManagedRuntime.make(appLayer({ db, userId: null }));
-  try {
-    const exit = await runtime.runPromiseExit(build(body));
-    if (Exit.isSuccess(exit)) return ok(exit.value);
+  // Reuse the module-scoped runtime (built once) instead of constructing +
+  // disposing a fresh one per POST (M5). The pool it wraps is already shared, so
+  // this removes the per-request runtime build/dispose overhead.
+  const runtime = await workerRuntime();
+  const exit = await runtime.runPromiseExit(build(body));
+  if (Exit.isSuccess(exit)) return ok(exit.value);
 
-    const failure = Cause.failureOption(exit.cause);
-    if (failure._tag === "Some") {
-      const err = failure.value as { _tag?: string; message?: string };
-      return new Response(
-        JSON.stringify({ error: err.message ?? "Worker request failed." }),
-        {
-          status: workerErrorStatus(err._tag),
-          headers: { "Content-Type": "application/json" },
-        },
-      );
-    }
+  const failure = Cause.failureOption(exit.cause);
+  if (failure._tag === "Some") {
+    const err = failure.value as { _tag?: string; message?: string };
     return new Response(
-      JSON.stringify({ error: Cause.pretty(exit.cause) }),
-      { status: 500, headers: { "Content-Type": "application/json" } },
+      JSON.stringify({ error: err.message ?? "Worker request failed." }),
+      {
+        status: workerErrorStatus(err._tag),
+        headers: { "Content-Type": "application/json" },
+      },
     );
-  } finally {
-    await runtime.dispose();
   }
+  return new Response(
+    JSON.stringify({ error: Cause.pretty(exit.cause) }),
+    { status: 500, headers: { "Content-Type": "application/json" } },
+  );
 }
 
 /** Map a typed service-error tag to an HTTP status for the worker boundary. */
