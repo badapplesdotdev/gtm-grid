@@ -192,6 +192,9 @@ const LAST_CLOUD_PROJECT_KEY = "gtmgrid:lastCloudProject";
 // True if any of a function column's params reference {{columnName}}.
 function columnDependsOn(col: Column, columnName: string): boolean {
   const re = new RegExp(`\\{\\{\\s*${columnName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\}\\}`);
+  // References live in the input params (incl. a formula column's params.expression)
+  // OR in the column's run condition — both should make it a dependent for auto-run.
+  if (typeof col.condition === "string" && re.test(col.condition)) return true;
   return Object.values(col.params ?? {}).some((v) => typeof v === "string" && re.test(v));
 }
 
@@ -1089,6 +1092,12 @@ export default function App() {
   const [autoRun, setAutoRun] = useState<boolean>(() => {
     try { return localStorage.getItem("gtmgrid:autoRun") !== "off"; } catch { return true; }
   });
+  // Mirror into a ref so the per-cell `onEdit` closure always reads the CURRENT
+  // value. Cells are memoized (cellPropsEqual ignores onEdit), so they keep a stale
+  // closure across a toggle — without this the toggle wouldn't take effect until the
+  // cell re-rendered for another reason, so "Auto-run off" was being ignored.
+  const autoRunRef = useRef(autoRun);
+  autoRunRef.current = autoRun;
   const toggleAutoRun = useCallback(() => {
     setAutoRun((v) => {
       const next = !v;
@@ -1571,7 +1580,8 @@ export default function App() {
     setTableData(updated);
 
     // Auto-run: re-run function columns that reference the edited column, for this row.
-    if (autoRun) {
+    // Read via the ref so a stale (memoized) onEdit closure still respects the toggle.
+    if (autoRunRef.current) {
       const changed = updated.columns.find((c) => c.id === colId);
       if (changed) {
         const deps = updated.columns.filter((c) => c.kind === "function" && columnDependsOn(c, changed.name));
