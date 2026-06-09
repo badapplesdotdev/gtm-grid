@@ -904,9 +904,13 @@ route("GET", "/api/agents/hermes-config", () => {
 route("POST", "/api/agents/hermes-config", (_p, body) => {
   const mode: HermesConn["mode"] = body?.mode === "remote" ? "remote" : "local";
   const trimmed = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
-  // Preserve an existing key when the form leaves it blank (UI sends "" to keep).
-  const apiKey = trimmed(body?.apiKey) ?? getHermesConn()?.apiKey;
-  setHermesConn({ mode, url: trimmed(body?.url), apiKey, model: trimmed(body?.model) });
+  // Partial updates preserve existing values, so toggling Local<->Remote never
+  // wipes the saved gateway URL/key/model. Blank fields keep what's stored.
+  const prev = getHermesConn();
+  const apiKey = trimmed(body?.apiKey) ?? prev?.apiKey;
+  const url = trimmed(body?.url) ?? prev?.url;
+  const model = trimmed(body?.model) ?? prev?.model;
+  setHermesConn({ mode, url, apiKey, model });
   rescanAgents();
   return { ok: true, agents: detectAgents() };
 });
