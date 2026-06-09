@@ -3317,3 +3317,20 @@ button.import-type:hover { background: var(--surface-3); }
 .sync-prog-n { margin-left: auto; font: 12px var(--font-mono); color: var(--text); }
 .sync-prog-bar { height: 6px; border-radius: var(--r-pill); background: var(--surface-2); overflow: hidden; margin: 11px 0 9px; }
 .sync-prog-bar span { display: block; height: 100%; background: var(--accent); border-radius: var(--r-pill); transition: width 0.12s linear; }
+
+/* ─────────────────────────────────────────────────────────
+   Auto-sync setting + nudge (TRI-3298). Reuses the .trial-banner
+   shell and the app's GREEN accent tokens (not the design's red).
+   ───────────────────────────────────────────────────────── */
+/* The nudge clones .trial-banner; this just keeps a hook for tone tweaks. */
+.auto-sync-nudge { background: var(--accent-soft, rgba(34,197,94,0.10)); }
+
+/* The settings toggle row, under the Tables section label. */
+.auto-sync-toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 16px 8px; cursor: default; }
+.auto-sync-toggle__label { font-size: 12px; color: var(--text-2); }
+
+/* A small accessible on/off switch (the app had no toggle control). */
+.switch { position: relative; flex: none; width: 30px; height: 17px; padding: 0; border: none; border-radius: var(--r-pill); background: var(--surface-2); cursor: pointer; transition: background var(--dur-fast, 0.12s) ease; }
+.switch.is-on { background: var(--accent); }
+.switch__knob { position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.25); transition: transform var(--dur-fast, 0.12s) ease; }
+.switch.is-on .switch__knob { transform: translateX(13px); }

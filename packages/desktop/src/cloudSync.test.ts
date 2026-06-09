@@ -16,6 +16,12 @@ import {
   isOverwriteConfirmNeeded,
   overwriteConfirmMessage,
   pendingCount,
+  parseAutoSyncFlag,
+  serializeAutoSyncFlag,
+  autoSyncNudgeVisible,
+  shouldAutoPush,
+  AUTO_SYNC_DEBOUNCE_MS,
+  AUTO_SYNC_ENABLE_WARNING,
   type TableSyncFacts,
 } from "./cloudSync";
 
@@ -137,5 +143,82 @@ describe("pendingCount", () => {
 
   it("is zero when everything is synced", () => {
     expect(pendingCount(["synced", "synced"])).toBe(0);
+  });
+});
+
+// ── Auto-sync setting (TRI-3298) ───────────────────────────────────────────
+
+describe("parseAutoSyncFlag (default OFF)", () => {
+  it("defaults OFF for unset / missing values", () => {
+    expect(parseAutoSyncFlag(undefined)).toBe(false);
+    expect(parseAutoSyncFlag(null)).toBe(false);
+    expect(parseAutoSyncFlag("")).toBe(false);
+  });
+
+  it("only the canonical 'true' string enables it", () => {
+    expect(parseAutoSyncFlag("true")).toBe(true);
+    expect(parseAutoSyncFlag("false")).toBe(false);
+  });
+
+  it("a non-canonical / garbage value can never silently turn it on", () => {
+    expect(parseAutoSyncFlag("1")).toBe(false);
+    expect(parseAutoSyncFlag("TRUE")).toBe(false);
+    expect(parseAutoSyncFlag("yes")).toBe(false);
+  });
+
+  it("round-trips through serialize", () => {
+    expect(parseAutoSyncFlag(serializeAutoSyncFlag(true))).toBe(true);
+    expect(parseAutoSyncFlag(serializeAutoSyncFlag(false))).toBe(false);
+  });
+});
+
+describe("autoSyncNudgeVisible", () => {
+  const base = { cloudEnabled: true, inCloud: true, isAuthenticated: true, autoSyncOn: false, dismissed: false };
+
+  it("shows for an eligible cloud user with auto-sync OFF and not dismissed", () => {
+    expect(autoSyncNudgeVisible(base)).toBe(true);
+  });
+
+  it("hidden once auto-sync is ON (nothing to nudge)", () => {
+    expect(autoSyncNudgeVisible({ ...base, autoSyncOn: true })).toBe(false);
+  });
+
+  it("hidden once dismissed (stays dismissed across sessions)", () => {
+    expect(autoSyncNudgeVisible({ ...base, dismissed: true })).toBe(false);
+  });
+
+  it("hidden for ineligible users (not cloud / not signed in / no project)", () => {
+    expect(autoSyncNudgeVisible({ ...base, cloudEnabled: false })).toBe(false);
+    expect(autoSyncNudgeVisible({ ...base, isAuthenticated: false })).toBe(false);
+    expect(autoSyncNudgeVisible({ ...base, inCloud: false })).toBe(false);
+  });
+});
+
+describe("shouldAutoPush (trigger gating)", () => {
+  const eligible = { autoSyncOn: true, cloudEnabled: true, inCloud: true, isAuthenticated: true };
+
+  it("ON + eligible cloud user → auto-push", () => {
+    expect(shouldAutoPush(eligible)).toBe(true);
+  });
+
+  it("OFF → no auto traffic, regardless of eligibility", () => {
+    expect(shouldAutoPush({ ...eligible, autoSyncOn: false })).toBe(false);
+  });
+
+  it("ON but ineligible (signed out / no project / local build) → no auto traffic", () => {
+    expect(shouldAutoPush({ ...eligible, isAuthenticated: false })).toBe(false);
+    expect(shouldAutoPush({ ...eligible, inCloud: false })).toBe(false);
+    expect(shouldAutoPush({ ...eligible, cloudEnabled: false })).toBe(false);
+  });
+});
+
+describe("auto-sync constants", () => {
+  it("has a positive debounce window", () => {
+    expect(AUTO_SYNC_DEBOUNCE_MS).toBeGreaterThan(0);
+  });
+
+  it("the enable warning makes the repeated overwrite explicit", () => {
+    expect(AUTO_SYNC_ENABLE_WARNING.toLowerCase()).toContain("overwrite");
+    expect(AUTO_SYNC_ENABLE_WARNING.toLowerCase()).toContain("automatically");
   });
 });
