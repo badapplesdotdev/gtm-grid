@@ -20,6 +20,10 @@ import {
 } from "./store.js";
 import type { AiConfig, Column, ConnectorMethod } from "./types.js";
 
+/** Stored on a cell's `error` (with status "empty") when a run condition gates the
+ *  row off, so the grid can show a muted "Condition not met" note instead of a dash. */
+export const CONDITION_SKIP_NOTE = "Condition not met";
+
 export interface EngineConfig {
   ai?: AiConfig;
   /** All connected AI providers (for model-based routing). */
@@ -319,10 +323,15 @@ export class Engine {
               prelude: conditionPrelude,
             });
             if (!pass) {
-              // Clear any stale value so the skip is visible; skip the write if already empty.
-              // (No progress event — CellProgress streams running/done/error transitions only.)
-              if (existing && existing.status !== "empty") {
-                await Effect.runPromise(this.store.setCell(rowId, columnId, { value: null, status: "empty", error: null }));
+              // Mark the cell so the user can SEE why it's blank — gated off by the run
+              // condition. We reuse the `error` text with status "empty" (not "error"), so
+              // the grid shows a muted "Condition not met" note instead of a bare dash.
+              // Skip the write when it already shows that note. (No progress event —
+              // CellProgress streams running/done/error transitions only.)
+              if (existing?.status !== "empty" || existing?.error !== CONDITION_SKIP_NOTE) {
+                await Effect.runPromise(
+                  this.store.setCell(rowId, columnId, { value: null, status: "empty", error: CONDITION_SKIP_NOTE }),
+                );
               }
               return;
             }

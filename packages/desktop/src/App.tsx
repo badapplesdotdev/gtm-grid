@@ -368,6 +368,16 @@ function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCel
   }
 
   if (!cell || cell.status === "empty" || cell.status === "pending") {
+    // A row gated off by the column's run condition carries a note on an empty cell —
+    // surface it ("Condition not met") so it's clear why the cell is blank.
+    if (cell?.status === "empty" && cell.error) {
+      return (
+        <div className="cell-wrap" title={cell.error}>
+          {runBtn}
+          <span className="cell-skipped">{cell.error}</span>
+        </div>
+      );
+    }
     if (col.kind === "function") {
       return <div className="cell-wrap">{runBtn}<span className="cell-empty">—</span></div>;
     }

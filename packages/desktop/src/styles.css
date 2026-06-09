@@ -3335,3 +3335,14 @@ button.import-type:hover { background: var(--surface-3); }
   vertical-align: -2px;
   flex-shrink: 0;
 }
+
+/* A cell whose row was gated off by the column's run condition ("Condition not met"). */
+.cell-skipped {
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+}
