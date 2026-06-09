@@ -300,6 +300,38 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         return yield* tables.listByProject(projectId);
       });
 
+    /**
+     * A project's tables WITH their column + row counts (position order).
+     * Members-only. The agent's project-wide `list_tables` tool reports each
+     * table with `{ id, name, columns, rows }`, so this composes the existing
+     * `listByProject` read with a per-table `listColumns`/`listRows` count —
+     * reusing the same repo reads {@link getTable} uses rather than adding a new
+     * count primitive — and never touches a write or the meter (a pure read).
+     */
+    const listTablesWithCounts = (projectId: string) =>
+      Effect.gen(function* () {
+        const project = yield* requireProject(projectId);
+        yield* membership.requireMember(project.workspaceId);
+        const projectTables = yield* tables.listByProject(projectId);
+        const out: {
+          id: string;
+          name: string;
+          columns: number;
+          rows: number;
+        }[] = [];
+        for (const t of projectTables) {
+          const cols = yield* columns.listByTable(t.id);
+          const rws = yield* rows.listByTable(t.id);
+          out.push({
+            id: t.id,
+            name: t.name,
+            columns: cols.length,
+            rows: rws.length,
+          });
+        }
+        return out;
+      });
+
     /** The full grid for a table (table+columns+rows+cells). Members-only. */
     const getTable = (tableId: string): Effect.Effect<
       FullGrid,
@@ -757,6 +789,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       listProjects,
       createProject,
       listTables,
+      listTablesWithCounts,
       getTable,
       getTablePage,
       createTable,

@@ -567,3 +567,67 @@ describe("cloud-access gate (lapsed trial / Free workspace)", () => {
     expect(Exit.isSuccess(exit)).toBe(true);
   });
 });
+
+describe("GridService.listTablesWithCounts (project-wide list for the agent — TRI-3299)", () => {
+  it("returns every table in the project with its column + row counts", async () => {
+    const store = makeGridStore({
+      projects: [{ id: "p1", workspaceId: WS, name: "P", createdAt: 1 }],
+      tables: [
+        table({ id: "t1", name: "T1", position: 0 }),
+        table({ id: "t2", name: "T2", position: 1 }),
+      ],
+      columns: [
+        column({ id: "c1", tableId: "t1", name: "A", position: 0 }),
+        column({ id: "c2", tableId: "t1", name: "B", position: 1 }),
+        column({ id: "c3", tableId: "t2", name: "C", position: 0 }),
+      ],
+      rows: [
+        row({ id: "r1", tableId: "t1", position: 0 }),
+        row({ id: "r2", tableId: "t2", position: 0 }),
+        row({ id: "r3", tableId: "t2", position: 1 }),
+      ],
+    });
+    const { run } = harness({ store });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.listTablesWithCounts("p1")),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value).toEqual([
+        { id: "t1", name: "T1", columns: 2, rows: 1 },
+        { id: "t2", name: "T2", columns: 1, rows: 2 },
+      ]);
+    }
+  });
+
+  it("rejects a non-member with NotAMemberError (authz before any read)", async () => {
+    const store = makeGridStore({
+      projects: [{ id: "p1", workspaceId: WS, name: "P", createdAt: 1 }],
+      tables: [table()],
+    });
+    const { run } = harness({ store, currentUserId: "stranger" });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.listTablesWithCounts("p1")),
+    );
+    expect(failTag(exit)).toBe("NotAMemberError");
+  });
+
+  it("fails GridNotFoundError for an unknown project", async () => {
+    const { run } = harness({});
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.listTablesWithCounts("nope")),
+    );
+    expect(failTag(exit)).toBe("GridNotFoundError");
+  });
+
+  it("does NOT meter (a pure read)", async () => {
+    const store = makeGridStore({
+      projects: [{ id: "p1", workspaceId: WS, name: "P", createdAt: 1 }],
+      tables: [table()],
+    });
+    const quotas = new Map<string, MeterQuota>();
+    const { run } = harness({ store, quotas });
+    await run(Effect.flatMap(GridService, (s) => s.listTablesWithCounts("p1")));
+    expect(quotas.get(WS)?.cloudActionsUsed ?? 0).toBe(0);
+  });
+});

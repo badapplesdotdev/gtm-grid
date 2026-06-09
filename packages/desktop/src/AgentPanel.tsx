@@ -306,12 +306,29 @@ function ModelPicker({ agent, value, onChange }: { agent: AgentKind; value: stri
   );
 }
 
+/**
+ * The CLOUD context forwarded to the agent so its MCP table tools operate on the
+ * user's CLOUD (Supabase) project instead of local SQLite (TRI-3296). `null`
+ * whenever a cloud project is NOT active (local mode, or signed-out / no
+ * `VITE_API_URL`), in which case the agent keeps its local SQLite behaviour.
+ */
+export interface AgentCloudContext {
+  readonly apiUrl: string;
+  readonly token: string;
+  readonly workspaceId: string;
+  readonly projectId: string;
+  readonly tableId: string;
+}
+
 export default function AgentPanel({
   onGridChange,
   activeTable,
+  cloud,
 }: {
   onGridChange: () => void;
   activeTable: { name: string; columns: string[] } | null;
+  /** Cloud context when a cloud project is active; `null` in local mode. */
+  cloud?: AgentCloudContext | null;
 }) {
   const [agent, setAgent] = useState<AgentKind>("claude");
   // Which model each agent's CLI runs with ("" = the plan's default). Persisted.
@@ -430,6 +447,10 @@ export default function AgentPanel({
           model: models[agent] || undefined,
           sessionId: sessionRef.current[agent],
           context: activeTable ? { tableName: activeTable.name, columns: activeTable.columns } : undefined,
+          // CLOUD context (TRI-3296): forwarded only when a cloud project is
+          // active so the agent's table tools operate on Supabase; omitted in
+          // local mode so the agent keeps local-SQLite behaviour.
+          cloud: cloud ?? undefined,
         }),
         signal: controller.signal,
       });

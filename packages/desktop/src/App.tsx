@@ -41,9 +41,12 @@ import {
   useCloudTables,
   useCloudProjectMutations,
   useCloudGridMutations,
+  useCloudSession,
   type CloudProject,
 } from "./cloud/useCloudGrid";
 import { type SignalsCloud } from "./SignalsModal";
+// Type-only import (erased at build) so the AgentPanel lazy chunk stays split.
+import type { AgentCloudContext } from "./AgentPanel";
 import type { ImportWriter } from "./csvImport";
 import type { Id } from "./cloud/ids";
 import { VirtualGridBody } from "./VirtualGridBody";
@@ -1129,6 +1132,23 @@ export default function App() {
   const [cloudCreateError, setCloudCreateError] = useState<string | null>(null);
   // Whether the app is currently viewing a cloud project (vs. local).
   const inCloud = cloudProject !== null;
+  // CLOUD context for the agent (TRI-3296): the signed-in session + the active
+  // cloud workspace/project/table, so the agent's MCP table tools operate on
+  // Supabase. Null unless ALL are present (a cloud project + table is open and
+  // we have a session), in which case the agent keeps its local-SQLite path.
+  const cloudSession = useCloudSession();
+  const agentCloud = useMemo<AgentCloudContext | null>(() => {
+    if (!cloudSession || !activeWorkspace || !cloudProject || !cloudTableId) {
+      return null;
+    }
+    return {
+      apiUrl: cloudSession.apiUrl,
+      token: cloudSession.token,
+      workspaceId: activeWorkspace._id,
+      projectId: cloudProject._id,
+      tableId: cloudTableId,
+    };
+  }, [cloudSession, activeWorkspace, cloudProject, cloudTableId]);
   // Cloud-access lock: the active workspace's trial lapsed / it's on Free (no
   // plan id). Cloud tables/projects are shown but LOCKED — opening or editing
   // them prompts an upgrade; local tables are unaffected. The server enforces the
@@ -2873,6 +2893,7 @@ export default function App() {
         <AgentPanel
           onGridChange={refreshAll}
           activeTable={tableData ? { name: tableData.name, columns: tableData.columns.map((c) => c.name) } : null}
+          cloud={agentCloud}
         />
       </Suspense>
 
