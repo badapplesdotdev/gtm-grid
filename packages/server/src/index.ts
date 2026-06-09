@@ -21,6 +21,7 @@ import {
   migrateGlobals,
   listProjects,
 } from "@gtmgrid/engine";
+import type { CellProgress } from "@gtmgrid/engine";
 import { detectAgents, streamClaude, streamCodex, setAgentPath, rescanAgents, type AgentKind } from "./agent.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
@@ -893,6 +894,48 @@ const server = createServer(async (req, res) => {
       send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
     }
     return;
+  }
+
+  // LOCAL run progress stream (TRI-3275): run a function column on the local
+  // SQLite project and stream per-cell progress as Server-Sent Events so the
+  // desktop patches only the changed cells as they complete — instead of running
+  // blind then refetching+replacing the whole grid. This is the SSE twin of the
+  // JSON `POST /api/columns/:id/run` route, handled here because the JSON router
+  // can't keep a streaming response open. CORS stays allowlisted, never `*` (#22).
+  {
+    const m = req.method === "POST" && url.pathname.match(/^\/api\/columns\/([^/]+)\/run\/stream$/);
+    if (m) {
+      const columnId = decodeURIComponent(m[1]);
+      const body = await readBody(req);
+      const rowIds =
+        Array.isArray(body?.rowIds) && body.rowIds.length ? (body.rowIds as string[]) : undefined;
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+        ...corsHeadersFor(origin),
+      });
+      const write = (event: unknown) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+      try {
+        const summary = await current.engine.runColumn(columnId, {
+          force: !!body?.force,
+          concurrency: body?.concurrency ?? 5,
+          rowIds,
+          onCell: (cell: CellProgress) =>
+            write({
+              type: "cell",
+              rowId: cell.rowId,
+              columnId: cell.columnId,
+              cell: { value: cell.value, status: cell.status, error: cell.error },
+            }),
+        });
+        write({ type: "done", ran: summary.ran, errors: summary.errors });
+      } catch (e) {
+        write({ type: "error", error: e instanceof Error ? e.message : String(e) });
+      }
+      res.end();
+      return;
+    }
   }
 
   for (const r of routes) {

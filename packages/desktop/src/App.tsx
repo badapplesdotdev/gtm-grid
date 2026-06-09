@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, memo, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
-import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource } from "./api";
+import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource, type CellProgressEvent } from "./api";
 import AgentPanel from "./AgentPanel";
 import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
@@ -1053,6 +1053,23 @@ export default function App() {
     else setTableData(null);
   }, [selectedTableId, loadTable]);
 
+  // Patch a single cell in place from a streamed run progress event. Keeps the
+  // rest of the grid untouched so a local run updates only the cells that
+  // actually changed (no full setTableData replacement / loadTable refetch).
+  // Ignores events for a table other than the one currently loaded.
+  const patchCell = useCallback((tableId: string, e: CellProgressEvent) => {
+    setTableData((cur) => {
+      if (!cur || cur.id !== tableId) return cur;
+      let touched = false;
+      const rows = cur.rows.map((row) => {
+        if (row.id !== e.rowId) return row;
+        touched = true;
+        return { ...row, cells: { ...row.cells, [e.columnId]: e.cell } };
+      });
+      return touched ? { ...cur, rows } : cur;
+    });
+  }, []);
+
   // A freshly-created social-signal table populates asynchronously (Trigify
   // scrapes results over ~10-60s). Poll until rows land, showing a skeleton.
   const startWarming = useCallback((tableId: string) => {
@@ -1260,35 +1277,39 @@ export default function App() {
 
   const runAll = async () => {
     if (!tableData) return;
+    const tableId = tableData.id;
     const fnCols = tableData.columns.filter(c => c.kind === "function");
     if (!fnCols.length) return;
     setRunProgress({ current: 0, total: fnCols.length });
     for (let i = 0; i < fnCols.length; i++) {
       setRunProgress({ current: i + 1, total: fnCols.length });
-      try { await api.runColumn(fnCols[i].id); } catch { /* continue */ }
+      // Stream per-cell progress and patch each cell as it lands — no full refetch.
+      try { await api.runColumnStream(fnCols[i].id, (e) => patchCell(tableId, e)); } catch { /* continue */ }
     }
     setRunProgress(null);
-    await loadTable(tableData.id);
   };
 
   // ── Run single column ──────────────────────
 
   const runColumn = async (colId: string) => {
+    const tableId = selectedTableId;
+    if (!tableId) return;
     setRunningColId(colId);
-    try { await api.runColumn(colId); } catch { /* ignore */ }
+    // Patch cells in place as the sidecar streams per-cell progress (SSE),
+    // instead of refetching+replacing the whole grid after the run.
+    try { await api.runColumnStream(colId, (e) => patchCell(tableId, e)); } catch { /* ignore */ }
     setRunningColId(null);
-    if (selectedTableId) await loadTable(selectedTableId);
   };
 
   // ── Run a single cell (this row × this function column) ──
   const runCell = async (rowId: string, colId: string) => {
+    const tableId = selectedTableId;
+    if (!tableId) return;
     const key = `${rowId}:${colId}`;
     setRunningCells(s => new Set(s).add(key));
-    try { await api.runColumn(colId, { force: true, rowIds: [rowId] }); } catch { /* ignore */ }
-    if (selectedTableId) {
-      const updated = await api.table(selectedTableId);
-      setTableData(updated);
-    }
+    try {
+      await api.runColumnStream(colId, (e) => patchCell(tableId, e), { force: true, rowIds: [rowId] });
+    } catch { /* ignore */ }
     setRunningCells(s => { const n = new Set(s); n.delete(key); return n; });
   };
 

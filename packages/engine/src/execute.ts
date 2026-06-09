@@ -19,11 +19,28 @@ export interface EngineConfig {
   aiProviders?: AiConfig[];
 }
 
+/** A cell's state as observed during a run, for per-cell progress streaming. */
+export interface CellProgress {
+  readonly rowId: string;
+  readonly columnId: string;
+  readonly value: unknown;
+  readonly status: "running" | "done" | "error";
+  readonly error: string | null;
+}
+
 export interface RunColumnOptions {
   concurrency?: number;
   rowIds?: string[];
   /** Re-run cells already marked done. */
   force?: boolean;
+  /**
+   * Fired synchronously after each cell write during the run (running → then
+   * done/error). Lets a caller stream per-cell progress (e.g. the sidecar's SSE
+   * run route) so clients patch only the changed cell instead of refetching the
+   * whole grid. Plain callback — kept off the Effect path on purpose. A throwing
+   * callback never aborts the run (its failure is swallowed).
+   */
+  onCell?: (cell: CellProgress) => void;
 }
 
 /**
@@ -163,6 +180,16 @@ export class Engine {
     const code = this.columnCode(col);
     const providers = this.registry.providerMap();
 
+    // Emit a per-cell progress event, never letting a bad callback abort the run.
+    const emit = (cell: CellProgress): void => {
+      if (!opts.onCell) return;
+      try {
+        opts.onCell(cell);
+      } catch {
+        /* a streaming sink failure must not fail the run */
+      }
+    };
+
     let ran = 0;
     let errors = 0;
     // Stores that batch terminal writes (the cloud store) coalesce the interim
@@ -174,17 +201,21 @@ export class Engine {
       if (!opts.force && existing?.status === "done") return;
       if (!skipRunning) {
         await Effect.runPromise(this.store.setCell(rowId, columnId, { status: "running", error: null }));
+        emit({ rowId, columnId, value: null, status: "running", error: null });
       }
       try {
         const inputs = await Effect.runPromise(this.resolveParams(col, rowId, reads));
         const result = await runFunction({ code, inputs, providers, dispatch: this.dispatch });
+        const value = simplify(result);
         await Effect.runPromise(
-          this.store.setCell(rowId, columnId, { value: simplify(result), status: "done", error: null }),
+          this.store.setCell(rowId, columnId, { value, status: "done", error: null }),
         );
+        emit({ rowId, columnId, value, status: "done", error: null });
         ran++;
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         await Effect.runPromise(this.store.setCell(rowId, columnId, { status: "error", error: message }));
+        emit({ rowId, columnId, value: null, status: "error", error: message });
         errors++;
       }
     });

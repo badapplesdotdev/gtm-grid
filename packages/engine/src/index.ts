@@ -11,7 +11,7 @@ import { parseManifest, connectorFromManifest } from "./connectors/manifest.js";
 
 export { Db } from "./db.js";
 export { Engine, mapConcurrent, aiConfigFromEnv } from "./execute.js";
-export type { EngineConfig, RunColumnOptions, EngineStores } from "./execute.js";
+export type { EngineConfig, RunColumnOptions, EngineStores, CellProgress } from "./execute.js";
 export { Registry, defaultRegistry } from "./registry.js";
 export { runFunction, normalizeCode } from "./sandbox.js";
 export { defineHttpConnector } from "./connectors/http.js";
