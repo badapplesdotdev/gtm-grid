@@ -144,6 +144,55 @@ export function pendingCount(statuses: readonly SyncStatus[]): number {
   ).length;
 }
 
+/** One table's facts as seen by the sync-all planner: its id, link state, and
+ * current design status (so the planner can exclude already synced/in-flight). */
+export interface SyncAllTable {
+  readonly id: string;
+  /** A successful push has linked this local table to a cloud table. */
+  readonly linked: boolean;
+  /** The table's mapped design status (synced/ahead/local/syncing/…). */
+  readonly status: SyncStatus;
+}
+
+/**
+ * The sync-all plan: which pending tables to CREATE (unlinked → non-destructive
+ * first push) vs OVERWRITE (linked → re-push that clobbers the cloud copy and so
+ * must be gated behind ONE bulk destructive-overwrite confirm).
+ */
+export interface SyncAllPlan {
+  /** Unlinked pending tables — pushed straight through as create (no warning). */
+  readonly toCreate: readonly string[];
+  /** Linked pending tables — every one re-pushed with `confirmOverwrite:true`
+   * after the single bulk confirm. NONE are ever silently dropped (TRI-3307). */
+  readonly toOverwrite: readonly string[];
+}
+
+/**
+ * Plan a "Sync all": split every table with un-pushed work into unlinked
+ * (`toCreate`) vs linked (`toOverwrite`). This is the fix for TRI-3307 — the old
+ * loop called the single-table push per table, and each linked table clobbered
+ * the one `overwriteConfirm` useState, so all-but-one linked table was silently
+ * skipped. By returning the FULL linked set up front, the caller can show ONE
+ * bulk confirm and then push EVERY linked table (none omitted).
+ *
+ * Already-`synced` and in-flight `syncing` tables are excluded (no work / busy);
+ * a table whose status is `offline` is also excluded (can't push). Pending =
+ * `local` (→ create), `ahead` / `conflict` (→ overwrite). Link state, not status
+ * alone, decides the bucket so a `conflict`-flagged linked table still overwrites.
+ */
+export function planSyncAll(tables: readonly SyncAllTable[]): SyncAllPlan {
+  const toCreate: string[] = [];
+  const toOverwrite: string[] = [];
+  for (const t of tables) {
+    if (t.status === "synced" || t.status === "syncing" || t.status === "offline") {
+      continue;
+    }
+    if (t.linked) toOverwrite.push(t.id);
+    else toCreate.push(t.id);
+  }
+  return { toCreate, toOverwrite };
+}
+
 // ── Auto-sync setting (TRI-3298) ───────────────────────────────────────────
 //
 // `auto_sync_offline_tables` is a GLOBAL meta flag (default OFF). When ON, the
