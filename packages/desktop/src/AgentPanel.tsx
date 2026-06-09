@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, API_BASE, type AgentSession, type AgentStatus } from "./api";
+import { abortInFlight } from "./agentAbort";
 
 type AgentKind = "claude" | "codex";
 
@@ -422,8 +423,17 @@ export default function AgentPanel({
     setThreads((t) => ({ ...t, [agent]: fn(t[agent]) }));
 
   function stop() {
-    abortRef.current?.abort();
+    abortInFlight(abortRef);
   }
+
+  // Abort the in-flight turn when the panel UNMOUNTS (closing it) or when the
+  // active agent / table / cloud context changes — otherwise the SSE fetch keeps
+  // streaming and the server keeps the spawned CLI (+ MCP tree) alive, leaking
+  // memory (TRI-3305). The empty effect body means the abort only runs on
+  // cleanup, never tearing down a turn just started against the current context.
+  useEffect(() => {
+    return () => abortInFlight(abortRef);
+  }, [agent, activeTable, cloud]);
 
   async function send(preset?: string) {
     const text = (preset ?? input).trim();
