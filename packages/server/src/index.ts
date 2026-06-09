@@ -478,7 +478,7 @@ route("GET", "/api/signals/sources", () => ({
 
 // Bindings in the current project (without the heavy `seen` dedupe window).
 route("GET", "/api/signals", () =>
-  listBindings(current.projectDb).map(({ seen, ...b }) => b),
+  listBindings(current.projectDb).map(({ seen: _seen, ...b }) => b),
 );
 
 // Create: table + columns + Trigify search + binding + initial pull.
