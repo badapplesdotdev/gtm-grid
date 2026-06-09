@@ -140,6 +140,9 @@ export {
 export {
   type NewRow,
   type Row,
+  type RowCursor,
+  type RowPage,
+  ROW_PAGE_SIZE,
   RowRepo,
   RowRepoError,
   RowRepoLive,
@@ -244,6 +247,7 @@ export {
   GridNotFoundError,
   GridService,
   InvalidCellError as GridInvalidCellError,
+  type TablePage,
 } from "./services/grid-service.js";
 export {
   type MeterQuota,

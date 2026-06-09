@@ -53,6 +53,8 @@ import {
 import {
   type NewRow,
   type Row,
+  type RowCursor,
+  ROW_PAGE_SIZE,
   RowRepo,
   type RowRepoError,
 } from "../repositories/row-repo.js";
@@ -89,26 +91,52 @@ export class CloudActionsLimitError extends Data.TaggedError(
  * useCloudGrid.ts:173-192 consumes: Convex-style `_id` keys on the table,
  * columns, and rows; cells carry `rowId`/`columnId`/`value`/`status`/`error`.
  */
+/** A column projection in the desktop `getTable` shape (Convex-style `_id`). */
+export interface GridColumn {
+  readonly _id: string;
+  readonly name: string;
+  readonly type: string;
+  readonly kind: ColumnKind;
+  readonly provider: string | null;
+  readonly method: string | null;
+  readonly code: string | null;
+  readonly params: unknown;
+}
+
+/** A cell projection in the desktop `getTable` shape. */
+export interface GridCell {
+  readonly rowId: string;
+  readonly columnId: string;
+  readonly value: unknown;
+  readonly status: string;
+  readonly error: string | null;
+}
+
 export interface FullGrid {
   readonly table: { readonly _id: string; readonly name: string };
-  readonly columns: readonly {
-    readonly _id: string;
-    readonly name: string;
-    readonly type: string;
-    readonly kind: ColumnKind;
-    readonly provider: string | null;
-    readonly method: string | null;
-    readonly code: string | null;
-    readonly params: unknown;
-  }[];
+  readonly columns: readonly GridColumn[];
   readonly rows: readonly { readonly _id: string }[];
-  readonly cells: readonly {
-    readonly rowId: string;
-    readonly columnId: string;
-    readonly value: unknown;
-    readonly status: string;
-    readonly error: string | null;
-  }[];
+  readonly cells: readonly GridCell[];
+}
+
+/**
+ * One PAGE of a table's grid: the table + columns (both bounded and needed to
+ * render any page) plus only THIS page's rows + their cells, and the
+ * `nextCursor` to fetch the next page (`null` on the last page).
+ *
+ * The shape is a {@link FullGrid} superset (same `table`/`columns`/`rows`/`cells`
+ * keys) so the desktop's incremental projector + the realtime `applyGridEvent`
+ * reducer operate on a page exactly as they did on the full grid — only `rows`
+ * and `cells` are bounded to the page, so no single response loads the whole
+ * grid. A keyset cursor by ROW POSITION makes paging stable under concurrent
+ * inserts.
+ */
+export interface TablePage {
+  readonly table: { readonly _id: string; readonly name: string };
+  readonly columns: readonly GridColumn[];
+  readonly rows: readonly { readonly _id: string }[];
+  readonly cells: readonly GridCell[];
+  readonly nextCursor: RowCursor | null;
 }
 
 /** A `{ columnId: value }` map of one bulk-imported row's cells. */
@@ -117,6 +145,27 @@ export type CellMap = Readonly<Record<string, unknown>>;
 /** Next sibling `position` = max(existing)+1 (0 when empty). */
 const nextPosition = (siblings: readonly { position: number }[]): number =>
   siblings.reduce((max, s) => Math.max(max, s.position + 1), 0);
+
+/** Project a repo `Column` onto the desktop `getTable` column shape. */
+const toGridColumn = (c: Column): GridColumn => ({
+  _id: c.id,
+  name: c.name,
+  type: c.type,
+  kind: c.kind,
+  provider: c.provider,
+  method: c.method,
+  code: c.code,
+  params: c.params,
+});
+
+/** Project a repo `Cell` onto the desktop `getTable` cell shape. */
+const toGridCell = (c: Cell): GridCell => ({
+  rowId: c.rowId,
+  columnId: c.columnId,
+  value: c.value,
+  status: c.status,
+  error: c.error,
+});
 
 /**
  * Grid domain service. Defined with the `Effect.Service` pattern; the composed
@@ -274,25 +323,56 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         const cls = yield* cells.listByTable(tableId);
         return {
           table: { _id: table.id, name: table.name },
-          columns: cols.map((c) => ({
-            _id: c.id,
-            name: c.name,
-            type: c.type,
-            kind: c.kind,
-            provider: c.provider,
-            method: c.method,
-            code: c.code,
-            params: c.params,
-          })),
+          columns: cols.map(toGridColumn),
           rows: rws.map((r) => ({ _id: r.id })),
-          cells: cls.map((c) => ({
-            rowId: c.rowId,
-            columnId: c.columnId,
-            value: c.value,
-            status: c.status,
-            error: c.error,
-          })),
+          cells: cls.map(toGridCell),
         } satisfies FullGrid;
+      });
+
+    /**
+     * One PAGE of a table's grid by ROW POSITION (keyset). Returns the table +
+     * columns plus ONLY this page's rows and their cells, and a `nextCursor`
+     * (`null` on the last page). No single response loads the whole grid, so a
+     * 10k-row table is read one bounded page at a time. Members-only + the cloud
+     * gate, exactly like {@link getTable}.
+     */
+    const getTablePage = (args: {
+      readonly tableId: string;
+      readonly cursor?: RowCursor | null;
+      readonly limit?: number;
+    }): Effect.Effect<
+      TablePage,
+      | TableRepoError
+      | ColumnRepoError
+      | RowRepoError
+      | CellRepoError
+      | GridNotFoundError
+      | UnauthenticatedError
+      | NotAMemberError
+      | MemberRepoError
+      | InsufficientRoleError
+      | PlanRequiredError
+      | WorkspaceRepoError
+    > =>
+      Effect.gen(function* () {
+        const table = yield* requireTable(args.tableId);
+        yield* requireCloudMember(table.workspaceId);
+        const cols = yield* columns.listByTable(args.tableId);
+        const page = yield* rows.listKeysetByTable({
+          tableId: args.tableId,
+          limit: args.limit ?? ROW_PAGE_SIZE,
+          cursor: args.cursor ?? null,
+        });
+        // Read only THIS page's cells (by the page's row ids), never the whole
+        // table's cells.
+        const pageCells = yield* cells.listByRowIds(page.rows.map((r) => r.id));
+        return {
+          table: { _id: table.id, name: table.name },
+          columns: cols.map(toGridColumn),
+          rows: page.rows.map((r) => ({ _id: r.id })),
+          cells: pageCells.map(toGridCell),
+          nextCursor: page.nextCursor,
+        } satisfies TablePage;
       });
 
     /** Create a table in a project. Members-only. Metered ONE action. */
@@ -678,6 +758,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       createProject,
       listTables,
       getTable,
+      getTablePage,
       createTable,
       addColumn,
       addRow,

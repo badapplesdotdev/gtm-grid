@@ -9,7 +9,7 @@
  */
 
 import { schema } from "@gtmgrid/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
 import type { GridStore } from "./grid-store.js";
@@ -84,9 +84,18 @@ const fail = (op: string) => (cause: unknown) =>
 export class CellRepo extends Context.Tag("CellRepo")<
   CellRepo,
   {
-    /** Every cell of a table — for getTable. */
+    /** Every cell of a table — for the full (unpaged) getTable. */
     readonly listByTable: (
       tableId: string,
+    ) => Effect.Effect<readonly Cell[], CellRepoError>;
+    /**
+     * Only the cells belonging to a given set of rows — for the PAGED getTable.
+     * Reads a single page's cells (the rows from one keyset page) instead of the
+     * whole table, so resident memory stays bounded. An empty `rowIds` returns
+     * `[]` without touching the database.
+     */
+    readonly listByRowIds: (
+      rowIds: readonly string[],
     ) => Effect.Effect<readonly Cell[], CellRepoError>;
     /** The single cell at (rowId, columnId), or `None` — for the setCell merge. */
     readonly findByRowColumn: (
@@ -138,6 +147,19 @@ export const CellRepoLive: Layer.Layer<CellRepo, never, DbClient> =
                 catch: fail("cell list"),
               })
             : Effect.succeed([] as readonly Cell[]),
+        listByRowIds: (rowIds) => {
+          const valid = rowIds.filter((id) => UUID_RE.test(id));
+          return valid.length === 0
+            ? Effect.succeed([] as readonly Cell[])
+            : Effect.tryPromise({
+                try: () =>
+                  db
+                    .select(cols)
+                    .from(schema.cells)
+                    .where(inArray(schema.cells.rowId, valid)),
+                catch: fail("cell page list"),
+              });
+        },
         findByRowColumn: (rowId, columnId) =>
           UUID_RE.test(rowId) && UUID_RE.test(columnId)
             ? Effect.tryPromise({
@@ -231,6 +253,10 @@ export const cellRepoLayer = (store: GridStore): Layer.Layer<CellRepo> =>
   Layer.succeed(CellRepo, {
     listByTable: (tableId) =>
       Effect.succeed(store.cells.filter((c) => c.tableId === tableId)),
+    listByRowIds: (rowIds) => {
+      const set = new Set(rowIds);
+      return Effect.succeed(store.cells.filter((c) => set.has(c.rowId)));
+    },
     findByRowColumn: (rowId, columnId) =>
       Effect.succeed(
         Option.fromNullable(

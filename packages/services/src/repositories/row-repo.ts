@@ -8,7 +8,7 @@
  */
 
 import { schema } from "@gtmgrid/db";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, gt, or } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
 import {
@@ -33,6 +33,30 @@ export interface NewRow {
   readonly position: number;
   readonly createdAt: number;
 }
+
+/**
+ * A keyset cursor: the `(position, createdAt, id)` of the LAST row of the
+ * previous page. Rows are ordered by ascending position (the stable display
+ * order), so the next page is the rows strictly "after" this cursor.
+ * `null` requests the first page. `position` alone is NOT unique
+ * (it is `doublePrecision`), so the cursor tie-breaks on `createdAt` then `id`
+ * — the SAME total order {@link RowRepo.listByTable} already uses, so a paged
+ * read returns rows in exactly the order an unbounded read would.
+ */
+export interface RowCursor {
+  readonly position: number;
+  readonly createdAt: number;
+  readonly id: string;
+}
+
+/** One page of rows plus the cursor to fetch the next page (or `null`). */
+export interface RowPage {
+  readonly rows: readonly Row[];
+  readonly nextCursor: RowCursor | null;
+}
+
+/** The default page size for a keyset row read (rows per page). */
+export const ROW_PAGE_SIZE = 200;
 
 /**
  * The atomic bulk-import unit for a CSV import: the rows to insert, a builder
@@ -103,6 +127,18 @@ export class RowRepo extends Context.Tag("RowRepo")<
     readonly listByTable: (
       tableId: string,
     ) => Effect.Effect<readonly Row[], RowRepoError>;
+    /**
+     * One KEYSET page of a table's rows, ordered by position (then createdAt,
+     * id) ascending. `limit` rows are fetched strictly after the optional
+     * `cursor` (the last row of the prior page); the returned `nextCursor` is
+     * `null` on the last page. The paged read NEVER loads the whole table, so a
+     * 10k-row grid is read one bounded page at a time.
+     */
+    readonly listKeysetByTable: (args: {
+      readonly tableId: string;
+      readonly limit: number;
+      readonly cursor: RowCursor | null;
+    }) => Effect.Effect<RowPage, RowRepoError>;
     /** Insert a row and return its id. */
     readonly insert: (values: NewRow) => Effect.Effect<string, RowRepoError>;
     /** Insert many rows in one call, returning ids in input order. */
@@ -164,6 +200,61 @@ export const RowRepoLive: Layer.Layer<RowRepo, never, DbClient> = Layer.effect(
               catch: fail("row list"),
             })
           : Effect.succeed([] as readonly Row[]),
+      listKeysetByTable: ({ tableId, limit, cursor }) =>
+        !UUID_RE.test(tableId)
+          ? Effect.succeed<RowPage>({ rows: [], nextCursor: null })
+          : Effect.tryPromise({
+              try: async () => {
+                const base = eq(schema.rows.tableId, tableId);
+                // Seek strictly past the cursor in the (position, createdAt, id)
+                // total order: position > c.position, OR equal position with a
+                // later createdAt, OR equal (position, createdAt) with a later id.
+                const seek =
+                  cursor === null
+                    ? base
+                    : and(
+                        base,
+                        or(
+                          gt(schema.rows.position, cursor.position),
+                          and(
+                            eq(schema.rows.position, cursor.position),
+                            gt(schema.rows.createdAt, cursor.createdAt),
+                          ),
+                          and(
+                            eq(schema.rows.position, cursor.position),
+                            eq(schema.rows.createdAt, cursor.createdAt),
+                            gt(schema.rows.id, cursor.id),
+                          ),
+                        ),
+                      );
+                // Fetch one extra to decide whether a next page exists.
+                const fetched = await db
+                  .select(cols)
+                  .from(schema.rows)
+                  .where(seek)
+                  .orderBy(
+                    asc(schema.rows.position),
+                    asc(schema.rows.createdAt),
+                    asc(schema.rows.id),
+                  )
+                  .limit(limit + 1);
+                const hasMore = fetched.length > limit;
+                const page = hasMore ? fetched.slice(0, limit) : fetched;
+                const last = page[page.length - 1];
+                return {
+                  rows: page,
+                  nextCursor:
+                    hasMore && last !== undefined
+                      ? {
+                          position: last.position,
+                          createdAt: last.createdAt,
+                          id: last.id,
+                        }
+                      : null,
+                };
+              },
+              catch: fail("row page"),
+            }),
       insert: (values) =>
         Effect.tryPromise({
           try: async () => {
@@ -283,6 +374,45 @@ export const rowRepoLayer = (
             (a, b) => a.position - b.position || a.createdAt - b.createdAt,
           ),
       ),
+    listKeysetByTable: ({ tableId, limit, cursor }) =>
+      Effect.sync(() => {
+        // Apply the SAME (position, createdAt, id) total order + seek-past-cursor
+        // rule the Drizzle path uses, so the in-memory Layer is a faithful mirror.
+        const sorted = [...store.rows]
+          .filter((r) => r.tableId === tableId)
+          .sort(
+            (a, b) =>
+              a.position - b.position ||
+              a.createdAt - b.createdAt ||
+              (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+          );
+        const past =
+          cursor === null
+            ? sorted
+            : sorted.filter(
+                (r) =>
+                  r.position > cursor.position ||
+                  (r.position === cursor.position &&
+                    r.createdAt > cursor.createdAt) ||
+                  (r.position === cursor.position &&
+                    r.createdAt === cursor.createdAt &&
+                    r.id > cursor.id),
+              );
+        const page = past.slice(0, limit);
+        const hasMore = past.length > limit;
+        const last = page[page.length - 1];
+        return {
+          rows: page,
+          nextCursor:
+            hasMore && last !== undefined
+              ? {
+                  position: last.position,
+                  createdAt: last.createdAt,
+                  id: last.id,
+                }
+              : null,
+        };
+      }),
     insert: (values) =>
       Effect.sync(() => {
         const id = store.nextId("row");
