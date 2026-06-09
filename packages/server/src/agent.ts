@@ -273,7 +273,8 @@ function versionOf(kind: AgentKind): { installed: boolean; version: string | nul
   const path = resolveAgentPath(kind);
   if (!path) return { installed: false, version: null, path: null };
   try {
-    const v = execFileSync(path, ["--version"], { encoding: "utf8", timeout: 5000, env: agentSpawnEnv(path) }).trim();
+    // First line only — `hermes --version` prints a multi-line report; claude/codex are single-line.
+    const v = execFileSync(path, ["--version"], { encoding: "utf8", timeout: 5000, env: agentSpawnEnv(path) }).split("\n")[0].trim();
     return { installed: true, version: v || null, path };
   } catch {
     return { installed: false, version: null, path };
