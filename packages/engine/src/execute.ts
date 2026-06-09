@@ -11,7 +11,7 @@ import {
   type GridStoreError,
   type GridStoreShape,
 } from "./store.js";
-import type { AiConfig, Column } from "./types.js";
+import type { AiConfig, Column, ConnectorMethod } from "./types.js";
 
 export interface EngineConfig {
   ai?: AiConfig;
@@ -190,39 +190,114 @@ export class Engine {
       }
     };
 
-    let ran = 0;
-    let errors = 0;
+    const counters = { ran: 0, errors: 0 };
     // Stores that batch terminal writes (the cloud store) coalesce the interim
     // `running` write away so a cell is ONE write, not two HTTP POSTs. Cheap
     // synchronous stores leave the flag unset and keep streaming `running`.
     const skipRunning = this.store.coalesceRunningWrites === true;
-    await mapConcurrent(rowIds, opts.concurrency ?? 5, async (rowId) => {
-      const existing = await Effect.runPromise(reads.getCell(rowId, columnId));
-      if (!opts.force && existing?.status === "done") return;
-      if (!skipRunning) {
-        await Effect.runPromise(this.store.setCell(rowId, columnId, { status: "running", error: null }));
-        emit({ rowId, columnId, value: null, status: "running", error: null });
+    const concurrency = opts.concurrency ?? 5;
+
+    // Resolve whether this column can run as ONE method call per batch: it must
+    // be a plain method-call column (no custom JS body), and its method must
+    // declare batchSize > 1 plus a `runBatch` implementation. Otherwise every
+    // row goes through the per-row sandbox path, identical to before — so the
+    // batchSize:1 / custom-code / runBatch-less cases are completely unchanged.
+    const batchMethod = this.batchableMethod(col);
+
+    // Mark a cell `running` (unless the store coalesces it) and stream progress.
+    const markRunning = async (rowId: string): Promise<void> => {
+      if (skipRunning) return;
+      await Effect.runPromise(this.store.setCell(rowId, columnId, { status: "running", error: null }));
+      emit({ rowId, columnId, value: null, status: "running", error: null });
+    };
+    const markDone = async (rowId: string, value: unknown): Promise<void> => {
+      await Effect.runPromise(this.store.setCell(rowId, columnId, { value, status: "done", error: null }));
+      emit({ rowId, columnId, value, status: "done", error: null });
+      counters.ran++;
+    };
+    const markError = async (rowId: string, e: unknown): Promise<void> => {
+      const message = e instanceof Error ? e.message : String(e);
+      await Effect.runPromise(this.store.setCell(rowId, columnId, { status: "error", error: message }));
+      emit({ rowId, columnId, value: null, status: "error", error: message });
+      counters.errors++;
+    };
+
+    if (batchMethod) {
+      // Skip already-done cells up front so chunking groups only the rows we'll
+      // actually call for, keeping the call count ~= pending-rows / batchSize.
+      const pending: string[] = [];
+      for (const rowId of rowIds) {
+        const existing = await Effect.runPromise(reads.getCell(rowId, columnId));
+        if (!opts.force && existing?.status === "done") continue;
+        pending.push(rowId);
       }
-      try {
-        const inputs = await Effect.runPromise(this.resolveParams(col, rowId, reads));
-        const result = await runFunction({ code, inputs, providers, dispatch: this.dispatch });
-        const value = simplify(result);
-        await Effect.runPromise(
-          this.store.setCell(rowId, columnId, { value, status: "done", error: null }),
-        );
-        emit({ rowId, columnId, value, status: "done", error: null });
-        ran++;
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        await Effect.runPromise(this.store.setCell(rowId, columnId, { status: "error", error: message }));
-        emit({ rowId, columnId, value: null, status: "error", error: message });
-        errors++;
-      }
-    });
+      const chunks = chunk(pending, batchMethod.batchSize);
+      // Bound concurrency across BATCHES (not rows): N rows at batchSize B is
+      // ceil(N/B) external calls, at most `concurrency` of them in flight.
+      await mapConcurrent(chunks, concurrency, async (rows) => {
+        for (const rowId of rows) await markRunning(rowId);
+        let inputs: Record<string, unknown>[];
+        try {
+          inputs = await Promise.all(
+            rows.map((rowId) => Effect.runPromise(this.resolveParams(col, rowId, reads))),
+          );
+        } catch (e) {
+          for (const rowId of rows) await markError(rowId, e);
+          return;
+        }
+        try {
+          const results = await this.runBatch(col, inputs);
+          // Fan each ordered result back to its row's cell (order preserved).
+          for (let i = 0; i < rows.length; i++) await markDone(rows[i], simplify(results[i]));
+        } catch (e) {
+          // A failed batch call fails every cell in that batch — never a silent done.
+          for (const rowId of rows) await markError(rowId, e);
+        }
+      });
+    } else {
+      await mapConcurrent(rowIds, concurrency, async (rowId) => {
+        const existing = await Effect.runPromise(reads.getCell(rowId, columnId));
+        if (!opts.force && existing?.status === "done") return;
+        await markRunning(rowId);
+        try {
+          const inputs = await Effect.runPromise(this.resolveParams(col, rowId, reads));
+          const result = await runFunction({ code, inputs, providers, dispatch: this.dispatch });
+          await markDone(rowId, simplify(result));
+        } catch (e) {
+          await markError(rowId, e);
+        }
+      });
+    }
     // Flush the final partial batch + await all in-flight writes (no-op for
     // synchronous stores).
     if (this.store.drain) await Effect.runPromise(this.store.drain());
-    return { ran, errors };
+    return { ran: counters.ran, errors: counters.errors };
+  }
+
+  /**
+   * The connector method to drive a column's run as ONE call per batch, or null
+   * if the column must run per-row. Eligible columns are plain method calls (no
+   * custom JS body) whose method declares `batchSize > 1` and a `runBatch`.
+   */
+  private batchableMethod(col: Column): (ConnectorMethod & { batchSize: number }) | null {
+    if (col.code) return null; // custom JS bodies always run per-row in the sandbox
+    if (!col.provider || !col.method) return null;
+    const m = this.registry.method(col.provider, col.method);
+    if (!m || m.batchSize <= 1 || !m.runBatch) return null;
+    return m;
+  }
+
+  /** Run a connector method over an ordered batch of inputs (one external call). */
+  private async runBatch(col: Column, inputs: Record<string, unknown>[]): Promise<unknown[]> {
+    const m = this.registry.method(col.provider ?? "", col.method ?? "");
+    if (!m?.runBatch) throw new Error(`Method ${col.provider}.${col.method} is not batchable`);
+    const cred = await Effect.runPromise(this.creds.getCredential(col.provider ?? ""));
+    const aiProviders = this.config.aiProviders?.length
+      ? this.config.aiProviders
+      : this.config.ai
+        ? [this.config.ai]
+        : [];
+    return m.runBatch(inputs, { secrets: cred?.secrets ?? {}, ai: this.config.ai, aiProviders });
   }
 }
 
@@ -248,6 +323,14 @@ function simplify(v: unknown): unknown {
     if (keys.length === 1 && keys[0] === "text") return (v as { text: unknown }).text;
   }
   return v;
+}
+
+/** Split a list into fixed-size chunks (last chunk may be smaller). */
+export function chunk<T>(items: T[], size: number): T[][] {
+  if (size <= 1) return items.map((i) => [i]);
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
 }
 
 /** Bounded-concurrency map (Revcode's `mapConcurrent`). */

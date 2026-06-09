@@ -71,6 +71,18 @@ export interface ConnectorMethod {
   source?: string;
   /** Executes the method host-side. Receives validated inputs + a resolved credential (if any). */
   run: (inputs: Record<string, unknown>, ctx: MethodContext) => Promise<unknown>;
+  /**
+   * Optional batched execution. When `batchSize > 1` the engine groups rows into
+   * chunks of `batchSize` and calls this ONCE per chunk with the ordered batch of
+   * per-row inputs, expecting an array of results in the SAME order (one per
+   * input row). Defining this lets a connector collapse N per-row lookups into one
+   * bulk external call. Methods that omit it always run per-row (`batchSize` is
+   * effectively 1), preserving the unbatched contract.
+   */
+  runBatch?: (
+    inputs: Record<string, unknown>[],
+    ctx: MethodContext,
+  ) => Promise<unknown[]>;
 }
 
 export interface MethodContext {
