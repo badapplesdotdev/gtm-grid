@@ -616,7 +616,7 @@ export default function AgentPanel({
           <div className="agent-empty-title">Connect {AGENT_LABEL[agent]}</div>
           <p>
             {agent === "hermes"
-              ? "Run your Hermes agent locally (the `hermes` binary) or point gtmgrid at a remote gateway. gtmgrid drives it over ACP and mounts the grid's tools — no keys stored here."
+              ? "Run the local `hermes` binary — gtmgrid drives it over ACP and mounts the grid's tools. This coding-agent path is local-only; no keys stored here. (The remote gateway is for the Hermes AI model provider, not this agent.)"
               : `Sign in to your ${agent === "claude" ? "Max" : "Codex"} plan in the ${AGENT_LABEL[agent]} CLI — gtmgrid drives the CLI you've already authed. No keys stored.`}
           </p>
           <button className="agent-connect-btn" onClick={() => connect()} disabled={connecting}>

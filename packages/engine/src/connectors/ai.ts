@@ -11,7 +11,7 @@ import type { Connector, MethodContext, AiConfig } from "../types.js";
 // Default Hermes gateway base URL — the user's SSH tunnel to the mac-mini
 // api_server (localhost:18642 -> mac-mini:8642). Overridable per connection;
 // for a gateway running locally, point it at :8642 directly.
-const DEFAULT_HERMES_BASE_URL = "http://localhost:18642/v1";
+export const DEFAULT_HERMES_BASE_URL = "http://localhost:18642/v1";
 
 const generateInput = z.object({
   prompt: z.string().describe("The prompt. Use {{Column Name}} in the column mapping to inject row values."),

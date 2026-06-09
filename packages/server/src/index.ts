@@ -20,6 +20,7 @@ import {
   projectPath,
   migrateGlobals,
   listProjects,
+  DEFAULT_HERMES_BASE_URL,
 } from "@gtmgrid/engine";
 import type { CellProgress } from "@gtmgrid/engine";
 import { detectAgents, streamClaude, streamCodex, streamHermes, setAgentPath, rescanAgents, parseAgentCloud, type AgentKind } from "./agent.js";
@@ -557,9 +558,9 @@ route("DELETE", "/api/signals/:id", (p) =>
 // --- AI providers (bring-your-own-key for AI step functions) ---
 // `fallbackModels` is only used if the live /v1/models fetch fails (offline,
 // bad key). When connected, the real model list is pulled from the provider.
-// Default Hermes gateway base URL — the user's SSH tunnel to the mac-mini
-// api_server (localhost:18642 -> mac-mini:8642). Overridable per connection.
-const DEFAULT_HERMES_BASE_URL = "http://localhost:18642/v1";
+// `DEFAULT_HERMES_BASE_URL` (the SSH tunnel to the mac-mini api_server,
+// localhost:18642 -> mac-mini:8642) is shared from @gtmgrid/engine so the
+// connector and these provider routes can't drift. Overridable per connection.
 const AI_PROVIDERS = [
   {
     id: "anthropic",

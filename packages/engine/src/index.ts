@@ -15,6 +15,9 @@ export type { EngineConfig, RunColumnOptions, EngineStores, CellProgress } from 
 export { Registry, defaultRegistry } from "./registry.js";
 export { runFunction, normalizeCode } from "./sandbox.js";
 export { defineHttpConnector } from "./connectors/http.js";
+// Default Hermes gateway base URL — shared so the server's provider routes and
+// the AI connector agree on the same fallback (no duplicated literal).
+export { DEFAULT_HERMES_BASE_URL } from "./connectors/ai.js";
 export {
   fetchWithRetry,
   isRetryableStatus,

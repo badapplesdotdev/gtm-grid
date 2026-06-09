@@ -780,14 +780,14 @@ interface AgentsConfig {
 
 function loadAgentsConfig(): AgentsConfig {
   try {
-    return JSON.parse(readFileSync(AGENTS_CONFIG, "utf8")) as AgentsConfig;
+    return JSON.parse(readFileSync(AGENTS_CONFIG, "utf8"));
   } catch {
     return {};
   }
 }
 
 type AcpMcpServer = { name: string; command: string; args: string[]; env: { name: string; value: string }[] };
-interface HermesTransport {
+export interface HermesTransport {
   argv: string[];
   gtmgridMcp: AcpMcpServer;
   label: string;
@@ -864,13 +864,39 @@ export function pickAllowOption(options: unknown): string | null {
   );
 }
 
+/** Minimal child surface the Hermes bridge drives (so tests can inject a fake).
+ *  A superset of {@link ManagedChild} that also exposes the stdio the JSON-RPC
+ *  client reads/writes. */
+export interface HermesChild extends ManagedChild {
+  stdin: { write(chunk: string): unknown } | null;
+  stdout: { on(event: "data", listener: (chunk: Buffer | string) => void): unknown };
+  stderr: { on(event: "data", listener: (chunk: Buffer | string) => void): unknown };
+  on(event: "close", listener: () => void): unknown;
+  on(event: "error", listener: (err: Error) => void): unknown;
+}
+
+/** Injectable spawn seam for the Hermes child — defaults to a detached `spawn`
+ *  so the bridge can group-kill the CLI + its MCP/grandchildren (TRI-3305). */
+export type SpawnHermes = (cmd: string, args: string[], cwd: string) => HermesChild;
+
+const defaultSpawnHermes: SpawnHermes = (cmd, args, cwd) =>
+  // `detached` → own process group, so cleanup can kill the CLI + the gtmgrid
+  // MCP server + their subprocesses as one group, not just the hermes parent.
+  // The real `ChildProcess` structurally satisfies HermesChild (pid + stdio + on).
+  spawn(cmd, args, { env: agentSpawnEnv(cmd), cwd, detached: true });
+
 /** Stream a Hermes turn over SSE via the Agent Client Protocol. */
 export function streamHermes(
   res: ServerResponse,
   opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext; origin?: string; model?: string },
+  deps: {
+    spawn?: SpawnHermes;
+    control?: ProcessControl;
+    resolveTransport?: (repoRoot: string, project: string) => HermesTransport | null;
+  } = {},
 ): void {
   const sse = sseClient(res, opts.origin);
-  const transport = resolveHermesTransport(opts.repoRoot, opts.project);
+  const transport = (deps.resolveTransport ?? resolveHermesTransport)(opts.repoRoot, opts.project);
   if (!transport) {
     sse.write({
       type: "error",
@@ -882,7 +908,32 @@ export function streamHermes(
   }
 
   const [cmd, ...args] = transport.argv;
-  const child = spawn(cmd, args, { env: agentSpawnEnv(cmd), cwd: opts.repoRoot });
+  const child = (deps.spawn ?? defaultSpawnHermes)(cmd, args, opts.repoRoot);
+
+  let sessionId = opts.sessionId ?? null;
+  // Suppress `session/update` events until our prompt is in flight — this drops
+  // setup notifications AND the history replay that session/load streams back.
+  let forwarding = false;
+  // The async driver and the timeout both finish the SSE stream — guard so only
+  // the first one writes the terminal `end` and ends the response.
+  let ended = false;
+  const finish = (): void => {
+    if (ended) return;
+    ended = true;
+    sse.write({ type: "end", sessionId });
+    sse.end();
+  };
+
+  // Group-kill cleanup + max-run ceiling, mirroring the claude/codex bridges.
+  // `terminate()` signals the whole process group (negative pid: SIGTERM→SIGKILL);
+  // `dispose()` (on child close/error) clears the timers so no signal lands after exit.
+  const lifecycle = manageChildLifecycle(child, {
+    control: deps.control,
+    onTimeout: () => {
+      sse.write({ type: "error", message: `hermes turn exceeded ${Math.round(MAX_RUN_MS / 1000)}s and was terminated` });
+      finish();
+    },
+  });
 
   // ── Minimal JSON-RPC 2.0 client over the child's stdio (NDJSON) ──
   let nextId = 1;
@@ -900,11 +951,6 @@ export function streamHermes(
     for (const [, resolve] of pending) resolve({ error: { message } });
     pending.clear();
   };
-
-  let sessionId = opts.sessionId ?? null;
-  // Suppress `session/update` events until our prompt is in flight — this drops
-  // setup notifications AND the history replay that session/load streams back.
-  let forwarding = false;
 
   let buf = "";
   child.stdout.on("data", (chunk) => {
@@ -945,8 +991,9 @@ export function streamHermes(
   });
 
   let stderr = "";
-  child.stderr.on("data", (d) => (stderr += d.toString()));
+  child.stderr.on("data", (d) => (stderr = appendCapped(stderr, d.toString())));
   child.on("error", (err) => {
+    lifecycle.dispose();
     failAllPending(`failed to launch hermes (${transport.label}): ${err.message}`);
   });
   child.on("close", () => failAllPending("hermes exited"));
@@ -987,11 +1034,12 @@ export function streamHermes(
       const detail = e instanceof Error ? e.message : String(e);
       sse.write({ type: "error", message: detail + (stderr ? ` — ${stderr.slice(-300)}` : "") });
     } finally {
-      sse.write({ type: "end", sessionId });
-      sse.end();
-      child.kill();
+      finish();
+      // Turn done (or failed) → tear down the whole group, not just the parent.
+      lifecycle.terminate();
     }
   })();
 
-  res.on("close", () => child.kill());
+  // Panel unmount / Stop / new send closes the response → kill the whole group.
+  res.on("close", () => lifecycle.terminate());
 }
