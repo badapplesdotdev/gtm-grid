@@ -3322,3 +3322,16 @@ button.import-type:hover { background: var(--surface-3); }
 .formula-gen-row { display: flex; align-items: center; gap: 6px; }
 .formula-gen-input { flex: 1; min-width: 0; height: 32px; }
 .formula-gen-go { height: 32px; padding: 0 12px; }
+
+/* Spinning wheel shown in the AI Generate buttons while a formula/condition is being generated. */
+.gen-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: -2px;
+  flex-shrink: 0;
+}

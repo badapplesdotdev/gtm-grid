@@ -932,7 +932,7 @@ function FormulaInput({
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); generate(); } }}
           />
           <button type="button" className="btn btn-primary formula-gen-go" onClick={generate} disabled={busy}>
-            {busy ? "…" : "Generate"}
+            {busy ? <span className="gen-spinner" /> : "Generate"}
           </button>
           <button type="button" className="formula-ai-cancel" onClick={() => { setGenOpen(false); setErr(""); }}>{X}</button>
         </div>
@@ -999,7 +999,7 @@ function RunSettings({
               <div className="formula-box-foot">
                 <span className="formula-box-hint">Type <code>/</code> to insert column</span>
                 <button type="button" className="formula-gen-btn" onClick={generate} disabled={busy}>
-                  <span className="formula-gen-spark">{SparkleIcon}</span>
+                  {busy ? <span className="gen-spinner" /> : <span className="formula-gen-spark">{SparkleIcon}</span>}
                   {busy ? "Generating…" : "Generate"}
                 </button>
               </div>
