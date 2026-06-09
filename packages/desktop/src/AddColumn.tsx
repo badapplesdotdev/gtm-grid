@@ -1005,6 +1005,7 @@ function RunSettings({
               </div>
             }
           />
+          {err && <div className="conn-err run-cond-err">{err}</div>}
           <input
             className="form-input formula-mono run-cond-formula"
             placeholder="E.g., !!{{Company Domain}}"
@@ -1012,7 +1013,6 @@ function RunSettings({
             onChange={(e) => setCondition(e.target.value)}
             spellCheck={false}
           />
-          {err && <div className="conn-err">{err}</div>}
           <p className="params-hint">A JavaScript boolean expression — describe it above and Generate, or write it directly. When false, the column skips that row (no run, no credits).</p>
         </div>
       )}
