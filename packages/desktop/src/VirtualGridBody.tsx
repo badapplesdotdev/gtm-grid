@@ -1,5 +1,6 @@
 /**
- * VirtualGridBody (TRI-3267) — the windowed `<tbody>` shared by both grids.
+ * VirtualGridBody (TRI-3267, columns TRI-3286) — the windowed `<tbody>` shared
+ * by both grids.
  *
  * Wraps `@tanstack/react-virtual`'s `useVirtualizer` so the local grid
  * (`App.tsx`) and the cloud grid (`cloud/CloudGrid.tsx`) mount only the rows
@@ -13,11 +14,19 @@
  * unit-tested. Each visible row is rendered via the `renderRow` render-prop so
  * each grid keeps its own cell markup, context menus and `CellContent` props —
  * the component owns only the virtualization machinery, not the cell content.
+ *
+ * Column virtualization (TRI-3286) is owned by the caller via
+ * {@link useColumnWindow}: the resulting {@link ColumnWindow} is passed through
+ * to `renderRow` so each grid windows the SAME column slice in its rows as it
+ * does in the header. This component only forwards it; the per-row left/right
+ * spacer `<td>`s live in each grid's `renderRow` (next to its gutter cell). The
+ * gutter is reserved once (the grid's own gutter cell), never by the window.
  */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { type ReactNode, type RefObject } from "react";
 import { computeSpacerHeights } from "./gridVirtual";
+import type { ColumnWindow } from "./useColumnWindow";
 
 interface VirtualGridBodyProps<Row> {
   /** The full row list. Only the windowed slice is mounted. */
@@ -37,8 +46,16 @@ interface VirtualGridBodyProps<Row> {
    * trailing add/delete column.
    */
   colSpan: number;
-  /** Render the cells for one row (the `<td>`s inside its `<tr>`). */
-  renderRow: (row: Row, index: number) => ReactNode;
+  /**
+   * The virtualized column slice ({@link useColumnWindow}). Forwarded to
+   * `renderRow` so rows window the same data columns as the header.
+   */
+  columnWindow: ColumnWindow;
+  /**
+   * Render the cells for one row (the `<td>`s inside its `<tr>`), windowing to
+   * `columnWindow.virtualColumns` and padding with its `spacers` widths.
+   */
+  renderRow: (row: Row, index: number, columnWindow: ColumnWindow) => ReactNode;
 }
 
 /**
@@ -50,6 +67,7 @@ export function VirtualGridBody<Row>({
   rowHeight,
   overscan = 8,
   colSpan,
+  columnWindow,
   renderRow,
 }: VirtualGridBodyProps<Row>) {
   const virtualizer = useVirtualizer({
@@ -72,7 +90,9 @@ export function VirtualGridBody<Row>({
           <td colSpan={colSpan} style={{ height: top, padding: 0, border: "none" }} />
         </tr>
       )}
-      {virtualRows.map((vr) => renderRow(rows[vr.index], vr.index))}
+      {virtualRows.map((vr) =>
+        renderRow(rows[vr.index], vr.index, columnWindow),
+      )}
       {bottom > 0 && (
         <tr aria-hidden="true" className="grid-spacer-row">
           <td colSpan={colSpan} style={{ height: bottom, padding: 0, border: "none" }} />

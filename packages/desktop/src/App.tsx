@@ -32,6 +32,8 @@ import type { ImportWriter } from "./csvImport";
 import type { Id } from "./cloud/ids";
 import { VirtualGridBody } from "./VirtualGridBody";
 import { resolveRowHeight } from "./gridVirtual";
+import { useColumnWindow } from "./useColumnWindow";
+import { GridColSpacer } from "./GridColSpacer";
 import "./styles.css";
 
 // ── Lazy-loaded panels (TRI-3287) ─────────────────────────────────────
@@ -1109,6 +1111,23 @@ export default function App() {
     (id: string) => Math.max(MIN_COL_W, Math.min(MAX_COL_W, colWidths[id] ?? DEFAULT_COL_W)),
     [colWidths],
   );
+
+  // Column virtualization (TRI-3286): window the DATA columns horizontally so a
+  // table with hundreds of columns mounts only the visible columns × visible
+  // rows. The gutter is NOT part of this window — it is the always-present
+  // sticky gutter <th>/<td> rendered once below, so it is reserved exactly once
+  // and `spacers.left` is the first visible data column's offset (gutter
+  // excluded). The hook runs unconditionally (count 0 when no table) to keep
+  // hook order stable.
+  const gridColumns = tableData?.columns ?? [];
+  const columnWindow = useColumnWindow({
+    count: gridColumns.length,
+    scrollRef: gridScrollRef,
+    getColumnWidth: (i) => {
+      const col = gridColumns[i];
+      return col ? colW(col.id) : DEFAULT_COL_W;
+    },
+  });
 
   // Right-click context menu
   const [ctxMenu, setCtxMenu] = useState<{
@@ -2261,9 +2280,12 @@ export default function App() {
             >
               <thead>
                 <tr>
-                  {/* Row-number gutter */}
+                  {/* Row-number gutter — the ONLY gutter cell (reserved once) */}
                   <th className="grid-th row-num-th col-row-num" />
-                  {tableData.columns.map(col => (
+                  <GridColSpacer side="left" width={columnWindow.spacers.left} as="th" />
+                  {columnWindow.virtualColumns.map(vc => {
+                    const col = tableData.columns[vc.index];
+                    return (
                     <th
                       key={col.id}
                       className="grid-th"
@@ -2299,7 +2321,9 @@ export default function App() {
                         }}
                       />
                     </th>
-                  ))}
+                    );
+                  })}
+                  <GridColSpacer side="right" width={columnWindow.spacers.right} as="th" />
                   {/* Add column */}
                   <th className="grid-th add-col-th" style={{ width: ADD_COL_W }}>
                     <button className="add-col-btn" onClick={openAddCol} title="Add column">
@@ -2312,11 +2336,16 @@ export default function App() {
                 <tbody>
                   <tr>
                     <td className="grid-td row-num-td" />
-                    {tableData.columns.map(col => (
+                    <GridColSpacer side="left" width={columnWindow.spacers.left} />
+                    {columnWindow.virtualColumns.map(vc => {
+                      const col = tableData.columns[vc.index];
+                      return (
                       <td key={col.id} className="grid-td">
                         <div className="cell-wrap"><span className="cell-empty">—</span></div>
                       </td>
-                    ))}
+                      );
+                    })}
+                    <GridColSpacer side="right" width={columnWindow.spacers.right} />
                     <td className="grid-td" />
                   </tr>
                 </tbody>
@@ -2326,7 +2355,8 @@ export default function App() {
                   scrollRef={gridScrollRef}
                   rowHeight={rowHeight}
                   colSpan={tableData.columns.length + 2}
-                  renderRow={(row, idx) => (
+                  columnWindow={columnWindow}
+                  renderRow={(row, idx, cw) => (
                     <tr key={row.id} className="grid-tr">
                       <td
                         className="grid-td row-num-td"
@@ -2334,7 +2364,9 @@ export default function App() {
                       >
                         {idx + 1}
                       </td>
-                      {tableData.columns.map(col => {
+                      <GridColSpacer side="left" width={cw.spacers.left} />
+                      {cw.virtualColumns.map(vc => {
+                        const col = tableData.columns[vc.index];
                         const cell: Cell | undefined = row.cells[col.id];
                         return (
                           <td
@@ -2373,6 +2405,7 @@ export default function App() {
                           </td>
                         );
                       })}
+                      <GridColSpacer side="right" width={cw.spacers.right} />
                       <td className="grid-td" />
                     </tr>
                   )}
