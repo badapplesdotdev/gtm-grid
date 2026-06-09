@@ -281,19 +281,7 @@ function versionOf(kind: AgentKind): { installed: boolean; version: string | nul
 }
 
 export function detectAgents() {
-  return { claude: versionOf("claude"), codex: versionOf("codex"), hermes: detectHermes() };
-}
-
-/** Hermes status: a configured remote (SSH) gateway, else the local `hermes` binary. */
-function detectHermes(): { installed: boolean; version: string | null; path: string | null } {
-  const cfg = loadAgentsConfig();
-  // Remote "brain" gateway (URL + key): GTM Grid runs the grid tools locally and
-  // uses this gateway as the model.
-  if (cfg.hermesConn?.mode === "remote" && cfg.hermesConn.url)
-    return { installed: true, version: `remote · ${cfg.hermesConn.url}`, path: cfg.hermesConn.url };
-  if (cfg.hermesRemote?.sshHost)
-    return { installed: true, version: `remote · ${cfg.hermesRemote.sshHost}`, path: `ssh:${cfg.hermesRemote.sshHost}` };
-  return versionOf("hermes");
+  return { claude: versionOf("claude"), codex: versionOf("codex"), hermes: versionOf("hermes") };
 }
 
 /** Clear caches so the next detect re-resolves (after install / manual connect). */
@@ -555,29 +543,14 @@ export function streamCodex(
 // the gtmgrid MCP server mounted INLINE (so the agent drives the same grid tools
 // claude/codex get), then `session/prompt`. The agent's `session/update`
 // notifications (assistant text, tool_call / tool_call_update) map onto the
-// exact SSE shape the panel already renders. Local by default; a configured
-// `hermesRemote` runs it over SSH against a LAN gateway (e.g. the mac-mini).
-
-/** Hermes connection: local binary (ACP) or a remote gateway "brain" (URL + key). */
-export interface HermesConn {
-  mode: "local" | "remote";
-  /** Gateway base URL ending in /v1 (remote mode), e.g. http://localhost:18642/v1. */
-  url?: string;
-  apiKey?: string;
-  model?: string;
-}
+// exact SSE shape the panel already renders. Runs the local `hermes` binary.
 
 interface AgentsConfig {
   claude?: string;
   codex?: string;
   hermes?: string;
-  /** Remote (LAN/SSH) Hermes gateway. `backHost` is how the remote reaches THIS
-   *  machine's gtmgrid MCP — it SSHes back; omit if gtmgrid runs on the gateway. */
-  hermesRemote?: { sshHost: string; remoteBin?: string; backHost?: string; backLauncher?: string };
   /** When set, also expose Hermes (`hermes mcp serve`) as a tool to claude/codex. */
   hermesAsTool?: boolean;
-  /** Local-vs-remote brain selection + the remote gateway URL/key. */
-  hermesConn?: HermesConn;
 }
 
 function loadAgentsConfig(): AgentsConfig {
@@ -588,20 +561,6 @@ function loadAgentsConfig(): AgentsConfig {
   }
 }
 
-/** The persisted Hermes connection (mode + remote URL/key). */
-export function getHermesConn(): HermesConn | undefined {
-  return loadAgentsConfig().hermesConn;
-}
-
-/** Persist the Hermes connection to ~/.gtmgrid/agents.json. */
-export function setHermesConn(conn: HermesConn): void {
-  const cfg = loadAgentsConfig();
-  cfg.hermesConn = conn;
-  mkdirSync(CONFIG_DIR, { recursive: true });
-  writeFileSync(AGENTS_CONFIG, JSON.stringify(cfg, null, 2));
-  resolveCache.hermes = undefined;
-}
-
 type AcpMcpServer = { name: string; command: string; args: string[]; env: { name: string; value: string }[] };
 interface HermesTransport {
   argv: string[];
@@ -609,19 +568,9 @@ interface HermesTransport {
   label: string;
 }
 
-/** Resolve how to launch Hermes (local binary vs SSH) and how its session reaches
- *  the gtmgrid MCP server. Returns null if there's no local binary and no remote. */
+/** Resolve how to launch the local Hermes (ACP) and how its session reaches the
+ *  gtmgrid MCP server. Returns null if there's no local `hermes` binary. */
 function resolveHermesTransport(repoRoot: string, project: string): HermesTransport | null {
-  const remote = loadAgentsConfig().hermesRemote;
-  if (remote?.sshHost) {
-    const remoteBin = remote.remoteBin || "hermes";
-    const launcher = remote.backLauncher || mcpLauncher(repoRoot);
-    // ssh doesn't forward env, so inline GTMGRID_PROJECT into the remote command.
-    const gtmgridMcp: AcpMcpServer = remote.backHost
-      ? { name: "gtmgrid", command: "ssh", args: [remote.backHost, `GTMGRID_PROJECT=${project} ${launcher}`], env: [] }
-      : { name: "gtmgrid", command: launcher, args: [], env: [{ name: "GTMGRID_PROJECT", value: project }] };
-    return { argv: ["ssh", remote.sshHost, remoteBin, "acp"], gtmgridMcp, label: `ssh:${remote.sshHost}` };
-  }
   const bin = resolveAgentPath("hermes");
   if (!bin) return null;
   return {
@@ -631,13 +580,11 @@ function resolveHermesTransport(repoRoot: string, project: string): HermesTransp
   };
 }
 
-/** When `hermesAsTool` is set, expose the user's Hermes agent as an MCP server
- *  (`hermes mcp serve`) to the claude/codex grid agent — local binary or SSH. */
+/** When `hermesAsTool` is set, expose the local Hermes agent as an MCP server
+ *  (`hermes mcp serve`) to the claude/codex grid agent. */
 function hermesToolServer(): ExtraMcpServer | null {
   const cfg = loadAgentsConfig();
   if (!cfg.hermesAsTool) return null;
-  const r = cfg.hermesRemote;
-  if (r?.sshHost) return { command: "ssh", args: [r.sshHost, r.remoteBin || "hermes", "mcp", "serve"] };
   const bin = resolveAgentPath("hermes") || "hermes";
   return { command: bin, args: ["mcp", "serve"] };
 }
@@ -703,7 +650,7 @@ export function streamHermes(
     sse.write({
       type: "error",
       message:
-        "Hermes not found. Connect the local `hermes` binary in the panel, or configure a remote gateway (hermesRemote in ~/.gtmgrid/agents.json).",
+        "Hermes not found. Install the `hermes` binary, or set its path in the panel.",
     });
     sse.write({ type: "end" });
     return sse.end();

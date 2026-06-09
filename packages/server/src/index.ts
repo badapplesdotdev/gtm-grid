@@ -22,8 +22,7 @@ import {
   listProjects,
 } from "@gtmgrid/engine";
 import type { CellProgress } from "@gtmgrid/engine";
-import { detectAgents, streamClaude, streamCodex, streamHermes, setAgentPath, rescanAgents, getHermesConn, setHermesConn, type AgentKind, type HermesConn } from "./agent.js";
-import { streamHermesRemote } from "./hermes-remote.js";
+import { detectAgents, streamClaude, streamCodex, streamHermes, setAgentPath, rescanAgents, type AgentKind } from "./agent.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
 import { corsHeadersFor, isOriginAllowed } from "./cors.js";
@@ -892,42 +891,6 @@ route("POST", "/api/agents/connect", (_p, body) => {
   return detectAgents();
 });
 
-// Read the Hermes connection (mode + remote URL/model; never returns the key).
-route("GET", "/api/agents/hermes-config", () => {
-  const conn = getHermesConn();
-  return { mode: conn?.mode ?? "local", url: conn?.url ?? "", model: conn?.model ?? "", hasKey: !!conn?.apiKey };
-});
-
-// Save the Hermes connection: local binary (ACP) vs remote gateway brain (URL/key).
-route("POST", "/api/agents/hermes-config", (_p, body) => {
-  const mode: HermesConn["mode"] = body?.mode === "remote" ? "remote" : "local";
-  const trimmed = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
-  // Partial updates preserve existing values, so toggling Local<->Remote never
-  // wipes the saved gateway URL/key/model. Blank fields keep what's stored.
-  const prev = getHermesConn();
-  const apiKey = trimmed(body?.apiKey) ?? prev?.apiKey;
-  const url = trimmed(body?.url) ?? prev?.url;
-  const model = trimmed(body?.model) ?? prev?.model;
-  setHermesConn({ mode, url, apiKey, model });
-  rescanAgents();
-  return { ok: true, agents: detectAgents() };
-});
-
-// Probe a remote Hermes gateway: GET {url}/models with the bearer key.
-route("POST", "/api/agents/hermes-test", async (_p, body) => {
-  const url = String(body?.url ?? "").trim().replace(/\/+$/, "").replace(/\/v1$/i, "");
-  const apiKey = String(body?.apiKey ?? "").trim();
-  if (!url) return { ok: false, error: "url required" };
-  try {
-    const r = await fetch(`${url}/v1/models`, { headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {} });
-    if (!r.ok) return { ok: false, error: `gateway ${r.status} ${r.statusText}` };
-    const data = (await r.json().catch(() => ({}))) as { data?: Array<{ id: string }> };
-    return { ok: true, models: Array.isArray(data.data) ? data.data.map((m) => m.id) : [] };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
-  }
-});
-
 // --- server plumbing ---
 // CORS is allowlisted, never `*` (#22): a disallowed browser Origin gets NO
 // `access-control-allow-origin`, so the calling page can't read the response.
@@ -992,13 +955,7 @@ const server = createServer(async (req, res) => {
       // Pass `origin` through so the SSE stream emits the allowlisted CORS
       // header on this privileged route (#22).
       const model = typeof body?.model === "string" && body.model.trim() ? body.model.trim() : undefined;
-      if (agent === "hermes") {
-        // Remote "brain": GTM Grid runs the grid tools locally, gateway is the model.
-        const conn = getHermesConn();
-        if (conn?.mode === "remote")
-          streamHermesRemote(res, { message, project: current.name, repoRoot: REPO_ROOT, url: conn.url, apiKey: conn.apiKey, model: conn.model || model, context, origin });
-        else streamHermes(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model });
-      }
+      if (agent === "hermes") streamHermes(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model });
       else if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context, origin, model });
       else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model });
     } catch (e) {

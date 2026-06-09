@@ -316,18 +316,6 @@ export const api = {
     http<{ sessions: AgentSession[] }>(`/api/agent/sessions/${agent}`),
   agentSession: (agent: "claude" | "codex", id: string) =>
     http<{ messages: AgentHistoryMessage[] }>(`/api/agent/sessions/${agent}/${encodeURIComponent(id)}`),
-  hermesConfig: () =>
-    http<{ mode: "local" | "remote"; url: string; model: string; hasKey: boolean }>("/api/agents/hermes-config"),
-  saveHermesConfig: (body: { mode: "local" | "remote"; url?: string; apiKey?: string; model?: string }) =>
-    http<{ ok: boolean; agents: { claude: AgentStatus; codex: AgentStatus; hermes: AgentStatus } }>(
-      "/api/agents/hermes-config",
-      { method: "POST", body: JSON.stringify(body) },
-    ),
-  testHermes: (body: { url: string; apiKey?: string }) =>
-    http<{ ok: boolean; models?: string[]; error?: string }>("/api/agents/hermes-test", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
 };
 
 /** A past conversation summary (from the agent's native transcript store). */

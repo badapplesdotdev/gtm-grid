@@ -329,63 +329,6 @@ function ModelPicker({ agent, value, onChange }: { agent: AgentKind; value: stri
   );
 }
 
-/** Hermes connection: switch between the local binary (ACP) and a remote gateway
- *  "brain" (URL + key). The grid + tools stay local; remote only powers the model. */
-function HermesConnBar({ onChanged }: { onChanged: () => void }) {
-  const [conn, setConn] = useState<{ mode: "local" | "remote"; url: string; model: string; hasKey: boolean } | null>(null);
-  const [url, setUrl] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [model, setModel] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
-
-  useEffect(() => {
-    api.hermesConfig().then((c) => { setConn(c); setUrl(c.url); setModel(c.model); }).catch(() => {});
-  }, []);
-
-  if (!conn) return null;
-
-  const setMode = async (mode: "local" | "remote") => {
-    setMsg("");
-    if (mode === "remote") { setConn({ ...conn, mode }); return; }
-    setBusy(true);
-    try { await api.saveHermesConfig({ mode: "local" }); setConn({ ...conn, mode }); onChanged(); }
-    finally { setBusy(false); }
-  };
-
-  const testAndSave = async () => {
-    setBusy(true); setMsg("Testing…");
-    try {
-      const t = await api.testHermes({ url: url.trim(), apiKey: apiKey || undefined });
-      if (!t.ok) { setMsg(t.error || "Connection failed"); return; }
-      const chosen = model.trim() || t.models?.[0] || "";
-      await api.saveHermesConfig({ mode: "remote", url: url.trim(), apiKey: apiKey || undefined, model: chosen });
-      setModel(chosen); setApiKey("");
-      setConn({ mode: "remote", url: url.trim(), model: chosen, hasKey: !!apiKey || conn.hasKey });
-      setMsg(`Connected · ${t.models?.length ?? 0} model${t.models?.length === 1 ? "" : "s"}`);
-      onChanged();
-    } catch (e) { setMsg(e instanceof Error ? e.message : "failed"); }
-    finally { setBusy(false); }
-  };
-
-  return (
-    <div className="agent-models" style={{ flexWrap: "wrap", gap: 6 }}>
-      <span className="agent-models-label">Hermes</span>
-      <button className={`agent-model-chip ${conn.mode === "local" ? "active" : ""}`} onClick={() => setMode("local")} disabled={busy} title="Run the local hermes binary (full agent + skills/memory on this machine)">Local</button>
-      <button className={`agent-model-chip ${conn.mode === "remote" ? "active" : ""}`} onClick={() => setMode("remote")} disabled={busy} title="Use a remote Hermes gateway as the brain; the grid + its tools stay local">Remote</button>
-      {conn.mode === "remote" && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, width: "100%", marginTop: 6 }}>
-          <input className="form-input" style={{ flex: "1 1 100%" }} value={url} placeholder="Gateway URL — e.g. http://localhost:18642/v1" spellCheck={false} onChange={(e) => setUrl(e.target.value)} />
-          <input className="form-input" style={{ flex: "1 1 60%" }} type="password" value={apiKey} placeholder={conn.hasKey ? "API key saved — blank keeps it" : "API key"} spellCheck={false} onChange={(e) => setApiKey(e.target.value)} />
-          <input className="form-input" style={{ flex: "1 1 30%" }} value={model} placeholder="model (optional)" spellCheck={false} onChange={(e) => setModel(e.target.value)} />
-          <button className="agent-connect-btn" style={{ flex: "0 0 auto", marginTop: 0 }} onClick={testAndSave} disabled={busy || !url.trim()}>{busy ? "…" : "Test & Save"}</button>
-          {msg && <span className="agent-plan" style={{ flex: "1 1 100%" }}>{msg}</span>}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function AgentPanel({
   onGridChange,
   activeTable,
@@ -626,8 +569,6 @@ export default function AgentPanel({
         </span>
       </div>
 
-      {agent === "hermes" && <HermesConnBar onChanged={() => api.agents().then(setStatus).catch(() => {})} />}
-
       {!ready ? (
         <div className="agent-empty">
           <div className="agent-empty-mark"><IconZap s={20} /></div>
@@ -657,7 +598,7 @@ export default function AgentPanel({
           <p className="agent-connect-hint">
             Find it with <code>which {agent}</code> in your terminal.{" "}
             {agent === "hermes" ? (
-              <>For a remote gateway, set <code>hermesRemote</code> in <code>~/.gtmgrid/agents.json</code>.</>
+              <>Install the Nous Research <code>hermes</code> agent and make sure it's on your <code>PATH</code>.</>
             ) : (
               <>
                 Or install:{" "}
