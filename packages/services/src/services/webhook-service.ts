@@ -426,13 +426,9 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             lastReceivedAt: args.receivedAt,
             receivedCount: (webhook.receivedCount ?? 0) + 1,
           });
-          const all = yield* deliveries.listByWebhookOldestFirst(webhook.id);
-          if (all.length > DELIVERY_RETENTION) {
-            const surplus = all
-              .slice(0, all.length - DELIVERY_RETENTION)
-              .map((d) => d.id);
-            yield* deliveries.deleteByIds(surplus);
-          }
+          // Bound the log to the latest 50 rows in ONE set-based DELETE — no
+          // fetch-all + slice + per-row delete on this hot path.
+          yield* deliveries.pruneOldest(webhook.id, DELIVERY_RETENTION);
         });
 
       /** Write a set of mapped cells onto a row (patch-or-insert per column). */

@@ -1397,6 +1397,9 @@ export default function App() {
     const key = `${rowId}:${colId}`;
     setRunningCells(s => new Set(s).add(key));
     try {
+      // Force is scoped to the ONE explicitly-targeted cell via `rowIds:[rowId]`,
+      // so re-running this cell never re-runs (or re-bills) any other row's
+      // already-`done` cell in the column (TRI-3283 L2).
       await api.runColumnStream(colId, (e) => patchCell(tableId, e), { force: true, rowIds: [rowId] });
     } catch { /* ignore */ }
     setRunningCells(s => { const n = new Set(s); n.delete(key); return n; });
@@ -1496,6 +1499,10 @@ export default function App() {
         const deps = updated.columns.filter((c) => c.kind === "function" && columnDependsOn(c, changed.name));
         if (deps.length) {
           for (const dc of deps) {
+            // Force is scoped to the edited row only (`rowIds:[rowId]`): only the
+            // cells whose input actually changed (this row's dependents) are
+            // recomputed/re-billed — every OTHER row's already-`done` dependent
+            // cell is left untouched (TRI-3283 L2).
             await api.runColumn(dc.id, { force: true, rowIds: [rowId] }).catch(() => {});
           }
           updated = await api.table(selectedTableId);
