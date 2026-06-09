@@ -17,7 +17,6 @@ import {
   overwriteConfirmMessage,
   pendingCount,
   planSyncAll,
-  autoSyncNudgeVisible,
   shouldAutoPush,
   parseAutoSyncFlag,
   AUTO_SYNC_DEBOUNCE_MS,
@@ -36,6 +35,19 @@ import {
 } from "./cloud/pendingInvite";
 import { fireConfetti } from "./cloud/confetti";
 import { useUpdateCheck } from "./useUpdateCheck";
+import {
+  buildNotifications,
+  unreadCount as countUnread,
+  markAllSeen,
+  dismissNotification,
+  parsePersistState,
+  serializePersistState,
+  NOTIFICATIONS_PERSIST_KEY,
+  LEGACY_AUTO_SYNC_NUDGE_KEY,
+  type NotificationPersistState,
+  type NotificationActionId,
+  type AppNotification,
+} from "./notifications";
 import { useWorkspaceCredentials } from "./cloud/useWorkspaceCredentials";
 import {
   useCloudProjects,
@@ -183,6 +195,11 @@ export const Icon = {
       <circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>
     </svg>
   ),
+  Bell: ({ size = 16 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+    </svg>
+  ),
   // ── Table-sync icons (TRI-3297) — Feather/Lucide stroke-2, currentColor.
   //    Path data copied verbatim from the design handoff app/icons.jsx.
   Cloud: ({ size = 14 }: { size?: number }) => (
@@ -240,9 +257,6 @@ const RUN_ALL_CONCURRENCY = 4;
 // Persisted id of the last cloud project the user had open, so a relaunch
 // reopens it (default-to-cloud for signed-in users).
 const LAST_CLOUD_PROJECT_KEY = "gtmgrid:lastCloudProject";
-// Persisted dismissal of the auto-sync nudge (TRI-3298) — stays dismissed across
-// sessions once the user closes the nudge.
-const AUTO_SYNC_NUDGE_DISMISSED_KEY = "gtmgrid:autoSyncNudgeDismissed";
 
 // True if any of a function column's params reference {{columnName}}.
 function columnDependsOn(col: Column, columnName: string): boolean {
@@ -829,6 +843,80 @@ function SyncPopover({
             {error && <div className="account-menu-error" role="alert">{error}</div>}
           </div>
         )}
+      </div>
+    </>
+  );
+}
+
+// ─── Notification center (TRI-3308) ───────────────────────
+// The bell popover. Reuses the account-menu shell (same surface / border /
+// radius / shadow tokens + green accent) so it matches the app's existing
+// popovers. Lists the active notifications newest-first; empty state when none.
+function NotificationCenter({
+  notifications,
+  onAction,
+  onDismiss,
+  onClose,
+}: {
+  notifications: readonly AppNotification[];
+  onAction: (id: NotificationActionId) => void;
+  onDismiss: (kind: AppNotification["kind"]) => void;
+  onClose: () => void;
+}) {
+  // Close on Escape for keyboard accessibility.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <>
+      <div className="popover-scrim" onMouseDown={onClose} />
+      <div
+        className="account-menu notif-pop"
+        role="dialog"
+        aria-label="Notifications"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="account-menu-head">
+          <div className="account-menu-head-text">
+            <strong>Notifications</strong>
+            <span>{notifications.length === 0 ? "Nothing needs your attention" : `${notifications.length} update${notifications.length === 1 ? "" : "s"}`}</span>
+          </div>
+        </div>
+        <div className="notif-list">
+          {notifications.length === 0 ? (
+            <div className="notif-empty">
+              <Icon.CheckCircle size={20} />
+              <span>You&apos;re all caught up</span>
+            </div>
+          ) : (
+            notifications.map((n) => (
+              <div key={n.id} className={`notif-item is-${n.severity}`}>
+                <div className="notif-item-body">
+                  <span className="notif-item-title">{n.title}</span>
+                  <span className="notif-item-text">{n.body}</span>
+                </div>
+                <div className="notif-item-actions">
+                  {n.actions.map((a) => (
+                    <button
+                      key={a.id}
+                      className={a.variant === "primary" ? "btn btn-primary btn-sm" : "btn btn-ghost btn-sm"}
+                      onClick={() => onAction(a.id)}
+                    >
+                      {a.label}
+                    </button>
+                  ))}
+                  {/* Fallback Dismiss for a dismissible item whose actions don't
+                      already include one (none today, but keeps the contract). */}
+                  {n.dismissible && !n.actions.some((a) => a.id.endsWith(".dismiss")) && (
+                    <button className="btn btn-ghost btn-sm" onClick={() => onDismiss(n.kind)}>Dismiss</button>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
       </div>
     </>
   );
@@ -1604,10 +1692,20 @@ export default function App() {
   // their cloud copies. Toggling OFF is immediate (no confirm).
   const [autoSyncOn, setAutoSyncOn] = useState(false);
   const [autoSyncEnableConfirm, setAutoSyncEnableConfirm] = useState(false);
-  // The nudge is dismissible and STAYS dismissed across sessions (localStorage).
-  const [autoSyncNudgeDismissed, setAutoSyncNudgeDismissed] = useState<boolean>(() => {
-    try { return localStorage.getItem(AUTO_SYNC_NUDGE_DISMISSED_KEY) === "1"; } catch { return false; }
+  // Notification-center persistence (TRI-3308): dismissed/seen kinds, persisted
+  // across sessions. On first run we MIGRATE the legacy auto-sync-nudge flag
+  // (LEGACY_AUTO_SYNC_NUDGE_KEY) so a previously-dismissed nudge stays dismissed
+  // (no regression of TRI-3298's "stays dismissed across sessions").
+  const [notifPersist, setNotifPersist] = useState<NotificationPersistState>(() => {
+    try {
+      const legacy = localStorage.getItem(LEGACY_AUTO_SYNC_NUDGE_KEY) === "1";
+      return parsePersistState(localStorage.getItem(NOTIFICATIONS_PERSIST_KEY), legacy);
+    } catch {
+      return parsePersistState(null, false);
+    }
   });
+  // Whether the bell's notification center popover is open.
+  const [notifOpen, setNotifOpen] = useState(false);
 
   // Load the persisted flag once the sidecar is reachable. Defaults OFF on any
   // failure (parseAutoSyncFlag treats a missing value as OFF).
@@ -1623,17 +1721,67 @@ export default function App() {
   // signed-in users with a cloud project open. Hidden in pure-local builds.
   const showSyncUi = syncUiVisible({ cloudEnabled, inCloud, isAuthenticated });
 
-  // Whether the auto-sync nudge should show: eligible cloud user, flag still
-  // OFF, and not previously dismissed.
-  const showAutoSyncNudge = autoSyncNudgeVisible({
-    cloudEnabled, inCloud, isAuthenticated, autoSyncOn, dismissed: autoSyncNudgeDismissed,
-  });
+  // Build the active notification list (TRI-3308) from app state. Eligibility is
+  // unchanged from the banners these replace: the trial item mirrors
+  // `showTrialBanner`, the auto-sync nudge reuses `autoSyncNudgeVisible` (inside
+  // buildNotifications), and the update item mirrors the old `.update-banner`.
+  const notifications = useMemo(
+    () =>
+      buildNotifications({
+        trialDaysLeft: showTrialBanner ? trialDaysLeft : null,
+        autoSync: { cloudEnabled, inCloud, isAuthenticated, autoSyncOn },
+        updateVersion: update && !updateDismissed ? update.version : null,
+        updateError,
+        persist: notifPersist,
+      }),
+    [showTrialBanner, trialDaysLeft, cloudEnabled, inCloud, isAuthenticated, autoSyncOn, update, updateDismissed, updateError, notifPersist],
+  );
+  // Bell badge = active notifications not yet seen.
+  const unreadNotifs = countUnread(notifications, notifPersist);
 
-  // Dismiss the nudge — persist so it stays dismissed across sessions.
-  const dismissAutoSyncNudge = useCallback(() => {
-    setAutoSyncNudgeDismissed(true);
-    try { localStorage.setItem(AUTO_SYNC_NUDGE_DISMISSED_KEY, "1"); } catch { /* ignore */ }
+  // Persist the notification dismissed/seen state to localStorage.
+  const persistNotifState = useCallback((next: NotificationPersistState) => {
+    setNotifPersist(next);
+    try { localStorage.setItem(NOTIFICATIONS_PERSIST_KEY, serializePersistState(next)); } catch { /* ignore */ }
   }, []);
+
+  // Opening the center marks every active item seen (clears the badge).
+  const openNotifications = useCallback(() => {
+    setNotifOpen(true);
+    persistNotifState(markAllSeen(notifications, notifPersist));
+  }, [notifications, notifPersist, persistNotifState]);
+
+  // Dismiss a notification — removes it + persists (stays dismissed next session).
+  const dismissNotif = useCallback((kind: AppNotification["kind"]) => {
+    persistNotifState(dismissNotification(kind, notifPersist));
+  }, [notifPersist, persistNotifState]);
+
+  // Map a notification action id to its behaviour. Each preserves the original
+  // banner's action — notably `autoSync.enable` still routes through the
+  // TRI-3298 enable-time overwrite confirm (setAutoSyncEnableConfirm) rather than
+  // enabling directly.
+  const runNotificationAction = useCallback((id: NotificationActionId) => {
+    switch (id) {
+      case "trial.upgrade":
+        setShowUpgrade(true);
+        setNotifOpen(false);
+        break;
+      case "autoSync.enable":
+        setAutoSyncEnableConfirm(true);
+        setNotifOpen(false);
+        break;
+      case "autoSync.dismiss":
+        dismissNotif("autoSyncNudge");
+        break;
+      case "update.install":
+        void runUpdate();
+        break;
+      case "update.dismiss":
+        setUpdateDismissed(true);
+        dismissNotif("update");
+        break;
+    }
+  }, [dismissNotif, runUpdate]);
 
   // Persist the flag to the sidecar. Toggling OFF is immediate; toggling ON must
   // go through `requestAutoSyncToggle` (which shows the enable-time confirm).
@@ -2075,76 +2223,11 @@ export default function App() {
 
   return (
     <div className="app-shell" style={{ ["--sidebar-w"]: `${sidebarWidth}px` } as CSSProperties}>
-      {/* Update-available banner — a newer release than the running app. */}
-      {update && !updateDismissed && (
-        <div className="update-banner" role="status">
-          <span className="update-banner__text">
-            GTM Grid <strong>v{update.version}</strong> is available.
-            {updateError ? ` ${updateError}` : ""}
-          </span>
-          <button
-            className="btn btn--primary btn-sm"
-            disabled={updating}
-            onClick={() => void runUpdate()}
-          >
-            {updating ? "Updating…" : "Update & restart"}
-          </button>
-          {!updating && (
-            <button
-              className="btn btn-ghost btn-sm"
-              onClick={() => setUpdateDismissed(true)}
-            >
-              Later
-            </button>
-          )}
-        </div>
-      )}
-
       {/* Workspace-invite accept banner (email-matched + ?invite= URL token).
-          Self-gates: renders nothing when signed out / no pending invites. */}
+          Self-gates: renders nothing when signed out / no pending invites. The
+          trial / auto-sync nudge / update alerts that used to stack here now live
+          in the bell notification center (TRI-3308) in the sidebar header. */}
       <PendingInvites onAccepted={onInviteAccepted} />
-      {showTrialBanner && trialDaysLeft != null && (
-        <div
-          className={`trial-banner${trialDaysLeft <= 2 ? " trial-banner--urgent" : ""}`}
-          role="status"
-        >
-          <span className="trial-banner__text">
-            {trialDaysLeft === 0
-              ? "Your trial ends today — add a card to keep cloud sync, realtime & shared credentials."
-              : `Your trial ends in ${trialDaysLeft} day${trialDaysLeft === 1 ? "" : "s"} — add a card to keep your cloud features.`}
-          </span>
-          <button
-            className="btn btn--primary btn-sm"
-            onClick={() => setShowUpgrade(true)}
-          >
-            Upgrade now
-          </button>
-        </div>
-      )}
-      {/* Auto-sync nudge (TRI-3298) — clones the .trial-banner pattern. Shown to
-          eligible cloud users while auto-sync is still OFF; dismissible and stays
-          dismissed across sessions. Enabling routes through the same enable-time
-          overwrite confirm as the settings toggle. */}
-      {showAutoSyncNudge && (
-        <div className="trial-banner auto-sync-nudge" role="status">
-          <span className="trial-banner__text">
-            Keep your local tables backed up — turn on auto-sync to push them to
-            the cloud automatically. Your local version always overwrites the cloud copy.
-          </span>
-          <button
-            className="btn btn--primary btn-sm"
-            onClick={() => setAutoSyncEnableConfirm(true)}
-          >
-            Turn on auto-sync
-          </button>
-          <button
-            className="btn btn-ghost btn-sm"
-            onClick={dismissAutoSyncNudge}
-          >
-            Dismiss
-          </button>
-        </div>
-      )}
       <div className="app">
       {/* ── Sidebar ─────────────────────── */}
       <aside className="sidebar">
@@ -2161,6 +2244,29 @@ export default function App() {
             </span>
           </button>
           <span className="sidebar-head-spacer" />
+          <div className="notif-anchor">
+            <button
+              className={`sidebar-members notif-bell${unreadNotifs > 0 ? " has-unread" : ""}`}
+              onClick={openNotifications}
+              aria-label={unreadNotifs > 0 ? `Notifications, ${unreadNotifs} unread` : "Notifications"}
+              aria-haspopup="dialog"
+              aria-expanded={notifOpen}
+              title="Notifications"
+            >
+              <Icon.Bell size={15} />
+              {unreadNotifs > 0 && (
+                <span className="notif-badge" aria-hidden="true">{unreadNotifs > 9 ? "9+" : unreadNotifs}</span>
+              )}
+            </button>
+            {notifOpen && (
+              <NotificationCenter
+                notifications={notifications}
+                onAction={runNotificationAction}
+                onDismiss={dismissNotif}
+                onClose={() => setNotifOpen(false)}
+              />
+            )}
+          </div>
           {activeWorkspace && (
             <button className="sidebar-members" onClick={() => setShowWorkspaceSettings(true)} title="Workspace members & seats">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
