@@ -29,6 +29,14 @@ const columnType = z.enum(["text", "number", "boolean", "date", "json"]);
 /** A column kind — manual cell or function column (mirrors `columnKind`). */
 const columnKind = z.enum(["manual", "function"]);
 
+/**
+ * Max rows accepted in one {@link gridRouter.addRowsWithCells} call. Bounds the
+ * payload so a wide CSV (rows × columns cells) stays well under Postgres' 65535
+ * bind-parameter cap even before cell-repo chunks each statement. The desktop
+ * imports in chunks far smaller than this, so the cap only fires on abuse.
+ */
+const MAX_ROWS_PER_IMPORT = 5000;
+
 export const gridRouter = router({
   // ── projects ────────────────────────────────────────────────────────────
 
@@ -156,7 +164,11 @@ export const gridRouter = router({
     .input(
       z.object({
         tableId: z.string().min(1),
-        rows: z.array(z.record(z.string(), z.unknown())),
+        rows: z
+          .array(z.record(z.string(), z.unknown()))
+          .max(MAX_ROWS_PER_IMPORT, {
+            message: `Too many rows in one import (max ${MAX_ROWS_PER_IMPORT}). Split the request into smaller chunks.`,
+          }),
       }),
     )
     .mutation(({ ctx, input }) =>

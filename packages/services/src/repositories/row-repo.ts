@@ -39,6 +39,24 @@ export class RowRepoError extends Data.TaggedError("RowRepoError")<{
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * Max rows per `INSERT` statement. Each row binds 4 columns
+ * (workspaceId, tableId, position, createdAt); Postgres caps a statement at
+ * 65535 bind parameters → ~16383 rows. 1000 keeps a wide margin so a bulk CSV
+ * import (which inserts one row per CSV line) never hits the wall.
+ */
+export const ROW_INSERT_CHUNK_SIZE = 1000;
+
+/** Split `items` into consecutive chunks of at most `size`, preserving order. */
+export const chunk = <T>(items: readonly T[], size: number): T[][] => {
+  if (size <= 0) throw new Error("chunk size must be positive");
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    out.push(items.slice(i, i + size));
+  }
+  return out;
+};
+
 const fail = (op: string) => (cause: unknown) =>
   new RowRepoError({
     message: cause instanceof Error ? cause.message : `${op} failed`,
@@ -128,11 +146,18 @@ export const RowRepoLive: Layer.Layer<RowRepo, never, DbClient> = Layer.effect(
           ? Effect.succeed([] as readonly string[])
           : Effect.tryPromise({
               try: async () => {
-                const rows = await db
-                  .insert(schema.rows)
-                  .values([...values])
-                  .returning({ id: schema.rows.id });
-                return rows.map((r) => r.id);
+                // Chunk so a large CSV import never exceeds Postgres' 65535
+                // bind-parameter cap (~16383 rows at 4 cols/row); concatenate
+                // the returned ids so callers still get them in input order.
+                const ids: string[] = [];
+                for (const batch of chunk(values, ROW_INSERT_CHUNK_SIZE)) {
+                  const rows = await db
+                    .insert(schema.rows)
+                    .values([...batch])
+                    .returning({ id: schema.rows.id });
+                  for (const r of rows) ids.push(r.id);
+                }
+                return ids;
               },
               catch: fail("row bulk insert"),
             }),
