@@ -8,9 +8,14 @@
  */
 
 import { schema } from "@gtmgrid/db";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, gt, or } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
+import { chunk } from "./_chunk.js";
+import {
+  CELL_INSERT_CHUNK_SIZE,
+  type NewCell,
+} from "./cell-repo.js";
 import { cascadeDeleteRow, type GridStore } from "./grid-store.js";
 
 /** A row row projection the grid domain uses. */
@@ -30,6 +35,46 @@ export interface NewRow {
   readonly createdAt: number;
 }
 
+/**
+ * A keyset cursor: the `(position, createdAt, id)` of the LAST row of the
+ * previous page. Rows are ordered by ascending position (the stable display
+ * order), so the next page is the rows strictly "after" this cursor.
+ * `null` requests the first page. `position` alone is NOT unique
+ * (it is `doublePrecision`), so the cursor tie-breaks on `createdAt` then `id`
+ * — the SAME total order {@link RowRepo.listByTable} already uses, so a paged
+ * read returns rows in exactly the order an unbounded read would.
+ */
+export interface RowCursor {
+  readonly position: number;
+  readonly createdAt: number;
+  readonly id: string;
+}
+
+/** One page of rows plus the cursor to fetch the next page (or `null`). */
+export interface RowPage {
+  readonly rows: readonly Row[];
+  readonly nextCursor: RowCursor | null;
+}
+
+/** The default page size for a keyset row read (rows per page). */
+export const ROW_PAGE_SIZE = 200;
+
+/**
+ * The atomic bulk-import unit for a CSV import: the rows to insert, a builder
+ * that maps the freshly-returned row ids (in input order) to their cell
+ * inserts, and the metering increment to apply. {@link RowRepo.bulkImport} runs
+ * all three — row insert, cell insert and meter — inside ONE `db.transaction`
+ * so a mid-import failure rolls back atomically (no orphaned rows or cells, no
+ * leaked meter count).
+ */
+export interface BulkImport {
+  readonly rows: readonly NewRow[];
+  /** Build the cell inserts from the inserted row ids (input order). */
+  readonly buildCells: (rowIds: readonly string[]) => readonly NewCell[];
+  /** The workspace + cloud-actions count to increment after the writes. */
+  readonly meter: { readonly workspaceId: string; readonly n: number };
+}
+
 /** Raised when a row read/write fails (DB/transport error). */
 export class RowRepoError extends Data.TaggedError("RowRepoError")<{
   readonly message: string;
@@ -39,11 +84,27 @@ export class RowRepoError extends Data.TaggedError("RowRepoError")<{
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * Max rows per `INSERT` statement. Each row binds 4 columns
+ * (workspaceId, tableId, position, createdAt); Postgres caps a statement at
+ * 65535 bind parameters → ~16383 rows. 1000 keeps a wide margin so a bulk CSV
+ * import (which inserts one row per CSV line) never hits the wall.
+ */
+export const ROW_INSERT_CHUNK_SIZE = 1000;
+
 const fail = (op: string) => (cause: unknown) =>
   new RowRepoError({
     message: cause instanceof Error ? cause.message : `${op} failed`,
     cause,
   });
+
+/** The `cell_status` enum union, narrowed from a free `string` with no cast. */
+type CellStatus = (typeof schema.cellStatus.enumValues)[number];
+const toCellStatus = (s: string): CellStatus => {
+  const found = schema.cellStatus.enumValues.find((v) => v === s);
+  if (found === undefined) throw new Error(`invalid cell status: ${s}`);
+  return found;
+};
 
 /** Reads/writes the `rows` table. */
 export class RowRepo extends Context.Tag("RowRepo")<
@@ -57,11 +118,31 @@ export class RowRepo extends Context.Tag("RowRepo")<
     readonly listByTable: (
       tableId: string,
     ) => Effect.Effect<readonly Row[], RowRepoError>;
+    /**
+     * One KEYSET page of a table's rows, ordered by position (then createdAt,
+     * id) ascending. `limit` rows are fetched strictly after the optional
+     * `cursor` (the last row of the prior page); the returned `nextCursor` is
+     * `null` on the last page. The paged read NEVER loads the whole table, so a
+     * 10k-row grid is read one bounded page at a time.
+     */
+    readonly listKeysetByTable: (args: {
+      readonly tableId: string;
+      readonly limit: number;
+      readonly cursor: RowCursor | null;
+    }) => Effect.Effect<RowPage, RowRepoError>;
     /** Insert a row and return its id. */
     readonly insert: (values: NewRow) => Effect.Effect<string, RowRepoError>;
     /** Insert many rows in one call, returning ids in input order. */
     readonly insertMany: (
       values: readonly NewRow[],
+    ) => Effect.Effect<readonly string[], RowRepoError>;
+    /**
+     * Atomically insert rows, their cells, and the meter increment in ONE
+     * `db.transaction`, returning the new row ids in input order. A failure at
+     * any step rolls the whole import back — no orphaned rows.
+     */
+    readonly bulkImport: (
+      input: BulkImport,
     ) => Effect.Effect<readonly string[], RowRepoError>;
     /** Delete a row (FK cascade drops its cells). */
     readonly remove: (id: string) => Effect.Effect<void, RowRepoError>;
@@ -110,6 +191,61 @@ export const RowRepoLive: Layer.Layer<RowRepo, never, DbClient> = Layer.effect(
               catch: fail("row list"),
             })
           : Effect.succeed([] as readonly Row[]),
+      listKeysetByTable: ({ tableId, limit, cursor }) =>
+        !UUID_RE.test(tableId)
+          ? Effect.succeed<RowPage>({ rows: [], nextCursor: null })
+          : Effect.tryPromise({
+              try: async () => {
+                const base = eq(schema.rows.tableId, tableId);
+                // Seek strictly past the cursor in the (position, createdAt, id)
+                // total order: position > c.position, OR equal position with a
+                // later createdAt, OR equal (position, createdAt) with a later id.
+                const seek =
+                  cursor === null
+                    ? base
+                    : and(
+                        base,
+                        or(
+                          gt(schema.rows.position, cursor.position),
+                          and(
+                            eq(schema.rows.position, cursor.position),
+                            gt(schema.rows.createdAt, cursor.createdAt),
+                          ),
+                          and(
+                            eq(schema.rows.position, cursor.position),
+                            eq(schema.rows.createdAt, cursor.createdAt),
+                            gt(schema.rows.id, cursor.id),
+                          ),
+                        ),
+                      );
+                // Fetch one extra to decide whether a next page exists.
+                const fetched = await db
+                  .select(cols)
+                  .from(schema.rows)
+                  .where(seek)
+                  .orderBy(
+                    asc(schema.rows.position),
+                    asc(schema.rows.createdAt),
+                    asc(schema.rows.id),
+                  )
+                  .limit(limit + 1);
+                const hasMore = fetched.length > limit;
+                const page = hasMore ? fetched.slice(0, limit) : fetched;
+                const last = page[page.length - 1];
+                return {
+                  rows: page,
+                  nextCursor:
+                    hasMore && last !== undefined
+                      ? {
+                          position: last.position,
+                          createdAt: last.createdAt,
+                          id: last.id,
+                        }
+                      : null,
+                };
+              },
+              catch: fail("row page"),
+            }),
       insert: (values) =>
         Effect.tryPromise({
           try: async () => {
@@ -128,13 +264,72 @@ export const RowRepoLive: Layer.Layer<RowRepo, never, DbClient> = Layer.effect(
           ? Effect.succeed([] as readonly string[])
           : Effect.tryPromise({
               try: async () => {
-                const rows = await db
-                  .insert(schema.rows)
-                  .values([...values])
-                  .returning({ id: schema.rows.id });
-                return rows.map((r) => r.id);
+                // Chunk so a large CSV import never exceeds Postgres' 65535
+                // bind-parameter cap (~16383 rows at 4 cols/row); concatenate
+                // the returned ids so callers still get them in input order.
+                const ids: string[] = [];
+                for (const batch of chunk(values, ROW_INSERT_CHUNK_SIZE)) {
+                  const rows = await db
+                    .insert(schema.rows)
+                    .values([...batch])
+                    .returning({ id: schema.rows.id });
+                  for (const r of rows) ids.push(r.id);
+                }
+                return ids;
               },
               catch: fail("row bulk insert"),
+            }),
+      bulkImport: (input) =>
+        input.rows.length === 0
+          ? Effect.succeed([] as readonly string[])
+          : Effect.tryPromise({
+              try: () =>
+                // ONE transaction (one pooled connection) so the import is
+                // atomic: a failure in any chunk rolls back the rows, cells and
+                // meter together — no orphaned rows. Kept short (insert-only,
+                // no app round-trips) so it is Supavisor transaction-pooler safe.
+                db.transaction(async (tx) => {
+                  // Bulk-insert rows, chunked, preserving input order in ids.
+                  const ids: string[] = [];
+                  for (const batch of chunk(input.rows, ROW_INSERT_CHUNK_SIZE)) {
+                    const inserted = await tx
+                      .insert(schema.rows)
+                      .values([...batch])
+                      .returning({ id: schema.rows.id });
+                    for (const r of inserted) ids.push(r.id);
+                  }
+
+                  // Build cells from the returned ids and bulk-insert, chunked.
+                  const cells = input.buildCells(ids);
+                  for (const batch of chunk(cells, CELL_INSERT_CHUNK_SIZE)) {
+                    await tx.insert(schema.cells).values(
+                      batch.map((c) => ({
+                        workspaceId: c.workspaceId,
+                        tableId: c.tableId,
+                        rowId: c.rowId,
+                        columnId: c.columnId,
+                        value: c.value,
+                        status: toCellStatus(c.status),
+                        error: c.error,
+                        updatedAt: c.updatedAt,
+                      })),
+                    );
+                  }
+
+                  // Meter the cloud-actions increment inside the same tx so a
+                  // rolled-back import never leaks a billable count.
+                  if (input.meter.n > 0) {
+                    await tx
+                      .update(schema.workspaces)
+                      .set({
+                        cloudActionsUsed: schema.sql`coalesce(${schema.workspaces.cloudActionsUsed}, 0) + ${input.meter.n}`,
+                      })
+                      .where(eq(schema.workspaces.id, input.meter.workspaceId));
+                  }
+
+                  return ids;
+                }),
+              catch: fail("row bulk import"),
             }),
       remove: (id) =>
         Effect.tryPromise({
@@ -147,8 +342,18 @@ export const RowRepoLive: Layer.Layer<RowRepo, never, DbClient> = Layer.effect(
   }),
 );
 
-/** An in-memory `RowRepo` Layer over a shared {@link GridStore}. */
-export const rowRepoLayer = (store: GridStore): Layer.Layer<RowRepo> =>
+/**
+ * An in-memory `RowRepo` Layer over a shared {@link GridStore}.
+ *
+ * `meterIncrement` mirrors the live {@link RowRepo.bulkImport} transaction's
+ * meter step: a test can pass the SAME function the in-memory `MeterService`
+ * uses so the bulk import's meter bump is part of the same atomic unit (and a
+ * simulated failure leaves the meter, like the rows and cells, untouched).
+ */
+export const rowRepoLayer = (
+  store: GridStore,
+  meterIncrement: (workspaceId: string, n: number) => void = () => {},
+): Layer.Layer<RowRepo> =>
   Layer.succeed(RowRepo, {
     findById: (id) =>
       Effect.succeed(Option.fromNullable(store.rows.find((r) => r.id === id))),
@@ -160,6 +365,45 @@ export const rowRepoLayer = (store: GridStore): Layer.Layer<RowRepo> =>
             (a, b) => a.position - b.position || a.createdAt - b.createdAt,
           ),
       ),
+    listKeysetByTable: ({ tableId, limit, cursor }) =>
+      Effect.sync(() => {
+        // Apply the SAME (position, createdAt, id) total order + seek-past-cursor
+        // rule the Drizzle path uses, so the in-memory Layer is a faithful mirror.
+        const sorted = [...store.rows]
+          .filter((r) => r.tableId === tableId)
+          .sort(
+            (a, b) =>
+              a.position - b.position ||
+              a.createdAt - b.createdAt ||
+              (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+          );
+        const past =
+          cursor === null
+            ? sorted
+            : sorted.filter(
+                (r) =>
+                  r.position > cursor.position ||
+                  (r.position === cursor.position &&
+                    r.createdAt > cursor.createdAt) ||
+                  (r.position === cursor.position &&
+                    r.createdAt === cursor.createdAt &&
+                    r.id > cursor.id),
+              );
+        const page = past.slice(0, limit);
+        const hasMore = past.length > limit;
+        const last = page[page.length - 1];
+        return {
+          rows: page,
+          nextCursor:
+            hasMore && last !== undefined
+              ? {
+                  position: last.position,
+                  createdAt: last.createdAt,
+                  id: last.id,
+                }
+              : null,
+        };
+      }),
     insert: (values) =>
       Effect.sync(() => {
         const id = store.nextId("row");
@@ -174,5 +418,30 @@ export const rowRepoLayer = (store: GridStore): Layer.Layer<RowRepo> =>
           return id;
         }),
       ),
+    bulkImport: (input) =>
+      Effect.try({
+        try: () => {
+          // Stage the whole import OFF the store, then commit in one shot, so a
+          // throw in buildCells/narrowing leaves rows, cells AND the meter
+          // untouched — the in-memory mirror of the live tx rollback.
+          const staged = input.rows.map((v) => ({
+            id: store.nextId("row"),
+            ...v,
+          }));
+          const ids = staged.map((r) => r.id);
+          const cells = input
+            .buildCells(ids)
+            .map((c) => ({ id: store.nextId("cell"), ...c }));
+          // Commit: rows + cells + meter together.
+          for (const r of staged) store.rows.push(r);
+          for (const c of cells) store.cells.push(c);
+          if (input.meter.n > 0) {
+            meterIncrement(input.meter.workspaceId, input.meter.n);
+          }
+          const out: readonly string[] = ids;
+          return out;
+        },
+        catch: fail("row bulk import"),
+      }),
     remove: (id) => Effect.sync(() => cascadeDeleteRow(store, id)),
   });

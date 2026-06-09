@@ -23,9 +23,11 @@ import { workerClient, WORKER_REFS } from "../worker-client";
  * Durability / exactly-once:
  *  - The triggering event carries `id: recordId` (a content hash), so Inngest
  *    de-dupes far-apart duplicate posts of the same payload before this runs.
- *  - Every `step.run` key is UNIQUE PER RECORD (`...:${recordId}`), so within-run
- *    retries are memoized — the row is inserted once and each function column is
- *    re-run at most once per record even across retries.
+ *  - Every `step.run` key is UNIQUE PER RECORD, and the enrichment uses a key
+ *    UNIQUE PER COLUMN (`enrich:${recordId}:${columnId}`), so within-run retries
+ *    are memoized — the row is inserted once and each function column is re-run
+ *    at most once per record even across retries. A failure on column K no longer
+ *    re-runs (and re-charges) the already-completed columns 0..K-1.
  *  - When `autoRun` is false the enrich step is SKIPPED entirely (the row is
  *    still inserted).
  */
@@ -44,6 +46,53 @@ export interface WebhookRecordData {
   readonly upsertKey: string | null;
   /** The idempotent content hash for this record (also the Inngest event id). */
   readonly recordId: string;
+}
+
+/**
+ * Narrow the Inngest event payload (typed loosely as `Jsonify<…>`) to a
+ * {@link WebhookRecordData} without an `as` cast, validating the fields the
+ * handler depends on. Throws (and lets Inngest retry) on a malformed payload.
+ */
+export function parseWebhookRecordData(
+  raw: unknown,
+): WebhookRecordData & { readonly webhookId?: string } {
+  if (typeof raw !== "object" || raw === null) {
+    throw new Error("webhook record event.data is not an object");
+  }
+  const d: Record<string, unknown> = { ...raw };
+  const str = (k: string): string => {
+    const v = d[k];
+    if (typeof v !== "string") {
+      throw new Error(`webhook record event.data.${k} must be a string`);
+    }
+    return v;
+  };
+  const mappedCells = d.mappedCells;
+  if (typeof mappedCells !== "object" || mappedCells === null) {
+    throw new Error("webhook record event.data.mappedCells must be an object");
+  }
+  const mode = d.mode;
+  if (mode !== "create" && mode !== "upsert") {
+    throw new Error("webhook record event.data.mode must be create|upsert");
+  }
+  const upsertKey = d.upsertKey;
+  if (upsertKey !== null && typeof upsertKey !== "string") {
+    throw new Error("webhook record event.data.upsertKey must be string|null");
+  }
+  const webhookId = d.webhookId;
+  if (webhookId !== undefined && typeof webhookId !== "string") {
+    throw new Error("webhook record event.data.webhookId must be a string");
+  }
+  return {
+    tableId: str("tableId"),
+    workspaceId: str("workspaceId"),
+    mappedCells: { ...mappedCells },
+    autoRun: d.autoRun === true,
+    mode,
+    upsertKey,
+    recordId: str("recordId"),
+    ...(webhookId === undefined ? {} : { webhookId }),
+  };
 }
 
 /** Build the engine AI config from the worker's environment (optional). */
@@ -131,57 +180,135 @@ export async function resolveRow(
   return result.rowId;
 }
 
+/**
+ * Recompute ONE function column over a single row through the engine cloud path.
+ * Exported so it can be wrapped in its own per-column `step.run` (TRI-3280) and
+ * exercised directly in tests. Builds the Db-FREE engine: store + creds are the
+ * same injected cloud store, so no SQLite file is opened (better-sqlite3 stays
+ * unloaded). Returns the number of cells the engine ran.
+ */
+export async function runEnrichColumn(
+  data: WebhookRecordData,
+  columnId: string,
+  rowId: string,
+): Promise<number> {
+  const store = await buildWorkerStore(data.tableId, data.workspaceId);
+  const engine = new Engine(undefined, engineConfig(), defaultRegistry(), undefined, {
+    store,
+    creds: store,
+  });
+  const { ran } = await engine.runColumn(columnId, { rowIds: [rowId] });
+  return ran;
+}
+
+/**
+ * The subset of the Inngest `step` API this handler relies on. The handler only
+ * ever stores JSON-safe step results (string, string[], number), so the simple
+ * `Promise<T>` return faithfully models Inngest's durable `step.run` for these
+ * payloads. The real `step` is adapted to this shape at the `createFunction`
+ * boundary; tests supply a fake that models retry memoization.
+ */
+export interface StepRunner {
+  run<T>(id: string, handler: () => Promise<T>): Promise<T>;
+}
+
+/**
+ * Adapt Inngest's `step` to the handler's {@link StepRunner}. Inngest types
+ * `step.run` results as `Jsonify<…>`; this handler only ever stores JSON-safe
+ * values (string, string[], number) for which `Jsonify` is the identity, so the
+ * runtime value is unchanged. This adapter is the SINGLE, deliberate place the
+ * two type worlds meet — everything downstream is fully typed.
+ */
+function toStepRunner(step: {
+  run: (id: string, fn: () => Promise<unknown>) => Promise<unknown>;
+}): StepRunner {
+  return {
+    run<T>(id: string, handler: () => Promise<T>): Promise<T> {
+      return step.run(id, handler) as Promise<T>;
+    },
+  };
+}
+
+/** The result the handler returns. */
+export type ProcessWebhookRecordResult =
+  | { readonly rowId: string; readonly enriched: false }
+  | { readonly rowId: string; readonly enriched: true; readonly ran: number };
+
+/**
+ * The durable handler body, extracted from `createFunction` so it can be driven
+ * directly in tests with a fake {@link StepRunner} that models Inngest's retry
+ * memoization (completed steps are not re-executed). This is what proves the
+ * per-column step keying skips already-done columns on retry (TRI-3280).
+ */
+export async function processWebhookRecordHandler(
+  data: WebhookRecordData,
+  webhookId: string,
+  step: StepRunner,
+): Promise<ProcessWebhookRecordResult> {
+
+  // 1) Insert (or upsert) the row. UNIQUE-per-record step key → memoized on
+  //    retry, so the row is created at most once per record.
+  const rowId = await step.run(
+    `insert-row:${data.recordId}`,
+    async () => resolveRow(data, webhookId),
+  );
+
+  // 2) Enrichment: only when the webhook auto-runs. Recompute every FUNCTION
+  //    column over just the new row, through the engine cloud path.
+  if (!data.autoRun) {
+    return { rowId, enriched: false };
+  }
+
+  // 2a) Fetch the table's function columns in their OWN step so the grid read
+  //     is memoized and not re-fetched on every retry attempt.
+  const functionColumns = await step.run(
+    `enrich-columns:${data.recordId}`,
+    async () => {
+      const grid = await fetchGrid(data.tableId);
+      return grid.columns
+        .filter((c) => c.kind === "function")
+        .sort((a, b) => a.position - b.position)
+        .map((c) => c._id);
+    },
+  );
+
+  // 2b) Run each function column inside its OWN step with a UNIQUE per-column
+  //     step key (`enrich:${recordId}:${columnId}`). Inngest memoizes each
+  //     completed step, so a retry triggered by a later column's failure SKIPS
+  //     the already-completed columns — no re-POST, no re-charge (TRI-3280).
+  let ran = 0;
+  for (const columnId of functionColumns) {
+    const n = await step.run(
+      `enrich:${data.recordId}:${columnId}`,
+      async () => runEnrichColumn(data, columnId, rowId),
+    );
+    ran += n;
+  }
+
+  return { rowId, enriched: true, ran };
+}
+
 export const processWebhookRecord = inngest.createFunction(
   {
     id: "process-webhook-record",
-    // Bound per-workspace so one busy workspace can't starve others; retries
-    // cover transient worker/engine failures (step memoization makes them safe).
-    concurrency: {
-      key: "event.data.workspaceId",
-      limit: 5,
-    },
+    // Two-tier concurrency: a GLOBAL account-scoped cap bounds total in-flight
+    // runs across ALL workspaces (per-workspace limits otherwise multiply
+    // unbounded as the number of workspaces grows), while the per-workspace key
+    // still prevents one busy workspace from starving others. Retries cover
+    // transient worker/engine failures (step memoization makes them safe).
+    concurrency: [
+      { scope: "account", limit: 50 },
+      { key: "event.data.workspaceId", limit: 5 },
+    ],
     retries: 3,
     triggers: [{ event: "webhook/record.received" }],
   },
   async ({ event, step }) => {
-    const data = event.data as WebhookRecordData;
-    const webhookId = (event.data as { webhookId?: string }).webhookId ?? "";
-
-    // 1) Insert (or upsert) the row. UNIQUE-per-record step key → memoized on
-    //    retry, so the row is created at most once per record.
-    const rowId = await step.run(
-      `insert-row:${data.recordId}`,
-      async () => resolveRow(data, webhookId),
+    const data = parseWebhookRecordData(event.data);
+    return processWebhookRecordHandler(
+      data,
+      data.webhookId ?? "",
+      toStepRunner(step),
     );
-
-    // 2) Enrichment: only when the webhook auto-runs. Recompute every FUNCTION
-    //    column over just the new row, through the engine cloud path.
-    if (!data.autoRun) {
-      return { rowId, enriched: false };
-    }
-
-    const ran = await step.run(`enrich:${data.recordId}`, async () => {
-      const grid = await fetchGrid(data.tableId);
-      const functionColumns = grid.columns
-        .filter((c) => c.kind === "function")
-        .sort((a, b) => a.position - b.position);
-      if (functionColumns.length === 0) return 0;
-
-      // Build the Db-FREE engine: store + creds are the same injected cloud
-      // store, so no SQLite file is opened (better-sqlite3 stays unloaded).
-      const store = await buildWorkerStore(data.tableId, data.workspaceId);
-      const engine = new Engine(undefined, engineConfig(), defaultRegistry(), undefined, {
-        store,
-        creds: store,
-      });
-      let total = 0;
-      for (const col of functionColumns) {
-        const { ran: n } = await engine.runColumn(col._id, { rowIds: [rowId] });
-        total += n;
-      }
-      return total;
-    });
-
-    return { rowId, enriched: true, ran };
   },
 );

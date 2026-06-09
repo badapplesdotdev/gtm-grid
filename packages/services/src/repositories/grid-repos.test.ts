@@ -5,8 +5,11 @@
  * and the FK-cascade mirror (deleting a table/column/row removes its children).
  */
 
+import { drizzle } from "drizzle-orm/postgres-js";
+import { schema } from "@gtmgrid/db";
 import { Effect, Exit, Option } from "effect";
 import { describe, expect, it } from "vitest";
+import { dbClientLayer } from "../db-client.js";
 import {
   cascadeDeleteColumn,
   cascadeDeleteRow,
@@ -17,7 +20,13 @@ import {
   type StoreRow,
   type StoreTable,
 } from "./grid-store.js";
-import { cellRepoLayer } from "./cell-repo.js";
+import {
+  cellRepoLayer,
+  CellRepoLive,
+  CELL_INSERT_CHUNK_SIZE,
+  chunk,
+  type NewCell,
+} from "./cell-repo.js";
 import { columnRepoLayer } from "./column-repo.js";
 import { projectRepoLayer } from "./project-repo.js";
 import { rowRepoLayer } from "./row-repo.js";
@@ -136,6 +145,154 @@ describe("rowRepoLayer", () => {
     expect(store.rows.map((r) => r.id)).toEqual(["r2"]);
     expect(store.cells.map((c) => c.rowId)).toEqual(["r2"]);
   });
+
+  // TRI-3272: keyset paging by row position — a page never loads the whole
+  // table, and walking the cursor returns the SAME rows in the SAME order an
+  // unbounded listByTable would, with the last page reporting nextCursor=null.
+  describe("listKeysetByTable (TRI-3272)", () => {
+    const pageStore = () =>
+      makeGridStore({
+        rows: [
+          { id: "r1", workspaceId: WS, tableId: "t1", position: 0, createdAt: 1 },
+          { id: "r2", workspaceId: WS, tableId: "t1", position: 1, createdAt: 1 },
+          { id: "r3", workspaceId: WS, tableId: "t1", position: 2, createdAt: 1 },
+          { id: "r4", workspaceId: WS, tableId: "t1", position: 3, createdAt: 1 },
+          { id: "r5", workspaceId: WS, tableId: "t1", position: 4, createdAt: 1 },
+          // A different table's row must never leak into a page.
+          { id: "x1", workspaceId: WS, tableId: "t2", position: 0, createdAt: 1 },
+        ],
+      });
+
+    it("returns the first page in position order with a nextCursor", async () => {
+      const exit = await run(rowRepoLayer(pageStore()))(
+        Effect.flatMap(RowRepo, (s) =>
+          s.listKeysetByTable({ tableId: "t1", limit: 2, cursor: null }),
+        ),
+      );
+      expect(Exit.isSuccess(exit)).toBe(true);
+      if (Exit.isSuccess(exit)) {
+        expect(exit.value.rows.map((r) => r.id)).toEqual(["r1", "r2"]);
+        expect(exit.value.nextCursor).toEqual({ position: 1, createdAt: 1, id: "r2" });
+      }
+    });
+
+    it("walks every page exactly once across the table and stops at a null cursor on the last page", async () => {
+      const r = run(rowRepoLayer(pageStore()));
+      const seen: string[] = [];
+      let cursor: import("./row-repo.js").RowCursor | null = null;
+      // Bound the loop so a paging bug can't spin forever.
+      for (let i = 0; i < 10; i++) {
+        const exit = await r(
+          Effect.flatMap(RowRepo, (s) =>
+            s.listKeysetByTable({ tableId: "t1", limit: 2, cursor }),
+          ),
+        );
+        if (!Exit.isSuccess(exit)) throw new Error("page read failed");
+        seen.push(...exit.value.rows.map((row) => row.id));
+        if (exit.value.nextCursor === null) break;
+        cursor = exit.value.nextCursor;
+      }
+      // 5 rows over pages of 2 → [r1,r2][r3,r4][r5], no duplicates, no t2 leak.
+      expect(seen).toEqual(["r1", "r2", "r3", "r4", "r5"]);
+    });
+
+    it("returns nextCursor=null when the page is exactly the last (no extra row)", async () => {
+      const exit = await run(rowRepoLayer(pageStore()))(
+        Effect.flatMap(RowRepo, (s) =>
+          s.listKeysetByTable({ tableId: "t1", limit: 5, cursor: null }),
+        ),
+      );
+      expect(Exit.isSuccess(exit)).toBe(true);
+      if (Exit.isSuccess(exit)) {
+        expect(exit.value.rows).toHaveLength(5);
+        expect(exit.value.nextCursor).toBeNull();
+      }
+    });
+
+    it("tie-breaks rows sharing a position by createdAt then id (stable order)", async () => {
+      const store = makeGridStore({
+        rows: [
+          { id: "rb", workspaceId: WS, tableId: "t1", position: 0, createdAt: 5 },
+          { id: "ra", workspaceId: WS, tableId: "t1", position: 0, createdAt: 5 },
+          { id: "rc", workspaceId: WS, tableId: "t1", position: 0, createdAt: 9 },
+        ],
+      });
+      const exit = await run(rowRepoLayer(store))(
+        Effect.flatMap(RowRepo, (s) =>
+          s.listKeysetByTable({ tableId: "t1", limit: 10, cursor: null }),
+        ),
+      );
+      // Equal position → by createdAt asc (5 before 9), ties by id asc (ra<rb).
+      expect(Exit.isSuccess(exit) && exit.value.rows.map((r) => r.id)).toEqual([
+        "ra",
+        "rb",
+        "rc",
+      ]);
+    });
+  });
+
+  // TRI-3271: addRowsWithCells now uses the atomic bulkImport (one bulk row
+  // insert + cells + meter in one transaction) instead of N per-row INSERTs.
+  it("bulkImport inserts a multi-row payload via ONE bulk path (rows + cells + meter), ids in input order", async () => {
+    const store = makeGridStore();
+    let metered = 0;
+    const r = run(rowRepoLayer(store, (_ws, n) => (metered += n)));
+    const exit = await r(
+      Effect.flatMap(RowRepo, (s) =>
+        s.bulkImport({
+          rows: [
+            { workspaceId: WS, tableId: "t1", position: 0, createdAt: 1 },
+            { workspaceId: WS, tableId: "t1", position: 1, createdAt: 1 },
+            { workspaceId: WS, tableId: "t1", position: 2, createdAt: 1 },
+          ],
+          // Cells reference rows by their returned id (input order), so the
+          // mapping below proves ids came back aligned to the input rows.
+          buildCells: (ids) =>
+            ids.map((rowId, i) => ({
+              workspaceId: WS, tableId: "t1", rowId, columnId: "c1",
+              value: `v${i}`, status: "done", error: null, updatedAt: 1,
+            })),
+          meter: { workspaceId: WS, n: 3 },
+        }),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    const ids = Exit.isSuccess(exit) ? exit.value : [];
+    // All 3 rows + 3 cells committed in one go; meter bumped once by N.
+    expect(store.rows).toHaveLength(3);
+    expect(store.cells).toHaveLength(3);
+    expect(metered).toBe(3);
+    // Cells point at the row ids in input order.
+    expect(store.cells.map((c) => c.rowId)).toEqual([...ids]);
+    expect(store.cells.map((c) => c.value)).toEqual(["v0", "v1", "v2"]);
+  });
+
+  it("bulkImport is atomic: a mid-import failure leaves ZERO rows, cells and no meter bump", async () => {
+    const store = makeGridStore({ rows: seedRows() });
+    let metered = 0;
+    const r = run(rowRepoLayer(store, (_ws, n) => (metered += n)));
+    const exit = await r(
+      Effect.flatMap(RowRepo, (s) =>
+        s.bulkImport({
+          rows: [
+            { workspaceId: WS, tableId: "t1", position: 1, createdAt: 1 },
+            { workspaceId: WS, tableId: "t1", position: 2, createdAt: 1 },
+          ],
+          // Simulate a failure mid-import (e.g. a bad cell status / DB error).
+          buildCells: () => {
+            throw new Error("boom mid-import");
+          },
+          meter: { workspaceId: WS, n: 2 },
+        }),
+      ),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    // Nothing from THIS import committed: only the pre-seeded row remains, no
+    // new cells, and the meter was never bumped — no orphaned rows.
+    expect(store.rows.map((row) => row.id)).toEqual(["r1"]);
+    expect(store.cells).toHaveLength(0);
+    expect(metered).toBe(0);
+  });
 });
 
 describe("cellRepoLayer", () => {
@@ -167,6 +324,164 @@ describe("cellRepoLayer", () => {
       Effect.flatMap(CellRepo, (s) => s.listByTable("t1")),
     );
     expect(Exit.isSuccess(exit) && exit.value.map((c) => c.id)).toEqual(["cell1"]);
+  });
+
+  // TRI-3272: the PAGED getTable reads only the cells of a page's rows, never
+  // the whole table's cells.
+  it("listByRowIds returns only the cells of the given rows (a page's cells)", async () => {
+    const cells = [
+      ...seedCells(), // rowId r1
+      { id: "cell2", workspaceId: WS, tableId: "t1", rowId: "r2", columnId: "c1", value: "y", status: "done", error: null, updatedAt: 1 },
+      { id: "cell3", workspaceId: WS, tableId: "t1", rowId: "r3", columnId: "c1", value: "z", status: "done", error: null, updatedAt: 1 },
+    ];
+    const store = makeGridStore({ cells });
+    const exit = await run(cellRepoLayer(store))(
+      Effect.flatMap(CellRepo, (s) => s.listByRowIds(["r1", "r3"])),
+    );
+    expect(Exit.isSuccess(exit) && exit.value.map((c) => c.id).sort()).toEqual([
+      "cell1",
+      "cell3",
+    ]);
+  });
+
+  it("listByRowIds returns [] for an empty row set", async () => {
+    const store = makeGridStore({ cells: seedCells() });
+    const exit = await run(cellRepoLayer(store))(
+      Effect.flatMap(CellRepo, (s) => s.listByRowIds([])),
+    );
+    expect(Exit.isSuccess(exit) && exit.value).toEqual([]);
+  });
+
+  // TRI-3266 regression: a wide CSV (>8191 cells) must insert across multiple
+  // statements without hitting Postgres' 65535 bind-parameter cap, and every
+  // cell must land.
+  it("insertMany lands all cells when the count exceeds the 8191/statement cap", async () => {
+    const store = makeGridStore();
+    const total = 8500; // > 65535 / 8 cols ≈ 8191, the single-statement ceiling
+    const cells: NewCell[] = Array.from({ length: total }, (_, i) => ({
+      workspaceId: WS,
+      tableId: "t1",
+      rowId: `r${i}`,
+      columnId: "c1",
+      value: i,
+      status: "done",
+      error: null,
+      updatedAt: 1,
+    }));
+    const exit = await run(cellRepoLayer(store))(
+      Effect.flatMap(CellRepo, (s) => s.insertMany(cells)),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(store.cells).toHaveLength(total);
+    // No cell was dropped or duplicated across the chunked batches.
+    expect(new Set(store.cells.map((c) => c.value)).size).toBe(total);
+  });
+});
+
+describe("chunk (cell-repo bulk-insert batching)", () => {
+  it("splits >8191 cells into batches of at most CELL_INSERT_CHUNK_SIZE", () => {
+    const total = 8500;
+    const items = Array.from({ length: total }, (_, i) => i);
+    const batches = chunk(items, CELL_INSERT_CHUNK_SIZE);
+    // Multiple statements, none over the bind-parameter-safe chunk size.
+    expect(batches.length).toBeGreaterThan(1);
+    for (const b of batches) {
+      expect(b.length).toBeLessThanOrEqual(CELL_INSERT_CHUNK_SIZE);
+    }
+    // Every item is covered exactly once, in order.
+    expect(batches.flat()).toEqual(items);
+    // Chosen chunk size stays well under the ~8191 cells/statement ceiling.
+    expect(CELL_INSERT_CHUNK_SIZE).toBeLessThanOrEqual(8000);
+  });
+
+  it("returns no batches for an empty input and rejects a non-positive size", () => {
+    expect(chunk([], CELL_INSERT_CHUNK_SIZE)).toEqual([]);
+    expect(() => chunk([1, 2, 3], 0)).toThrow();
+  });
+});
+
+// TRI-3285 regression: the in-memory cellRepoLayer pushes cells one-by-one, so
+// it can NOT catch a regression that drops chunking from the LIVE Drizzle path.
+// This binds the assertion to CellRepoLive itself: a real Drizzle client over a
+// recording fake (the same shape `dbClientLayer` accepts in production) captures
+// the rows handed to each `INSERT`. If chunking is removed, a >chunk-size import
+// collapses to ONE oversized statement (which would blow Postgres' 65535
+// bind-parameter cap) and these assertions fail.
+describe("CellRepoLive.insertMany chunks the live Drizzle insert (TRI-3285)", () => {
+  // A real Drizzle handle whose `insert(...).values(rows)` is intercepted to
+  // record the batch size and resolve without a database. Typed as the same
+  // `Db` `dbClientLayer` takes (Proxy preserves the target type) — no `as`.
+  const recordingDb = (batches: number[]) => {
+    const base = drizzle.mock({ schema });
+    const values = (rows: unknown) => {
+      batches.push(Array.isArray(rows) ? rows.length : 1);
+      return Promise.resolve([] as unknown[]);
+    };
+    return new Proxy(base, {
+      get(target, prop, receiver) {
+        if (prop === "insert") return () => ({ values });
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+  };
+
+  const makeCells = (total: number): NewCell[] =>
+    Array.from({ length: total }, (_, i) => ({
+      workspaceId: WS,
+      tableId: "t1",
+      rowId: `r${i}`,
+      columnId: "c1",
+      value: i,
+      status: "done",
+      error: null,
+      updatedAt: 1,
+    }));
+
+  it("splits a >chunk-size import into batches of at most CELL_INSERT_CHUNK_SIZE", async () => {
+    const batches: number[] = [];
+    const total = CELL_INSERT_CHUNK_SIZE * 2 + 5;
+    const exit = await Effect.runPromiseExit(
+      Effect.flatMap(CellRepo, (s) => s.insertMany(makeCells(total))).pipe(
+        Effect.provide(CellRepoLive),
+        Effect.provide(dbClientLayer(recordingDb(batches))),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    // >1 statement, none over the bind-parameter-safe size, summing to total:
+    // the exact signature a chunked bulk insert leaves and a single oversized
+    // INSERT (the regression) would not.
+    expect(batches.length).toBeGreaterThan(1);
+    for (const n of batches) expect(n).toBeLessThanOrEqual(CELL_INSERT_CHUNK_SIZE);
+    expect(batches.reduce((a, b) => a + b, 0)).toBe(total);
+    expect(batches).toEqual([
+      CELL_INSERT_CHUNK_SIZE,
+      CELL_INSERT_CHUNK_SIZE,
+      5,
+    ]);
+  });
+
+  it("emits exactly one statement when the import fits in a single chunk", async () => {
+    const batches: number[] = [];
+    const exit = await Effect.runPromiseExit(
+      Effect.flatMap(CellRepo, (s) => s.insertMany(makeCells(10))).pipe(
+        Effect.provide(CellRepoLive),
+        Effect.provide(dbClientLayer(recordingDb(batches))),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(batches).toEqual([10]);
+  });
+
+  it("touches the database for ZERO statements on an empty import", async () => {
+    const batches: number[] = [];
+    const exit = await Effect.runPromiseExit(
+      Effect.flatMap(CellRepo, (s) => s.insertMany([])).pipe(
+        Effect.provide(CellRepoLive),
+        Effect.provide(dbClientLayer(recordingDb(batches))),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(batches).toEqual([]);
   });
 });
 

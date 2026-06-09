@@ -19,13 +19,24 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Id } from "./ids";
 import { CellContent, Icon } from "../App";
 import type { Cell } from "../api";
+import { VirtualGridBody } from "../VirtualGridBody";
+import { resolveRowHeight } from "../gridVirtual";
+import { useColumnWindow } from "../useColumnWindow";
+import { GridColSpacer } from "../GridColSpacer";
 import { runCloudColumn } from "./cloud-run";
 import { WebhookModal } from "./WebhookModal";
 import {
   useCloudGridMutations,
   useCloudSession,
-  useCloudTable,
+  useCloudTablePaged,
 } from "./useCloudGrid";
+
+/** Fixed cloud column width (px) — cloud columns are not resizable. */
+const CLOUD_COL_W = 180;
+/** Row-number gutter width (px) — matches `.col-row-num` in styles.css. */
+const CLOUD_GUTTER_W = 48;
+/** Trailing add/delete column width (px) — matches `.add-col-th`. */
+const CLOUD_ADD_COL_W = 44;
 
 interface CloudGridProps {
   /** The active cloud table to render, or `null` when none is selected. */
@@ -45,7 +56,11 @@ interface CloudGridProps {
  * in-flight request to disable the trigger).
  */
 export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
-  const data = useCloudTable(tableId);
+  // Lazily-paged grid (TRI-3272): only the loaded pages are resident, and the
+  // viewport scroll handler below pulls the next page as the user nears the end —
+  // so combined with the C1 virtualization a 10k-row table's memory is bounded.
+  const { data, loadMore, hasMore, isLoadingMore } =
+    useCloudTablePaged(tableId);
   const session = useCloudSession();
   const { setCell, addRow, addColumn, deleteRow, deleteColumn } =
     useCloudGridMutations();
@@ -53,6 +68,40 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
   const [runningColId, setRunningColId] = useState<string | null>(null);
   const [runningCells, setRunningCells] = useState<Set<string>>(new Set());
   const [showWebhook, setShowWebhook] = useState(false);
+
+  // Row-virtualization plumbing (TRI-3267): the scroll container the
+  // virtualizer reads from, and the resolved per-density row height.
+  const gridScrollRef = useRef<HTMLDivElement>(null);
+  const rowHeight = resolveRowHeight();
+
+  // Column virtualization (TRI-3286): window the DATA columns horizontally so a
+  // cloud table with hundreds of columns mounts only the visible columns ×
+  // visible rows. Cloud columns are a fixed width (no resize). The gutter is NOT
+  // part of this window — it is the always-present sticky gutter cell rendered
+  // once below, so it is reserved exactly once and `spacers.left` is the first
+  // visible data column's offset (gutter excluded). The hook runs
+  // unconditionally (count 0 when no table) to keep hook order stable.
+  const cloudColumns = data?.columns ?? [];
+  const columnWindow = useColumnWindow({
+    count: cloudColumns.length,
+    scrollRef: gridScrollRef,
+    getColumnWidth: () => CLOUD_COL_W,
+  });
+
+  // Tie page fetching to the virtualization viewport (TRI-3272): when the user
+  // scrolls within ~10 row-heights of the bottom and another page exists, pull
+  // it. The infinite query + `loadMore` guards against concurrent fetches, so a
+  // burst of scroll events triggers at most one in-flight page load.
+  const onGridScroll = useCallback(
+    (e: React.UIEvent<HTMLDivElement>) => {
+      if (!hasMore || isLoadingMore) return;
+      const el = e.currentTarget;
+      const nearBottom =
+        el.scrollHeight - el.scrollTop - el.clientHeight < rowHeight * 10;
+      if (nearBottom) loadMore();
+    },
+    [hasMore, isLoadingMore, loadMore, rowHeight],
+  );
 
   // Auto-open the webhook form when the chooser's "Webhook" flow bumps the token
   // (and a table is actually present to bind it to).
@@ -84,6 +133,9 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
       const key = `${rowId}:${columnId}`;
       setRunningCells((s) => new Set(s).add(key));
       try {
+        // Force is scoped to the ONE explicitly-targeted cell via `rowIds:[rowId]`
+        // so re-running this cell never re-runs (or re-bills) any other row's
+        // already-`done` cell in the column (TRI-3283 L2).
         await runCloudColumn(session, {
           tableId,
           columnId,
@@ -209,16 +261,29 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
           </button>
         </div>
       ) : (
-        <div className="grid-wrap">
-          <table className="grid-table">
+        <div className="grid-wrap" ref={gridScrollRef} onScroll={onGridScroll}>
+          <table
+            className="grid-table"
+            style={{
+              // Reserve the gutter EXACTLY ONCE: gutter (rendered cell) + all
+              // data columns (the virtualizer's total) + the trailing add-col.
+              width:
+                CLOUD_GUTTER_W +
+                data.columns.length * CLOUD_COL_W +
+                CLOUD_ADD_COL_W,
+            }}
+          >
             <thead>
               <tr>
                 <th className="grid-th row-num-th col-row-num" />
-                {data.columns.map((col) => (
+                <GridColSpacer side="left" width={columnWindow.spacers.left} as="th" />
+                {columnWindow.virtualColumns.map((vc) => {
+                  const col = data.columns[vc.index];
+                  return (
                   <th
                     key={col.id}
                     className="grid-th"
-                    style={{ width: 180, minWidth: 80 }}
+                    style={{ width: CLOUD_COL_W, minWidth: 80 }}
                     onContextMenu={(e) => {
                       e.preventDefault();
                       deleteColumn(col.id as Id<"columns">);
@@ -248,7 +313,9 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
                       )}
                     </div>
                   </th>
-                ))}
+                  );
+                })}
+                <GridColSpacer side="right" width={columnWindow.spacers.right} as="th" />
                 <th className="grid-th add-col-th">
                   <button
                     className="add-col-btn"
@@ -262,22 +329,36 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
                 </th>
               </tr>
             </thead>
-            <tbody>
-              {data.rows.length === 0 ? (
+            {data.rows.length === 0 ? (
+              <tbody>
                 <tr>
                   <td className="grid-td row-num-td" />
-                  {data.columns.map((col) => (
+                  <GridColSpacer side="left" width={columnWindow.spacers.left} />
+                  {columnWindow.virtualColumns.map((vc) => {
+                    const col = data.columns[vc.index];
+                    return (
                     <td key={col.id} className="grid-td">
                       <div className="cell-wrap"><span className="cell-empty">—</span></div>
                     </td>
-                  ))}
+                    );
+                  })}
+                  <GridColSpacer side="right" width={columnWindow.spacers.right} />
                   <td className="grid-td" />
                 </tr>
-              ) : (
-                data.rows.map((row, idx) => (
+              </tbody>
+            ) : (
+              <VirtualGridBody
+                rows={data.rows}
+                scrollRef={gridScrollRef}
+                rowHeight={rowHeight}
+                colSpan={data.columns.length + 2}
+                columnWindow={columnWindow}
+                renderRow={(row, idx, cw) => (
                   <tr key={row.id} className="grid-tr">
                     <td className="grid-td row-num-td">{idx + 1}</td>
-                    {data.columns.map((col) => {
+                    <GridColSpacer side="left" width={cw.spacers.left} />
+                    {cw.virtualColumns.map((vc) => {
+                      const col = data.columns[vc.index];
                       const cell: Cell | undefined = row.cells[col.id];
                       return (
                         <td key={col.id} className="grid-td">
@@ -301,6 +382,7 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
                         </td>
                       );
                     })}
+                    <GridColSpacer side="right" width={cw.spacers.right} />
                     <td className="grid-td">
                       <button
                         className="th-run-btn"
@@ -311,9 +393,9 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
                       </button>
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
+                )}
+              />
+            )}
           </table>
         </div>
       )}

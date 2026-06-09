@@ -9,10 +9,13 @@
  */
 
 import { schema } from "@gtmgrid/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
+import { chunk } from "./_chunk.js";
 import type { GridStore } from "./grid-store.js";
+
+export { chunk } from "./_chunk.js";
 
 /** A cell row projection the grid domain uses (the getTable cell shape). */
 export interface Cell {
@@ -56,6 +59,14 @@ export class CellRepoError extends Data.TaggedError("CellRepoError")<{
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * Max cells per `INSERT` statement. Each cell binds 8 columns
+ * (workspaceId, tableId, rowId, columnId, value, status, error, updatedAt) and
+ * Postgres caps a statement at 65535 bind parameters → 65535 / 8 ≈ 8191 cells.
+ * 1000 leaves a wide safety margin so a single bulk import never hits the wall.
+ */
+export const CELL_INSERT_CHUNK_SIZE = 1000;
+
 const fail = (op: string) => (cause: unknown) =>
   new CellRepoError({
     message: cause instanceof Error ? cause.message : `${op} failed`,
@@ -66,9 +77,18 @@ const fail = (op: string) => (cause: unknown) =>
 export class CellRepo extends Context.Tag("CellRepo")<
   CellRepo,
   {
-    /** Every cell of a table — for getTable. */
+    /** Every cell of a table — for the full (unpaged) getTable. */
     readonly listByTable: (
       tableId: string,
+    ) => Effect.Effect<readonly Cell[], CellRepoError>;
+    /**
+     * Only the cells belonging to a given set of rows — for the PAGED getTable.
+     * Reads a single page's cells (the rows from one keyset page) instead of the
+     * whole table, so resident memory stays bounded. An empty `rowIds` returns
+     * `[]` without touching the database.
+     */
+    readonly listByRowIds: (
+      rowIds: readonly string[],
     ) => Effect.Effect<readonly Cell[], CellRepoError>;
     /** The single cell at (rowId, columnId), or `None` — for the setCell merge. */
     readonly findByRowColumn: (
@@ -120,6 +140,19 @@ export const CellRepoLive: Layer.Layer<CellRepo, never, DbClient> =
                 catch: fail("cell list"),
               })
             : Effect.succeed([] as readonly Cell[]),
+        listByRowIds: (rowIds) => {
+          const valid = rowIds.filter((id) => UUID_RE.test(id));
+          return valid.length === 0
+            ? Effect.succeed([] as readonly Cell[])
+            : Effect.tryPromise({
+                try: () =>
+                  db
+                    .select(cols)
+                    .from(schema.cells)
+                    .where(inArray(schema.cells.rowId, valid)),
+                catch: fail("cell page list"),
+              });
+        },
         findByRowColumn: (rowId, columnId) =>
           UUID_RE.test(rowId) && UUID_RE.test(columnId)
             ? Effect.tryPromise({
@@ -168,18 +201,24 @@ export const CellRepoLive: Layer.Layer<CellRepo, never, DbClient> =
             ? Effect.void
             : Effect.tryPromise({
                 try: async () => {
-                  await db.insert(schema.cells).values(
-                    values.map((v) => ({
-                      workspaceId: v.workspaceId,
-                      tableId: v.tableId,
-                      rowId: v.rowId,
-                      columnId: v.columnId,
-                      value: v.value,
-                      status: v.status as never,
-                      error: v.error,
-                      updatedAt: v.updatedAt,
-                    })),
-                  );
+                  // Chunk so a wide CSV import never exceeds Postgres' 65535
+                  // bind-parameter cap (~8191 cells at 8 cols/cell); loop the
+                  // batches inside one tryPromise so a mid-import failure still
+                  // surfaces as a single CellRepoError.
+                  for (const batch of chunk(values, CELL_INSERT_CHUNK_SIZE)) {
+                    await db.insert(schema.cells).values(
+                      batch.map((v) => ({
+                        workspaceId: v.workspaceId,
+                        tableId: v.tableId,
+                        rowId: v.rowId,
+                        columnId: v.columnId,
+                        value: v.value,
+                        status: v.status as never,
+                        error: v.error,
+                        updatedAt: v.updatedAt,
+                      })),
+                    );
+                  }
                 },
                 catch: fail("cell bulk insert"),
               }),
@@ -207,6 +246,10 @@ export const cellRepoLayer = (store: GridStore): Layer.Layer<CellRepo> =>
   Layer.succeed(CellRepo, {
     listByTable: (tableId) =>
       Effect.succeed(store.cells.filter((c) => c.tableId === tableId)),
+    listByRowIds: (rowIds) => {
+      const set = new Set(rowIds);
+      return Effect.succeed(store.cells.filter((c) => set.has(c.rowId)));
+    },
     findByRowColumn: (rowId, columnId) =>
       Effect.succeed(
         Option.fromNullable(

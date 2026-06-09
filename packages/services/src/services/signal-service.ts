@@ -15,6 +15,7 @@ import { Data, Effect, Option } from "effect";
 import {
   getSignalSource,
   getPath,
+  MAX_RESULTS_PER_SYNC,
   normalizeResults,
   resultKey,
   toCellValue,
@@ -26,10 +27,9 @@ import {
   SignalRepo,
   type SignalBinding,
   type SignalBindingColumn,
+  type SignalDueCursor,
 } from "../repositories/signal-repo.js";
 import { WebhookRepo } from "../repositories/webhook-repo.js";
-
-const SEEN_CAP = 1000;
 
 /** Raised for Trigify/source failures (bad source id, search not created, HTTP error). */
 export class SignalError extends Data.TaggedError("SignalError")<{
@@ -141,49 +141,64 @@ export class SignalService extends Effect.Service<SignalService>()("SignalServic
           try: () => fetchTrigifyResults(apiKey, source.resultsPath, binding.searchId ?? ""),
           catch: (cause) => new SignalError({ message: cause instanceof Error ? cause.message : "Trigify results failed", cause }),
         });
-        const results = normalizeResults(resp);
+        // Cap the payload so one binding can't enqueue an unbounded insert burst
+        // in a single step (a slow/large search would otherwise time the step out
+        // and retry-replay the whole thing).
+        const results = normalizeResults(resp).slice(0, MAX_RESULTS_PER_SYNC);
 
-        const seen = new Set(binding.seen ?? []);
-        const fresh = results.filter((r) => {
+        // First non-empty occurrence per dedupe key within THIS payload — so a
+        // payload that repeats a key inserts it at most once.
+        const byKey = new Map<string, unknown>();
+        for (const r of results) {
           const k = resultKey(r);
-          if (seen.has(k)) return false;
-          seen.add(k);
-          return true;
-        });
+          if (!byKey.has(k)) byKey.set(k, r);
+        }
+
+        // Durable cross-poll dedupe: atomically record the keys and learn which
+        // were genuinely NEW. Correct for a binding of any size (no 1000-key cap).
+        const newKeys = yield* repo.recordSeenKeys(binding.id, [...byKey.keys()]);
 
         let added = 0;
-        if (fresh.length > 0) {
-          const existing = yield* grid.listRows(binding.tableId);
-          let pos = existing.reduce((m, r) => Math.max(m, r.position), 0);
+        if (newKeys.length > 0) {
+          const base = yield* grid.maxRowPosition(binding.tableId);
           const now = Date.now();
-          for (const r of fresh) {
-            pos += 1;
-            const rowId = yield* grid.insertRow({
+          // Bulk-insert the rows in one statement, ids returned in input order.
+          const rowIds = yield* grid.insertRowsBulk(
+            newKeys.map((_k, i) => ({
               workspaceId: binding.workspaceId,
               tableId: binding.tableId,
-              position: pos,
+              position: base + i + 1,
               createdAt: now,
-            });
-            for (const col of binding.columns) {
+            })),
+          );
+          // Build every cell across every new row, then bulk-insert in one
+          // statement (was N rows × M columns serial round-trips).
+          const cells = newKeys.flatMap((k, i) => {
+            const r = byKey.get(k);
+            const rowId = rowIds[i];
+            if (rowId === undefined) return [];
+            return binding.columns.flatMap((col) => {
               const value = toCellValue(getPath(r, col.key));
-              if (value === "") continue;
-              yield* grid.insertCell({
-                workspaceId: binding.workspaceId,
-                tableId: binding.tableId,
-                rowId,
-                columnId: col.columnId,
-                cell: { value, status: "done", error: null, updatedAt: now },
-              });
-            }
-            added += 1;
-          }
+              if (value === "") return [];
+              return [
+                {
+                  workspaceId: binding.workspaceId,
+                  tableId: binding.tableId,
+                  rowId,
+                  columnId: col.columnId,
+                  cell: { value, status: "done", error: null, updatedAt: now },
+                },
+              ];
+            });
+          });
+          yield* grid.insertCellsBulk(cells);
+          added = rowIds.length;
         }
 
         yield* repo.patch(binding.id, {
           lastSyncedAt: Date.now(),
           lastError: null,
           rowsPulled: (binding.rowsPulled ?? 0) + added,
-          seen: [...seen].slice(-SEEN_CAP),
         });
         return added;
       }).pipe(
@@ -278,9 +293,15 @@ export class SignalService extends Effect.Service<SignalService>()("SignalServic
         return yield* runSync(binding.value, apiKey);
       });
 
-    /** Every enabled binding (worker scans for due ones). */
-    const listAllEnabled = () => repo.listAllEnabled();
+    /**
+     * One keyset page of DUE bindings — the cron's fan-out source. The due
+     * predicate (enabled + schedule interval) is resolved in SQL with a LIMIT, so
+     * the worker enqueues bounded batches instead of scanning + JS-filtering the
+     * whole enabled population.
+     */
+    const listDuePage = (args: { now: number; limit: number; cursor: SignalDueCursor | null }) =>
+      repo.listDuePage(args);
 
-    return { create, listByTable, remove, sync, syncForWorker, listAllEnabled } as const;
+    return { create, listByTable, remove, sync, syncForWorker, listDuePage } as const;
   }),
 }) {}

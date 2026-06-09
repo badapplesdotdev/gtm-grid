@@ -749,6 +749,16 @@ html, body, #root {
 
 /* ── Body rows ────────────────────────────── */
 
+/* Row-virtualization spacers (TRI-3267): zero-content <tr>s that pad the
+   <tbody> for the offscreen rows above/below the rendered window so the
+   scrollbar height and column layout stay correct. No borders/hover. */
+.grid-spacer-row,
+.grid-spacer-row > td {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
 .grid-tr {
   transition: background 0.08s;
 }
@@ -865,6 +875,16 @@ html, body, #root {
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
   flex-shrink: 0;
+}
+
+/* Fallback shown while a lazy-loaded panel chunk is fetched (TRI-3287). */
+.panel-fallback {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  min-height: 80px;
+  padding: 24px;
 }
 
 @keyframes spin {
@@ -1336,20 +1356,48 @@ html, body, #root {
   gap: 4px;
   align-items: center;
   flex-shrink: 0;
+  position: relative;
 }
 
-/* Per-agent model picker (chip row under the tabs) */
-.agent-models {
-  display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
-  padding: 7px 10px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+/* Chat history dropdown (native transcripts) — in the composer foot, opens upward */
+.agent-history-picker { position: relative; }
+.agent-history {
+  position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 60; width: 320px; max-width: 80vw;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16); padding: 5px; max-height: 360px; overflow-y: auto;
 }
-.agent-models-label { font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); margin-right: 2px; }
-.agent-model-chip {
-  all: unset; cursor: pointer; font: 500 11.5px var(--font-sans); color: var(--text-2);
-  padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); transition: all 0.12s;
+.agent-history-head { font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); padding: 5px 9px 6px; }
+.agent-history-empty { font-size: 12px; color: var(--text-3); padding: 6px 9px 10px; line-height: 1.4; }
+.agent-history-row { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: var(--r-sm); cursor: pointer; }
+.agent-history-row:hover { background: var(--surface-2); }
+.agent-history-logo { display: inline-flex; width: 15px; height: 15px; flex-shrink: 0; color: var(--text-2); }
+.agent-history-logo svg { width: 15px; height: 15px; }
+.agent-history-title { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-history-time { font-size: 10.5px; color: var(--text-3); flex-shrink: 0; }
+
+/* Per-agent model picker — bottom-right of the composer, popover opens upward */
+.agent-composer-foot { display: flex; justify-content: flex-end; align-items: center; padding: 2px 12px 8px; flex-shrink: 0; }
+.agent-model-picker { position: relative; }
+.agent-model-btn {
+  all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+  font: 500 11.5px var(--font-sans); color: var(--text-2); padding: 3px 8px; border-radius: var(--r-sm);
+  transition: background 0.12s, color 0.12s;
 }
-.agent-model-chip:hover { border-color: var(--border-2); color: var(--text); }
-.agent-model-chip.active { background: var(--accent-soft); border-color: var(--accent-2); color: var(--accent-2); font-weight: 600; }
+.agent-model-btn:hover { background: var(--surface-2); color: var(--text); }
+.agent-model-btn svg { color: var(--text-3); }
+.agent-model-menu {
+  position: absolute; bottom: calc(100% + 6px); right: 0; z-index: 60; min-width: 200px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16); padding: 5px; max-height: 280px; overflow-y: auto;
+}
+.agent-model-menu-head { font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); padding: 5px 9px 6px; }
+.agent-model-opt {
+  all: unset; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; box-sizing: border-box;
+  font: 500 12.5px var(--font-sans); color: var(--text); padding: 7px 9px; border-radius: var(--r-xs);
+}
+.agent-model-opt:hover { background: var(--surface-2); }
+.agent-model-opt.active { color: var(--accent-2); font-weight: 600; }
+.agent-model-opt svg { color: var(--accent-2); }
 .agent-tab {
   all: unset; cursor: pointer;
   display: flex; align-items: center; gap: 8px;
@@ -1474,13 +1522,13 @@ html, body, #root {
 .agent-think-dots span:nth-child(3) { animation-delay: .4s; }
 @keyframes agentPulse { 0%,60%,100% { opacity: .3; } 30% { opacity: 1; } }
 
-.agent-input { border-top: 1px solid var(--border); padding: 12px; display: flex; gap: 8px; flex-shrink: 0; align-items: flex-end; }
+.agent-input { border-top: 1px solid var(--border); padding: 12px; display: flex; gap: 8px; flex-shrink: 0; align-items: flex-end; position: relative; }
 .agent-input textarea {
   flex: 1;
   resize: none;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
-  padding: 9px 11px;
+  padding: 9px 42px 9px 11px;
   font: 400 13px var(--font-sans);
   color: var(--text);
   background: var(--surface-2);
@@ -1490,18 +1538,18 @@ html, body, #root {
 .agent-input textarea:focus { border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 3px var(--accent-ring); }
 .agent-send {
   all: unset; cursor: pointer;
-  align-self: flex-end;
-  height: 37px;
-  padding: 0 17px;
-  border-radius: var(--r-md);
-  background: var(--accent);
-  color: #fff;
-  font: 600 13px var(--font-sans);
-  display: flex; align-items: center;
-  box-shadow: 0 1px 3px var(--accent-shadow);
+  position: absolute; right: 18px; top: 50%; transform: translateY(-50%);
+  height: 28px;
+  width: 28px;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--accent-2);
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.12s, color 0.12s;
 }
-.agent-send:hover { filter: brightness(1.06); }
-.agent-send:disabled { opacity: .45; cursor: default; box-shadow: none; }
+/* The "box" only appears on hover/focus — otherwise it's a bare icon. */
+.agent-send:hover { background: var(--surface-3); }
+.agent-send:disabled { color: var(--text-3); opacity: .55; cursor: default; background: transparent; }
 
 /* ─── Agent panel: markdown + tool results + controls ─────── */
 .agent-clear {
@@ -1557,7 +1605,9 @@ html, body, #root {
 }
 .agent-text .md-pre code { font: 12px var(--font-mono); color: #e4e4ea; white-space: pre; }
 .agent-text a { color: var(--accent); }
-.agent-stop { background: var(--danger) !important; }
+/* Stop — bare neutral icon (not green, not red); box only on hover */
+.agent-stop { color: var(--text-2) !important; }
+.agent-stop:hover { background: var(--surface-3) !important; color: var(--text) !important; }
 
 /* ─── Agent panel: connect / locate CLI ───────────────────── */
 .agent-connect-btn {
@@ -1729,6 +1779,12 @@ html, body, #root {
   background: var(--accent); border-radius: 0 2px 2px 0;
 }
 .ext-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* "+ N more" row at the foot of a sidebar section preview — reads as a link,
+   aligned under the item labels. Opens the Browse-all gallery (Tools/Skills) or
+   reveals the remaining providers inline (Functions). */
+.ext-item.ext-item-more { padding-left: 40px; color: var(--accent-2); font-weight: 500; }
+.ext-item.clickable.ext-item-more:hover { color: var(--accent-2); background: var(--accent-soft); }
 
 /* ── Detail panels (extension / AI provider) ─────────────── */
 .detail {

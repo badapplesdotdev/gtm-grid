@@ -1,5 +1,53 @@
 # @gtmgrid/services
 
+## 0.3.18
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.3.18
+- @gtmgrid/db@0.3.18
+- @gtmgrid/email@0.3.18
+
+## 0.3.17
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.3.17
+- @gtmgrid/db@0.3.17
+- @gtmgrid/email@0.3.17
+
+## 0.3.16
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.3.16
+- @gtmgrid/db@0.3.16
+- @gtmgrid/email@0.3.16
+
+## 0.3.15
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.3.15
+- @gtmgrid/db@0.3.15
+- @gtmgrid/email@0.3.15
+
+## 0.3.14
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.3.14
+- @gtmgrid/db@0.3.14
+- @gtmgrid/email@0.3.14
+
+## 0.3.13
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.3.13
+- @gtmgrid/db@0.3.13
+- @gtmgrid/email@0.3.13
+
 ## 0.3.12
 
 ### Patch Changes

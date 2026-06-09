@@ -11,6 +11,69 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
+/** A per-cell progress event streamed from the local run SSE endpoint. */
+export interface CellProgressEvent {
+  rowId: string;
+  columnId: string;
+  cell: Cell;
+}
+
+/**
+ * Run a function column on the LOCAL project, consuming the sidecar's SSE
+ * progress stream and invoking `onCell` for each cell as it completes (running →
+ * done/error). Resolves with the run summary once the stream's `done` event
+ * arrives. The desktop uses this to patch only the changed cells in place
+ * instead of refetching+replacing the whole grid after the run.
+ */
+async function runColumnStream(
+  path: string,
+  body: unknown,
+  onCell: (e: CellProgressEvent) => void,
+): Promise<{ ran: number; errors: number }> {
+  const res = await fetch(BASE + path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok || !res.body) {
+    throw new Error((await res.json().catch(() => ({}))).error ?? res.statusText);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let summary = { ran: 0, errors: 0 };
+  let streamError: string | null = null;
+
+  const handle = (json: string) => {
+    let evt: { type?: string; rowId?: string; columnId?: string; cell?: Cell; ran?: number; errors?: number; error?: string };
+    try { evt = JSON.parse(json); } catch { return; }
+    if (evt.type === "cell" && evt.rowId && evt.columnId && evt.cell) {
+      onCell({ rowId: evt.rowId, columnId: evt.columnId, cell: evt.cell });
+    } else if (evt.type === "done") {
+      summary = { ran: evt.ran ?? 0, errors: evt.errors ?? 0 };
+    } else if (evt.type === "error") {
+      streamError = evt.error ?? "run failed";
+    }
+  };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl: number;
+    // SSE frames are separated by a blank line; each `data: <json>` line is one event.
+    while ((nl = buffer.indexOf("\n\n")) !== -1) {
+      const frame = buffer.slice(0, nl);
+      buffer = buffer.slice(nl + 2);
+      for (const line of frame.split("\n")) {
+        if (line.startsWith("data:")) handle(line.slice(5).trim());
+      }
+    }
+  }
+  if (streamError) throw new Error(streamError);
+  return summary;
+}
+
 export type CellStatus = "empty" | "pending" | "running" | "done" | "error";
 
 export interface ProjectInfo {
@@ -217,6 +280,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ force: opts.force ?? false, rowIds: opts.rowIds }),
     }),
+  // Streaming run: emits per-cell progress (SSE) so the UI patches changed cells
+  // as they complete, with no full-grid refetch afterwards. LOCAL projects only.
+  runColumnStream: (
+    columnId: string,
+    onCell: (e: CellProgressEvent) => void,
+    opts: { force?: boolean; rowIds?: string[] } = {},
+  ) =>
+    runColumnStream(
+      `/api/columns/${columnId}/run/stream`,
+      { force: opts.force ?? false, rowIds: opts.rowIds },
+      onCell,
+    ),
   updateColumn: (
     columnId: string,
     patch: { name?: string; type?: string; kind?: string; provider?: string | null; method?: string | null; code?: string | null; params?: Record<string, unknown>; condition?: string | null },
@@ -239,7 +314,26 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ agent, path }),
     }),
+  // Past conversations from the CLI's OWN native transcript store (current project).
+  agentSessions: (agent: "claude" | "codex") =>
+    http<{ sessions: AgentSession[] }>(`/api/agent/sessions/${agent}`),
+  agentSession: (agent: "claude" | "codex", id: string) =>
+    http<{ messages: AgentHistoryMessage[] }>(`/api/agent/sessions/${agent}/${encodeURIComponent(id)}`),
 };
+
+/** A past conversation summary (from the agent's native transcript store). */
+export interface AgentSession {
+  id: string;
+  title: string;
+  updatedAt: number;
+  messageCount: number;
+}
+/** One parsed turn from a native transcript. */
+export interface AgentHistoryMessage {
+  role: "user" | "assistant";
+  text: string;
+  tools: { name: string; input: Record<string, unknown>; result?: string }[];
+}
 
 export interface AgentStatus {
   installed: boolean;

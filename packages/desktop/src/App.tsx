@@ -1,18 +1,13 @@
-import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
-import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource } from "./api";
-import AgentPanel from "./AgentPanel";
+import { useState, useEffect, useCallback, useMemo, useRef, memo, lazy, Suspense, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource, type CellProgressEvent } from "./api";
 import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import CellDetails, { extractCode } from "./CellDetails";
-import { ExtensionPanel, AiProviderPanel, ExtensionsBrowse, SkillsBrowse, SkillPanel, BrandIcon } from "./Panels";
-import { AddColumnPopover, FunctionsModal, ColumnSettingsModal } from "./AddColumn";
+import { BrandIcon } from "./BrandIcon";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { AccountBar, PlanBillingModal } from "./cloud/AccountBar";
 import { PendingInvites } from "./cloud/PendingInvites";
-import { WorkspaceSettings } from "./cloud/WorkspaceSettings";
-import { OnboardingFlow } from "./cloud/onboarding/OnboardingFlow";
 import { cloudEnabled, queryClient, syncWorkspacePlan, apiClient } from "./cloud/client";
-import { CloudGrid } from "./cloud/CloudGrid";
 import { useMe, useActiveWorkspace, useAuthState } from "./cloud/auth";
 import {
   useMyPendingInvitations,
@@ -32,11 +27,68 @@ import {
   useCloudGridMutations,
   type CloudProject,
 } from "./cloud/useCloudGrid";
-import { ImportCsvModal } from "./ImportCsvModal";
-import { SignalsModal, type SignalsCloud } from "./SignalsModal";
+import { type SignalsCloud } from "./SignalsModal";
 import type { ImportWriter } from "./csvImport";
 import type { Id } from "./cloud/ids";
+import { VirtualGridBody } from "./VirtualGridBody";
+import { resolveRowHeight } from "./gridVirtual";
+import { useColumnWindow } from "./useColumnWindow";
+import { GridColSpacer } from "./GridColSpacer";
 import "./styles.css";
+
+// ── Lazy-loaded panels (TRI-3287) ─────────────────────────────────────
+// Heavy, non-initial UI is code-split out of the initial bundle so first
+// paint (the core grid + shell) stays small. Each is rendered inside a
+// <Suspense> with a lightweight fallback.
+const AgentPanel = lazy(() => import("./AgentPanel"));
+const OnboardingFlow = lazy(() =>
+  import("./cloud/onboarding/OnboardingFlow").then((m) => ({ default: m.OnboardingFlow })),
+);
+const CloudGrid = lazy(() =>
+  import("./cloud/CloudGrid").then((m) => ({ default: m.CloudGrid })),
+);
+const WorkspaceSettings = lazy(() =>
+  import("./cloud/WorkspaceSettings").then((m) => ({ default: m.WorkspaceSettings })),
+);
+const ExtensionsBrowse = lazy(() =>
+  import("./Panels").then((m) => ({ default: m.ExtensionsBrowse })),
+);
+const ExtensionPanel = lazy(() =>
+  import("./Panels").then((m) => ({ default: m.ExtensionPanel })),
+);
+const AiProviderPanel = lazy(() =>
+  import("./Panels").then((m) => ({ default: m.AiProviderPanel })),
+);
+const SkillsBrowse = lazy(() =>
+  import("./Panels").then((m) => ({ default: m.SkillsBrowse })),
+);
+const SkillPanel = lazy(() =>
+  import("./Panels").then((m) => ({ default: m.SkillPanel })),
+);
+const AddColumnPopover = lazy(() =>
+  import("./AddColumn").then((m) => ({ default: m.AddColumnPopover })),
+);
+const FunctionsModal = lazy(() =>
+  import("./AddColumn").then((m) => ({ default: m.FunctionsModal })),
+);
+const ColumnSettingsModal = lazy(() =>
+  import("./AddColumn").then((m) => ({ default: m.ColumnSettingsModal })),
+);
+const SignalsModal = lazy(() =>
+  import("./SignalsModal").then((m) => ({ default: m.SignalsModal })),
+);
+const ImportCsvModal = lazy(() =>
+  import("./ImportCsvModal").then((m) => ({ default: m.ImportCsvModal })),
+);
+
+/** Lightweight fallback shown while a lazy panel chunk loads. */
+function PanelFallback() {
+  return (
+    <div className="panel-fallback" role="status" aria-live="polite">
+      <span className="cell-spinner" style={{ width: 16, height: 16 }} />
+    </div>
+  );
+}
 
 // What the main area is showing.
 type View =
@@ -46,6 +98,11 @@ type View =
   | { kind: "skills" }
   | { kind: "skill"; id: string }
   | { kind: "ai"; id: string };
+
+// How many rows a sidebar section previews before the rest collapse behind a
+// clickable "+ N more" row (Tools/Skills open their Browse-all gallery; Functions
+// has no gallery, so it reveals the remaining providers inline).
+const NAV_PREVIEW_LIMIT = 10;
 
 // ─── Icons (inline SVG, no deps) ─────────────────────────
 
@@ -124,6 +181,10 @@ const MAX_COL_W = 460;
 const GUTTER_W = 48; // row-number column
 const ADD_COL_W = 44; // trailing "+" column
 
+// Max function columns run concurrently by "Run all". Independent columns fan
+// out up to this bound; dependent columns still serialize behind their inputs.
+const RUN_ALL_CONCURRENCY = 4;
+
 // Persisted id of the last cloud project the user had open, so a relaunch
 // reopens it (default-to-cloud for signed-in users).
 const LAST_CLOUD_PROJECT_KEY = "gtmgrid:lastCloudProject";
@@ -132,6 +193,87 @@ const LAST_CLOUD_PROJECT_KEY = "gtmgrid:lastCloudProject";
 function columnDependsOn(col: Column, columnName: string): boolean {
   const re = new RegExp(`\\{\\{\\s*${columnName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\}\\}`);
   return Object.values(col.params ?? {}).some((v) => typeof v === "string" && re.test(v));
+}
+
+// Build the intra-set dependency graph for a run-all: for each function column,
+// the set of OTHER function-column ids it depends on (references via {{Name}}).
+// Only columns within `cols` are considered — a reference to a manual column or
+// to a column outside this set imposes no ordering constraint here.
+export function buildColumnDeps(cols: Column[]): Map<string, Set<string>> {
+  const deps = new Map<string, Set<string>>();
+  for (const col of cols) {
+    const set = new Set<string>();
+    for (const other of cols) {
+      if (other.id === col.id) continue;
+      if (columnDependsOn(col, other.name)) set.add(other.id);
+    }
+    deps.set(col.id, set);
+  }
+  return deps;
+}
+
+/**
+ * Run a set of function columns honouring their dependency graph with bounded
+ * concurrency. Independent columns run in parallel (up to `concurrency`); a
+ * column only starts once every column it depends on has finished. Cyclic or
+ * unresolvable dependencies are released once no further progress is possible,
+ * so every column is always attempted exactly once. `run` failures are swallowed
+ * per-column (matching the prior per-column try/catch) so one bad column never
+ * blocks the rest. `onColumnSettled` fires after each column completes (used for
+ * progress reporting).
+ */
+export async function runColumnsWithDeps(
+  cols: Column[],
+  deps: Map<string, Set<string>>,
+  concurrency: number,
+  run: (col: Column) => Promise<void>,
+  onColumnSettled?: () => void,
+): Promise<void> {
+  const byId = new Map(cols.map((c) => [c.id, c]));
+  const done = new Set<string>();
+  const inFlight = new Set<string>();
+  const pending = new Set(cols.map((c) => c.id));
+  const limit = Math.max(1, concurrency);
+
+  const depsSatisfied = (id: string): boolean => {
+    const d = deps.get(id);
+    if (!d) return true;
+    for (const dep of d) if (byId.has(dep) && !done.has(dep)) return false;
+    return true;
+  };
+
+  return new Promise<void>((resolve) => {
+    const pump = () => {
+      if (pending.size === 0 && inFlight.size === 0) {
+        resolve();
+        return;
+      }
+      // Eligible = pending columns whose in-set deps are all done.
+      let eligible = [...pending].filter(depsSatisfied);
+      // Deadlock guard: nothing eligible and nothing running (e.g. a cycle) —
+      // release the rest so they still get attempted exactly once.
+      if (eligible.length === 0 && inFlight.size === 0 && pending.size > 0) {
+        eligible = [...pending];
+      }
+      for (const id of eligible) {
+        if (inFlight.size >= limit) break;
+        const col = byId.get(id);
+        if (!col) { pending.delete(id); continue; }
+        pending.delete(id);
+        inFlight.add(id);
+        void Promise.resolve()
+          .then(() => run(col))
+          .catch(() => { /* per-column failure must not abort the run */ })
+          .finally(() => {
+            inFlight.delete(id);
+            done.add(id);
+            onColumnSettled?.();
+            pump();
+          });
+      }
+    };
+    pump();
+  });
 }
 
 // ─── Cell renderer ───────────────────────────────────────
@@ -143,7 +285,7 @@ const ExpandIcon = () => (
   </svg>
 );
 
-export function CellContent({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running }: {
+type CellContentProps = {
   cell: Cell | undefined;
   col: Column;
   onEdit: (value: string) => void;
@@ -151,7 +293,9 @@ export function CellContent({ cell, col, onEdit, onOpenDetails, onExpand, onRunC
   onExpand?: (anchor: { left: number; top: number; width: number }) => void;
   onRunCell?: () => void;
   running?: boolean;
-}) {
+};
+
+function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running }: CellContentProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -263,6 +407,34 @@ export function CellContent({ cell, col, onEdit, onOpenDetails, onExpand, onRunC
     </div>
   );
 }
+
+/**
+ * Memoized cell renderer. A grid has thousands of cells; without this, any App
+ * state change (e.g. a single cell edit, an unrelated panel toggle) re-renders
+ * EVERY mounted cell. The comparator skips re-render unless this cell's own
+ * data changed: its value/status/error, its `running` flag, or its `col`
+ * identity. Callback props (`onEdit`, `onRunCell`, …) are intentionally NOT
+ * compared — call sites create fresh closures per render, so comparing them
+ * would defeat memoization. They are safe to ignore because each closure only
+ * captures the cell's stable `row.id`/`col.id`, so a stale closure still writes
+ * the correct cell. `running` and `onRunCell`-presence are the only render-
+ * affecting inputs derived from those props, and both are compared.
+ */
+function cellPropsEqual(prev: CellContentProps, next: CellContentProps): boolean {
+  return (
+    prev.col === next.col &&
+    prev.running === next.running &&
+    prev.cell?.value === next.cell?.value &&
+    prev.cell?.status === next.cell?.status &&
+    prev.cell?.error === next.cell?.error &&
+    // Run/expand/details affordances are gated on whether the handler exists.
+    !prev.onRunCell === !next.onRunCell &&
+    !prev.onExpand === !next.onExpand &&
+    !prev.onOpenDetails === !next.onOpenDetails
+  );
+}
+
+export const CellContent = memo(CellContentInner, cellPropsEqual);
 
 // ─── Expanded cell editor ─────────────────────────────────
 // A popover for viewing / editing long cell content (transcripts, summaries…)
@@ -412,9 +584,6 @@ function NewTableChooser({
   const WebhookIcon = (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17a4 4 0 0 1 3.6-3.98" /><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06" /><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8" /></svg>
   );
-  const SignalIcon = (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 11a9 9 0 0 1 9 9" /><path d="M4 4a16 16 0 0 1 16 16" /><circle cx="5" cy="19" r="1" /></svg>
-  );
   const LockIcon = (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
   );
@@ -502,6 +671,7 @@ export default function App() {
   const [aiProviders, setAiProviders] = useState<AiProviderInfo[]>([]);
   const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
   const [fnSectionOpen, setFnSectionOpen] = useState(false); // Functions section: collapsed by default
+  const [fnShowAll, setFnShowAll] = useState(false); // Functions: reveal providers past the preview limit inline (no gallery to open)
   const [aiSectionOpen, setAiSectionOpen] = useState(true);
   const [extSectionOpen, setExtSectionOpen] = useState(true);
   const [skillsSectionOpen, setSkillsSectionOpen] = useState(false); // Skills section: collapsed by default
@@ -881,11 +1051,16 @@ export default function App() {
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try { return (localStorage.getItem("gtmgrid:theme") as "light" | "dark") || "light"; } catch { return "light"; }
   });
+  // Row-virtualization plumbing (TRI-3267): the scroll container ref the
+  // virtualizer reads, and the resolved per-density row height it estimates with.
+  const gridScrollRef = useRef<HTMLDivElement>(null);
+  const [rowHeight, setRowHeight] = useState(resolveRowHeight);
   useEffect(() => {
     const root = document.documentElement;
     root.setAttribute("data-theme", theme);
     root.setAttribute("data-density", "compact");
     root.setAttribute("data-accent", "green");
+    setRowHeight(resolveRowHeight());
     try { localStorage.setItem("gtmgrid:theme", theme); } catch { /* ignore */ }
   }, [theme]);
 
@@ -941,6 +1116,23 @@ export default function App() {
     [colWidths],
   );
 
+  // Column virtualization (TRI-3286): window the DATA columns horizontally so a
+  // table with hundreds of columns mounts only the visible columns × visible
+  // rows. The gutter is NOT part of this window — it is the always-present
+  // sticky gutter <th>/<td> rendered once below, so it is reserved exactly once
+  // and `spacers.left` is the first visible data column's offset (gutter
+  // excluded). The hook runs unconditionally (count 0 when no table) to keep
+  // hook order stable.
+  const gridColumns = tableData?.columns ?? [];
+  const columnWindow = useColumnWindow({
+    count: gridColumns.length,
+    scrollRef: gridScrollRef,
+    getColumnWidth: (i) => {
+      const col = gridColumns[i];
+      return col ? colW(col.id) : DEFAULT_COL_W;
+    },
+  });
+
   // Right-click context menu
   const [ctxMenu, setCtxMenu] = useState<{
     x: number;
@@ -957,17 +1149,22 @@ export default function App() {
     // it's reachable instead of giving up on the first failed check.
     const boot = async () => {
       try {
-        const [h, t, f, e, ai, sk] = await Promise.all([
-          api.health(),
-          api.tables(),
-          api.functions(),
-          api.extensions(),
-          api.aiProviders(),
-          api.skills(),
-        ]);
+        // `health` is the liveness contract — gate connected/offline on it ALONE.
+        const h = await api.health();
         if (cancelled) return;
         setHealthStatus("connected");
         setProjectName(h.project ?? "gtmgrid");
+        // Load feature data resiliently: a single missing/failed route (e.g. a
+        // version-skewed sidecar lacking a newer endpoint) must degrade that one
+        // feature, never blank the whole app with "server not reachable".
+        const [t, f, e, ai, sk] = await Promise.all([
+          api.tables().catch(() => []),
+          api.functions().catch(() => []),
+          api.extensions().catch(() => []),
+          api.aiProviders().catch(() => []),
+          api.skills().catch(() => []),
+        ]);
+        if (cancelled) return;
         setTables(t);
         setConnectors(f);
         setExtensions(e);
@@ -1005,6 +1202,23 @@ export default function App() {
     if (selectedTableId) loadTable(selectedTableId);
     else setTableData(null);
   }, [selectedTableId, loadTable]);
+
+  // Patch a single cell in place from a streamed run progress event. Keeps the
+  // rest of the grid untouched so a local run updates only the cells that
+  // actually changed (no full setTableData replacement / loadTable refetch).
+  // Ignores events for a table other than the one currently loaded.
+  const patchCell = useCallback((tableId: string, e: CellProgressEvent) => {
+    setTableData((cur) => {
+      if (!cur || cur.id !== tableId) return cur;
+      let touched = false;
+      const rows = cur.rows.map((row) => {
+        if (row.id !== e.rowId) return row;
+        touched = true;
+        return { ...row, cells: { ...row.cells, [e.columnId]: e.cell } };
+      });
+      return touched ? { ...cur, rows } : cur;
+    });
+  }, []);
 
   // A freshly-created social-signal table populates asynchronously (Trigify
   // scrapes results over ~10-60s). Poll until rows land, showing a skeleton.
@@ -1213,35 +1427,49 @@ export default function App() {
 
   const runAll = async () => {
     if (!tableData) return;
+    const tableId = tableData.id;
     const fnCols = tableData.columns.filter(c => c.kind === "function");
     if (!fnCols.length) return;
+    // Run independent columns concurrently (bounded), serializing only columns
+    // with true {{dependencies}} (topological order). Each column streams its
+    // per-cell progress and patches cells as they land — no full-grid refetch.
+    const deps = buildColumnDeps(fnCols);
+    let completed = 0;
     setRunProgress({ current: 0, total: fnCols.length });
-    for (let i = 0; i < fnCols.length; i++) {
-      setRunProgress({ current: i + 1, total: fnCols.length });
-      try { await api.runColumn(fnCols[i].id); } catch { /* continue */ }
-    }
+    await runColumnsWithDeps(
+      fnCols,
+      deps,
+      RUN_ALL_CONCURRENCY,
+      async (col) => { await api.runColumnStream(col.id, (e) => patchCell(tableId, e)); },
+      () => { completed += 1; setRunProgress({ current: completed, total: fnCols.length }); },
+    );
     setRunProgress(null);
-    await loadTable(tableData.id);
   };
 
   // ── Run single column ──────────────────────
 
   const runColumn = async (colId: string) => {
+    const tableId = selectedTableId;
+    if (!tableId) return;
     setRunningColId(colId);
-    try { await api.runColumn(colId); } catch { /* ignore */ }
+    // Patch cells in place as the sidecar streams per-cell progress (SSE),
+    // instead of refetching+replacing the whole grid after the run.
+    try { await api.runColumnStream(colId, (e) => patchCell(tableId, e)); } catch { /* ignore */ }
     setRunningColId(null);
-    if (selectedTableId) await loadTable(selectedTableId);
   };
 
   // ── Run a single cell (this row × this function column) ──
   const runCell = async (rowId: string, colId: string) => {
+    const tableId = selectedTableId;
+    if (!tableId) return;
     const key = `${rowId}:${colId}`;
     setRunningCells(s => new Set(s).add(key));
-    try { await api.runColumn(colId, { force: true, rowIds: [rowId] }); } catch { /* ignore */ }
-    if (selectedTableId) {
-      const updated = await api.table(selectedTableId);
-      setTableData(updated);
-    }
+    try {
+      // Force is scoped to the ONE explicitly-targeted cell via `rowIds:[rowId]`,
+      // so re-running this cell never re-runs (or re-bills) any other row's
+      // already-`done` cell in the column (TRI-3283 L2).
+      await api.runColumnStream(colId, (e) => patchCell(tableId, e), { force: true, rowIds: [rowId] });
+    } catch { /* ignore */ }
     setRunningCells(s => { const n = new Set(s); n.delete(key); return n; });
   };
 
@@ -1339,6 +1567,10 @@ export default function App() {
         const deps = updated.columns.filter((c) => c.kind === "function" && columnDependsOn(c, changed.name));
         if (deps.length) {
           for (const dc of deps) {
+            // Force is scoped to the edited row only (`rowIds:[rowId]`): only the
+            // cells whose input actually changed (this row's dependents) are
+            // recomputed/re-billed — every OTHER row's already-`done` dependent
+            // cell is left untouched (TRI-3283 L2).
             await api.runColumn(dc.id, { force: true, rowIds: [rowId] }).catch(() => {});
           }
           updated = await api.table(selectedTableId);
@@ -1386,17 +1618,19 @@ export default function App() {
   }
   if (mustAuth) {
     return (
-      <OnboardingFlow
-        forced
-        initialScreen={pendingInviteToken !== null ? "signup" : "signin"}
-        hasSession={false}
-        onClose={() => {
-          // Opting out clears the invite so the gate doesn't re-fire in a loop.
-          if (pendingInviteToken !== null) clearPendingInviteToken();
-          continueLocally();
-        }}
-        onDone={() => {}}
-      />
+      <Suspense fallback={<AppLoader inShell label="Signing you in…" />}>
+        <OnboardingFlow
+          forced
+          initialScreen={pendingInviteToken !== null ? "signup" : "signin"}
+          hasSession={false}
+          onClose={() => {
+            // Opting out clears the invite so the gate doesn't re-fire in a loop.
+            if (pendingInviteToken !== null) clearPendingInviteToken();
+            continueLocally();
+          }}
+          onDone={() => {}}
+        />
+      </Suspense>
     );
   }
 
@@ -1671,19 +1905,30 @@ export default function App() {
               <div className="skeleton-row">
                 <div className="shimmer skeleton-bar" style={{ width: "70%", height: 13 }} />
               </div>
-            ) : extensions.map(e => (
-              <div
-                key={e.id}
-                className={`ext-item clickable${view.kind === "extension" && view.id === e.id ? " active" : ""}`}
-                onClick={() => setView({ kind: "extension", id: e.id })}
-              >
-                <BrandIcon logo={e.logo} name={e.name} size={16} />
-                <span className="ext-item-name">{e.name}</span>
-                <span className={`ext-badge ${e.connected ? "connected" : "no-key"}`}>
-                  {e.connected ? "connected" : "no key"}
-                </span>
-              </div>
-            )))}
+            ) : <>
+              {extensions.slice(0, NAV_PREVIEW_LIMIT).map(e => (
+                <div
+                  key={e.id}
+                  className={`ext-item clickable${view.kind === "extension" && view.id === e.id ? " active" : ""}`}
+                  onClick={() => setView({ kind: "extension", id: e.id })}
+                >
+                  <BrandIcon logo={e.logo} name={e.name} size={16} />
+                  <span className="ext-item-name">{e.name}</span>
+                  <span className={`ext-badge ${e.connected ? "connected" : "no-key"}`}>
+                    {e.connected ? "connected" : "no key"}
+                  </span>
+                </div>
+              ))}
+              {extensions.length > NAV_PREVIEW_LIMIT && (
+                <div
+                  className="ext-item clickable ext-item-more"
+                  onClick={() => setView({ kind: "extensions" })}
+                  title="Browse all tools"
+                >
+                  +{extensions.length - NAV_PREVIEW_LIMIT} more
+                </div>
+              )}
+            </>)}
           </div>
 
           {/* Functions section — collapsed by default */}
@@ -1704,26 +1949,37 @@ export default function App() {
               <div className="skeleton-row">
                 <div className="shimmer skeleton-bar" style={{ width: "60%", height: 13 }} />
               </div>
-            ) : connectors.map(c => (
-              <div key={c.provider} className="connector-group">
-                <div className="connector-group-header" onClick={() => toggleProvider(c.provider)}>
-                  <span className={`connector-group-toggle${expandedProviders[c.provider] ? " open" : ""}`}>
-                    <Icon.ChevronRight />
-                  </span>
-                  <span className="connector-group-name">{c.name}</span>
-                  <span className="connector-method-count">{c.methods.length}</span>
-                </div>
-                {expandedProviders[c.provider] && (
-                  <div className="connector-methods">
-                    {c.methods.map(m => (
-                      <div key={m.method} className="connector-method-item" title={m.description}>
-                        {m.label}
-                      </div>
-                    ))}
+            ) : <>
+              {(fnShowAll ? connectors : connectors.slice(0, NAV_PREVIEW_LIMIT)).map(c => (
+                <div key={c.provider} className="connector-group">
+                  <div className="connector-group-header" onClick={() => toggleProvider(c.provider)}>
+                    <span className={`connector-group-toggle${expandedProviders[c.provider] ? " open" : ""}`}>
+                      <Icon.ChevronRight />
+                    </span>
+                    <span className="connector-group-name">{c.name}</span>
+                    <span className="connector-method-count">{c.methods.length}</span>
                   </div>
-                )}
-              </div>
-            )))}
+                  {expandedProviders[c.provider] && (
+                    <div className="connector-methods">
+                      {c.methods.map(m => (
+                        <div key={m.method} className="connector-method-item" title={m.description}>
+                          {m.label}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+              {!fnShowAll && connectors.length > NAV_PREVIEW_LIMIT && (
+                <div
+                  className="ext-item clickable ext-item-more"
+                  onClick={() => setFnShowAll(true)}
+                  title="Show all providers"
+                >
+                  +{connectors.length - NAV_PREVIEW_LIMIT} more
+                </div>
+              )}
+            </>)}
           </div>
 
           {/* Skills section — per-tool agent playbooks + custom skills */}
@@ -1746,18 +2002,29 @@ export default function App() {
               <div className="skeleton-row">
                 <div className="shimmer skeleton-bar" style={{ width: "70%", height: 13 }} />
               </div>
-            ) : skills.map(s => (
-              <div
-                key={s.id}
-                className={`ext-item clickable${view.kind === "skill" && view.id === s.id ? " active" : ""}`}
-                onClick={() => setView({ kind: "skill", id: s.id })}
-              >
-                <BrandIcon logo={s.logo} name={s.name} size={16} />
-                <span className="ext-item-name">{s.name}</span>
-                {s.source === "tool" && s.connected && <span className="ext-badge connected">on</span>}
-                {s.source === "custom" && <span className="ext-badge no-key">custom</span>}
-              </div>
-            )))}
+            ) : <>
+              {skills.slice(0, NAV_PREVIEW_LIMIT).map(s => (
+                <div
+                  key={s.id}
+                  className={`ext-item clickable${view.kind === "skill" && view.id === s.id ? " active" : ""}`}
+                  onClick={() => setView({ kind: "skill", id: s.id })}
+                >
+                  <BrandIcon logo={s.logo} name={s.name} size={16} />
+                  <span className="ext-item-name">{s.name}</span>
+                  {s.source === "tool" && s.connected && <span className="ext-badge connected">on</span>}
+                  {s.source === "custom" && <span className="ext-badge no-key">custom</span>}
+                </div>
+              ))}
+              {skills.length > NAV_PREVIEW_LIMIT && (
+                <div
+                  className="ext-item clickable ext-item-more"
+                  onClick={() => setView({ kind: "skills" })}
+                  title="Browse all skills"
+                >
+                  +{skills.length - NAV_PREVIEW_LIMIT} more
+                </div>
+              )}
+            </>)}
           </div>
         </div>
 
@@ -1804,37 +2071,45 @@ export default function App() {
             Closing returns to the grid. Local writes via the sidecar; cloud via
             Convex. */}
         {importMode === "local" && (
-          <ImportCsvModal
-            inline
-            writer={localImportWriter}
-            onClose={() => setImportMode(null)}
-            onImported={() => { api.tables().then(setTables); }}
-            onOpenTable={id => {
-              api.tables().then(t => {
-                setTables(t);
-                setSelectedTableId(id);
-                setView({ kind: "table" });
-              });
-              setImportMode(null);
-            }}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <ImportCsvModal
+              inline
+              writer={localImportWriter}
+              onClose={() => setImportMode(null)}
+              onImported={() => { api.tables().then(setTables); }}
+              onOpenTable={id => {
+                api.tables().then(t => {
+                  setTables(t);
+                  setSelectedTableId(id);
+                  setView({ kind: "table" });
+                });
+                setImportMode(null);
+              }}
+            />
+          </Suspense>
         )}
         {importMode === "cloud" && cloudImportWriter && (
-          <ImportCsvModal
-            inline
-            writer={cloudImportWriter}
-            onClose={() => setImportMode(null)}
-            onOpenTable={id => {
-              setCloudTableId(id as Id<"tables">);
-              setImportMode(null);
-            }}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <ImportCsvModal
+              inline
+              writer={cloudImportWriter}
+              onClose={() => setImportMode(null)}
+              onOpenTable={id => {
+                setCloudTableId(id as Id<"tables">);
+                setImportMode(null);
+              }}
+            />
+          </Suspense>
         )}
 
         {/* Cloud project: the LIVE multiplayer grid (Convex). Replaces the local
             sidecar grid entirely while a cloud project is open. Hidden while a
             CSV import is open in this pane. */}
-        {!importMode && inCloud && !cloudLocked && view.kind === "table" && <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} />}
+        {!importMode && inCloud && !cloudLocked && view.kind === "table" && (
+          <Suspense fallback={<PanelFallback />}>
+            <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} />
+          </Suspense>
+        )}
 
         {/* Cloud locked: the trial lapsed / Free plan. Cloud data stays safe but
             inaccessible until the user upgrades; local tables are unaffected. */}
@@ -1860,22 +2135,30 @@ export default function App() {
             scope, so they must take precedence over the CloudGrid (which only
             renders for the "table" view). */}
         {!importMode && view.kind === "extensions" && (
-          <ExtensionsBrowse
-            extensions={extensions}
-            onOpen={(id) => setView({ kind: "extension", id })}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <ExtensionsBrowse
+              extensions={extensions}
+              onOpen={(id) => setView({ kind: "extension", id })}
+            />
+          </Suspense>
         )}
         {!importMode && view.kind === "extension" && (
-          <ExtensionPanel
-            id={view.id}
-            onConnected={refreshConnections}
-            onBack={() => setView({ kind: "extensions" })}
-            workspaceCreds={workspaceCreds}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <ExtensionPanel
+              id={view.id}
+              onConnected={refreshConnections}
+              onBack={() => setView({ kind: "extensions" })}
+              workspaceCreds={workspaceCreds}
+            />
+          </Suspense>
         )}
         {!importMode && view.kind === "ai" && (() => {
           const p = aiProviders.find(x => x.id === view.id);
-          return p ? <AiProviderPanel provider={p} onConnected={refreshConnections} workspaceCreds={workspaceCreds} /> : null;
+          return p ? (
+            <Suspense fallback={<PanelFallback />}>
+              <AiProviderPanel provider={p} onConnected={refreshConnections} workspaceCreds={workspaceCreds} />
+            </Suspense>
+          ) : null;
         })()}
 
         {/* Skills gallery + detail panels. Like the extension/AI panels, these
@@ -1884,18 +2167,22 @@ export default function App() {
             "table" view — otherwise selecting a skill in a cloud workspace would
             hide the grid and render nothing (a blank dead-end). */}
         {!importMode && view.kind === "skills" && (
-          <SkillsBrowse
-            skills={skills}
-            onOpen={(id) => setView({ kind: "skill", id })}
-            onChanged={() => api.skills().then(setSkills).catch(() => {})}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <SkillsBrowse
+              skills={skills}
+              onOpen={(id) => setView({ kind: "skill", id })}
+              onChanged={() => api.skills().then(setSkills).catch(() => {})}
+            />
+          </Suspense>
         )}
         {!importMode && view.kind === "skill" && (
-          <SkillPanel
-            id={view.id}
-            onBack={() => setView({ kind: "skills" })}
-            onChanged={() => api.skills().then(setSkills).catch(() => {})}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <SkillPanel
+              id={view.id}
+              onBack={() => setView({ kind: "skills" })}
+              onChanged={() => api.skills().then(setSkills).catch(() => {})}
+            />
+          </Suspense>
         )}
 
         {!importMode && !inCloud && view.kind === "table" && <>
@@ -1990,16 +2277,19 @@ export default function App() {
             <p className="empty-sub">Trigify is scraping your signal — first results can take a few minutes. They'll appear here automatically, and keep updating on your schedule.</p>
           </div>
         ) : tableData ? (
-          <div className="grid-wrap">
+          <div className="grid-wrap" ref={gridScrollRef}>
             <table
               className="grid-table"
               style={{ width: GUTTER_W + tableData.columns.reduce((s, c) => s + colW(c.id), 0) + ADD_COL_W }}
             >
               <thead>
                 <tr>
-                  {/* Row-number gutter */}
+                  {/* Row-number gutter — the ONLY gutter cell (reserved once) */}
                   <th className="grid-th row-num-th col-row-num" />
-                  {tableData.columns.map(col => (
+                  <GridColSpacer side="left" width={columnWindow.spacers.left} as="th" />
+                  {columnWindow.virtualColumns.map(vc => {
+                    const col = tableData.columns[vc.index];
+                    return (
                     <th
                       key={col.id}
                       className="grid-th"
@@ -2038,7 +2328,9 @@ export default function App() {
                         }}
                       />
                     </th>
-                  ))}
+                    );
+                  })}
+                  <GridColSpacer side="right" width={columnWindow.spacers.right} as="th" />
                   {/* Add column */}
                   <th className="grid-th add-col-th" style={{ width: ADD_COL_W }}>
                     <button className="add-col-btn" onClick={openAddCol} title="Add column">
@@ -2047,68 +2339,85 @@ export default function App() {
                   </th>
                 </tr>
               </thead>
-              <tbody>
-                {tableData.rows.length === 0 ? (
+              {tableData.rows.length === 0 ? (
+                <tbody>
                   <tr>
                     <td className="grid-td row-num-td" />
-                    {tableData.columns.map(col => (
+                    <GridColSpacer side="left" width={columnWindow.spacers.left} />
+                    {columnWindow.virtualColumns.map(vc => {
+                      const col = tableData.columns[vc.index];
+                      return (
                       <td key={col.id} className="grid-td">
                         <div className="cell-wrap"><span className="cell-empty">—</span></div>
                       </td>
-                    ))}
-                    <td className="grid-td" />
-                  </tr>
-                ) : tableData.rows.map((row, idx) => (
-                  <tr key={row.id} className="grid-tr">
-                    <td
-                      className="grid-td row-num-td"
-                      onContextMenu={(e) => openCtx(e, [{ label: "Delete row", danger: true, onClick: () => deleteRow(row.id) }])}
-                    >
-                      {idx + 1}
-                    </td>
-                    {tableData.columns.map(col => {
-                      const cell: Cell | undefined = row.cells[col.id];
-                      return (
-                        <td
-                          key={col.id}
-                          className="grid-td"
-                          onContextMenu={(e) =>
-                            openCtx(e, [
-                              { label: "Clear cell", onClick: () => clearCell(row.id, col.id) },
-                              { label: "Delete row", danger: true, onClick: () => deleteRow(row.id) },
-                            ])
-                          }
-                        >
-                          <CellContent
-                            cell={cell}
-                            col={col}
-                            onEdit={v => setCell(row.id, col.id, v)}
-                            onOpenDetails={() =>
-                              setDetail({
-                                columnName: col.name,
-                                value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
-                              })
-                            }
-                            onExpand={(anchor) =>
-                              setExpandCell({
-                                rowId: row.id,
-                                colId: col.id,
-                                columnName: col.name,
-                                value: cell?.value != null ? String(cell.value) : "",
-                                editable: col.kind === "manual",
-                                anchor,
-                              })
-                            }
-                            onRunCell={col.kind === "function" ? () => runCell(row.id, col.id) : undefined}
-                            running={runningCells.has(`${row.id}:${col.id}`)}
-                          />
-                        </td>
                       );
                     })}
+                    <GridColSpacer side="right" width={columnWindow.spacers.right} />
                     <td className="grid-td" />
                   </tr>
-                ))}
-              </tbody>
+                </tbody>
+              ) : (
+                <VirtualGridBody
+                  rows={tableData.rows}
+                  scrollRef={gridScrollRef}
+                  rowHeight={rowHeight}
+                  colSpan={tableData.columns.length + 2}
+                  columnWindow={columnWindow}
+                  renderRow={(row, idx, cw) => (
+                    <tr key={row.id} className="grid-tr">
+                      <td
+                        className="grid-td row-num-td"
+                        onContextMenu={(e) => openCtx(e, [{ label: "Delete row", danger: true, onClick: () => deleteRow(row.id) }])}
+                      >
+                        {idx + 1}
+                      </td>
+                      <GridColSpacer side="left" width={cw.spacers.left} />
+                      {cw.virtualColumns.map(vc => {
+                        const col = tableData.columns[vc.index];
+                        const cell: Cell | undefined = row.cells[col.id];
+                        return (
+                          <td
+                            key={col.id}
+                            className="grid-td"
+                            onContextMenu={(e) =>
+                              openCtx(e, [
+                                { label: "Clear cell", onClick: () => clearCell(row.id, col.id) },
+                                { label: "Delete row", danger: true, onClick: () => deleteRow(row.id) },
+                              ])
+                            }
+                          >
+                            <CellContent
+                              cell={cell}
+                              col={col}
+                              onEdit={v => setCell(row.id, col.id, v)}
+                              onOpenDetails={() =>
+                                setDetail({
+                                  columnName: col.name,
+                                  value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
+                                })
+                              }
+                              onExpand={(anchor) =>
+                                setExpandCell({
+                                  rowId: row.id,
+                                  colId: col.id,
+                                  columnName: col.name,
+                                  value: cell?.value != null ? String(cell.value) : "",
+                                  editable: col.kind === "manual",
+                                  anchor,
+                                })
+                              }
+                              onRunCell={col.kind === "function" ? () => runCell(row.id, col.id) : undefined}
+                              running={runningCells.has(`${row.id}:${col.id}`)}
+                            />
+                          </td>
+                        );
+                      })}
+                      <GridColSpacer side="right" width={cw.spacers.right} />
+                      <td className="grid-td" />
+                    </tr>
+                  )}
+                />
+              )}
             </table>
           </div>
         ) : null}
@@ -2116,10 +2425,12 @@ export default function App() {
       </div>
 
       {/* ── Agent panel (Claude Code / Codex) ─ */}
-      <AgentPanel
-        onGridChange={refreshAll}
-        activeTable={tableData ? { name: tableData.name, columns: tableData.columns.map((c) => c.name) } : null}
-      />
+      <Suspense fallback={null}>
+        <AgentPanel
+          onGridChange={refreshAll}
+          activeTable={tableData ? { name: tableData.name, columns: tableData.columns.map((c) => c.name) } : null}
+        />
+      </Suspense>
 
       {/* ── Cell details drawer ─ */}
       {detail && (
@@ -2167,25 +2478,29 @@ export default function App() {
 
       {/* ── Cloud onboarding (full-screen, C28) ─────────────── */}
       {onboarding && (
-        <OnboardingFlow
-          initialScreen={onboarding.initialScreen}
-          hasSession={onboarding.hasSession}
-          onClose={() => setOnboarding(null)}
-          onDone={(workspaceId) => {
-            if (workspaceId !== null) setActiveWorkspaceId(workspaceId);
-            setOnboarding(null);
-            refreshAppState(workspaceId);
-          }}
-        />
+        <Suspense fallback={<AppLoader inShell label="Loading…" />}>
+          <OnboardingFlow
+            initialScreen={onboarding.initialScreen}
+            hasSession={onboarding.hasSession}
+            onClose={() => setOnboarding(null)}
+            onDone={(workspaceId) => {
+              if (workspaceId !== null) setActiveWorkspaceId(workspaceId);
+              setOnboarding(null);
+              refreshAppState(workspaceId);
+            }}
+          />
+        </Suspense>
       )}
 
       {/* ── Modals ──────────────────────── */}
       {showWorkspaceSettings && activeWorkspace && (
-        <WorkspaceSettings
-          workspaceId={activeWorkspace._id}
-          workspaceName={activeWorkspace.name}
-          onClose={() => setShowWorkspaceSettings(false)}
-        />
+        <Suspense fallback={<PanelFallback />}>
+          <WorkspaceSettings
+            workspaceId={activeWorkspace._id}
+            workspaceName={activeWorkspace.name}
+            onClose={() => setShowWorkspaceSettings(false)}
+          />
+        </Suspense>
       )}
 
       {/* Invite-accepted celebration: confetti fires on accept; this confirms it. */}
@@ -2227,37 +2542,43 @@ export default function App() {
       )}
 
       {showAddCol && tableData && (
-        <AddColumnPopover
-          tableId={tableData.id}
-          anchor={addColAnchor}
-          onClose={() => setShowAddCol(false)}
-          onAdded={() => loadTable(tableData.id)}
-          onUseFunction={() => { setShowAddCol(false); setShowFunctions(true); }}
-        />
+        <Suspense fallback={<PanelFallback />}>
+          <AddColumnPopover
+            tableId={tableData.id}
+            anchor={addColAnchor}
+            onClose={() => setShowAddCol(false)}
+            onAdded={() => loadTable(tableData.id)}
+            onUseFunction={() => { setShowAddCol(false); setShowFunctions(true); }}
+          />
+        </Suspense>
       )}
 
       {showFunctions && tableData && (
-        <FunctionsModal
-          tableId={tableData.id}
-          connectors={connectors}
-          columns={tableData.columns.map((c) => c.name)}
-          onClose={() => setShowFunctions(false)}
-          onAdded={() => loadTable(tableData.id)}
-          onOpenAiSettings={() => {
-            setShowFunctions(false);
-            const target = aiProviders[0]?.id ?? "anthropic";
-            setView({ kind: "ai", id: target });
-          }}
-        />
+        <Suspense fallback={<PanelFallback />}>
+          <FunctionsModal
+            tableId={tableData.id}
+            connectors={connectors}
+            columns={tableData.columns.map((c) => c.name)}
+            onClose={() => setShowFunctions(false)}
+            onAdded={() => loadTable(tableData.id)}
+            onOpenAiSettings={() => {
+              setShowFunctions(false);
+              const target = aiProviders[0]?.id ?? "anthropic";
+              setView({ kind: "ai", id: target });
+            }}
+          />
+        </Suspense>
       )}
 
       {editCol && tableData && (
-        <ColumnSettingsModal
-          column={editCol}
-          columns={tableData.columns.map((c) => c.name)}
-          onClose={() => setEditCol(null)}
-          onSaved={() => loadTable(tableData.id)}
-        />
+        <Suspense fallback={<PanelFallback />}>
+          <ColumnSettingsModal
+            column={editCol}
+            columns={tableData.columns.map((c) => c.name)}
+            onClose={() => setEditCol(null)}
+            onSaved={() => loadTable(tableData.id)}
+          />
+        </Suspense>
       )}
 
       {showNewTableChooser && (
@@ -2275,25 +2596,27 @@ export default function App() {
       )}
 
       {showSignals && (
-        <SignalsModal
-          cloud={inCloud ? signalsCloud : undefined}
-          onClose={() => setShowSignals(false)}
-          onConnectTrigify={() => { setShowSignals(false); setView({ kind: "extension", id: "trigify" }); }}
-          onCreated={(tableId, added) => {
-            setShowSignals(false);
-            if (inCloud) {
-              setCloudTableId(tableId as Id<"tables">);
-              setView({ kind: "table" });
-            } else {
-              api.tables().then((t) => {
-                setTables(t);
-                setSelectedTableId(tableId);
+        <Suspense fallback={<PanelFallback />}>
+          <SignalsModal
+            cloud={inCloud ? signalsCloud : undefined}
+            onClose={() => setShowSignals(false)}
+            onConnectTrigify={() => { setShowSignals(false); setView({ kind: "extension", id: "trigify" }); }}
+            onCreated={(tableId, added) => {
+              setShowSignals(false);
+              if (inCloud) {
+                setCloudTableId(tableId as Id<"tables">);
                 setView({ kind: "table" });
-              }).catch(() => {});
-              if (!added) startWarming(tableId);
-            }
-          }}
-        />
+              } else {
+                api.tables().then((t) => {
+                  setTables(t);
+                  setSelectedTableId(tableId);
+                  setView({ kind: "table" });
+                }).catch(() => {});
+                if (!added) startWarming(tableId);
+              }
+            }}
+          />
+        </Suspense>
       )}
 
       {showNewTable && (

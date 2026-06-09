@@ -1,5 +1,67 @@
 # @gtmgrid/desktop
 
+## 0.3.18
+
+### Patch Changes
+
+- a0d2514: Performance & scale hardening, Tier 3 + cleanups. Column virtualization (visible columns × rows only) for very wide tables; desktop bundle code-split (lazy-loaded panels) to shrink first load; dedupe the bulk-insert chunk() helper into one shared util with a regression test bound to the real Drizzle path; recordDelivery prunes in a single set-based DELETE; cell runs force only the targeted cell (no re-billing unchanged cells); and lint is now warning-free.
+  - @gtmgrid/cloud@0.3.18
+  - @gtmgrid/services@0.3.18
+
+## 0.3.17
+
+### Patch Changes
+
+- 203c18e: Performance & scale hardening, Tier 2. Server: retry/backoff + timeout on connector and worker HTTP (429/Retry-After aware, 402 fatal); pre-run credit/quota gate so an over-quota column run is rejected up front instead of over-metering; signals cron now filters due bindings in SQL with keyset pagination + chunked fan-out, bulk-inserts results, and dedupes via a durable signal_seen_keys table (no more >1000 re-insert); per-column Inngest step keys so a retry never re-charges completed columns; honor connector batchSize (one call per batch); cached worker Effect runtime + a process-wide sidecar concurrency semaphore with a clamped run concurrency. Device: run-all now runs independent columns concurrently (dependency-ordered).
+  - @gtmgrid/cloud@0.3.17
+  - @gtmgrid/services@0.3.17
+
+## 0.3.16
+
+### Patch Changes
+
+- 3a9f459: Performance & scale hardening for thousands of rows + enrichments (perf epic, Tier 0 + Tier 1). Server: cap the Supavisor pool, add a global Inngest concurrency cap, chunk bulk cell/row inserts (fixes the 65535-param crash on wide CSV), collapse the per-cell cloud write to <=2 queries + batch worker writes with backpressure, make CSV import a single atomic transaction, replace the webhook upsert full-table scan with an indexed lookup, add a metadata-only table fast path, and paginate getTable cell reads. Device: virtualize the local + cloud grids, coalesce realtime events with an O(1) keyed reducer + incremental view, memoize cells and stop the full-table refetch on every edit, stream local-run progress per cell, and bound client memory to loaded pages.
+  - @gtmgrid/cloud@0.3.16
+  - @gtmgrid/services@0.3.16
+
+## 0.3.15
+
+### Patch Changes
+
+- 85d5772: Fix "Server not reachable" after an in-app update. The auto-update relaunch left
+  the previous local engine sidecar running (orphaned, holding the port), so the
+  updated app's UI talked to a stale older sidecar missing newer routes and
+  reported the server as offline. The sidecar now self-terminates when its parent
+  app exits, retries binding the port during the relaunch handoff, and the app
+  gates its connection state on the health check alone.
+  - @gtmgrid/cloud@0.3.15
+  - @gtmgrid/services@0.3.15
+
+## 0.3.14
+
+### Patch Changes
+
+- 2f7da8b: Agent panel now shows past conversations again — read from each CLI's own native
+  transcript store (Claude Code project sessions, Codex rollouts for the current
+  project) instead of a local copy. Opening one loads its messages and resumes the
+  CLI's native session for full context. Replaces the previous localStorage history.
+  - @gtmgrid/cloud@0.3.14
+  - @gtmgrid/services@0.3.14
+
+## 0.3.13
+
+### Patch Changes
+
+- f469e03: Tools & agent follow-ups: add Firecrawl (scraping) and Supabase (Management API)
+  connectors with manifests + agent playbooks; restyle the agent composer (model
+  picker popover, send/stop icon); persist the per-agent model selection across
+  relaunches; cap each sidebar section (Tools/Skills/Functions) at 10 with a
+  "+ N more" reveal; and rebuild the marketing homepage (apps/web). Past agent
+  conversations now rely on each CLI's own native transcript store (resume via the
+  native session id) rather than a local copy.
+  - @gtmgrid/cloud@0.3.13
+  - @gtmgrid/services@0.3.13
+
 ## 0.3.12
 
 ### Patch Changes

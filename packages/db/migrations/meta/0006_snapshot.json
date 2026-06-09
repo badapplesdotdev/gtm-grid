@@ -1,5 +1,5 @@
 {
-  "id": "fc56b44f-5071-4362-b394-5a0ebc4b2470",
+  "id": "76cb3cf1-5090-433d-8d7b-c7446c668384",
   "prevId": "151d3fa0-e48e-44bd-8356-a1bd40df8a04",
   "version": "7",
   "dialect": "postgresql",
@@ -420,12 +420,6 @@
         "params": {
           "name": "params",
           "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "condition": {
-          "name": "condition",
-          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
@@ -1520,6 +1514,80 @@
           "tableTo": "tables",
           "columnsFrom": [
             "table_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.signal_seen_keys": {
+      "name": "signal_seen_keys",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "binding_id": {
+          "name": "binding_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "signal_seen_keys_by_binding_key": {
+          "name": "signal_seen_keys_by_binding_key",
+          "columns": [
+            {
+              "expression": "binding_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "signal_seen_keys_binding_id_signal_bindings_id_fk": {
+          "name": "signal_seen_keys_binding_id_signal_bindings_id_fk",
+          "tableFrom": "signal_seen_keys",
+          "tableTo": "signal_bindings",
+          "columnsFrom": [
+            "binding_id"
           ],
           "columnsTo": [
             "id"

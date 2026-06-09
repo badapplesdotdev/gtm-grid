@@ -34,8 +34,21 @@ if (!connectionString) {
  * Raw postgres-js connection. `prepare: false` is mandatory for Supavisor
  * transaction mode (see file header). Exported for the rare case a caller needs
  * a raw query or to close the pool; prefer the `db` Drizzle client below.
+ *
+ * The pool is deliberately TINY (`max: 2`). In transaction-mode serverless,
+ * every instance keeps its own pool, so the total Supavisor client connections
+ * are `instances × max`. That product must stay under the Supavisor client cap,
+ * otherwise new instances get "max client connections reached" and requests
+ * fail. `idle_timeout` (seconds) returns idle connections to Supavisor quickly
+ * so cold instances don't hoard them, and `connect_timeout` (seconds) fails
+ * fast instead of hanging when the pooler is saturated.
  */
-export const sqlClient = postgres(connectionString, { prepare: false });
+export const sqlClient = postgres(connectionString, {
+  prepare: false,
+  max: 2,
+  idle_timeout: 20,
+  connect_timeout: 10,
+});
 
 /** Drizzle client bound to the full schema. The single DB access surface. */
 export const db = drizzle(sqlClient, { schema });

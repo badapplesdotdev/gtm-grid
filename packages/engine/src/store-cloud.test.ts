@@ -177,6 +177,71 @@ describe("ConvexGridStore — reads", () => {
   });
 });
 
+describe("ConvexGridStore — batched writes (setCells)", () => {
+  const REFS_BATCHED: CloudFunctionRefs = {
+    ...REFS,
+    setCells: { kind: "setCells" },
+  };
+
+  it("buffers writes and flushes them through setCells on drain", async () => {
+    const { client, calls } = fakeClient({});
+    const store = await buildStore({
+      client,
+      refs: REFS_BATCHED,
+      tableId: TABLE_ID,
+    });
+
+    // Two terminal writes — neither hits setCell/setCellStatus directly; they
+    // buffer until drain flushes them in one setCells POST.
+    await Effect.runPromise(
+      store.setCell("row_1", "col_1", {
+        value: { text: "a" },
+        status: "done",
+        error: null,
+      }),
+    );
+    await Effect.runPromise(
+      store.setCell("row_2", "col_1", {
+        value: { text: "b" },
+        status: "done",
+        error: null,
+      }),
+    );
+    expect(calls.some((c) => c.ref === REFS_BATCHED.setCells)).toBe(false);
+
+    if (store.drain === undefined) throw new Error("expected drain");
+    await Effect.runPromise(store.drain());
+
+    const batch = calls.find((c) => c.ref === REFS_BATCHED.setCells);
+    expect(batch).toBeDefined();
+    expect(batch?.args.cells).toEqual([
+      { rowId: "row_1", columnId: "col_1", value: { text: "a" }, status: "done", error: null },
+      { rowId: "row_2", columnId: "col_1", value: { text: "b" }, status: "done", error: null },
+    ]);
+    // No per-cell setCell/setCellStatus writes on the batched path.
+    expect(calls.some((c) => c.ref === REFS_BATCHED.setCell)).toBe(false);
+    expect(calls.some((c) => c.ref === REFS_BATCHED.setCellStatus)).toBe(false);
+  });
+
+  it("signals coalesceRunningWrites + drain when batching is wired", async () => {
+    const { client } = fakeClient({});
+    const store = await buildStore({
+      client,
+      refs: REFS_BATCHED,
+      tableId: TABLE_ID,
+    });
+    expect(store.coalesceRunningWrites).toBe(true);
+    expect(store.drain).toBeDefined();
+  });
+
+  it("does NOT signal coalesce/drain without a setCells ref", async () => {
+    const { client } = fakeClient({});
+    const store = await buildStore({ client, refs: REFS, tableId: TABLE_ID });
+    expect(store.coalesceRunningWrites).toBeUndefined();
+    expect(store.drain).toBeUndefined();
+  });
+});
+
 describe("ConvexGridStore — writes (run-status mapping)", () => {
   it("routes a status-only patch to setCellStatus (run lifecycle running→done)", async () => {
     const { client, calls } = fakeClient({});

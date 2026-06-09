@@ -11,10 +11,17 @@ import { parseManifest, connectorFromManifest } from "./connectors/manifest.js";
 
 export { Db } from "./db.js";
 export { Engine, mapConcurrent, aiConfigFromEnv } from "./execute.js";
-export type { EngineConfig, RunColumnOptions, EngineStores } from "./execute.js";
+export type { EngineConfig, RunColumnOptions, EngineStores, CellProgress } from "./execute.js";
 export { Registry, defaultRegistry } from "./registry.js";
 export { runFunction, normalizeCode } from "./sandbox.js";
 export { defineHttpConnector } from "./connectors/http.js";
+export {
+  fetchWithRetry,
+  isRetryableStatus,
+  isFatalStopStatus,
+  parseRetryAfter,
+  type RetryOptions,
+} from "./http-retry.js";
 export { parseManifest, connectorFromManifest, manifestSchema, type ExtensionManifest } from "./connectors/manifest.js";
 export * from "./types.js";
 // Canonical Effect-TS service pattern (see docs/effect-conventions.md). Later

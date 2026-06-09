@@ -21,9 +21,12 @@ import {
   migrateGlobals,
   listProjects,
 } from "@gtmgrid/engine";
+import type { CellProgress } from "@gtmgrid/engine";
 import { detectAgents, streamClaude, streamCodex, setAgentPath, rescanAgents, type AgentKind } from "./agent.js";
+import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
 import { corsHeadersFor, isOriginAllowed } from "./cors.js";
+import { Semaphore } from "./semaphore.js";
 import {
   SIGNAL_SOURCES,
   getSource,
@@ -40,6 +43,18 @@ import {
 const PORT = Number(process.env.GTMGRID_PORT ?? 8787);
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(SERVER_DIR, "..", "..", "..");
+
+// ── Process-wide run limiter (M6). The engine's per-run `mapConcurrent` only
+// bounds ONE column run's row fan-out; it does NOT cap how many runs execute at
+// once. A couple of simultaneous device runs (auto-run + manual) therefore push
+// many sandboxed executions through this single sidecar at once. This semaphore
+// is shared by BOTH the local and cloud run routes so the TOTAL number of
+// in-flight runs is bounded regardless of how many start simultaneously.
+// Overridable via GTMGRID_MAX_CONCURRENT_RUNS for tuning; defaults to 4.
+const MAX_CONCURRENT_RUNS = Number(
+  process.env.GTMGRID_MAX_CONCURRENT_RUNS ?? 4,
+);
+const runLimiter = new Semaphore(MAX_CONCURRENT_RUNS);
 
 // ── Shared global db: credentials, extensions, AI config (across all projects).
 const globalDb = new Db(globalDbPath());
@@ -507,7 +522,7 @@ route("GET", "/api/signals/sources", () => ({
 
 // Bindings in the current project (without the heavy `seen` dedupe window).
 route("GET", "/api/signals", () =>
-  listBindings(current.projectDb).map(({ seen, ...b }) => b),
+  listBindings(current.projectDb).map(({ seen: _seen, ...b }) => b),
 );
 
 // Create: table + columns + Trigify search + binding + initial pull.
@@ -791,8 +806,12 @@ route("POST", "/api/cells", (_p, body) => {
 
 route("POST", "/api/columns/:id/run", async (p, body) => {
   const rowIds = Array.isArray(body?.rowIds) && body.rowIds.length ? (body.rowIds as string[]) : undefined;
-  const res = await current.engine.runColumn(p.id, { force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds });
-  return res;
+  // Bound the number of simultaneous runs process-wide (M6): a run waits for a
+  // permit before fanning out, so concurrent runs queue instead of all spiking
+  // the single sidecar at once.
+  return runLimiter.run(() =>
+    current.engine.runColumn(p.id, { force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds }),
+  );
 });
 
 // --- cloud run path (T9) ---
@@ -812,10 +831,15 @@ route("POST", "/api/cloud/columns/run", async (_p, body) => {
   const rowIds = Array.isArray(body?.rowIds) && body.rowIds.length ? (body.rowIds as string[]) : undefined;
   const deps = defaultCloudRunDeps(registry, aiConfig());
   // The cloud path is Db-free: the engine is built with no Db and reads/writes
-  // through the injected cloud store, so no SQLite file is opened here.
-  return runCloudColumn(
-    { apiUrl, token, tableId, columnId, force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds },
-    deps,
+  // through the injected cloud store, so no SQLite file is opened here. The run
+  // waits for a process-wide permit first (M6) so simultaneous cloud + local
+  // runs are bounded; `runCloudColumn` additionally clamps `concurrency` to a
+  // safe per-run ceiling.
+  return runLimiter.run(() =>
+    runCloudColumn(
+      { apiUrl, token, tableId, columnId, force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds },
+      deps,
+    ),
   );
 });
 
@@ -867,6 +891,17 @@ route("POST", "/api/extensions/:id/connect", (p, body) => {
 });
 
 route("GET", "/api/agents", () => detectAgents());
+
+// Past conversations for the current project, read from the CLI's OWN native
+// transcript store (Claude Code project dir / Codex rollouts) — no local copy.
+route("GET", "/api/agent/sessions/:agent", (p) => ({
+  sessions: listAgentSessions(p.agent === "codex" ? "codex" : "claude", REPO_ROOT),
+}));
+// One conversation's messages, parsed from the native transcript. Resuming it
+// reuses the native session id via the chat route's `--resume`.
+route("GET", "/api/agent/sessions/:agent/:id", (p) => ({
+  messages: readAgentSession(p.agent === "codex" ? "codex" : "claude", REPO_ROOT, p.id),
+}));
 
 // Manually connect a CLI (set its path) and/or rescan after install.
 route("POST", "/api/agents/connect", (_p, body) => {
@@ -950,6 +985,48 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // LOCAL run progress stream (TRI-3275): run a function column on the local
+  // SQLite project and stream per-cell progress as Server-Sent Events so the
+  // desktop patches only the changed cells as they complete — instead of running
+  // blind then refetching+replacing the whole grid. This is the SSE twin of the
+  // JSON `POST /api/columns/:id/run` route, handled here because the JSON router
+  // can't keep a streaming response open. CORS stays allowlisted, never `*` (#22).
+  {
+    const m = req.method === "POST" && url.pathname.match(/^\/api\/columns\/([^/]+)\/run\/stream$/);
+    if (m) {
+      const columnId = decodeURIComponent(m[1]);
+      const body = await readBody(req);
+      const rowIds =
+        Array.isArray(body?.rowIds) && body.rowIds.length ? (body.rowIds as string[]) : undefined;
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+        ...corsHeadersFor(origin),
+      });
+      const write = (event: unknown) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+      try {
+        const summary = await current.engine.runColumn(columnId, {
+          force: !!body?.force,
+          concurrency: body?.concurrency ?? 5,
+          rowIds,
+          onCell: (cell: CellProgress) =>
+            write({
+              type: "cell",
+              rowId: cell.rowId,
+              columnId: cell.columnId,
+              cell: { value: cell.value, status: cell.status, error: cell.error },
+            }),
+        });
+        write({ type: "done", ran: summary.ran, errors: summary.errors });
+      } catch (e) {
+        write({ type: "error", error: e instanceof Error ? e.message : String(e) });
+      }
+      res.end();
+      return;
+    }
+  }
+
   for (const r of routes) {
     if (r.method !== req.method) continue;
     const m = url.pathname.match(r.pattern);
@@ -967,18 +1044,48 @@ const server = createServer(async (req, res) => {
   send(res, 404, { error: "not found" }, origin);
 });
 
-server.on("error", (err: NodeJS.ErrnoException) => {
-  if (err.code === "EADDRINUSE") {
-    console.error(`gtmgrid server: port ${PORT} already in use — assuming another instance is running.`);
-    process.exit(0);
-  }
-  throw err;
-});
+// Parent-death watchdog. The desktop app spawns this sidecar as a child; if the
+// app dies WITHOUT killing us — notably an auto-update `relaunch()`, which
+// hard-exits and never fires the window-destroyed handler — we'd otherwise linger
+// as an orphan holding the port. The NEW app's sidecar would then hit EADDRINUSE
+// and the stale (older) process would keep serving outdated routes, so the
+// refreshed UI sees 404s and reports "server not reachable". When orphaned we get
+// reparented to init/launchd (ppid 1), so exit on that transition. (Skipped when
+// launched directly from a shell in dev, where there is no parent app to outlive.)
+const PARENT_PID = process.ppid;
+if (PARENT_PID > 1) {
+  setInterval(() => {
+    if (process.ppid !== PARENT_PID || process.ppid <= 1) {
+      console.error("gtmgrid server: parent app exited — shutting down sidecar.");
+      process.exit(0);
+    }
+  }, 1500).unref();
+}
 
 // Bind to loopback (127.0.0.1) ONLY, never 0.0.0.0 (#22): the sidecar runs
 // connectors with the user's credentials and spawns their authenticated CLIs,
 // so it must be reachable only from this machine — not exposed on the LAN.
 const HOST = "127.0.0.1";
+
+// On EADDRINUSE, RETRY rather than give up: right after an app relaunch the
+// previous sidecar may still be releasing the port (its watchdog is exiting), so
+// brief contention is expected. Retry for a few seconds before failing, so the
+// new (current-version) sidecar reliably wins the port.
+let bindAttempts = 0;
+const MAX_BIND_ATTEMPTS = 15;
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    bindAttempts += 1;
+    if (bindAttempts >= MAX_BIND_ATTEMPTS) {
+      console.error(`gtmgrid server: port ${PORT} still in use after ${bindAttempts} attempts — giving up.`);
+      process.exit(0);
+    }
+    setTimeout(() => server.listen(PORT, HOST), 1000);
+    return;
+  }
+  throw err;
+});
+
 server.listen(PORT, HOST, () => {
   console.error(`gtmgrid server on http://${HOST}:${PORT} (project: ${current.name})`);
 });

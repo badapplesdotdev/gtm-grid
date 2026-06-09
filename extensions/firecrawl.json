@@ -1,0 +1,328 @@
+{
+  "id": "firecrawl",
+  "name": "Firecrawl",
+  "version": "1.0.0",
+  "category": "scraping",
+  "description": "Firecrawl — turn any website into clean LLM-ready data: scrape a single page to markdown/html/json, crawl whole sites, map every URL, run web search, and extract structured data across pages with an LLM, via the Firecrawl v2 REST API.",
+  "logo": "https://www.google.com/s2/favicons?domain=firecrawl.dev&sz=128",
+  "baseUrl": "https://api.firecrawl.dev",
+  "auth": { "type": "apiKey", "header": "Authorization", "secretKey": "apiKey" },
+  "methods": [
+    {
+      "id": "scrape",
+      "label": "Scrape Page",
+      "description": "Scrape a single URL and return clean content. Body: { url (required), formats:['markdown'|'html'|'rawHtml'|'links'|'summary'|'screenshot'|{type:'json',...}], onlyMainContent (default true), includeTags[], excludeTags[], waitFor (ms), timeout (ms 1000-300000, default 60000), headers{}, actions[], mobile, parsers, location, proxy }. Returns { success, data:{ markdown, html, links, screenshot, metadata{ title, description, sourceURL, statusCode } } }. Synchronous. 1 credit (more for screenshot/json).",
+      "verb": "POST",
+      "path": "/v2/scrape",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+          "url": { "type": "string", "description": "The URL to scrape" },
+          "formats": { "type": "array", "items": {}, "description": "Output formats, e.g. ['markdown','html','links','screenshot']; an item can be an object like { type:'json', prompt, schema }. Default ['markdown']." },
+          "onlyMainContent": { "type": "boolean", "description": "Strip headers/nav/footers and return only main content (default true)" },
+          "includeTags": { "type": "array", "items": { "type": "string" }, "description": "HTML tags/selectors to include" },
+          "excludeTags": { "type": "array", "items": { "type": "string" }, "description": "HTML tags/selectors to exclude" },
+          "waitFor": { "type": "integer", "description": "Delay in ms before grabbing content (default 0)" },
+          "timeout": { "type": "integer", "description": "Request timeout in ms, 1000-300000 (default 60000)" },
+          "headers": { "type": "object", "description": "Headers to send (cookies, user-agent, etc.)" },
+          "actions": { "type": "array", "items": { "type": "object" }, "description": "Browser actions to run before scraping, e.g. [{ type:'click', selector }, { type:'wait', milliseconds }, { type:'screenshot' }]" },
+          "mobile": { "type": "boolean", "description": "Emulate a mobile device" },
+          "location": { "type": "object", "description": "{ country, languages[] } geo-targeting for the request" }
+        }
+      }
+    },
+    {
+      "id": "parse",
+      "label": "Parse Document",
+      "description": "Parse a hosted document (PDF, DOCX, etc.) into markdown/other formats. Body: { url (required), formats[] }. Returns { success, data:{ markdown, metadata } }. Synchronous. 1 credit.",
+      "verb": "POST",
+      "path": "/v2/parse",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+          "url": { "type": "string", "description": "URL of the document to parse" },
+          "formats": { "type": "array", "items": { "type": "string" }, "description": "Output formats (default ['markdown'])" }
+        }
+      }
+    },
+
+    {
+      "id": "startCrawl",
+      "label": "Start Crawl (Async Job)",
+      "description": "Start crawling a site from a base URL — follows links and scrapes every discovered page. Body: { url (required), limit (max pages, default 10000), maxDiscoveryDepth, includePaths[] (regex), excludePaths[] (regex), allowSubdomains, allowExternalLinks, crawlEntireDomain, sitemap:'skip'|'include'|'only', maxConcurrency, delay, scrapeOptions:{ formats, onlyMainContent, ... }, webhook }. ASYNC — returns { success, id, url } immediately; poll getCrawlStatus. 1 credit (the job then burns 1 credit per page scraped).",
+      "verb": "POST",
+      "path": "/v2/crawl",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+          "url": { "type": "string", "description": "Base URL to start crawling from" },
+          "limit": { "type": "integer", "description": "Max pages to crawl (default 10000)" },
+          "maxDiscoveryDepth": { "type": "integer", "description": "Max link-discovery depth from the base URL" },
+          "includePaths": { "type": "array", "items": { "type": "string" }, "description": "URL pathname regex patterns to include" },
+          "excludePaths": { "type": "array", "items": { "type": "string" }, "description": "URL pathname regex patterns to exclude" },
+          "allowSubdomains": { "type": "boolean", "description": "Follow links into subdomains" },
+          "allowExternalLinks": { "type": "boolean", "description": "Follow links to external domains" },
+          "crawlEntireDomain": { "type": "boolean", "description": "Follow internal links to sibling/parent URLs, not just children" },
+          "sitemap": { "type": "string", "description": "'skip' | 'include' (default) | 'only'" },
+          "maxConcurrency": { "type": "integer", "description": "Concurrent scrape limit" },
+          "delay": { "type": "integer", "description": "Delay (s) between scrapes to respect rate limits" },
+          "scrapeOptions": { "type": "object", "description": "Per-page scrape config, e.g. { formats:['markdown'], onlyMainContent:true }" },
+          "webhook": { "type": "object", "description": "Webhook config for crawl event notifications" }
+        }
+      }
+    },
+    {
+      "id": "getCrawlStatus",
+      "label": "Get Crawl Status & Data",
+      "description": "Poll a crawl job by id. Returns { success, status:'scraping'|'completed'|'failed'|'cancelled', total, completed, creditsUsed, expiresAt, next (URL for next page of data if >10MB), data:[{ markdown, html, links, metadata }] }. Loop until status='completed'; follow `next` to page large result sets. Free.",
+      "verb": "GET",
+      "path": "/v2/crawl/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "description": "Crawl job id returned by startCrawl" }
+        }
+      }
+    },
+    {
+      "id": "cancelCrawl",
+      "label": "Cancel Crawl",
+      "description": "Cancel a running crawl job by id. Returns { status:'cancelled' }. Free.",
+      "verb": "DELETE",
+      "path": "/v2/crawl/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "description": "Crawl job id" }
+        }
+      }
+    },
+    {
+      "id": "getCrawlErrors",
+      "label": "Get Crawl Errors",
+      "description": "List errors encountered during a crawl job. Returns { errors:[{ id, timestamp, url, error }], robotsBlocked:[] }. Use to debug pages that failed or were robots-blocked. Free.",
+      "verb": "GET",
+      "path": "/v2/crawl/{id}/errors",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "description": "Crawl job id" }
+        }
+      }
+    },
+    {
+      "id": "crawlParamsPreview",
+      "label": "Crawl Params Preview",
+      "description": "Preview/expand the effective crawl parameters Firecrawl would use for a URL + natural-language prompt, without starting a crawl. Body: { url, prompt }. Returns the resolved crawl options. Free.",
+      "verb": "POST",
+      "path": "/v2/crawl/params-preview",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+          "url": { "type": "string", "description": "Base URL" },
+          "prompt": { "type": "string", "description": "Natural-language description of what to crawl" }
+        }
+      }
+    },
+
+    {
+      "id": "map",
+      "label": "Map Site URLs",
+      "description": "Return a fast, complete list of URLs on a site (cheap alternative to crawling when you only need links). Body: { url (required), search (order/filter by relevance, e.g. 'blog'), sitemap:'skip'|'include'|'only', includeSubdomains (default true), ignoreQueryParameters (default true), limit (max 100000, default 5000), timeout, location }. Returns { success, links:[{ url, title, description }] }. Synchronous. 1 credit.",
+      "verb": "POST",
+      "path": "/v2/map",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+          "url": { "type": "string", "description": "Base URL of the site to map" },
+          "search": { "type": "string", "description": "Order/filter results by relevance to this term, e.g. 'pricing'" },
+          "sitemap": { "type": "string", "description": "'skip' | 'include' (default) | 'only'" },
+          "includeSubdomains": { "type": "boolean", "description": "Include subdomain URLs (default true)" },
+          "ignoreQueryParameters": { "type": "boolean", "description": "Drop URLs that differ only by query params (default true)" },
+          "limit": { "type": "integer", "description": "Max links returned, up to 100000 (default 5000)" },
+          "timeout": { "type": "integer", "description": "Timeout in ms" }
+        }
+      }
+    },
+
+    {
+      "id": "search",
+      "label": "Web Search",
+      "description": "Search the web and optionally scrape the result pages. Body: { query (required, max 500 chars), limit (per source, default 10, max 100), sources:['web'|'images'|'news'], categories:['github'|'research'|'pdf'], includeDomains[], excludeDomains[], location (e.g. 'Germany'), country (ISO, default 'US'), tbs (e.g. 'qdr:w'), timeout (default 60000), scrapeOptions:{ formats, ... } (set to also scrape each result) }. Returns { success, data:{ web:[{ url, title, description, markdown? }], images:[], news:[] }, creditsUsed }. 1 credit (more when scrapeOptions is set — scrapes each result).",
+      "verb": "POST",
+      "path": "/v2/search",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "query": { "type": "string", "description": "Search query (max 500 chars)" },
+          "limit": { "type": "integer", "description": "Results per source (default 10, max 100)" },
+          "sources": { "type": "array", "items": { "type": "string" }, "description": "['web'|'images'|'news'] (default ['web'])" },
+          "categories": { "type": "array", "items": { "type": "string" }, "description": "Filter by ['github'|'research'|'pdf']" },
+          "includeDomains": { "type": "array", "items": { "type": "string" }, "description": "Restrict to these hostnames" },
+          "excludeDomains": { "type": "array", "items": { "type": "string" }, "description": "Exclude these hostnames" },
+          "location": { "type": "string", "description": "Geo-targeting, e.g. 'Germany'" },
+          "country": { "type": "string", "description": "ISO country code (default 'US')" },
+          "tbs": { "type": "string", "description": "Time-based filter, e.g. 'qdr:w' (past week)" },
+          "timeout": { "type": "integer", "description": "Timeout in ms (default 60000)" },
+          "scrapeOptions": { "type": "object", "description": "If set, scrape each result, e.g. { formats:['markdown'] }" }
+        }
+      }
+    },
+
+    {
+      "id": "startExtract",
+      "label": "Start Extract (Async LLM)",
+      "description": "Start an LLM structured-extraction job across one or more URLs. Body: { urls[] (glob patterns allowed), prompt, schema (JSON Schema for the output shape), enableWebSearch (default false), ignoreSitemap, includeSubdomains (default true), showSources, scrapeOptions, ignoreInvalidURLs (default true) }. ASYNC — returns { success, id }; poll getExtractStatus. 1 credit (extraction also consumes Extract tokens, tracked separately).",
+      "verb": "POST",
+      "path": "/v2/extract",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["urls"],
+        "properties": {
+          "urls": { "type": "array", "items": { "type": "string" }, "description": "URLs to extract from; glob patterns allowed, e.g. 'https://site.com/*'" },
+          "prompt": { "type": "string", "description": "Guidance for what to extract" },
+          "schema": { "type": "object", "description": "JSON Schema defining the structure of the extracted data" },
+          "enableWebSearch": { "type": "boolean", "description": "Allow web search for supporting data (default false)" },
+          "includeSubdomains": { "type": "boolean", "description": "Include subdomains when expanding URLs (default true)" },
+          "showSources": { "type": "boolean", "description": "Return the source URLs for each field (default false)" },
+          "scrapeOptions": { "type": "object", "description": "Scrape config applied to source pages" },
+          "ignoreInvalidURLs": { "type": "boolean", "description": "Skip invalid URLs instead of failing (default true)" }
+        }
+      }
+    },
+    {
+      "id": "getExtractStatus",
+      "label": "Get Extract Status & Data",
+      "description": "Poll an extract job by id. Returns { success, status:'processing'|'completed'|'failed'|'cancelled', data (the structured object/array matching your schema), sources? }. Loop until status='completed'. Free.",
+      "verb": "GET",
+      "path": "/v2/extract/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "description": "Extract job id returned by startExtract" }
+        }
+      }
+    },
+
+    {
+      "id": "startBatchScrape",
+      "label": "Start Batch Scrape (Async Job)",
+      "description": "Scrape many known URLs in one job (same scrape options applied to all). Body: { urls[] (required), formats[], onlyMainContent (default true), maxConcurrency, ignoreInvalidURLs (default true), zeroDataRetention, scrapeOptions{ headers, waitFor, timeout, actions, location, ... }, webhook }. ASYNC — returns { success, id, invalidURLs[] }; poll getBatchScrapeStatus. 1 credit (the job burns 1 credit per URL scraped).",
+      "verb": "POST",
+      "path": "/v2/batch/scrape",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["urls"],
+        "properties": {
+          "urls": { "type": "array", "items": { "type": "string" }, "description": "List of URLs to scrape" },
+          "formats": { "type": "array", "items": {}, "description": "Output formats applied to every URL, e.g. ['markdown','html']" },
+          "onlyMainContent": { "type": "boolean", "description": "Strip headers/nav/footers (default true)" },
+          "maxConcurrency": { "type": "integer", "description": "Concurrent scrape limit" },
+          "ignoreInvalidURLs": { "type": "boolean", "description": "Skip invalid URLs instead of failing the request (default true)" },
+          "scrapeOptions": { "type": "object", "description": "Advanced per-URL scrape config (waitFor, actions, location, etc.)" },
+          "webhook": { "type": "object", "description": "Webhook config for batch event notifications" }
+        }
+      }
+    },
+    {
+      "id": "getBatchScrapeStatus",
+      "label": "Get Batch Scrape Status & Data",
+      "description": "Poll a batch-scrape job by id. Returns { success, status:'scraping'|'completed'|'failed', total, completed, creditsUsed, expiresAt, next (next page URL if >10MB), data:[{ markdown, html, metadata }] }. Loop until status='completed'; follow `next` to page. Free.",
+      "verb": "GET",
+      "path": "/v2/batch/scrape/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "description": "Batch scrape job id returned by startBatchScrape" }
+        }
+      }
+    },
+    {
+      "id": "cancelBatchScrape",
+      "label": "Cancel Batch Scrape",
+      "description": "Cancel a running batch-scrape job by id. Returns { status:'cancelled' }. Free.",
+      "verb": "DELETE",
+      "path": "/v2/batch/scrape/{id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "description": "Batch scrape job id" }
+        }
+      }
+    },
+    {
+      "id": "getBatchScrapeErrors",
+      "label": "Get Batch Scrape Errors",
+      "description": "List errors from a batch-scrape job. Returns { errors:[{ id, timestamp, url, error }], robotsBlocked:[] }. Free.",
+      "verb": "GET",
+      "path": "/v2/batch/scrape/{id}/errors",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "description": "Batch scrape job id" }
+        }
+      }
+    },
+
+    {
+      "id": "getCreditUsage",
+      "label": "Get Credit Usage",
+      "description": "Get the team's remaining credits and plan info. Returns { success, data:{ remainingCredits, planCredits, billingPeriodStart, billingPeriodEnd } }. Call before large crawl/batch/extract jobs. Free.",
+      "verb": "GET",
+      "path": "/v2/team/credit-usage",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "getCreditUsageHistorical",
+      "label": "Get Historical Credit Usage",
+      "description": "Get month-by-month historical credit usage for the team. Query: byApiKey?. Returns usage broken down by billing period. Free.",
+      "verb": "GET",
+      "path": "/v2/team/credit-usage/historical",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "byApiKey": { "type": "boolean", "description": "Break usage down per API key" }
+        }
+      }
+    },
+    {
+      "id": "getTokenUsage",
+      "label": "Get Token Usage (Extract)",
+      "description": "Get the team's remaining Extract tokens and plan info (Extract is billed in tokens, separately from credits). Returns { success, data:{ remainingTokens, planTokens, billingPeriodStart, billingPeriodEnd } }. Call before large extract jobs. Free.",
+      "verb": "GET",
+      "path": "/v2/team/token-usage",
+      "credits": 0,
+      "input": { "type": "object", "properties": {} }
+    }
+  ]
+}

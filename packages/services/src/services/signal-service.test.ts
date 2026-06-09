@@ -20,7 +20,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { credentialCryptoTest } from "../credential-crypto-test.js";
 import { TestLayer, type TestLayerFixtures } from "../layers.js";
 import type { SignalBinding } from "../repositories/signal-repo.js";
-import type { GridTable } from "../repositories/webhook-repo.js";
+import type { GridCell, GridRow, GridTable } from "../repositories/webhook-repo.js";
 import { SignalService } from "./signal-service.js";
 
 const WS = "ws-team";
@@ -173,6 +173,113 @@ describe("SignalService.syncForWorker (membership-free credential path)", () => 
       (s) => s.syncForWorker("missing"),
     );
     expect(Exit.isSuccess(exit) && exit.value).toBe(0);
+  });
+});
+
+describe("SignalService.syncForWorker (durable dedupe + bulk insert)", () => {
+  it("dedupes a result already seen even when the binding has >1000 cumulative results (no SEEN_CAP truncation dup)", async () => {
+    // Seed a large history: the OLD code truncated `seen` to the last 1000 keys,
+    // so an early key ("hist-0") would no longer be recognised and would be
+    // re-inserted. The durable seen-set keeps every key, so it dedupes.
+    const history = Array.from({ length: 1500 }, (_, i) => `hist-${i}`);
+    stubTrigify([{ id: "hist-0" }, { id: "hist-1499" }]); // both already seen
+    const enc = await encryptedKey(WS, "tk_live");
+    const exit = await run(
+      {
+        currentUserId: null,
+        workspaces: [{ id: WS, name: "WS", ownerId: "owner", currentPlanId: "team" }],
+        signalBindings: [binding({ seen: history })],
+        tables: [table(WS)],
+        webhookCredentials: new Map([[`${WS}:trigify`, enc]]),
+      },
+      (s) => s.syncForWorker("sig-1"),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) expect(exit.value).toBe(0);
+  });
+
+  it("inserts rows + cells for fresh results and computes positions above the table's max", async () => {
+    stubTrigify([{ id: "r1", url: "u1" }, { id: "r2", url: "u2" }]);
+    const enc = await encryptedKey(WS, "tk_live");
+    const rows: GridRow[] = [{ id: "existing-row", tableId: TABLE, position: 7 }];
+    const cells: GridCell[] = [];
+    const exit = await run(
+      {
+        currentUserId: null,
+        workspaces: [{ id: WS, name: "WS", ownerId: "owner", currentPlanId: "team" }],
+        signalBindings: [
+          binding({ columns: [{ key: "url", columnId: "col-url" }] }),
+        ],
+        tables: [table(WS)],
+        columns: [{ id: "col-url", tableId: TABLE }],
+        rows,
+        cells,
+        webhookCredentials: new Map([[`${WS}:trigify`, enc]]),
+      },
+      (s) => s.syncForWorker("sig-1"),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) expect(exit.value).toBe(2);
+    // Two new rows appended above the existing max position (7).
+    expect(rows.filter((r) => r.position > 7)).toHaveLength(2);
+    expect(rows.map((r) => r.position).sort((a, b) => a - b)).toEqual([7, 8, 9]);
+    // One cell per new row (the single mapped column).
+    expect(cells).toHaveLength(2);
+  });
+});
+
+describe("SignalService.listDuePage (SQL due filter + keyset)", () => {
+  const due = (over: Partial<SignalBinding>): SignalBinding =>
+    binding({ enabled: true, schedule: "hourly", lastSyncedAt: null, ...over });
+
+  it("returns only enabled, non-manual, due-by-schedule bindings", async () => {
+    const now = 10_000_000_000;
+    const exit = await run(
+      {
+        currentUserId: null,
+        signalBindings: [
+          due({ id: "a", createdAt: 1 }), // never synced → due
+          due({ id: "b", createdAt: 2, schedule: "manual" }), // manual → not due
+          due({ id: "c", createdAt: 3, enabled: false }), // disabled → not due
+          due({ id: "d", createdAt: 4, schedule: "hourly", lastSyncedAt: now - 30 * 60 * 1000 }), // 30m ago, hourly → not due
+          due({ id: "e", createdAt: 5, schedule: "hourly", lastSyncedAt: now - 2 * 60 * 60 * 1000 }), // 2h ago → due
+        ],
+      },
+      (s) => s.listDuePage({ now, limit: 100, cursor: null }),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.items.map((i) => i.id).sort()).toEqual(["a", "e"]);
+      expect(exit.value.nextCursor).toBeNull();
+    }
+  });
+
+  it("paginates via the keyset cursor without dropping or repeating bindings", async () => {
+    const now = 10_000_000_000;
+    const bindings = Array.from({ length: 5 }, (_, i) => due({ id: `s${i}`, createdAt: i + 1 }));
+    const page1 = await run(
+      { currentUserId: null, signalBindings: bindings },
+      (s) => s.listDuePage({ now, limit: 2, cursor: null }),
+    );
+    expect(Exit.isSuccess(page1)).toBe(true);
+    if (!Exit.isSuccess(page1)) return;
+    expect(page1.value.items.map((i) => i.id)).toEqual(["s0", "s1"]);
+    expect(page1.value.nextCursor).not.toBeNull();
+
+    const page2 = await run(
+      { currentUserId: null, signalBindings: bindings },
+      (s) => s.listDuePage({ now, limit: 2, cursor: page1.value.nextCursor }),
+    );
+    expect(Exit.isSuccess(page2)).toBe(true);
+    if (!Exit.isSuccess(page2)) return;
+    expect(page2.value.items.map((i) => i.id)).toEqual(["s2", "s3"]);
+
+    const page3 = await run(
+      { currentUserId: null, signalBindings: bindings },
+      (s) => s.listDuePage({ now, limit: 2, cursor: page2.value.nextCursor }),
+    );
+    expect(Exit.isSuccess(page3) && page3.value.items.map((i) => i.id)).toEqual(["s4"]);
+    if (Exit.isSuccess(page3)) expect(page3.value.nextCursor).toBeNull();
   });
 });
 

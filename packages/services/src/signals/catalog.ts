@@ -191,7 +191,13 @@ export function mapResultToCells(result: any, columns: SignalColumn[]): Record<s
   return out;
 }
 
-const SCHEDULE_MS: Record<Exclude<SignalSchedule, "manual">, number> = {
+/**
+ * Minimum elapsed time (ms) since the last sync before a non-manual binding is
+ * due again, keyed by schedule. Exported so the repo can push the same predicate
+ * down into SQL (`now - last_synced_at >= interval`) instead of loading every
+ * binding and re-checking in JS.
+ */
+export const SCHEDULE_DUE_MS: Record<Exclude<SignalSchedule, "manual">, number> = {
   hourly: 60 * 60 * 1000,
   daily: 24 * 60 * 60 * 1000,
   weekly: 7 * 24 * 60 * 60 * 1000,
@@ -204,5 +210,20 @@ export function isBindingDue(
 ): boolean {
   if (!b.enabled || b.schedule === "manual") return false;
   if (b.lastSyncedAt == null) return true;
-  return now - b.lastSyncedAt >= SCHEDULE_MS[b.schedule];
+  if (b.schedule === "hourly" || b.schedule === "daily" || b.schedule === "weekly") {
+    return now - b.lastSyncedAt >= SCHEDULE_DUE_MS[b.schedule];
+  }
+  // Unknown/legacy schedule string: treat as never due (matches the old map
+  // lookup, which would have produced NaN >= comparison === false).
+  return false;
 }
+
+/** A cap on results processed per poll, so one binding can't enqueue an
+ * unbounded payload of inserts in a single step. */
+export const MAX_RESULTS_PER_SYNC = 500;
+
+/** How many due bindings to enqueue per fan-out event/step. */
+export const FANOUT_CHUNK = 200;
+
+/** How many due bindings the cron pulls per keyset page. */
+export const DUE_PAGE_SIZE = 500;

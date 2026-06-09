@@ -140,6 +140,9 @@ export {
 export {
   type NewRow,
   type Row,
+  type RowCursor,
+  type RowPage,
+  ROW_PAGE_SIZE,
   RowRepo,
   RowRepoError,
   RowRepoLive,
@@ -224,6 +227,7 @@ export {
   WebhookNotFoundError,
   WebhookService,
   type WorkerGrid,
+  type WorkerTableMeta,
 } from "./services/webhook-service.js";
 export { ExtensionService } from "./services/extension-service.js";
 // --- Cloud-access gate (entitlement) -----------------------------------------
@@ -243,6 +247,7 @@ export {
   GridNotFoundError,
   GridService,
   InvalidCellError as GridInvalidCellError,
+  type TablePage,
 } from "./services/grid-service.js";
 export {
   type MeterQuota,
@@ -345,5 +350,5 @@ export {
 } from "@gtmgrid/cloud";
 
 export * from "./signals/catalog.js";
-export { SignalRepo, SignalRepoLive, signalRepoLayer, SignalRepoError, type SignalBinding, type SignalBindingColumn, type SignalBindingInsert, type SignalBindingPatch } from "./repositories/signal-repo.js";
+export { SignalRepo, SignalRepoLive, signalRepoLayer, SignalRepoError, type SignalBinding, type SignalBindingColumn, type SignalBindingInsert, type SignalBindingPatch, type SignalDueCursor, type DueBinding, type DueBindingPage } from "./repositories/signal-repo.js";
 export { SignalService, SignalError } from "./services/signal-service.js";

@@ -12,9 +12,12 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  createIncrementalTableView,
   deriveColumnKind,
   gridQueryKeys,
+  mergePagesToSnapshot,
   patchGridCache,
+  patchPagedGridCache,
   toCloudDelivery,
   toCloudWebhook,
 } from "./useCloudGrid";
@@ -299,5 +302,230 @@ describe("patchGridCache — realtime cache-patch integration (pure reducer)", (
       tableId: "t999",
     });
     expect(next).toEqual(snap);
+  });
+});
+
+describe("createIncrementalTableView — incremental derivation + row identity", () => {
+  /** A snapshot with `rows`×`cols` cells (every cell populated). */
+  const grid = (rows: number, cols: number): NonNullable<Snapshot> =>
+    ({
+      table: { _id: "t1", name: "Grid" },
+      columns: Array.from({ length: cols }, (_, c) => ({
+        _id: `c${c}`,
+        name: `C${c}`,
+        type: "text",
+        kind: "manual",
+        provider: null,
+        method: null,
+        code: null,
+        params: {},
+      })),
+      rows: Array.from({ length: rows }, (_, r) => ({ _id: `r${r}` })),
+      cells: Array.from({ length: rows }, (_, r) =>
+        Array.from({ length: cols }, (_, c) => ({
+          rowId: `r${r}`,
+          columnId: `c${c}`,
+          value: `${r}-${c}`,
+          status: "done",
+          error: null,
+        })),
+      ).flat(),
+    }) as NonNullable<Snapshot>;
+
+  it("produces the same FullTable shape as a one-shot derivation", () => {
+    const snap = grid(3, 2);
+    const a = createIncrementalTableView().derive(snap);
+    const b = createIncrementalTableView().derive(snap);
+    expect(a).toEqual(b);
+    expect(a.rows.map((r) => r.id)).toEqual(["r0", "r1", "r2"]);
+    expect(a.rows[0].cells.c1.value).toBe("0-1");
+  });
+
+  it("rebuilds ONLY the touched row; untouched rows keep their identity", () => {
+    const view = createIncrementalTableView();
+    const snap0 = grid(4, 2);
+    const v0 = view.derive(snap0);
+
+    // One cell.upsert on r1/c0, fed through the SAME reducer the live cache uses.
+    const snap1 = patchGridCache(snap0, {
+      type: "cell.upsert",
+      cell: {
+        rowId: "r1",
+        columnId: "c0",
+        value: "edited",
+        status: "done",
+        error: null,
+      },
+    });
+    const v1 = view.derive(snap1!);
+
+    // The changed row is a new object with the new value.
+    expect(v1.rows[1]).not.toBe(v0.rows[1]);
+    expect(v1.rows[1].cells.c0.value).toBe("edited");
+    // Every untouched row keeps referential identity (memo-friendly).
+    expect(v1.rows[0]).toBe(v0.rows[0]);
+    expect(v1.rows[2]).toBe(v0.rows[2]);
+    expect(v1.rows[3]).toBe(v0.rows[3]);
+    // The columns array identity is preserved when columns are unchanged.
+    expect(v1.columns).toBe(v0.columns);
+  });
+
+  it("keeps a row's identity when an UNRELATED row changes only", () => {
+    const view = createIncrementalTableView();
+    const snap0 = grid(3, 1);
+    const v0 = view.derive(snap0);
+    const snap1 = patchGridCache(snap0, {
+      type: "cell.upsert",
+      cell: {
+        rowId: "r2",
+        columnId: "c0",
+        value: "z",
+        status: "running",
+        error: null,
+      },
+    });
+    const v1 = view.derive(snap1!);
+    expect(v1.rows[0]).toBe(v0.rows[0]);
+    expect(v1.rows[1]).toBe(v0.rows[1]);
+    expect(v1.rows[2]).not.toBe(v0.rows[2]);
+    expect(v1.rows[2].cells.c0.status).toBe("running");
+  });
+});
+
+// ─── TRI-3272: keyset-paged grid — page merge + page-aware realtime patch ─────
+
+type Page = Parameters<typeof patchPagedGridCache>[0][number];
+
+const page = (
+  rowIds: readonly string[],
+  nextCursor: Page["nextCursor"],
+): Page =>
+  ({
+    table: { _id: "t1", name: "Leads" },
+    columns: [
+      {
+        _id: "c1",
+        name: "Domain",
+        type: "text",
+        kind: "manual",
+        provider: null,
+        method: null,
+        code: null,
+        params: {},
+      },
+    ],
+    rows: rowIds.map((_id) => ({ _id })),
+    cells: rowIds.map((rowId) => ({
+      rowId,
+      columnId: "c1",
+      value: rowId,
+      status: "done",
+      error: null,
+    })),
+    nextCursor,
+  }) as Page;
+
+const cursor = (id: string): NonNullable<Page["nextCursor"]> =>
+  ({ position: 0, createdAt: 0, id }) as NonNullable<Page["nextCursor"]>;
+
+describe("mergePagesToSnapshot — flatten loaded pages (TRI-3272)", () => {
+  it("returns null when no page is loaded", () => {
+    expect(mergePagesToSnapshot([])).toBeNull();
+  });
+
+  it("concatenates only the loaded pages' rows + cells, columns from the first", () => {
+    const snap = mergePagesToSnapshot([
+      page(["r1", "r2"], cursor("r2")),
+      page(["r3"], null),
+    ]);
+    expect(snap?.rows.map((r) => r._id)).toEqual(["r1", "r2", "r3"]);
+    expect(snap?.cells.map((c) => c.rowId)).toEqual(["r1", "r2", "r3"]);
+    expect(snap?.columns.map((c) => c._id)).toEqual(["c1"]);
+    expect(snap?.table).toEqual({ _id: "t1", name: "Leads" });
+  });
+});
+
+describe("patchPagedGridCache — page-aware realtime patch (TRI-3272)", () => {
+  it("cell.upsert patches ONLY the page that holds the row (no phantom row elsewhere)", () => {
+    const pages = [page(["r1"], cursor("r1")), page(["r2"], null)];
+    const next = patchPagedGridCache(pages, {
+      type: "cell.upsert",
+      cell: { rowId: "r2", columnId: "c1", value: "new", status: "running", error: null },
+    });
+    // Page 0 (no r2) is untouched by reference; page 1 patched, no new rows.
+    expect(next[0]).toBe(pages[0]);
+    expect(next[1]?.rows.map((r) => r._id)).toEqual(["r2"]);
+    expect(next[1]?.cells.find((c) => c.rowId === "r2")?.status).toBe("running");
+  });
+
+  it("cell.upsert for an UNLOADED row is dropped (no page gains a phantom row)", () => {
+    const pages = [page(["r1"], cursor("r1"))];
+    const next = patchPagedGridCache(pages, {
+      type: "cell.upsert",
+      cell: { rowId: "r9", columnId: "c1", value: "x", status: "done", error: null },
+    });
+    expect(next).toBe(pages); // unchanged identity — nothing applied
+  });
+
+  it("row.insert appends ONLY to the final page (nextCursor === null)", () => {
+    const pages = [page(["r1"], cursor("r1")), page(["r2"], null)];
+    const next = patchPagedGridCache(pages, {
+      type: "row.insert",
+      row: { _id: "r3" },
+      cells: [],
+    });
+    expect(next[0]).toBe(pages[0]);
+    expect(next[1]?.rows.map((r) => r._id)).toEqual(["r2", "r3"]);
+  });
+
+  it("row.insert is NOT applied when the last loaded page still has a next page", () => {
+    const pages = [page(["r1"], cursor("r1"))];
+    const next = patchPagedGridCache(pages, {
+      type: "row.insert",
+      row: { _id: "r2" },
+      cells: [],
+    });
+    // The new row belongs to an unloaded tail — surfaces when paged to.
+    expect(next).toBe(pages);
+  });
+
+  it("row.delete drops the row + its cells across loaded pages", () => {
+    const pages = [page(["r1", "r2"], null)];
+    const next = patchPagedGridCache(pages, { type: "row.delete", rowId: "r1" });
+    expect(next[0]?.rows.map((r) => r._id)).toEqual(["r2"]);
+    expect(next[0]?.cells.map((c) => c.rowId)).toEqual(["r2"]);
+  });
+
+  it("column.insert is applied to EVERY loaded page (columns duplicated per page)", () => {
+    const pages = [page(["r1"], cursor("r1")), page(["r2"], null)];
+    const col = {
+      _id: "c2",
+      name: "Name",
+      type: "text",
+      kind: "manual" as const,
+      provider: null,
+      method: null,
+      code: null,
+      params: {},
+    };
+    const next = patchPagedGridCache(pages, { type: "column.insert", column: col });
+    expect(next[0]?.columns.map((c) => c._id)).toEqual(["c1", "c2"]);
+    expect(next[1]?.columns.map((c) => c._id)).toEqual(["c1", "c2"]);
+  });
+
+  it("table.delete collapses the whole paged result to no loaded pages", () => {
+    const pages = [page(["r1"], null)];
+    const next = patchPagedGridCache(pages, { type: "table.delete", tableId: "t1" });
+    expect(next).toEqual([]);
+  });
+
+  it("each page keeps its own nextCursor after a patch", () => {
+    const pages = [page(["r1"], cursor("r1")), page(["r2"], null)];
+    const next = patchPagedGridCache(pages, {
+      type: "cell.upsert",
+      cell: { rowId: "r2", columnId: "c1", value: "z", status: "done", error: null },
+    });
+    expect(next[0]?.nextCursor).toEqual(cursor("r1"));
+    expect(next[1]?.nextCursor).toBeNull();
   });
 });
