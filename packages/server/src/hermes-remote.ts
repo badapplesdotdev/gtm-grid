@@ -11,7 +11,8 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { corsHeadersFor } from "./cors.js";
 import { contextPreamble, mcpLauncher, type AgentContext } from "./agent.js";
 
-const DEFAULT_HERMES_BASE_URL = "http://localhost:18642/v1";
+// Host base (no /v1). Endpoints are formed as `${base}/v1/chat/completions`.
+const DEFAULT_HERMES_BASE_URL = "http://localhost:18642";
 const MAX_STEPS = 16; // safety cap on tool-loop iterations per turn
 
 interface SseClient {
@@ -41,13 +42,13 @@ type ToolCall = { id: string; type: "function"; function: { name: string; argume
 async function streamCompletion(
   base: string,
   apiKey: string,
-  model: string,
+  model: string | undefined,
   messages: unknown[],
   tools: unknown[],
   sse: SseClient,
   signal: AbortSignal,
 ): Promise<{ text: string; toolCalls: ToolCall[] }> {
-  const res = await fetch(`${base}/chat/completions`, {
+  const res = await fetch(`${base}/v1/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({ model, messages, tools: tools.length ? tools : undefined, stream: true }),
@@ -116,9 +117,13 @@ export function streamHermesRemote(
   },
 ): void {
   const sse = sseClient(res, opts.origin);
-  const base = (opts.url || DEFAULT_HERMES_BASE_URL).replace(/\/+$/, "");
+  // Normalize to the host root: strip a trailing slash AND an optional "/v1" the
+  // user may have included, so endpoints form cleanly as `${base}/v1/...`.
+  const base = (opts.url || DEFAULT_HERMES_BASE_URL).replace(/\/+$/, "").replace(/\/v1$/i, "");
   const apiKey = opts.apiKey || "hermes";
-  const model = opts.model || "hermes-4";
+  // Model is OPTIONAL — when omitted, the gateway uses the agent's own configured
+  // model (the user said the remote agent sets this itself).
+  const model = opts.model?.trim() || undefined;
   const abort = new AbortController();
   res.on("close", () => abort.abort());
 

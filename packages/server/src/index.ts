@@ -913,11 +913,11 @@ route("POST", "/api/agents/hermes-config", (_p, body) => {
 
 // Probe a remote Hermes gateway: GET {url}/models with the bearer key.
 route("POST", "/api/agents/hermes-test", async (_p, body) => {
-  const url = String(body?.url ?? "").trim().replace(/\/+$/, "");
+  const url = String(body?.url ?? "").trim().replace(/\/+$/, "").replace(/\/v1$/i, "");
   const apiKey = String(body?.apiKey ?? "").trim();
   if (!url) return { ok: false, error: "url required" };
   try {
-    const r = await fetch(`${url}/models`, { headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {} });
+    const r = await fetch(`${url}/v1/models`, { headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {} });
     if (!r.ok) return { ok: false, error: `gateway ${r.status} ${r.statusText}` };
     const data = (await r.json().catch(() => ({}))) as { data?: Array<{ id: string }> };
     return { ok: true, models: Array.isArray(data.data) ? data.data.map((m) => m.id) : [] };
