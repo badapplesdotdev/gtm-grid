@@ -58,6 +58,14 @@ const CLOUD_REFS: CloudFunctionRefs = {
  */
 const GET_TABLE_META_REF = "/api/worker/getTableMeta";
 
+/**
+ * The worker ref the pre-flight quota gate POSTs to (TRI-3277). The server
+ * computes how many cells the run would meter (candidate rows minus already-done
+ * skips unless force) and rejects with a 402 when the workspace lacks the
+ * remaining cloud actions, BEFORE the run fans out.
+ */
+const ASSERT_COLUMN_RUN_QUOTA_REF = "/api/worker/assertColumnRunQuota";
+
 /** Inputs the desktop forwards to run a column on a cloud project. */
 export interface CloudRunRequest {
   /** The apps/web API base URL (the desktop's `VITE_API_URL`). */
@@ -224,6 +232,52 @@ export async function buildCloudStore(
 }
 
 /**
+ * Raised when a cloud column run's pre-flight quota gate rejects the run because
+ * the workspace lacks the remaining cloud actions for the cells it would run
+ * (TRI-3277). Surfaces the worker's 402 as a typed error so a caller can map it
+ * back to a 402 for the desktop instead of treating it as a generic 5xx.
+ */
+export class CloudActionsLimitError extends Error {
+  readonly _tag = "CloudActionsLimitError";
+  constructor(message: string) {
+    super(message);
+    this.name = "CloudActionsLimitError";
+  }
+}
+
+/**
+ * Pre-flight quota gate (TRI-3277). POSTs the run shape to the server's
+ * `/api/worker/assertColumnRunQuota` route, which computes how many cells the run
+ * would meter (candidate rows minus already-`done` skips unless `force`) and
+ * rejects over-quota runs with a 402. The HTTP worker client throws on any
+ * non-2xx; a 402 is re-raised as a typed {@link CloudActionsLimitError} so the
+ * over-quota case is distinguishable from a transport failure. A run within
+ * quota resolves and the caller proceeds to fan out unchanged.
+ */
+export async function assertColumnRunQuota(
+  client: CloudClientLike,
+  req: Pick<CloudRunRequest, "tableId" | "columnId" | "rowIds" | "force">,
+): Promise<void> {
+  try {
+    await client.query(ASSERT_COLUMN_RUN_QUOTA_REF, {
+      tableId: req.tableId,
+      columnId: req.columnId,
+      ...(req.rowIds !== undefined ? { rowIds: req.rowIds } : {}),
+      ...(req.force !== undefined ? { force: req.force } : {}),
+    });
+  } catch (e) {
+    if (e instanceof CloudActionsLimitError) throw e;
+    const message = e instanceof Error ? e.message : String(e);
+    // The worker boundary returns 402 for CloudActionsLimitError; the HTTP
+    // client folds the status into the thrown message.
+    if (message.includes("402") || message.includes("CloudActionsLimitError")) {
+      throw new CloudActionsLimitError(message);
+    }
+    throw e;
+  }
+}
+
+/**
  * Run a column on a cloud project. Builds a worker-backed client, resolves the
  * table's workspace, then a cloud-backed GridStore for the table, and an
  * {@link Engine} that uses that store for BOTH project data and credentials.
@@ -237,12 +291,18 @@ export async function buildCloudStore(
  * injected cloud store backs BOTH project data and credentials, so no SQLite
  * file is opened (and the native better-sqlite3 addon is never loaded). The run
  * path reads/writes only the injected cloud store.
+ *
+ * Before any fan-out, a pre-flight quota gate ({@link assertColumnRunQuota})
+ * rejects an over-quota run with a 402 so a thousands-row run on a near-empty
+ * plan no longer executes and over-meters silently (TRI-3277). The check runs
+ * before {@link buildCloudStore} so a rejected run never ships the full grid.
  */
 export async function runCloudColumn(
   req: CloudRunRequest,
   deps: CloudRunDeps,
 ): Promise<{ ran: number; errors: number }> {
   const client = deps.makeClient(req.apiUrl, req.token);
+  await assertColumnRunQuota(client, req);
   const workspaceId = await resolveWorkspaceId(client, req.tableId);
   const store = await buildCloudStore(client, req.tableId, workspaceId);
   const engine = new Engine(undefined, deps.config, deps.registry, undefined, {
