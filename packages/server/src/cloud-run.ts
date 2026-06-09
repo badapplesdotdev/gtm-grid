@@ -66,6 +66,36 @@ const GET_TABLE_META_REF = "/api/worker/getTableMeta";
  */
 const ASSERT_COLUMN_RUN_QUOTA_REF = "/api/worker/assertColumnRunQuota";
 
+/**
+ * The default row fan-out concurrency when a request omits one — matches the
+ * server route's historical `?? 5`.
+ */
+export const DEFAULT_CLOUD_RUN_CONCURRENCY = 5;
+
+/**
+ * Process-wide safe ceiling for a single cloud run's row fan-out (M6).
+ * `CloudRunRequest.concurrency` is caller-controlled (the desktop forwards it)
+ * and was previously unclamped, so a too-large value multiplied worker POSTs and
+ * sandboxed executions without bound. We clamp it to this max so even a hostile
+ * or buggy caller cannot blow past a safe per-run ceiling; the sidecar's
+ * process-wide run semaphore bounds the number of simultaneous runs on top of
+ * this per-run cap.
+ */
+export const MAX_CLOUD_RUN_CONCURRENCY = 10;
+
+/**
+ * Clamp a requested row-fan-out concurrency into `[1, MAX_CLOUD_RUN_CONCURRENCY]`,
+ * defaulting an absent/invalid value to {@link DEFAULT_CLOUD_RUN_CONCURRENCY}.
+ * A non-finite or sub-1 value falls back to the default rather than 0 (which
+ * would stall the run); anything above the ceiling is capped.
+ */
+export function clampConcurrency(requested: number | undefined): number {
+  if (requested === undefined || !Number.isFinite(requested) || requested < 1) {
+    return DEFAULT_CLOUD_RUN_CONCURRENCY;
+  }
+  return Math.min(Math.floor(requested), MAX_CLOUD_RUN_CONCURRENCY);
+}
+
 /** Inputs the desktop forwards to run a column on a cloud project. */
 export interface CloudRunRequest {
   /** The apps/web API base URL (the desktop's `VITE_API_URL`). */
@@ -80,7 +110,12 @@ export interface CloudRunRequest {
   readonly force?: boolean;
   /** Restrict the run to these `rows.id`s (defaults to all rows). */
   readonly rowIds?: string[];
-  /** Bounded concurrency for the row fan-out (defaults to 5). */
+  /**
+   * Bounded concurrency for the row fan-out (defaults to
+   * {@link DEFAULT_CLOUD_RUN_CONCURRENCY}). Clamped to
+   * `[1, MAX_CLOUD_RUN_CONCURRENCY]` before use (M6): caller-controlled, so an
+   * out-of-range value can never blow past the safe per-run ceiling.
+   */
   readonly concurrency?: number;
 }
 
@@ -312,6 +347,8 @@ export async function runCloudColumn(
   return engine.runColumn(req.columnId, {
     force: req.force,
     rowIds: req.rowIds,
-    concurrency: req.concurrency,
+    // Clamp the caller-controlled fan-out to a safe ceiling (M6) so a too-large
+    // `req.concurrency` cannot multiply worker POSTs / sandboxed executions.
+    concurrency: clampConcurrency(req.concurrency),
   });
 }

@@ -28,6 +28,9 @@ import {
 } from "@gtmgrid/engine";
 import {
   CloudActionsLimitError,
+  DEFAULT_CLOUD_RUN_CONCURRENCY,
+  MAX_CLOUD_RUN_CONCURRENCY,
+  clampConcurrency,
   makeWorkerClient,
   resolveWorkspaceId,
   runCloudColumn,
@@ -565,6 +568,84 @@ describe("runCloudColumn — pre-flight quota gate (TRI-3277)", () => {
 
     expect(res).toEqual({ ran: 2, errors: 0 });
     expect(queryRefs).toContain("/api/worker/assertColumnRunQuota");
+    expect(grid.cells.filter((c) => c.columnId === "c_x")).toHaveLength(2);
+  });
+});
+
+describe("clampConcurrency — safe per-run fan-out ceiling (M6 / TRI-3282)", () => {
+  it("defaults an absent value to DEFAULT_CLOUD_RUN_CONCURRENCY", () => {
+    expect(clampConcurrency(undefined)).toBe(DEFAULT_CLOUD_RUN_CONCURRENCY);
+  });
+
+  it("caps an over-ceiling value at MAX_CLOUD_RUN_CONCURRENCY", () => {
+    expect(clampConcurrency(MAX_CLOUD_RUN_CONCURRENCY + 1)).toBe(
+      MAX_CLOUD_RUN_CONCURRENCY,
+    );
+    expect(clampConcurrency(1000)).toBe(MAX_CLOUD_RUN_CONCURRENCY);
+  });
+
+  it("passes through an in-range value unchanged (floored to an integer)", () => {
+    expect(clampConcurrency(3)).toBe(3);
+    expect(clampConcurrency(MAX_CLOUD_RUN_CONCURRENCY)).toBe(
+      MAX_CLOUD_RUN_CONCURRENCY,
+    );
+    expect(clampConcurrency(4.9)).toBe(4);
+  });
+
+  it("falls back to the default for non-finite or sub-1 values (never 0, which would stall)", () => {
+    expect(clampConcurrency(0)).toBe(DEFAULT_CLOUD_RUN_CONCURRENCY);
+    expect(clampConcurrency(-5)).toBe(DEFAULT_CLOUD_RUN_CONCURRENCY);
+    expect(clampConcurrency(Number.NaN)).toBe(DEFAULT_CLOUD_RUN_CONCURRENCY);
+    expect(clampConcurrency(Number.POSITIVE_INFINITY)).toBe(
+      DEFAULT_CLOUD_RUN_CONCURRENCY,
+    );
+  });
+
+  it("a cloud run with an absurd requested concurrency still completes correctly (clamp is behaviour-preserving)", async () => {
+    const grid = {
+      columns: [
+        {
+          _id: "c_x",
+          tableId: "t1",
+          name: "X",
+          type: "text",
+          kind: "function",
+          provider: null,
+          method: null,
+          code: "function(inputs, sdk){ return { text: 'x' }; }",
+          params: {},
+          position: 0,
+          createdAt: 1,
+        },
+      ],
+      rows: [
+        { _id: "r1", tableId: "t1", position: 0, createdAt: 1 },
+        { _id: "r2", tableId: "t1", position: 1, createdAt: 2 },
+      ],
+      cells: [] as Array<{
+        rowId: string;
+        columnId: string;
+        value: unknown;
+        status: string;
+        error: string | null;
+        updatedAt: number | null;
+      }>,
+    };
+    const { client } = fakeConvex(grid);
+
+    const res = await runCloudColumn(
+      {
+        apiUrl: "https://app.gtmgrid.dev",
+        token: "jwt",
+        tableId: "t1",
+        columnId: "c_x",
+        concurrency: 10_000,
+      },
+      depsFor(client, upperRegistry()),
+    );
+
+    // Despite the absurd requested concurrency, every row still ran exactly once.
+    expect(res).toEqual({ ran: 2, errors: 0 });
     expect(grid.cells.filter((c) => c.columnId === "c_x")).toHaveLength(2);
   });
 });
