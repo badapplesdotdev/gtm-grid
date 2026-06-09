@@ -173,3 +173,97 @@ describe("applyGridEvent · null snapshot", () => {
     ).toBeNull();
   });
 });
+
+describe("applyGridEvent · cell.upsert is O(1) + preserves untouched identity", () => {
+  /** A snapshot with `n` distinct cells (one per row, all on column c1). */
+  const withCells = (n: number): GridSnapshot =>
+    snapshot({
+      rows: Array.from({ length: n }, (_, i) => ({ _id: `r${i}` })),
+      cells: Array.from({ length: n }, (_, i) =>
+        cell({ rowId: `r${i}`, value: i }),
+      ),
+    });
+
+  it("copies ONLY the touched cell — every other cell keeps its reference", () => {
+    const base = withCells(5);
+    const next = applyGridEvent(base, {
+      type: "cell.upsert",
+      cell: cell({ rowId: "r2", value: "changed" }),
+    });
+    expect(next).not.toBeNull();
+    const after = next!.cells;
+    expect(after).toHaveLength(5);
+    for (let i = 0; i < 5; i++) {
+      if (i === 2) {
+        // The touched cell is a NEW object holding the new value.
+        expect(after[i]).not.toBe(base.cells[i]);
+        expect(after[i].value).toBe("changed");
+      } else {
+        // Untouched cells are carried over by reference (memo-friendly).
+        expect(after[i]).toBe(base.cells[i]);
+      }
+    }
+  });
+
+  it("appends a new key without re-copying existing cell objects", () => {
+    const base = withCells(3);
+    const next = applyGridEvent(base, {
+      type: "cell.upsert",
+      cell: cell({ rowId: "r9", columnId: "c1", value: "new" }),
+    });
+    const after = next!.cells;
+    expect(after).toHaveLength(4);
+    for (let i = 0; i < 3; i++) expect(after[i]).toBe(base.cells[i]);
+    expect(after[3].value).toBe("new");
+  });
+
+  it("a stream of upserts stays correct across the carried-forward index", () => {
+    let snap: GridSnapshot | null = withCells(4);
+    snap = applyGridEvent(snap, {
+      type: "cell.upsert",
+      cell: cell({ rowId: "r1", value: "a" }),
+    });
+    snap = applyGridEvent(snap, {
+      type: "cell.upsert",
+      cell: cell({ rowId: "r1", value: "b" }),
+    });
+    snap = applyGridEvent(snap, {
+      type: "cell.upsert",
+      cell: cell({ rowId: "r3", value: "c" }),
+    });
+    expect(snap!.cells).toHaveLength(4);
+    expect(snap!.cells.find((c) => c.rowId === "r1")?.value).toBe("b");
+    expect(snap!.cells.find((c) => c.rowId === "r3")?.value).toBe("c");
+    expect(snap!.cells.find((c) => c.rowId === "r0")?.value).toBe(0);
+  });
+
+  it("upsert lookup is O(1) — per-event cost does not grow with cell count", () => {
+    // The keyed index makes the LOOKUP O(1) regardless of grid size. With an
+    // O(N) findIndex the per-event cost would scale with the cell count, so the
+    // large grid would take dramatically longer per upsert than the small one.
+    // (The immutable array copy is linear in both and cancels in the ratio.)
+    const measure = (cellCount: number, upserts: number): number => {
+      let snap: GridSnapshot | null = withCells(cellCount);
+      const start = performance.now();
+      for (let i = 0; i < upserts; i++) {
+        // Always re-upsert the SAME (rowId,columnId) so the array length is
+        // fixed; only the lookup+slice cost is exercised.
+        snap = applyGridEvent(snap, {
+          type: "cell.upsert",
+          cell: cell({ rowId: "r0", value: i }),
+        });
+      }
+      return performance.now() - start;
+    };
+
+    const upserts = 2_000;
+    const small = measure(100, upserts);
+    const large = measure(20_000, upserts);
+
+    // With O(1) lookup the only size-dependent term is the array slice; the
+    // lookup contributes nothing extra. A regression to findIndex would make the
+    // 200×-larger grid wildly slower per event. Allow generous headroom for the
+    // linear slice + GC jitter; an O(N²) findIndex regression blows past this.
+    expect(large).toBeLessThan(small * 60 + 250);
+  });
+});

@@ -279,11 +279,8 @@ function toCell(c: {
   };
 }
 
-/**
- * Project a `getTable`-shaped snapshot onto the desktop `FullTable` (columns
- * ordered, rows with a `cells` map keyed by column id). Pure.
- */
-function toFullTable(data: {
+/** The `getTable`-shaped snapshot {@link createIncrementalTableView} projects. */
+type GetTableData = {
   table: { _id: string; name: string };
   columns: readonly {
     _id: string;
@@ -303,33 +300,115 @@ function toFullTable(data: {
     status: string;
     error: string | null;
   }[];
-}): FullTable {
-  const columns = data.columns.map((c) =>
-    toColumn({ ...c, kind: c.kind as "manual" | "function" }),
-  );
-  // Index cells by (rowId, columnId) once, then build each row's cell map.
-  const byRow = new Map<string, Map<string, Cell>>();
-  for (const cell of data.cells) {
-    let m = byRow.get(cell.rowId);
-    if (!m) {
-      m = new Map();
-      byRow.set(cell.rowId, m);
+};
+
+/** The source cell shape, indexed per row (the reducer preserves its identity). */
+type SourceCell = GetTableData["cells"][number];
+
+/** One derived row plus the source cells it was built from (for reuse checks). */
+interface DerivedRow {
+  readonly row: FullTable["rows"][number];
+  /** The source `SourceCell` each column was projected from (`null` = empty). */
+  readonly sources: ReadonlyMap<string, SourceCell | null>;
+}
+
+/**
+ * Build an INCREMENTAL `getTable` → `FullTable` projector that reuses unchanged
+ * row objects across successive snapshots.
+ *
+ * Rebuilding the whole grid on every realtime patch is O(rows×cols) per single
+ * cell change AND breaks referential identity for every row (forcing a full
+ * re-render). This deriver instead keeps the previous `FullTable` plus, per row,
+ * the SOURCE cell each column was projected from. Because the reducer preserves
+ * the identity of untouched cell objects, a row whose every column maps to the
+ * same source cell (and the same column list) is UNCHANGED — we hand back the
+ * exact same row object, so `React.memo`'d rows skip re-rendering. Only the row
+ * whose cell actually changed is rebuilt.
+ *
+ * Stateful (holds the previous derivation), so each grid view owns one instance.
+ * Exported (unit-tested) so the incremental row-identity invariant is verifiable
+ * without React or Supabase.
+ */
+export function createIncrementalTableView(): {
+  derive: (data: GetTableData) => FullTable;
+} {
+  let prevColumns: FullTable["columns"] | null = null;
+  let prevColumnsSource: GetTableData["columns"] | null = null;
+  let prevByRow = new Map<string, DerivedRow>();
+
+  const derive = (data: GetTableData): FullTable => {
+    // Reuse the projected columns array (and thus its identity) when the source
+    // columns array is unchanged — the common case during a cell-edit stream.
+    const columns =
+      prevColumnsSource === data.columns && prevColumns !== null
+        ? prevColumns
+        : data.columns.map((c) =>
+            toColumn({ ...c, kind: c.kind as "manual" | "function" }),
+          );
+    const columnsChanged = columns !== prevColumns;
+    prevColumns = columns;
+    prevColumnsSource = data.columns;
+
+    // Index source cells by (rowId, columnId) once.
+    const byRow = new Map<string, Map<string, SourceCell>>();
+    for (const cell of data.cells) {
+      let m = byRow.get(cell.rowId);
+      if (!m) {
+        m = new Map();
+        byRow.set(cell.rowId, m);
+      }
+      m.set(cell.columnId, cell);
     }
-    m.set(cell.columnId, toCell(cell));
+
+    const nextByRow = new Map<string, DerivedRow>();
+    const rows = data.rows.map((r) => {
+      const m = byRow.get(r._id);
+      // Resolve each column's source cell (or `null` for a synthesized empty).
+      const sources = new Map<string, SourceCell | null>();
+      for (const col of columns) sources.set(col.id, m?.get(col.id) ?? null);
+
+      // Reuse the previous row object when neither the column list nor any of
+      // this row's source cells changed (all by reference — the reducer keeps
+      // untouched cell identity).
+      const prev = prevByRow.get(r._id);
+      if (
+        prev !== undefined &&
+        !columnsChanged &&
+        sameSources(prev.sources, sources)
+      ) {
+        nextByRow.set(r._id, prev);
+        return prev.row;
+      }
+
+      const cells: Record<string, Cell> = {};
+      for (const col of columns) {
+        const src = sources.get(col.id);
+        cells[col.id] = src
+          ? toCell(src)
+          : { value: null, status: "empty", error: null };
+      }
+      const row = { id: r._id, cells };
+      nextByRow.set(r._id, { row, sources });
+      return row;
+    });
+
+    prevByRow = nextByRow;
+    return { id: data.table._id, name: data.table.name, columns, rows };
+  };
+
+  return { derive };
+}
+
+/** Two per-row source maps are equal when every column maps to the same cell ref. */
+function sameSources(
+  a: ReadonlyMap<string, SourceCell | null>,
+  b: ReadonlyMap<string, SourceCell | null>,
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const [key, value] of b) {
+    if (a.get(key) !== value) return false;
   }
-  const rows = data.rows.map((r) => {
-    const m = byRow.get(r._id);
-    const cells: Record<string, Cell> = {};
-    for (const col of columns) {
-      cells[col.id] = m?.get(col.id) ?? {
-        value: null,
-        status: "empty",
-        error: null,
-      };
-    }
-    return { id: r._id, cells };
-  });
-  return { id: data.table._id, name: data.table.name, columns, rows };
+  return true;
 }
 
 /**
@@ -355,11 +434,22 @@ export function useCloudTable(
   // workspace handle the switcher sets (the snapshot itself omits it).
   useGridRealtime(tableId, q.data ? activeWorkspaceIdRef.current : null);
 
+  // One incremental projector per view: a cell-edit stream then rebuilds only
+  // the changed row and keeps every untouched row object's identity (so memoised
+  // rows skip re-rendering). Reset when the table changes so a new table starts
+  // from a clean slate rather than reusing the prior table's rows.
+  const viewRef = useRef(createIncrementalTableView());
+  const lastTableRef = useRef(tableId);
+  if (lastTableRef.current !== tableId) {
+    lastTableRef.current = tableId;
+    viewRef.current = createIncrementalTableView();
+  }
+
   return useMemo<FullTable | null | undefined>(() => {
     if (q.isLoading && q.data === undefined) return undefined;
     if (q.data === undefined) return undefined;
     if (q.data === null) return null;
-    return toFullTable(q.data);
+    return viewRef.current.derive(q.data);
   }, [q.data, q.isLoading]);
 }
 
@@ -408,6 +498,26 @@ function useGridRealtime(
     let disposed = false;
     let teardown: (() => Promise<void>) | null = null;
 
+    // Coalescing buffer: a single enrichment cell publishes ≥2 events (running →
+    // done) and a bulk run fires thousands; writing the cache per event causes a
+    // full grid re-render each time. Instead we BUFFER inbound events and flush
+    // them as ONE cache write per animation frame (≈60/s), merging every queued
+    // event into the snapshot in arrival order via the pure reducer. This caps
+    // re-renders at frame rate regardless of event throughput.
+    const buffer: Array<Parameters<typeof patchGridCache>[1]> = [];
+    const flush = scheduleFlush(() => {
+      if (disposed || buffer.length === 0) return;
+      const events = buffer.splice(0, buffer.length);
+      qcRef.current.setQueryData<GridCacheSnapshot | null>(
+        gridQueryKeys.table(tableId),
+        (prev) => {
+          let next = prev ?? null;
+          for (const event of events) next = patchGridCache(next, event);
+          return next;
+        },
+      );
+    });
+
     void (async () => {
       const token = await mintRealtimeToken(workspaceId).catch(() => null);
       if (token === null || disposed) return;
@@ -417,10 +527,8 @@ function useGridRealtime(
         workspaceId,
         tableId,
         onEvent: (event) => {
-          qcRef.current.setQueryData<GridCacheSnapshot | null>(
-            gridQueryKeys.table(tableId),
-            (prev) => patchGridCache(prev ?? null, event),
-          );
+          buffer.push(event);
+          flush.schedule();
         },
       });
       teardown = sub.unsubscribe;
@@ -429,9 +537,57 @@ function useGridRealtime(
 
     return () => {
       disposed = true;
+      flush.cancel();
       if (teardown) void teardown();
     };
   }, [tableId, workspaceId]);
+}
+
+/**
+ * A debounced flush primitive for the realtime coalescing buffer. Coalesces
+ * bursts of inbound events into ONE `run` per animation frame: the first
+ * `schedule()` after a flush arms a `requestAnimationFrame` callback, and any
+ * further `schedule()` calls before it fires are no-ops (the already-pending
+ * frame will drain the shared buffer). Falls back to a ~100ms `setTimeout` when
+ * `requestAnimationFrame` is unavailable (non-DOM / test environments), so the
+ * coalescing behaviour holds everywhere. `cancel()` clears any pending flush on
+ * teardown so a unmounted subscription never writes the cache.
+ */
+function scheduleFlush(run: () => void): {
+  schedule: () => void;
+  cancel: () => void;
+} {
+  const hasRaf = typeof requestAnimationFrame === "function";
+  let rafHandle: number | null = null;
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+  const fire = () => {
+    rafHandle = null;
+    timeoutHandle = null;
+    run();
+  };
+
+  const schedule = () => {
+    if (rafHandle !== null || timeoutHandle !== null) return;
+    if (hasRaf) {
+      rafHandle = requestAnimationFrame(fire);
+    } else {
+      timeoutHandle = setTimeout(fire, 100);
+    }
+  };
+
+  const cancel = () => {
+    if (rafHandle !== null) {
+      cancelAnimationFrame(rafHandle);
+      rafHandle = null;
+    }
+    if (timeoutHandle !== null) {
+      clearTimeout(timeoutHandle);
+      timeoutHandle = null;
+    }
+  };
+
+  return { schedule, cancel };
 }
 
 /**
