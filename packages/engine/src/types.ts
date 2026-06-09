@@ -91,6 +91,14 @@ export interface MethodContext {
   ai?: AiConfig;
   /** All connected AI providers — lets a method route by the requested model. */
   aiProviders?: AiConfig[];
+  /**
+   * Enforce the SSRF guard on this method's outbound HTTP — set ONLY when the
+   * connector runs on shared server infrastructure (the Vercel enrichment worker),
+   * where an attacker-supplied manifest `baseUrl` could otherwise reach internal/
+   * link-local addresses. Local (sidecar) runs leave it unset: the call runs on the
+   * user's own machine/network, so a self-hosted localhost/LAN connector is fine.
+   */
+  guardSsrf?: boolean;
 }
 
 export interface AiConfig {
