@@ -22,7 +22,7 @@ import {
   listProjects,
 } from "@gtmgrid/engine";
 import type { CellProgress } from "@gtmgrid/engine";
-import { detectAgents, streamClaude, streamCodex, setAgentPath, rescanAgents, type AgentKind } from "./agent.js";
+import { detectAgents, streamClaude, streamCodex, setAgentPath, rescanAgents, parseAgentCloud, type AgentKind } from "./agent.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
 import { corsHeadersFor, isOriginAllowed } from "./cors.js";
@@ -910,8 +910,14 @@ const server = createServer(async (req, res) => {
       // Pass `origin` through so the SSE stream emits the allowlisted CORS
       // header on this privileged route (#22).
       const model = typeof body?.model === "string" && body.model.trim() ? body.model.trim() : undefined;
-      if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context, origin, model });
-      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model });
+      // CLOUD context (TRI-3296): when the desktop is operating a CLOUD project
+      // it forwards apiUrl/token/workspace/project/table so the spawned MCP's
+      // table tools read/write Supabase. A partial/absent block ⇒ undefined,
+      // and the MCP opens the local SQLite project exactly as before. The token
+      // rides the MCP child env (set by agent.ts), never a log line here.
+      const cloud = parseAgentCloud(body?.cloud);
+      if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context, origin, model, cloud });
+      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model, cloud });
     } catch (e) {
       send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
     }
