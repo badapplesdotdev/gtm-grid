@@ -1121,6 +1121,7 @@ export function ColumnSettingsModal({
   column: {
     id: string;
     name: string;
+    type?: string;
     provider: string | null;
     fn: string | null;
     params: Record<string, unknown>;
@@ -1131,15 +1132,38 @@ export function ColumnSettingsModal({
   onSaved: () => void;
 }) {
   const isFormula = column.provider === "formula" || column.fn === "formula.eval";
+  const isAi = column.provider === "ai";
   const isFunction = !!column.provider || !!column.fn;
+  const isEnrichment = isFunction && !isFormula && !isAi; // connector/enrichment column
+  const p = (column.params ?? {}) as Record<string, unknown>;
+
   const [name, setName] = useState(column.name);
-  const [expression, setExpression] = useState(isFormula ? String(column.params?.expression ?? "") : "");
+  const [type, setType] = useState(column.type ?? "text");
   const [condition, setCondition] = useState(column.condition ?? "");
+  // formula
+  const [expression, setExpression] = useState(isFormula ? String(p.expression ?? "") : "");
+  // ai
+  const [prompt, setPrompt] = useState(isAi ? String(p.prompt ?? "") : "");
+  const [system, setSystem] = useState(isAi ? String(p.system ?? "") : "");
+  const [model, setModel] = useState(isAi ? String(p.model ?? "") : "");
+  const [maxTokens, setMaxTokens] = useState(isAi && p.maxTokens != null ? String(p.maxTokens) : "");
+  // enrichment: re-edit the existing input mappings
+  const [params, setParams] = useState<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    if (isEnrichment) for (const [k, v] of Object.entries(p)) out[k] = v == null ? "" : typeof v === "string" ? v : String(v);
+    return out;
+  });
+  const [models, setModels] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
-  // A column should never reference itself in an expression/condition.
+  // A column should never reference itself in an expression/condition/mapping.
   const otherColumns = columns.filter((c) => c !== column.name);
+
+  useEffect(() => {
+    if (!isAi) return;
+    api.aiProviders().then((ps) => setModels(ps.filter((x) => x.connected).flatMap((x) => x.models))).catch(() => {});
+  }, [isAi]);
 
   const save = async () => {
     if (!name.trim()) { setErr("Column name is required"); return; }
@@ -1150,7 +1174,22 @@ export function ColumnSettingsModal({
         name: name.trim(),
         condition: condition.trim() || null,
       };
-      if (isFormula) patch.params = { ...column.params, expression: expression.trim() };
+      if (isFormula) {
+        patch.params = { ...p, expression: expression.trim() };
+        patch.type = type;
+      } else if (isAi) {
+        const np: Record<string, unknown> = { ...p, prompt: prompt.trim() };
+        np.system = system.trim() || undefined;
+        np.model = model.trim() || undefined;
+        const mt = parseInt(maxTokens, 10);
+        np.maxTokens = !Number.isNaN(mt) && mt > 0 ? mt : undefined;
+        for (const k of Object.keys(np)) if (np[k] === undefined) delete np[k];
+        patch.params = np;
+      } else if (isEnrichment) {
+        patch.params = { ...p, ...params };
+      } else {
+        patch.type = type; // manual column
+      }
       await api.updateColumn(column.id, patch);
       onSaved();
       onClose();
@@ -1160,11 +1199,22 @@ export function ColumnSettingsModal({
     }
   };
 
+  const TypePicker = (
+    <div className="fx-types">
+      {FX_TYPES.map(([id, label]) => (
+        <button key={id} type="button" className={`fx-type${type === id ? " active" : ""}`} onClick={() => setType(id)}>
+          <span className="fx-type-icon">{TYPE_ICONS[id]}</span>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
   return (
     <div className="popover-scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="col-settings" onMouseDown={(e) => e.stopPropagation()}>
         <div className="col-settings-head">
-          <div className="col-settings-title">Column settings</div>
+          <div className="col-settings-title">Edit column{column.fn ? ` · ${column.fn}` : ""}</div>
           <button className="fnx-x" onClick={onClose}>{X}</button>
         </div>
         <div className="col-settings-body">
@@ -1175,14 +1225,53 @@ export function ColumnSettingsModal({
             <>
               <label className="form-label">Formula</label>
               <FormulaInput value={expression} setValue={setExpression} columns={otherColumns} mode="formula" placeholder={'{{Email}}.split("@")[1]'} />
+              <label className="form-label">Output type</label>
+              {TypePicker}
             </>
           )}
 
-          {isFunction ? (
-            <RunSettings condition={condition} setCondition={setCondition} columns={otherColumns} />
-          ) : (
-            <p className="params-hint">Run settings apply to function columns (enrichments, AI, and formulas).</p>
+          {isAi && (
+            <>
+              <label className="form-label">Prompt</label>
+              <SlashTextarea value={prompt} onChange={setPrompt} columns={otherColumns} rows={5} placeholder="Write a personalized opener for {{First Name}} at {{Company}}…" />
+              <label className="form-label">System prompt <span className="form-label-opt">(optional)</span></label>
+              <textarea className="form-input ai-textarea" rows={2} value={system} onChange={(e) => setSystem(e.target.value)} placeholder="You are a helpful assistant…" />
+              <label className="form-label">Model</label>
+              <input className="form-input" list="colsettings-models" value={model} onChange={(e) => setModel(e.target.value)} placeholder="e.g. claude-haiku-4-5" />
+              <datalist id="colsettings-models">{models.map((m) => <option key={m} value={m} />)}</datalist>
+              <label className="form-label">Max tokens <span className="form-label-opt">(optional)</span></label>
+              <input className="form-input" type="number" min={1} value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} placeholder="512" />
+            </>
           )}
+
+          {isEnrichment && Object.keys(params).length > 0 && (
+            <>
+              <div className="fnx-cfg-section">Inputs</div>
+              {Object.keys(params).map((k) => (
+                <div key={k} className="fnx-param">
+                  <label className="fnx-param-label">{k}</label>
+                  <input
+                    className="form-input"
+                    list="colsettings-cols"
+                    value={params[k]}
+                    onChange={(e) => setParams((prev) => ({ ...prev, [k]: e.target.value }))}
+                    placeholder="value or {{Column}}"
+                  />
+                </div>
+              ))}
+              <datalist id="colsettings-cols">{otherColumns.map((c) => <option key={c} value={`{{${c}}}`} />)}</datalist>
+              <p className="params-hint">Map each input to a value, or reference a column with <code>{"{{Column}}"}</code>.</p>
+            </>
+          )}
+
+          {!isFunction && (
+            <>
+              <label className="form-label">Type</label>
+              {TypePicker}
+            </>
+          )}
+
+          {isFunction && <RunSettings condition={condition} setCondition={setCondition} columns={otherColumns} />}
 
           {err && <div className="conn-err">{err}</div>}
         </div>
