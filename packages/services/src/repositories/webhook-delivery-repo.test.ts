@@ -96,16 +96,36 @@ describe("WebhookDeliveryRepo keyset pagination", () => {
   });
 });
 
-describe("WebhookDeliveryRepo prune round-trip", () => {
-  it("inserts and deletes by id", async () => {
-    const store: WebhookDelivery[] = [];
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const repo = yield* WebhookDeliveryRepo;
-        const id = yield* repo.insert(mk("z", 1));
-        yield* repo.deleteByIds([id]);
-      }).pipe(Effect.provide(webhookDeliveryRepoLayer(store))),
-    );
-    expect(store).toHaveLength(0);
+describe("WebhookDeliveryRepo.pruneOldest", () => {
+  it("keeps the N newest rows and drops the rest in one statement", async () => {
+    // 5 rows, retain 2 → the two newest (by receivedAt DESC) survive.
+    const store = [mk("a", 1), mk("b", 2), mk("c", 3), mk("d", 4), mk("e", 5)];
+    await run(store, (r) => r.pruneOldest("wh", 2));
+    expect(store.map((d) => d.id).sort()).toEqual(["d", "e"]);
+  });
+
+  it("is a no-op when the log is already at or under the cap", async () => {
+    const store = [mk("a", 1), mk("b", 2)];
+    await run(store, (r) => r.pruneOldest("wh", 5));
+    expect(store.map((d) => d.id)).toEqual(["a", "b"]);
+  });
+
+  it("breaks ties on equal receivedAt by id DESC when choosing survivors", async () => {
+    const store = [mk("a", 5), mk("b", 5), mk("c", 5)];
+    await run(store, (r) => r.pruneOldest("wh", 2));
+    // Same receivedAt: keep the two highest ids (c, b); drop a.
+    expect(store.map((d) => d.id).sort()).toEqual(["b", "c"]);
+  });
+
+  it("only prunes the requested webhook's rows", async () => {
+    const store = [
+      mk("a", 1),
+      mk("b", 2),
+      mk("c", 3),
+      { ...mk("x", 9), webhookId: "other" },
+    ];
+    await run(store, (r) => r.pruneOldest("wh", 1));
+    // wh pruned to its 1 newest (c); the other webhook's row is untouched.
+    expect(store.map((d) => d.id).sort()).toEqual(["c", "x"]);
   });
 });

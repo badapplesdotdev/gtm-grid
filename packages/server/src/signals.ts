@@ -7,7 +7,7 @@
 // under "signal_bindings") — no schema migration needed.
 
 import { randomUUID } from "node:crypto";
-import type { Db, Engine } from "@gtmgrid/engine";
+import type { Db } from "@gtmgrid/engine";
 
 export type SignalSchedule = "manual" | "hourly" | "daily" | "weekly";
 export type SignalKind = "search" | "profileEngagement";

@@ -64,6 +64,71 @@ export function computeSpacerHeights(
   };
 }
 
+/**
+ * A virtual COLUMN item as produced by a horizontal `Virtualizer`. Mirrors
+ * {@link VirtualRowItem} but on the X axis — `start`/`end` are pixel offsets
+ * along the table's DATA-column width (the row-number gutter is NOT part of the
+ * virtualized range; see {@link computeColumnSpacers}).
+ */
+export interface VirtualColItem {
+  /** Index into the underlying column array. */
+  readonly index: number;
+  /** Pixel offset of the column's left edge from the start of the data columns. */
+  readonly start: number;
+  /** Pixel offset of the column's right edge (`start + width`). */
+  readonly end: number;
+}
+
+/** Widths (px) of the leading and trailing spacer `<td>`/`<th>` cells. */
+export interface SpacerWidths {
+  /** Width of the spacer to the LEFT of the first rendered data column. */
+  readonly left: number;
+  /** Width of the spacer to the RIGHT of the last rendered data column. */
+  readonly right: number;
+}
+
+/**
+ * Compute the left/right spacer widths for a windowed row of cells — the
+ * X-axis analogue of {@link computeSpacerHeights}.
+ *
+ * Column virtualization (TRI-3286) mounts only the columns inside (and just
+ * around) the viewport. To keep `table-layout: fixed` widths, the sticky header
+ * and the horizontal scrollbar correct, each rendered `<tr>` (and the `<thead>`
+ * row) pads the unmounted DATA columns with two zero-content spacer cells:
+ * `left` reserves the width of every data column scrolled past on the left, and
+ * `right` reserves the width of every data column still off-screen to the right
+ * (`totalSize - lastColumn.end`).
+ *
+ * IMPORTANT — gutter is reserved EXACTLY ONCE (TRI-3286 re-run fix). The
+ * row-number gutter is rendered by each grid as its own always-present sticky
+ * `<th>`/`<td>`; it is NOT part of the virtualized column range. Callers MUST
+ * therefore drive the virtualizer with `paddingStart = 0` and pass a
+ * `totalSize` covering ONLY the data columns, so `left` is the offset of the
+ * first visible DATA column with the gutter EXCLUDED. (The previous attempt
+ * folded the gutter into `paddingStart`, which baked it into both `start` and
+ * the always-present gutter cell, shifting every column right by one gutter and
+ * making the table one gutter wider than its wrapper. Do not reintroduce that.)
+ *
+ * When no columns are rendered the whole data-column width collapses into the
+ * left spacer so the scroll area stays correct. Both results are clamped to
+ * `>= 0` so a transient over-measurement mid-scroll never yields a negative
+ * cell width.
+ */
+export function computeColumnSpacers(
+  virtualColumns: readonly VirtualColItem[],
+  totalSize: number,
+): SpacerWidths {
+  if (virtualColumns.length === 0) {
+    return { left: Math.max(0, totalSize), right: 0 };
+  }
+  const first = virtualColumns[0];
+  const last = virtualColumns[virtualColumns.length - 1];
+  return {
+    left: Math.max(0, first.start),
+    right: Math.max(0, totalSize - last.end),
+  };
+}
+
 /** Fallback row height (px) — matches the default `--row-h` in styles.css. */
 export const DEFAULT_ROW_HEIGHT = 34;
 

@@ -1,18 +1,13 @@
-import { useState, useEffect, useCallback, useMemo, useRef, memo, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, memo, lazy, Suspense, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource, type CellProgressEvent } from "./api";
-import AgentPanel from "./AgentPanel";
 import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import CellDetails, { extractCode } from "./CellDetails";
-import { ExtensionPanel, AiProviderPanel, ExtensionsBrowse, SkillsBrowse, SkillPanel, BrandIcon } from "./Panels";
-import { AddColumnPopover, FunctionsModal } from "./AddColumn";
+import { BrandIcon } from "./BrandIcon";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { AccountBar, PlanBillingModal } from "./cloud/AccountBar";
 import { PendingInvites } from "./cloud/PendingInvites";
-import { WorkspaceSettings } from "./cloud/WorkspaceSettings";
-import { OnboardingFlow } from "./cloud/onboarding/OnboardingFlow";
 import { cloudEnabled, queryClient, syncWorkspacePlan, apiClient } from "./cloud/client";
-import { CloudGrid } from "./cloud/CloudGrid";
 import { useMe, useActiveWorkspace, useAuthState } from "./cloud/auth";
 import {
   useMyPendingInvitations,
@@ -32,13 +27,65 @@ import {
   useCloudGridMutations,
   type CloudProject,
 } from "./cloud/useCloudGrid";
-import { ImportCsvModal } from "./ImportCsvModal";
-import { SignalsModal, type SignalsCloud } from "./SignalsModal";
+import { type SignalsCloud } from "./SignalsModal";
 import type { ImportWriter } from "./csvImport";
 import type { Id } from "./cloud/ids";
 import { VirtualGridBody } from "./VirtualGridBody";
 import { resolveRowHeight } from "./gridVirtual";
+import { useColumnWindow } from "./useColumnWindow";
+import { GridColSpacer } from "./GridColSpacer";
 import "./styles.css";
+
+// ── Lazy-loaded panels (TRI-3287) ─────────────────────────────────────
+// Heavy, non-initial UI is code-split out of the initial bundle so first
+// paint (the core grid + shell) stays small. Each is rendered inside a
+// <Suspense> with a lightweight fallback.
+const AgentPanel = lazy(() => import("./AgentPanel"));
+const OnboardingFlow = lazy(() =>
+  import("./cloud/onboarding/OnboardingFlow").then((m) => ({ default: m.OnboardingFlow })),
+);
+const CloudGrid = lazy(() =>
+  import("./cloud/CloudGrid").then((m) => ({ default: m.CloudGrid })),
+);
+const WorkspaceSettings = lazy(() =>
+  import("./cloud/WorkspaceSettings").then((m) => ({ default: m.WorkspaceSettings })),
+);
+const ExtensionsBrowse = lazy(() =>
+  import("./Panels").then((m) => ({ default: m.ExtensionsBrowse })),
+);
+const ExtensionPanel = lazy(() =>
+  import("./Panels").then((m) => ({ default: m.ExtensionPanel })),
+);
+const AiProviderPanel = lazy(() =>
+  import("./Panels").then((m) => ({ default: m.AiProviderPanel })),
+);
+const SkillsBrowse = lazy(() =>
+  import("./Panels").then((m) => ({ default: m.SkillsBrowse })),
+);
+const SkillPanel = lazy(() =>
+  import("./Panels").then((m) => ({ default: m.SkillPanel })),
+);
+const AddColumnPopover = lazy(() =>
+  import("./AddColumn").then((m) => ({ default: m.AddColumnPopover })),
+);
+const FunctionsModal = lazy(() =>
+  import("./AddColumn").then((m) => ({ default: m.FunctionsModal })),
+);
+const SignalsModal = lazy(() =>
+  import("./SignalsModal").then((m) => ({ default: m.SignalsModal })),
+);
+const ImportCsvModal = lazy(() =>
+  import("./ImportCsvModal").then((m) => ({ default: m.ImportCsvModal })),
+);
+
+/** Lightweight fallback shown while a lazy panel chunk loads. */
+function PanelFallback() {
+  return (
+    <div className="panel-fallback" role="status" aria-live="polite">
+      <span className="cell-spinner" style={{ width: 16, height: 16 }} />
+    </div>
+  );
+}
 
 // What the main area is showing.
 type View =
@@ -533,9 +580,6 @@ function NewTableChooser({
   );
   const WebhookIcon = (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17a4 4 0 0 1 3.6-3.98" /><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06" /><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8" /></svg>
-  );
-  const SignalIcon = (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 11a9 9 0 0 1 9 9" /><path d="M4 4a16 16 0 0 1 16 16" /><circle cx="5" cy="19" r="1" /></svg>
   );
   const LockIcon = (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
@@ -1068,6 +1112,23 @@ export default function App() {
     [colWidths],
   );
 
+  // Column virtualization (TRI-3286): window the DATA columns horizontally so a
+  // table with hundreds of columns mounts only the visible columns × visible
+  // rows. The gutter is NOT part of this window — it is the always-present
+  // sticky gutter <th>/<td> rendered once below, so it is reserved exactly once
+  // and `spacers.left` is the first visible data column's offset (gutter
+  // excluded). The hook runs unconditionally (count 0 when no table) to keep
+  // hook order stable.
+  const gridColumns = tableData?.columns ?? [];
+  const columnWindow = useColumnWindow({
+    count: gridColumns.length,
+    scrollRef: gridScrollRef,
+    getColumnWidth: (i) => {
+      const col = gridColumns[i];
+      return col ? colW(col.id) : DEFAULT_COL_W;
+    },
+  });
+
   // Right-click context menu
   const [ctxMenu, setCtxMenu] = useState<{
     x: number;
@@ -1400,6 +1461,9 @@ export default function App() {
     const key = `${rowId}:${colId}`;
     setRunningCells(s => new Set(s).add(key));
     try {
+      // Force is scoped to the ONE explicitly-targeted cell via `rowIds:[rowId]`,
+      // so re-running this cell never re-runs (or re-bills) any other row's
+      // already-`done` cell in the column (TRI-3283 L2).
       await api.runColumnStream(colId, (e) => patchCell(tableId, e), { force: true, rowIds: [rowId] });
     } catch { /* ignore */ }
     setRunningCells(s => { const n = new Set(s); n.delete(key); return n; });
@@ -1499,6 +1563,10 @@ export default function App() {
         const deps = updated.columns.filter((c) => c.kind === "function" && columnDependsOn(c, changed.name));
         if (deps.length) {
           for (const dc of deps) {
+            // Force is scoped to the edited row only (`rowIds:[rowId]`): only the
+            // cells whose input actually changed (this row's dependents) are
+            // recomputed/re-billed — every OTHER row's already-`done` dependent
+            // cell is left untouched (TRI-3283 L2).
             await api.runColumn(dc.id, { force: true, rowIds: [rowId] }).catch(() => {});
           }
           updated = await api.table(selectedTableId);
@@ -1546,17 +1614,19 @@ export default function App() {
   }
   if (mustAuth) {
     return (
-      <OnboardingFlow
-        forced
-        initialScreen={pendingInviteToken !== null ? "signup" : "signin"}
-        hasSession={false}
-        onClose={() => {
-          // Opting out clears the invite so the gate doesn't re-fire in a loop.
-          if (pendingInviteToken !== null) clearPendingInviteToken();
-          continueLocally();
-        }}
-        onDone={() => {}}
-      />
+      <Suspense fallback={<AppLoader inShell label="Signing you in…" />}>
+        <OnboardingFlow
+          forced
+          initialScreen={pendingInviteToken !== null ? "signup" : "signin"}
+          hasSession={false}
+          onClose={() => {
+            // Opting out clears the invite so the gate doesn't re-fire in a loop.
+            if (pendingInviteToken !== null) clearPendingInviteToken();
+            continueLocally();
+          }}
+          onDone={() => {}}
+        />
+      </Suspense>
     );
   }
 
@@ -1997,37 +2067,45 @@ export default function App() {
             Closing returns to the grid. Local writes via the sidecar; cloud via
             Convex. */}
         {importMode === "local" && (
-          <ImportCsvModal
-            inline
-            writer={localImportWriter}
-            onClose={() => setImportMode(null)}
-            onImported={() => { api.tables().then(setTables); }}
-            onOpenTable={id => {
-              api.tables().then(t => {
-                setTables(t);
-                setSelectedTableId(id);
-                setView({ kind: "table" });
-              });
-              setImportMode(null);
-            }}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <ImportCsvModal
+              inline
+              writer={localImportWriter}
+              onClose={() => setImportMode(null)}
+              onImported={() => { api.tables().then(setTables); }}
+              onOpenTable={id => {
+                api.tables().then(t => {
+                  setTables(t);
+                  setSelectedTableId(id);
+                  setView({ kind: "table" });
+                });
+                setImportMode(null);
+              }}
+            />
+          </Suspense>
         )}
         {importMode === "cloud" && cloudImportWriter && (
-          <ImportCsvModal
-            inline
-            writer={cloudImportWriter}
-            onClose={() => setImportMode(null)}
-            onOpenTable={id => {
-              setCloudTableId(id as Id<"tables">);
-              setImportMode(null);
-            }}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <ImportCsvModal
+              inline
+              writer={cloudImportWriter}
+              onClose={() => setImportMode(null)}
+              onOpenTable={id => {
+                setCloudTableId(id as Id<"tables">);
+                setImportMode(null);
+              }}
+            />
+          </Suspense>
         )}
 
         {/* Cloud project: the LIVE multiplayer grid (Convex). Replaces the local
             sidecar grid entirely while a cloud project is open. Hidden while a
             CSV import is open in this pane. */}
-        {!importMode && inCloud && !cloudLocked && view.kind === "table" && <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} />}
+        {!importMode && inCloud && !cloudLocked && view.kind === "table" && (
+          <Suspense fallback={<PanelFallback />}>
+            <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} />
+          </Suspense>
+        )}
 
         {/* Cloud locked: the trial lapsed / Free plan. Cloud data stays safe but
             inaccessible until the user upgrades; local tables are unaffected. */}
@@ -2053,22 +2131,30 @@ export default function App() {
             scope, so they must take precedence over the CloudGrid (which only
             renders for the "table" view). */}
         {!importMode && view.kind === "extensions" && (
-          <ExtensionsBrowse
-            extensions={extensions}
-            onOpen={(id) => setView({ kind: "extension", id })}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <ExtensionsBrowse
+              extensions={extensions}
+              onOpen={(id) => setView({ kind: "extension", id })}
+            />
+          </Suspense>
         )}
         {!importMode && view.kind === "extension" && (
-          <ExtensionPanel
-            id={view.id}
-            onConnected={refreshConnections}
-            onBack={() => setView({ kind: "extensions" })}
-            workspaceCreds={workspaceCreds}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <ExtensionPanel
+              id={view.id}
+              onConnected={refreshConnections}
+              onBack={() => setView({ kind: "extensions" })}
+              workspaceCreds={workspaceCreds}
+            />
+          </Suspense>
         )}
         {!importMode && view.kind === "ai" && (() => {
           const p = aiProviders.find(x => x.id === view.id);
-          return p ? <AiProviderPanel provider={p} onConnected={refreshConnections} workspaceCreds={workspaceCreds} /> : null;
+          return p ? (
+            <Suspense fallback={<PanelFallback />}>
+              <AiProviderPanel provider={p} onConnected={refreshConnections} workspaceCreds={workspaceCreds} />
+            </Suspense>
+          ) : null;
         })()}
 
         {/* Skills gallery + detail panels. Like the extension/AI panels, these
@@ -2077,18 +2163,22 @@ export default function App() {
             "table" view — otherwise selecting a skill in a cloud workspace would
             hide the grid and render nothing (a blank dead-end). */}
         {!importMode && view.kind === "skills" && (
-          <SkillsBrowse
-            skills={skills}
-            onOpen={(id) => setView({ kind: "skill", id })}
-            onChanged={() => api.skills().then(setSkills).catch(() => {})}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <SkillsBrowse
+              skills={skills}
+              onOpen={(id) => setView({ kind: "skill", id })}
+              onChanged={() => api.skills().then(setSkills).catch(() => {})}
+            />
+          </Suspense>
         )}
         {!importMode && view.kind === "skill" && (
-          <SkillPanel
-            id={view.id}
-            onBack={() => setView({ kind: "skills" })}
-            onChanged={() => api.skills().then(setSkills).catch(() => {})}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <SkillPanel
+              id={view.id}
+              onBack={() => setView({ kind: "skills" })}
+              onChanged={() => api.skills().then(setSkills).catch(() => {})}
+            />
+          </Suspense>
         )}
 
         {!importMode && !inCloud && view.kind === "table" && <>
@@ -2190,9 +2280,12 @@ export default function App() {
             >
               <thead>
                 <tr>
-                  {/* Row-number gutter */}
+                  {/* Row-number gutter — the ONLY gutter cell (reserved once) */}
                   <th className="grid-th row-num-th col-row-num" />
-                  {tableData.columns.map(col => (
+                  <GridColSpacer side="left" width={columnWindow.spacers.left} as="th" />
+                  {columnWindow.virtualColumns.map(vc => {
+                    const col = tableData.columns[vc.index];
+                    return (
                     <th
                       key={col.id}
                       className="grid-th"
@@ -2228,7 +2321,9 @@ export default function App() {
                         }}
                       />
                     </th>
-                  ))}
+                    );
+                  })}
+                  <GridColSpacer side="right" width={columnWindow.spacers.right} as="th" />
                   {/* Add column */}
                   <th className="grid-th add-col-th" style={{ width: ADD_COL_W }}>
                     <button className="add-col-btn" onClick={openAddCol} title="Add column">
@@ -2241,11 +2336,16 @@ export default function App() {
                 <tbody>
                   <tr>
                     <td className="grid-td row-num-td" />
-                    {tableData.columns.map(col => (
+                    <GridColSpacer side="left" width={columnWindow.spacers.left} />
+                    {columnWindow.virtualColumns.map(vc => {
+                      const col = tableData.columns[vc.index];
+                      return (
                       <td key={col.id} className="grid-td">
                         <div className="cell-wrap"><span className="cell-empty">—</span></div>
                       </td>
-                    ))}
+                      );
+                    })}
+                    <GridColSpacer side="right" width={columnWindow.spacers.right} />
                     <td className="grid-td" />
                   </tr>
                 </tbody>
@@ -2255,7 +2355,8 @@ export default function App() {
                   scrollRef={gridScrollRef}
                   rowHeight={rowHeight}
                   colSpan={tableData.columns.length + 2}
-                  renderRow={(row, idx) => (
+                  columnWindow={columnWindow}
+                  renderRow={(row, idx, cw) => (
                     <tr key={row.id} className="grid-tr">
                       <td
                         className="grid-td row-num-td"
@@ -2263,7 +2364,9 @@ export default function App() {
                       >
                         {idx + 1}
                       </td>
-                      {tableData.columns.map(col => {
+                      <GridColSpacer side="left" width={cw.spacers.left} />
+                      {cw.virtualColumns.map(vc => {
+                        const col = tableData.columns[vc.index];
                         const cell: Cell | undefined = row.cells[col.id];
                         return (
                           <td
@@ -2302,6 +2405,7 @@ export default function App() {
                           </td>
                         );
                       })}
+                      <GridColSpacer side="right" width={cw.spacers.right} />
                       <td className="grid-td" />
                     </tr>
                   )}
@@ -2314,10 +2418,12 @@ export default function App() {
       </div>
 
       {/* ── Agent panel (Claude Code / Codex) ─ */}
-      <AgentPanel
-        onGridChange={refreshAll}
-        activeTable={tableData ? { name: tableData.name, columns: tableData.columns.map((c) => c.name) } : null}
-      />
+      <Suspense fallback={null}>
+        <AgentPanel
+          onGridChange={refreshAll}
+          activeTable={tableData ? { name: tableData.name, columns: tableData.columns.map((c) => c.name) } : null}
+        />
+      </Suspense>
 
       {/* ── Cell details drawer ─ */}
       {detail && (
@@ -2365,25 +2471,29 @@ export default function App() {
 
       {/* ── Cloud onboarding (full-screen, C28) ─────────────── */}
       {onboarding && (
-        <OnboardingFlow
-          initialScreen={onboarding.initialScreen}
-          hasSession={onboarding.hasSession}
-          onClose={() => setOnboarding(null)}
-          onDone={(workspaceId) => {
-            if (workspaceId !== null) setActiveWorkspaceId(workspaceId);
-            setOnboarding(null);
-            refreshAppState(workspaceId);
-          }}
-        />
+        <Suspense fallback={<AppLoader inShell label="Loading…" />}>
+          <OnboardingFlow
+            initialScreen={onboarding.initialScreen}
+            hasSession={onboarding.hasSession}
+            onClose={() => setOnboarding(null)}
+            onDone={(workspaceId) => {
+              if (workspaceId !== null) setActiveWorkspaceId(workspaceId);
+              setOnboarding(null);
+              refreshAppState(workspaceId);
+            }}
+          />
+        </Suspense>
       )}
 
       {/* ── Modals ──────────────────────── */}
       {showWorkspaceSettings && activeWorkspace && (
-        <WorkspaceSettings
-          workspaceId={activeWorkspace._id}
-          workspaceName={activeWorkspace.name}
-          onClose={() => setShowWorkspaceSettings(false)}
-        />
+        <Suspense fallback={<PanelFallback />}>
+          <WorkspaceSettings
+            workspaceId={activeWorkspace._id}
+            workspaceName={activeWorkspace.name}
+            onClose={() => setShowWorkspaceSettings(false)}
+          />
+        </Suspense>
       )}
 
       {/* Invite-accepted celebration: confetti fires on accept; this confirms it. */}
@@ -2425,28 +2535,32 @@ export default function App() {
       )}
 
       {showAddCol && tableData && (
-        <AddColumnPopover
-          tableId={tableData.id}
-          anchor={addColAnchor}
-          onClose={() => setShowAddCol(false)}
-          onAdded={() => loadTable(tableData.id)}
-          onUseFunction={() => { setShowAddCol(false); setShowFunctions(true); }}
-        />
+        <Suspense fallback={<PanelFallback />}>
+          <AddColumnPopover
+            tableId={tableData.id}
+            anchor={addColAnchor}
+            onClose={() => setShowAddCol(false)}
+            onAdded={() => loadTable(tableData.id)}
+            onUseFunction={() => { setShowAddCol(false); setShowFunctions(true); }}
+          />
+        </Suspense>
       )}
 
       {showFunctions && tableData && (
-        <FunctionsModal
-          tableId={tableData.id}
-          connectors={connectors}
-          columns={tableData.columns.map((c) => c.name)}
-          onClose={() => setShowFunctions(false)}
-          onAdded={() => loadTable(tableData.id)}
-          onOpenAiSettings={() => {
-            setShowFunctions(false);
-            const target = aiProviders[0]?.id ?? "anthropic";
-            setView({ kind: "ai", id: target });
-          }}
-        />
+        <Suspense fallback={<PanelFallback />}>
+          <FunctionsModal
+            tableId={tableData.id}
+            connectors={connectors}
+            columns={tableData.columns.map((c) => c.name)}
+            onClose={() => setShowFunctions(false)}
+            onAdded={() => loadTable(tableData.id)}
+            onOpenAiSettings={() => {
+              setShowFunctions(false);
+              const target = aiProviders[0]?.id ?? "anthropic";
+              setView({ kind: "ai", id: target });
+            }}
+          />
+        </Suspense>
       )}
 
       {showNewTableChooser && (
@@ -2464,25 +2578,27 @@ export default function App() {
       )}
 
       {showSignals && (
-        <SignalsModal
-          cloud={inCloud ? signalsCloud : undefined}
-          onClose={() => setShowSignals(false)}
-          onConnectTrigify={() => { setShowSignals(false); setView({ kind: "extension", id: "trigify" }); }}
-          onCreated={(tableId, added) => {
-            setShowSignals(false);
-            if (inCloud) {
-              setCloudTableId(tableId as Id<"tables">);
-              setView({ kind: "table" });
-            } else {
-              api.tables().then((t) => {
-                setTables(t);
-                setSelectedTableId(tableId);
+        <Suspense fallback={<PanelFallback />}>
+          <SignalsModal
+            cloud={inCloud ? signalsCloud : undefined}
+            onClose={() => setShowSignals(false)}
+            onConnectTrigify={() => { setShowSignals(false); setView({ kind: "extension", id: "trigify" }); }}
+            onCreated={(tableId, added) => {
+              setShowSignals(false);
+              if (inCloud) {
+                setCloudTableId(tableId as Id<"tables">);
                 setView({ kind: "table" });
-              }).catch(() => {});
-              if (!added) startWarming(tableId);
-            }
-          }}
-        />
+              } else {
+                api.tables().then((t) => {
+                  setTables(t);
+                  setSelectedTableId(tableId);
+                  setView({ kind: "table" });
+                }).catch(() => {});
+                if (!added) startWarming(tableId);
+              }
+            }}
+          />
+        </Suspense>
       )}
 
       {showNewTable && (

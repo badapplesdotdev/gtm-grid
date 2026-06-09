@@ -12,11 +12,14 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  computeColumnSpacers,
   computeSpacerHeights,
+  type VirtualColItem,
   type VirtualRowItem,
 } from "./gridVirtual";
 
 const ROW_H = 34;
+const COL_W = 180;
 
 /** Build a contiguous window of virtual rows like the virtualizer produces. */
 const window = (startIndex: number, count: number): VirtualRowItem[] =>
@@ -76,5 +79,113 @@ describe("computeSpacerHeights", () => {
     const { top, bottom } = computeSpacerHeights(rows, total);
     expect(rows.length).toBe(25); // only the window is materialised
     expect(top + 25 * ROW_H + bottom).toBe(total);
+  });
+});
+
+/**
+ * Column virtualization (TRI-3286) — the X-axis mirror of the row spacer math,
+ * asserting the REAL rendering invariant after the re-run gutter-double-count
+ * fix.
+ *
+ * The grids render, per row: gutter cell → left spacer → windowed data cells →
+ * right spacer → add-column cell. The gutter is the grid's own always-present
+ * sticky cell and is reserved EXACTLY ONCE — it is NOT part of the virtualized
+ * column range. The virtualizer therefore runs with `paddingStart = 0`, so
+ * `totalSize` and every `start`/`end` cover ONLY the data columns and the left
+ * spacer EXCLUDES the gutter.
+ *
+ * The load-bearing invariant the grids depend on is the full table width:
+ *
+ *   GUTTER + computeColumnSpacers.left
+ *          + sum(visible column widths)
+ *          + computeColumnSpacers.right
+ *          + ADD_COL
+ *   === GUTTER + totalDataWidth + ADD_COL  (the wrapper's declared width)
+ *
+ * i.e. the rendered leading width is the gutter PLUS the left spacer (never the
+ * gutter twice), and the table is never wider than its wrapper. We assert this
+ * at scroll 0 AND after a horizontal scroll offset, and explicitly that the
+ * left spacer is NOT the gutter (the previous attempt's bug, which made the
+ * table one gutter wider with a blank gap at the left edge).
+ */
+
+const GUTTER = 48;
+const ADD_COL = 44;
+
+/**
+ * Build a contiguous window of virtual DATA columns like the horizontal
+ * virtualizer produces with `paddingStart = 0` (gutter excluded — offsets start
+ * at 0 for the first data column).
+ */
+const colWindow = (startIndex: number, count: number): VirtualColItem[] =>
+  Array.from({ length: count }, (_, i) => {
+    const index = startIndex + i;
+    const start = index * COL_W;
+    return { index, start, end: start + COL_W };
+  });
+
+describe("computeColumnSpacers", () => {
+  it("collapses the full data width into the left spacer when nothing is rendered", () => {
+    const total = 300 * COL_W;
+    expect(computeColumnSpacers([], total)).toEqual({ left: total, right: 0 });
+  });
+
+  it("reserves the gutter EXACTLY ONCE at scroll 0 — left spacer is 0, NOT the gutter", () => {
+    const totalDataWidth = 300 * COL_W;
+    const cols = colWindow(0, 10);
+    const { left, right } = computeColumnSpacers(cols, totalDataWidth);
+    // The first data column sits flush after the gutter cell, so the left spacer
+    // is 0 — it does NOT carry the gutter (that codified the prior bug).
+    expect(left).toBe(0);
+    expect(left).not.toBe(GUTTER);
+    // Full wrapper width reconstructs with the gutter counted exactly once.
+    const visibleSpan = 10 * COL_W;
+    const wrapperWidth = GUTTER + totalDataWidth + ADD_COL;
+    expect(GUTTER + left + visibleSpan + right + ADD_COL).toBe(wrapperWidth);
+  });
+
+  it("keeps the full-width invariant after a horizontal scroll offset", () => {
+    const totalDataWidth = 300 * COL_W;
+    const visibleCount = 10;
+    const startCol = 150; // scrolled into the middle of the table
+    const cols = colWindow(startCol, visibleCount);
+    const { left, right } = computeColumnSpacers(cols, totalDataWidth);
+    // Left spacer is the offset of the first visible DATA column (gutter NOT
+    // included), so it is the width of the columns scrolled past.
+    expect(left).toBe(startCol * COL_W);
+    const visibleSpan = visibleCount * COL_W;
+    const wrapperWidth = GUTTER + totalDataWidth + ADD_COL;
+    // gutter + left + visible + right + addCol === wrapper width (gutter once).
+    expect(GUTTER + left + visibleSpan + right + ADD_COL).toBe(wrapperWidth);
+    // And the table is not wider than its wrapper.
+    expect(left + visibleSpan + right).toBe(totalDataWidth);
+  });
+
+  it("has no right spacer at the very right of the table", () => {
+    const totalDataWidth = 300 * COL_W;
+    const cols = colWindow(290, 10); // last 10 columns
+    const { left, right } = computeColumnSpacers(cols, totalDataWidth);
+    expect(right).toBe(0);
+    expect(left).toBe(290 * COL_W);
+  });
+
+  it("never returns negative widths when measurement transiently overshoots totalSize", () => {
+    // The virtualizer can briefly report an `end` past totalSize mid-scroll.
+    const cols: VirtualColItem[] = [
+      { index: 0, start: -10, end: 170 },
+      { index: 1, start: 170, end: 350 },
+    ];
+    const { left, right } = computeColumnSpacers(cols, 200);
+    expect(left).toBe(0); // clamped from -10
+    expect(right).toBe(0); // clamped from 200 - 350
+  });
+
+  it("scales to hundreds of columns without enumerating every column", () => {
+    // A small window over a very wide table: only the window is materialised.
+    const totalDataWidth = 500 * COL_W;
+    const cols = colWindow(200, 12);
+    const { left, right } = computeColumnSpacers(cols, totalDataWidth);
+    expect(cols.length).toBe(12); // only the window is materialised
+    expect(left + 12 * COL_W + right).toBe(totalDataWidth);
   });
 });

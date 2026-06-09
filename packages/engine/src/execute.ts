@@ -31,7 +31,13 @@ export interface CellProgress {
 export interface RunColumnOptions {
   concurrency?: number;
   rowIds?: string[];
-  /** Re-run cells already marked done. */
+  /**
+   * Re-run cells already marked `done`. Without it, a candidate cell already
+   * `done` is SKIPPED (costs no write / no cloud-action bill). Callers that want
+   * to recompute ONLY a specific cell scope the force with `rowIds` so the
+   * already-`done` cells outside that scope are never re-run or re-billed
+   * (TRI-3283 L2).
+   */
   force?: boolean;
   /**
    * Fired synchronously after each cell write during the run (running → then
