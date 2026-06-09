@@ -25,6 +25,7 @@ import type { CellProgress } from "@gtmgrid/engine";
 import { detectAgents, streamClaude, streamCodex, setAgentPath, rescanAgents, type AgentKind } from "./agent.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
+import { runCloudPush, defaultCloudPushDeps } from "./cloud-push.js";
 import { corsHeadersFor, isOriginAllowed } from "./cors.js";
 import { Semaphore } from "./semaphore.js";
 import {
@@ -957,6 +958,60 @@ const server = createServer(async (req, res) => {
       }
       res.end();
       return;
+    }
+  }
+
+  // --- cloud push path (TRI-3295) ---
+  // Push the CURRENT local project's table to the active cloud project. The
+  // engine's CloudPushService orchestrator owns all resilience (retry/jitter/
+  // timeout/rate-limit/bounded-concurrency) over a thin tRPC transport that
+  // reuses the SAME `grid` mutations the CSV cloud import uses. Handled here
+  // (not via the JSON router) so we can return the right status code per typed
+  // error: 402 (quota), 409 (link conflict / overwrite-needs-confirmation), 404
+  // (local table missing), 200 with the structured result otherwise.
+  if (req.method === "POST" && url.pathname === "/api/cloud/tables/push") {
+    const body = await readBody(req);
+    const apiUrl = String(body?.apiUrl ?? "").trim();
+    const token = String(body?.token ?? "").trim();
+    const projectId = String(body?.projectId ?? "").trim();
+    const localTableId = String(body?.localTableId ?? "").trim();
+    if (!apiUrl || !token || !projectId || !localTableId) {
+      return send(
+        res,
+        400,
+        { error: "apiUrl, token, projectId and localTableId are required" },
+        origin,
+      );
+    }
+    try {
+      const result = await runCloudPush(
+        {
+          apiUrl,
+          token,
+          projectId,
+          localTableId,
+          confirmOverwrite: body?.confirmOverwrite === true,
+        },
+        defaultCloudPushDeps(current.projectDb),
+      );
+      return send(res, 200, result, origin);
+    } catch (e) {
+      // The orchestrator surfaces typed engine push errors; map each to the
+      // status the desktop expects so it can warn correctly.
+      const tag =
+        e !== null && typeof e === "object" && "_tag" in e
+          ? String((e as { _tag?: unknown })._tag)
+          : undefined;
+      const message = e instanceof Error ? e.message : String(e);
+      const status =
+        tag === "CloudActionsLimitError"
+          ? 402
+          : tag === "LinkConflictError"
+            ? 409
+            : tag === "FatalPushError" && /not found/i.test(message)
+              ? 404
+              : 500;
+      return send(res, status, { error: message, code: tag ?? null }, origin);
     }
   }
 
