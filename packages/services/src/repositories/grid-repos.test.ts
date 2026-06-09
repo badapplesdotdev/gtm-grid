@@ -142,6 +142,91 @@ describe("rowRepoLayer", () => {
     expect(store.cells.map((c) => c.rowId)).toEqual(["r2"]);
   });
 
+  // TRI-3272: keyset paging by row position — a page never loads the whole
+  // table, and walking the cursor returns the SAME rows in the SAME order an
+  // unbounded listByTable would, with the last page reporting nextCursor=null.
+  describe("listKeysetByTable (TRI-3272)", () => {
+    const pageStore = () =>
+      makeGridStore({
+        rows: [
+          { id: "r1", workspaceId: WS, tableId: "t1", position: 0, createdAt: 1 },
+          { id: "r2", workspaceId: WS, tableId: "t1", position: 1, createdAt: 1 },
+          { id: "r3", workspaceId: WS, tableId: "t1", position: 2, createdAt: 1 },
+          { id: "r4", workspaceId: WS, tableId: "t1", position: 3, createdAt: 1 },
+          { id: "r5", workspaceId: WS, tableId: "t1", position: 4, createdAt: 1 },
+          // A different table's row must never leak into a page.
+          { id: "x1", workspaceId: WS, tableId: "t2", position: 0, createdAt: 1 },
+        ],
+      });
+
+    it("returns the first page in position order with a nextCursor", async () => {
+      const exit = await run(rowRepoLayer(pageStore()))(
+        Effect.flatMap(RowRepo, (s) =>
+          s.listKeysetByTable({ tableId: "t1", limit: 2, cursor: null }),
+        ),
+      );
+      expect(Exit.isSuccess(exit)).toBe(true);
+      if (Exit.isSuccess(exit)) {
+        expect(exit.value.rows.map((r) => r.id)).toEqual(["r1", "r2"]);
+        expect(exit.value.nextCursor).toEqual({ position: 1, createdAt: 1, id: "r2" });
+      }
+    });
+
+    it("walks every page exactly once across the table and stops at a null cursor on the last page", async () => {
+      const r = run(rowRepoLayer(pageStore()));
+      const seen: string[] = [];
+      let cursor: import("./row-repo.js").RowCursor | null = null;
+      // Bound the loop so a paging bug can't spin forever.
+      for (let i = 0; i < 10; i++) {
+        const exit = await r(
+          Effect.flatMap(RowRepo, (s) =>
+            s.listKeysetByTable({ tableId: "t1", limit: 2, cursor }),
+          ),
+        );
+        if (!Exit.isSuccess(exit)) throw new Error("page read failed");
+        seen.push(...exit.value.rows.map((row) => row.id));
+        if (exit.value.nextCursor === null) break;
+        cursor = exit.value.nextCursor;
+      }
+      // 5 rows over pages of 2 → [r1,r2][r3,r4][r5], no duplicates, no t2 leak.
+      expect(seen).toEqual(["r1", "r2", "r3", "r4", "r5"]);
+    });
+
+    it("returns nextCursor=null when the page is exactly the last (no extra row)", async () => {
+      const exit = await run(rowRepoLayer(pageStore()))(
+        Effect.flatMap(RowRepo, (s) =>
+          s.listKeysetByTable({ tableId: "t1", limit: 5, cursor: null }),
+        ),
+      );
+      expect(Exit.isSuccess(exit)).toBe(true);
+      if (Exit.isSuccess(exit)) {
+        expect(exit.value.rows).toHaveLength(5);
+        expect(exit.value.nextCursor).toBeNull();
+      }
+    });
+
+    it("tie-breaks rows sharing a position by createdAt then id (stable order)", async () => {
+      const store = makeGridStore({
+        rows: [
+          { id: "rb", workspaceId: WS, tableId: "t1", position: 0, createdAt: 5 },
+          { id: "ra", workspaceId: WS, tableId: "t1", position: 0, createdAt: 5 },
+          { id: "rc", workspaceId: WS, tableId: "t1", position: 0, createdAt: 9 },
+        ],
+      });
+      const exit = await run(rowRepoLayer(store))(
+        Effect.flatMap(RowRepo, (s) =>
+          s.listKeysetByTable({ tableId: "t1", limit: 10, cursor: null }),
+        ),
+      );
+      // Equal position → by createdAt asc (5 before 9), ties by id asc (ra<rb).
+      expect(Exit.isSuccess(exit) && exit.value.rows.map((r) => r.id)).toEqual([
+        "ra",
+        "rb",
+        "rc",
+      ]);
+    });
+  });
+
   // TRI-3271: addRowsWithCells now uses the atomic bulkImport (one bulk row
   // insert + cells + meter in one transaction) instead of N per-row INSERTs.
   it("bulkImport inserts a multi-row payload via ONE bulk path (rows + cells + meter), ids in input order", async () => {
@@ -235,6 +320,32 @@ describe("cellRepoLayer", () => {
       Effect.flatMap(CellRepo, (s) => s.listByTable("t1")),
     );
     expect(Exit.isSuccess(exit) && exit.value.map((c) => c.id)).toEqual(["cell1"]);
+  });
+
+  // TRI-3272: the PAGED getTable reads only the cells of a page's rows, never
+  // the whole table's cells.
+  it("listByRowIds returns only the cells of the given rows (a page's cells)", async () => {
+    const cells = [
+      ...seedCells(), // rowId r1
+      { id: "cell2", workspaceId: WS, tableId: "t1", rowId: "r2", columnId: "c1", value: "y", status: "done", error: null, updatedAt: 1 },
+      { id: "cell3", workspaceId: WS, tableId: "t1", rowId: "r3", columnId: "c1", value: "z", status: "done", error: null, updatedAt: 1 },
+    ];
+    const store = makeGridStore({ cells });
+    const exit = await run(cellRepoLayer(store))(
+      Effect.flatMap(CellRepo, (s) => s.listByRowIds(["r1", "r3"])),
+    );
+    expect(Exit.isSuccess(exit) && exit.value.map((c) => c.id).sort()).toEqual([
+      "cell1",
+      "cell3",
+    ]);
+  });
+
+  it("listByRowIds returns [] for an empty row set", async () => {
+    const store = makeGridStore({ cells: seedCells() });
+    const exit = await run(cellRepoLayer(store))(
+      Effect.flatMap(CellRepo, (s) => s.listByRowIds([])),
+    );
+    expect(Exit.isSuccess(exit) && exit.value).toEqual([]);
   });
 
   // TRI-3266 regression: a wide CSV (>8191 cells) must insert across multiple

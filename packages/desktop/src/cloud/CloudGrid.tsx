@@ -26,7 +26,7 @@ import { WebhookModal } from "./WebhookModal";
 import {
   useCloudGridMutations,
   useCloudSession,
-  useCloudTable,
+  useCloudTablePaged,
 } from "./useCloudGrid";
 
 interface CloudGridProps {
@@ -47,7 +47,11 @@ interface CloudGridProps {
  * in-flight request to disable the trigger).
  */
 export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
-  const data = useCloudTable(tableId);
+  // Lazily-paged grid (TRI-3272): only the loaded pages are resident, and the
+  // viewport scroll handler below pulls the next page as the user nears the end —
+  // so combined with the C1 virtualization a 10k-row table's memory is bounded.
+  const { data, loadMore, hasMore, isLoadingMore } =
+    useCloudTablePaged(tableId);
   const session = useCloudSession();
   const { setCell, addRow, addColumn, deleteRow, deleteColumn } =
     useCloudGridMutations();
@@ -60,6 +64,21 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
   // virtualizer reads from, and the resolved per-density row height.
   const gridScrollRef = useRef<HTMLDivElement>(null);
   const rowHeight = resolveRowHeight();
+
+  // Tie page fetching to the virtualization viewport (TRI-3272): when the user
+  // scrolls within ~10 row-heights of the bottom and another page exists, pull
+  // it. The infinite query + `loadMore` guards against concurrent fetches, so a
+  // burst of scroll events triggers at most one in-flight page load.
+  const onGridScroll = useCallback(
+    (e: React.UIEvent<HTMLDivElement>) => {
+      if (!hasMore || isLoadingMore) return;
+      const el = e.currentTarget;
+      const nearBottom =
+        el.scrollHeight - el.scrollTop - el.clientHeight < rowHeight * 10;
+      if (nearBottom) loadMore();
+    },
+    [hasMore, isLoadingMore, loadMore, rowHeight],
+  );
 
   // Auto-open the webhook form when the chooser's "Webhook" flow bumps the token
   // (and a table is actually present to bind it to).
@@ -216,7 +235,7 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
           </button>
         </div>
       ) : (
-        <div className="grid-wrap" ref={gridScrollRef}>
+        <div className="grid-wrap" ref={gridScrollRef} onScroll={onGridScroll}>
           <table className="grid-table">
             <thead>
               <tr>
