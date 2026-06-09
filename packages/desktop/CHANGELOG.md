@@ -1,5 +1,17 @@
 # @gtmgrid/desktop
 
+## 0.5.0
+
+### Minor Changes
+
+- 71da2f3: Formula columns + conditional-run ("only run if"). **Formula columns** evaluate a JavaScript expression per row with Lodash (`_`), Moment (`moment`), and Excel/Sheets functions via FormulaJS (`VLOOKUP`, `IF`, `SUM`, …), referencing other columns with `{{Column}}`; helper libs are injected into the QuickJS sandbox on-demand so plain formulas stay fast, and `{{Column}}` compiles to typed input refs (not string interpolation). **Conditional-run** adds a per-column boolean expression that gates whether an enrichment runs for a row, so credits aren't spent when the condition is false. Both are generatable from natural language by the connected coding agent, with full parity across desktop, the MCP agents, and the cloud (Postgres) path.
+- 71da2f3: Hermes integration (Nous Research Hermes). Adds a **Hermes** coding-agent tab alongside Claude/Codex that drives the grid locally over ACP (Agent Client Protocol) with the gtmgrid MCP tools mounted in — so the grid and its tools never leave the machine. Also exposes Hermes as an OpenAI-compatible **AI provider**, so `ai.generate` columns can run against a Hermes gateway (each cell gets the agent's full memory/context). The Hermes agent process is spawned detached and torn down via the shared process-group cleanup (no orphaned subprocess leak), with a max-run timeout.
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.5.0
+- @gtmgrid/services@0.5.0
+
 ## 0.4.0
 
 ### Minor Changes
