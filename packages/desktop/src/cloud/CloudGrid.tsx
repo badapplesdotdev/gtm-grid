@@ -110,6 +110,9 @@ export function CloudGrid({ tableId, openWebhookToken }: CloudGridProps) {
       const key = `${rowId}:${columnId}`;
       setRunningCells((s) => new Set(s).add(key));
       try {
+        // Force is scoped to the ONE explicitly-targeted cell via `rowIds:[rowId]`
+        // so re-running this cell never re-runs (or re-bills) any other row's
+        // already-`done` cell in the column (TRI-3283 L2).
         await runCloudColumn(session, {
           tableId,
           columnId,

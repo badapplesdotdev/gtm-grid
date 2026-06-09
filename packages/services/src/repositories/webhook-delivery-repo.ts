@@ -10,14 +10,15 @@
  *     `paginationOptsValidator` cursor with a `(receivedAt, id)` seek so paging is
  *     index-friendly and stable under inserts.
  *   - {@link WebhookDeliveryRepo.pruneOldest} — drop the oldest surplus past a
- *     retention cap so a hot webhook's log stays bounded.
+ *     retention cap in ONE set-based DELETE so a hot webhook's log stays bounded
+ *     without a fetch-all/slice/per-row-delete round-trip per record.
  *
  * Two Layers, like {@link WebhookRepo}: Drizzle-backed {@link WebhookDeliveryRepoLive}
  * and the in-memory {@link webhookDeliveryRepoLayer} for offline tests.
  */
 
 import { schema } from "@gtmgrid/db";
-import { and, asc, desc, eq, lt, or } from "drizzle-orm";
+import { and, desc, eq, lt, notInArray, or } from "drizzle-orm";
 import { Context, Data, Effect, Layer } from "effect";
 import { DbClient } from "../db-client.js";
 
@@ -97,13 +98,15 @@ export class WebhookDeliveryRepo extends Context.Tag("WebhookDeliveryRepo")<
       readonly limit: number;
       readonly cursor: DeliveryCursor | null;
     }) => Effect.Effect<DeliveryPage, WebhookDeliveryRepoError>;
-    /** All deliveries for a webhook, oldest first (the prune source). */
-    readonly listByWebhookOldestFirst: (
+    /**
+     * Prune a webhook's delivery log down to its `retain` newest rows in ONE
+     * set-based statement: delete every row of the webhook whose id is NOT among
+     * the `retain` most-recent `(receivedAt DESC, id DESC)` ids. Idempotent — a
+     * log already at or under the cap deletes nothing.
+     */
+    readonly pruneOldest: (
       webhookId: string,
-    ) => Effect.Effect<readonly WebhookDelivery[], WebhookDeliveryRepoError>;
-    /** Delete a set of deliveries by id (the prune sink). */
-    readonly deleteByIds: (
-      ids: readonly string[],
+      retain: number,
     ) => Effect.Effect<void, WebhookDeliveryRepoError>;
   }
 >() {}
@@ -212,36 +215,35 @@ export const WebhookDeliveryRepoLive: Layer.Layer<
               catch: failDelivery("delivery page failed"),
             }),
 
-      listByWebhookOldestFirst: (webhookId) =>
-        !UUID_RE.test(webhookId)
-          ? Effect.succeed([] as readonly WebhookDelivery[])
-          : Effect.tryPromise({
-              try: async () => {
-                const rows = await db
-                  .select()
-                  .from(schema.webhookDeliveries)
-                  .where(eq(schema.webhookDeliveries.webhookId, webhookId))
-                  .orderBy(
-                    asc(schema.webhookDeliveries.receivedAt),
-                    asc(schema.webhookDeliveries.id),
-                  );
-                return rows.map(rowToDelivery);
-              },
-              catch: failDelivery("delivery prune-scan failed"),
-            }),
-
-      deleteByIds: (ids) =>
-        ids.length === 0
+      pruneOldest: (webhookId, retain) =>
+        !UUID_RE.test(webhookId) || retain < 0
           ? Effect.void
           : Effect.tryPromise({
               try: async () => {
-                for (const id of ids) {
-                  await db
-                    .delete(schema.webhookDeliveries)
-                    .where(eq(schema.webhookDeliveries.id, id));
-                }
+                // The ids to KEEP: the `retain` newest rows of this webhook,
+                // ordered the same way the panel pages them
+                // `(receivedAt DESC, id DESC)`. A single DELETE then removes
+                // every other row of the webhook in one set-based statement —
+                // no fetch-all / slice / per-row delete round-trips.
+                const keep = db
+                  .select({ id: schema.webhookDeliveries.id })
+                  .from(schema.webhookDeliveries)
+                  .where(eq(schema.webhookDeliveries.webhookId, webhookId))
+                  .orderBy(
+                    desc(schema.webhookDeliveries.receivedAt),
+                    desc(schema.webhookDeliveries.id),
+                  )
+                  .limit(retain);
+                await db
+                  .delete(schema.webhookDeliveries)
+                  .where(
+                    and(
+                      eq(schema.webhookDeliveries.webhookId, webhookId),
+                      notInArray(schema.webhookDeliveries.id, keep),
+                    ),
+                  );
               },
-              catch: failDelivery("delivery prune-delete failed"),
+              catch: failDelivery("delivery prune failed"),
             }),
     };
   }),
@@ -291,20 +293,28 @@ export const webhookDeliveryRepoLayer = (
               : null,
         };
       }),
-    listByWebhookOldestFirst: (webhookId) =>
-      Effect.sync(() =>
-        deliveries
-          .filter((d) => d.webhookId === webhookId)
-          .sort(
-            (a, b) =>
-              a.receivedAt - b.receivedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-          ),
-      ),
-    deleteByIds: (ids) =>
+    pruneOldest: (webhookId, retain) =>
       Effect.sync(() => {
-        for (const id of ids) {
-          const idx = deliveries.findIndex((d) => d.id === id);
-          if (idx >= 0) deliveries.splice(idx, 1);
+        if (retain < 0) return;
+        // Mirror the Drizzle set-based DELETE: keep the `retain` newest rows of
+        // this webhook `(receivedAt DESC, id DESC)`, drop every older one in
+        // place so a test observes the array shrink to the cap.
+        const keep = new Set(
+          deliveries
+            .filter((d) => d.webhookId === webhookId)
+            .sort(
+              (a, b) =>
+                b.receivedAt - a.receivedAt ||
+                (b.id < a.id ? -1 : b.id > a.id ? 1 : 0),
+            )
+            .slice(0, retain)
+            .map((d) => d.id),
+        );
+        for (let i = deliveries.length - 1; i >= 0; i--) {
+          const d = deliveries[i];
+          if (d.webhookId === webhookId && !keep.has(d.id)) {
+            deliveries.splice(i, 1);
+          }
         }
       }),
   });
