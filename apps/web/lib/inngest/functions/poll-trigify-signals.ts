@@ -2,8 +2,9 @@
  * Scheduled Social Signals poller (cloud-only). The desktop has no cron; the
  * recurring pull lives here:
  *
- *   - {@link pollTrigifySignals} runs on a cron, lists every enabled binding,
- *     keeps the ones whose schedule is DUE, and fans out one event per binding.
+ *   - {@link pollTrigifySignals} runs on a cron, collects the bindings whose
+ *     schedule is DUE via SQL keyset pagination (the due predicate runs in the
+ *     DB), and fans them out in bounded chunks (~{@link FANOUT_CHUNK}/event).
  *   - {@link processSignalBinding} handles each event (per-workspace concurrency)
  *     by running `SignalService.syncForWorker` — fetch Trigify results, map, and
  *     insert new rows/cells. Membership-free: this runs server-side, gated by the
@@ -12,7 +13,7 @@
  * `runtime = "nodejs"` for the Effect runtime + credential decrypt (node:crypto).
  */
 
-import { type AppServices, appLayer, isBindingDue, SignalService } from "@gtmgrid/services";
+import { type AppServices, appLayer, DUE_PAGE_SIZE, FANOUT_CHUNK, type SignalDueCursor, SignalService } from "@gtmgrid/services";
 import { Effect, ManagedRuntime } from "effect";
 import { inngest } from "../client";
 
@@ -32,27 +33,48 @@ export const pollTrigifySignals = inngest.createFunction(
   // hourly; the per-binding schedule (hourly/daily/weekly) gates actual pulls
   { id: "poll-trigify-signals", retries: 1, triggers: [{ cron: "0 * * * *" }] },
   async ({ step }) => {
-    const due = await step.run("list-due", () =>
+    // Collect DUE bindings via SQL keyset pagination — the due predicate runs in
+    // the DB with a LIMIT per page, so we never load + JS-filter the whole
+    // enabled population. The `now` is captured ONCE so paging is consistent.
+    const due = await step.run("collect-due", () =>
       withRuntime(async (exec) => {
-        const bindings = await exec(
-          Effect.gen(function* () {
-            const svc = yield* SignalService;
-            return yield* svc.listAllEnabled();
-          }),
-        );
         const now = Date.now();
-        return bindings
-          .filter((b) => isBindingDue({ enabled: b.enabled, schedule: b.schedule as never, lastSyncedAt: b.lastSyncedAt }, now))
-          .map((b) => ({ bindingId: b.id, workspaceId: b.workspaceId }));
+        const out: { bindingId: string; workspaceId: string }[] = [];
+        let cursor: SignalDueCursor | null = null;
+        // Bound the work per cron tick: at most a fixed number of pages, so a
+        // pathological backlog can't make one tick run unbounded (the next tick
+        // resumes — bindings stay marked due until synced).
+        for (let page = 0; page < 200; page += 1) {
+          const result: { items: ReadonlyArray<{ id: string; workspaceId: string; createdAt: number }>; nextCursor: SignalDueCursor | null } =
+            await exec(
+              Effect.gen(function* () {
+                const svc = yield* SignalService;
+                return yield* svc.listDuePage({ now, limit: DUE_PAGE_SIZE, cursor });
+              }),
+            );
+          for (const b of result.items) out.push({ bindingId: b.id, workspaceId: b.workspaceId });
+          if (result.nextCursor === null) break;
+          cursor = result.nextCursor;
+        }
+        return out;
       }),
     );
 
     if (due.length === 0) return { due: 0 };
-    await step.sendEvent(
-      "fan-out-bindings",
-      due.map((d) => ({ name: "signals/binding.due", data: d })),
-    );
-    return { due: due.length };
+
+    // Chunk the fan-out into bounded batches across separate steps, rather than
+    // one giant sendEvent array — keeps each enqueue payload small and lets the
+    // per-binding function's global concurrency cap pace the actual pulls.
+    let chunks = 0;
+    for (let i = 0; i < due.length; i += FANOUT_CHUNK) {
+      const batch = due.slice(i, i + FANOUT_CHUNK);
+      await step.sendEvent(
+        `fan-out-bindings-${i}`,
+        batch.map((d) => ({ name: "signals/binding.due", data: d })),
+      );
+      chunks += 1;
+    }
+    return { due: due.length, chunks };
   },
 );
 

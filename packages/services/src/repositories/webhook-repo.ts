@@ -269,6 +269,28 @@ export class WebhookRepo extends Context.Tag("WebhookRepo")<
       readonly position: number;
       readonly createdAt: number;
     }) => Effect.Effect<string, WebhookRepoError>;
+    /**
+     * The highest `position` among a table's rows, or 0 when the table is empty —
+     * resolved with a single `MAX(position)` aggregate instead of loading every
+     * row (`listRows`) just to fold the maximum in JS.
+     */
+    readonly maxRowPosition: (
+      tableId: string,
+    ) => Effect.Effect<number, WebhookRepoError>;
+    /**
+     * Bulk-insert rows in ONE multi-VALUES statement, returning the new ids in
+     * the SAME order as `values` so the caller can pair each id with its cells.
+     * An empty input returns `[]` without touching the DB. Collapses N serial
+     * `insertRow` round-trips into one.
+     */
+    readonly insertRowsBulk: (
+      values: readonly {
+        readonly workspaceId: string;
+        readonly tableId: string;
+        readonly position: number;
+        readonly createdAt: number;
+      }[],
+    ) => Effect.Effect<readonly string[], WebhookRepoError>;
     /** Insert a cell, returning its id. */
     readonly insertCell: (values: {
       readonly workspaceId: string;
@@ -277,6 +299,19 @@ export class WebhookRepo extends Context.Tag("WebhookRepo")<
       readonly columnId: string;
       readonly cell: CellWrite;
     }) => Effect.Effect<string, WebhookRepoError>;
+    /**
+     * Bulk-insert cells in ONE multi-VALUES statement. An empty input is a no-op.
+     * Collapses N serial `insertCell` round-trips (one per row × column) into one.
+     */
+    readonly insertCellsBulk: (
+      values: readonly {
+        readonly workspaceId: string;
+        readonly tableId: string;
+        readonly rowId: string;
+        readonly columnId: string;
+        readonly cell: CellWrite;
+      }[],
+    ) => Effect.Effect<void, WebhookRepoError>;
     /** Patch an existing cell by id. */
     readonly patchCell: (
       cellId: string,
@@ -699,6 +734,40 @@ export const WebhookRepoLive: Layer.Layer<WebhookRepo, never, DbClient> =
             catch: fail("row insert failed"),
           }),
 
+        maxRowPosition: (tableId) =>
+          !UUID_RE.test(tableId)
+            ? Effect.succeed(0)
+            : Effect.tryPromise({
+                try: async () => {
+                  // COALESCE(MAX(position), 0): one aggregate, no row load.
+                  const out = await db
+                    .select({
+                      max: schema.sql<number>`coalesce(max(${schema.rows.position}), 0)`,
+                    })
+                    .from(schema.rows)
+                    .where(eq(schema.rows.tableId, tableId));
+                  return Number(out[0]?.max ?? 0);
+                },
+                catch: fail("row max-position failed"),
+              }),
+
+        insertRowsBulk: (values) =>
+          values.length === 0
+            ? Effect.succeed([] as readonly string[])
+            : Effect.tryPromise({
+                try: async () => {
+                  const rows = await db
+                    .insert(schema.rows)
+                    .values([...values])
+                    .returning({ id: schema.rows.id });
+                  if (rows.length !== values.length) {
+                    throw new Error("row bulk insert returned wrong id count");
+                  }
+                  return rows.map((r) => r.id);
+                },
+                catch: fail("row bulk insert failed"),
+              }),
+
         insertCell: (values) =>
           Effect.tryPromise({
             try: async () => {
@@ -723,6 +792,27 @@ export const WebhookRepoLive: Layer.Layer<WebhookRepo, never, DbClient> =
             },
             catch: fail("cell insert failed"),
           }),
+
+        insertCellsBulk: (values) =>
+          values.length === 0
+            ? Effect.succeed(undefined)
+            : Effect.tryPromise({
+                try: async () => {
+                  await db.insert(schema.cells).values(
+                    values.map((v) => ({
+                      workspaceId: v.workspaceId,
+                      tableId: v.tableId,
+                      rowId: v.rowId,
+                      columnId: v.columnId,
+                      value: v.cell.value,
+                      status: v.cell.status as never,
+                      error: v.cell.error,
+                      updatedAt: v.cell.updatedAt,
+                    })),
+                  );
+                },
+                catch: fail("cell bulk insert failed"),
+              }),
 
         patchCell: (cellId, cell) =>
           Effect.tryPromise({
@@ -1020,6 +1110,34 @@ export const webhookRepoLayer = (fixtures: {
         const id = nextId("row");
         rows.push({ id, tableId: values.tableId, position: values.position });
         return id;
+      }),
+    maxRowPosition: (tableId) =>
+      Effect.succeed(
+        rows
+          .filter((r) => r.tableId === tableId)
+          .reduce((max, r) => Math.max(max, r.position), 0),
+      ),
+    insertRowsBulk: (values) =>
+      Effect.sync(() =>
+        values.map((v) => {
+          const id = nextId("row");
+          rows.push({ id, tableId: v.tableId, position: v.position });
+          return id;
+        }),
+      ),
+    insertCellsBulk: (values) =>
+      Effect.sync(() => {
+        for (const v of values) {
+          cells.push({
+            id: nextId("cell"),
+            rowId: v.rowId,
+            columnId: v.columnId,
+            value: v.cell.value,
+            status: v.cell.status,
+            error: v.cell.error,
+            updatedAt: v.cell.updatedAt,
+          });
+        }
       }),
     insertCell: (values) =>
       Effect.sync(() => {

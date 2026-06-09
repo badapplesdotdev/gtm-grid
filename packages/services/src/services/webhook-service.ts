@@ -374,23 +374,31 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           } satisfies ResolvedWebhook;
         });
 
-      /** Atomic quota pre-check: reject when used+1 would exceed limit. */
-      const assertQuota = (workspaceId: string) =>
+      /**
+       * Quota pre-check: reject when `used + n` would exceed the plan's
+       * cloud-actions limit. `n` is the number of billable cloud actions the
+       * pending operation would meter (1 per webhook record; one per cell that
+       * would actually run for a column). A workspace with no quota row or no
+       * numeric limit is unmetered and always passes. A non-positive `n` (e.g. a
+       * run whose every candidate cell is already done) needs no headroom and
+       * passes.
+       */
+      const assertQuota = (workspaceId: string, n: number, message: string) =>
         Effect.gen(function* () {
+          if (n <= 0) return;
           const q = yield* repo.findWorkspaceQuota(workspaceId);
           if (q._tag === "None") return;
           const limit = q.value.cloudActionsLimit;
           if (typeof limit !== "number") return;
           const used = q.value.cloudActionsUsed ?? 0;
-          if (used + 1 > limit) {
-            return yield* Effect.fail(
-              new CloudActionsLimitError({
-                message:
-                  "This webhook delivery would exceed your plan's remaining cloud actions.",
-              }),
-            );
+          if (used + n > limit) {
+            return yield* Effect.fail(new CloudActionsLimitError({ message }));
           }
         });
+
+      /** The webhook-ingest message: one record = one cloud action. */
+      const WEBHOOK_QUOTA_MESSAGE =
+        "This webhook delivery would exceed your plan's remaining cloud actions.";
 
       /** Record ONE delivery (status 200), bump telemetry, prune past 50. */
       const recordDelivery = (
@@ -487,7 +495,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
               }),
             );
           }
-          yield* assertQuota(table.value.workspaceId);
+          yield* assertQuota(table.value.workspaceId, 1, WEBHOOK_QUOTA_MESSAGE);
 
           const validColumnIds = yield* tableColumnIds(webhook.tableId);
           const position = yield* nextPosition(webhook.tableId);
@@ -536,7 +544,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
               }),
             );
           }
-          yield* assertQuota(table.value.workspaceId);
+          yield* assertQuota(table.value.workspaceId, 1, WEBHOOK_QUOTA_MESSAGE);
 
           const validColumnIds = yield* tableColumnIds(webhook.tableId);
           if (!validColumnIds.has(args.upsertKey)) {
@@ -639,6 +647,73 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           return {
             table: { id: table.value.id, workspaceId: table.value.workspaceId },
           } satisfies WorkerTableMeta;
+        });
+
+      /**
+       * Pre-flight quota gate for a cloud COLUMN run (TRI-3277). A column run
+       * meters one cloud action per cell that actually runs, but historically
+       * only the webhook-ingest path pre-checked the quota — a column run fanned
+       * out unchecked and over-metered silently. This computes, server-side
+       * (where the quota counter lives — no parallel counter), exactly how many
+       * cells the run would execute and asserts the workspace has the headroom,
+       * failing with {@link CloudActionsLimitError} (→ 402 at the worker
+       * boundary) when it does not.
+       *
+       * The cell count mirrors the engine's run semantics exactly: the candidate
+       * rows are `rowIds` when given else every row of the table, and a candidate
+       * cell is SKIPPED (costs nothing) when `!force` and its current status is
+       * already `"done"` — the same `if (!opts.force && existing?.status ===
+       * "done")` idempotency skip the engine applies. The remaining count is what
+       * the run would meter, so that is what we gate on.
+       */
+      const assertColumnRunQuota = (args: {
+        readonly tableId: string;
+        readonly columnId: string;
+        readonly rowIds?: readonly string[];
+        readonly force?: boolean;
+      }) =>
+        Effect.gen(function* () {
+          const table = yield* repo.findTable(args.tableId);
+          if (table._tag === "None") {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({
+                message: `Table ${args.tableId} not found.`,
+              }),
+            );
+          }
+          const workspaceId = table.value.workspaceId;
+
+          const candidateRowIds =
+            args.rowIds ??
+            (yield* repo.listRows(args.tableId)).map((r) => r.id);
+
+          // Cells the engine would skip as already-done (unless force) cost no
+          // cloud actions, so subtract them from the candidate count. The skip is
+          // per (row, RUN column): a candidate row is skipped only when ITS cell
+          // in `columnId` is already `done`.
+          let cellsToRun = candidateRowIds.length;
+          if (args.force !== true && candidateRowIds.length > 0) {
+            const candidateSet = new Set(candidateRowIds);
+            const cells = yield* repo.listCellsByTable(args.tableId);
+            const doneRows = new Set<string>();
+            for (const cell of cells) {
+              if (
+                cell.columnId === args.columnId &&
+                cell.status === "done" &&
+                candidateSet.has(cell.rowId)
+              ) {
+                doneRows.add(cell.rowId);
+              }
+            }
+            cellsToRun = candidateRowIds.length - doneRows.size;
+          }
+
+          yield* assertQuota(
+            workspaceId,
+            cellsToRun,
+            "This column run would exceed your plan's remaining cloud actions.",
+          );
+          return { workspaceId, cellsToRun };
         });
 
       /**
@@ -793,6 +868,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         upsertRow,
         getTable,
         getTableMeta,
+        assertColumnRunQuota,
         setCell,
         setCells,
         setCellStatus,

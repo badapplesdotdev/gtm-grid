@@ -8,8 +8,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WebhookRecordData } from "./process-webhook-record";
-import { fetchGrid, resolveRow } from "./process-webhook-record";
+import type { StepRunner, WebhookRecordData } from "./process-webhook-record";
+import {
+  fetchGrid,
+  processWebhookRecordHandler,
+  resolveRow,
+} from "./process-webhook-record";
 
 const SITE_URL = "https://app.gtmgrid.test";
 const SECRET = "whk_secret_value";
@@ -100,6 +104,136 @@ describe("resolveRow (upsert)", () => {
     await expect(resolveRow(baseData, "wh-1")).rejects.toThrow(
       /\/api\/worker\/insertRow failed: 500/,
     );
+  });
+});
+
+/**
+ * A fake {@link StepRunner} that models Inngest's durable-step memoization: each
+ * step `id` runs its body AT MOST ONCE across the whole run AND across retries
+ * of the handler. Completed steps return their cached value WITHOUT re-invoking
+ * the body — exactly how Inngest replays a function on retry. When a body throws,
+ * the step is left UNcompleted, so a later handler re-run (a "retry") can attempt
+ * it again while every already-completed step is skipped.
+ *
+ * It also intercepts the webhook handler's three step bodies (insert-row,
+ * enrich-columns, per-column enrich) by key, so the handler never touches the
+ * real HTTP/engine helpers — the unit under test is purely the step KEYING.
+ */
+class FakeWebhookStep implements StepRunner {
+  /** Cached results for completed steps, by step id. */
+  readonly completed = new Map<string, unknown>();
+  /** How many times each step id actually executed its (intercepted) body. */
+  readonly bodyRuns = new Map<string, number>();
+
+  constructor(
+    private readonly recordId: string,
+    private readonly columns: readonly string[],
+    /** Counts per-column enrich executions, shared across retry attempts. */
+    private readonly perColumnRuns: Map<string, number>,
+    /** When set, this column's body throws while `remaining > 0`. */
+    private readonly failOnColumn?: { id: string; remaining: number },
+  ) {}
+
+  async run<T>(id: string, _body: () => Promise<T>): Promise<T> {
+    if (this.completed.has(id)) return this.completed.get(id) as T;
+    this.bodyRuns.set(id, (this.bodyRuns.get(id) ?? 0) + 1);
+
+    const value = this.intercept(id);
+    this.completed.set(id, value);
+    return value as T;
+  }
+
+  /** Produce the intercepted step result (or throw to simulate a failure). */
+  private intercept(id: string): unknown {
+    if (id === `insert-row:${this.recordId}`) return "row-1";
+    if (id === `enrich-columns:${this.recordId}`) return this.columns;
+
+    const prefix = `enrich:${this.recordId}:`;
+    if (id.startsWith(prefix)) {
+      const columnId = id.slice(prefix.length);
+      this.perColumnRuns.set(
+        columnId,
+        (this.perColumnRuns.get(columnId) ?? 0) + 1,
+      );
+      const fail = this.failOnColumn;
+      if (fail && fail.id === columnId && fail.remaining > 0) {
+        fail.remaining -= 1;
+        throw new Error(`transient failure on ${columnId}`);
+      }
+      return 1;
+    }
+    throw new Error(`unexpected step id: ${id}`);
+  }
+}
+
+describe("per-column enrich step keys (TRI-3280 regression)", () => {
+  const recordId = "rec-xyz";
+  const columns = ["c0", "c1", "c2", "c3"];
+
+  /** The autorun record the enrich path consumes. */
+  const enrichData: WebhookRecordData = {
+    ...baseData,
+    recordId,
+    autoRun: true,
+  };
+
+  it("uses a UNIQUE step key per function column", async () => {
+    const perColumnRuns = new Map<string, number>();
+    const step = new FakeWebhookStep(recordId, columns, perColumnRuns);
+
+    await processWebhookRecordHandler(enrichData, "wh-1", step);
+
+    for (const columnId of columns) {
+      expect(
+        step.completed.has(`enrich:${recordId}:${columnId}`),
+        `missing per-column step key for ${columnId}`,
+      ).toBe(true);
+    }
+    // The old single-step-for-all-columns key must NOT exist anymore.
+    expect(step.completed.has(`enrich:${recordId}`)).toBe(false);
+  });
+
+  it("a retry after column K does NOT re-run columns 0..K-1 (no re-charge)", async () => {
+    const perColumnRuns = new Map<string, number>();
+    // Fail once on column index 2 ("c2"): the loop completes c0 and c1, then c2
+    // throws, aborting the handler — exactly the mid-loop failure that, in the
+    // old single-step code, would re-charge c0 and c1 on retry.
+    const failOnColumn = { id: "c2", remaining: 1 };
+    const step = new FakeWebhookStep(
+      recordId,
+      columns,
+      perColumnRuns,
+      failOnColumn,
+    );
+
+    // First attempt: throws after c0, c1 have completed.
+    await expect(
+      processWebhookRecordHandler(enrichData, "wh-1", step),
+    ).rejects.toThrow(/transient failure on c2/);
+
+    expect(perColumnRuns.get("c0")).toBe(1);
+    expect(perColumnRuns.get("c1")).toBe(1);
+    expect(perColumnRuns.get("c2")).toBe(1); // attempted (and failed)
+    expect(perColumnRuns.get("c3")).toBeUndefined(); // never reached
+
+    // Retry: the handler re-runs top-to-bottom. Completed steps (insert-row,
+    // enrich-columns, c0, c1) are memoized and SKIPPED; only c2 (retried) and
+    // c3 (new) execute their bodies.
+    const result = await processWebhookRecordHandler(
+      enrichData,
+      "wh-1",
+      step,
+    );
+
+    expect(perColumnRuns.get("c0")).toBe(1); // NOT re-run → not re-charged
+    expect(perColumnRuns.get("c1")).toBe(1); // NOT re-run → not re-charged
+    expect(perColumnRuns.get("c2")).toBe(2); // retried once
+    expect(perColumnRuns.get("c3")).toBe(1); // finally reached
+    expect(result).toEqual({ rowId: "row-1", enriched: true, ran: 4 });
+
+    // The expensive setup steps were also memoized (not repeated on retry).
+    expect(step.bodyRuns.get(`insert-row:${recordId}`)).toBe(1);
+    expect(step.bodyRuns.get(`enrich-columns:${recordId}`)).toBe(1);
   });
 });
 

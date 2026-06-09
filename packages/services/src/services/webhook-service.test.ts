@@ -233,6 +233,142 @@ describe("WebhookService.insertRow", () => {
   });
 });
 
+describe("WebhookService.assertColumnRunQuota (TRI-3277)", () => {
+  const rows: GridRow[] = [
+    { id: "row-1", tableId: TABLE, position: 0 },
+    { id: "row-2", tableId: TABLE, position: 1 },
+    { id: "row-3", tableId: TABLE, position: 2 },
+  ];
+  const doneCell = (rowId: string): GridCell => ({
+    id: `cell-${rowId}`,
+    rowId,
+    columnId: COL_NAME,
+    value: "x",
+    status: "done",
+    error: null,
+    updatedAt: 1,
+  });
+
+  it("passes a run that fits within the remaining cloud actions", async () => {
+    const quotas = new Map<string, WorkspaceQuota>([
+      [WS, { cloudActionsUsed: 7, cloudActionsLimit: 10 }],
+    ]);
+    const { run } = harness({ rows, cells: [], quotas });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.assertColumnRunQuota({ tableId: TABLE, columnId: COL_NAME }),
+        ),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    // 3 candidate rows, none done → 3 cells; 7 + 3 = 10 == limit, fits.
+    if (Exit.isSuccess(exit)) expect(exit.value.cellsToRun).toBe(3);
+  });
+
+  it("rejects with 402-mapped CloudActionsLimitError when remaining < cells to run", async () => {
+    const quotas = new Map<string, WorkspaceQuota>([
+      [WS, { cloudActionsUsed: 9, cloudActionsLimit: 10 }],
+    ]);
+    const { run } = harness({ rows, cells: [], quotas });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.assertColumnRunQuota({ tableId: TABLE, columnId: COL_NAME }),
+        ),
+      ),
+    );
+    // 3 cells but only 1 remaining → reject.
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const f = Cause.failureOption(exit.cause);
+      expect(f._tag === "Some" && f.value._tag).toBe("CloudActionsLimitError");
+    }
+  });
+
+  it("subtracts already-done cells (idempotency skips) so a re-run within quota passes", async () => {
+    const quotas = new Map<string, WorkspaceQuota>([
+      [WS, { cloudActionsUsed: 9, cloudActionsLimit: 10 }],
+    ]);
+    // Two of three rows already done for the run column → only 1 cell would run.
+    const { run } = harness({
+      rows,
+      cells: [doneCell("row-1"), doneCell("row-2")],
+      quotas,
+    });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.assertColumnRunQuota({ tableId: TABLE, columnId: COL_NAME }),
+        ),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) expect(exit.value.cellsToRun).toBe(1);
+  });
+
+  it("counts every candidate cell when force re-runs already-done cells", async () => {
+    const quotas = new Map<string, WorkspaceQuota>([
+      [WS, { cloudActionsUsed: 9, cloudActionsLimit: 10 }],
+    ]);
+    const { run } = harness({
+      rows,
+      cells: [doneCell("row-1"), doneCell("row-2")],
+      quotas,
+    });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.assertColumnRunQuota({
+            tableId: TABLE,
+            columnId: COL_NAME,
+            force: true,
+          }),
+        ),
+      ),
+    );
+    // force ignores done skips → 3 cells, only 1 remaining → reject.
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const f = Cause.failureOption(exit.cause);
+      expect(f._tag === "Some" && f.value._tag).toBe("CloudActionsLimitError");
+    }
+  });
+
+  it("gates only the explicit rowIds subset", async () => {
+    const quotas = new Map<string, WorkspaceQuota>([
+      [WS, { cloudActionsUsed: 9, cloudActionsLimit: 10 }],
+    ]);
+    const { run } = harness({ rows, cells: [], quotas });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.assertColumnRunQuota({
+            tableId: TABLE,
+            columnId: COL_NAME,
+            rowIds: ["row-1"],
+          }),
+        ),
+      ),
+    );
+    // Only 1 candidate row → 1 cell, fits within the 1 remaining.
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) expect(exit.value.cellsToRun).toBe(1);
+  });
+
+  it("passes when the workspace has no quota row (unmetered)", async () => {
+    const { run } = harness({ rows, cells: [], quotas: new Map() });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.assertColumnRunQuota({ tableId: TABLE, columnId: COL_NAME }),
+        ),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+  });
+});
+
 describe("WebhookService.upsertRow", () => {
   it("UPDATES the matched row when the upsert key matches", async () => {
     const rows: GridRow[] = [{ id: "row-1", tableId: TABLE, position: 0 }];

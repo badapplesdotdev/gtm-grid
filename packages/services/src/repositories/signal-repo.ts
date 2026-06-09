@@ -6,9 +6,10 @@
  */
 
 import { schema } from "@gtmgrid/db";
-import { desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
+import { isBindingDue, SCHEDULE_DUE_MS, type SignalSchedule } from "../signals/catalog.js";
 
 /** A result-field → column id mapping entry for a signal binding. */
 export interface SignalBindingColumn {
@@ -51,12 +52,30 @@ export interface SignalBindingInsert {
   readonly createdAt: number;
 }
 
+/** A keyset cursor over due bindings, seeking on `(createdAt, id)`. */
+export interface SignalDueCursor {
+  readonly createdAt: number;
+  readonly id: string;
+}
+
+/** A due binding the cron needs to enqueue (the only fields the event carries). */
+export interface DueBinding {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly createdAt: number;
+}
+
+/** One keyset page of due bindings plus the cursor to fetch the next. */
+export interface DueBindingPage {
+  readonly items: readonly DueBinding[];
+  readonly nextCursor: SignalDueCursor | null;
+}
+
 /** A patch over a binding; only present fields are written. */
 export interface SignalBindingPatch {
   readonly searchId?: string | null;
   readonly schedule?: string;
   readonly config?: Record<string, unknown>;
-  readonly seen?: readonly string[];
   readonly lastSyncedAt?: number | null;
   readonly lastError?: string | null;
   readonly rowsPulled?: number | null;
@@ -74,11 +93,32 @@ export class SignalRepo extends Context.Tag("SignalRepo")<
   {
     readonly findById: (id: string) => Effect.Effect<Option.Option<SignalBinding>, SignalRepoError>;
     readonly listByTable: (tableId: string) => Effect.Effect<readonly SignalBinding[], SignalRepoError>;
-    /** Every enabled binding across all workspaces — the cron worker filters by due. */
-    readonly listAllEnabled: () => Effect.Effect<readonly SignalBinding[], SignalRepoError>;
+    /**
+     * One keyset page of DUE bindings (enabled, non-manual, `last_synced_at` null
+     * or older than its schedule interval relative to `now`), seeking on
+     * `(created_at, id)`. Pushes the {@link isBindingDue} predicate into SQL with
+     * a `LIMIT`, so the cron never loads + JS-filters the whole enabled
+     * population. `cursor === null` starts from the first page.
+     */
+    readonly listDuePage: (args: {
+      readonly now: number;
+      readonly limit: number;
+      readonly cursor: SignalDueCursor | null;
+    }) => Effect.Effect<DueBindingPage, SignalRepoError>;
     readonly insert: (values: SignalBindingInsert) => Effect.Effect<string, SignalRepoError>;
     readonly patch: (id: string, patch: SignalBindingPatch) => Effect.Effect<void, SignalRepoError>;
     readonly remove: (id: string) => Effect.Effect<void, SignalRepoError>;
+    /**
+     * Durably record `keys` as seen for a binding and return ONLY the subset that
+     * was genuinely new (inserted now). Backed by an `ON CONFLICT DO NOTHING`
+     * bulk upsert over the `(binding_id, key)` unique index, so dedupe is correct
+     * for a binding of ANY size — replacing the bounded, truncation-prone
+     * `seen` jsonb array. An empty `keys` returns empty without touching the DB.
+     */
+    readonly recordSeenKeys: (
+      bindingId: string,
+      keys: readonly string[],
+    ) => Effect.Effect<readonly string[], SignalRepoError>;
   }
 >() {}
 
@@ -172,13 +212,56 @@ export const SignalRepoLive: Layer.Layer<SignalRepo, never, DbClient> = Layer.ef
             })
           : Effect.succeed([] as readonly SignalBinding[]),
 
-      listAllEnabled: () =>
+      listDuePage: ({ now, limit, cursor }) =>
         Effect.tryPromise({
           try: async () => {
-            const rows = await db.select().from(schema.signalBindings).where(eq(schema.signalBindings.enabled, true));
-            return rows.map(rowToBinding);
+            const sb = schema.signalBindings;
+            // `now - last_synced_at >= interval(schedule)` ⇔
+            // `last_synced_at <= now - interval(schedule)`. Express the per-
+            // schedule interval as a CASE so the whole predicate stays in SQL.
+            // A `manual`/unknown schedule never matches (it's excluded by the
+            // `ne(schedule, "manual")` clause and falls through the CASE to a
+            // threshold of -inf, mirroring `isBindingDue` returning false).
+            const dueThreshold = sql<number>`CASE ${sb.schedule}
+              WHEN 'hourly' THEN ${now - SCHEDULE_DUE_MS.hourly}
+              WHEN 'daily' THEN ${now - SCHEDULE_DUE_MS.daily}
+              WHEN 'weekly' THEN ${now - SCHEDULE_DUE_MS.weekly}
+              ELSE ${Number.NEGATIVE_INFINITY}
+            END`;
+            const duePredicate = and(
+              eq(sb.enabled, true),
+              ne(sb.schedule, "manual"),
+              or(isNull(sb.lastSyncedAt), lte(sb.lastSyncedAt, dueThreshold)),
+            );
+            // Keyset seek on (created_at, id) so paging is index-friendly and
+            // stable under concurrent inserts.
+            const seek =
+              cursor === null
+                ? duePredicate
+                : and(
+                    duePredicate,
+                    or(
+                      gt(sb.createdAt, cursor.createdAt),
+                      and(eq(sb.createdAt, cursor.createdAt), gt(sb.id, cursor.id)),
+                    ),
+                  );
+            // Fetch one extra to decide whether a next page exists.
+            const rows = await db
+              .select({ id: sb.id, workspaceId: sb.workspaceId, createdAt: sb.createdAt })
+              .from(sb)
+              .where(seek)
+              .orderBy(asc(sb.createdAt), asc(sb.id))
+              .limit(limit + 1);
+            const hasMore = rows.length > limit;
+            const items = hasMore ? rows.slice(0, limit) : rows;
+            const last = items[items.length - 1];
+            return {
+              items,
+              nextCursor:
+                hasMore && last !== undefined ? { createdAt: last.createdAt, id: last.id } : null,
+            };
           },
-          catch: fail("signal binding scan failed"),
+          catch: fail("signal due page failed"),
         }),
 
       insert: (values) =>
@@ -229,19 +312,90 @@ export const SignalRepoLive: Layer.Layer<SignalRepo, never, DbClient> = Layer.ef
           },
           catch: fail("signal binding delete failed"),
         }),
+
+      recordSeenKeys: (bindingId, keys) =>
+        keys.length === 0
+          ? Effect.succeed([] as readonly string[])
+          : Effect.tryPromise({
+              try: async () => {
+                const now = Date.now();
+                // De-dupe within the batch first so a single payload that repeats
+                // a key doesn't trip the unique constraint mid-insert.
+                const unique = [...new Set(keys)];
+                const inserted = await db
+                  .insert(schema.signalSeenKeys)
+                  .values(unique.map((key) => ({ bindingId, key, createdAt: now })))
+                  .onConflictDoNothing({
+                    target: [schema.signalSeenKeys.bindingId, schema.signalSeenKeys.key],
+                  })
+                  .returning({ key: schema.signalSeenKeys.key });
+                return inserted.map((r) => r.key);
+              },
+              catch: fail("signal seen-key record failed"),
+            }),
     };
   }),
 );
 
 /** In-memory `SignalRepo` for tests, backed by a mutable fixture array. */
-export const signalRepoLayer = (fixtures: { bindings?: SignalBinding[] } = {}): Layer.Layer<SignalRepo> => {
+export const signalRepoLayer = (fixtures: {
+  bindings?: SignalBinding[];
+  /** Pre-seen keys per binding id; defaults to each binding's `seen` array. */
+  seenKeys?: Map<string, Set<string>>;
+}): Layer.Layer<SignalRepo> => {
   const bindings = fixtures.bindings ?? [];
+  // Durable per-binding seen set. Seeded from each binding's legacy `seen` array
+  // so existing fixtures (e.g. `binding({ seen: ["r1"] })`) dedupe identically.
+  const seenKeys = fixtures.seenKeys ?? new Map<string, Set<string>>();
+  for (const b of bindings) {
+    if (!seenKeys.has(b.id)) seenKeys.set(b.id, new Set(b.seen ?? []));
+  }
   let seq = 0;
   return Layer.succeed(SignalRepo, {
     findById: (id) => Effect.succeed(Option.fromNullable(bindings.find((b) => b.id === id))),
     listByTable: (tableId) =>
       Effect.succeed([...bindings].filter((b) => b.tableId === tableId).sort((a, b) => b.createdAt - a.createdAt)),
-    listAllEnabled: () => Effect.succeed(bindings.filter((b) => b.enabled)),
+    listDuePage: ({ now, limit, cursor }) =>
+      Effect.succeed(
+        (() => {
+          const due = bindings
+            .filter((b) =>
+              isBindingDue(
+                { enabled: b.enabled, schedule: b.schedule as SignalSchedule, lastSyncedAt: b.lastSyncedAt },
+                now,
+              ),
+            )
+            .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+          const after =
+            cursor === null
+              ? due
+              : due.filter(
+                  (b) =>
+                    b.createdAt > cursor.createdAt ||
+                    (b.createdAt === cursor.createdAt && b.id > cursor.id),
+                );
+          const slice = after.slice(0, limit);
+          const hasMore = after.length > limit;
+          const last = slice[slice.length - 1];
+          return {
+            items: slice.map((b) => ({ id: b.id, workspaceId: b.workspaceId, createdAt: b.createdAt })),
+            nextCursor: hasMore && last !== undefined ? { createdAt: last.createdAt, id: last.id } : null,
+          };
+        })(),
+      ),
+    recordSeenKeys: (bindingId, keys) =>
+      Effect.sync(() => {
+        const set = seenKeys.get(bindingId) ?? new Set<string>();
+        seenKeys.set(bindingId, set);
+        const inserted: string[] = [];
+        for (const key of keys) {
+          if (!set.has(key)) {
+            set.add(key);
+            inserted.push(key);
+          }
+        }
+        return inserted;
+      }),
     insert: (values) =>
       Effect.sync(() => {
         const id = `signal_${++seq}`;

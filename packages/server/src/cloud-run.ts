@@ -25,6 +25,7 @@ import {
   Engine,
   cloudGridStoreShape,
   defaultRegistry,
+  fetchWithRetry,
   Registry,
   type CloudClientLike,
   type CloudFunctionRefs,
@@ -57,6 +58,44 @@ const CLOUD_REFS: CloudFunctionRefs = {
  */
 const GET_TABLE_META_REF = "/api/worker/getTableMeta";
 
+/**
+ * The worker ref the pre-flight quota gate POSTs to (TRI-3277). The server
+ * computes how many cells the run would meter (candidate rows minus already-done
+ * skips unless force) and rejects with a 402 when the workspace lacks the
+ * remaining cloud actions, BEFORE the run fans out.
+ */
+const ASSERT_COLUMN_RUN_QUOTA_REF = "/api/worker/assertColumnRunQuota";
+
+/**
+ * The default row fan-out concurrency when a request omits one — matches the
+ * server route's historical `?? 5`.
+ */
+export const DEFAULT_CLOUD_RUN_CONCURRENCY = 5;
+
+/**
+ * Process-wide safe ceiling for a single cloud run's row fan-out (M6).
+ * `CloudRunRequest.concurrency` is caller-controlled (the desktop forwards it)
+ * and was previously unclamped, so a too-large value multiplied worker POSTs and
+ * sandboxed executions without bound. We clamp it to this max so even a hostile
+ * or buggy caller cannot blow past a safe per-run ceiling; the sidecar's
+ * process-wide run semaphore bounds the number of simultaneous runs on top of
+ * this per-run cap.
+ */
+export const MAX_CLOUD_RUN_CONCURRENCY = 10;
+
+/**
+ * Clamp a requested row-fan-out concurrency into `[1, MAX_CLOUD_RUN_CONCURRENCY]`,
+ * defaulting an absent/invalid value to {@link DEFAULT_CLOUD_RUN_CONCURRENCY}.
+ * A non-finite or sub-1 value falls back to the default rather than 0 (which
+ * would stall the run); anything above the ceiling is capped.
+ */
+export function clampConcurrency(requested: number | undefined): number {
+  if (requested === undefined || !Number.isFinite(requested) || requested < 1) {
+    return DEFAULT_CLOUD_RUN_CONCURRENCY;
+  }
+  return Math.min(Math.floor(requested), MAX_CLOUD_RUN_CONCURRENCY);
+}
+
 /** Inputs the desktop forwards to run a column on a cloud project. */
 export interface CloudRunRequest {
   /** The apps/web API base URL (the desktop's `VITE_API_URL`). */
@@ -71,7 +110,12 @@ export interface CloudRunRequest {
   readonly force?: boolean;
   /** Restrict the run to these `rows.id`s (defaults to all rows). */
   readonly rowIds?: string[];
-  /** Bounded concurrency for the row fan-out (defaults to 5). */
+  /**
+   * Bounded concurrency for the row fan-out (defaults to
+   * {@link DEFAULT_CLOUD_RUN_CONCURRENCY}). Clamped to
+   * `[1, MAX_CLOUD_RUN_CONCURRENCY]` before use (M6): caller-controlled, so an
+   * out-of-range value can never blow past the safe per-run ceiling.
+   */
   readonly concurrency?: number;
 }
 
@@ -117,7 +161,13 @@ export function makeWorkerClient(
     if (typeof ref !== "string") {
       throw new Error(`Unsupported worker function ref: ${String(ref)}`);
     }
-    const res = await fetch(`${base}${ref}`, {
+    // Retry transient worker failures (429/503/5xx) with exponential backoff +
+    // jitter, honour Retry-After, and abort a hung worker via a per-attempt
+    // timeout so it cannot pin this run forever. A 402 (CloudActionsLimitError —
+    // see the worker boundary's `workerErrorStatus`) is FATAL: the helper does
+    // not retry it, and we surface it with its tag so the run stops rather than
+    // hammering an exhausted quota. Other 4xx are likewise fatal (no retry).
+    const res = await fetchWithRetry(`${base}${ref}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -128,8 +178,11 @@ export function makeWorkerClient(
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      // The apps/web worker boundary maps CloudActionsLimitError → HTTP 402.
+      // Tag the thrown error so callers/engine can recognise the fatal stop.
+      const tag = res.status === 402 ? "CloudActionsLimitError: " : "";
       throw new Error(
-        `Worker route ${ref} failed: ${res.status} ${res.statusText} ${text}`.trim(),
+        `${tag}Worker route ${ref} failed: ${res.status} ${res.statusText} ${text}`.trim(),
       );
     }
     const text = await res.text();
@@ -214,6 +267,52 @@ export async function buildCloudStore(
 }
 
 /**
+ * Raised when a cloud column run's pre-flight quota gate rejects the run because
+ * the workspace lacks the remaining cloud actions for the cells it would run
+ * (TRI-3277). Surfaces the worker's 402 as a typed error so a caller can map it
+ * back to a 402 for the desktop instead of treating it as a generic 5xx.
+ */
+export class CloudActionsLimitError extends Error {
+  readonly _tag = "CloudActionsLimitError";
+  constructor(message: string) {
+    super(message);
+    this.name = "CloudActionsLimitError";
+  }
+}
+
+/**
+ * Pre-flight quota gate (TRI-3277). POSTs the run shape to the server's
+ * `/api/worker/assertColumnRunQuota` route, which computes how many cells the run
+ * would meter (candidate rows minus already-`done` skips unless `force`) and
+ * rejects over-quota runs with a 402. The HTTP worker client throws on any
+ * non-2xx; a 402 is re-raised as a typed {@link CloudActionsLimitError} so the
+ * over-quota case is distinguishable from a transport failure. A run within
+ * quota resolves and the caller proceeds to fan out unchanged.
+ */
+export async function assertColumnRunQuota(
+  client: CloudClientLike,
+  req: Pick<CloudRunRequest, "tableId" | "columnId" | "rowIds" | "force">,
+): Promise<void> {
+  try {
+    await client.query(ASSERT_COLUMN_RUN_QUOTA_REF, {
+      tableId: req.tableId,
+      columnId: req.columnId,
+      ...(req.rowIds !== undefined ? { rowIds: req.rowIds } : {}),
+      ...(req.force !== undefined ? { force: req.force } : {}),
+    });
+  } catch (e) {
+    if (e instanceof CloudActionsLimitError) throw e;
+    const message = e instanceof Error ? e.message : String(e);
+    // The worker boundary returns 402 for CloudActionsLimitError; the HTTP
+    // client folds the status into the thrown message.
+    if (message.includes("402") || message.includes("CloudActionsLimitError")) {
+      throw new CloudActionsLimitError(message);
+    }
+    throw e;
+  }
+}
+
+/**
  * Run a column on a cloud project. Builds a worker-backed client, resolves the
  * table's workspace, then a cloud-backed GridStore for the table, and an
  * {@link Engine} that uses that store for BOTH project data and credentials.
@@ -227,12 +326,18 @@ export async function buildCloudStore(
  * injected cloud store backs BOTH project data and credentials, so no SQLite
  * file is opened (and the native better-sqlite3 addon is never loaded). The run
  * path reads/writes only the injected cloud store.
+ *
+ * Before any fan-out, a pre-flight quota gate ({@link assertColumnRunQuota})
+ * rejects an over-quota run with a 402 so a thousands-row run on a near-empty
+ * plan no longer executes and over-meters silently (TRI-3277). The check runs
+ * before {@link buildCloudStore} so a rejected run never ships the full grid.
  */
 export async function runCloudColumn(
   req: CloudRunRequest,
   deps: CloudRunDeps,
 ): Promise<{ ran: number; errors: number }> {
   const client = deps.makeClient(req.apiUrl, req.token);
+  await assertColumnRunQuota(client, req);
   const workspaceId = await resolveWorkspaceId(client, req.tableId);
   const store = await buildCloudStore(client, req.tableId, workspaceId);
   const engine = new Engine(undefined, deps.config, deps.registry, undefined, {
@@ -242,6 +347,8 @@ export async function runCloudColumn(
   return engine.runColumn(req.columnId, {
     force: req.force,
     rowIds: req.rowIds,
-    concurrency: req.concurrency,
+    // Clamp the caller-controlled fan-out to a safe ceiling (M6) so a too-large
+    // `req.concurrency` cannot multiply worker POSTs / sandboxed executions.
+    concurrency: clampConcurrency(req.concurrency),
   });
 }

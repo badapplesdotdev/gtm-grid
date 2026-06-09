@@ -18,7 +18,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   Db,
   Registry,
@@ -27,6 +27,11 @@ import {
   type CloudClientLike,
 } from "@gtmgrid/engine";
 import {
+  CloudActionsLimitError,
+  DEFAULT_CLOUD_RUN_CONCURRENCY,
+  MAX_CLOUD_RUN_CONCURRENCY,
+  clampConcurrency,
+  makeWorkerClient,
   resolveWorkspaceId,
   runCloudColumn,
   type CloudRunDeps,
@@ -95,6 +100,12 @@ function fakeConvex(
   },
   /** Optional decrypt-for-run secrets, keyed by connector extension id (#18). */
   credentials: Record<string, Record<string, string>> = {},
+  /**
+   * Optional pre-flight quota gate (TRI-3277). Invoked for the
+   * `/api/worker/assertColumnRunQuota` ref with the run args; throw to simulate
+   * the server's 402 rejection. Defaults to a no-op (always within quota).
+   */
+  quotaGate: (args: Record<string, unknown>) => void = () => {},
 ): {
   client: CloudClientLike;
   mutations: RecordedMutation[];
@@ -123,9 +134,16 @@ function fakeConvex(
 
   // Refs are now `/api/worker/*` route-path strings; the fake matches on those.
   const client: CloudClientLike = {
-    query: async (ref) => {
+    query: async (ref, args) => {
       const name = String(ref);
       queryRefs.push(name);
+      if (name === "/api/worker/assertColumnRunQuota") {
+        // The pre-flight quota gate (TRI-3277): the server computes the cells the
+        // run would meter and 402s when over quota. The fake delegates to the
+        // injected `quotaGate` so a test can simulate the rejection.
+        quotaGate((args ?? {}) as Record<string, unknown>);
+        return null;
+      }
       if (name === "/api/worker/getTableMeta") {
         // The metadata-only fast path: resolveWorkspaceId reads ONLY the table's
         // workspace id from here — no columns/rows/cells (TRI-3273).
@@ -428,5 +446,206 @@ describe("resolveWorkspaceId — metadata-only fast path (TRI-3273)", () => {
     // The regression: it must hit the metadata-only ref and NEVER the full grid.
     expect(queryRefs).toContain("/api/worker/getTableMeta");
     expect(queryRefs).not.toContain("/api/worker/getTable");
+  });
+});
+
+describe("makeWorkerClient — transient retry + 402 fatal (TRI-3276)", () => {
+  const OLD_SECRET = process.env.WEBHOOK_WORKER_SECRET;
+
+  beforeEach(() => {
+    process.env.WEBHOOK_WORKER_SECRET = "test-secret";
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (OLD_SECRET === undefined) delete process.env.WEBHOOK_WORKER_SECRET;
+    else process.env.WEBHOOK_WORKER_SECRET = OLD_SECRET;
+  });
+
+  /** A scripted global fetch returning the given Responses in order. */
+  function scriptFetch(steps: Response[]): { calls: number } {
+    const state = { calls: 0 };
+    const queue = [...steps];
+    vi.stubGlobal("fetch", async () => {
+      state.calls++;
+      const next = queue.shift();
+      if (next === undefined) throw new Error("fetch over-called");
+      return next;
+    });
+    return state;
+  }
+
+  it("retries a 503 then returns the eventual success payload", async () => {
+    const state = scriptFetch([
+      new Response("{}", { status: 503 }),
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    ]);
+    const client = makeWorkerClient("https://app.test", "jwt");
+    const out = await client.query("/api/worker/getTableMeta", { tableId: "t1" });
+    expect(out).toEqual({ ok: true });
+    expect(state.calls).toBe(2);
+  });
+
+  it("does NOT retry a 402 and surfaces it as a CloudActionsLimitError fatal stop", async () => {
+    const state = scriptFetch([
+      new Response("over quota", { status: 402, statusText: "Payment Required" }),
+      new Response("{}", { status: 200 }),
+    ]);
+    const client = makeWorkerClient("https://app.test", "jwt");
+    await expect(
+      client.mutation("/api/worker/setCells", { cells: [] }),
+    ).rejects.toThrow("CloudActionsLimitError");
+    // Exactly one attempt — a 402 is fatal, never retried.
+    expect(state.calls).toBe(1);
+  });
+});
+
+describe("runCloudColumn — pre-flight quota gate (TRI-3277)", () => {
+  /** A one-function-column, two-row grid the run would fan out over. */
+  const twoRowGrid = () => ({
+    columns: [
+      {
+        _id: "c_x",
+        tableId: "t1",
+        name: "X",
+        type: "text",
+        kind: "function",
+        provider: null,
+        method: null,
+        code: "function(inputs, sdk){ return { text: 'x' }; }",
+        params: {},
+        position: 0,
+        createdAt: 1,
+      },
+    ],
+    rows: [
+      { _id: "r1", tableId: "t1", position: 0, createdAt: 1 },
+      { _id: "r2", tableId: "t1", position: 1, createdAt: 2 },
+    ],
+    cells: [] as Array<{
+      rowId: string;
+      columnId: string;
+      value: unknown;
+      status: string;
+      error: string | null;
+      updatedAt: number | null;
+    }>,
+  });
+
+  it("rejects an over-quota run up-front and never fans out (no cell writes)", async () => {
+    const grid = twoRowGrid();
+    // The server's pre-flight 402s the run; the worker HTTP client tags 402 with
+    // `CloudActionsLimitError:`, so the fake throws that tagged error.
+    const { client, mutations, queryRefs } = fakeConvex(grid, {}, () => {
+      throw new Error(
+        "CloudActionsLimitError: Worker route /api/worker/assertColumnRunQuota failed: 402 Payment Required",
+      );
+    });
+
+    await expect(
+      runCloudColumn(
+        { apiUrl: "https://app.gtmgrid.dev", token: "jwt", tableId: "t1", columnId: "c_x" },
+        depsFor(client, upperRegistry()),
+      ),
+    ).rejects.toBeInstanceOf(CloudActionsLimitError);
+
+    // The gate ran BEFORE fan-out: no cell was written, and the full grid was
+    // never fetched for the rejected run.
+    expect(mutations).toHaveLength(0);
+    expect(grid.cells).toHaveLength(0);
+    expect(queryRefs).toContain("/api/worker/assertColumnRunQuota");
+    expect(queryRefs).not.toContain("/api/worker/getTable");
+  });
+
+  it("lets a run within quota proceed unchanged", async () => {
+    const grid = twoRowGrid();
+    // Default quotaGate is a no-op → within quota → the run proceeds.
+    const { client, queryRefs } = fakeConvex(grid);
+
+    const res = await runCloudColumn(
+      { apiUrl: "https://app.gtmgrid.dev", token: "jwt", tableId: "t1", columnId: "c_x" },
+      depsFor(client, upperRegistry()),
+    );
+
+    expect(res).toEqual({ ran: 2, errors: 0 });
+    expect(queryRefs).toContain("/api/worker/assertColumnRunQuota");
+    expect(grid.cells.filter((c) => c.columnId === "c_x")).toHaveLength(2);
+  });
+});
+
+describe("clampConcurrency — safe per-run fan-out ceiling (M6 / TRI-3282)", () => {
+  it("defaults an absent value to DEFAULT_CLOUD_RUN_CONCURRENCY", () => {
+    expect(clampConcurrency(undefined)).toBe(DEFAULT_CLOUD_RUN_CONCURRENCY);
+  });
+
+  it("caps an over-ceiling value at MAX_CLOUD_RUN_CONCURRENCY", () => {
+    expect(clampConcurrency(MAX_CLOUD_RUN_CONCURRENCY + 1)).toBe(
+      MAX_CLOUD_RUN_CONCURRENCY,
+    );
+    expect(clampConcurrency(1000)).toBe(MAX_CLOUD_RUN_CONCURRENCY);
+  });
+
+  it("passes through an in-range value unchanged (floored to an integer)", () => {
+    expect(clampConcurrency(3)).toBe(3);
+    expect(clampConcurrency(MAX_CLOUD_RUN_CONCURRENCY)).toBe(
+      MAX_CLOUD_RUN_CONCURRENCY,
+    );
+    expect(clampConcurrency(4.9)).toBe(4);
+  });
+
+  it("falls back to the default for non-finite or sub-1 values (never 0, which would stall)", () => {
+    expect(clampConcurrency(0)).toBe(DEFAULT_CLOUD_RUN_CONCURRENCY);
+    expect(clampConcurrency(-5)).toBe(DEFAULT_CLOUD_RUN_CONCURRENCY);
+    expect(clampConcurrency(Number.NaN)).toBe(DEFAULT_CLOUD_RUN_CONCURRENCY);
+    expect(clampConcurrency(Number.POSITIVE_INFINITY)).toBe(
+      DEFAULT_CLOUD_RUN_CONCURRENCY,
+    );
+  });
+
+  it("a cloud run with an absurd requested concurrency still completes correctly (clamp is behaviour-preserving)", async () => {
+    const grid = {
+      columns: [
+        {
+          _id: "c_x",
+          tableId: "t1",
+          name: "X",
+          type: "text",
+          kind: "function",
+          provider: null,
+          method: null,
+          code: "function(inputs, sdk){ return { text: 'x' }; }",
+          params: {},
+          position: 0,
+          createdAt: 1,
+        },
+      ],
+      rows: [
+        { _id: "r1", tableId: "t1", position: 0, createdAt: 1 },
+        { _id: "r2", tableId: "t1", position: 1, createdAt: 2 },
+      ],
+      cells: [] as Array<{
+        rowId: string;
+        columnId: string;
+        value: unknown;
+        status: string;
+        error: string | null;
+        updatedAt: number | null;
+      }>,
+    };
+    const { client } = fakeConvex(grid);
+
+    const res = await runCloudColumn(
+      {
+        apiUrl: "https://app.gtmgrid.dev",
+        token: "jwt",
+        tableId: "t1",
+        columnId: "c_x",
+        concurrency: 10_000,
+      },
+      depsFor(client, upperRegistry()),
+    );
+
+    // Despite the absurd requested concurrency, every row still ran exactly once.
+    expect(res).toEqual({ ran: 2, errors: 0 });
+    expect(grid.cells.filter((c) => c.columnId === "c_x")).toHaveLength(2);
   });
 });
