@@ -131,6 +131,10 @@ const MAX_COL_W = 460;
 const GUTTER_W = 48; // row-number column
 const ADD_COL_W = 44; // trailing "+" column
 
+// Max function columns run concurrently by "Run all". Independent columns fan
+// out up to this bound; dependent columns still serialize behind their inputs.
+const RUN_ALL_CONCURRENCY = 4;
+
 // Persisted id of the last cloud project the user had open, so a relaunch
 // reopens it (default-to-cloud for signed-in users).
 const LAST_CLOUD_PROJECT_KEY = "gtmgrid:lastCloudProject";
@@ -139,6 +143,87 @@ const LAST_CLOUD_PROJECT_KEY = "gtmgrid:lastCloudProject";
 function columnDependsOn(col: Column, columnName: string): boolean {
   const re = new RegExp(`\\{\\{\\s*${columnName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\}\\}`);
   return Object.values(col.params ?? {}).some((v) => typeof v === "string" && re.test(v));
+}
+
+// Build the intra-set dependency graph for a run-all: for each function column,
+// the set of OTHER function-column ids it depends on (references via {{Name}}).
+// Only columns within `cols` are considered — a reference to a manual column or
+// to a column outside this set imposes no ordering constraint here.
+export function buildColumnDeps(cols: Column[]): Map<string, Set<string>> {
+  const deps = new Map<string, Set<string>>();
+  for (const col of cols) {
+    const set = new Set<string>();
+    for (const other of cols) {
+      if (other.id === col.id) continue;
+      if (columnDependsOn(col, other.name)) set.add(other.id);
+    }
+    deps.set(col.id, set);
+  }
+  return deps;
+}
+
+/**
+ * Run a set of function columns honouring their dependency graph with bounded
+ * concurrency. Independent columns run in parallel (up to `concurrency`); a
+ * column only starts once every column it depends on has finished. Cyclic or
+ * unresolvable dependencies are released once no further progress is possible,
+ * so every column is always attempted exactly once. `run` failures are swallowed
+ * per-column (matching the prior per-column try/catch) so one bad column never
+ * blocks the rest. `onColumnSettled` fires after each column completes (used for
+ * progress reporting).
+ */
+export async function runColumnsWithDeps(
+  cols: Column[],
+  deps: Map<string, Set<string>>,
+  concurrency: number,
+  run: (col: Column) => Promise<void>,
+  onColumnSettled?: () => void,
+): Promise<void> {
+  const byId = new Map(cols.map((c) => [c.id, c]));
+  const done = new Set<string>();
+  const inFlight = new Set<string>();
+  const pending = new Set(cols.map((c) => c.id));
+  const limit = Math.max(1, concurrency);
+
+  const depsSatisfied = (id: string): boolean => {
+    const d = deps.get(id);
+    if (!d) return true;
+    for (const dep of d) if (byId.has(dep) && !done.has(dep)) return false;
+    return true;
+  };
+
+  return new Promise<void>((resolve) => {
+    const pump = () => {
+      if (pending.size === 0 && inFlight.size === 0) {
+        resolve();
+        return;
+      }
+      // Eligible = pending columns whose in-set deps are all done.
+      let eligible = [...pending].filter(depsSatisfied);
+      // Deadlock guard: nothing eligible and nothing running (e.g. a cycle) —
+      // release the rest so they still get attempted exactly once.
+      if (eligible.length === 0 && inFlight.size === 0 && pending.size > 0) {
+        eligible = [...pending];
+      }
+      for (const id of eligible) {
+        if (inFlight.size >= limit) break;
+        const col = byId.get(id);
+        if (!col) { pending.delete(id); continue; }
+        pending.delete(id);
+        inFlight.add(id);
+        void Promise.resolve()
+          .then(() => run(col))
+          .catch(() => { /* per-column failure must not abort the run */ })
+          .finally(() => {
+            inFlight.delete(id);
+            done.add(id);
+            onColumnSettled?.();
+            pump();
+          });
+      }
+    };
+    pump();
+  });
 }
 
 // ─── Cell renderer ───────────────────────────────────────
@@ -1280,12 +1365,19 @@ export default function App() {
     const tableId = tableData.id;
     const fnCols = tableData.columns.filter(c => c.kind === "function");
     if (!fnCols.length) return;
+    // Run independent columns concurrently (bounded), serializing only columns
+    // with true {{dependencies}} (topological order). Each column streams its
+    // per-cell progress and patches cells as they land — no full-grid refetch.
+    const deps = buildColumnDeps(fnCols);
+    let completed = 0;
     setRunProgress({ current: 0, total: fnCols.length });
-    for (let i = 0; i < fnCols.length; i++) {
-      setRunProgress({ current: i + 1, total: fnCols.length });
-      // Stream per-cell progress and patch each cell as it lands — no full refetch.
-      try { await api.runColumnStream(fnCols[i].id, (e) => patchCell(tableId, e)); } catch { /* continue */ }
-    }
+    await runColumnsWithDeps(
+      fnCols,
+      deps,
+      RUN_ALL_CONCURRENCY,
+      async (col) => { await api.runColumnStream(col.id, (e) => patchCell(tableId, e)); },
+      () => { completed += 1; setRunProgress({ current: completed, total: fnCols.length }); },
+    );
     setRunProgress(null);
   };
 
