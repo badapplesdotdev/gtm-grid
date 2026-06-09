@@ -276,22 +276,16 @@ export const AUTO_SYNC_ENABLE_WARNING =
 
 // ── localStorage sync-link mirror (TRI-3309 bug B) ─────────────────────────
 //
-// The authoritative local↔cloud link lives in the sidecar meta, but `/api/tables`
-// does NOT expose it and we may not add a server route in this lane. Without a
-// hydration source, a synced local table renders "Local only" after reload (the
-// `syncLinks` state only tracks links established in the current session).
-//
-// To restore the correct status on load we keep a CLIENT-SIDE MIRROR of the
-// links in localStorage: on each successful push we record
-// `${projectKey}:${localTableId}` → cloudTableId, and on mount we hydrate the
-// in-memory `syncLinks` from it. This mirror ONLY drives the UI status (dot /
-// pill / sync-all badge) — the sidecar meta stays the source of truth for actual
-// overwrite detection (the server still returns 409 if a push would clobber a
-// cloud copy). DRIFT TRADEOFF: if the mirror and the sidecar disagree (e.g. the
-// cloud table was deleted out-of-band, or the mirror is stale), the worst case is
-// a momentarily-wrong dot that self-corrects on the next push (a 409 re-routes
-// through the overwrite confirm). A future server-backed hydration (once the
-// concurrent server WIP lands a link-list endpoint) should supersede this mirror.
+// The authoritative local↔cloud link lives in the sidecar meta and is now
+// exposed at `GET /api/cloud/tables/links` (TRI-3311) — that is the source of
+// truth the desktop hydrates from on load / project change (mergeServerSyncLinks
+// below). This localStorage MIRROR is kept ONLY as an optional offline/fast-path
+// cache: on each successful push we record `${projectKey}:${localTableId}` →
+// cloudTableId, and on mount we seed the in-memory `syncLinks` from it
+// synchronously so the status paints before the sidecar answers. The server then
+// overlays and WINS on every conflict, so a stale mirror can no longer drift the
+// displayed status (the sidecar meta also stays the source of truth for overwrite
+// detection — the server still returns 409 if a push would clobber a cloud copy).
 
 /** The localStorage key holding the serialized sync-link mirror. */
 export const SYNC_LINKS_STORAGE_KEY = "gtmgrid:syncLinks";
@@ -395,4 +389,80 @@ export function shouldCloseConflictPopover(args: {
     args.openPopoverTableId !== null &&
     args.openPopoverTableId === args.modalTableId
   );
+}
+
+// ── Server-backed sync-link hydration (TRI-3311) ───────────────────────────
+//
+// The authoritative local↔cloud links live in the sidecar's SQLite meta and are
+// now exposed at `GET /api/cloud/tables/links` (api.cloudTableLinks()). On load /
+// project change the desktop hydrates `syncLinks` from THAT (source of truth),
+// keeping the localStorage mirror only as an optional offline/fast-path cache.
+// Because the mirror could drift (links created/cleared on another machine, or a
+// cloud table deleted out-of-band), the SERVER MUST WIN on conflict so the
+// displayed status can't go stale.
+
+/**
+ * Merge the server's authoritative `{ [localTableId]: cloudTableId }` link map
+ * with the localStorage mirror, with the SERVER WINNING on every conflict. The
+ * mirror only fills gaps (a link the server doesn't yet report, e.g. hydrating
+ * offline before the sidecar answers); any local table the server reports is
+ * taken verbatim from the server, and a mirror entry that disagrees with the
+ * server is DROPPED in favour of the server value — so a stale mirror can never
+ * override the source of truth. Pure (mutates neither input) and testable.
+ */
+export function mergeServerSyncLinks(
+  server: Record<string, string>,
+  mirror: Record<string, string>,
+): Record<string, string> {
+  // Start from the mirror (fast-path / offline cache), then overlay the server
+  // so every server-reported link overwrites any disagreeing mirror entry.
+  return { ...mirror, ...server };
+}
+
+// ── Open-cloud-table 404 self-heal (TRI-3312) ──────────────────────────────
+//
+// A re-sync swap creates a NEW cloud table and deletes the old one, repointing
+// the local table's link. If the currently-open cloud table id is a STALE id
+// deleted before this session's link state (swaps across versions, or a teammate
+// re-synced), the open grid's `getTable` returns 404 ("no longer exists"). Rather
+// than leave the dead-id error, self-heal: fall back to the local table's CURRENT
+// linked cloud id (from the now-server-hydrated `syncLinks`) and open that.
+
+/**
+ * Whether a cloud `getTable` result indicates the open table no longer exists.
+ * The cloud grid hook surfaces a missing table as `null` (vs `undefined` while
+ * loading), mirroring a 404 / not-found from `grid.getTable`. Pure so the 404
+ * detection is unit-testable without React or the network.
+ */
+export function isCloudTableMissing(
+  data: unknown | null | undefined,
+): data is null {
+  return data === null;
+}
+
+/**
+ * Decide the cloud table id to fall back to when the currently-open cloud table
+ * 404s (TRI-3312). Given the stale open cloud id, the LOCAL table the open view
+ * corresponds to, and the current (server-hydrated) links map
+ * (`{ [localTableId]: { cloudTableId } }`), return that local table's CURRENT
+ * linked cloud id — but ONLY when it is a DIFFERENT, non-empty id (a real swap to
+ * recover to). Returns `null` when there is nothing to recover to (no link, or
+ * the link still points at the same — already-dead — id), so the caller leaves
+ * the existing behaviour rather than looping on the same dead id.
+ *
+ * Pure + testable: the recovery decision is verifiable offline with no React.
+ */
+export function resolveStaleCloudTableFallback(args: {
+  /** The open cloud table id whose load just 404'd. */
+  readonly openCloudTableId: string | null;
+  /** The local table the open cloud view corresponds to (its link key), if known. */
+  readonly localTableId: string | null;
+  /** The current links map, keyed by local table id. */
+  readonly links: Record<string, { cloudTableId: string }>;
+}): string | null {
+  if (args.openCloudTableId === null || args.localTableId === null) return null;
+  const linked = args.links[args.localTableId]?.cloudTableId;
+  if (linked === undefined || linked === "") return null;
+  // Only recover when the current link points somewhere ELSE than the dead id.
+  return linked === args.openCloudTableId ? null : linked;
 }

@@ -466,6 +466,25 @@ export class Db {
     this.setMeta(Db.cloudLinkKey(localTableId), cloudTableId);
   }
 
+  /**
+   * All persisted local↔cloud links in this project, as `{ [localTableId]:
+   * cloudTableId }`. Reads the same `cloud_table_link:<localTableId>` meta rows
+   * `getCloudTableLink` reads (the prefix is the single source of truth), so the
+   * map is exactly the set of links any push has recorded. The sidecar's
+   * `GET /api/cloud/tables/links` returns this so the desktop can hydrate its
+   * synced-table status from the authoritative meta instead of a localStorage
+   * mirror that can drift (TRI-3311).
+   */
+  listCloudTableLinks(): Record<string, string> {
+    const prefix = "cloud_table_link:";
+    const rows = this.raw
+      .prepare(`SELECT key, value FROM meta WHERE key LIKE ? || '%'`)
+      .all(prefix) as { key: string; value: string }[];
+    const out: Record<string, string> = {};
+    for (const r of rows) out[r.key.slice(prefix.length)] = r.value;
+    return out;
+  }
+
   private nextPos(table: string, scopeCol?: string, scopeVal?: string): number {
     const where = scopeCol ? `WHERE ${scopeCol} = ?` : "";
     const stmt = this.raw.prepare(`SELECT COALESCE(MAX(position), -1) + 1 AS n FROM ${table} ${where}`);
