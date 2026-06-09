@@ -51,6 +51,7 @@ import {
   type ProjectRepoError,
 } from "../repositories/project-repo.js";
 import {
+  type NewRow,
   type Row,
   RowRepo,
   type RowRepoError,
@@ -420,63 +421,73 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
           (yield* columns.listByTable(args.tableId)).map((c) => c.id),
         );
         const siblings = yield* rows.listByTable(args.tableId);
-        let position = nextPosition(siblings);
+        const basePosition = nextPosition(siblings);
         const now = Date.now();
 
-        const rowIds: string[] = [];
-        const cellInserts: NewCell[] = [];
-        // Per-row broadcast events (row + the cells created with it), emitted
-        // AFTER the write so each subscriber splices the imported rows in.
-        const rowEvents: GridChangeEvent[] = [];
-        for (const cellMap of args.rows) {
-          const rowId = yield* rows.insert({
-            workspaceId: table.workspaceId,
-            tableId: args.tableId,
-            position: position++,
-            createdAt: now,
-          });
-          rowIds.push(rowId);
-          const eventCells: {
-            rowId: string;
-            columnId: string;
-            value: unknown;
-            status: string;
-            error: string | null;
-          }[] = [];
-          for (const [columnId, value] of Object.entries(cellMap)) {
-            if (value === "" || value === null || value === undefined) continue;
-            if (!valid.has(columnId)) continue;
-            cellInserts.push({
-              workspaceId: table.workspaceId,
-              tableId: args.tableId,
-              rowId,
-              columnId,
-              value,
-              status: "done",
-              error: null,
-              updatedAt: now,
-            });
-            eventCells.push({
-              rowId,
-              columnId,
-              value,
-              status: "done",
-              error: null,
-            });
-          }
-          rowEvents.push({
-            type: "row.insert",
-            row: { _id: rowId },
-            cells: eventCells,
-          });
-        }
-        yield* cells.insertMany(cellInserts);
-        // ONE billable cloud action per imported row (cells are not metered).
-        yield* meter.meterActions(table.workspaceId, args.rows.length);
+        // Build ALL row values up front (one bulk insert, not N), plus the
+        // per-row filtered cell payloads (keyed by input index — the row id is
+        // not known until insertMany returns it in input order).
+        const newRows: NewRow[] = args.rows.map((_, i) => ({
+          workspaceId: table.workspaceId,
+          tableId: args.tableId,
+          position: basePosition + i,
+          createdAt: now,
+        }));
+        const perRowCells = args.rows.map((cellMap) =>
+          Object.entries(cellMap).flatMap(([columnId, value]) =>
+            value === "" ||
+            value === null ||
+            value === undefined ||
+            !valid.has(columnId)
+              ? []
+              : [{ columnId, value }],
+          ),
+        );
+
+        // Atomic write: row insert + cell insert + meter increment in ONE
+        // transaction. A mid-import failure rolls back — no orphaned rows.
+        const rowIds = yield* rows.bulkImport({
+          rows: newRows,
+          buildCells: (ids) =>
+            ids.flatMap((rowId, i) =>
+              (perRowCells[i] ?? []).map(
+                ({ columnId, value }): NewCell => ({
+                  workspaceId: table.workspaceId,
+                  tableId: args.tableId,
+                  rowId,
+                  columnId,
+                  value,
+                  status: "done",
+                  error: null,
+                  updatedAt: now,
+                }),
+              ),
+            ),
+          // ONE billable cloud action per imported row (cells are not metered).
+          meter: { workspaceId: table.workspaceId, n: args.rows.length },
+        });
+
+        // The DB counter was bumped inside the import transaction; only the
+        // best-effort external Autumn usage track remains, AFTER the commit.
+        yield* meter.trackActions(table.workspaceId, args.rows.length);
+
+        // Per-row broadcast events (row + its cells), emitted AFTER the commit
+        // so each subscriber splices the imported rows in.
+        const rowEvents: GridChangeEvent[] = rowIds.map((rowId, i) => ({
+          type: "row.insert",
+          row: { _id: rowId },
+          cells: (perRowCells[i] ?? []).map(({ columnId, value }) => ({
+            rowId,
+            columnId,
+            value,
+            status: "done",
+            error: null,
+          })),
+        }));
         for (const event of rowEvents) {
           yield* publish(table.workspaceId, args.tableId, event);
         }
-        return { rowIds };
+        return { rowIds: [...rowIds] };
       });
 
     /** Delete a table (FK cascade drops children). Members-only. Metered ONE. */
