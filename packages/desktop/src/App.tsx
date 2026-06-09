@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback, useMemo, useRef, memo, lazy, Suspense, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, memo, lazy, Suspense, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource, type CellProgressEvent } from "./api";
 import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import CellDetails, { extractCode } from "./CellDetails";
 import { BrandIcon } from "./BrandIcon";
-import { ProjectSwitcher } from "./ProjectSwitcher";
+import { ProjectSwitcher, CloudIcon } from "./ProjectSwitcher";
 import { AccountBar, PlanBillingModal } from "./cloud/AccountBar";
 import { PendingInvites } from "./cloud/PendingInvites";
 import { cloudEnabled, queryClient, syncWorkspacePlan, apiClient, API_URL, getStoredAuthToken } from "./cloud/client";
@@ -29,7 +29,10 @@ import {
   shouldCloseConflictPopover,
   mergeServerSyncLinks,
   resolveStaleCloudTableFallback,
+  resolveTargetCloudProject,
+  buildTableList,
   type SyncStatus,
+  type TableListRow,
 } from "./cloudSync";
 import { CloudPushHttpError } from "./api";
 import { useMe, useActiveWorkspace, useAuthState } from "./cloud/auth";
@@ -65,6 +68,7 @@ import {
   useCloudSyncRefresh,
   useCloudSession,
   type CloudProject,
+  type CloudTableSummary,
 } from "./cloud/useCloudGrid";
 import { type SignalsCloud } from "./SignalsModal";
 // Type-only import (erased at build) so the AgentPanel lazy chunk stays split.
@@ -784,11 +788,22 @@ function SyncPopover({
   onClose: () => void;
 }) {
   const meta = SYNC_META[status];
-  const top = Math.min(anchorTop, window.innerHeight - 330);
+  // TRI-3314-2: clamp `top` against the ACTUAL rendered height, not a fixed 330px
+  // guess. A tall branch (conflict / synced + error) used to exceed the guess and
+  // clip the action button. We measure the popover after layout and re-clamp so it
+  // can never overflow the bottom edge (and flips above the anchor when needed).
+  const popRef = useRef<HTMLDivElement>(null);
+  const [top, setTop] = useState(() => Math.max(8, Math.min(anchorTop, window.innerHeight - 330)));
+  useLayoutEffect(() => {
+    const el = popRef.current;
+    const measured = el ? el.getBoundingClientRect().height : 330;
+    setTop(Math.max(8, Math.min(anchorTop, window.innerHeight - measured - 8)));
+  }, [anchorTop, status, error]);
   return (
     <>
       <div className="popover-scrim" onMouseDown={onClose} />
       <div
+        ref={popRef}
         className="sync-pop"
         style={{ top, left: sidebarWidth + 8 }}
         onMouseDown={(e) => e.stopPropagation()}
@@ -1923,9 +1938,22 @@ export default function App() {
     async (tableId: string, confirmOverwrite: boolean) => {
       const apiUrl = API_URL;
       const token = getStoredAuthToken();
-      const projectId = cloudProject?._id ?? null;
-      if (!apiUrl || !token || !projectId) {
+      if (!apiUrl || !token) {
         setSyncErrors((m) => ({ ...m, [tableId]: "Sign in to a cloud workspace to sync." }));
+        return;
+      }
+      // TRI-3313-B: a push from the LOCAL env must NOT require an open cloud
+      // project. Resolve a TARGET project (open → last-used → most-recent → first)
+      // WITHOUT opening it; the server reads the local table from the sidecar and
+      // only needs a valid target projectId. If the workspace has NO project to
+      // target, prompt the user to pick/create one (open the ProjectSwitcher)
+      // rather than erroring with "not found".
+      let lastUsed: string | null = null;
+      try { lastUsed = localStorage.getItem(LAST_CLOUD_PROJECT_KEY); } catch { /* ignore */ }
+      const target = resolveTargetCloudProject(cloudProject, lastUsed, cloudProjects ?? null);
+      const projectId = target?._id ?? null;
+      if (!projectId) {
+        setShowProjects(true);
         return;
       }
       setPushingTableIds((s) => { const next = new Set(s); next.add(tableId); return next; });
@@ -1990,7 +2018,7 @@ export default function App() {
         setPushingTableIds((s) => { const next = new Set(s); next.delete(tableId); return next; });
       }
     },
-    [cloudProject, tables, syncLinks, invalidateCloudTables, invalidateCloudTable],
+    [cloudProject, cloudProjects, tables, syncLinks, invalidateCloudTables, invalidateCloudTable],
   );
 
   // Push entry point from the popover / sync-all. Decides create-vs-overwrite:
@@ -2093,6 +2121,59 @@ export default function App() {
   const syncPending = useMemo(
     () => (showSyncUi ? pendingCount(tables.map((t) => syncStatusFor(t.id))) : 0),
     [showSyncUi, tables, syncStatusFor],
+  );
+
+  // ── Unified Tables list (TRI-3313-C) ──────────────────────────────────────
+  // ONE merged, de-duplicated list of local + cloud tables (a local table linked
+  // via `syncLinks` is rendered ONCE as a synced local row; its cloud copy is
+  // folded in). Drives a SINGLE active-table selection so only one row highlights.
+  const tableList = useMemo(
+    () =>
+      buildTableList({
+        localTables: tables.map((t) => ({ id: t.id, name: t.name, favorite: t.favorite, rows: t.rows })),
+        cloudTables: (cloudTables ?? []).map((t) => ({ _id: t._id, name: t.name })),
+        syncLinks,
+      }),
+    [tables, cloudTables, syncLinks],
+  );
+  // Lookups by id so the unified rows can recover their original summaries (the
+  // local TableSummary for context-menu / rename / delete; the branded cloud id
+  // for selection) without re-casting strings.
+  const localById = useMemo(() => {
+    const m = new Map<string, TableSummary>();
+    for (const t of tables) m.set(t.id, t);
+    return m;
+  }, [tables]);
+  const cloudById = useMemo(() => {
+    const m = new Map<string, CloudTableSummary>();
+    for (const t of cloudTables ?? []) m.set(String(t._id), t);
+    return m;
+  }, [cloudTables]);
+  // The ONE active row id, unifying the old independent cloud (`cloudTableId`) vs
+  // local (`selectedTableId`) selection: when a cloud project is open and a cloud
+  // table is selected, the cloud id wins; otherwise the local selection wins.
+  const activeRowId = inCloud && cloudTableId !== null ? String(cloudTableId) : selectedTableId;
+  // Select any row from the unified list: a LOCAL row drops the open cloud project
+  // (so the local sidecar grid renders) and selects the local table; a CLOUD row
+  // keeps the cloud project open and points the live grid at that cloud table.
+  // Either way exactly ONE row ends up active.
+  const onSelectTableRow = useCallback(
+    (row: TableListRow) => {
+      if (row.kind === "cloud") {
+        const ct = cloudById.get(row.id);
+        if (ct) setCloudTableId(ct._id);
+        setView({ kind: "table" });
+        return;
+      }
+      // Local row: leave cloud mode so the local grid shows this table.
+      if (inCloud) {
+        setCloudProject(null);
+        setCloudTableId(null);
+      }
+      setSelectedTableId(row.id);
+      setView({ kind: "table" });
+    },
+    [inCloud, cloudById],
   );
 
   // Default the active cloud table to the first one once the list loads.
@@ -2449,99 +2530,15 @@ export default function App() {
         </div>
 
         <div className="sidebar-scroll">
-          {/* Cloud tables section — shown only while a cloud project is open. */}
-          {inCloud && (
-            <div className="sidebar-section">
-              <div className="sidebar-section-label">
-                Tables (cloud){cloudLocked ? " 🔒" : ""}
-                <button
-                  title={cloudLocked ? "Upgrade to add cloud tables" : "New cloud table"}
-                  disabled={cloudCreating || cloudLocked}
-                  onClick={() => setShowNewTableChooser(true)}
-                >
-                  <Icon.Plus />
-                </button>
-              </div>
-              {cloudTables === undefined ? (
-                <div className="skeleton-row">
-                  <div className="shimmer skeleton-bar" style={{ width: "65%", height: 13 }} />
-                </div>
-              ) : cloudTables.length === 0 ? (
-                <div style={{ padding: "4px 16px", fontSize: 12, color: "var(--text-3)" }}>No tables yet</div>
-              ) : (
-                cloudTables.map((t) => (
-                  <div
-                    key={t._id}
-                    className={`sidebar-item${t._id === cloudTableId && !cloudLocked ? " active" : ""}`}
-                    style={cloudLocked ? { opacity: 0.6 } : undefined}
-                    title={cloudLocked ? "Upgrade to unlock cloud tables" : undefined}
-                    onClick={() =>
-                      cloudLocked
-                        ? setShowUpgrade(true)
-                        : (setCloudTableId(t._id), setView({ kind: "table" }))
-                    }
-                  >
-                    <span className="sidebar-item-icon">
-                      {cloudLocked ? "🔒" : <Icon.Table />}
-                    </span>
-                    <span className="sidebar-item-name">{t.name}</span>
-                    {!cloudLocked && (
-                      <button
-                        className="sidebar-item-del"
-                        title="Delete table"
-                        onClick={(e) => { e.stopPropagation(); setConfirmDeleteCloudTable({ _id: t._id, name: t.name }); }}
-                      >
-                        <Icon.Trash />
-                      </button>
-                    )}
-                  </div>
-                ))
-              )}
-              {cloudLocked ? (
-                <button
-                  className="btn btn--primary"
-                  style={{ margin: "8px 12px", width: "calc(100% - 24px)", justifyContent: "center" }}
-                  onClick={() => setShowUpgrade(true)}
-                >
-                  Upgrade to unlock cloud
-                </button>
-              ) : (
-                <>
-                  <div
-                    className="sidebar-item"
-                    style={{ marginTop: 2, opacity: cloudCreating ? 0.6 : 1 }}
-                    onClick={() => setShowNewTableChooser(true)}
-                  >
-                    <span className="sidebar-item-icon" style={{ color: "var(--accent)" }}><Icon.Plus /></span>
-                    <span className="sidebar-item-name" style={{ color: "var(--accent)" }}>
-                      {cloudCreating ? "Creating…" : "New table"}
-                    </span>
-                  </div>
-                  <div className="sidebar-item" onClick={() => setImportMode("cloud")}>
-                    <span className="sidebar-item-icon"><Icon.Table /></span>
-                    <span className="sidebar-item-name">Import CSV…</span>
-                  </div>
-                </>
-              )}
-              {cloudCreateError && (
-                <div
-                  className="account-menu-error"
-                  role="alert"
-                  style={{ margin: "4px 16px" }}
-                >
-                  {cloudCreateError}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Tables section (local). Hidden while a cloud project is open UNLESS
-              the user is a connected cloud user — then it stays visible so local
-              tables can be pushed to the open cloud workspace (TRI-3297). */}
-          {(!inCloud || showSyncUi) && <>
+          {/* Unified Tables section (TRI-3313-C). ONE merged, de-duplicated list
+              of local + cloud tables with a SINGLE active-table selection (only
+              one row highlighted). A cloud-backed (synced) row shows a cloud icon;
+              an unsynced local row shows its sync dot (cloud users) or row count.
+              Selecting a row sets the one active table and switches the main grid
+              to the cloud-table or local-table view as appropriate. */}
           <div className="sidebar-section">
             <div className="sidebar-section-label">
-              <span className="sidebar-label-text">Tables</span>
+              <span className="sidebar-label-text">Tables{cloudLocked && inCloud ? " 🔒" : ""}</span>
               <span className="sidebar-label-actions">
                 {showSyncUi && (
                   <button
@@ -2554,7 +2551,7 @@ export default function App() {
                     {syncPending ? <span className="sync-all-count">{syncPending}</span> : null}
                   </button>
                 )}
-                <button onClick={() => setShowNewTableChooser(true)} title="New table">
+                <button onClick={() => setShowNewTableChooser(true)} title="New table" disabled={inCloud && cloudLocked}>
                   <Icon.Plus />
                 </button>
               </span>
@@ -2576,82 +2573,139 @@ export default function App() {
                 </button>
               </label>
             )}
-            {tables.length === 0 ? (
-              <div style={{ padding: "4px 16px", fontSize: 12, color: "var(--text-3)" }}>No tables yet</div>
-            ) : [...tables].sort((a, b) => Number(b.favorite) - Number(a.favorite)).map(t => (
-              renamingTableId === t.id ? (
-                <div key={t.id} className="sidebar-item" style={{ paddingTop: 2, paddingBottom: 2 }}>
-                  <span className="sidebar-item-icon"><Icon.Table /></span>
-                  <input
-                    className="sidebar-rename-input"
-                    value={renameDraft}
-                    autoFocus
-                    onChange={e => setRenameDraft(e.target.value)}
-                    onBlur={() => commitRename(t.id, renameDraft)}
-                    onKeyDown={e => {
-                      if (e.key === "Enter") commitRename(t.id, renameDraft);
-                      if (e.key === "Escape") setRenamingTableId(null);
-                    }}
-                  />
-                </div>
-              ) : (
-              <div
-                key={t.id}
-                className={`sidebar-item${t.id === selectedTableId && view.kind === "table" ? " active" : ""}`}
-                onClick={() => { setSelectedTableId(t.id); setView({ kind: "table" }); }}
-                onContextMenu={e => openCtx(e, tableMenuItems(t))}
-              >
-                <span className="sidebar-item-icon"><Icon.Table /></span>
-                <span className="sidebar-item-name">{t.name}</span>
-                {t.favorite && <span className="sidebar-item-star"><Icon.Star filled /></span>}
-                <button
-                  className="sidebar-item-del"
-                  title="Delete table"
-                  onClick={e => { e.stopPropagation(); setConfirmDeleteTable(t); }}
-                >
-                  <Icon.Trash />
-                </button>
-                <button
-                  className="sidebar-item-more"
-                  title="Table options"
-                  onClick={e => { e.stopPropagation(); openCtx(e, tableMenuItems(t)); }}
-                >
-                  <Icon.More />
-                </button>
-                {showSyncUi ? (
-                  <button
-                    className={`row-sync is-${syncStatusFor(t.id)}`}
-                    title={SYNC_META[syncStatusFor(t.id)].label}
-                    onClick={e => {
-                      e.stopPropagation();
-                      const top = (e.currentTarget.closest(".sidebar-item") as HTMLElement | null)?.getBoundingClientRect().top ?? 80;
-                      setSyncPopover({ tableId: t.id, anchorTop: top });
-                      // TRI-3310 bug C: the popover diff + the overwrite-confirm
-                      // copy read the row count from the cached TableSummary,
-                      // which goes stale after edits. Refresh the summary at
-                      // popover-open so the count reflects the table's real
-                      // current rows (the push itself always sends the live rows).
-                      void reloadTables();
-                    }}
-                  >
-                    <SyncDot status={syncStatusFor(t.id)} />
-                  </button>
-                ) : (
-                  <span className="sidebar-item-count">{t.rows}</span>
-                )}
+            {cloudTables === undefined && inCloud ? (
+              <div className="skeleton-row">
+                <div className="shimmer skeleton-bar" style={{ width: "65%", height: 13 }} />
               </div>
-              )
-            ))}
-            <div className="sidebar-item" style={{ marginTop: 2 }} onClick={() => setShowNewTableChooser(true)}>
-              <span className="sidebar-item-icon" style={{ color: "var(--accent)" }}><Icon.Plus /></span>
-              <span className="sidebar-item-name" style={{ color: "var(--accent)" }}>New table</span>
-            </div>
-            <div className="sidebar-item" onClick={() => setImportMode("local")}>
-              <span className="sidebar-item-icon"><Icon.Table /></span>
-              <span className="sidebar-item-name">Import CSV…</span>
-            </div>
+            ) : tableList.length === 0 ? (
+              <div style={{ padding: "4px 16px", fontSize: 12, color: "var(--text-3)" }}>No tables yet</div>
+            ) : tableList.map((row) => {
+              const local = row.kind === "local" ? localById.get(row.id) : undefined;
+              const cloudRowLocked = row.kind === "cloud" && cloudLocked;
+              if (local && renamingTableId === local.id) {
+                return (
+                  <div key={`local:${row.id}`} className="sidebar-item" style={{ paddingTop: 2, paddingBottom: 2 }}>
+                    <span className="sidebar-item-icon"><Icon.Table /></span>
+                    <input
+                      className="sidebar-rename-input"
+                      value={renameDraft}
+                      autoFocus
+                      onChange={e => setRenameDraft(e.target.value)}
+                      onBlur={() => commitRename(local.id, renameDraft)}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") commitRename(local.id, renameDraft);
+                        if (e.key === "Escape") setRenamingTableId(null);
+                      }}
+                    />
+                  </div>
+                );
+              }
+              return (
+                <div
+                  key={`${row.kind}:${row.id}`}
+                  className={`sidebar-item${row.id === activeRowId && view.kind === "table" && !cloudRowLocked ? " active" : ""}`}
+                  style={cloudRowLocked ? { opacity: 0.6 } : undefined}
+                  title={cloudRowLocked ? "Upgrade to unlock cloud tables" : undefined}
+                  onClick={() => (cloudRowLocked ? setShowUpgrade(true) : onSelectTableRow(row))}
+                  onContextMenu={local ? (e => openCtx(e, tableMenuItems(local))) : undefined}
+                >
+                  <span className="sidebar-item-icon">
+                    {cloudRowLocked ? "🔒" : <Icon.Table />}
+                  </span>
+                  <span className="sidebar-item-name">{row.name}</span>
+                  {row.favorite && <span className="sidebar-item-star"><Icon.Star filled /></span>}
+                  {local && (
+                    <>
+                      <button
+                        className="sidebar-item-del"
+                        title="Delete table"
+                        onClick={e => { e.stopPropagation(); setConfirmDeleteTable(local); }}
+                      >
+                        <Icon.Trash />
+                      </button>
+                      <button
+                        className="sidebar-item-more"
+                        title="Table options"
+                        onClick={e => { e.stopPropagation(); openCtx(e, tableMenuItems(local)); }}
+                      >
+                        <Icon.More />
+                      </button>
+                    </>
+                  )}
+                  {row.kind === "cloud" && !cloudRowLocked && cloudById.get(row.id) && (
+                    <button
+                      className="sidebar-item-del"
+                      title="Delete table"
+                      onClick={e => {
+                        e.stopPropagation();
+                        const ct = cloudById.get(row.id);
+                        if (ct) setConfirmDeleteCloudTable({ _id: ct._id, name: ct.name });
+                      }}
+                    >
+                      <Icon.Trash />
+                    </button>
+                  )}
+                  {/* Trailing indicator: a cloud icon on cloud/synced rows; the
+                      sync dot (cloud users) or row count on unsynced local rows. */}
+                  {row.synced ? (
+                    <span className="sidebar-item-cloud" title="Synced to cloud">{CloudIcon}</span>
+                  ) : showSyncUi && local ? (
+                    <button
+                      className={`row-sync is-${syncStatusFor(local.id)}`}
+                      title={SYNC_META[syncStatusFor(local.id)].label}
+                      onClick={e => {
+                        e.stopPropagation();
+                        const host = e.currentTarget.closest(".sidebar-item");
+                        const top = host instanceof HTMLElement ? host.getBoundingClientRect().top : 80;
+                        setSyncPopover({ tableId: local.id, anchorTop: top });
+                        // TRI-3310 bug C: the popover diff + the overwrite-confirm
+                        // copy read the row count from the cached TableSummary,
+                        // which goes stale after edits. Refresh the summary at
+                        // popover-open so the count reflects the table's real
+                        // current rows (the push itself always sends the live rows).
+                        void reloadTables();
+                      }}
+                    >
+                      <SyncDot status={syncStatusFor(local.id)} />
+                    </button>
+                  ) : (
+                    <span className="sidebar-item-count">{row.rows}</span>
+                  )}
+                </div>
+              );
+            })}
+            {inCloud && cloudLocked ? (
+              <button
+                className="btn btn--primary"
+                style={{ margin: "8px 12px", width: "calc(100% - 24px)", justifyContent: "center" }}
+                onClick={() => setShowUpgrade(true)}
+              >
+                Upgrade to unlock cloud
+              </button>
+            ) : (
+              <>
+                <div
+                  className="sidebar-item"
+                  style={{ marginTop: 2, opacity: cloudCreating ? 0.6 : 1 }}
+                  onClick={() => setShowNewTableChooser(true)}
+                >
+                  <span className="sidebar-item-icon" style={{ color: "var(--accent)" }}><Icon.Plus /></span>
+                  <span className="sidebar-item-name" style={{ color: "var(--accent)" }}>
+                    {cloudCreating ? "Creating…" : "New table"}
+                  </span>
+                </div>
+                <div className="sidebar-item" onClick={() => setImportMode(inCloud ? "cloud" : "local")}>
+                  <span className="sidebar-item-icon"><Icon.Table /></span>
+                  <span className="sidebar-item-name">Import CSV…</span>
+                </div>
+              </>
+            )}
+            {cloudCreateError && (
+              <div className="account-menu-error" role="alert" style={{ margin: "4px 16px" }}>
+                {cloudCreateError}
+              </div>
+            )}
           </div>
-          </>}
 
           {/* AI Providers section — collapsible */}
           <div className="sidebar-section">
@@ -2832,6 +2886,8 @@ export default function App() {
           inCloud={inCloud}
           cloudProjectName={cloudProject?.name ?? null}
           onSwitchToLocal={switchToLocal}
+          cloudProjects={activeWorkspace ? cloudProjects : undefined}
+          onOpenCloudProject={onCloudProjectSelected}
           onSwitchProject={() => setShowProjects(true)}
           onOpenMenu={openAccountMenu}
           theme={theme}

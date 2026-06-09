@@ -90,10 +90,17 @@ describe("buildNotifications — per-state items", () => {
       buildNotifications(inputs({ autoSync: { ...eligibleAutoSync, isAuthenticated: false } })).map((n) => n.kind),
     ).not.toContain("autoSyncNudge");
 
-    // not in cloud → no nudge
+    // cloud disabled (pure-local build) → no nudge
+    expect(
+      buildNotifications(inputs({ autoSync: { ...eligibleAutoSync, cloudEnabled: false } })).map((n) => n.kind),
+    ).not.toContain("autoSyncNudge");
+
+    // TRI-3313-A: the nudge is shown in the LOCAL env too (no cloud project
+    // open) when signed in — eligibility is consistent with the relaxed
+    // syncUiVisible, so a signed-in local user still gets the auto-sync nudge.
     expect(
       buildNotifications(inputs({ autoSync: { ...eligibleAutoSync, inCloud: false } })).map((n) => n.kind),
-    ).not.toContain("autoSyncNudge");
+    ).toContain("autoSyncNudge");
   });
 
   it("auto-sync nudge keeps the overwrite warning + both actions", () => {

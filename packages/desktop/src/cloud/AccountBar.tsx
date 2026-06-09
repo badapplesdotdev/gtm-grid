@@ -21,6 +21,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { type BillingCycle, resolvePlanId } from "@gtmgrid/cloud";
 import type { Id } from "./ids";
+import type { CloudProject } from "./useCloudGrid";
 import { cloudEnabled, syncWorkspacePlan } from "./client";
 import { isTauri } from "./desktop-oauth";
 
@@ -105,6 +106,18 @@ interface AccountBarProps {
   cloudProjectName?: string | null;
   /** Switch the app back to LOCAL mode (drop the open cloud project). */
   onSwitchToLocal?: () => void;
+  /**
+   * The active workspace's cloud projects (TRI-3313-D), so the bottom account
+   * menu can offer switching INTO a cloud env from the local env. `undefined`
+   * while loading / when there is no active workspace.
+   */
+  cloudProjects?: readonly CloudProject[] | undefined;
+  /**
+   * Open a cloud project (TRI-3313-D). Routes through the SAME handler the top
+   * ProjectSwitcher's cloud `onSelect` uses, so switching to cloud from the
+   * bottom menu behaves identically.
+   */
+  onOpenCloudProject?: (project: CloudProject) => void;
   /** Open the local project switcher (unchanged local behaviour). */
   onSwitchProject: () => void;
   /** Refresh the current local project path when the menu opens. */
@@ -132,6 +145,8 @@ export function AccountBar(props: AccountBarProps) {
     inCloud = false,
     cloudProjectName = null,
     onSwitchToLocal,
+    cloudProjects,
+    onOpenCloudProject,
     onSwitchProject,
     onOpenMenu,
     theme,
@@ -320,6 +335,37 @@ export function AccountBar(props: AccountBarProps) {
                   Switch to local · {projectName}
                 </button>
               )}
+
+              {/* TRI-3313-D: when in the LOCAL env, offer switching INTO a cloud
+                  env from the bottom menu — the inverse of "Switch to local".
+                  Lists the workspace's cloud projects (each routes through the
+                  SAME onOpenCloudProject the top ProjectSwitcher uses). Only shown
+                  for signed-in users with at least one cloud project. */}
+              {!inCloud && signedIn && onOpenCloudProject && (cloudProjects?.length ?? 0) > 0 &&
+                cloudProjects!.map((p) => (
+                  <button
+                    key={p._id}
+                    className="account-menu-item"
+                    onClick={() => {
+                      setOpen(false);
+                      onOpenCloudProject(p);
+                    }}
+                  >
+                    <svg
+                      width="15"
+                      height="15"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
+                    </svg>
+                    Switch to cloud · {p.name}
+                  </button>
+                ))}
 
               <button
                 className="account-menu-item"
