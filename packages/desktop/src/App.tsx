@@ -724,7 +724,7 @@ function SyncPopover({
   error,
   onPush,
   onConfirmOverwrite,
-  onCheckUpdates,
+  onRepush,
   onClose,
 }: {
   tableName: string;
@@ -738,7 +738,9 @@ function SyncPopover({
   error: string | null;
   onPush: () => void;
   onConfirmOverwrite: () => void;
-  onCheckUpdates: () => void;
+  // TRI-3306: v1 sync is one-way (local→cloud), so the synced state offers a
+  // re-push, not a "check for updates" (there is nothing to pull).
+  onRepush: () => void;
   onClose: () => void;
 }) {
   const meta = SYNC_META[status];
@@ -783,8 +785,8 @@ function SyncPopover({
         ) : status === "synced" ? (
           <div className="sync-body">
             <div className="sync-row"><span className="sync-row-k">Rows in cloud</span><span className="sync-row-v mono">{(cloudRowCount ?? rowCount).toLocaleString()}</span></div>
-            <button className="btn btn-outline sync-act" onClick={onCheckUpdates}>
-              <Icon.Refresh size={13} /> Check for updates
+            <button className="btn btn-outline sync-act" onClick={onRepush}>
+              <Icon.CloudUp size={13} /> Re-push to cloud
             </button>
             {error && <div className="account-menu-error" role="alert">{error}</div>}
           </div>
@@ -1149,6 +1151,19 @@ export default function App() {
       tableId: cloudTableId,
     };
   }, [cloudSession, activeWorkspace, cloudProject, cloudTableId]);
+  // Stable `activeTable` for the agent panel (TRI-3306). Previously passed as an
+  // inline object literal, giving it a new identity on every App re-render
+  // (react-query cloud polling, etc.); the panel keyed an abort-on-change effect
+  // off it and so aborted the live agent turn on every unrelated re-render. The
+  // panel now depends on scalar keys, but we still memoize here for hygiene so
+  // the prop identity only changes when the table name or column set actually
+  // does.
+  const activeTableColumnNames = tableData?.columns.map((c) => c.name).join("\n") ?? null;
+  const activeTable = useMemo(
+    () => (tableData ? { name: tableData.name, columns: tableData.columns.map((c) => c.name) } : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the table name + serialized column names, not the FullTable identity
+    [tableData?.name, activeTableColumnNames],
+  );
   // Cloud-access lock: the active workspace's trial lapsed / it's on Free (no
   // plan id). Cloud tables/projects are shown but LOCKED — opening or editing
   // them prompts an upgrade; local tables are unaffected. The server enforces the
@@ -2892,7 +2907,7 @@ export default function App() {
       <Suspense fallback={null}>
         <AgentPanel
           onGridChange={refreshAll}
-          activeTable={tableData ? { name: tableData.name, columns: tableData.columns.map((c) => c.name) } : null}
+          activeTable={activeTable}
           cloud={agentCloud}
         />
       </Suspense>
@@ -3163,8 +3178,12 @@ export default function App() {
             cloudRowCount={syncLinks[t.id]?.rowCount ?? null}
             error={syncErrors[t.id] ?? null}
             onPush={() => onPushTable(t.id)}
-            onConfirmOverwrite={() => { setSyncPopover(null); onPushTable(t.id); }}
-            onCheckUpdates={() => onPushTable(t.id)}
+            // Conflict state already names the destructive overwrite and asks
+            // "Keep my version / Cancel", so push DIRECTLY here (TRI-3306) —
+            // routing through onPushTable would pop a second identical overwrite
+            // modal (double-confirm) for the one action the user just accepted.
+            onConfirmOverwrite={() => { setSyncPopover(null); void runPush(t.id, true); }}
+            onRepush={() => onPushTable(t.id)}
             onClose={() => setSyncPopover(null)}
           />
         );

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { abortInFlight, type AbortRef } from "./agentAbort";
+import { abortInFlight, agentAbortKey, type AbortRef } from "./agentAbort";
 
 // The panel calls `abortInFlight(abortRef)` from a `useEffect` cleanup, so it
 // fires on unmount (closing the panel) and on agent/table/cloud context change.
@@ -43,5 +43,50 @@ describe("abortInFlight — abort the in-flight agent turn on unmount/context ch
     const second = new AbortController();
     ref.current = second;
     expect(second.signal.aborted).toBe(false);
+  });
+});
+
+// `agentAbortKey` is the STABLE dependency the panel's abort effect keys off
+// (TRI-3306). The regression: TRI-3305 keyed the effect on the `activeTable`
+// OBJECT identity, which App.tsx recreates on every re-render (cloud polling),
+// so the cleanup aborted the live turn on every unrelated re-render. The key
+// must change ONLY on a real agent/table switch — never just because a new
+// object literal with the same contents was passed.
+describe("agentAbortKey — abort iff the agent/table context actually changes", () => {
+  it("is STABLE across new object identities for the same table (the regression)", () => {
+    const agent = "claude";
+    // Two distinct object literals — what App.tsx produces each re-render.
+    const renderA = { name: "Leads", columns: ["a", "b"] };
+    const renderB = { name: "Leads", columns: ["a", "b"] };
+    expect(renderA).not.toBe(renderB); // different identity (would churn old deps)
+
+    // Same key → no dep change → effect cleanup does NOT fire → live turn lives.
+    expect(agentAbortKey(agent, renderA)).toBe(agentAbortKey(agent, renderB));
+  });
+
+  it("changes when the user switches agent (turn must abort)", () => {
+    const table = { name: "Leads", columns: ["a"] };
+    expect(agentAbortKey("claude", table)).not.toBe(agentAbortKey("codex", table));
+  });
+
+  it("changes when the user switches table / cloud project (turn must abort)", () => {
+    expect(agentAbortKey("claude", { name: "Leads", columns: ["a"] })).not.toBe(
+      agentAbortKey("claude", { name: "Accounts", columns: ["a"] }),
+    );
+  });
+
+  it("is stable when only the column set changes but the table name does not", () => {
+    // Column edits don't switch context, so they must not tear down the turn.
+    expect(agentAbortKey("claude", { name: "Leads", columns: ["a"] })).toBe(
+      agentAbortKey("claude", { name: "Leads", columns: ["a", "b", "c"] }),
+    );
+  });
+
+  it("distinguishes a null table (local) from a named table", () => {
+    expect(agentAbortKey("claude", null)).not.toBe(
+      agentAbortKey("claude", { name: "Leads", columns: [] }),
+    );
+    // ...and two local (null) renders share a key.
+    expect(agentAbortKey("claude", null)).toBe(agentAbortKey("claude", null));
   });
 });
