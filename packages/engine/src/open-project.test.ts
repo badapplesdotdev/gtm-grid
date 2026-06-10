@@ -118,3 +118,34 @@ describe("openProject credential wiring", () => {
     expect(projectPath("anything")).not.toBe(globalDbPath());
   });
 });
+
+describe("openProject extension wiring", () => {
+  const manifest = (id: string) => ({
+    id,
+    name: id,
+    baseUrl: "https://api.example.com",
+    methods: [{ id: "ping", description: "ping", verb: "GET" as const, path: "/ping", input: { type: "object", properties: {} } }],
+  });
+
+  it("loads JSON-manifest extensions from the GLOBAL db, not the project db", () => {
+    // The server seeds extensions/*.json into the global db; the MCP (which opens
+    // a project) must see that same set — firecrawl/notion/supabase included.
+    const global = new Db(globalDbPath());
+    global.saveExtension(manifest("globext"));
+    global.close();
+
+    const registry = new Registry([]);
+    openProject("proj-ext", { registry });
+    expect(registry.get("globext")?.methods.map((m) => m.id)).toEqual(["ping"]);
+  });
+
+  it("ignores an extension that exists ONLY in the stale project db", () => {
+    const proj = new Db(projectPath("proj-stale"));
+    proj.saveExtension(manifest("staleext"));
+    proj.close();
+
+    const registry = new Registry([]);
+    openProject("proj-stale", { registry });
+    expect(registry.get("staleext")).toBeUndefined();
+  });
+});
