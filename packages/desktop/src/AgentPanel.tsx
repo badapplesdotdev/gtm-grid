@@ -365,6 +365,11 @@ export default function AgentPanel({
   const [pathInput, setPathInput] = useState("");
   const [connecting, setConnecting] = useState(false);
   const sessionRef = useRef<Record<AgentKind, string | undefined>>({ claude: undefined, codex: undefined, hermes: undefined });
+  // "Start fresh" intent for the next turn. The server resumes the latest native
+  // session by default (so continuity survives a Stop/restart with nothing stored
+  // here), so a New chat must be signalled explicitly — otherwise an empty
+  // sessionRef would just resume the latest thread.
+  const newChatRef = useRef<Record<AgentKind, boolean>>({ claude: false, codex: false, hermes: false });
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // History dropdown: past conversations from the agent's OWN native transcript
@@ -404,6 +409,7 @@ export default function AgentPanel({
    * session id so the next turn starts a new native transcript). */
   const newChat = () => {
     sessionRef.current[agent] = undefined;
+    newChatRef.current[agent] = true; // next turn starts a fresh native session
     setThreads((t) => ({ ...t, [agent]: [] }));
   };
 
@@ -416,6 +422,7 @@ export default function AgentPanel({
       const { messages: msgs } = await api.agentSession(agent, s.id);
       setThreads((t) => ({ ...t, [agent]: msgs as Message[] }));
       sessionRef.current[agent] = s.id;
+      newChatRef.current[agent] = false; // resuming a specific thread, not starting fresh
     } catch {
       /* transcript unreadable — leave the current thread as-is */
     }
@@ -482,6 +489,12 @@ export default function AgentPanel({
     const updateLast = (fn: (m: Message) => Message) =>
       setMessages((msgs) => msgs.map((m, i) => (i === msgs.length - 1 ? fn(m) : m)));
 
+    // Consume the one-shot "start fresh" intent for this turn. Without it, the
+    // server resumes the latest native session — which is exactly what we want
+    // after a Stop or app restart (no client-stored id required).
+    const fresh = newChatRef.current[agent];
+    newChatRef.current[agent] = false;
+
     try {
       const res = await fetch(`${API_BASE}/api/agent/chat`, {
         method: "POST",
@@ -491,6 +504,7 @@ export default function AgentPanel({
           message: text,
           model: models[agent] || undefined,
           sessionId: sessionRef.current[agent],
+          newChat: fresh || undefined,
           context: activeTable ? { tableName: activeTable.name, columns: activeTable.columns } : undefined,
           // CLOUD context (TRI-3296): forwarded only when a cloud project is
           // active so the agent's table tools operate on Supabase; omitted in

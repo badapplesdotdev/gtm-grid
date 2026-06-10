@@ -5,7 +5,7 @@
  * and Codex's cwd filtering of a global rollout store.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -124,5 +124,37 @@ describe("Codex rollouts", () => {
       { role: "user", text: "hi", tools: [] },
       { role: "assistant", text: "yo", tools: [] },
     ]);
+  });
+});
+
+describe("latestSessionId — binds a turn to the user's own newest native session", () => {
+  it("Claude: returns the newest .jsonl id by mtime, null when none", () => {
+    const dir = join(root, encodeClaudeDir(REPO));
+    mkdirSync(dir, { recursive: true });
+    jsonl(join(dir, "old.jsonl"), [{ type: "user", message: { role: "user", content: "first" } }]);
+    const newer = join(dir, "new.jsonl");
+    jsonl(newer, [{ type: "user", message: { role: "user", content: "second" } }]);
+    // Force `new.jsonl` to be the most-recently-modified.
+    const future = Date.now() / 1000 + 60;
+    utimesSync(newer, future, future);
+    expect(__test.latestClaudeSessionId(REPO, root)).toBe("new");
+    expect(__test.latestClaudeSessionId("/Users/dev/repos/nope", root)).toBeNull();
+  });
+
+  it("Codex: returns the newest thread id whose rollout cwd matches the project", () => {
+    const mk = (day: string, id: string, cwd: string) => {
+      const dir = join(root, "2026", "06", day);
+      mkdirSync(dir, { recursive: true });
+      const p = join(dir, `rollout-2026-06-${day}T10-00-00-${id}.jsonl`);
+      jsonl(p, [{ type: "session_meta", payload: { id, cwd } }]);
+      return p;
+    };
+    mk("01", "aaaa-1111", REPO);
+    const other = mk("01", "cccc-3333", "/Users/dev/repos/other"); // newer but wrong cwd
+    const future = Date.now() / 1000 + 60;
+    utimesSync(other, future, future);
+    // The newest matching-cwd thread wins; the newer other-project rollout is ignored.
+    expect(__test.latestCodexSessionId(REPO, root)).toBe("aaaa-1111");
+    expect(__test.latestCodexSessionId("/Users/dev/repos/none", root)).toBeNull();
   });
 });

@@ -316,6 +316,49 @@ function readCodexSession(repoRoot: string, id: string, root = codexSessionsRoot
   return messages;
 }
 
+// ── Latest-session lookup (cheap: no full transcript parse) ──────────────────
+// The CLI is the source of truth for "what session are we in" — its native store,
+// keyed by cwd, holds the running conversation. Resolving the newest session here
+// lets a turn resume the user's own latest thread WITHOUT us persisting an id, so
+// continuity survives a Stop or an app restart (we just re-bind to their terminal).
+
+/** Newest Claude session id for `repoRoot` by mtime (filename only — no parse). */
+function latestClaudeSessionId(repoRoot: string, root = claudeProjectsRoot()): string | null {
+  const dir = join(root, encodeClaudeDir(repoRoot));
+  if (!existsSync(dir)) return null;
+  let files: string[];
+  try {
+    files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
+  } catch {
+    return null;
+  }
+  let best: { id: string; mtime: number } | null = null;
+  for (const f of files) {
+    let mtime = 0;
+    try {
+      mtime = statSync(join(dir, f)).mtimeMs;
+    } catch {
+      continue;
+    }
+    if (!best || mtime > best.mtime) best = { id: f.replace(/\.jsonl$/, ""), mtime };
+  }
+  return best?.id ?? null;
+}
+
+/** Newest Codex thread id whose rollout cwd matches `repoRoot` (rollouts are mtime-desc). */
+function latestCodexSessionId(repoRoot: string, root = codexSessionsRoot()): string | null {
+  for (const { path } of codexRollouts(root)) {
+    const meta = codexMeta(path);
+    if (meta && meta.cwd === repoRoot) return meta.id;
+  }
+  return null;
+}
+
+/** The most recently-touched native session id for this agent + project, or null. */
+export function latestSessionId(agent: AgentKind, repoRoot: string): string | null {
+  return agent === "codex" ? latestCodexSessionId(repoRoot) : latestClaudeSessionId(repoRoot);
+}
+
 // ── Dispatch ─────────────────────────────────────────────────────────────────
 
 export function listAgentSessions(agent: AgentKind, repoRoot: string): SessionSummary[] {
@@ -332,4 +375,6 @@ export const __test = {
   readClaudeSession,
   listCodexSessions,
   readCodexSession,
+  latestClaudeSessionId,
+  latestCodexSessionId,
 };
