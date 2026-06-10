@@ -158,6 +158,16 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # The self-hosted Mac mini PERSISTS state between runs (unlike ephemeral
+      # GitHub-hosted runners), so a prior run's `signing_temp` keychain lingers
+      # and makes import-codesign-certs fail with `security ... exit code 48`
+      # (keychain already exists). It also lingers BETWEEN the two macOS jobs in
+      # one run (they share the runner). Delete it first so the import is always
+      # a clean create.
+      - name: Clean leftover signing keychain (self-hosted)
+        if: ${{ matrix.os == 'macos' && env.HAS_APPLE_SIGNING == 'true' }}
+        run: security delete-keychain signing_temp.keychain 2>/dev/null || true
+
       # macOS code signing: import the Developer ID Application cert into a
       # temporary keychain BEFORE the build, so BOTH our sidecar codesigning
       # (scripts/bundle-sidecar.mjs, run inside beforeBuildCommand) and Tauri's
