@@ -939,11 +939,46 @@ function applyEventToPage(
  * the exact snapshot, so the manual refetch is redundant — removed per TRI-3274
  * (C5) to keep manual writes O(1) on a large table instead of O(loaded tables).
  */
+/** A tRPC "… not found" error — the row/column was already deleted server-side. */
+function isNotFoundError(e: unknown): boolean {
+  return e instanceof Error && /not found/i.test(e.message);
+}
+
 export function useCloudGridMutations() {
   const qc = useQueryClient();
+  // Invalidate BOTH the unpaged (`grid.getTable`) and the paged
+  // (`grid.getTablePage`) caches for a table. The live grid renders the PAGED
+  // query, so invalidating only `table` (the old behavior) left structural
+  // edits — delete/edit column, delete row — invisible until remount when the
+  // realtime broadcast was unconfigured or dropped. Invalidating the paged key
+  // too makes every mutation authoritatively reflect, broadcast or not.
   const refresh = useCallback(
     (tableId: string) =>
-      qc.invalidateQueries({ queryKey: gridQueryKeys.table(tableId) }),
+      qc.invalidateQueries({
+        predicate: (q) =>
+          q.queryKey[0] === "grid" &&
+          (q.queryKey[1] === "table" || q.queryKey[1] === "tablePaged") &&
+          q.queryKey[2] === tableId,
+      }),
+    [qc],
+  );
+
+  // Optimistically apply a structural event to both caches so the change shows
+  // INSTANTLY (no waiting on the refetch round-trip), then `refresh` reconciles
+  // with server truth. Reuses the same pure reducers the realtime path uses.
+  const applyOptimistic = useCallback(
+    (tableId: string, event: Parameters<typeof patchGridCache>[1]) => {
+      qc.setQueryData(gridQueryKeys.table(tableId), (prev) =>
+        patchGridCache(prev as Parameters<typeof patchGridCache>[0], event),
+      );
+      qc.setQueryData<{ pages: GridPage[]; pageParams: unknown[] }>(
+        gridQueryKeys.tablePaged(tableId),
+        (prev) =>
+          prev === undefined
+            ? prev
+            : { ...prev, pages: [...patchPagedGridCache(prev.pages, event)] },
+      );
+    },
     [qc],
   );
 
@@ -1020,16 +1055,62 @@ export function useCloudGridMutations() {
     },
     [refresh],
   );
-  const deleteRow = useCallback(async (rowId: Id<"rows">) => {
-    const res = await apiClient!.grid.deleteRow.mutate({ rowId });
-    return res;
-  }, []);
-  const deleteColumn = useCallback(async (columnId: Id<"columns">) => {
-    const res = await apiClient!.grid.deleteColumn.mutate({ columnId });
-    return res;
-  }, []);
+  const deleteRow = useCallback(
+    async (tableId: Id<"tables">, rowId: Id<"rows">) => {
+      applyOptimistic(tableId, { type: "row.delete", rowId });
+      try {
+        await apiClient!.grid.deleteRow.mutate({ rowId });
+      } catch (e) {
+        if (!isNotFoundError(e)) throw e; // already gone → optimistic state is right
+      } finally {
+        await refresh(tableId);
+      }
+    },
+    [applyOptimistic, refresh],
+  );
+  const deleteColumn = useCallback(
+    async (tableId: Id<"tables">, columnId: Id<"columns">) => {
+      applyOptimistic(tableId, { type: "column.delete", columnId });
+      try {
+        await apiClient!.grid.deleteColumn.mutate({ columnId });
+      } catch (e) {
+        if (!isNotFoundError(e)) throw e; // already gone → optimistic state is right
+      } finally {
+        await refresh(tableId);
+      }
+    },
+    [applyOptimistic, refresh],
+  );
+  /**
+   * Patch a column's definition (rename / type / function config). Invalidates
+   * the table's grid queries so the edit reflects even when the realtime
+   * `column.update` broadcast is unconfigured or dropped.
+   */
+  const updateColumn = useCallback(
+    async (
+      tableId: Id<"tables">,
+      columnId: Id<"columns">,
+      patch: {
+        name?: string;
+        type?: "text" | "number" | "boolean" | "date" | "json";
+        kind?: "manual" | "function";
+        provider?: string | null;
+        method?: string | null;
+        code?: string | null;
+        params?: Record<string, unknown>;
+        condition?: string | null;
+      },
+    ) => {
+      try {
+        return await apiClient!.grid.updateColumn.mutate({ columnId, ...patch });
+      } finally {
+        await refresh(tableId);
+      }
+    },
+    [refresh],
+  );
 
-  return { setCell, addRow, addRowsWithCells, addColumn, deleteRow, deleteColumn };
+  return { setCell, addRow, addRowsWithCells, addColumn, updateColumn, deleteRow, deleteColumn };
 }
 
 /**

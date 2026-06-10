@@ -1,5 +1,58 @@
 # @gtmgrid/desktop
 
+## 0.6.1
+
+### Patch Changes
+
+- dcb9297: Fix cloud grid not reflecting column/row deletes and column edits.
+
+  The live grid renders the PAGED query (`grid.getTablePage`), but the cloud
+  mutations either didn't refetch or invalidated only the unpaged `grid.getTable`
+  cache — so deleting a column/row or editing a column left the change invisible
+  (and a re-delete surfaced a scary "Column … not found") whenever the realtime
+  broadcast was unconfigured or dropped.
+
+  - `deleteColumn` / `deleteRow` now optimistically drop the column/row from the
+    cache for instant feedback, then invalidate both the paged and unpaged grid
+    queries to reconcile with the server.
+  - `updateColumn` (edit column) now invalidates the table's grid queries so the
+    edit reflects without relying on the realtime `column.update` event.
+  - A "… not found" delete is treated as already-done (no error banner) — the
+    refetch drops the stale row/column.
+  - @gtmgrid/cloud@0.6.1
+  - @gtmgrid/services@0.6.1
+
+## 0.6.0
+
+### Minor Changes
+
+- ee40d02: One shared grid for local & cloud, with clear local/cloud separation.
+
+  - **One grid, no divergence** — the local grid and the cloud grid now render the
+    same `DataGrid` component, driven by an injected controller. Cloud no longer
+    silently deletes a column on header right-click and no longer has a
+    stripped-down add-column; it gets the identical header context menu
+    (Edit / Delete), the full add-column popover (manual types + AI / function /
+    formula), add-row, and run.
+  - **Clear local/cloud separation** — the sidebar shows ONE environment's tables:
+    only cloud tables in a cloud project, only local tables in local mode. This
+    removes the dual-selection bug where a cloud and a local table were both
+    highlighted at once. The sync affordances (sync-all, per-row dots, auto-sync
+    toggle/nudge, auto-push) now appear only in local mode while signed into cloud.
+  - **Cloud column editing (parity)** — new `grid.updateColumn` tRPC procedure
+    (`GridService.updateColumn` → `ColumnRepo.update`) broadcasts a `column.update`
+    realtime event so a rename / type / function-config change reflects live across
+    clients with no refetch. The shared edit-column modal now persists in cloud.
+  - **Cloud AI/formula authoring** — the cloud add-column flow reuses the local
+    sidecar's AI providers + formula generation (which is what runs cloud columns),
+    so function / AI / formula columns can be authored in cloud too.
+
+### Patch Changes
+
+- Updated dependencies [ee40d02]
+  - @gtmgrid/services@0.6.0
+  - @gtmgrid/cloud@0.6.0
+
 ## 0.5.1
 
 ### Patch Changes

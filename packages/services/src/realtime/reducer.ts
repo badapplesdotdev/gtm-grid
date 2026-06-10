@@ -158,6 +158,19 @@ export const applyGridEvent = (
       return { ...snapshot, columns };
     }
 
+    case "column.update": {
+      // Replace the column in place by id (order preserved). If we don't yet
+      // hold the column (not loaded / out-of-order delivery), leave the snapshot
+      // unchanged — the column will arrive correct on its next full read.
+      let found = false;
+      const columns = snapshot.columns.map((c) => {
+        if (c._id !== event.column._id) return c;
+        found = true;
+        return event.column;
+      });
+      return found ? { ...snapshot, columns } : snapshot;
+    }
+
     case "column.delete":
       return {
         ...snapshot,

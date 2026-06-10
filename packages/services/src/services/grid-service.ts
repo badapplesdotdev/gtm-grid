@@ -44,6 +44,7 @@ import {
   ColumnRepo,
   type ColumnRepoError,
   type ColumnKind,
+  type ColumnPatch,
 } from "../repositories/column-repo.js";
 import {
   type Project,
@@ -615,6 +616,36 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         });
       });
 
+    /**
+     * Patch a column's definition (rename / type / function provider-method-
+     * code-params-condition). Members-only. Metered ONE. Broadcasts a
+     * `column.update` with the full updated projection so every viewer's grid
+     * reflects the change live. Returns the updated column.
+     */
+    const updateColumn = (columnId: string, patch: ColumnPatch) =>
+      Effect.gen(function* () {
+        const existing = yield* requireColumn(columnId);
+        yield* requireCloudMember(existing.workspaceId);
+        const updated = yield* columns.update(columnId, patch);
+        const col = updated._tag === "Some" ? updated.value : existing;
+        yield* meter.meterActions(existing.workspaceId, 1);
+        yield* publish(existing.workspaceId, existing.tableId, {
+          type: "column.update",
+          column: {
+            _id: col.id,
+            name: col.name,
+            type: col.type,
+            kind: col.kind,
+            provider: col.provider,
+            method: col.method,
+            code: col.code,
+            params: col.params,
+            condition: col.condition,
+          },
+        });
+        return col;
+      });
+
     /** Delete a column (FK cascade drops its cells). Members-only. Metered ONE. */
     const deleteColumn = (columnId: string) =>
       Effect.gen(function* () {
@@ -797,6 +828,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       addRow,
       addRowsWithCells,
       deleteTable,
+      updateColumn,
       deleteColumn,
       deleteRow,
       setCell,

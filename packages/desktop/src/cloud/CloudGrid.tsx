@@ -1,28 +1,37 @@
 /**
- * CloudGrid (T9 → W4) — the LIVE multiplayer grid view for a CLOUD project.
+ * CloudGrid — the LIVE multiplayer grid view for a CLOUD project.
  *
- * Renders a cloud table via {@link useCloudTable}, so cell edits / added rows /
- * run statuses by any workspace member appear here without a refresh. The data
- * source is chosen INSIDE the hooks by the strangler flag (TRI-3254): the NEW
- * tRPC + W3 realtime path (`grid.getTable` seed + `subscribeToGrid` cache patch)
- * or the LEGACY Convex `useQuery` subscription. Edits, add row and add column go
- * through {@link useCloudGridMutations}; running a column goes through the local
- * sidecar via the {@link runCloudColumn} Effect orchestration. This component is
- * data-source-agnostic — it only knows the `FullTable`-shaped hook output.
+ * It renders the SAME {@link DataGrid} the local environment uses (TRI-3313
+ * follow-up: one shared grid, no divergence). CloudGrid's only job is to build
+ * the {@link GridController} from the cloud data hooks + mutation layer and to
+ * mount the SAME column-authoring modals the local grid uses, pointed at a
+ * cloud backend via {@link ColumnAuthoringApiProvider}. Everything the user
+ * sees and does in the grid — the header right-click menu, add/edit/delete
+ * column, add row, run, cells — is therefore identical to local; only the
+ * action functions differ (cloud tRPC + realtime instead of the local sidecar).
  *
- * It reuses the existing `CellContent` cell renderer and the shared `.grid-*`
- * CSS, so cloud and local grids look identical. The component stays plain React;
- * the run LOGIC is the Effect service. It imports only the `Id` TYPE.
+ * Data source: the NEW tRPC + W3 realtime path via {@link useCloudTablePaged}
+ * (paged + live), so edits/added rows/run statuses by any member appear without
+ * a refresh. Running a column still goes through the local sidecar via the
+ * {@link runCloudColumn} Effect orchestration — which is WHY the authoring
+ * adapter reuses the LOCAL `api.aiProviders` / `api.generateFormula` (the same
+ * sidecar AI that will execute the column).
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Id } from "./ids";
-import { CellContent, Icon } from "../App";
-import type { Cell } from "../api";
-import { VirtualGridBody } from "../VirtualGridBody";
+import { Icon } from "../App";
+import { api } from "../api";
+import type { ConnectorInfo, Column, FullTable } from "../api";
+import {
+  AddColumnPopover,
+  FunctionsModal,
+  ColumnSettingsModal,
+  ColumnAuthoringApiProvider,
+  type ColumnAuthoringApi,
+} from "../AddColumn";
+import { DataGrid, type GridController } from "../DataGrid";
 import { resolveRowHeight } from "../gridVirtual";
-import { useColumnWindow } from "../useColumnWindow";
-import { GridColSpacer } from "../GridColSpacer";
 import { runCloudColumn } from "./cloud-run";
 import { WebhookModal } from "./WebhookModal";
 import {
@@ -34,85 +43,51 @@ import { isCloudTableMissing } from "../cloudSync";
 
 /** Fixed cloud column width (px) — cloud columns are not resizable. */
 const CLOUD_COL_W = 180;
-/** Row-number gutter width (px) — matches `.col-row-num` in styles.css. */
-const CLOUD_GUTTER_W = 48;
-/** Trailing add/delete column width (px) — matches `.add-col-th`. */
-const CLOUD_ADD_COL_W = 44;
 
 interface CloudGridProps {
   /** The active cloud table to render, or `null` when none is selected. */
   tableId: Id<"tables"> | null;
+  /** The connector/function catalog for the Functions browser (shared with local). */
+  connectors: ConnectorInfo[];
+  /** Open the AI-provider settings (the Functions browser's "configure AI" link). */
+  onOpenAiSettings?: () => void;
   /**
    * A monotonically-increasing token that, when it changes to a truthy value,
-   * auto-opens the webhook setup form for the current table. Used by the
-   * "New table → Webhook" chooser flow to land directly on the webhook form
-   * after creating/selecting the cloud table. `0`/undefined = do nothing.
+   * auto-opens the webhook setup form for the current table.
    */
   openWebhookToken?: number;
   /**
-   * Fired when the open cloud table's load returns 404 / not-found (`data` is
-   * `null`). The open id is a STALE deleted id (a re-sync swap deleted it); the
-   * parent self-heals by re-pointing to the table's current linked cloud id
-   * (TRI-3312) instead of leaving the dead-id "no longer exists" error.
+   * Fired when the open cloud table's load returns 404 / not-found so the parent
+   * can self-heal to the table's current linked cloud id (TRI-3312).
    */
   onMissing?: () => void;
 }
 
-/**
- * The cloud grid. Self-contained: it owns its own column-run / cell-run busy
- * state (the live `running` cell status comes from Convex, so we only track the
- * in-flight request to disable the trigger).
- */
-export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridProps) {
-  // Lazily-paged grid (TRI-3272): only the loaded pages are resident, and the
-  // viewport scroll handler below pulls the next page as the user nears the end —
-  // so combined with the C1 virtualization a 10k-row table's memory is bounded.
-  const { data, loadMore, hasMore, isLoadingMore } =
-    useCloudTablePaged(tableId);
+export function CloudGrid({
+  tableId,
+  connectors,
+  onOpenAiSettings,
+  openWebhookToken,
+  onMissing,
+}: CloudGridProps) {
+  const { data, loadMore, hasMore, isLoadingMore } = useCloudTablePaged(tableId);
   const session = useCloudSession();
-  const { setCell, addRow, addColumn, deleteRow, deleteColumn } =
+  const { setCell, addRow, addColumn, updateColumn, deleteRow, deleteColumn } =
     useCloudGridMutations();
 
   const [runningColId, setRunningColId] = useState<string | null>(null);
   const [runningCells, setRunningCells] = useState<Set<string>>(new Set());
   const [showWebhook, setShowWebhook] = useState(false);
+  // Authoring overlays (shared with the local grid; opened via controller intents).
+  const [showAddCol, setShowAddCol] = useState(false);
+  const [addColAnchor, setAddColAnchor] = useState<{ left: number; top: number } | null>(null);
+  const [showFunctions, setShowFunctions] = useState(false);
+  const [editCol, setEditCol] = useState<Column | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  // Row-virtualization plumbing (TRI-3267): the scroll container the
-  // virtualizer reads from, and the resolved per-density row height.
-  const gridScrollRef = useRef<HTMLDivElement>(null);
   const rowHeight = resolveRowHeight();
 
-  // Column virtualization (TRI-3286): window the DATA columns horizontally so a
-  // cloud table with hundreds of columns mounts only the visible columns ×
-  // visible rows. Cloud columns are a fixed width (no resize). The gutter is NOT
-  // part of this window — it is the always-present sticky gutter cell rendered
-  // once below, so it is reserved exactly once and `spacers.left` is the first
-  // visible data column's offset (gutter excluded). The hook runs
-  // unconditionally (count 0 when no table) to keep hook order stable.
-  const cloudColumns = data?.columns ?? [];
-  const columnWindow = useColumnWindow({
-    count: cloudColumns.length,
-    scrollRef: gridScrollRef,
-    getColumnWidth: () => CLOUD_COL_W,
-  });
-
-  // Tie page fetching to the virtualization viewport (TRI-3272): when the user
-  // scrolls within ~10 row-heights of the bottom and another page exists, pull
-  // it. The infinite query + `loadMore` guards against concurrent fetches, so a
-  // burst of scroll events triggers at most one in-flight page load.
-  const onGridScroll = useCallback(
-    (e: React.UIEvent<HTMLDivElement>) => {
-      if (!hasMore || isLoadingMore) return;
-      const el = e.currentTarget;
-      const nearBottom =
-        el.scrollHeight - el.scrollTop - el.clientHeight < rowHeight * 10;
-      if (nearBottom) loadMore();
-    },
-    [hasMore, isLoadingMore, loadMore, rowHeight],
-  );
-
-  // Auto-open the webhook form when the chooser's "Webhook" flow bumps the token
-  // (and a table is actually present to bind it to).
+  // Auto-open the webhook form when the chooser's "Webhook" flow bumps the token.
   const lastTokenRef = useRef(0);
   useEffect(() => {
     if (!openWebhookToken || openWebhookToken === lastTokenRef.current) return;
@@ -120,11 +95,8 @@ export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridPro
     if (tableId !== null) setShowWebhook(true);
   }, [openWebhookToken, tableId]);
 
-  // Open-cloud-table 404 self-heal (TRI-3312): when the load reports the table no
-  // longer exists (`data === null`, a 404 from `grid.getTable`), tell the parent
-  // ONCE per (table, missing) so it can re-point to the current linked cloud id
-  // instead of stranding the user on the dead-id "no longer exists" error. Guarded
-  // by a ref so a re-render with the same null `data` doesn't re-fire.
+  // Open-cloud-table 404 self-heal (TRI-3312): tell the parent ONCE per
+  // (table, missing) so it can re-point to the current linked cloud id.
   const missingFiredFor = useRef<string | null>(null);
   useEffect(() => {
     if (tableId !== null && isCloudTableMissing(data)) {
@@ -133,8 +105,6 @@ export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridPro
         onMissing?.();
       }
     } else if (!isCloudTableMissing(data)) {
-      // Reset once this table resolves (or we switch tables) so a future swap of
-      // the SAME id can self-heal again.
       missingFiredFor.current = null;
     }
   }, [tableId, data, onMissing]);
@@ -160,15 +130,7 @@ export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridPro
       const key = `${rowId}:${columnId}`;
       setRunningCells((s) => new Set(s).add(key));
       try {
-        // Force is scoped to the ONE explicitly-targeted cell via `rowIds:[rowId]`
-        // so re-running this cell never re-runs (or re-bills) any other row's
-        // already-`done` cell in the column (TRI-3283 L2).
-        await runCloudColumn(session, {
-          tableId,
-          columnId,
-          force: true,
-          rowIds: [rowId],
-        });
+        await runCloudColumn(session, { tableId, columnId, force: true, rowIds: [rowId] });
       } catch {
         /* surfaced live via the cell error status from Convex */
       } finally {
@@ -180,6 +142,55 @@ export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridPro
       }
     },
     [tableId, session],
+  );
+
+  // Surface mutation failures inline instead of dropping them as unhandled
+  // rejections (a failed add previously looked like the button "did nothing").
+  const guard = useCallback(async (fn: () => Promise<unknown>, what: string) => {
+    setActionError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : `Failed to ${what}`);
+    }
+  }, []);
+
+  // The cloud column-authoring backend. addColumn / updateColumn target the
+  // cloud tRPC API; generateFormula / aiProviders reuse the LOCAL sidecar (which
+  // is what runs cloud columns), so AI + formula authoring works identically.
+  const cloudColumnApi = useMemo<ColumnAuthoringApi>(
+    () => ({
+      addColumn: async (tId, body) => {
+        const id = await addColumn(tId as Id<"tables">, {
+          name: body.name,
+          type: body.type,
+          fn: body.fn,
+          code: body.code ?? undefined,
+          params: body.params,
+        });
+        return { id: String(id) };
+      },
+      updateColumn: async (columnId, patch) => {
+        if (tableId === null) throw new Error("No table selected");
+        const col = await updateColumn(tableId, columnId as Id<"columns">, {
+          name: patch.name,
+          type: patch.type as
+            | "text" | "number" | "boolean" | "date" | "json" | undefined,
+          kind: patch.kind as "manual" | "function" | undefined,
+          provider: patch.provider,
+          method: patch.method,
+          code: patch.code,
+          params: patch.params as Record<string, unknown> | undefined,
+          condition: patch.condition,
+        });
+        // The live `column.update` broadcast patches the grid; return the shape
+        // the modal expects.
+        return { ok: true as const, id: col.id, tableId: col.tableId };
+      },
+      generateFormula: api.generateFormula,
+      aiProviders: api.aiProviders,
+    }),
+    [addColumn, updateColumn, tableId],
   );
 
   if (tableId === null) {
@@ -210,10 +221,7 @@ export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridPro
     );
   }
 
-  const fnColCount = data.columns.filter((c) => c.kind === "function").length;
-
-  // Webhook setup renders INLINE in this pane (replacing the grid), not as a
-  // fullscreen overlay — closing returns to the grid.
+  // Webhook setup renders INLINE in this pane (replacing the grid).
   if (showWebhook) {
     return (
       <WebhookModal
@@ -227,21 +235,25 @@ export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridPro
     );
   }
 
-  return (
-    <>
-      <div className="toolbar">
-        <span className="toolbar-title">{data.name}</span>
-        <span className="toolbar-meta">
-          {data.rows.length} rows · {data.columns.length} cols
-        </span>
+  const table: FullTable = data;
+  const fnColCount = table.columns.filter((c) => c.kind === "function").length;
+  const columnNames = table.columns.map((c) => c.name);
+
+  const controller: GridController = {
+    table,
+    rowHeight,
+    columnWidth: () => CLOUD_COL_W,
+    minColWidth: 80,
+    runProgress: null,
+    runningColId,
+    runningCells,
+    fnColCount,
+    canRun: session !== null,
+    runDisabledReason: session === null ? "Sign in to run cloud columns" : undefined,
+    canAddRow: true,
+    toolbarExtras: (
+      <>
         <span className="free-badge" title="Live multiplayer">LIVE</span>
-        <div className="toolbar-spacer" />
-        <button
-          className="btn btn-outline btn-sm"
-          onClick={() => addRow(data.id as Id<"tables">)}
-        >
-          <Icon.Plus size={11} /> Add row
-        </button>
         <button
           className="btn btn-outline btn-sm"
           onClick={() => setShowWebhook(true)}
@@ -250,182 +262,66 @@ export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridPro
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17a4 4 0 0 1 3.6-3.98" /><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06" /><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8" /></svg>{" "}
           Webhook
         </button>
-        <div className="toolbar-sep" />
-        <button
-          className="btn btn-primary btn-sm"
-          disabled={fnColCount === 0 || session === null}
-          title={
-            session === null
-              ? "Sign in to run cloud columns"
-              : fnColCount === 0
-                ? "No function columns to run"
-                : `Run ${fnColCount} function column${fnColCount !== 1 ? "s" : ""}`
-          }
-          onClick={async () => {
-            for (const col of data.columns.filter((c) => c.kind === "function")) {
-              await runColumn(col.id);
-            }
-          }}
-        >
-          <Icon.Play size={10} /> Run
-        </button>
-      </div>
+      </>
+    ),
+    addRow: () => void guard(() => addRow(tableId), "add row"),
+    runAll: async () => {
+      for (const col of table.columns.filter((c) => c.kind === "function")) {
+        await runColumn(col.id);
+      }
+    },
+    runColumn,
+    runCell,
+    setCell: (rowId, colId, value) =>
+      void guard(() => setCell(rowId as Id<"rows">, colId as Id<"columns">, value), "set cell"),
+    deleteRow: (rowId) => void guard(() => deleteRow(tableId, rowId as Id<"rows">), "delete row"),
+    deleteColumn: (colId) => void guard(() => deleteColumn(tableId, colId as Id<"columns">), "delete column"),
+    clearCell: (rowId, colId) =>
+      void guard(() => setCell(rowId as Id<"rows">, colId as Id<"columns">, ""), "clear cell"),
+    editColumn: (col) => setEditCol(col),
+    openAddColumn: (anchor) => { setAddColAnchor(anchor); setShowAddCol(true); },
+    // Cloud columns are a fixed width (no resize) — omit `resizeColumn`.
+    onScrollNearBottom: hasMore && !isLoadingMore ? loadMore : undefined,
+  };
 
-      {data.columns.length === 0 ? (
-        <div className="empty-state">
-          <div className="empty-icon"><Icon.Zap /></div>
-          <div className="empty-title">No columns yet</div>
-          <p className="empty-sub">
-            Add a column to define this cloud table's structure.
-          </p>
-          <button
-            className="btn btn-primary"
-            onClick={() =>
-              addColumn(data.id as Id<"tables">, { name: "Column", type: "text" })
-            }
-          >
-            <Icon.Plus /> Add first column
-          </button>
-        </div>
-      ) : (
-        <div className="grid-wrap" ref={gridScrollRef} onScroll={onGridScroll}>
-          <table
-            className="grid-table"
-            style={{
-              // Reserve the gutter EXACTLY ONCE: gutter (rendered cell) + all
-              // data columns (the virtualizer's total) + the trailing add-col.
-              width:
-                CLOUD_GUTTER_W +
-                data.columns.length * CLOUD_COL_W +
-                CLOUD_ADD_COL_W,
-            }}
-          >
-            <thead>
-              <tr>
-                <th className="grid-th row-num-th col-row-num" />
-                <GridColSpacer side="left" width={columnWindow.spacers.left} as="th" />
-                {columnWindow.virtualColumns.map((vc) => {
-                  const col = data.columns[vc.index];
-                  return (
-                  <th
-                    key={col.id}
-                    className="grid-th"
-                    style={{ width: CLOUD_COL_W, minWidth: 80 }}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      deleteColumn(col.id as Id<"columns">);
-                    }}
-                    title="Right-click to delete column"
-                  >
-                    <div className="th-inner">
-                      <span className="th-name">{col.name}</span>
-                      {col.kind === "function" && col.fn && (
-                        <span className="th-fn-badge" title={col.fn}>
-                          {col.fn.split(".").pop()}
-                        </span>
-                      )}
-                      {col.kind === "function" && (
-                        <button
-                          className="th-run-btn"
-                          title={`Run ${col.name}`}
-                          onClick={() => runColumn(col.id)}
-                          disabled={runningColId === col.id || session === null}
-                        >
-                          {runningColId === col.id ? (
-                            <span className="cell-spinner" />
-                          ) : (
-                            <Icon.Play size={9} />
-                          )}
-                        </button>
-                      )}
-                    </div>
-                  </th>
-                  );
-                })}
-                <GridColSpacer side="right" width={columnWindow.spacers.right} as="th" />
-                <th className="grid-th add-col-th">
-                  <button
-                    className="add-col-btn"
-                    title="Add column"
-                    onClick={() =>
-                      addColumn(data.id as Id<"tables">, { name: "Column", type: "text" })
-                    }
-                  >
-                    <Icon.Plus size={16} />
-                  </button>
-                </th>
-              </tr>
-            </thead>
-            {data.rows.length === 0 ? (
-              <tbody>
-                <tr>
-                  <td className="grid-td row-num-td" />
-                  <GridColSpacer side="left" width={columnWindow.spacers.left} />
-                  {columnWindow.virtualColumns.map((vc) => {
-                    const col = data.columns[vc.index];
-                    return (
-                    <td key={col.id} className="grid-td">
-                      <div className="cell-wrap"><span className="cell-empty">—</span></div>
-                    </td>
-                    );
-                  })}
-                  <GridColSpacer side="right" width={columnWindow.spacers.right} />
-                  <td className="grid-td" />
-                </tr>
-              </tbody>
-            ) : (
-              <VirtualGridBody
-                rows={data.rows}
-                scrollRef={gridScrollRef}
-                rowHeight={rowHeight}
-                colSpan={data.columns.length + 2}
-                columnWindow={columnWindow}
-                renderRow={(row, idx, cw) => (
-                  <tr key={row.id} className="grid-tr">
-                    <td className="grid-td row-num-td">{idx + 1}</td>
-                    <GridColSpacer side="left" width={cw.spacers.left} />
-                    {cw.virtualColumns.map((vc) => {
-                      const col = data.columns[vc.index];
-                      const cell: Cell | undefined = row.cells[col.id];
-                      return (
-                        <td key={col.id} className="grid-td">
-                          <CellContent
-                            cell={cell}
-                            col={col}
-                            onEdit={(v) =>
-                              setCell(
-                                row.id as Id<"rows">,
-                                col.id as Id<"columns">,
-                                v,
-                              )
-                            }
-                            onRunCell={
-                              col.kind === "function"
-                                ? () => runCell(row.id, col.id)
-                                : undefined
-                            }
-                            running={runningCells.has(`${row.id}:${col.id}`)}
-                          />
-                        </td>
-                      );
-                    })}
-                    <GridColSpacer side="right" width={cw.spacers.right} />
-                    <td className="grid-td">
-                      <button
-                        className="th-run-btn"
-                        title="Delete row"
-                        onClick={() => deleteRow(row.id as Id<"rows">)}
-                      >
-                        <Icon.X />
-                      </button>
-                    </td>
-                  </tr>
-                )}
-              />
-            )}
-          </table>
+  return (
+    <ColumnAuthoringApiProvider value={cloudColumnApi}>
+      {actionError && (
+        <div className="account-menu-error" role="alert" style={{ margin: "6px 12px" }}>
+          {actionError}
         </div>
       )}
-    </>
+      <DataGrid controller={controller} />
+
+      {showAddCol && (
+        <AddColumnPopover
+          tableId={table.id}
+          anchor={addColAnchor}
+          onClose={() => setShowAddCol(false)}
+          onAdded={() => setShowAddCol(false)}
+          onUseFunction={() => { setShowAddCol(false); setShowFunctions(true); }}
+        />
+      )}
+
+      {showFunctions && (
+        <FunctionsModal
+          tableId={table.id}
+          connectors={connectors}
+          columns={columnNames}
+          onClose={() => setShowFunctions(false)}
+          onAdded={() => setShowFunctions(false)}
+          onOpenAiSettings={onOpenAiSettings}
+        />
+      )}
+
+      {editCol && (
+        <ColumnSettingsModal
+          column={editCol}
+          columns={columnNames}
+          onClose={() => setEditCol(null)}
+          onSaved={() => setEditCol(null)}
+        />
+      )}
+    </ColumnAuthoringApiProvider>
   );
 }

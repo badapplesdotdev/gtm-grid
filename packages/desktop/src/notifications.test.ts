@@ -23,9 +23,12 @@ import {
   type NotificationPersistState,
 } from "./notifications";
 
+// Sync (and therefore the auto-sync nudge) is a LOCAL-mode activity: eligible =
+// cloud-enabled + signed in + NOT in a cloud project (clear local/cloud
+// separation). A cloud project being open suppresses the nudge.
 const eligibleAutoSync = {
   cloudEnabled: true,
-  inCloud: true,
+  inCloud: false,
   isAuthenticated: true,
   autoSyncOn: false,
 } as const;
@@ -95,12 +98,11 @@ describe("buildNotifications — per-state items", () => {
       buildNotifications(inputs({ autoSync: { ...eligibleAutoSync, cloudEnabled: false } })).map((n) => n.kind),
     ).not.toContain("autoSyncNudge");
 
-    // TRI-3313-A: the nudge is shown in the LOCAL env too (no cloud project
-    // open) when signed in — eligibility is consistent with the relaxed
-    // syncUiVisible, so a signed-in local user still gets the auto-sync nudge.
+    // Clear separation: with a cloud project OPEN (cloud mode) the nudge is
+    // suppressed — cloud tables are edited directly, so there is nothing to sync.
     expect(
-      buildNotifications(inputs({ autoSync: { ...eligibleAutoSync, inCloud: false } })).map((n) => n.kind),
-    ).toContain("autoSyncNudge");
+      buildNotifications(inputs({ autoSync: { ...eligibleAutoSync, inCloud: true } })).map((n) => n.kind),
+    ).not.toContain("autoSyncNudge");
   });
 
   it("auto-sync nudge keeps the overwrite warning + both actions", () => {

@@ -78,6 +78,17 @@ export interface ColumnInsertEvent {
   readonly column: GridEventColumn;
 }
 
+/**
+ * A column's definition changed (updateColumn): rename, type change, or a
+ * function column's provider/method/code/params/condition. The payload is the
+ * FULL updated column projection, so the reducer replaces it in place by `_id`
+ * (cells are unaffected — only the column metadata changed).
+ */
+export interface ColumnUpdateEvent {
+  readonly type: "column.update";
+  readonly column: GridEventColumn;
+}
+
 /** A column was deleted (its cells cascade out of the snapshot too). */
 export interface ColumnDeleteEvent {
   readonly type: "column.delete";
@@ -115,6 +126,7 @@ export type GridChangeEvent =
   | RowInsertEvent
   | RowDeleteEvent
   | ColumnInsertEvent
+  | ColumnUpdateEvent
   | ColumnDeleteEvent
   | TableInsertEvent
   | TableDeleteEvent;

@@ -2,9 +2,39 @@
 // and a full Functions browser (category nav + searchable list + configure-as-
 // column detail) for function columns.
 
-import { useState, useMemo, useEffect, useRef, ReactNode, CSSProperties } from "react";
+import { useState, useMemo, useEffect, useRef, createContext, useContext, ReactNode, CSSProperties } from "react";
 import { api, ConnectorInfo, AiProviderInfo } from "./api";
 import { BrandIcon } from "./Panels";
+
+/**
+ * The subset of the data API the column-authoring modals need. Injected so the
+ * SAME modals serve both environments: local mode uses the local `api`
+ * (default); cloud mode supplies a cloud-backed adapter (apps/web tRPC) via
+ * {@link ColumnAuthoringApiProvider}. This is what lets the add-column popover,
+ * the Functions browser (incl. AI + formula), and the edit-column modal work
+ * identically in cloud as in local — the only difference is which backend the
+ * four calls hit.
+ *
+ * It's a React context (not a prop) because the Functions browser is composed
+ * of several nested sub-components that each call the API; a context lets them
+ * all read the active backend without threading a prop through every layer.
+ */
+export interface ColumnAuthoringApi {
+  addColumn: (typeof api)["addColumn"];
+  updateColumn: (typeof api)["updateColumn"];
+  generateFormula: (typeof api)["generateFormula"];
+  aiProviders: (typeof api)["aiProviders"];
+}
+
+const ColumnAuthoringApiContext = createContext<ColumnAuthoringApi>(api);
+
+/** Wrap the column-authoring modals to point them at a non-local backend. */
+export const ColumnAuthoringApiProvider = ColumnAuthoringApiContext.Provider;
+
+/** The active column-authoring backend (local `api` by default). */
+function useColumnApi(): ColumnAuthoringApi {
+  return useContext(ColumnAuthoringApiContext);
+}
 
 // ─── icons ───────────────────────────────────────────────
 
@@ -98,6 +128,7 @@ export function AddColumnPopover({
   onAdded: () => void;
   onUseFunction: () => void;
 }) {
+  const gridApi = useColumnApi();
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -108,7 +139,7 @@ export function AddColumnPopover({
     const colName = name.trim() || TYPES.find((t) => t.id === type)?.label || "Column";
     setSaving(true);
     try {
-      await api.addColumn(tableId, { name: colName, type });
+      await gridApi.addColumn(tableId, { name: colName, type });
       onAdded();
       onClose();
     } catch {
@@ -440,6 +471,7 @@ function FunctionDetail({
   columns: string[];
   onAdded: () => void;
 }) {
+  const gridApi = useColumnApi();
   const props = (fn.input?.properties ?? {}) as Record<string, { description?: string; type?: string }>;
   const required = new Set((fn.input?.required as string[] | undefined) ?? []);
   const paramKeys = Object.keys(props);
@@ -460,7 +492,7 @@ function FunctionDetail({
     try {
       const params: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(values)) if (v.trim()) params[k] = v.trim();
-      await api.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, params, condition: condition.trim() || null });
+      await gridApi.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, params, condition: condition.trim() || null });
       onAdded();
     } catch (e: any) {
       setErr(e?.message ?? "Failed to add column");
@@ -591,6 +623,7 @@ function AiGenerateDetail({
   onAdded: () => void;
   onOpenAiSettings?: () => void;
 }) {
+  const gridApi = useColumnApi();
   const [providers, setProviders] = useState<AiProviderInfo[] | null>(null);
   const [colName, setColName] = useState("AI Generated");
   const [model, setModel] = useState("");
@@ -619,8 +652,8 @@ function AiGenerateDetail({
   }, [modelOpen]);
 
   useEffect(() => {
-    api.aiProviders().then(setProviders).catch(() => setProviders([]));
-  }, []);
+    gridApi.aiProviders().then(setProviders).catch(() => setProviders([]));
+  }, [gridApi]);
 
   const connected = (providers ?? []).filter((p) => p.connected);
   const modelOptions = connected.flatMap((p) => p.models.map((m) => ({ provider: p.name, value: m })));
@@ -670,7 +703,7 @@ function AiGenerateDetail({
       if (model) params.model = model;
       const mt = parseInt(maxTokens, 10);
       if (!Number.isNaN(mt) && mt > 0) params.maxTokens = mt;
-      await api.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, params, condition: condition.trim() || null });
+      await gridApi.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, params, condition: condition.trim() || null });
       onAdded();
     } catch (e: any) {
       setErr(e?.message ?? "Failed to add column");
@@ -884,6 +917,7 @@ function FormulaInput({
   rows?: number;
   placeholder?: string;
 }) {
+  const gridApi = useColumnApi();
   const [genOpen, setGenOpen] = useState(false);
   const [desc, setDesc] = useState("");
   const [busy, setBusy] = useState(false);
@@ -894,7 +928,7 @@ function FormulaInput({
     setBusy(true);
     setErr("");
     try {
-      const r = await api.generateFormula(desc.trim(), columns, mode);
+      const r = await gridApi.generateFormula(desc.trim(), columns, mode);
       if (r.error) throw new Error(r.error);
       if (r.formula) { setValue(r.formula); setGenOpen(false); setDesc(""); }
     } catch (e: any) {
@@ -954,6 +988,7 @@ function RunSettings({
   setCondition: (v: string) => void;
   columns: string[];
 }) {
+  const gridApi = useColumnApi();
   const [enabled, setEnabled] = useState(!!condition.trim());
   const [desc, setDesc] = useState("");
   const [busy, setBusy] = useState(false);
@@ -969,7 +1004,7 @@ function RunSettings({
     setBusy(true);
     setErr("");
     try {
-      const r = await api.generateFormula(desc.trim(), columns, "condition");
+      const r = await gridApi.generateFormula(desc.trim(), columns, "condition");
       if (r.error) throw new Error(r.error);
       if (r.formula) setCondition(r.formula);
     } catch (e: any) {
@@ -1041,6 +1076,7 @@ function FormulaDetail({
   columns: string[];
   onAdded: () => void;
 }) {
+  const gridApi = useColumnApi();
   const [colName, setColName] = useState("Formula");
   const [expression, setExpression] = useState("");
   const [type, setType] = useState("text");
@@ -1054,7 +1090,7 @@ function FormulaDetail({
     setSaving(true);
     setErr("");
     try {
-      await api.addColumn(tableId, {
+      await gridApi.addColumn(tableId, {
         name: colName.trim(),
         type,
         fn: "formula.eval",
@@ -1465,6 +1501,7 @@ export function ColumnSettingsModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const gridApi = useColumnApi();
   const isFormula = column.provider === "formula" || column.fn === "formula.eval";
   const isAi = column.provider === "ai";
   const isHttp = column.provider === "http";
@@ -1499,8 +1536,8 @@ export function ColumnSettingsModal({
 
   useEffect(() => {
     if (!isAi) return;
-    api.aiProviders().then((ps) => setModels(ps.filter((x) => x.connected).flatMap((x) => x.models))).catch(() => {});
-  }, [isAi]);
+    gridApi.aiProviders().then((ps) => setModels(ps.filter((x) => x.connected).flatMap((x) => x.models))).catch(() => {});
+  }, [isAi, gridApi]);
 
   const save = async () => {
     if (!name.trim()) { setErr("Column name is required"); return; }
@@ -1529,7 +1566,7 @@ export function ColumnSettingsModal({
       } else {
         patch.type = type; // manual column
       }
-      await api.updateColumn(column.id, patch);
+      await gridApi.updateColumn(column.id, patch);
       onSaved();
       onClose();
     } catch (e: any) {
