@@ -3,6 +3,7 @@ import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInf
 import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import CellDetails, { extractCode } from "./CellDetails";
+import { DedupePopover } from "./DedupePopover";
 import { BrandIcon } from "./BrandIcon";
 import { ProjectSwitcher, CloudIcon } from "./ProjectSwitcher";
 import { AccountBar, PlanBillingModal } from "./cloud/AccountBar";
@@ -1751,6 +1752,7 @@ export default function App() {
   // The open sync popover: the table id + the clicked row's viewport top, so the
   // popover anchors to the right of the row (design's `.sync-pop`).
   const [syncPopover, setSyncPopover] = useState<{ tableId: string; anchorTop: number } | null>(null);
+  const [dedupeOpen, setDedupeOpen] = useState(false);
   // A pending destructive-overwrite confirm: a linked table whose re-push would
   // overwrite cloud data. Holds the table + cloud row count for the warning copy.
   const [overwriteConfirm, setOverwriteConfirm] = useState<{ tableId: string; name: string; rowCount: number } | null>(null);
@@ -3080,6 +3082,17 @@ export default function App() {
             </button>
           )}
 
+          {tableData && (
+            <button
+              className="autorun-toggle"
+              onClick={() => setDedupeOpen(true)}
+              title="Deduplicate rows on a column"
+            >
+              <span className="autorun-label">Dedupe</span>
+              {tableData.dedupe && <span className="dedupe-on-dot" title="Auto-dedupe is on" />}
+            </button>
+          )}
+
           <div className="toolbar-spacer" />
 
           {runProgress && (
@@ -3596,6 +3609,16 @@ export default function App() {
           />
         );
       })()}
+
+      {dedupeOpen && tableData && (
+        <DedupePopover
+          tableId={tableData.id}
+          columns={tableData.columns.map((c) => ({ id: c.id, name: c.name }))}
+          current={tableData.dedupe ?? null}
+          onClose={() => setDedupeOpen(false)}
+          onChanged={() => loadTable(tableData.id)}
+        />
+      )}
 
       {/* Destructive-overwrite confirm (TRI-3297): a re-push of a LINKED table
           overwrites cloud data, so name the table + row count before sending

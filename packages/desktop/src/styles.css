@@ -3550,3 +3550,25 @@ button.import-type:hover { background: var(--surface-3); }
 .http-try-idx { flex: none; width: 18px; text-align: right; font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; padding-top: 1px; }
 .http-try-msg { font-family: var(--font-mono); font-size: 11.5px; color: var(--text); white-space: pre-wrap; word-break: break-word; min-width: 0; }
 .http-try-msg.is-err { color: var(--danger); }
+
+/* ── Deduplication popover (Clay-style) ───────────────────── */
+.dedupe-on-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-left: 5px; flex: none; }
+.dedupe-pop {
+  position: fixed; top: 54px; right: 16px; z-index: 50; width: 360px; max-height: calc(100vh - 70px); overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--r-md); box-shadow: var(--shadow-lg);
+  padding: 14px; display: flex; flex-direction: column; gap: 12px;
+}
+.dedupe-pop-head { font-size: 14px; font-weight: 600; color: var(--text); }
+.dedupe-toggle-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; cursor: default; }
+.dedupe-toggle-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.dedupe-toggle-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.dedupe-sub { font-size: 12px; color: var(--text-3); line-height: 1.4; }
+.dedupe-toggle-row .autorun-switch { margin-top: 2px; flex: none; cursor: pointer; }
+.dedupe-body { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; }
+.dedupe-radio { display: flex; align-items: flex-start; gap: 9px; cursor: pointer; padding: 4px 0; }
+.dedupe-radio input { margin-top: 2px; width: 15px; height: 15px; accent-color: var(--accent); flex: none; }
+.dedupe-radio-text { display: flex; flex-direction: column; gap: 1px; }
+.dedupe-radio-name { font-size: 13px; font-weight: 500; color: var(--text); }
+.dedupe-now { align-self: flex-start; margin-top: 4px; }
+.dedupe-msg { font-size: 12px; color: var(--accent); }
+.dedupe-err { margin: 0; }
