@@ -45,6 +45,24 @@ const server = new McpServer({ name: "gtmgrid", version: "0.0.1" });
 
 const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] });
 
+/**
+ * Cap a cell value for `get_table` so one fat column (e.g. a raw enrichment JSON
+ * blob) can't blow the whole response budget and truncate the table after row 1.
+ * Small/compiled values pass through untouched; large strings/objects are sliced
+ * with a '…[+N chars]' marker so the agent knows it was cut (and can extract the
+ * fields it needs via a code/formula column). The full value stays in the cell.
+ */
+const CELL_CAP = 500;
+function capCellValue(v: unknown): unknown {
+  if (v == null || typeof v === "number" || typeof v === "boolean") return v;
+  if (typeof v === "string") {
+    return v.length > CELL_CAP ? `${v.slice(0, CELL_CAP)}…[+${v.length - CELL_CAP} chars]` : v;
+  }
+  const s = JSON.stringify(v);
+  if (s.length <= CELL_CAP) return v; // small object/array — keep structured
+  return `${s.slice(0, CELL_CAP)}…[+${s.length - CELL_CAP} chars, full value in the cell]`;
+}
+
 /** LOCAL-only helper: resolve a table by id/name on the SQLite project. */
 const localTableOr = (ref: string) => {
   const t = local!.db.resolveTable(ref);
@@ -268,7 +286,7 @@ server.tool(
 
 server.tool(
   "get_table",
-  "Get a table's full contents: columns and every row's cell values + statuses.",
+  "Get a table's contents: columns and every row's cell values + statuses. Large cell values (e.g. raw enrichment JSON blobs) are truncated to keep the whole table readable in one pass — a '…[+N chars]' marker shows how much was cut. Small/compiled columns come through in full. Use a code/formula column to extract the specific fields you need from a big blob.",
   { table: z.string() },
   async ({ table }) => {
     if (cloudSource) return ok(await cloudSource.getTable(table));
@@ -279,7 +297,7 @@ server.tool(
       const obj: Record<string, unknown> = {};
       for (const c of cols) {
         const cell = cells.get(c.id);
-        obj[c.name] = cell ? (cell.status === "error" ? { error: cell.error } : cell.value) : null;
+        obj[c.name] = cell ? (cell.status === "error" ? { error: cell.error } : capCellValue(cell.value)) : null;
       }
       return obj;
     });
