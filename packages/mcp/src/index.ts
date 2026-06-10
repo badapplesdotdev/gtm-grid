@@ -413,6 +413,29 @@ server.tool(
 );
 
 server.tool(
+  "describe_column",
+  "Show exactly HOW a column computes its values — its function (provider.method), params (the {{Column}} input mapping), 'only run if' condition, full custom code (uncapped), output type and kind. Use this to understand how an EXISTING column was worked out — e.g. one that already has data filled in — before you edit it, re-run it, or answer 'how is this calculated?'. For a quick overview of every column at once, get_table now also returns a (capped) condition/code/params per column.",
+  { table: z.string(), column: z.string() },
+  async ({ table, column }) => {
+    if (cloudSource) return cloudUnsupported("describe_column");
+    const t = localTableOr(table);
+    const col = local!.db.resolveColumn(t.id, column);
+    if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
+    return ok({
+      name: col.name,
+      kind: col.kind,
+      type: col.type,
+      fn: col.provider ? `${col.provider}.${col.method}` : col.code ? "code" : null,
+      provider: col.provider,
+      method: col.method,
+      params: col.params,
+      condition: col.condition ?? null,
+      code: col.code ?? null, // FULL body, not capped — this is the recipe
+    });
+  },
+);
+
+server.tool(
   "update_cells",
   "Set or clear specific cells. Each update is { row: <_id from get_table/find_rows>, column: <name>, value: <any> }; value null/'' clears the cell. For more than 50 cells it asks first (confirm:true after the user approves).",
   {

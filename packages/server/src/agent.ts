@@ -26,6 +26,7 @@ const GTM_TOOLS = [
   "delete_rows",
   "find_rows",
   "get_column",
+  "describe_column",
   "set_dedupe",
   "run_column",
   "get_table",
@@ -119,6 +120,7 @@ The catalog is huge (Trigify alone exposes 122 methods). Discover in this order:
 
 ### Before you build
 - **Read first, write second.** Call \`get_table\` to see what columns + rows already exist before adding new columns or running anything. Don't recreate what's there. Don't assume column names — they're case-sensitive in \`{{templates}}\`.
+- **Understand existing columns before touching them.** If a column already has data and you need to know HOW it was computed (e.g. the user asks "how is Branch Count worked out?", or you're about to re-run/edit it), call \`describe_column\` — it returns the column's function/method, params, "only run if" condition, and full code. Don't rebuild a column you can just read. (\`get_table\` also surfaces a capped condition/code/params per column for a quick scan.)
 - **Plan the pipeline left-to-right.** Inputs on the left (LinkedIn URL, Email, Domain…), enrichments next, derived/formatted in the middle, AI personalization toward the right. Don't add a column whose params reference something that doesn't exist yet.
 - **Pick clean, human-readable column names.** "Email" not "email_address_v2", "First Name" not "fname". These names ARE the API the user types into \`{{First Name}}\` later.
 
