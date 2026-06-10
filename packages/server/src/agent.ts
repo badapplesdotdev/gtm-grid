@@ -619,13 +619,13 @@ export function streamClaude(
       } catch {
         continue;
       }
-      // Track the session id but DON'T surface it early: in `-p` mode the init
-      // message can carry a transient id that is never saved as a resumable
-      // conversation (`--resume` on it → "No conversation found"). Only the id on
-      // the final `result` is durable, so we report it on `done`/`end`. Continuity
-      // after a Stop/restart comes from the on-disk latest-session fallback above,
-      // which is always a real resumable transcript.
-      if (e.session_id) sessionId = e.session_id;
+      // DON'T capture the session id from the init/intermediate messages: in
+      // `-p` mode the init message can carry a transient id that is never saved
+      // as a resumable conversation (`--resume` on it → "No conversation
+      // found"). Only the id on the final `result` event is durable (captured in
+      // the `result` branch below). Continuity after a Stop/restart comes from
+      // the on-disk latest-session fallback above, which is always a real
+      // resumable transcript.
 
       if (e.type === "assistant") {
         for (const block of e.message?.content ?? []) {
@@ -649,6 +649,9 @@ export function streamClaude(
           }
         }
       } else if (e.type === "result") {
+        // The `result` id is the durable, resumable one — surface it (falls back
+        // to the resume id we started with if this event omits it).
+        if (e.session_id) sessionId = e.session_id;
         sse.write({ type: "done", result: e.result ?? "", sessionId, isError: e.is_error ?? e.subtype !== "success" });
       }
       // Nudge the UI to refetch as soon as a mutating tool runs (not just at the end).

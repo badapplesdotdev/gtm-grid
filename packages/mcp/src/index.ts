@@ -330,7 +330,7 @@ server.tool(
       const obj: Record<string, unknown> = { _id: r.id };
       for (const c of cols) {
         const cell = cells.get(c.id);
-        obj[c.name] = cell ? (cell.status === "error" ? { error: cell.error } : capCellValue(cell.value)) : null;
+        obj[c.name] = cell ? (cell.status === "error" ? { error: capCellValue(cell.error) } : capCellValue(cell.value)) : null;
       }
       return obj;
     });
@@ -409,8 +409,12 @@ server.tool(
     if (cloudSource) return cloudUnsupported("update_cells");
     const t = localTableOr(table);
     if (updates.length > CONFIRM_THRESHOLD && !confirm) return needsConfirm("Update cells", updates.length, t.name);
+    // Scope row ids to THIS table — never write a cell against a row id that
+    // belongs to another table (a stray/hallucinated id).
+    const tableRows = new Set(local!.db.listRows(t.id).map((r) => r.id));
     let updated = 0;
     for (const u of updates) {
+      if (!tableRows.has(u.row)) throw new Error(`Row "${u.row}" is not in "${t.name}"`);
       const col = local!.db.resolveColumn(t.id, u.column);
       if (!col) throw new Error(`No column "${u.column}" in "${t.name}"`);
       if (u.value === null || u.value === undefined || u.value === "") local!.db.deleteCell(u.row, col.id);
@@ -433,7 +437,16 @@ server.tool(
   async ({ table, ids, where, confirm }) => {
     if (cloudSource) return cloudUnsupported("delete_rows");
     const t = localTableOr(table);
-    const targets = new Set<string>(ids ?? []);
+    const targets = new Set<string>();
+    if (ids?.length) {
+      // Only delete ids that actually belong to THIS table — a stray id must not
+      // delete a row in another table (deleteRow is keyed by id alone).
+      const tableRows = new Set(local!.db.listRows(t.id).map((r) => r.id));
+      for (const id of ids) {
+        if (!tableRows.has(id)) throw new Error(`Row "${id}" is not in "${t.name}"`);
+        targets.add(id);
+      }
+    }
     if (where && Object.keys(where).length) {
       const match: Record<string, unknown> = {};
       for (const [name, val] of Object.entries(where)) {
@@ -486,7 +499,7 @@ server.tool(
     column: z.string(),
     patch: z.object({
       name: z.string().optional(),
-      type: z.string().optional(),
+      type: z.enum(["text", "number", "boolean", "date", "json"]).optional(),
       condition: z.string().nullable().optional(),
       provider: z.string().nullable().optional(),
       method: z.string().nullable().optional(),

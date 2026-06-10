@@ -11,6 +11,61 @@ import { fetchWithRetry } from "../http-retry.js";
 import { assertPublicUrl } from "../ssrf.js";
 import type { Connector, ConnectorMethod, MethodContext } from "../types.js";
 
+/** Hard ceiling on a buffered response body (bytes) — caps memory for an any-URL connector. */
+const MAX_RESPONSE_BYTES = 10_000_000; // 10 MB
+
+/** Header names that carry credentials and must NOT cross an origin boundary on redirect. */
+const SENSITIVE_HEADERS = new Set([
+  "authorization",
+  "cookie",
+  "proxy-authorization",
+]);
+
+/**
+ * Drop credential-bearing headers (the URL is agent/LLM-templated, so a hostile
+ * endpoint can 302 us to its own host to harvest a bearer token / api key).
+ * Strips the well-known auth headers plus anything that looks like an api-key /
+ * token / secret — erring toward stripping, since security beats convenience on
+ * a cross-origin hop.
+ */
+function stripSensitiveHeaders(h: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(h)) {
+    const lk = k.toLowerCase();
+    if (SENSITIVE_HEADERS.has(lk)) continue;
+    if (/(?:^|[-_])(?:api[-_]?key|token|secret|auth)(?:[-_]|$)/.test(lk)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * Read a response body to a string, aborting once it exceeds `cap` bytes so a
+ * large/hostile response can't exhaust memory. Falls back to `resp.text()` when
+ * the body isn't a readable stream.
+ */
+async function readBodyCapped(resp: Response, cap: number): Promise<string> {
+  const declared = Number(resp.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > cap) {
+    throw new Error(`http.request: response too large (${declared} bytes > ${cap})`);
+  }
+  if (!resp.body) return resp.text();
+  const reader = resp.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > cap) {
+      try { await reader.cancel(); } catch { /* already closing */ }
+      throw new Error(`http.request: response too large (> ${cap} bytes)`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 function str(v: unknown): string {
   return v == null ? "" : typeof v === "string" ? v : String(v);
 }
@@ -237,13 +292,16 @@ return data;`,
     //  - Local runs follow up to `maxRedirects` hops manually, capping the chain and
     //    downgrading to GET (no body) after the first hop (browser behaviour).
     let current = url;
+    // Headers carried into the next hop — credential headers are dropped the
+    // moment a redirect crosses an origin boundary (see stripSensitiveHeaders).
+    let activeHeaders = headers;
     let resp: Response;
     for (let hop = 0; ; hop++) {
       if (guarded) await assertPublicUrl(current);
       const redirectMode: RequestInit["redirect"] = guarded ? "error" : "manual";
       const init: RequestInit = {
         method: hop > 0 ? "GET" : method,
-        headers,
+        headers: activeHeaders,
         redirect: redirectMode,
       };
       if (hop === 0 && body !== undefined) init.body = body;
@@ -257,11 +315,15 @@ return data;`,
       if (hop >= maxRedirects) {
         throw new Error(`http.request: exceeded maxRedirects (${maxRedirects}) for ${url.host}`);
       }
+      let next: URL;
       try {
-        current = new URL(location, current);
+        next = new URL(location, current);
       } catch {
         break;
       }
+      // SECURITY: never send Authorization/Cookie/api-key to a different origin.
+      if (next.origin !== current.origin) activeHeaders = stripSensitiveHeaders(activeHeaders);
+      current = next;
     }
 
     // Binary/image responses carry no JSON to store.
@@ -271,7 +333,7 @@ return data;`,
       return resp.headers.get("location") ?? null;
     }
 
-    const text = await resp.text();
+    const text = await readBodyCapped(resp, MAX_RESPONSE_BYTES);
     let data: unknown;
     try {
       data = JSON.parse(text);

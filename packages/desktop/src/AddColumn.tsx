@@ -24,6 +24,8 @@ export interface ColumnAuthoringApi {
   updateColumn: (typeof api)["updateColumn"];
   generateFormula: (typeof api)["generateFormula"];
   aiProviders: (typeof api)["aiProviders"];
+  /** Preview a column's function on the first N rows (the HTTP column "Try" action). */
+  previewFunction: (typeof api)["previewFunction"];
 }
 
 const ColumnAuthoringApiContext = createContext<ColumnAuthoringApi>(api);
@@ -1380,6 +1382,7 @@ function TryRowsButton({
   params: Record<string, unknown>;
   limit?: number;
 }) {
+  const gridApi = useColumnApi();
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<Array<{ rowId: string; value?: unknown; error?: string }> | null>(null);
   const [err, setErr] = useState("");
@@ -1388,10 +1391,10 @@ function TryRowsButton({
   const run = async () => {
     setBusy(true); setErr(""); setResults(null);
     try {
-      const r = await api.previewFunction(tableId, { provider, method, params, limit });
+      const r = await gridApi.previewFunction(tableId, { provider, method, params, limit });
       setResults(r.results);
-    } catch (e: any) {
-      setErr(e?.message ?? "Preview failed");
+    } catch (e) {
+      setErr((e as Error)?.message ?? "Preview failed");
     } finally {
       setBusy(false);
     }
@@ -1432,6 +1435,7 @@ function HttpRequestDetail({
   columns: string[];
   onAdded: () => void;
 }) {
+  const gridApi = useColumnApi();
   const [colName, setColName] = useState("HTTP API");
   const [params, setParams] = useState<Record<string, unknown>>({});
   const [condition, setCondition] = useState("");
@@ -1444,10 +1448,10 @@ function HttpRequestDetail({
     setSaving(true);
     setErr("");
     try {
-      await api.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, type: "json", params, condition: condition.trim() || null });
+      await gridApi.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, type: "json", params, condition: condition.trim() || null });
       onAdded();
-    } catch (e: any) {
-      setErr(e?.message ?? "Failed to add column");
+    } catch (e) {
+      setErr((e as Error)?.message ?? "Failed to add column");
       setSaving(false);
     }
   };
