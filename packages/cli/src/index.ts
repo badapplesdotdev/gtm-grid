@@ -75,12 +75,15 @@ async function main() {
 
   if (cmd === "connect-ai") {
     const name = sub!;
-    const { db } = openProject(name);
+    const { db, credsDb } = openProject(name);
     const provider = String(flags.provider ?? "anthropic") as "anthropic" | "openai" | "openrouter";
     const key = String(flags.key ?? "");
     if (!key) throw new Error("--key is required");
-    connectAi(db, provider, key, flags.model ? String(flags.model) : undefined);
+    // Credentials live in the shared global db (credsDb), not the project db — the
+    // engine resolves them from there, so a write to `db` would never be seen.
+    connectAi(credsDb, provider, key, flags.model ? String(flags.model) : undefined);
     console.log(`Connected AI provider "${provider}" (key stored encrypted).`);
+    if (credsDb !== db) credsDb.close();
     db.close();
     return;
   }
@@ -88,10 +91,12 @@ async function main() {
   if (cmd === "connect") {
     const name = sub!;
     const extension = rest[0]!;
-    const { db } = openProject(name);
+    const { db, credsDb } = openProject(name);
     if (Object.keys(pairs).length === 0) throw new Error("provide secrets as key=value");
-    db.saveCredential({ extensionId: extension, scope: "local", name: "default", secrets: pairs });
+    // Save into the shared global db (credsDb), mirroring the desktop — see connect-ai.
+    credsDb.saveCredential({ extensionId: extension, scope: "local", name: "default", secrets: pairs });
     console.log(`Saved credential for "${extension}" (encrypted): ${Object.keys(pairs).join(", ")}`);
+    if (credsDb !== db) credsDb.close();
     db.close();
     return;
   }
@@ -108,13 +113,15 @@ async function main() {
   }
 
   if (cmd === "ext" && (sub === "ls" || sub === "list")) {
-    const { db } = openProject(rest[0]!);
+    const { db, credsDb } = openProject(rest[0]!);
     const exts = db.listExtensions();
     if (exts.length === 0) console.log("No custom extensions uploaded.");
     for (const e of exts as any[]) {
-      const cred = db.getCredential(e.id);
+      // Extensions live in the project db; their credentials in the global db.
+      const cred = credsDb.getCredential(e.id);
       console.log(`🧩 ${e.name} (${e.id}) — ${e.methods.length} methods ${cred ? "· 🔑 connected" : "· no credential"}`);
     }
+    if (credsDb !== db) credsDb.close();
     db.close();
     return;
   }
