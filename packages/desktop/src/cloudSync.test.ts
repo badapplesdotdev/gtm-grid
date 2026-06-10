@@ -33,6 +33,8 @@ import {
   mergeServerSyncLinks,
   isCloudTableMissing,
   resolveStaleCloudTableFallback,
+  resolveTargetCloudProject,
+  buildTableList,
   type TableSyncFacts,
 } from "./cloudSync";
 
@@ -83,8 +85,8 @@ describe("mapSyncStatus", () => {
   });
 });
 
-describe("syncUiVisible", () => {
-  it("visible only for cloud-enabled, signed-in users with a cloud project open", () => {
+describe("syncUiVisible (TRI-3313-A — no cloud project required)", () => {
+  it("visible for any cloud-enabled, signed-in user (cloud project open)", () => {
     expect(syncUiVisible({ cloudEnabled: true, inCloud: true, isAuthenticated: true })).toBe(true);
   });
 
@@ -92,8 +94,12 @@ describe("syncUiVisible", () => {
     expect(syncUiVisible({ cloudEnabled: false, inCloud: true, isAuthenticated: true })).toBe(false);
   });
 
-  it("hidden when no cloud project is open", () => {
-    expect(syncUiVisible({ cloudEnabled: true, inCloud: false, isAuthenticated: true })).toBe(false);
+  it("visible in the LOCAL env when signed in (no cloud project open)", () => {
+    expect(syncUiVisible({ cloudEnabled: true, inCloud: false, isAuthenticated: true })).toBe(true);
+  });
+
+  it("visible even when inCloud is omitted entirely", () => {
+    expect(syncUiVisible({ cloudEnabled: true, isAuthenticated: true })).toBe(true);
   });
 
   it("hidden when signed out", () => {
@@ -286,10 +292,13 @@ describe("autoSyncNudgeVisible", () => {
     expect(autoSyncNudgeVisible({ ...base, dismissed: true })).toBe(false);
   });
 
-  it("hidden for ineligible users (not cloud / not signed in / no project)", () => {
+  it("hidden for ineligible users (not cloud / not signed in)", () => {
     expect(autoSyncNudgeVisible({ ...base, cloudEnabled: false })).toBe(false);
     expect(autoSyncNudgeVisible({ ...base, isAuthenticated: false })).toBe(false);
-    expect(autoSyncNudgeVisible({ ...base, inCloud: false })).toBe(false);
+  });
+
+  it("shown in the LOCAL env too (TRI-3313-A — no cloud project required)", () => {
+    expect(autoSyncNudgeVisible({ ...base, inCloud: false })).toBe(true);
   });
 });
 
@@ -304,10 +313,13 @@ describe("shouldAutoPush (trigger gating)", () => {
     expect(shouldAutoPush({ ...eligible, autoSyncOn: false })).toBe(false);
   });
 
-  it("ON but ineligible (signed out / no project / local build) → no auto traffic", () => {
+  it("ON but ineligible (signed out / local build) → no auto traffic", () => {
     expect(shouldAutoPush({ ...eligible, isAuthenticated: false })).toBe(false);
-    expect(shouldAutoPush({ ...eligible, inCloud: false })).toBe(false);
     expect(shouldAutoPush({ ...eligible, cloudEnabled: false })).toBe(false);
+  });
+
+  it("ON + signed-in user in the LOCAL env → auto-push (TRI-3313-A)", () => {
+    expect(shouldAutoPush({ ...eligible, inCloud: false })).toBe(true);
   });
 });
 
@@ -544,5 +556,84 @@ describe("resolveStaleCloudTableFallback (TRI-3312 — recover to linked id)", (
         links,
       }),
     ).toBeNull();
+  });
+});
+
+describe("resolveTargetCloudProject (TRI-3313-B — push target without opening)", () => {
+  const p = (id: string, createdAt: number) => ({ _id: id, createdAt });
+
+  it("prefers the currently-open project", () => {
+    const open = p("open", 1);
+    expect(resolveTargetCloudProject(open, "last", [p("a", 5), p("b", 9)])?._id).toBe("open");
+  });
+
+  it("falls back to the last-used (persisted) project when none open", () => {
+    const list = [p("a", 5), p("last", 1), p("b", 9)];
+    expect(resolveTargetCloudProject(null, "last", list)?._id).toBe("last");
+  });
+
+  it("falls back to the most-recent by createdAt when no last-used match", () => {
+    const list = [p("a", 5), p("b", 9), p("c", 2)];
+    expect(resolveTargetCloudProject(null, "missing", list)?._id).toBe("b");
+  });
+
+  it("falls back to the most-recent when last-used is null/empty", () => {
+    const list = [p("a", 5), p("b", 9)];
+    expect(resolveTargetCloudProject(null, null, list)?._id).toBe("b");
+    expect(resolveTargetCloudProject(null, "", list)?._id).toBe("b");
+  });
+
+  it("returns null when there is no project to target (caller must prompt)", () => {
+    expect(resolveTargetCloudProject(null, "last", [])).toBeNull();
+    expect(resolveTargetCloudProject(null, "last", undefined)).toBeNull();
+    expect(resolveTargetCloudProject(null, "last", null)).toBeNull();
+  });
+});
+
+describe("buildTableList (TRI-3313-C — merge / dedup / synced-tagging)", () => {
+  const local = (id: string, name: string, favorite = false, rows = 0) => ({ id, name, favorite, rows });
+  const cloud = (id: string, name: string) => ({ _id: id, name });
+
+  it("renders an unlinked local table as a non-synced local row", () => {
+    const rows = buildTableList({ localTables: [local("l1", "Leads", false, 12)], cloudTables: [], syncLinks: {} });
+    expect(rows).toEqual([
+      { kind: "local", id: "l1", name: "Leads", synced: false, favorite: false, rows: 12 },
+    ]);
+  });
+
+  it("tags a linked local table as synced", () => {
+    const rows = buildTableList({
+      localTables: [local("l1", "Leads")],
+      cloudTables: [],
+      syncLinks: { l1: { cloudTableId: "c1" } },
+    });
+    expect(rows[0]).toMatchObject({ kind: "local", id: "l1", synced: true });
+  });
+
+  it("de-dups: a linked local table's cloud copy is NOT listed twice", () => {
+    const rows = buildTableList({
+      localTables: [local("l1", "Leads")],
+      cloudTables: [cloud("c1", "Leads"), cloud("c2", "Accounts")],
+      syncLinks: { l1: { cloudTableId: "c1" } },
+    });
+    // c1 is folded into the synced local row; only c2 surfaces as a cloud row.
+    expect(rows.map((r) => `${r.kind}:${r.id}`)).toEqual(["local:l1", "cloud:c2"]);
+    expect(rows.find((r) => r.id === "c2")).toMatchObject({ kind: "cloud", synced: true });
+  });
+
+  it("sorts favorited local tables to the top, then appends cloud rows", () => {
+    const rows = buildTableList({
+      localTables: [local("l1", "A", false), local("l2", "B", true)],
+      cloudTables: [cloud("c9", "Cloudy")],
+      syncLinks: {},
+    });
+    expect(rows.map((r) => r.id)).toEqual(["l2", "l1", "c9"]);
+  });
+
+  it("lists an unlinked cloud table as a plain synced cloud row", () => {
+    const rows = buildTableList({ localTables: [], cloudTables: [cloud("c1", "Signals")], syncLinks: {} });
+    expect(rows).toEqual([
+      { kind: "cloud", id: "c1", name: "Signals", synced: true, favorite: false, rows: 0 },
+    ]);
   });
 });

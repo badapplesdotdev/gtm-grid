@@ -68,15 +68,145 @@ export function mapSyncStatus(facts: TableSyncFacts): SyncStatus {
 
 /**
  * Whether the sync dot / popover / sync-all controls are visible at all. Shown
- * ONLY for cloud-enabled, signed-in users with a cloud project open. Hidden in
- * pure-local builds (`cloudEnabled` false) — the plain row count stays.
+ * for ANY cloud-enabled, signed-in user (TRI-3313-A): the user does NOT need a
+ * cloud project open. A signed-in user working in their LOCAL environment can
+ * push local tables to a (resolved/created) cloud project, so the sync dots /
+ * sync-all / push controls must be available there too. Hidden in pure-local
+ * builds (`cloudEnabled` false) and when signed out — the plain row count stays.
+ *
+ * `inCloud` is accepted but intentionally ignored so existing callers keep their
+ * signature; the visibility no longer depends on a cloud project being open.
  */
 export function syncUiVisible(gate: {
   readonly cloudEnabled: boolean;
-  readonly inCloud: boolean;
+  readonly inCloud?: boolean;
   readonly isAuthenticated: boolean;
 }): boolean {
-  return gate.cloudEnabled && gate.inCloud && gate.isAuthenticated;
+  return gate.cloudEnabled && gate.isAuthenticated;
+}
+
+// ── Target cloud project resolution (TRI-3313-B) ───────────────────────────
+//
+// A push from the LOCAL environment must NOT require a cloud project to be open.
+// The old runPush used `cloudProject?._id ?? null` and bailed ("not found") when
+// local. Instead we resolve a TARGET cloud project WITHOUT opening one, mirroring
+// the default-to-cloud auto-select logic (App.tsx): prefer the currently-open
+// project, else the last-used (persisted) project, else the most-recent by
+// `createdAt`, else the first. When the workspace has no projects at all, the
+// caller must prompt the user to pick/create one (open the ProjectSwitcher)
+// rather than erroring.
+
+/** The minimal cloud-project shape this resolver needs (id + creation time). */
+export interface TargetProjectCandidate {
+  readonly _id: string;
+  readonly createdAt: number;
+}
+
+/**
+ * Resolve the cloud project a local-env push should target, WITHOUT opening one.
+ * Priority: the currently-open project → the last-used (persisted) project → the
+ * most-recent by `createdAt` → the first. Returns `null` when there is no project
+ * to target (empty/loading list), so the caller can prompt to pick/create one.
+ *
+ * Pure + testable: the target decision is verifiable offline with no React.
+ */
+export function resolveTargetCloudProject<T extends TargetProjectCandidate>(
+  open: T | null,
+  lastUsedId: string | null,
+  projects: readonly T[] | null | undefined,
+): T | null {
+  if (open) return open;
+  if (!projects || projects.length === 0) return null;
+  if (lastUsedId !== null && lastUsedId !== "") {
+    const byId = projects.find((p) => p._id === lastUsedId);
+    if (byId) return byId;
+  }
+  // Most recent by createdAt, falling back to the first.
+  const mostRecent = [...projects].sort((a, b) => b.createdAt - a.createdAt)[0];
+  return mostRecent ?? projects[0] ?? null;
+}
+
+// ── Unified table list view-model (TRI-3313-C) ─────────────────────────────
+//
+// The sidebar previously rendered TWO independent "Tables" sections — a cloud
+// list (useCloudTables) and a local list (api.tables()) — each with its OWN
+// selection, so two rows could be highlighted at once. We now build ONE merged,
+// de-duplicated view-model: a local table that has a `syncLinks[id]` entry is
+// "cloud-backed" (synced) and is rendered ONCE as a synced local row (its linked
+// cloud table is folded in via that link, never listed twice). Cloud tables that
+// are NOT the link target of any local table render as plain cloud rows.
+
+/** One row of the unified Tables list. */
+export interface TableListRow {
+  /** Where the row's data lives / how the main grid should render it. */
+  readonly kind: "local" | "cloud";
+  /** The id used to select + render the row (local table id or cloud table id). */
+  readonly id: string;
+  /** The display name. */
+  readonly name: string;
+  /** Whether this row is cloud-backed (a cloud row, or a linked local row). */
+  readonly synced: boolean;
+  /** Favorite flag (local rows only; cloud rows are never favorited). */
+  readonly favorite: boolean;
+  /** Local row count (for the trailing count on unsynced local rows). */
+  readonly rows: number;
+}
+
+/** A local table summary as seen by the list builder (subset of TableSummary). */
+export interface LocalTableInput {
+  readonly id: string;
+  readonly name: string;
+  readonly favorite: boolean;
+  readonly rows: number;
+}
+
+/** A cloud table summary as seen by the list builder (subset of CloudTableSummary). */
+export interface CloudTableInput {
+  readonly _id: string;
+  readonly name: string;
+}
+
+/**
+ * Build the ONE merged, de-duplicated Tables list (TRI-3313-C). Local tables come
+ * first (favorites sorted to the top, matching the old local list), each tagged
+ * `synced` when a `syncLinks[id]` entry exists. Cloud tables are appended ONLY
+ * when they are not already the link target of a local table (so a synced local
+ * table and its cloud copy never both appear). Pure + testable: merge / dedup /
+ * synced-tagging are verifiable offline with no React.
+ */
+export function buildTableList(args: {
+  readonly localTables: readonly LocalTableInput[];
+  readonly cloudTables: readonly CloudTableInput[];
+  readonly syncLinks: Record<string, { cloudTableId: string }>;
+}): TableListRow[] {
+  const { localTables, cloudTables, syncLinks } = args;
+  // Cloud ids that a local table already links to — folded into the local row.
+  const linkedCloudIds = new Set<string>();
+  for (const id of Object.keys(syncLinks)) {
+    const cloudId = syncLinks[id]?.cloudTableId;
+    if (cloudId) linkedCloudIds.add(cloudId);
+  }
+  const localRows: TableListRow[] = [...localTables]
+    .sort((a, b) => Number(b.favorite) - Number(a.favorite))
+    .map((t) => ({
+      kind: "local" as const,
+      id: t.id,
+      name: t.name,
+      synced: syncLinks[t.id] !== undefined,
+      favorite: t.favorite,
+      rows: t.rows,
+    }));
+  const cloudRows: TableListRow[] = cloudTables
+    .filter((t) => !linkedCloudIds.has(t._id))
+    .map((t) => ({
+      kind: "cloud" as const,
+      id: t._id,
+      name: t.name,
+      synced: true,
+      favorite: false,
+      rows: 0,
+    }));
+  return [...localRows, ...cloudRows];
 }
 
 /** The decision for a push attempt before any network call. */

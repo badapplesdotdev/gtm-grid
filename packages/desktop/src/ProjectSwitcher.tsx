@@ -28,7 +28,9 @@ const CheckIcon = (
     <polyline points="20 6 9 17 4 12" />
   </svg>
 );
-const CloudIcon = (
+/** Cloud glyph — reused by the unified Tables list (TRI-3313-C) to mark cloud /
+ *  synced rows, so cloud vs local is clear at a glance. */
+export const CloudIcon = (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
   </svg>

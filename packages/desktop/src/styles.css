@@ -391,6 +391,11 @@ html, body, #root {
   color: var(--text-3);
   font-weight: 500;
 }
+/* TRI-3313-C: trailing cloud glyph on cloud-backed (synced) rows in the unified
+   Tables list, so cloud vs local is clear at a glance (green accent). */
+.sidebar-item-cloud { display: inline-flex; align-items: center; color: var(--accent); flex-shrink: 0; }
+.sidebar-item-cloud svg { width: 14px; height: 14px; }
+.sidebar-item:hover .sidebar-item-cloud { display: none; }
 
 /* connector groups in sidebar */
 .connector-group {
@@ -2700,6 +2705,14 @@ html, body, #root {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg);
   box-shadow: var(--shadow-lg); overflow: hidden; animation: pop-in 0.12s ease; transform-origin: bottom left;
 }
+/* TRI-3314-1: the bell notification popover reuses the .account-menu shell but is
+   ALSO tagged .notif-pop. Because .account-menu (bottom-anchored, defined later in
+   this file) would otherwise win on equal specificity, it drops the popover off
+   the TOP of the screen. This higher-specificity rule re-anchors it DOWN-left so
+   the bell popover is fully on-screen. */
+.account-menu.notif-pop {
+  position: fixed; inset: auto; transform-origin: top left; max-width: calc(100vw - 16px);
+}
 .account-menu-head { display: flex; align-items: center; gap: 10px; padding: 14px 14px; border-bottom: 1px solid var(--border); }
 .account-menu-head-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .account-menu-head-text strong { font: 600 13px var(--font-sans); color: var(--text); }
@@ -3430,7 +3443,12 @@ button.import-type:hover { background: var(--surface-3); }
 .sync-pop {
   position: fixed; width: 290px; z-index: 101;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg);
-  box-shadow: var(--shadow-lg); overflow: hidden; animation: pop-in 0.16s ease; transform-origin: left top;
+  box-shadow: var(--shadow-lg); animation: pop-in 0.16s ease; transform-origin: left top;
+  /* TRI-3314-2: a tall branch (conflict / synced + error) used to exceed the old
+     fixed 330px top clamp and clip the action button. Cap the height to the
+     viewport and scroll internally so the push/confirm button is NEVER cut off;
+     the top is also clamped against the ACTUAL measured height in App.tsx. */
+  max-height: calc(100vh - 16px); overflow-y: auto;
 }
 .sync-pop-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 13px 14px 11px; border-bottom: 1px solid var(--border); }
 .sync-pop-table { display: inline-flex; align-items: center; gap: 7px; font: 600 13px var(--font-sans); color: var(--text); min-width: 0; }
