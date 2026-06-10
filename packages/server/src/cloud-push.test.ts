@@ -102,7 +102,18 @@ describe("makeTrpcPushTransport — thin, NON-retrying tRPC transport", () => {
   it("classifies a non-quota 4xx as FatalPushError", async () => {
     scriptFetch([new Response("bad", { status: 400, statusText: "Bad Request" })]);
     const t = makeTrpcPushTransport("https://app.test", "jwt", "proj1");
-    const exit = await runExit(t.addColumn("ct", { name: "n", type: "text" }));
+    const exit = await runExit(
+      t.addColumn("ct", {
+        name: "n",
+        type: "text",
+        kind: "manual",
+        provider: null,
+        method: null,
+        code: null,
+        params: {},
+        condition: null,
+      }),
+    );
     expect(failValue(exit)._tag).toBe("FatalPushError");
   });
 

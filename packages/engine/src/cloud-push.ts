@@ -120,12 +120,24 @@ export type CloudPushError =
 /** A row of cells to write, keyed by CLOUD column id. */
 export type CloudCellMap = Record<string, unknown>;
 
-/** A column to create in the cloud table (mapped from the local column). */
+/**
+ * A column to create in the cloud table (mapped from the local column). Carries
+ * the FULL function config (kind/provider/method/code/params/condition), not just
+ * name/type — otherwise a pushed function column lands in the cloud as a plain
+ * manual column and its cells can no longer be run/enriched (TRI: lost run
+ * capability on local→cloud sync).
+ */
 export interface CloudColumnSpec {
   /** The local column id — used to map local cells onto the created cloud column. */
   readonly localColumnId: string;
   readonly name: string;
   readonly type: string;
+  readonly kind: string;
+  readonly provider: string | null;
+  readonly method: string | null;
+  readonly code: string | null;
+  readonly params: Record<string, unknown>;
+  readonly condition: string | null;
 }
 
 /**
@@ -142,10 +154,23 @@ export interface CloudPushTransport {
   readonly createTable: (
     name: string,
   ) => Effect.Effect<string, CloudPushError>;
-  /** Add a manual column to a cloud table; resolves its cloud `columns.id`. */
+  /**
+   * Create a column on a cloud table, carrying its full function config so a
+   * pushed function/formula/code column stays runnable in the cloud; resolves
+   * its cloud `columns.id`.
+   */
   readonly addColumn: (
     cloudTableId: string,
-    col: { readonly name: string; readonly type: string },
+    col: {
+      readonly name: string;
+      readonly type: string;
+      readonly kind: string;
+      readonly provider: string | null;
+      readonly method: string | null;
+      readonly code: string | null;
+      readonly params: Record<string, unknown>;
+      readonly condition: string | null;
+    },
   ) => Effect.Effect<string, CloudPushError>;
   /** Bulk-insert one chunk of rows + cells (cells keyed by cloud column id). */
   readonly addRowsWithCells: (
@@ -391,6 +416,14 @@ export class CloudPushService extends Effect.Service<CloudPushService>()(
               transport.addColumn(newCloudTableId, {
                 name: col.name,
                 type: cloudColumnType(col.type),
+                // Carry the full function config so a function/formula/code column
+                // stays runnable in the cloud (don't flatten it to manual).
+                kind: col.kind,
+                provider: col.provider,
+                method: col.method,
+                code: col.code,
+                params: col.params,
+                condition: col.condition,
               }),
             );
             columnIdByLocal.set(col.id, cloudColumnId);
