@@ -291,17 +291,25 @@ server.tool(
 
 server.tool(
   "run_column",
-  "Run a function column over its rows (enriching cells). A large run (more than ~50 pending rows) asks first: it returns the pending-row count + estimated credits — surface that and only re-call with confirm:true once the user approves. Returns how many ran and errored.",
-  { table: z.string(), column: z.string(), force: z.boolean().optional(), concurrency: z.number().optional(), confirm: z.boolean().optional() },
-  async ({ table, column, force, concurrency, confirm }) => {
-    if (cloudSource) return ok(await cloudSource.runColumn(table, column, { force, concurrency }));
+  "Run a function column over its rows (enriching cells), in grid order (top-down — the same order the user sees). Pass `limit` to enrich only the next N rows that still need filling — use this for requests like 'run this for 10 rows' or 'do the next 20': it fills the first N unfilled cells in display order, NEVER a random subset. Add `offset` to skip the first matches (e.g. limit:10, offset:10 = rows 11–20). Omit `limit` to run every pending row. A large run (more than ~50 pending rows) asks first: it returns the pending-row count + estimated credits — surface that and only re-call with confirm:true once the user approves. Returns how many ran and errored.",
+  { table: z.string(), column: z.string(), force: z.boolean().optional(), concurrency: z.number().optional(), limit: z.number().optional(), offset: z.number().optional(), confirm: z.boolean().optional() },
+  async ({ table, column, force, concurrency, limit, offset, confirm }) => {
+    if (cloudSource) return ok(await cloudSource.runColumn(table, column, { force, concurrency, limit, offset }));
     const t = localTableOr(table);
     const col = local!.db.resolveColumn(t.id, column);
     if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
-    // Cost/scale gate — a massive run needs the user's OK first.
-    const pending = force
-      ? local!.db.countRows(t.id)
-      : local!.db.listRows(t.id).filter((r) => (local!.db.getCell(r.id, col.id)?.status ?? "empty") !== "done").length;
+    // Candidate rows in grid order (listRows is already sorted by position,
+    // created_at). Without `force`, skip cells already `done`; with it, every row
+    // is a candidate. `limit`/`offset` then scope to the next N — so "run 10 rows"
+    // fills the first 10 unfilled cells in display order, not a random subset.
+    const ordered = local!.db.listRows(t.id);
+    const candidates = force
+      ? ordered
+      : ordered.filter((r) => (local!.db.getCell(r.id, col.id)?.status ?? "empty") !== "done");
+    const scoped = limit != null ? candidates.slice(offset ?? 0, (offset ?? 0) + limit) : candidates;
+    // Cost/scale gate — a massive run needs the user's OK first. Counts the SCOPED
+    // set, so a deliberately small `limit` run never trips the confirm threshold.
+    const pending = scoped.length;
     const method = col.provider && col.method ? local!.engine.registry.method(col.provider, col.method) : undefined;
     if (pending > CONFIRM_THRESHOLD && !confirm) {
       return needsConfirm("Run column", pending, `${t.name} › ${col.name}`, {
@@ -314,7 +322,13 @@ server.tool(
           : "enriches every pending row",
       });
     }
-    const res = await local!.engine.runColumn(col.id, { force, concurrency: concurrency ?? 5 });
+    const res = await local!.engine.runColumn(col.id, {
+      force,
+      concurrency: concurrency ?? 5,
+      // Only pass an explicit row scope when the caller asked for one; otherwise
+      // leave it undefined so the engine runs every row exactly as before.
+      rowIds: limit != null ? scoped.map((r) => r.id) : undefined,
+    });
     return ok({ column: col.name, ...res });
   },
 );
