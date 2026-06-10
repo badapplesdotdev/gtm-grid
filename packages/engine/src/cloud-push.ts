@@ -43,10 +43,8 @@
  */
 
 import { Data, type Duration, Effect, RateLimiter, Schedule } from "effect";
-import { CloudSchemaMapping } from "./cloud-schema.js";
 import { chunk } from "./execute.js";
 import type { Db } from "./db.js";
-import type { CredentialScope } from "./types.js";
 
 /** Rows per cloud `addRowsWithCells` POST. Mirrors the cloud store's FLUSH_CHUNK. */
 export const PUSH_ROW_CHUNK = 100;
@@ -232,34 +230,8 @@ export interface CloudPushConfig {
 const cloudColumnType = (type: string): string => type;
 
 /**
- * Validate that a local column may be pushed to the cloud. Function columns may
- * carry a credential scope; a `local`-scoped credential is machine-local and must
- * never be synced (CloudSchemaMapping.credentialScopeForCloud rejects it). We
- * surface that rejection as a FATAL push error (retrying cannot fix an unpushable
- * scope). A `null` scope (a plain manual column) is always pushable.
- */
-const assertColumnPushable = (
-  mapping: CloudSchemaMapping,
-  columnName: string,
-  scope: CredentialScope | null,
-): Effect.Effect<void, FatalPushError> =>
-  scope === null
-    ? Effect.void
-    : mapping.credentialScopeForCloud(scope).pipe(
-        Effect.asVoid,
-        Effect.mapError(
-          (e) =>
-            new FatalPushError({
-              message: `Column "${columnName}" uses an unpushable credential scope: ${e.message}`,
-              operation: "mapColumn",
-              cause: e,
-            }),
-        ),
-      );
-
-/**
  * The local→cloud table push orchestrator. Reads the local table via the injected
- * {@link Db}, maps + validates it via {@link CloudSchemaMapping}, then pushes it
+ * {@link Db}, maps it onto the cloud schema, then pushes it
  * through the injected {@link CloudPushTransport} with this service OWNING all
  * resilience (retry/jitter/timeout/rate-limit/bounded-concurrency). The local
  * meta link is read/written through the same {@link Db}.
@@ -268,9 +240,8 @@ export class CloudPushService extends Effect.Service<CloudPushService>()(
   "CloudPushService",
   {
     accessors: false,
-    effect: Effect.gen(function* () {
-      const mapping = yield* CloudSchemaMapping;
-
+    // No service dependencies to acquire — just expose `pushTable`.
+    effect: Effect.sync(() => {
       /**
        * Push ONE local table to the active cloud project. Scoped: the
        * token-bucket {@link RateLimiter} is created per call so it lives only for
@@ -303,18 +274,11 @@ export class CloudPushService extends Effect.Service<CloudPushService>()(
           const localColumns = db.listColumns(input.localTableId);
           const localRows = db.listRows(input.localTableId);
 
-          // ── Validate every column is pushable BEFORE any cloud write, so an
-          //    unpushable scope fails fast and never half-creates a cloud table.
-          for (const col of localColumns) {
-            // A function column resolves its credential from the connector; only
-            // a `local`-scoped credential is unpushable. Manual columns have no
-            // scope. We read the connector's stored scope via the credential.
-            const scope =
-              col.kind === "function" && col.provider !== null
-                ? (db.getCredential(col.provider)?.scope ?? null)
-                : null;
-            yield* assertColumnPushable(mapping, col.name, scope);
-          }
+          // Credentials are never pushed — a cloud run resolves the team's shared
+          // (workspace) key server-side — so a function column is ALWAYS pushable
+          // regardless of which local credential scope it happens to resolve. (If
+          // no shared cloud key exists for its connector, the cloud cell surfaces a
+          // connect-integration error at run time, not a push failure.)
 
           // ── Resolve the link: present → overwrite, absent → create.
           const existingLink = db.getCloudTableLink(input.localTableId);
@@ -486,6 +450,5 @@ export class CloudPushService extends Effect.Service<CloudPushService>()(
 
       return { pushTable };
     }),
-    dependencies: [CloudSchemaMapping.Default],
   },
 ) {}
