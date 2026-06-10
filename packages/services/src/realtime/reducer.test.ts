@@ -136,6 +136,30 @@ describe("applyGridEvent · column.insert / column.delete", () => {
   });
 });
 
+describe("applyGridEvent · column.update", () => {
+  it("replaces the column in place by id (order preserved, cells untouched)", () => {
+    const base = snapshot({
+      columns: [column({ _id: "c1", name: "A" }), column({ _id: "c2", name: "B" })],
+    });
+    const next = applyGridEvent(base, {
+      type: "column.update",
+      column: column({ _id: "c1", name: "Renamed", type: "number" }),
+    });
+    expect(next?.columns.map((c) => c._id)).toEqual(["c1", "c2"]);
+    expect(next?.columns[0]).toMatchObject({ name: "Renamed", type: "number" });
+    expect(next?.cells).toEqual(base.cells);
+  });
+
+  it("is a no-op (same reference) when the column isn't loaded", () => {
+    const input = snapshot();
+    const next = applyGridEvent(input, {
+      type: "column.update",
+      column: column({ _id: "gone", name: "X" }),
+    });
+    expect(next).toBe(input);
+  });
+});
+
 describe("applyGridEvent · table.insert / table.delete", () => {
   it("table.insert leaves a getTable snapshot unchanged", () => {
     const input = snapshot();

@@ -49,6 +49,18 @@ export interface NewColumn {
   readonly createdAt: number;
 }
 
+/** The mutable fields an `updateColumn` may patch (id/table/workspace are fixed). */
+export interface ColumnPatch {
+  readonly name?: string;
+  readonly type?: string;
+  readonly kind?: ColumnKind;
+  readonly provider?: string | null;
+  readonly method?: string | null;
+  readonly code?: string | null;
+  readonly params?: unknown;
+  readonly condition?: string | null;
+}
+
 /** Raised when a column read/write fails (DB/transport error). */
 export class ColumnRepoError extends Data.TaggedError("ColumnRepoError")<{
   readonly message: string;
@@ -88,6 +100,11 @@ export class ColumnRepo extends Context.Tag("ColumnRepo")<
     readonly insert: (
       values: NewColumn,
     ) => Effect.Effect<string, ColumnRepoError>;
+    /** Patch a column's mutable fields; resolves to the updated projection. */
+    readonly update: (
+      id: string,
+      patch: ColumnPatch,
+    ) => Effect.Effect<Option.Option<Column>, ColumnRepoError>;
     /** Delete a column (FK cascade drops its cells). */
     readonly remove: (id: string) => Effect.Effect<void, ColumnRepoError>;
   }
@@ -186,6 +203,39 @@ export const ColumnRepoLive: Layer.Layer<ColumnRepo, never, DbClient> =
             },
             catch: fail("column insert"),
           }),
+        update: (id, patch) =>
+          !UUID_RE.test(id)
+            ? Effect.succeed(Option.none<Column>())
+            : Effect.tryPromise({
+                try: async () => {
+                  // Only set the keys the caller actually provided, so an omitted
+                  // field keeps its current value.
+                  const set: Record<string, unknown> = {};
+                  if (patch.name !== undefined) set.name = patch.name;
+                  if (patch.type !== undefined) set.type = patch.type;
+                  if (patch.kind !== undefined) set.kind = patch.kind;
+                  if (patch.provider !== undefined) set.provider = patch.provider;
+                  if (patch.method !== undefined) set.method = patch.method;
+                  if (patch.code !== undefined) set.code = patch.code;
+                  if (patch.params !== undefined) set.params = patch.params;
+                  if (patch.condition !== undefined) set.condition = patch.condition;
+                  if (Object.keys(set).length === 0) {
+                    const rows = await db
+                      .select(cols)
+                      .from(schema.columns)
+                      .where(eq(schema.columns.id, id))
+                      .limit(1);
+                    return Option.fromNullable(rows[0] ?? null);
+                  }
+                  const rows = await db
+                    .update(schema.columns)
+                    .set(set as never)
+                    .where(eq(schema.columns.id, id))
+                    .returning(cols);
+                  return Option.fromNullable(rows[0] ?? null);
+                },
+                catch: fail("column update"),
+              }),
         remove: (id) =>
           Effect.tryPromise({
             try: async () => {
@@ -223,6 +273,20 @@ export const columnRepoLayer = (store: GridStore): Layer.Layer<ColumnRepo> =>
         const id = store.nextId("column");
         store.columns.push({ id, ...values });
         return id;
+      }),
+    update: (id, patch) =>
+      Effect.sync(() => {
+        const col = store.columns.find((c) => c.id === id);
+        if (!col) return Option.none<Column>();
+        if (patch.name !== undefined) col.name = patch.name;
+        if (patch.type !== undefined) col.type = patch.type;
+        if (patch.kind !== undefined) col.kind = patch.kind;
+        if (patch.provider !== undefined) col.provider = patch.provider;
+        if (patch.method !== undefined) col.method = patch.method;
+        if (patch.code !== undefined) col.code = patch.code;
+        if (patch.params !== undefined) col.params = patch.params;
+        if (patch.condition !== undefined) col.condition = patch.condition;
+        return Option.some(col);
       }),
     remove: (id) => Effect.sync(() => cascadeDeleteColumn(store, id)),
   });

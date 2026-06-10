@@ -237,6 +237,36 @@ export const gridRouter = router({
       ),
     ),
 
+  /**
+   * Patch a column's definition (rename / type / function config). Members-only.
+   * Metered. Only the provided fields change; broadcasts `column.update` so every
+   * viewer's grid reflects the edit live. Returns the updated column.
+   */
+  updateColumn: protectedProcedure
+    .input(
+      z.object({
+        columnId: z.string().min(1),
+        name: z.string().optional(),
+        type: columnType.optional(),
+        kind: columnKind.optional(),
+        provider: z.string().nullish(),
+        method: z.string().nullish(),
+        code: z.string().nullish(),
+        params: z.unknown().optional(),
+        condition: z.string().nullish(),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* GridService;
+          const { columnId, ...patch } = input;
+          return yield* svc.updateColumn(columnId, patch);
+        }),
+      ),
+    ),
+
   /** Delete a column (FK cascade drops its cells). Members-only. Metered. */
   deleteColumn: protectedProcedure
     .input(z.object({ columnId: z.string().min(1) }))

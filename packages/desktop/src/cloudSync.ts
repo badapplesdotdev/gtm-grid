@@ -82,7 +82,13 @@ export function syncUiVisible(gate: {
   readonly inCloud?: boolean;
   readonly isAuthenticated: boolean;
 }): boolean {
-  return gate.cloudEnabled && gate.isAuthenticated;
+  // Sync (pushing the LOCAL environment's tables up to cloud) is only meaningful
+  // in LOCAL mode while signed into cloud. When a cloud project is open
+  // (`inCloud`) you are already editing cloud tables directly, so the sync
+  // affordances (sync-all, per-row sync dots, auto-sync toggle, nudge) are
+  // hidden. `inCloud` defaults to false so callers that don't pass it (pure
+  // local-mode checks) keep the old "cloud-enabled + signed in" behavior.
+  return gate.cloudEnabled && gate.isAuthenticated && !gate.inCloud;
 }
 
 // ── Target cloud project resolution (TRI-3313-B) ───────────────────────────
