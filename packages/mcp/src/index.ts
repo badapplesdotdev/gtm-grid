@@ -306,7 +306,12 @@ server.tool(
     if (pending > CONFIRM_THRESHOLD && !confirm) {
       return needsConfirm("Run column", pending, `${t.name} › ${col.name}`, {
         estimatedCredits: (method?.credits ?? 0) * pending,
-        hint: "enriches every pending row",
+        // Surface the "only run if" rule so a ran:0 (every row skipped by the
+        // condition) is explainable up front, not a mystery after the fact.
+        condition: col.condition ?? undefined,
+        hint: col.condition
+          ? "rows that fail the column's run-condition are skipped (may run fewer than shown)"
+          : "enriches every pending row",
       });
     }
     const res = await local!.engine.runColumn(col.id, { force, concurrency: concurrency ?? 5 });
@@ -336,7 +341,17 @@ server.tool(
     });
     return ok({
       table: t.name,
-      columns: cols.map((c) => ({ name: c.name, kind: c.kind, fn: c.provider ? `${c.provider}.${c.method}` : c.code ? "code" : null })),
+      columns: cols.map((c) => ({
+        name: c.name,
+        kind: c.kind,
+        fn: c.provider ? `${c.provider}.${c.method}` : c.code ? "code" : null,
+        // Expose the column's logic so the agent can DIAGNOSE/FIX it in place: a
+        // wrong "only run if" condition skips every row → run_column reports ran:0,
+        // and without seeing the condition the agent can't tell why.
+        condition: c.condition ?? null,
+        params: c.params,
+        code: typeof c.code === "string" && c.code.length > 600 ? `${c.code.slice(0, 600)}…[+${c.code.length - 600} chars]` : c.code ?? null,
+      })),
       rows,
       totalRows: total,
       returned: rows.length,
