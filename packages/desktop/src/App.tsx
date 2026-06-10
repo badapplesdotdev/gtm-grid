@@ -3446,6 +3446,7 @@ export default function App() {
           <ColumnSettingsModal
             column={editCol}
             columns={tableData.columns.map((c) => c.name)}
+            tableId={tableData.id}
             onClose={() => setEditCol(null)}
             onSaved={() => loadTable(tableData.id)}
           />

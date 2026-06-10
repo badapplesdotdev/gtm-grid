@@ -891,6 +891,23 @@ route("POST", "/api/columns/:id/run", async (p, body) => {
   );
 });
 
+// "Try on N rows": dry-run an UNSAVED function column (provider/method/params)
+// against the first `limit` rows and return the results without persisting a
+// column or writing cells. Powers the column-editor preview button.
+route("POST", "/api/tables/:id/preview-function", async (p, body) => {
+  const provider = String(body?.provider ?? "");
+  const method = String(body?.method ?? "");
+  if (!provider || !method) throw new Error("provider and method are required");
+  const limit = Math.min(Math.max(Number(body?.limit ?? 5) || 5, 1), 25);
+  const results = await runLimiter.run(() =>
+    current.engine.previewColumn(
+      { provider, method, params: body?.params ?? {}, table_id: p.id },
+      limit,
+    ),
+  );
+  return { results };
+});
+
 // --- cloud run path (T9) ---
 // Running a column on a CLOUD project: build an Engine whose store is the
 // cloud-backed GridStore (POSTing to the apps/web `/api/worker/*` endpoints), so

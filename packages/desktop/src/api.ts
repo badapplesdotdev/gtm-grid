@@ -351,6 +351,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ force: opts.force ?? false, rowIds: opts.rowIds }),
     }),
+  // "Try on N rows": dry-run an unsaved function column against the first `limit`
+  // rows; returns per-row results without persisting anything.
+  previewFunction: (
+    tableId: string,
+    body: { provider: string; method: string; params: Record<string, unknown>; limit?: number },
+  ) =>
+    http<{ results: Array<{ rowId: string; value?: unknown; error?: string }> }>(
+      `/api/tables/${tableId}/preview-function`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
   // Streaming run: emits per-cell progress (SSE) so the UI patches changed cells
   // as they complete, with no full-grid refetch afterwards. LOCAL projects only.
   runColumnStream: (
