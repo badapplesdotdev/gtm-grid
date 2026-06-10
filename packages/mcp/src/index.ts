@@ -291,7 +291,7 @@ server.tool(
 
 server.tool(
   "run_column",
-  "Run a function column over its rows (enriching cells). A large run (more than ~50 pending rows) asks first: it returns the pending-row count + estimated credits — surface that and only re-call with confirm:true once the user approves. Returns how many ran and errored.",
+  "Run a function column over its rows (enriching cells). A large run (more than ~50 pending rows) asks first: it returns the pending-row count + estimated credits — surface that and only re-call with confirm:true once the user approves. A confirmed large run is then started in the BACKGROUND on the sidecar (it outlasts this turn — a synchronous run of hundreds of rows would hit the 5-min turn limit and be killed), and returns immediately with {started:true}; poll get_column/get_table to watch the done count rise and tell the user when it's complete. A small run (≤50 rows) runs synchronously and returns {ran, errors}.",
   { table: z.string(), column: z.string(), force: z.boolean().optional(), concurrency: z.number().optional(), confirm: z.boolean().optional() },
   async ({ table, column, force, concurrency, confirm }) => {
     if (cloudSource) return ok(await cloudSource.runColumn(table, column, { force, concurrency }));
@@ -312,6 +312,30 @@ server.tool(
         hint: col.condition
           ? "rows that fail the column's run-condition are skipped (may run fewer than shown)"
           : "enriches every pending row",
+      });
+    }
+    if (pending > CONFIRM_THRESHOLD) {
+      // Large (confirmed) run → delegate to the PERSISTENT sidecar so the work
+      // outlives the 5-min agent turn. A synchronous run here would block the turn
+      // and be killed mid-way (the "connection drop" on big Firecrawl/enrichment runs).
+      const port = process.env.GTMGRID_PORT ?? "8787";
+      try {
+        const r = await fetch(`http://127.0.0.1:${port}/api/columns/${col.id}/run/async`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ force, concurrency }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      } catch (e) {
+        throw new Error(
+          `Couldn't start the background run (${e instanceof Error ? e.message : String(e)}). The user can run it from the column's ▶ button instead.`,
+        );
+      }
+      return ok({
+        column: col.name,
+        started: true,
+        pending,
+        note: `Started enriching ${pending} rows in the background — it keeps running past this turn. Poll get_column("${col.name}") or get_table to watch the done count rise, and tell the user when it finishes. Do NOT re-run the column while it's in progress.`,
       });
     }
     const res = await local!.engine.runColumn(col.id, { force, concurrency: concurrency ?? 5 });
