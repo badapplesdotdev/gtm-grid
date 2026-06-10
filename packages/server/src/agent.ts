@@ -18,6 +18,7 @@ const GTM_TOOLS = [
   "create_table",
   "add_column",
   "add_rows",
+  "set_dedupe",
   "run_column",
   "get_table",
   "run_function",

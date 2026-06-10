@@ -213,22 +213,42 @@ server.tool(
 
 server.tool(
   "add_rows",
-  "Add one or more rows. Each row is an object of { ColumnName: value } for manual columns, e.g. [{ Username: 'torvalds' }].",
+  "Add one or more rows. Each row is an object of { ColumnName: value } for manual columns, e.g. [{ Username: 'torvalds' }]. If the table has dedup ON (see set_dedupe), incoming rows whose key already exists are skipped automatically — so you can stream paginated search results straight in without deduping yourself. Returns { added, skipped, replaced }.",
   { table: z.string(), rows: z.array(z.record(z.string(), z.any())) },
   async ({ table, rows }) => {
     if (cloudSource) return ok(await cloudSource.addRows(table, rows));
     const t = localTableOr(table);
-    const created: string[] = [];
-    for (const r of rows) {
-      const row = local!.db.createRow(t.id);
+    // Resolve { ColumnName: value } -> { columnId: value }, validating names up front.
+    const resolved = rows.map((r) => {
+      const cells: Record<string, unknown> = {};
       for (const [colName, val] of Object.entries(r)) {
         const col = local!.db.resolveColumn(t.id, colName);
         if (!col) throw new Error(`No column "${colName}" in "${t.name}"`);
-        local!.db.setCell(row.id, col.id, { value: val, status: "done" });
+        cells[col.id] = val;
       }
-      created.push(row.id);
+      return cells;
+    });
+    const res = local!.db.addRowsDeduped(t.id, resolved);
+    return ok({ added: res.added, skipped: res.skipped, replaced: res.replaced });
+  },
+);
+
+server.tool(
+  "set_dedupe",
+  "Turn deduplication on/off for a table. With it ON, the table stays unique on one column — add_rows skips incoming duplicates automatically (ideal for sourcing N unique rows across paginated searches). Pass column:null to turn it off. keep:'oldest' keeps the first row seen; keep:'newest' replaces it with the new one. Enabling also sweeps existing duplicates once. Match is EXACT (no URL/email normalization), and a blank or over-200-char key cell is never merged.",
+  { table: z.string(), column: z.string().nullable().describe("Column NAME to dedupe on, or null to disable"), keep: z.enum(["oldest", "newest"]).optional() },
+  async ({ table, column, keep }) => {
+    if (cloudSource) return cloudUnsupported("set_dedupe");
+    const t = localTableOr(table);
+    if (column === null || column === "") {
+      local!.db.setTableDedupe(t.id, null);
+      return ok({ dedupe: null });
     }
-    return ok({ added: created.length });
+    const col = local!.db.resolveColumn(t.id, column);
+    if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
+    local!.db.setTableDedupe(t.id, { column: col.id, keep: keep ?? "oldest" });
+    const swept = local!.db.dedupeTable(t.id);
+    return ok({ dedupe: { column: col.name, keep: keep ?? "oldest" }, removedExistingDuplicates: swept.deleted });
   },
 );
 

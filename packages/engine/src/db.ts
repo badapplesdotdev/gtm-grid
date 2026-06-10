@@ -127,7 +127,13 @@ export class Db {
    * "duplicate column name" error when the column already exists.
    */
   private migrate(): void {
-    for (const sql of ["ALTER TABLE columns ADD COLUMN condition TEXT"]) {
+    for (const sql of [
+      "ALTER TABLE columns ADD COLUMN condition TEXT",
+      // Per-table deduplication (Clay-style): dedupe_column is the column id to
+      // match on (null = off); dedupe_keep is "oldest" | "newest".
+      "ALTER TABLE tables ADD COLUMN dedupe_column TEXT",
+      "ALTER TABLE tables ADD COLUMN dedupe_keep TEXT",
+    ]) {
       try {
         this.raw.exec(sql);
       } catch (e) {
@@ -375,6 +381,127 @@ export class Db {
       error: r.error,
       updated_at: r.updated_at,
     };
+  }
+
+  // ---- Deduplication (Clay-style: keep a table unique on one column) ----
+
+  /** Current dedup config for a table, or null when off. */
+  getTableDedupe(tableId: string): { column: string; keep: "oldest" | "newest" } | null {
+    const t = this.getTable(tableId);
+    if (!t?.dedupe_column) return null;
+    return { column: t.dedupe_column, keep: t.dedupe_keep === "newest" ? "newest" : "oldest" };
+  }
+
+  /** Set (or clear, with `null`) the dedup config. */
+  setTableDedupe(tableId: string, cfg: { column: string; keep: "oldest" | "newest" } | null): void {
+    this.raw
+      .prepare(`UPDATE tables SET dedupe_column = ?, dedupe_keep = ? WHERE id = ?`)
+      .run(cfg?.column ?? null, cfg?.keep ?? null, tableId);
+  }
+
+  /**
+   * The exact-match dedup key for a cell value, or null if the row must NOT be
+   * deduplicated on it. Mirrors Clay: a blank cell, or a value longer than 200
+   * chars, is left alone (never merged away). Exact match — no normalization.
+   */
+  private dedupeKeyOf(value: unknown): string | null {
+    if (value == null) return null;
+    const s = (typeof value === "string" ? value : String(value)).trim();
+    if (s === "" || s.length > 200) return null;
+    return s;
+  }
+
+  /**
+   * Insert rows (each a `{ columnId: value }` map) into a table, applying the
+   * table's dedup config if set. Returns counts. With dedup on:
+   *   - keep "oldest": an incoming row whose key already exists is skipped;
+   *   - keep "newest": the existing match is deleted and the new row inserted.
+   * Runs in ONE transaction. With no dedup config this is a plain bulk insert.
+   */
+  addRowsDeduped(
+    tableId: string,
+    rows: Array<Record<string, unknown>>,
+  ): { added: number; skipped: number; replaced: number; rowIds: string[] } {
+    const cfg = this.getTableDedupe(tableId);
+    const rowIds: string[] = [];
+    let added = 0;
+    let skipped = 0;
+    let replaced = 0;
+
+    const insertCells = (cells: Record<string, unknown>): string => {
+      const row = this.createRow(tableId);
+      for (const [colId, value] of Object.entries(cells)) {
+        if (value === "" || value === null || value === undefined) continue;
+        this.setCell(row.id, colId, { value, status: "done" });
+      }
+      return row.id;
+    };
+
+    const tx = this.raw.transaction((batch: Array<Record<string, unknown>>) => {
+      // Build the surviving-key index from existing rows (only when deduping).
+      const index = new Map<string, string>(); // key -> rowId
+      if (cfg) {
+        for (const r of this.listRows(tableId)) {
+          const key = this.dedupeKeyOf(this.getCell(r.id, cfg.column)?.value);
+          if (key !== null && !index.has(key)) index.set(key, r.id);
+        }
+      }
+      for (const cells of batch) {
+        if (cfg) {
+          const key = this.dedupeKeyOf(cells[cfg.column]);
+          if (key !== null && index.has(key)) {
+            if (cfg.keep === "oldest") {
+              skipped++;
+              continue; // drop the incoming duplicate
+            }
+            this.deleteRow(index.get(key)!); // keep newest: existing match goes
+            replaced++;
+          }
+          const id = insertCells(cells);
+          rowIds.push(id);
+          if (key !== null) index.set(key, id);
+          added++;
+        } else {
+          rowIds.push(insertCells(cells));
+          added++;
+        }
+      }
+    });
+    tx(rows);
+    return { added, skipped, replaced, rowIds };
+  }
+
+  /**
+   * One-shot sweep: collapse existing duplicate rows by the table's dedup key,
+   * keeping the oldest (first) or newest (last) per group. No-op when dedup is
+   * off. Used when dedup is turned on and by the manual "Dedupe" button.
+   */
+  dedupeTable(tableId: string): { deleted: number } {
+    const cfg = this.getTableDedupe(tableId);
+    if (!cfg) return { deleted: 0 };
+    let deleted = 0;
+    const sweep = this.raw.transaction(() => {
+      const groups = new Map<string, string[]>(); // key -> rowIds, in table order
+      for (const r of this.listRows(tableId)) {
+        const key = this.dedupeKeyOf(this.getCell(r.id, cfg.column)?.value);
+        if (key === null) continue; // blank / over-long values are never merged
+        const arr = groups.get(key) ?? [];
+        arr.push(r.id);
+        groups.set(key, arr);
+      }
+      for (const ids of groups.values()) {
+        if (ids.length <= 1) continue;
+        const keep = cfg.keep === "newest" ? ids.length - 1 : 0;
+        ids.forEach((id, i) => {
+          if (i !== keep) {
+            this.deleteRow(id);
+            deleted++;
+          }
+        });
+      }
+    });
+    sweep();
+    return { deleted };
   }
 
   // ---- Credentials ----

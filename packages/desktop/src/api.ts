@@ -182,6 +182,7 @@ export interface FullTable {
   name: string;
   columns: Column[];
   rows: Row[];
+  dedupe?: { column: string; keep: "oldest" | "newest" } | null;
 }
 export interface FunctionMethod {
   method: string;
@@ -336,6 +337,15 @@ export const api = {
   deleteTable: (id: string) => http<{ ok: boolean }>(`/api/tables/${id}/delete`, { method: "POST" }),
   favoriteTable: (id: string, favorite: boolean) =>
     http<{ ok: boolean; favorite: boolean }>(`/api/tables/${id}/favorite`, { method: "POST", body: JSON.stringify({ favorite }) }),
+  // Deduplication: set the key column + keep mode (column:null to disable). Enabling
+  // also sweeps existing duplicates; returns how many were removed.
+  setDedupe: (id: string, body: { column: string | null; keep?: "oldest" | "newest" }) =>
+    http<{ dedupe: { column: string; keep: string } | null; deleted: number }>(`/api/tables/${id}/dedupe-config`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  dedupeTable: (id: string) =>
+    http<{ deleted: number }>(`/api/tables/${id}/dedupe`, { method: "POST" }),
   addColumn: (
     tableId: string,
     body: { name: string; type?: string; fn?: string; code?: string; params?: Record<string, unknown>; condition?: string | null },
