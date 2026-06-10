@@ -252,6 +252,10 @@ jobs:
           RUST_TARGET: ${{ matrix.rust_target }}
         run: |
           set -euo pipefail
+          # The self-hosted runner's service PATH is minimal (/usr/bin:/bin); add
+          # Homebrew's bin so `gh` (at /opt/homebrew/bin/gh) is found for the
+          # upload below. hdiutil/codesign/xcrun/stapler all live in /usr/bin.
+          export PATH="/opt/homebrew/bin:$PATH"
           bundle_dir="packages/desktop/src-tauri/target/${RUST_TARGET}/release/bundle"
           app="$(/usr/bin/find "$bundle_dir/macos" -maxdepth 1 -name '*.app' | head -1)"
           [ -n "$app" ] || { echo "::error::no .app found under $bundle_dir/macos"; exit 1; }
