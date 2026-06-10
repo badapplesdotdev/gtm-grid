@@ -20,12 +20,13 @@
  * by each parent and opened via controller intents.
  */
 
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { CellContent, Icon } from "./App";
 import type { Cell, Column, FullTable } from "./api";
 import { VirtualGridBody } from "./VirtualGridBody";
 import { useColumnWindow } from "./useColumnWindow";
 import { GridColSpacer } from "./GridColSpacer";
+import { csvFilename, downloadCsv, tableToCsv } from "./csvExport";
 
 /** Row-number gutter width (px) — matches `.col-row-num` in styles.css. */
 const GUTTER_W = 48;
@@ -75,6 +76,10 @@ export interface GridController {
   // ── Actions / intents (fire the correct local-vs-cloud function) ───────
   readonly addRow: () => void;
   readonly runAll: () => void;
+  /** Run every function column, but scoped to just the given row IDs (the
+   *  user's current selection). Lets the user process a custom batch at a time
+   *  instead of the whole table. */
+  readonly runRows: (rowIds: string[]) => void;
   readonly runColumn: (colId: string) => void;
   readonly runCell: (rowId: string, colId: string) => void;
   readonly setCell: (rowId: string, colId: string, value: string) => void;
@@ -107,7 +112,7 @@ export interface GridController {
  * warming state for a freshly-created, still-empty Trigify table).
  */
 
-type CtxItem = { label: string; danger?: boolean; onClick: () => void };
+type CtxItem = { label: string; danger?: boolean; disabled?: boolean; onClick: () => void };
 
 export function DataGrid({
   controller: c,
@@ -124,6 +129,95 @@ export function DataGrid({
     e.preventDefault();
     setCtxMenu({ x: e.clientX, y: e.clientY, items });
   }, []);
+
+  // ── Row selection ──────────────────────────────────────────────────────
+  // Pure presentation state owned by the grid so BOTH envs get multi-select for
+  // free; the only thing the controller supplies is `runRows`, which runs the
+  // function columns scoped to the selected row IDs. Lets the user run a custom
+  // batch at a time instead of the whole table.
+  const [selectedRows, setSelectedRows] = useState<ReadonlySet<string>>(new Set());
+  // Anchor for shift-click range selection (last row toggled via its checkbox).
+  const lastClickedRef = useRef<string | null>(null);
+
+  // Selection intersected with the rows that still exist (rows can be deleted
+  // out from under a stale selection), in table order.
+  const selectedIds = useMemo(
+    () => table.rows.filter((r) => selectedRows.has(r.id)).map((r) => r.id),
+    [table.rows, selectedRows],
+  );
+  const selectedCount = selectedIds.length;
+  const allSelected = selectedCount > 0 && selectedCount === table.rows.length;
+
+  const clearSelection = useCallback(() => setSelectedRows(new Set()), []);
+
+  const toggleRow = useCallback(
+    (rowId: string, shiftKey: boolean) => {
+      setSelectedRows((prev) => {
+        const next = new Set(prev);
+        const anchor = lastClickedRef.current;
+        if (shiftKey && anchor && anchor !== rowId) {
+          // Add the contiguous range between the anchor and this row.
+          const ids = table.rows.map((r) => r.id);
+          const a = ids.indexOf(anchor);
+          const b = ids.indexOf(rowId);
+          if (a !== -1 && b !== -1) {
+            const [lo, hi] = a < b ? [a, b] : [b, a];
+            for (let i = lo; i <= hi; i++) next.add(ids[i]);
+          }
+        } else if (next.has(rowId)) {
+          next.delete(rowId);
+        } else {
+          next.add(rowId);
+        }
+        return next;
+      });
+      lastClickedRef.current = rowId;
+    },
+    [table.rows],
+  );
+
+  const toggleAll = useCallback(() => {
+    setSelectedRows((prev) => (prev.size > 0 ? new Set() : new Set(table.rows.map((r) => r.id))));
+    lastClickedRef.current = null;
+  }, [table.rows]);
+
+  const runSelected = useCallback(() => {
+    if (selectedIds.length) c.runRows(selectedIds);
+  }, [c, selectedIds]);
+
+  // Export the table to CSV — mapped scalar values only (JSON/multi-item cells
+  // export blank), every column included. See csvExport.ts.
+  const exportCsv = useCallback(() => {
+    downloadCsv(csvFilename(table.name), tableToCsv(table));
+  }, [table]);
+
+  // Context-menu items shared by the row gutter and data cells. When the
+  // right-clicked row is part of the active selection we act on the whole
+  // selection; otherwise we act on just that row.
+  const rowCtxItems = useCallback(
+    (rowId: string, extra: CtxItem[] = []): CtxItem[] => {
+      const inSel = selectedRows.has(rowId) && selectedCount > 0;
+      const ids = inSel ? selectedIds : [rowId];
+      const n = ids.length;
+      const items: CtxItem[] = [];
+      if (c.fnColCount > 0) {
+        items.push({
+          label: inSel ? `Run ${n} selected row${n !== 1 ? "s" : ""}` : "Run this row",
+          disabled: !c.canRun,
+          onClick: () => c.runRows(ids),
+        });
+      }
+      if (selectedCount > 0) items.push({ label: "Clear selection", onClick: clearSelection });
+      items.push(...extra);
+      items.push({
+        label: inSel && n > 1 ? `Delete ${n} selected rows` : "Delete row",
+        danger: true,
+        onClick: () => ids.forEach((id) => c.deleteRow(id)),
+      });
+      return items;
+    },
+    [c, selectedRows, selectedCount, selectedIds, clearSelection],
+  );
 
   // Column virtualization (TRI-3286): window the DATA columns horizontally so a
   // table with hundreds of columns mounts only the visible columns × visible
@@ -181,6 +275,29 @@ export function DataGrid({
 
         <div className="toolbar-spacer" />
 
+        {selectedCount > 0 && (
+          <span className="sel-bar">
+            <span className="sel-count">{selectedCount} selected</span>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={runSelected}
+              disabled={runDisabled || c.fnColCount === 0}
+              title={
+                runDisabled
+                  ? c.runDisabledReason ?? "Running…"
+                  : c.fnColCount === 0
+                    ? "No function columns to run"
+                    : `Run ${c.fnColCount} function column${c.fnColCount !== 1 ? "s" : ""} on ${selectedCount} selected row${selectedCount !== 1 ? "s" : ""}`
+              }
+            >
+              <Icon.Play size={10} /> Run {selectedCount}
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={clearSelection} title="Clear selection">
+              Clear
+            </button>
+          </span>
+        )}
+
         {c.runProgress && (
           <span className="run-progress">
             <span className="cell-spinner" style={{ width: 11, height: 11 }} />
@@ -190,6 +307,14 @@ export function DataGrid({
 
         {c.toolbarExtras}
 
+        <button
+          className="btn btn-outline btn-sm"
+          onClick={exportCsv}
+          disabled={table.columns.length === 0 || table.rows.length === 0}
+          title="Export this table as CSV (mapped values only — JSON / multi-item cells export blank)"
+        >
+          <Icon.Download size={11} /> Export CSV
+        </button>
         <button className="btn btn-outline btn-sm" onClick={c.addRow} disabled={!c.canAddRow}>
           <Icon.Plus size={11} /> Add row
         </button>
@@ -237,7 +362,21 @@ export function DataGrid({
             <thead>
               <tr>
                 {/* Row-number gutter — the ONLY gutter cell (reserved once) */}
-                <th className="grid-th row-num-th col-row-num" />
+                <th className="grid-th row-num-th col-row-num">
+                  {table.rows.length > 0 && (
+                    <input
+                      type="checkbox"
+                      className="row-select"
+                      aria-label={allSelected ? "Clear selection" : "Select all rows"}
+                      title={allSelected ? "Clear selection" : "Select all rows"}
+                      checked={allSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = selectedCount > 0 && !allSelected;
+                      }}
+                      onChange={toggleAll}
+                    />
+                  )}
+                </th>
                 <GridColSpacer side="left" width={columnWindow.spacers.left} as="th" />
                 {columnWindow.virtualColumns.map((vc) => {
                   const col = table.columns[vc.index];
@@ -322,15 +461,26 @@ export function DataGrid({
                 rowHeight={c.rowHeight}
                 colSpan={table.columns.length + 2}
                 columnWindow={columnWindow}
-                renderRow={(row, idx, cw) => (
-                  <tr key={row.id} className="grid-tr">
+                renderRow={(row, idx, cw) => {
+                  const selected = selectedRows.has(row.id);
+                  return (
+                  <tr key={row.id} className={`grid-tr${selected ? " is-selected" : ""}`}>
                     <td
                       className="grid-td row-num-td"
-                      onContextMenu={(e) =>
-                        openCtx(e, [{ label: "Delete row", danger: true, onClick: () => c.deleteRow(row.id) }])
-                      }
+                      onContextMenu={(e) => openCtx(e, rowCtxItems(row.id))}
                     >
-                      {idx + 1}
+                      <input
+                        type="checkbox"
+                        className="row-select"
+                        aria-label={`Select row ${idx + 1}`}
+                        checked={selected}
+                        onChange={() => {}}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleRow(row.id, e.shiftKey);
+                        }}
+                      />
+                      <span className="row-num-val">{idx + 1}</span>
                     </td>
                     <GridColSpacer side="left" width={cw.spacers.left} />
                     {cw.virtualColumns.map((vc) => {
@@ -341,10 +491,9 @@ export function DataGrid({
                           key={col.id}
                           className="grid-td"
                           onContextMenu={(e) =>
-                            openCtx(e, [
+                            openCtx(e, rowCtxItems(row.id, [
                               { label: "Clear cell", onClick: () => c.clearCell(row.id, col.id) },
-                              { label: "Delete row", danger: true, onClick: () => c.deleteRow(row.id) },
-                            ])
+                            ]))
                           }
                         >
                           <CellContent
@@ -376,7 +525,8 @@ export function DataGrid({
                     <GridColSpacer side="right" width={cw.spacers.right} />
                     <td className="grid-td" />
                   </tr>
-                )}
+                  );
+                }}
               />
             )}
           </table>
@@ -396,6 +546,7 @@ export function DataGrid({
               <button
                 key={i}
                 className={`ctx-item ${it.danger ? "danger" : ""}`}
+                disabled={it.disabled}
                 onClick={() => { setCtxMenu(null); it.onClick(); }}
               >
                 {it.label}

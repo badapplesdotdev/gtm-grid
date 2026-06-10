@@ -124,6 +124,27 @@ export function CloudGrid({
     [tableId, session],
   );
 
+  // Run every function column scoped to a subset of rows (the user's
+  // selection), so a custom batch can be processed at a time. Sequential to
+  // match the cloud `runAll`; each column reports its spinner via runningColId.
+  const runRows = useCallback(
+    async (rowIds: string[]) => {
+      if (tableId === null || rowIds.length === 0) return;
+      if (!data || isCloudTableMissing(data)) return;
+      for (const col of data.columns.filter((col) => col.kind === "function")) {
+        setRunningColId(col.id);
+        try {
+          await runCloudColumn(session, { tableId, columnId: col.id, rowIds });
+        } catch {
+          /* surfaced live via the cell error status from Convex */
+        } finally {
+          setRunningColId(null);
+        }
+      }
+    },
+    [tableId, session, data],
+  );
+
   const runCell = useCallback(
     async (rowId: string, columnId: string) => {
       if (tableId === null) return;
@@ -273,6 +294,7 @@ export function CloudGrid({
         await runColumn(col.id);
       }
     },
+    runRows,
     runColumn,
     runCell,
     setCell: (rowId, colId, value) =>

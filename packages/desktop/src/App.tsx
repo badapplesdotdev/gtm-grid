@@ -215,6 +215,11 @@ export const Icon = {
       <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
     </svg>
   ),
+  Download: ({ size = 14 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+    </svg>
+  ),
   // ── Table-sync icons (TRI-3297) — Feather/Lucide stroke-2, currentColor.
   //    Path data copied verbatim from the design handoff app/icons.jsx.
   Cloud: ({ size = 14 }: { size?: number }) => (
@@ -2301,6 +2306,29 @@ export default function App() {
     setRunProgress(null);
   };
 
+  // ── Run only the selected rows ─────────────
+  // Same dependency-aware orchestration as `runAll`, but each column streams
+  // against just the chosen row IDs — so the user can process a custom batch at
+  // a time instead of the whole table. Non-force: already-`done` cells in those
+  // rows are skipped (and not re-billed), matching Run-all semantics.
+  const runRows = async (rowIds: string[]) => {
+    if (!tableData || rowIds.length === 0) return;
+    const tableId = tableData.id;
+    const fnCols = tableData.columns.filter(c => c.kind === "function");
+    if (!fnCols.length) return;
+    const deps = buildColumnDeps(fnCols);
+    let completed = 0;
+    setRunProgress({ current: 0, total: fnCols.length });
+    await runColumnsWithDeps(
+      fnCols,
+      deps,
+      RUN_ALL_CONCURRENCY,
+      async (col) => { await api.runColumnStream(col.id, (e) => patchCell(tableId, e), { rowIds }); },
+      () => { completed += 1; setRunProgress({ current: completed, total: fnCols.length }); },
+    );
+    setRunProgress(null);
+  };
+
   // ── Run single column ──────────────────────
 
   const runColumn = async (colId: string) => {
@@ -3108,6 +3136,7 @@ export default function App() {
                 ),
                 addRow,
                 runAll,
+                runRows,
                 runColumn,
                 runCell,
                 setCell,
