@@ -133,21 +133,32 @@ const I = {
   ),
 };
 
-const SCOPES: { id: CredentialScope; label: string; icon: ReactNode }[] = [
-  { id: "personal", label: "Personal", icon: <I.Lock /> },
-  { id: "team", label: "Team", icon: <I.Globe /> },
-  { id: "local", label: "Local", icon: <I.Home /> },
-];
+// Two credential scopes the panels expose:
+//  • LOCAL  — the key is stored on THIS machine only (sidecar SQLite, engine
+//    scope "local"), for local runs.
+//  • CLOUD  — the key is stored encrypted server-side and SHARED with the whole
+//    workspace/team (everyone uses it). This is the cloud `workspace` scope; the
+//    tab only appears when signed into a cloud workspace.
+// (The old Personal/Team local sub-scopes are collapsed into a single Local tab;
+//  existing personal/team rows still read back as "connected" under Local.)
+const LOCAL_SCOPE: { id: CredentialScope; label: string; icon: ReactNode } = {
+  id: "local",
+  label: "Local",
+  icon: <I.Home />,
+};
 
 /**
- * The shared (cloud) workspace scope tab, prepended to {@link SCOPES} only when a
- * workspace is active. Saving under it routes to Convex `saveCredential`.
+ * The shared (cloud) scope tab, shown only when a workspace is active. Saving
+ * under it routes to the encrypted cloud save path and is shared with the team.
  */
-const WORKSPACE_SCOPE: { id: "workspace"; label: string; icon: ReactNode } = {
+const CLOUD_SCOPE: { id: "workspace"; label: string; icon: ReactNode } = {
   id: "workspace",
-  label: "Workspace",
+  label: "Cloud",
   icon: <I.Users />,
 };
+
+/** Friendly label for a scope id (the underlying cloud id stays "workspace"). */
+const scopeLabel = (s: PanelScope): string => (s === "workspace" ? "Cloud" : "Local");
 
 // BrandIcon (and its `initials` helper) live in ./BrandIcon so they can be
 // eagerly imported into the initial bundle while the rest of Panels is
@@ -180,9 +191,11 @@ function ScopeTabs({
   /** When true, prepend the shared "Workspace" (cloud) scope tab. */
   showWorkspace: boolean;
 }) {
+  // Cloud first (it's the headline) when signed into a workspace; otherwise the
+  // Local tab is the only option.
   const tabs: { id: PanelScope; label: string; icon: ReactNode }[] = showWorkspace
-    ? [WORKSPACE_SCOPE, ...SCOPES]
-    : SCOPES;
+    ? [CLOUD_SCOPE, LOCAL_SCOPE]
+    : [LOCAL_SCOPE];
   return (
     <div className="scope-tabs">
       {tabs.map((s) => (
@@ -229,18 +242,20 @@ function ConnectionsSection({
   workspace?: WorkspaceCredContext;
 }) {
   const showWorkspace = workspace !== undefined;
-  // Default to the shared workspace tab when available (cloud sharing is the
-  // headline of T11); otherwise the existing local default.
-  const [scope, setScope] = useState<PanelScope>(showWorkspace ? "workspace" : "personal");
+  // Default to the shared Cloud tab when available (team sharing is the headline);
+  // otherwise the machine-local tab.
+  const [scope, setScope] = useState<PanelScope>(showWorkspace ? "workspace" : "local");
   const [adding, setAdding] = useState(false);
   const [keyDraft, setKeyDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
   const isWorkspace = scope === "workspace";
+  // The single Local tab represents ALL machine-local scopes, so it's "connected"
+  // when any local credential exists (incl. legacy personal/team rows).
   const connectedHere = isWorkspace
     ? (workspace?.connected ?? false)
-    : connectedScopes.includes(scope);
+    : connectedScopes.length > 0;
 
   const reset = () => { setAdding(false); setKeyDraft(""); setErr(""); };
 
@@ -271,7 +286,7 @@ function ConnectionsSection({
       <div className={`conn-card${adding ? " editing" : ""}`}>
         {adding ? (
           <div className="conn-add-form">
-            <label className="form-label">{name} API key · {scope}</label>
+            <label className="form-label">{name} API key · {scopeLabel(scope)}</label>
             <input
               className="form-input"
               type="password"
@@ -296,9 +311,9 @@ function ConnectionsSection({
               <strong>{name} connected</strong>
               <span>
                 {isWorkspace ? (
-                  <>Shared with the <b>workspace</b> · encrypted server-side.</>
+                  <>Shared with your <b>team</b> · encrypted in the cloud.</>
                 ) : (
-                  <>Key stored under <b>{scope}</b> · encrypted on this device.</>
+                  <>Stored on <b>this device</b> only · encrypted at rest.</>
                 )}
               </span>
             </div>

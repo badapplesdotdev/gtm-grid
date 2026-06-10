@@ -13,7 +13,8 @@
  *   - Re-push of a LINKED table is detected via the link and OVERWRITES (with
  *     explicit confirmation); without confirmation it fails LinkConflictError.
  *   - A stale link (cloud table gone) fails LinkConflictError.
- *   - Mapping rejects an unpushable (`local`-scoped) credential column (FatalPush).
+ *   - Credential scope is NOT a push gate: a `local`-scoped credential column still
+ *     pushes (credentials are never synced; cloud runs use the shared workspace key).
  *   - The retry predicate retries TransientPushError but NOT FatalPushError, and a
  *     transient failure that recovers within budget succeeds.
  *   - The structured result distinguishes created vs overwritten + row/column count.
@@ -354,18 +355,21 @@ describe("CloudPushService.pushTable", () => {
     });
   });
 
-  describe("schema mapping rejection", () => {
-    it("FAILS FatalPushError for a column backed by a `local`-scoped credential", async () => {
+  describe("credential scope is not a push gate", () => {
+    it("PUSHES a column backed by a `local`-scoped credential (no unpushable-scope failure)", async () => {
       const tableId = seedTable({ rows: 1, functionColumnScope: "local" });
       const transport = new FakeTransport();
       const exit = await runPush(transport, { localTableId: tableId });
-      const err = expectFailureTag(exit, "FatalPushError");
-      expect(err.message).toMatch(/unpushable credential scope/i);
-      // Nothing was created in the cloud (validation runs before any write).
-      expect(transport.createdCount).toBe(0);
+      // Local-only credentials no longer block the push — credentials are never
+      // synced; a cloud run resolves the team's shared workspace key at run time.
+      expect(Exit.isSuccess(exit)).toBe(true);
+      if (Exit.isSuccess(exit)) {
+        expect(exit.value.outcome).toBe("created");
+        expect(exit.value.columnCount).toBe(3);
+      }
     });
 
-    it("ALLOWS a function column backed by a `team`/`personal` credential", async () => {
+    it("PUSHES a function column backed by a `team`/`personal` credential", async () => {
       const tableId = seedTable({ rows: 1, functionColumnScope: "team" });
       const transport = new FakeTransport();
       const exit = await runPush(transport, { localTableId: tableId });
