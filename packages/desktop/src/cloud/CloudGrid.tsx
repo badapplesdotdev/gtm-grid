@@ -189,6 +189,9 @@ export function CloudGrid({
       },
       generateFormula: api.generateFormula,
       aiProviders: api.aiProviders,
+      // Previewing a function runs it through the local sidecar (same as cloud
+      // column runs), so reuse the local endpoint.
+      previewFunction: api.previewFunction,
     }),
     [addColumn, updateColumn, tableId],
   );

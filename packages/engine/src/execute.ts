@@ -177,8 +177,19 @@ export class Engine {
           const v = cells.get(cid)?.value;
           return v == null ? "" : typeof v === "string" ? v : JSON.stringify(v);
         });
+      // Interpolate {{Column}} in every string, including those NESTED inside
+      // object/array params (e.g. an http.request column's `headers`/`body`).
+      // Non-string leaves are preserved as-is, so numbers/booleans stay typed.
+      const interpDeep = (v: unknown): unknown =>
+        typeof v === "string"
+          ? interp(v)
+          : Array.isArray(v)
+            ? v.map(interpDeep)
+            : v && typeof v === "object"
+              ? Object.fromEntries(Object.entries(v).map(([k, val]) => [k, interpDeep(val)]))
+              : v;
       const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(col.params)) out[k] = typeof v === "string" ? interp(v) : v;
+      for (const [k, v] of Object.entries(col.params)) out[k] = interpDeep(v);
       return out;
     });
   }
@@ -407,6 +418,48 @@ export class Engine {
       aiProviders,
       guardSsrf: this.config.guardSsrf,
     });
+  }
+
+  /**
+   * Dry-run a not-yet-saved function column against the first `limit` rows and
+   * return each result WITHOUT persisting a column or writing any cell. Powers
+   * the "Try on N rows" preview: it resolves {{Column}} templates per row (same
+   * path as a real run) and dispatches the method, so what you see is what a run
+   * would store. A per-row failure is captured as `error`, never thrown.
+   */
+  async previewColumn(
+    spec: { provider: string; method: string; params: Record<string, unknown>; table_id: string },
+    limit = 5,
+  ): Promise<Array<{ rowId: string; value?: unknown; error?: string }>> {
+    const rows = (await Effect.runPromise(this.store.listRows(spec.table_id))).slice(0, Math.max(0, limit));
+    // A transient column object — never saved; `resolveParams` only reads
+    // `params` + `table_id`, so this is enough to interpolate per-row values.
+    const col: Column = {
+      id: "__preview__",
+      table_id: spec.table_id,
+      name: "__preview__",
+      type: "json",
+      kind: "function",
+      provider: spec.provider,
+      method: spec.method,
+      code: null,
+      params: spec.params,
+      condition: null,
+      position: 0,
+      created_at: 0,
+    };
+    // Bounded by `limit` (≤25 from the route), so a plain concurrent fan-out is fine.
+    return Promise.all(
+      rows.map(async (row) => {
+        try {
+          const input = await Effect.runPromise(this.resolveParams(col, row.id, this.store));
+          const value = await this.dispatch(spec.provider, spec.method, input);
+          return { rowId: row.id, value };
+        } catch (e) {
+          return { rowId: row.id, error: e instanceof Error ? e.message : String(e) };
+        }
+      }),
+    );
   }
 }
 

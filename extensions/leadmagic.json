@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "category": "enrichment",
   "description": "B2B data enrichment — email finder, mobile finder, and profile & company search.",
-  "baseUrl": "https://api.leadmagic.io/v1",
+  "baseUrl": "https://api.leadmagic.io",
   "auth": { "type": "apiKey", "header": "X-API-Key", "secretKey": "apiKey" },
   "methods": [
     {
@@ -12,7 +12,7 @@
       "label": "Find Email",
       "description": "Find a person's work email from their name and company. Needs a name (first_name+last_name OR full_name) AND a company (domain OR company_name). Returns { email, status, employment_verified, company_name }. 1 credit per valid email; free if not found.",
       "verb": "POST",
-      "path": "/people/email-finder",
+      "path": "/v1/people/email-finder",
       "credits": 1,
       "input": {
         "type": "object",
@@ -30,7 +30,7 @@
       "label": "Validate Email",
       "description": "Validate an email address and return deliverability + company data. Returns { email, email_status, is_domain_catch_all, company_name, company_industry }. 0.25 credit for definitive valid/invalid.",
       "verb": "POST",
-      "path": "/people/email-validation",
+      "path": "/v1/people/email-validation",
       "credits": 1,
       "input": {
         "type": "object",
@@ -43,7 +43,7 @@
       "label": "Find Mobile",
       "description": "Find a person's mobile phone number. Provide at least one of profile_url, work_email, personal_email. Returns { mobile_number, profile_url, email }. 5 credits on success; free if none found.",
       "verb": "POST",
-      "path": "/people/mobile-finder",
+      "path": "/v1/people/mobile-finder",
       "credits": 5,
       "input": {
         "type": "object",
@@ -59,7 +59,7 @@
       "label": "Enrich LinkedIn Profile",
       "description": "Enrich a LinkedIn profile from its URL. Returns { full_name, professional_title, bio, location, company_name, company_industry, work_experience[], education[] }. 1 credit on success.",
       "verb": "POST",
-      "path": "/people/profile-search",
+      "path": "/v1/people/profile-search",
       "credits": 1,
       "input": {
         "type": "object",
@@ -75,7 +75,7 @@
       "label": "Email to LinkedIn Profile",
       "description": "Reverse-lookup a LinkedIn profile from a work or personal email. Returns { profile_url }. 10 credits on success; free if no match.",
       "verb": "POST",
-      "path": "/people/b2b-profile",
+      "path": "/v1/people/b2b-profile",
       "credits": 10,
       "input": {
         "type": "object",
@@ -90,7 +90,7 @@
       "label": "LinkedIn Profile to Work Email",
       "description": "Reverse of b2bProfile: get a person's verified work email from their LinkedIn/B2B profile URL. Returns { email, profile_url, credits_consumed, message }. 5 credits on success; free if no result.",
       "verb": "POST",
-      "path": "/people/b2b-profile-email",
+      "path": "/v1/people/b2b-profile-email",
       "credits": 5,
       "input": {
         "type": "object",
@@ -105,7 +105,7 @@
       "label": "Find Personal Email",
       "description": "Find a person's personal email(s) (Gmail/Outlook/iCloud) from their LinkedIn/B2B profile URL. Returns { profile_url, first_personal_email, personal_emails[], name, credits_consumed, message }. 2 credits if found; free if none.",
       "verb": "POST",
-      "path": "/people/personal-email-finder",
+      "path": "/v1/people/personal-email-finder",
       "credits": 2,
       "input": {
         "type": "object",
@@ -120,7 +120,7 @@
       "label": "Enrich Company",
       "description": "Enrich a company from its domain, name, or LinkedIn URL. Returns camelCase fields: { companyName, industry, employeeCount, employeeRange, founded, headquarters, revenue, description, specialties[] }. 1 credit on success.",
       "verb": "POST",
-      "path": "/companies/company-search",
+      "path": "/v1/companies/company-search",
       "credits": 1,
       "input": {
         "type": "object",
@@ -136,7 +136,7 @@
       "label": "Company Funding",
       "description": "Get a company's funding history, financials, investors and CEO details. Provide company_domain (preferred) OR company_name. Returns { company_name, total_funding, latest_round, latest_round_amount, latest_round_date, funding_rounds[], investors[], lead_investors[], leadership.ceo{ firstName, lastName, designation, b2b_profile }, credits_consumed, message }. 4 credits on success; free if no funding data.",
       "verb": "POST",
-      "path": "/companies/company-funding",
+      "path": "/v1/companies/company-funding",
       "credits": 4,
       "input": {
         "type": "object",
@@ -151,7 +151,7 @@
       "label": "Find Person by Role",
       "description": "Find a person holding a given job title at a company. Requires company_domain OR company_name; job_title is optional (partial match). Returns { first_name, last_name, full_name, job_title, company_name, company_website, profile_url, credits_consumed, message }. 2 credits if found; free if no match.",
       "verb": "POST",
-      "path": "/people/role-finder",
+      "path": "/v1/people/role-finder",
       "credits": 2,
       "input": {
         "type": "object",
@@ -167,7 +167,7 @@
       "label": "Find Company Employees",
       "description": "List employees at a company. Requires company_domain OR company_name; optional limit (default 10). Returns { employees[]{ first_name, last_name, full_name, job_title, location, profile_url }, total_count, credits_consumed, message }. 0.05 credit per employee returned.",
       "verb": "POST",
-      "path": "/people/employee-finder",
+      "path": "/v1/people/employee-finder",
       "credits": 2,
       "input": {
         "type": "object",
@@ -183,7 +183,7 @@
       "label": "Detect Job Change",
       "description": "Check whether a person has changed jobs from a known company. Provide profile_url plus the expected company_domain OR company_name. Returns { job_changed, still_employed, current_company, current_title }. 3 credits per call.",
       "verb": "POST",
-      "path": "/people/job-change-detector",
+      "path": "/v1/people/job-change-detector",
       "credits": 3,
       "input": {
         "type": "object",
@@ -200,7 +200,7 @@
       "label": "Search Job Postings",
       "description": "Search live job postings with company, role, location and date filters (intent/hiring signal). All params optional. Returns { total_count, page, per_page, total_pages, credits_consumed, results[]{ title, company info, location, types, experience level, remote status, publish date, description, application URL } }. 1 credit per job returned. Use jobCountries/jobTypes to resolve filter IDs first.",
       "verb": "POST",
-      "path": "/jobs/jobs-finder",
+      "path": "/v1/jobs/jobs-finder",
       "credits": 2,
       "input": {
         "type": "object",
@@ -233,7 +233,7 @@
       "label": "List Job Countries",
       "description": "List supported country filter IDs for jobsFinder. No inputs. Returns an array of { id, name }. Free — cache locally.",
       "verb": "GET",
-      "path": "/jobs/job-country",
+      "path": "/v1/jobs/countries",
       "credits": 0,
       "input": { "type": "object", "properties": {} }
     },
@@ -242,7 +242,7 @@
       "label": "List Job Types",
       "description": "List supported job_type_id values for jobsFinder (e.g. Full Time=1, Part Time=2, Temporary=3, Internship=4, Freelance=5, Contract=6). No inputs. Returns an array of { id, name }. Free — cache locally.",
       "verb": "GET",
-      "path": "/jobs/job-types",
+      "path": "/v1/jobs/job-types",
       "credits": 0,
       "input": { "type": "object", "properties": {} }
     },
@@ -251,7 +251,7 @@
       "label": "Search Google Ads",
       "description": "Find a company's active Google Ads creatives (ad-spend / GTM intel). Requires company_domain (preferred) OR company_name. Returns { ads_count, ads[]{ advertiser_id, creative_id, original_url, variants[], start, last_seen, advertiser_name, format }, credits_consumed, message }. 0.2 credit per search; free if no results.",
       "verb": "POST",
-      "path": "/ads/google-ads-search",
+      "path": "/v1/ads/google-ads-search",
       "credits": 1,
       "input": {
         "type": "object",
@@ -266,7 +266,7 @@
       "label": "Search Meta Ads",
       "description": "Find a company's active Meta (Facebook/Instagram) Ads from the Facebook Ad Library. Requires company_domain OR company_name. Returns { ads_count, ads[], credits_consumed, message }. 0.2 credit per search; free if no results.",
       "verb": "POST",
-      "path": "/ads/meta-ads-search",
+      "path": "/v1/ads/meta-ads-search",
       "credits": 1,
       "input": {
         "type": "object",
@@ -281,7 +281,7 @@
       "label": "Search B2B (LinkedIn) Ads",
       "description": "Find a company's B2B / LinkedIn ad creatives. Requires company_domain OR company_name. Returns { ads_count, ads[]{ content, link, image_url }, credits_consumed, message }. Use b2bAdDetails with an ad link/ID for full creative copy.",
       "verb": "POST",
-      "path": "/ads/b2b-ads-search",
+      "path": "/v1/ads/b2b-ads-search",
       "credits": 1,
       "input": {
         "type": "object",
@@ -296,7 +296,7 @@
       "label": "Get B2B Ad Details",
       "description": "Resolve full creative detail for a single B2B ad returned by b2bAdsSearch. Requires ad_url (the Ad Library URL or ID). Returns { ad_details{ ads_type, content, heading, cta{ title, url } }, credits_consumed, message }. 2 credits per resolved ad; free if not found.",
       "verb": "POST",
-      "path": "/ads/b2b-ads-details",
+      "path": "/v1/ads/b2b-ads-details",
       "credits": 2,
       "input": {
         "type": "object",
@@ -311,9 +311,618 @@
       "label": "Check Credits",
       "description": "Get the current LeadMagic credit balance. Returns { credits }. Free.",
       "verb": "GET",
-      "path": "/credits",
+      "path": "/v1/credits",
       "credits": 0,
       "input": { "type": "object", "properties": {} }
+    },
+    {
+      "id": "analytics",
+      "label": "Analytics Dashboard",
+      "description": "Free real-time account snapshot: current credit balance, rate-limit utilization, concurrency metrics, and request/credit usage stats for today/this week/this month. Returns { user, credits, rate_limit, concurrency, stats }. GET, no parameters, 0 credits.",
+      "verb": "GET",
+      "path": "/v1/analytics/dashboard",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "id": "companyLookalike",
+      "label": "Find Lookalike Companies",
+      "description": "Find companies semantically similar to a seed for ICP expansion. Provide exactly one seed: company_domain (or domain), website, company_name, or description. Optionally narrow with company_filters (geo, headcount, industry, tech stack, funding) and paginate with limit/offset; set preview=true for a free count-only run. Returns per-match { similarity, company_domain, company_name, employee_range, revenue_range, founded_year, industry, hq_country/city/state, total_funding, last_funding_date, lead_investors, crm_tech/marketing_automation_tech/analytics_tech, total_contacts, contacts_with_email, valid_email_count } plus source_seed_domain. 1 credit per lookalike returned; free when zero matches or preview=true.",
+      "verb": "POST",
+      "path": "/v3/companies/lookalike",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "properties": {
+          "company_domain": {
+            "type": "string",
+            "description": "Seed company domain, e.g. 'stripe.com' (preferred seed input; alias of 'domain')"
+          },
+          "domain": {
+            "type": "string",
+            "description": "Seed company domain (alias of company_domain)"
+          },
+          "website": {
+            "type": "string",
+            "description": "Seed company full URL or bare domain"
+          },
+          "company_name": {
+            "type": "string",
+            "description": "Seed company name (text-intent fallback)"
+          },
+          "description": {
+            "type": "string",
+            "description": "Free-text semantic seed describing the target company profile"
+          },
+          "company_filters": {
+            "type": "object",
+            "description": "Optional filters: geography, headcount, industry, tech stack, funding criteria"
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "If true, returns count only and spends no credits"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max results, range 1-2000, default 25"
+          },
+          "offset": {
+            "type": "integer",
+            "description": "Pagination offset"
+          }
+        }
+      }
+    },
+    {
+      "id": "companySearchV3",
+      "label": "Search Companies (V3)",
+      "description": "Canonical company discovery: single-company lookup (provide one of company_domain / website / company_name / linkedin_url) OR criteria-based discovery via company_filters (industries, country_codes, headcount/revenue/funding ranges, technographics, founded-year range). Supports limit/offset pagination and a preview flag that returns match counts without spending credits. Direct lookup returns { found, company, companyName, companyDomain, websiteUrl, linkedinUrl }; broad search returns { companies[] } with firmographics, HQ location, funding/investors, social metrics, contact coverage, technographics, SIC/NAICS classifications. 1 credit per company returned; free when zero matches or when preview=true.",
+      "verb": "POST",
+      "path": "/v3/companies/search",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "properties": {
+          "company_domain": {
+            "type": "string",
+            "description": "Company domain for single-company lookup, e.g. 'stripe.com' (one of company_domain/website/company_name/linkedin_url)"
+          },
+          "website": {
+            "type": "string",
+            "description": "Company website URL for single-company lookup (alternative lookup key)"
+          },
+          "company_name": {
+            "type": "string",
+            "description": "Company name for single-company lookup (alternative lookup key)"
+          },
+          "linkedin_url": {
+            "type": "string",
+            "description": "Company LinkedIn profile URL for single-company lookup (alternative lookup key)"
+          },
+          "company_filters": {
+            "type": "object",
+            "description": "Criteria-based discovery filters: company_domains (string[]), country_codes (string[]), industries (string[]), headcount_ranges (array), crm_tech/marketing_tech/analytics_tech (technographics), founded_year_min/founded_year_max (int), revenue_ranges (array), funding_stages (array)"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Results per page"
+          },
+          "offset": {
+            "type": "integer",
+            "description": "Pagination offset"
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "If true, returns match counts without spending credits"
+          }
+        }
+      }
+    },
+    {
+      "id": "competitorsSearch",
+      "label": "Find Competitors",
+      "description": "Find a company's competitors from a company identifier. Provide at least one of company_domain, company_url, or company_name. Returns { company_name, competitors[] (name, domain, profile_url, industry, employee_count, description), credits_consumed, message }. 5 credits per successful search; free if no competitors found.",
+      "verb": "POST",
+      "path": "/v1/companies/competitors-search",
+      "credits": 5,
+      "input": {
+        "type": "object",
+        "properties": {
+          "company_domain": {
+            "type": "string",
+            "description": "Company website domain, e.g. 'salesforce.com' (provide one of company_domain/company_url/company_name)"
+          },
+          "company_url": {
+            "type": "string",
+            "description": "Company website URL (alternative to company_domain)"
+          },
+          "company_name": {
+            "type": "string",
+            "description": "Company name (alternative to company_domain)"
+          }
+        }
+      }
+    },
+    {
+      "id": "technographics",
+      "label": "Get Technographics",
+      "description": "Analyze a company's website to detect its technology stack (marketing, analytics, hosting, CRM, CDN, etc.) from a company_domain. Returns { company_domain, technologies (name/category/website/icon), categories (grouped by type), credits_consumed, message }. 1 credit per company if technologies are found; free if no results.",
+      "verb": "POST",
+      "path": "/v1/companies/technographics",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": [
+          "company_domain"
+        ],
+        "properties": {
+          "company_domain": {
+            "type": "string",
+            "description": "Company website domain to analyze, e.g. 'stripe.com'"
+          }
+        }
+      }
+    },
+    {
+      "id": "peopleSearch",
+      "label": "People Search",
+      "description": "Unified V3 people lookup: find people by company (company_domain OR company_name OR linkedin_url OR company_filters) plus optional people_filters (name, title, function, level, location, industry, follower/seniority ranges, email/mobile availability) and title/role intent. Returns { message, people[] (with nested company + domain_intel), count, returned_count, credits_consumed }. 1 credit per returned person, free if no results; +1/raw email and +5/raw mobile when include_contact_details:true (needs confirm_credit_charge).",
+      "verb": "POST",
+      "path": "/v3/people/search",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "properties": {
+          "company_domain": {
+            "type": "string",
+            "description": "Company website domain to target, e.g. 'stripe.com'. One company identifier required."
+          },
+          "company_name": {
+            "type": "string",
+            "description": "Company name to target. Alternative company identifier."
+          },
+          "linkedin_url": {
+            "type": "string",
+            "description": "Company LinkedIn URL to target. Alternative company identifier."
+          },
+          "company_filters": {
+            "type": "object",
+            "description": "Object of company-level filters for broad multi-company discovery; usable in place of a single company identifier."
+          },
+          "title": {
+            "type": "string",
+            "description": "Target job title (alias: job_title)."
+          },
+          "job_title": {
+            "type": "string",
+            "description": "Target job title (alias of title)."
+          },
+          "titles": {
+            "type": "array",
+            "description": "Array of target job titles."
+          },
+          "roles": {
+            "type": "array",
+            "description": "Array of target roles."
+          },
+          "query": {
+            "type": "string",
+            "description": "Free-text people intent query."
+          },
+          "people_filters": {
+            "type": "object",
+            "description": "Nested object of people-level filters: full/first/last name, email domain, LinkedIn URL/username, job title, function, level, location (country, region, city, state), LinkedIn headline/about, industry, job description, languages, follower ranges, seniority score, email/mobile availability flags."
+          },
+          "required_email": {
+            "type": "boolean",
+            "description": "Only return people with an available email."
+          },
+          "required_mobile": {
+            "type": "boolean",
+            "description": "Only return people with an available mobile."
+          },
+          "include_contact_details": {
+            "type": "boolean",
+            "description": "Unlock raw contact details (emails/mobiles); incurs extra credits per unlock."
+          },
+          "confirm_credit_charge": {
+            "type": "boolean",
+            "description": "Required to confirm paid contact-detail unlocks when include_contact_details is true."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max people to return; max 100, default 25."
+          },
+          "offset": {
+            "type": "integer",
+            "description": "Pagination offset."
+          },
+          "include_company": {
+            "type": "boolean",
+            "description": "Include nested company data in each result."
+          },
+          "person_fields": {
+            "type": "string",
+            "description": "Field set per person: 'summary' or 'full'."
+          }
+        }
+      }
+    },
+    {
+      "id": "jobCompanyTypes",
+      "label": "Job Company Types",
+      "description": "Catalog of company type classifications (e.g. public, private, nonprofit) used to filter Jobs Finder results via the company_type_id parameter. Returns the list of { id, name } company types. Free helper endpoint — cache results locally; no credits charged. Takes no input.",
+      "verb": "GET",
+      "path": "/v1/jobs/company-types",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "id": "jobIndustries",
+      "label": "List Job Industries",
+      "description": "Catalog endpoint returning the list of job/company industry categories and their IDs. Use the returned company_industry_id to filter the Jobs Finder and other targeting endpoints. Takes no parameters; returns an array of { id, name } industry records. Free helper endpoint — no credits charged; cache results locally.",
+      "verb": "GET",
+      "path": "/v1/jobs/industries",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "id": "jobRegions",
+      "label": "Job Regions",
+      "description": "List supported regions/states for job-search geographic targeting. Free catalog endpoint, no inputs. Returns an array of { id, name, country_id }; use the returned region id as region_id in the Jobs Finder API and pair with country_id for precise targeting.",
+      "verb": "GET",
+      "path": "/v1/jobs/regions",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "id": "jobSearch",
+      "label": "Search Jobs",
+      "description": "Search live job postings with frontend-friendly filters; resolves company domains, country codes, tags, occupation taxonomy, and title terms into normalized filter IDs before running a bounded query. All filters optional. Returns { signals[] (title, company, location, salary, posted_at, has_remote, application_url, occupation_taxonomy), total, pagination.next_cursor, credits_consumed }. 1 credit per returned job; free if none returned; dryRun validates without charging.",
+      "verb": "POST",
+      "path": "/v3/jobs/search",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "properties": {
+          "titles": {
+            "type": "object",
+            "description": "Title filter: { include: string[], exclude: string[], vector: boolean (semantic title matching) }"
+          },
+          "occupationTaxonomy": {
+            "type": "object",
+            "description": "Normalized occupation filter: { level1, level2, level3 } each string[] or int[] (broad family / mid-level / specific title)"
+          },
+          "companies": {
+            "type": "object",
+            "description": "Company filter: { include: string[] (domains or names), exclude: string[], ids: int[] (exact company IDs) }"
+          },
+          "location": {
+            "type": "object",
+            "description": "Location filter: { countries, regions, states, cities } each string[] or int[] (names, codes, or IDs)"
+          },
+          "tags": {
+            "type": "object",
+            "description": "Tag filter: { include, exclude } each string[] or int[] (tag names or IDs)"
+          },
+          "salary": {
+            "type": "object",
+            "description": "Normalized USD salary filter: { min_usd: integer, max_usd: integer }"
+          },
+          "seniority": {
+            "type": "array",
+            "description": "Experience levels: EN, MI, SE, EX"
+          },
+          "languages": {
+            "type": "array",
+            "description": "Two-letter language codes"
+          },
+          "hasRemote": {
+            "type": "boolean",
+            "description": "Filter for remote-work support"
+          },
+          "workModes": {
+            "type": "array",
+            "description": "Work mode IDs (1, 2, 3)"
+          },
+          "jobTypeIds": {
+            "type": "array",
+            "description": "Job type IDs from catalog"
+          },
+          "industryIds": {
+            "type": "array",
+            "description": "Company industry IDs"
+          },
+          "companyTypeIds": {
+            "type": "array",
+            "description": "Company type IDs"
+          },
+          "companySizeCodes": {
+            "type": "array",
+            "description": "Company size bucket codes"
+          },
+          "postedAfter": {
+            "type": "string",
+            "description": "YYYY-MM-DD; jobs posted on/after this date"
+          },
+          "postedBefore": {
+            "type": "string",
+            "description": "YYYY-MM-DD; jobs posted before/on this date"
+          },
+          "postedWithin": {
+            "type": "integer",
+            "description": "Jobs posted within the last N days"
+          },
+          "includeAgencies": {
+            "type": "boolean",
+            "description": "Include staffing/recruiting agencies"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Number of jobs to return (max 50)"
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Cursor object from a prior response's pagination.next_cursor"
+          },
+          "includeDescription": {
+            "type": "boolean",
+            "description": "Include job description snippet in results"
+          },
+          "includeCompany": {
+            "type": "boolean",
+            "description": "Include company object in results"
+          },
+          "includeFacets": {
+            "type": "boolean",
+            "description": "Include facet metadata"
+          },
+          "includeOccupationTaxonomy": {
+            "type": "boolean",
+            "description": "Include occupation taxonomy fields in results"
+          },
+          "totalMode": {
+            "type": "string",
+            "description": "Count mode: 'none', 'capped', or 'exact'"
+          },
+          "mode": {
+            "type": "string",
+            "description": "Query mode: 'fast' (default) or 'deep'"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "Validate the query without charging credits"
+          },
+          "autoResolve": {
+            "type": "boolean",
+            "description": "Resolve friendly strings (domains, names) into filter IDs before search"
+          },
+          "_query_budget_ms": {
+            "type": "integer",
+            "description": "Internal query budget hint in milliseconds"
+          }
+        }
+      }
+    },
+    {
+      "id": "jobSearchCatalogs",
+      "label": "Job Search Catalogs",
+      "description": "Catalog/helper endpoint returning all job-search filter taxonomies in one call: countries, regions, job_types, industries, company_types, seniority levels, and dataset stats. Takes no parameters. Use to populate static filter dropdowns. Free; 0 credits.",
+      "verb": "GET",
+      "path": "/v3/jobs/search/catalogs",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "id": "jobSearchCompanies",
+      "label": "Job Search Companies",
+      "description": "Resolve a free-text company name or domain into canonical company IDs for use as Job Search filters (autocomplete/filter-builder helper). Pass q (name or domain) and/or domain (exact). Returns { companies: [{ id, name, domain, logo_domain }] }. Free, 0 credits.",
+      "verb": "GET",
+      "path": "/v3/jobs/search/companies",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string",
+            "description": "Free-text company name or domain to search for, e.g. 'leadmagic'"
+          },
+          "domain": {
+            "type": "string",
+            "description": "Exact company domain lookup, e.g. 'leadmagic.io'"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max number of company candidates to return"
+          }
+        }
+      }
+    },
+    {
+      "id": "jobSearchHelpers",
+      "label": "Resolve Job Search Filters",
+      "description": "Resolve friendly job-search filter values (company names/domains, tags, titles, occupation taxonomy, locations) into canonical LeadMagic filter IDs before running a job search. POST body groups inputs by filter category, each with include/exclude sub-arrays. Returns each input value replaced by { id, name, ... } canonical objects, plus a `warnings` array for any unresolved values. Free helper endpoint. Companion GET autocomplete helpers (all also free, /v3/jobs/search/{companies,tags,titles,occupation-taxonomy,locations,catalogs}?q=) provide per-field lookups.",
+      "verb": "POST",
+      "path": "/v3/jobs/search/resolve",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "companies": {
+            "type": "object",
+            "description": "Company filters to resolve: { include, exclude, ids } (names or domains, e.g. 'leadmagic.io')"
+          },
+          "tags": {
+            "type": "object",
+            "description": "Tag filters to resolve: { include, exclude }"
+          },
+          "occupationTaxonomy": {
+            "type": "object",
+            "description": "Occupation taxonomy filters to resolve: { level1, level2, level3 }"
+          },
+          "location": {
+            "type": "object",
+            "description": "Location filters to resolve: { countries, regions, states, cities }"
+          },
+          "titles": {
+            "type": "object",
+            "description": "Job title filters to resolve: { include, exclude }"
+          }
+        }
+      }
+    },
+    {
+      "id": "jobSearchLocations",
+      "label": "Job Search Locations",
+      "description": "Resolve a free-text location query into canonical location IDs for job-search geo filtering. Requires q (e.g. 'Berlin', 'United') AND type (one of country/region/state/city). Returns { locations: [{ id, name, type }] }. Free helper/catalog endpoint, 0 credits.",
+      "verb": "GET",
+      "path": "/v3/jobs/search/locations",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": [
+          "q",
+          "type"
+        ],
+        "properties": {
+          "q": {
+            "type": "string",
+            "description": "Free-text location query, e.g. 'United', 'Berlin', 'California'"
+          },
+          "type": {
+            "type": "string",
+            "description": "Location type to search. One of 'country', 'region', 'state', or 'city'"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max number of location candidates to return (optional)"
+          }
+        }
+      }
+    },
+    {
+      "id": "jobSearchOccupations",
+      "label": "Job Search Occupation Taxonomy",
+      "description": "Autocomplete occupation taxonomy: maps free-text occupation input to standardized IDs/labels across a 3-tier hierarchy (level1 families, level2 categories, level3 normalized titles). Requires q (search query); optional level filter and limit. Returns { occupation_taxonomy: [{ id, name, type, level1, level2, level3, path }], credits_consumed: 0 }. Free (0 credits).",
+      "verb": "GET",
+      "path": "/v3/jobs/search/occupation-taxonomy",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": [
+          "q"
+        ],
+        "properties": {
+          "q": {
+            "type": "string",
+            "description": "Free-text occupation search query, e.g. 'DevOps'"
+          },
+          "level": {
+            "type": "string",
+            "description": "Optional. Filter by taxonomy level: 'level1', 'level2', or 'level3'"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Optional. Number of results to return"
+          }
+        }
+      }
+    },
+    {
+      "id": "jobSearchTags",
+      "label": "Job Search Tags",
+      "description": "Tag autocomplete for the Job Search filter builder. Free-text query `q` returns normalized hiring-signal tags (tools/platforms/skills, e.g. kubernetes, terraform, react); optionally scope by tag_type_id and cap with limit. Returns { tags: [{ id, name, tag_type, occupation_taxonomy }] }. Free (0 credits).",
+      "verb": "GET",
+      "path": "/v3/jobs/search/tags",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": [
+          "q"
+        ],
+        "properties": {
+          "q": {
+            "type": "string",
+            "description": "Free-text tag query, e.g. 'kuber' matches 'kubernetes', 'kubectl'"
+          },
+          "tag_type_id": {
+            "type": "integer",
+            "description": "Optional tag-type ID to scope the search"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Number of tag candidates to return"
+          }
+        }
+      }
+    },
+    {
+      "id": "jobSearchTitles",
+      "label": "Job Search Titles",
+      "description": "Title autocomplete + occupation taxonomy helper for the Job Search filters. Takes a free-text title query `q` (and optional `limit`); returns { titles: [{ id, name, occupation_taxonomy }] } with hierarchical taxonomy metadata. Use to resolve title filters before running a Job Search. Free / 0 credits.",
+      "verb": "GET",
+      "path": "/v3/jobs/search/titles",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": [
+          "q"
+        ],
+        "properties": {
+          "q": {
+            "type": "string",
+            "description": "Free-text title query, e.g. 'devops engineer' (required)"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max number of title candidates to return (optional)"
+          }
+        }
+      }
+    },
+    {
+      "id": "searchStats",
+      "label": "Search Stats",
+      "description": "Free helper endpoint summarizing what's available across Jobs, Company, and People Search. Powers filter builders, capability cards, and onboarding/\"what can I target?\" UIs. Requires products[] (jobs|company|people) and sections[] (coverage|top|capabilities); optional limit (top values per dimension, default 3, max 25). Returns cached high-level metrics: per-product coverage, top, capabilities blocks plus cache status. credits_consumed always 0.",
+      "verb": "POST",
+      "path": "/v3/search/stats",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": [
+          "products",
+          "sections"
+        ],
+        "properties": {
+          "products": {
+            "type": "array",
+            "description": "Required. Product families to include: 'jobs', 'company', 'people'"
+          },
+          "sections": {
+            "type": "array",
+            "description": "Required. Sections to include: 'coverage', 'top', 'capabilities'"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Optional. Number of top values per dimension (default 3, max 25)"
+          }
+        }
+      }
     }
   ]
 }

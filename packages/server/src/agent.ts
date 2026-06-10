@@ -10,19 +10,34 @@ import { homedir } from "node:os";
 import type { ServerResponse } from "node:http";
 import { join, dirname } from "node:path";
 import { corsHeadersFor } from "./cors.js";
+import { latestSessionId } from "./agent-history.js";
 
 const GTM_TOOLS = [
   "list_functions",
   "list_tables",
   "create_table",
+  "rename_table",
+  "delete_table",
   "add_column",
+  "update_column",
+  "delete_column",
   "add_rows",
+  "update_cells",
+  "delete_rows",
+  "find_rows",
+  "get_column",
+  "set_dedupe",
   "run_column",
   "get_table",
   "run_function",
   "upload_extension",
 ];
-const MUTATING = new Set(["create_table", "add_column", "add_rows", "run_column", "upload_extension"]);
+const MUTATING = new Set([
+  "create_table", "rename_table", "delete_table",
+  "add_column", "update_column", "delete_column",
+  "add_rows", "update_cells", "delete_rows",
+  "set_dedupe", "run_column", "upload_extension",
+]);
 
 export interface AgentContext {
   tableName?: string;
@@ -116,6 +131,15 @@ The catalog is huge (Trigify alone exposes 122 methods). Discover in this order:
 - The grid has **Auto-run**: when ON, editing/adding a manual cell that a function column depends on auto-recomputes the dependent cells. Don't fight it — when Auto-run is on, just \`add_rows\` and the function columns fill themselves.
 - Users can run a **single cell** (hover, click ▶) or a **whole column** (the per-column run button in the header) or **everything** (Run all in the toolbar). \`run_column\` from your side is equivalent to clicking the column run button.
 - Runs are **idempotent**: \`run_column\` skips cells already \`done\` unless you pass \`force: true\`. Re-running after a transient error is safe.
+
+### Full grid control — and the confirm protocol
+You control the whole grid, not just appends:
+- **Read precisely** instead of pulling everything. \`get_table\` is paginated (\`limit\`/\`offset\`, returns \`totalRows\`) and truncates fat cells — for a big table use \`find_rows(where:{ Column: value })\` to search, or \`get_column\` to scan one field. Every row comes back with an \`_id\`.
+- **Edit**: \`update_cells\` (set/clear cells by \`_id\`), \`update_column\` (change a column's config — non-destructive), \`rename_table\`.
+- **Delete**: \`delete_rows\` (by \`_id\` or \`where\`), \`delete_column\`, \`delete_table\`.
+- **Dedup**: \`set_dedupe(table, column, keep)\` keeps a table unique on a column — then \`add_rows\` auto-skips duplicates, so you can stream paginated sourcing straight in (no scripts, no scratch files). \`column:null\` turns it off.
+
+**Confirm protocol — non-negotiable.** Delete tools, a large \`update_cells\`, and a big \`run_column\` will return \`{ confirmationRequired: true, willAffect, estimatedCredits? }\` and DO NOTHING. When you see that: STOP, tell the user plainly what will happen ("This will delete 4,200 rows from Leads — proceed?"), and only re-call the SAME tool with \`confirm: true\` AFTER they explicitly approve. NEVER set \`confirm:true\` on your own — that flag exists to carry the user's permission, not your intent.
 
 ### Handling errors
 - A cell with \`status: "error"\` shows a red **Status Code: 4xx/5xx** pill in the grid. Click → opens the cell-details drawer with the full error body.
@@ -528,7 +552,7 @@ export function mcpConfig(
 /** Stream a Claude Code turn over SSE, driving gtmgrid via MCP. */
 export function streamClaude(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext; origin?: string; model?: string; cloud?: AgentCloud },
+  opts: { message: string; project: string; repoRoot: string; sessionId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; cloud?: AgentCloud },
 ): void {
   const sse = sseClient(res, opts.origin);
   // Optionally also expose the user's Hermes agent as an MCP tool (off unless
@@ -554,7 +578,12 @@ export function streamClaude(
   const preamble = contextPreamble(opts.context);
   if (preamble) args.push("--append-system-prompt", preamble);
   if (opts.model) args.push("--model", opts.model);
-  if (opts.sessionId) args.push("--resume", opts.sessionId);
+  // Bind to the user's OWN session, not a client-stored id: an explicit id (a
+  // History pick) wins; otherwise — unless they asked for a New chat — resume the
+  // latest native session for this project. So continuity survives a Stop or app
+  // restart (we re-read the CLI's transcript store) with nothing persisted by us.
+  const resumeId = opts.sessionId ?? (opts.newChat ? null : latestSessionId("claude", opts.repoRoot));
+  if (resumeId) args.push("--resume", resumeId);
 
   const bin = resolveAgentPath("claude");
   if (!bin) {
@@ -565,7 +594,8 @@ export function streamClaude(
   // `detached` makes the child its own process-group leader so we can later
   // signal the WHOLE tree (CLI + MCP server + grandchildren) via `-pid` (TRI-3305).
   const child = spawn(bin, args, { env: agentSpawnEnv(bin), cwd: opts.repoRoot, detached: true });
-  let sessionId = opts.sessionId ?? null;
+  child.stdin?.end(); // we pass the prompt via `-p`; close stdin so claude doesn't wait on it (the "no stdin data in 3s" warning)
+  let sessionId = resumeId ?? null;
   let buf = "";
   let gridDirty = false;
   const lifecycle = manageChildLifecycle(child, {
@@ -589,7 +619,13 @@ export function streamClaude(
       } catch {
         continue;
       }
-      if (e.session_id) sessionId = e.session_id;
+      // DON'T capture the session id from the init/intermediate messages: in
+      // `-p` mode the init message can carry a transient id that is never saved
+      // as a resumable conversation (`--resume` on it → "No conversation
+      // found"). Only the id on the final `result` event is durable (captured in
+      // the `result` branch below). Continuity after a Stop/restart comes from
+      // the on-disk latest-session fallback above, which is always a real
+      // resumable transcript.
 
       if (e.type === "assistant") {
         for (const block of e.message?.content ?? []) {
@@ -613,6 +649,9 @@ export function streamClaude(
           }
         }
       } else if (e.type === "result") {
+        // The `result` id is the durable, resumable one — surface it (falls back
+        // to the resume id we started with if this event omits it).
+        if (e.session_id) sessionId = e.session_id;
         sse.write({ type: "done", result: e.result ?? "", sessionId, isError: e.is_error ?? e.subtype !== "success" });
       }
       // Nudge the UI to refetch as soon as a mutating tool runs (not just at the end).
@@ -665,7 +704,7 @@ export function codexEnvToml(env: Record<string, string>): string {
 
 export function streamCodex(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; threadId?: string; context?: AgentContext; origin?: string; model?: string; cloud?: AgentCloud },
+  opts: { message: string; project: string; repoRoot: string; threadId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; cloud?: AgentCloud },
 ): void {
   const sse = sseClient(res, opts.origin);
   const launcher = mcpLauncher(opts.repoRoot);
@@ -689,8 +728,11 @@ export function streamCodex(
     `mcp_servers={ gtmgrid = { command = "${launcher}", env = ${codexEnvToml(mcpEnv(opts.project, opts.cloud))} }${hermesToml} }`,
     ...(opts.model ? ["-m", opts.model] : []),
   ];
-  const args = opts.threadId
-    ? ["exec", "resume", opts.threadId, ...flags, message]
+  // Same binding as Claude: an explicit threadId (History pick) wins, else resume
+  // the latest native Codex thread for this project unless a New chat was asked for.
+  const resumeThread = opts.threadId ?? (opts.newChat ? null : latestSessionId("codex", opts.repoRoot));
+  const args = resumeThread
+    ? ["exec", "resume", resumeThread, ...flags, message]
     : ["exec", ...flags, message];
 
   const bin = resolveAgentPath("codex");
@@ -704,7 +746,7 @@ export function streamCodex(
   const child = spawn(bin, args, { env: agentSpawnEnv(bin), cwd: opts.repoRoot, detached: true });
   child.stdin?.end(); // codex exec otherwise waits on stdin
 
-  let threadId = opts.threadId ?? null;
+  let threadId = resumeThread ?? null;
   let buf = "";
   const lifecycle = manageChildLifecycle(child, {
     onTimeout: () => {

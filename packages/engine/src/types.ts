@@ -10,6 +10,10 @@ export interface Table {
   name: string;
   position: number;
   created_at: number;
+  /** Column id to deduplicate rows on (null/absent = dedup off). */
+  dedupe_column?: string | null;
+  /** Which row survives a duplicate: "oldest" (default) keeps the first, "newest" keeps the last. */
+  dedupe_keep?: "oldest" | "newest" | null;
 }
 
 export interface Column {

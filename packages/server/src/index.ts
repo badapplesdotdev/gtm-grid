@@ -245,7 +245,8 @@ function fullTable(tableId: string) {
     }
     return { id: r.id, cells: out };
   });
-  return { id: t.id, name: t.name, columns, rows };
+  const dedupe = current.projectDb.getTableDedupe(t.id);
+  return { id: t.id, name: t.name, columns, rows, dedupe };
 }
 
 /** Treat a blank "only run if" input as no condition (always run). */
@@ -840,13 +841,10 @@ route("POST", "/api/tables/:id/columns", (p, body) => {
 });
 
 route("POST", "/api/tables/:id/rows", (p, body) => {
-  const row = current.projectDb.createRow(p.id);
-  if (body?.cells) {
-    for (const [colId, value] of Object.entries(body.cells)) {
-      current.projectDb.setCell(row.id, colId, { value, status: "done" });
-    }
-  }
-  return { id: row.id };
+  // Route through the dedup-aware insert so a manual add respects the table's
+  // dedup config (an empty row has no key, so it's never skipped).
+  const res = current.projectDb.addRowsDeduped(p.id, [body?.cells ?? {}]);
+  return { id: res.rowIds[0] ?? null, skipped: res.skipped, replaced: res.replaced };
 });
 
 // Bulk row insert for CSV import: create many rows + their cells in ONE
@@ -854,27 +852,30 @@ route("POST", "/api/tables/:id/rows", (p, body) => {
 // map; empty values are skipped so the cell stays empty. LOCAL projects only —
 // never metered (local is unlimited on every tier).
 route("POST", "/api/tables/:id/rows/bulk", (p, body) => {
-  const inputRows: Array<Record<string, unknown>> = Array.isArray(body?.rows)
-    ? body.rows
-    : [];
-  const rowIds: string[] = [];
-  const insertAll = current.projectDb.raw.transaction(
-    (rows: Array<Record<string, unknown>>) => {
-      for (const cells of rows) {
-        const row = current.projectDb.createRow(p.id);
-        rowIds.push(row.id);
-        if (cells) {
-          for (const [colId, value] of Object.entries(cells)) {
-            if (value === "" || value === null || value === undefined) continue;
-            current.projectDb.setCell(row.id, colId, { value, status: "done" });
-          }
-        }
-      }
-    },
-  );
-  insertAll(inputRows);
-  return { rowIds };
+  const inputRows: Array<Record<string, unknown>> = Array.isArray(body?.rows) ? body.rows : [];
+  // addRowsDeduped runs in one transaction and applies the table's dedup config
+  // (a plain bulk insert when dedup is off).
+  const res = current.projectDb.addRowsDeduped(p.id, inputRows);
+  return { rowIds: res.rowIds, added: res.added, skipped: res.skipped, replaced: res.replaced };
 });
+
+// Deduplication config: set the dedup column + keep mode (or clear with column:null).
+// Enabling sweeps existing duplicates once. (The "can't change while running" lock
+// is enforced in the UI for now.)
+route("POST", "/api/tables/:id/dedupe-config", (p, body) => {
+  const column = body?.column ? String(body.column) : null;
+  const keep = body?.keep === "newest" ? "newest" : "oldest";
+  if (!column) {
+    current.projectDb.setTableDedupe(p.id, null);
+    return { dedupe: null, deleted: 0 };
+  }
+  current.projectDb.setTableDedupe(p.id, { column, keep });
+  const swept = current.projectDb.dedupeTable(p.id);
+  return { dedupe: { column, keep }, deleted: swept.deleted };
+});
+
+// One-shot dedupe sweep (the "Dedupe" button) using the table's configured key.
+route("POST", "/api/tables/:id/dedupe", (p) => current.projectDb.dedupeTable(p.id));
 
 route("POST", "/api/cells", (_p, body) => {
   current.projectDb.setCell(body.rowId, body.columnId, { value: body.value, status: "done" });
@@ -889,6 +890,23 @@ route("POST", "/api/columns/:id/run", async (p, body) => {
   return runLimiter.run(() =>
     current.engine.runColumn(p.id, { force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds }),
   );
+});
+
+// "Try on N rows": dry-run an UNSAVED function column (provider/method/params)
+// against the first `limit` rows and return the results without persisting a
+// column or writing cells. Powers the column-editor preview button.
+route("POST", "/api/tables/:id/preview-function", async (p, body) => {
+  const provider = String(body?.provider ?? "");
+  const method = String(body?.method ?? "");
+  if (!provider || !method) throw new Error("provider and method are required");
+  const limit = Math.min(Math.max(Number(body?.limit ?? 5) || 5, 1), 25);
+  const results = await runLimiter.run(() =>
+    current.engine.previewColumn(
+      { provider, method, params: body?.params ?? {}, table_id: p.id },
+      limit,
+    ),
+  );
+  return { results };
 });
 
 // --- cloud run path (T9) ---
@@ -1079,9 +1097,10 @@ const server = createServer(async (req, res) => {
       const cloud = parseAgentCloud(body?.cloud);
       // Hermes is LOCAL-only by design — it drives the local SQLite project via
       // ACP and is never threaded the cloud context.
+      const newChat = body?.newChat === true;
       if (agent === "hermes") streamHermes(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model });
-      else if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context, origin, model, cloud });
-      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model, cloud });
+      else if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, newChat, context, origin, model, cloud });
+      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, newChat, context, origin, model, cloud });
     } catch (e) {
       send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
     }

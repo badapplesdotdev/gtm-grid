@@ -6,6 +6,7 @@ import { aiConnector } from "./connectors/ai.js";
 import { githubConnector } from "./connectors/github.js";
 import { formattingConnector } from "./connectors/formatting.js";
 import { formulaConnector } from "./connectors/formula.js";
+import { httpRequestConnector } from "./connectors/http-request.js";
 
 export class Registry {
   private connectors = new Map<string, Connector>();
@@ -39,5 +40,11 @@ export class Registry {
 }
 
 export function defaultRegistry(): Registry {
-  return new Registry([aiConnector, formattingConnector, formulaConnector, githubConnector]);
+  return new Registry([
+    aiConnector,
+    formattingConnector,
+    formulaConnector,
+    githubConnector,
+    httpRequestConnector,
+  ]);
 }

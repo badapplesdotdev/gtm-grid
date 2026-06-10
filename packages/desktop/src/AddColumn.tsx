@@ -24,6 +24,8 @@ export interface ColumnAuthoringApi {
   updateColumn: (typeof api)["updateColumn"];
   generateFormula: (typeof api)["generateFormula"];
   aiProviders: (typeof api)["aiProviders"];
+  /** Preview a column's function on the first N rows (the HTTP column "Try" action). */
+  previewFunction: (typeof api)["previewFunction"];
 }
 
 const ColumnAuthoringApiContext = createContext<ColumnAuthoringApi>(api);
@@ -440,6 +442,8 @@ export function FunctionsModal({
                 />
               ) : selected.provider === "formula" ? (
                 <FormulaDetail key={selected.fnKey} tableId={tableId} columns={columns} onAdded={() => { onAdded(); onClose(); }} />
+              ) : selected.provider === "http" ? (
+                <HttpRequestDetail key={selected.fnKey} fn={selected} tableId={tableId} columns={columns} onAdded={() => { onAdded(); onClose(); }} />
               ) : (
                 <FunctionDetail key={selected.fnKey} fn={selected} tableId={tableId} columns={columns} onAdded={() => { onAdded(); onClose(); }} />
               )
@@ -1147,12 +1151,345 @@ function FormulaDetail({
   );
 }
 
+// ─── HTTP request (dedicated rich form) ──────────────────
+// A full request builder — Method, Endpoint (with "/" column chips), Query and
+// Header key/value editors, Body, plus response shaping (pick fields, remove
+// empties, metadata) and transport options (redirects, timeout, retries). Shared
+// by the add-column detail and the edit modal so both render identically.
+
+const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"];
+
+interface KV {
+  key: string;
+  value: string;
+}
+interface HttpState {
+  method: string;
+  url: string;
+  query: KV[];
+  body: string;
+  headers: KV[];
+  responseFields: string;
+  removeEmpty: boolean;
+  returnMetadata: boolean;
+  followRedirects: boolean;
+  maxRedirects: string;
+  timeout: string;
+  retryOnFailure: boolean;
+  maxRetries: string;
+}
+
+function kvFromObj(o: unknown): KV[] {
+  return o && typeof o === "object" && !Array.isArray(o)
+    ? Object.entries(o as Record<string, unknown>).map(([key, v]) => ({ key, value: v == null ? "" : String(v) }))
+    : [];
+}
+function kvToObj(pairs: KV[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const { key, value } of pairs) if (key.trim()) out[key.trim()] = value;
+  return out;
+}
+
+function httpStateFromParams(p: Record<string, unknown>): HttpState {
+  return {
+    method: typeof p.method === "string" ? p.method : "GET",
+    url: typeof p.url === "string" ? p.url : "",
+    query: kvFromObj(p.query),
+    body: typeof p.body === "string" ? p.body : p.body != null ? JSON.stringify(p.body, null, 2) : "",
+    headers: kvFromObj(p.headers),
+    responseFields: Array.isArray(p.responseFields)
+      ? (p.responseFields as string[]).join("\n")
+      : typeof p.responseFields === "string"
+        ? p.responseFields
+        : "",
+    removeEmpty: p.removeEmpty !== false,
+    returnMetadata: !!p.returnMetadata,
+    followRedirects: p.followRedirects !== false,
+    maxRedirects: p.maxRedirects != null ? String(p.maxRedirects) : "",
+    timeout: p.timeout != null ? String(p.timeout) : "",
+    retryOnFailure: p.retryOnFailure !== false,
+    maxRetries: p.maxRetries != null ? String(p.maxRetries) : "",
+  };
+}
+
+function httpStateToParams(s: HttpState): Record<string, unknown> {
+  const params: Record<string, unknown> = { method: s.method, url: s.url.trim() };
+  const q = kvToObj(s.query);
+  if (Object.keys(q).length) params.query = q;
+  const h = kvToObj(s.headers);
+  if (Object.keys(h).length) params.headers = h;
+  if (s.body.trim()) {
+    // A JSON object/array body is stored typed (so the connector sends it as
+    // application/json); anything else (incl. {{templated}} strings) stays raw.
+    try {
+      const parsed = JSON.parse(s.body);
+      params.body = parsed && typeof parsed === "object" ? parsed : s.body;
+    } catch {
+      params.body = s.body;
+    }
+  }
+  const rf = s.responseFields
+    .split(/[\n,]/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  if (rf.length) params.responseFields = rf;
+  params.removeEmpty = s.removeEmpty;
+  params.returnMetadata = s.returnMetadata;
+  params.followRedirects = s.followRedirects;
+  params.retryOnFailure = s.retryOnFailure;
+  const mr = parseInt(s.maxRedirects, 10);
+  if (!Number.isNaN(mr)) params.maxRedirects = mr;
+  const to = parseInt(s.timeout, 10);
+  if (!Number.isNaN(to)) params.timeout = to;
+  const mx = parseInt(s.maxRetries, 10);
+  if (!Number.isNaN(mx)) params.maxRetries = mx;
+  return params;
+}
+
+/** A repeatable key/value editor (headers, query params). Values autocomplete to {{Column}}. */
+function KeyValueEditor({
+  pairs, onChange, listId, valuePlaceholder = "Value or {{Column}}",
+}: {
+  pairs: KV[];
+  onChange: (pairs: KV[]) => void;
+  listId: string;
+  valuePlaceholder?: string;
+}) {
+  const setPair = (i: number, patch: Partial<KV>) => onChange(pairs.map((p, idx) => (idx === i ? { ...p, ...patch } : p)));
+  return (
+    <div className="http-kv">
+      {pairs.map((p, i) => (
+        <div className="http-kv-row" key={i}>
+          <input className="form-input http-kv-key" placeholder="Key" value={p.key} onChange={(e) => setPair(i, { key: e.target.value })} />
+          <input className="form-input http-kv-val" list={listId} placeholder={valuePlaceholder} value={p.value} onChange={(e) => setPair(i, { value: e.target.value })} />
+          <button className="http-kv-del" type="button" title="Remove" onClick={() => onChange(pairs.filter((_, idx) => idx !== i))}>{X}</button>
+        </div>
+      ))}
+      <button className="http-kv-add" type="button" onClick={() => onChange([...pairs, { key: "", value: "" }])}>+ Add {pairs.length ? "another" : "row"}</button>
+    </div>
+  );
+}
+
+/** A collapsible "— Optional" field section, mirroring the request-builder layout. */
+function HttpField({ title, optional, defaultOpen, children }: { title: string; optional?: boolean; defaultOpen?: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return (
+    <div className="http-field">
+      <button type="button" className="http-field-head" onClick={() => setOpen((o) => !o)}>
+        <span className={`http-field-caret${open ? " open" : ""}`}>{Chevron}</span>
+        <span className="http-field-name">{title}</span>
+        {optional && <span className="http-field-opt">— Optional</span>}
+      </button>
+      {open && <div className="http-field-body">{children}</div>}
+    </div>
+  );
+}
+
+/** A label + iOS-style switch row for boolean options. */
+function HttpToggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="http-toggle">
+      <span className="http-toggle-label">{label} <span className="http-field-opt">— Optional</span></span>
+      <span className={`http-switch${checked ? " on" : ""}`}>
+        <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+        <span className="http-switch-knob" />
+      </span>
+    </label>
+  );
+}
+
+/** The shared HTTP request field set. Reports serialized params via onChange on every edit. */
+function HttpRequestForm({
+  columns, initial, onChange,
+}: {
+  columns: string[];
+  initial?: Record<string, unknown>;
+  onChange: (params: Record<string, unknown>) => void;
+}) {
+  const [s, setS] = useState<HttpState>(() => httpStateFromParams(initial ?? {}));
+  const upd = (patch: Partial<HttpState>) => setS((prev) => ({ ...prev, ...patch }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { onChange(httpStateToParams(s)); }, [s]);
+  const listId = "http-col-values";
+
+  return (
+    <div className="http-form">
+      <datalist id={listId}>{columns.map((c) => <option key={c} value={`{{${c}}}`} />)}</datalist>
+
+      <label className="form-label">Method</label>
+      <select className="form-input form-select" value={s.method} onChange={(e) => upd({ method: e.target.value })}>
+        {HTTP_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
+      </select>
+
+      <label className="form-label">Endpoint <span className="fnx-param-req">*</span></label>
+      <SlashTextarea value={s.url} onChange={(v) => upd({ url: v })} columns={columns} rows={2} className="formula-mono" placeholder="https://api.example.com/v1/search?id={{Id}}  ·  type / to insert a column" />
+
+      <HttpField title="Query parameters" optional defaultOpen={s.query.length > 0}>
+        <KeyValueEditor pairs={s.query} onChange={(query) => upd({ query })} listId={listId} />
+      </HttpField>
+
+      <HttpField title="Body" optional defaultOpen={!!s.body}>
+        <SlashTextarea value={s.body} onChange={(v) => upd({ body: v })} columns={columns} rows={5} className="formula-mono" placeholder={'{ "domain": "{{Domain}}" }  ·  JSON or raw text, type / to insert a column'} />
+      </HttpField>
+
+      <HttpField title="Headers" optional defaultOpen={s.headers.length > 0}>
+        <KeyValueEditor pairs={s.headers} onChange={(headers) => upd({ headers })} listId={listId} valuePlaceholder="e.g. Bearer {{API Key}}" />
+      </HttpField>
+
+      <HttpField title="Response values to return" optional defaultOpen={!!s.responseFields}>
+        <textarea className="form-input ai-textarea formula-mono" rows={3} spellCheck={false} value={s.responseFields} placeholder={"email\ncompany.name\nresults.0.id"} onChange={(e) => upd({ responseFields: e.target.value })} />
+        <p className="params-hint">One dot-path per line. Leave empty to return the whole response.</p>
+      </HttpField>
+
+      <HttpToggle label="Remove empty values" checked={s.removeEmpty} onChange={(removeEmpty) => upd({ removeEmpty })} />
+      <HttpToggle label="Return response metadata" checked={s.returnMetadata} onChange={(returnMetadata) => upd({ returnMetadata })} />
+      <HttpToggle label="Follow redirects" checked={s.followRedirects} onChange={(followRedirects) => upd({ followRedirects })} />
+
+      {s.followRedirects && (
+        <HttpField title="Max redirects" optional>
+          <input className="form-input" type="number" min={0} value={s.maxRedirects} placeholder="5" onChange={(e) => upd({ maxRedirects: e.target.value })} />
+        </HttpField>
+      )}
+
+      <HttpField title="Response timeout (ms)" optional defaultOpen={!!s.timeout}>
+        <input className="form-input" type="number" min={1} value={s.timeout} placeholder="30000" onChange={(e) => upd({ timeout: e.target.value })} />
+      </HttpField>
+
+      <HttpToggle label="Retry on failure" checked={s.retryOnFailure} onChange={(retryOnFailure) => upd({ retryOnFailure })} />
+      {s.retryOnFailure && (
+        <HttpField title="Max retries" optional>
+          <input className="form-input" type="number" min={0} value={s.maxRetries} placeholder="3" onChange={(e) => upd({ maxRetries: e.target.value })} />
+        </HttpField>
+      )}
+    </div>
+  );
+}
+
+function previewValueText(v: unknown): string {
+  if (v === undefined) return "(no value)";
+  const s = v === null ? "null" : typeof v === "string" ? v : JSON.stringify(v);
+  return s.length > 220 ? s.slice(0, 220) + "…" : s;
+}
+
+/** "Try on N rows" — dry-runs the current request against the first N rows and shows
+ *  each result inline, without saving the column or writing any cell. */
+function TryRowsButton({
+  tableId, provider, method, params, limit = 5,
+}: {
+  tableId: string;
+  provider: string;
+  method: string;
+  params: Record<string, unknown>;
+  limit?: number;
+}) {
+  const gridApi = useColumnApi();
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState<Array<{ rowId: string; value?: unknown; error?: string }> | null>(null);
+  const [err, setErr] = useState("");
+  const noUrl = !String(params.url ?? "").trim();
+
+  const run = async () => {
+    setBusy(true); setErr(""); setResults(null);
+    try {
+      const r = await gridApi.previewFunction(tableId, { provider, method, params, limit });
+      setResults(r.results);
+    } catch (e) {
+      setErr((e as Error)?.message ?? "Preview failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="http-try">
+      <button type="button" className="btn btn-outline btn-sm" onClick={run} disabled={busy || noUrl} title={noUrl ? "Add an endpoint first" : undefined}>
+        {busy ? "Running…" : `Try on ${limit} rows`}
+      </button>
+      {err && <div className="conn-err http-try-errbox">{err}</div>}
+      {results && (
+        <div className="http-try-results">
+          {results.length === 0 ? (
+            <div className="http-try-empty">No rows yet — add rows to the table to preview.</div>
+          ) : (
+            results.map((r, i) => (
+              <div key={r.rowId} className={`http-try-row${r.error ? " is-err" : ""}`}>
+                <span className="http-try-idx">{i + 1}</span>
+                {r.error
+                  ? <span className="http-try-msg is-err">{r.error}</span>
+                  : <code className="http-try-msg">{previewValueText(r.value)}</code>}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Add-column detail for the HTTP connector: name + the request form + run settings. */
+function HttpRequestDetail({
+  fn, tableId, columns, onAdded,
+}: {
+  fn: Fn;
+  tableId: string;
+  columns: string[];
+  onAdded: () => void;
+}) {
+  const gridApi = useColumnApi();
+  const [colName, setColName] = useState("HTTP API");
+  const [params, setParams] = useState<Record<string, unknown>>({});
+  const [condition, setCondition] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  const add = async () => {
+    if (!colName.trim()) { setErr("Column name is required"); return; }
+    if (!String(params.url ?? "").trim()) { setErr("Endpoint is required"); return; }
+    setSaving(true);
+    setErr("");
+    try {
+      await gridApi.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, type: "json", params, condition: condition.trim() || null });
+      onAdded();
+    } catch (e) {
+      setErr((e as Error)?.message ?? "Failed to add column");
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fnx-cfg">
+      <div className="fnx-cfg-head">
+        <div className="fnx-cfg-icon"><FnIcon fn={fn} size={26} /></div>
+        <div style={{ minWidth: 0 }}>
+          <div className="fnx-cfg-title">{fn.label}</div>
+          <div className="fnx-cfg-sub">Call any API endpoint · outputs json</div>
+        </div>
+      </div>
+
+      <label className="form-label">Column name</label>
+      <input className="form-input" value={colName} onChange={(e) => setColName(e.target.value)} placeholder="Column name" />
+
+      <HttpRequestForm columns={columns} onChange={setParams} />
+
+      <RunSettings condition={condition} setCondition={setCondition} columns={columns} />
+
+      <TryRowsButton tableId={tableId} provider={fn.provider} method={fn.fnKey.split(".")[1] ?? "request"} params={params} />
+
+      {err && <div className="conn-err">{err}</div>}
+
+      <button className="btn btn-primary fnx-cfg-add" onClick={add} disabled={saving}>
+        {saving ? "Adding…" : "Add column"}
+      </button>
+    </div>
+  );
+}
+
 // ─── Column settings (edit an existing column) ───────────
 // Reachable from the column header menu — edit the name, a formula column's
 // expression, and the "only run if" condition on any function column.
 
 export function ColumnSettingsModal({
-  column, columns, onClose, onSaved,
+  column, columns, tableId, onClose, onSaved,
 }: {
   column: {
     id: string;
@@ -1164,14 +1501,16 @@ export function ColumnSettingsModal({
     condition?: string | null;
   };
   columns: string[];
+  tableId?: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const gridApi = useColumnApi();
   const isFormula = column.provider === "formula" || column.fn === "formula.eval";
   const isAi = column.provider === "ai";
+  const isHttp = column.provider === "http";
   const isFunction = !!column.provider || !!column.fn;
-  const isEnrichment = isFunction && !isFormula && !isAi; // connector/enrichment column
+  const isEnrichment = isFunction && !isFormula && !isAi && !isHttp; // connector/enrichment column
   const p: Record<string, unknown> = column.params ?? {};
 
   const [name, setName] = useState(column.name);
@@ -1184,6 +1523,8 @@ export function ColumnSettingsModal({
   const [system, setSystem] = useState(isAi ? String(p.system ?? "") : "");
   const [model, setModel] = useState(isAi ? String(p.model ?? "") : "");
   const [maxTokens, setMaxTokens] = useState(isAi && p.maxTokens != null ? String(p.maxTokens) : "");
+  // http: re-edit the full request builder (params reported by HttpRequestForm)
+  const [httpParams, setHttpParams] = useState<Record<string, unknown>>(p);
   // enrichment: re-edit the existing input mappings
   const [params, setParams] = useState<Record<string, string>>(() => {
     const out: Record<string, string> = {};
@@ -1222,6 +1563,8 @@ export function ColumnSettingsModal({
         np.maxTokens = !Number.isNaN(mt) && mt > 0 ? mt : undefined;
         for (const k of Object.keys(np)) if (np[k] === undefined) delete np[k];
         patch.params = np;
+      } else if (isHttp) {
+        patch.params = httpParams;
       } else if (isEnrichment) {
         patch.params = { ...p, ...params };
       } else {
@@ -1279,6 +1622,11 @@ export function ColumnSettingsModal({
               <label className="form-label">Max tokens <span className="form-label-opt">(optional)</span></label>
               <input className="form-input" type="number" min={1} value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} placeholder="512" />
             </>
+          )}
+
+          {isHttp && <HttpRequestForm columns={otherColumns} initial={p} onChange={setHttpParams} />}
+          {isHttp && tableId && (
+            <TryRowsButton tableId={tableId} provider={column.provider ?? "http"} method={(column.fn ?? "http.request").split(".")[1] ?? "request"} params={httpParams} />
           )}
 
           {isEnrichment && Object.keys(params).length > 0 && (

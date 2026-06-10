@@ -93,11 +93,24 @@ export {
 export interface OpenProjectResult {
   db: Db;
   engine: Engine;
+  /**
+   * The shared global db holding connector/AI credentials (see {@link globalDbPath}).
+   * Distinct from {@link db} (the project store) since the global-db split: callers
+   * that read or write credentials (CLI `connect`/`status`) MUST use this, not `db`,
+   * or they'll save/inspect keys the engine never resolves. Equals `db` only when the
+   * opened project IS the global db.
+   */
+  credsDb: Db;
 }
 
-/** Root directory for all project + global .db files. */
+/**
+ * Root directory for all project + global .db files. Defaults to `~/gtmgrid`;
+ * `GTMGRID_HOME` overrides it (used to sandbox tests/CI so they never touch the
+ * real global db, and to relocate state in containerised deploys).
+ */
 export function gtmgridDir(): string {
-  const dir = join(homedir(), "gtmgrid");
+  const override = process.env.GTMGRID_HOME;
+  const dir = override && override.length > 0 ? override : join(homedir(), "gtmgrid");
   mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -174,18 +187,31 @@ export function openProject(
 ): OpenProjectResult {
   const path = pathOrName.endsWith(".db") || pathOrName.includes("/") ? pathOrName : projectPath(pathOrName);
   const db = new Db(path);
-  const config = opts.config ?? { ai: aiConfigFromEnv() ?? storedAiConfig(db), aiProviders: storedAiProviders(db) };
+  // Connector secrets + AI config live in the SHARED global db (since the
+  // global-db split). The desktop sidecar already wires this as the Engine's
+  // credsDb (`new Engine(projectDb, …, globalDb)`); openProject must do the same
+  // or every key stored only in global.db (exa, firecrawl, …) resolves to
+  // undefined and the connector fires keyless — e.g. Exa then 402s. Reuse `db`
+  // when this project IS the global db so we never double-open it.
+  const gPath = globalDbPath();
+  const credsDb = path === gPath ? db : new Db(gPath);
+  const config =
+    opts.config ?? { ai: aiConfigFromEnv() ?? storedAiConfig(credsDb), aiProviders: storedAiProviders(credsDb) };
   const registry = opts.registry ?? defaultRegistry();
-  // Load any uploaded JSON-manifest extensions into the registry.
-  for (const manifest of db.listExtensions()) {
+  // Load JSON-manifest extensions from the GLOBAL db, not the project db — they
+  // live alongside credentials in the shared global store (see {@link globalDbPath}),
+  // and the server seeds the current `extensions/*.json` set there on startup. A
+  // project db only ever held a stale snapshot, so the MCP agent (which opens a
+  // project) was missing connectors the UI showed — firecrawl, notion, supabase…
+  for (const manifest of credsDb.listExtensions()) {
     try {
       registry.add(connectorFromManifest(parseManifest(manifest)));
     } catch (err) {
       console.error(`Skipping invalid extension "${(manifest as any)?.id}": ${err instanceof Error ? err.message : err}`);
     }
   }
-  const engine = new Engine(db, config, registry);
-  return { db, engine };
+  const engine = new Engine(db, config, registry, credsDb);
+  return { db, engine, credsDb };
 }
 
 const DEFAULT_MODEL = {

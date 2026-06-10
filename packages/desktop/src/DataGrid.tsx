@@ -67,6 +67,8 @@ export interface GridController {
   // ── Toolbar slots (environment-specific extras) ────────────────────────
   /** Local auto-run toggle; omit to hide (cloud has no auto-run). */
   readonly autoRun?: { value: boolean; onToggle: () => void };
+  /** Extra controls in the LEFT cluster, next to Auto-run (e.g. local Dedupe). */
+  readonly toolbarLeftExtras?: ReactNode;
   /** Extra toolbar controls rendered in the right cluster (e.g. cloud Webhook). */
   readonly toolbarExtras?: ReactNode;
 
@@ -174,6 +176,8 @@ export function DataGrid({
             </span>
           </button>
         )}
+
+        {c.toolbarLeftExtras}
 
         <div className="toolbar-spacer" />
 
