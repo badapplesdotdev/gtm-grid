@@ -1,5 +1,17 @@
 # @gtmgrid/web
 
+## 0.7.0
+
+### Patch Changes
+
+- Updated dependencies [accf1a9]
+  - @gtmgrid/engine@0.7.0
+  - @gtmgrid/auth@0.7.0
+  - @gtmgrid/cloud@0.7.0
+  - @gtmgrid/db@0.7.0
+  - @gtmgrid/email@0.7.0
+  - @gtmgrid/services@0.7.0
+
 ## 0.6.1
 
 ### Patch Changes

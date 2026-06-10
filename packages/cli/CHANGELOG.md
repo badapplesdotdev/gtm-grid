@@ -1,5 +1,12 @@
 # @gtmgrid/cli
 
+## 0.7.0
+
+### Patch Changes
+
+- Updated dependencies [accf1a9]
+  - @gtmgrid/engine@0.7.0
+
 ## 0.6.1
 
 ### Patch Changes
