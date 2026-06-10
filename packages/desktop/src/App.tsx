@@ -897,11 +897,13 @@ function NotificationCenter({
   onAction,
   onDismiss,
   onClose,
+  anchorRef,
 }: {
   notifications: readonly AppNotification[];
   onAction: (id: NotificationActionId) => void;
   onDismiss: (kind: AppNotification["kind"]) => void;
   onClose: () => void;
+  anchorRef: { readonly current: HTMLButtonElement | null };
 }) {
   // Close on Escape for keyboard accessibility.
   useEffect(() => {
@@ -909,11 +911,25 @@ function NotificationCenter({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+  // Position as a viewport-FIXED popover anchored just under the bell and clamped
+  // on-screen — as an absolute child of the sidebar header it gets clipped by the
+  // sidebar's overflow, so we measure the bell rect and place it fixed instead.
+  const popRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number }>({ top: 8, left: 8 });
+  useLayoutEffect(() => {
+    const a = anchorRef.current?.getBoundingClientRect();
+    if (!a) return;
+    const w = popRef.current?.offsetWidth ?? 320;
+    const left = Math.max(8, Math.min(a.right - w, window.innerWidth - w - 8));
+    setPos({ top: a.bottom + 6, left });
+  }, [anchorRef, notifications.length]);
   return (
     <>
       <div className="popover-scrim" onMouseDown={onClose} />
       <div
+        ref={popRef}
         className="account-menu notif-pop"
+        style={{ top: pos.top, left: pos.left }}
         role="dialog"
         aria-label="Notifications"
         onMouseDown={(e) => e.stopPropagation()}
@@ -1824,6 +1840,7 @@ export default function App() {
   });
   // Whether the bell's notification center popover is open.
   const [notifOpen, setNotifOpen] = useState(false);
+  const bellRef = useRef<HTMLButtonElement | null>(null);
 
   // Load the persisted flag once the sidecar is reachable. Defaults OFF on any
   // failure (parseAutoSyncFlag treats a missing value as OFF).
@@ -2501,6 +2518,7 @@ export default function App() {
           <span className="sidebar-head-spacer" />
           <div className="notif-anchor">
             <button
+              ref={bellRef}
               className={`sidebar-members notif-bell${unreadNotifs > 0 ? " has-unread" : ""}`}
               onClick={openNotifications}
               aria-label={unreadNotifs > 0 ? `Notifications, ${unreadNotifs} unread` : "Notifications"}
@@ -2519,6 +2537,7 @@ export default function App() {
                 onAction={runNotificationAction}
                 onDismiss={dismissNotif}
                 onClose={() => setNotifOpen(false)}
+                anchorRef={bellRef}
               />
             )}
           </div>

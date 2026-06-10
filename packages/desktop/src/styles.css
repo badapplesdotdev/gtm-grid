@@ -2711,7 +2711,7 @@ html, body, #root {
    the TOP of the screen. This higher-specificity rule re-anchors it DOWN-left so
    the bell popover is fully on-screen. */
 .account-menu.notif-pop {
-  top: calc(100% + 6px); bottom: auto; left: auto; right: 0; transform-origin: top right;
+  position: fixed; inset: auto; transform-origin: top left; max-width: calc(100vw - 16px);
 }
 .account-menu-head { display: flex; align-items: center; gap: 10px; padding: 14px 14px; border-bottom: 1px solid var(--border); }
 .account-menu-head-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
