@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import type { ServerResponse } from "node:http";
 import { join, dirname } from "node:path";
 import { corsHeadersFor } from "./cors.js";
+import { latestSessionId } from "./agent-history.js";
 
 const GTM_TOOLS = [
   "list_functions",
@@ -528,7 +529,7 @@ export function mcpConfig(
 /** Stream a Claude Code turn over SSE, driving gtmgrid via MCP. */
 export function streamClaude(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext; origin?: string; model?: string; cloud?: AgentCloud },
+  opts: { message: string; project: string; repoRoot: string; sessionId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; cloud?: AgentCloud },
 ): void {
   const sse = sseClient(res, opts.origin);
   // Optionally also expose the user's Hermes agent as an MCP tool (off unless
@@ -554,7 +555,12 @@ export function streamClaude(
   const preamble = contextPreamble(opts.context);
   if (preamble) args.push("--append-system-prompt", preamble);
   if (opts.model) args.push("--model", opts.model);
-  if (opts.sessionId) args.push("--resume", opts.sessionId);
+  // Bind to the user's OWN session, not a client-stored id: an explicit id (a
+  // History pick) wins; otherwise — unless they asked for a New chat — resume the
+  // latest native session for this project. So continuity survives a Stop or app
+  // restart (we re-read the CLI's transcript store) with nothing persisted by us.
+  const resumeId = opts.sessionId ?? (opts.newChat ? null : latestSessionId("claude", opts.repoRoot));
+  if (resumeId) args.push("--resume", resumeId);
 
   const bin = resolveAgentPath("claude");
   if (!bin) {
@@ -565,7 +571,8 @@ export function streamClaude(
   // `detached` makes the child its own process-group leader so we can later
   // signal the WHOLE tree (CLI + MCP server + grandchildren) via `-pid` (TRI-3305).
   const child = spawn(bin, args, { env: agentSpawnEnv(bin), cwd: opts.repoRoot, detached: true });
-  let sessionId = opts.sessionId ?? null;
+  let sessionId = resumeId ?? null;
+  let emittedSession = false;
   let buf = "";
   let gridDirty = false;
   const lifecycle = manageChildLifecycle(child, {
@@ -590,6 +597,13 @@ export function streamClaude(
         continue;
       }
       if (e.session_id) sessionId = e.session_id;
+      // Surface the session id as soon as the CLI reports it (the init message),
+      // not just at the end — so a Stop mid-turn still leaves the UI/History
+      // pointing at the right native session to resume.
+      if (sessionId && !emittedSession) {
+        emittedSession = true;
+        sse.write({ type: "session", sessionId });
+      }
 
       if (e.type === "assistant") {
         for (const block of e.message?.content ?? []) {
@@ -665,7 +679,7 @@ export function codexEnvToml(env: Record<string, string>): string {
 
 export function streamCodex(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; threadId?: string; context?: AgentContext; origin?: string; model?: string; cloud?: AgentCloud },
+  opts: { message: string; project: string; repoRoot: string; threadId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; cloud?: AgentCloud },
 ): void {
   const sse = sseClient(res, opts.origin);
   const launcher = mcpLauncher(opts.repoRoot);
@@ -689,8 +703,11 @@ export function streamCodex(
     `mcp_servers={ gtmgrid = { command = "${launcher}", env = ${codexEnvToml(mcpEnv(opts.project, opts.cloud))} }${hermesToml} }`,
     ...(opts.model ? ["-m", opts.model] : []),
   ];
-  const args = opts.threadId
-    ? ["exec", "resume", opts.threadId, ...flags, message]
+  // Same binding as Claude: an explicit threadId (History pick) wins, else resume
+  // the latest native Codex thread for this project unless a New chat was asked for.
+  const resumeThread = opts.threadId ?? (opts.newChat ? null : latestSessionId("codex", opts.repoRoot));
+  const args = resumeThread
+    ? ["exec", "resume", resumeThread, ...flags, message]
     : ["exec", ...flags, message];
 
   const bin = resolveAgentPath("codex");
@@ -704,7 +721,7 @@ export function streamCodex(
   const child = spawn(bin, args, { env: agentSpawnEnv(bin), cwd: opts.repoRoot, detached: true });
   child.stdin?.end(); // codex exec otherwise waits on stdin
 
-  let threadId = opts.threadId ?? null;
+  let threadId = resumeThread ?? null;
   let buf = "";
   const lifecycle = manageChildLifecycle(child, {
     onTimeout: () => {

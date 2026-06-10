@@ -1079,9 +1079,10 @@ const server = createServer(async (req, res) => {
       const cloud = parseAgentCloud(body?.cloud);
       // Hermes is LOCAL-only by design — it drives the local SQLite project via
       // ACP and is never threaded the cloud context.
+      const newChat = body?.newChat === true;
       if (agent === "hermes") streamHermes(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model });
-      else if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context, origin, model, cloud });
-      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model, cloud });
+      else if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, newChat, context, origin, model, cloud });
+      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, newChat, context, origin, model, cloud });
     } catch (e) {
       send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
     }
