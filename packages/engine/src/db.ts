@@ -317,6 +317,34 @@ export class Db {
     return row;
   }
 
+  /** Total row count for a table (cheap — no row fetch). */
+  countRows(tableId: string): number {
+    return (this.raw.prepare(`SELECT COUNT(*) AS n FROM rows WHERE table_id = ?`).get(tableId) as { n: number }).n;
+  }
+
+  /**
+   * Find rows where every (columnId -> value) in `match` equals the cell value
+   * (exact match, with whitespace trim on strings). An empty `match` returns all
+   * rows. Bounded by `limit` so a query on a huge table never blows up — this is
+   * the agent's "search inside a sheet" primitive (no whole-table pull needed).
+   */
+  findRows(tableId: string, match: Record<string, unknown>, limit = 100): Row[] {
+    const entries = Object.entries(match);
+    const cellEq = (a: unknown, b: unknown): boolean => {
+      if (typeof a === "string" && typeof b === "string") return a.trim() === b.trim();
+      if (typeof a === "string" || typeof b === "string") return String(a ?? "").trim() === String(b ?? "").trim();
+      return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+    };
+    const out: Row[] = [];
+    for (const r of this.listRows(tableId)) {
+      if (entries.every(([colId, want]) => cellEq(this.getCell(r.id, colId)?.value, want))) {
+        out.push(r);
+        if (out.length >= limit) break;
+      }
+    }
+    return out;
+  }
+
   listRows(tableId: string): Row[] {
     return this.raw
       .prepare(`SELECT * FROM rows WHERE table_id = ? ORDER BY position, created_at`)

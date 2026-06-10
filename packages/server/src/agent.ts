@@ -16,15 +16,28 @@ const GTM_TOOLS = [
   "list_functions",
   "list_tables",
   "create_table",
+  "rename_table",
+  "delete_table",
   "add_column",
+  "update_column",
+  "delete_column",
   "add_rows",
+  "update_cells",
+  "delete_rows",
+  "find_rows",
+  "get_column",
   "set_dedupe",
   "run_column",
   "get_table",
   "run_function",
   "upload_extension",
 ];
-const MUTATING = new Set(["create_table", "add_column", "add_rows", "run_column", "upload_extension"]);
+const MUTATING = new Set([
+  "create_table", "rename_table", "delete_table",
+  "add_column", "update_column", "delete_column",
+  "add_rows", "update_cells", "delete_rows",
+  "set_dedupe", "run_column", "upload_extension",
+]);
 
 export interface AgentContext {
   tableName?: string;
@@ -118,6 +131,15 @@ The catalog is huge (Trigify alone exposes 122 methods). Discover in this order:
 - The grid has **Auto-run**: when ON, editing/adding a manual cell that a function column depends on auto-recomputes the dependent cells. Don't fight it — when Auto-run is on, just \`add_rows\` and the function columns fill themselves.
 - Users can run a **single cell** (hover, click ▶) or a **whole column** (the per-column run button in the header) or **everything** (Run all in the toolbar). \`run_column\` from your side is equivalent to clicking the column run button.
 - Runs are **idempotent**: \`run_column\` skips cells already \`done\` unless you pass \`force: true\`. Re-running after a transient error is safe.
+
+### Full grid control — and the confirm protocol
+You control the whole grid, not just appends:
+- **Read precisely** instead of pulling everything. \`get_table\` is paginated (\`limit\`/\`offset\`, returns \`totalRows\`) and truncates fat cells — for a big table use \`find_rows(where:{ Column: value })\` to search, or \`get_column\` to scan one field. Every row comes back with an \`_id\`.
+- **Edit**: \`update_cells\` (set/clear cells by \`_id\`), \`update_column\` (change a column's config — non-destructive), \`rename_table\`.
+- **Delete**: \`delete_rows\` (by \`_id\` or \`where\`), \`delete_column\`, \`delete_table\`.
+- **Dedup**: \`set_dedupe(table, column, keep)\` keeps a table unique on a column — then \`add_rows\` auto-skips duplicates, so you can stream paginated sourcing straight in (no scripts, no scratch files). \`column:null\` turns it off.
+
+**Confirm protocol — non-negotiable.** Delete tools, a large \`update_cells\`, and a big \`run_column\` will return \`{ confirmationRequired: true, willAffect, estimatedCredits? }\` and DO NOTHING. When you see that: STOP, tell the user plainly what will happen ("This will delete 4,200 rows from Leads — proceed?"), and only re-call the SAME tool with \`confirm: true\` AFTER they explicitly approve. NEVER set \`confirm:true\` on your own — that flag exists to carry the user's permission, not your intent.
 
 ### Handling errors
 - A cell with \`status: "error"\` shows a red **Status Code: 4xx/5xx** pill in the grid. Click → opens the cell-details drawer with the full error body.

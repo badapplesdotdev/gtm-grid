@@ -63,6 +63,25 @@ function capCellValue(v: unknown): unknown {
   return `${s.slice(0, CELL_CAP)}…[+${s.length - CELL_CAP} chars, full value in the cell]`;
 }
 
+/**
+ * Standard "this is destructive or large — get the user's OK first" response.
+ * The tool does NOT execute; it returns confirmationRequired so the agent (per
+ * its system prompt) surfaces the impact and waits for the user. Only after the
+ * user approves does the agent re-call with confirm:true.
+ */
+const needsConfirm = (action: string, willAffect: number, target: string, extra?: Record<string, unknown>) =>
+  ok({
+    confirmationRequired: true,
+    action,
+    willAffect,
+    target,
+    message: `${action} would affect ${willAffect} item(s) in "${target}". Confirm with the user, then re-call with confirm:true.`,
+    ...extra,
+  });
+
+/** Above this many affected rows/cells, a destructive or compute-heavy op asks first. */
+const CONFIRM_THRESHOLD = 50;
+
 /** LOCAL-only helper: resolve a table by id/name on the SQLite project. */
 const localTableOr = (ref: string) => {
   const t = local!.db.resolveTable(ref);
@@ -272,13 +291,24 @@ server.tool(
 
 server.tool(
   "run_column",
-  "Run a function column over its rows (enriching cells). Returns how many ran and errored.",
-  { table: z.string(), column: z.string(), force: z.boolean().optional(), concurrency: z.number().optional() },
-  async ({ table, column, force, concurrency }) => {
+  "Run a function column over its rows (enriching cells). A large run (more than ~50 pending rows) asks first: it returns the pending-row count + estimated credits — surface that and only re-call with confirm:true once the user approves. Returns how many ran and errored.",
+  { table: z.string(), column: z.string(), force: z.boolean().optional(), concurrency: z.number().optional(), confirm: z.boolean().optional() },
+  async ({ table, column, force, concurrency, confirm }) => {
     if (cloudSource) return ok(await cloudSource.runColumn(table, column, { force, concurrency }));
     const t = localTableOr(table);
     const col = local!.db.resolveColumn(t.id, column);
     if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
+    // Cost/scale gate — a massive run needs the user's OK first.
+    const pending = force
+      ? local!.db.countRows(t.id)
+      : local!.db.listRows(t.id).filter((r) => (local!.db.getCell(r.id, col.id)?.status ?? "empty") !== "done").length;
+    const method = col.provider && col.method ? local!.engine.registry.method(col.provider, col.method) : undefined;
+    if (pending > CONFIRM_THRESHOLD && !confirm) {
+      return needsConfirm("Run column", pending, `${t.name} › ${col.name}`, {
+        estimatedCredits: (method?.credits ?? 0) * pending,
+        hint: "enriches every pending row",
+      });
+    }
     const res = await local!.engine.runColumn(col.id, { force, concurrency: concurrency ?? 5 });
     return ok({ column: col.name, ...res });
   },
@@ -286,22 +316,205 @@ server.tool(
 
 server.tool(
   "get_table",
-  "Get a table's contents: columns and every row's cell values + statuses. Large cell values (e.g. raw enrichment JSON blobs) are truncated to keep the whole table readable in one pass — a '…[+N chars]' marker shows how much was cut. Small/compiled columns come through in full. Use a code/formula column to extract the specific fields you need from a big blob.",
-  { table: z.string() },
-  async ({ table }) => {
+  "Get a table's columns + rows (each row carries its _id for update_cells/delete_rows). Bounded: returns up to `limit` rows (default 200) from `offset`, plus totalRows — for a big table, paginate or use find_rows/get_column instead of pulling it all. Large cell values are truncated with a '…[+N chars]' marker (full value stays in the cell; extract fields via a code/formula column); small/compiled columns come through whole.",
+  { table: z.string(), limit: z.number().optional(), offset: z.number().optional() },
+  async ({ table, limit, offset }) => {
     if (cloudSource) return ok(await cloudSource.getTable(table));
     const t = localTableOr(table);
     const cols = local!.db.listColumns(t.id);
-    const rows = local!.db.listRows(t.id).map((r) => {
+    const total = local!.db.countRows(t.id);
+    const start = Math.max(offset ?? 0, 0);
+    const cap = Math.min(Math.max(limit ?? 200, 1), 1000);
+    const rows = local!.db.listRows(t.id).slice(start, start + cap).map((r) => {
       const cells = local!.db.rowCells(r.id);
-      const obj: Record<string, unknown> = {};
+      const obj: Record<string, unknown> = { _id: r.id };
       for (const c of cols) {
         const cell = cells.get(c.id);
         obj[c.name] = cell ? (cell.status === "error" ? { error: cell.error } : capCellValue(cell.value)) : null;
       }
       return obj;
     });
-    return ok({ table: t.name, columns: cols.map((c) => ({ name: c.name, kind: c.kind, fn: c.provider ? `${c.provider}.${c.method}` : c.code ? "code" : null })), rows });
+    return ok({
+      table: t.name,
+      columns: cols.map((c) => ({ name: c.name, kind: c.kind, fn: c.provider ? `${c.provider}.${c.method}` : c.code ? "code" : null })),
+      rows,
+      totalRows: total,
+      returned: rows.length,
+      offset: start,
+      truncated: start + rows.length < total,
+    });
+  },
+);
+
+server.tool(
+  "find_rows",
+  "Search inside a table: return only the rows whose cells match `where` (exact match, AND across the given columns) — no whole-table pull needed. Each returned row carries its _id (use with update_cells / delete_rows). Pass `columns` to slim the payload, and `limit` to bound it.",
+  {
+    table: z.string(),
+    where: z.record(z.string(), z.any()).describe("{ ColumnName: value } — a row must match ALL of these"),
+    columns: z.array(z.string()).optional().describe("Only return these columns (plus _id). Omit for all."),
+    limit: z.number().optional(),
+  },
+  async ({ table, where, columns, limit }) => {
+    if (cloudSource) return cloudUnsupported("find_rows");
+    const t = localTableOr(table);
+    const match: Record<string, unknown> = {};
+    for (const [name, val] of Object.entries(where ?? {})) {
+      const col = local!.db.resolveColumn(t.id, name);
+      if (!col) throw new Error(`No column "${name}" in "${t.name}"`);
+      match[col.id] = val;
+    }
+    const wantCols = (columns ?? local!.db.listColumns(t.id).map((c) => c.name))
+      .map((n) => local!.db.resolveColumn(t.id, n))
+      .filter((c): c is NonNullable<typeof c> => !!c);
+    const rows = local!.db.findRows(t.id, match, Math.min(limit ?? 100, 1000)).map((r) => {
+      const obj: Record<string, unknown> = { _id: r.id };
+      for (const c of wantCols) {
+        const cell = local!.db.getCell(r.id, c.id);
+        obj[c.name] = cell ? capCellValue(cell.value) : null;
+      }
+      return obj;
+    });
+    return ok({ matched: rows.length, rows });
+  },
+);
+
+server.tool(
+  "get_column",
+  "Read one column's values (each with its row _id) — a lean alternative to get_table for assessing a big table on a single field. Bounded by `limit`.",
+  { table: z.string(), column: z.string(), limit: z.number().optional() },
+  async ({ table, column, limit }) => {
+    if (cloudSource) return cloudUnsupported("get_column");
+    const t = localTableOr(table);
+    const col = local!.db.resolveColumn(t.id, column);
+    if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
+    const cap = Math.min(limit ?? 1000, 5000);
+    const values = local!.db.listRows(t.id).slice(0, cap).map((r) => ({
+      _id: r.id,
+      value: capCellValue(local!.db.getCell(r.id, col.id)?.value ?? null),
+    }));
+    return ok({ column: col.name, total: local!.db.countRows(t.id), returned: values.length, values });
+  },
+);
+
+server.tool(
+  "update_cells",
+  "Set or clear specific cells. Each update is { row: <_id from get_table/find_rows>, column: <name>, value: <any> }; value null/'' clears the cell. For more than 50 cells it asks first (confirm:true after the user approves).",
+  {
+    table: z.string(),
+    updates: z.array(z.object({ row: z.string(), column: z.string(), value: z.any() })),
+    confirm: z.boolean().optional(),
+  },
+  async ({ table, updates, confirm }) => {
+    if (cloudSource) return cloudUnsupported("update_cells");
+    const t = localTableOr(table);
+    if (updates.length > CONFIRM_THRESHOLD && !confirm) return needsConfirm("Update cells", updates.length, t.name);
+    let updated = 0;
+    for (const u of updates) {
+      const col = local!.db.resolveColumn(t.id, u.column);
+      if (!col) throw new Error(`No column "${u.column}" in "${t.name}"`);
+      if (u.value === null || u.value === undefined || u.value === "") local!.db.deleteCell(u.row, col.id);
+      else local!.db.setCell(u.row, col.id, { value: u.value, status: "done" });
+      updated++;
+    }
+    return ok({ updated });
+  },
+);
+
+server.tool(
+  "delete_rows",
+  "Delete rows by _id (from get_table/find_rows) and/or by a `where` match. DESTRUCTIVE: without confirm:true it returns a preview of how many rows would be deleted — surface that to the user and only re-call with confirm:true once they approve.",
+  {
+    table: z.string(),
+    ids: z.array(z.string()).optional(),
+    where: z.record(z.string(), z.any()).optional().describe("{ ColumnName: value } — delete rows matching ALL"),
+    confirm: z.boolean().optional(),
+  },
+  async ({ table, ids, where, confirm }) => {
+    if (cloudSource) return cloudUnsupported("delete_rows");
+    const t = localTableOr(table);
+    const targets = new Set<string>(ids ?? []);
+    if (where && Object.keys(where).length) {
+      const match: Record<string, unknown> = {};
+      for (const [name, val] of Object.entries(where)) {
+        const col = local!.db.resolveColumn(t.id, name);
+        if (!col) throw new Error(`No column "${name}" in "${t.name}"`);
+        match[col.id] = val;
+      }
+      for (const r of local!.db.findRows(t.id, match, 1_000_000)) targets.add(r.id);
+    }
+    if (targets.size === 0) return ok({ deleted: 0, note: "no matching rows" });
+    if (!confirm) return needsConfirm("Delete rows", targets.size, t.name);
+    for (const id of targets) local!.db.deleteRow(id);
+    return ok({ deleted: targets.size });
+  },
+);
+
+server.tool(
+  "delete_column",
+  "Delete a column and its values from every row. DESTRUCTIVE: needs confirm:true after the user approves.",
+  { table: z.string(), column: z.string(), confirm: z.boolean().optional() },
+  async ({ table, column, confirm }) => {
+    if (cloudSource) return cloudUnsupported("delete_column");
+    const t = localTableOr(table);
+    const col = local!.db.resolveColumn(t.id, column);
+    if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
+    if (!confirm) return needsConfirm("Delete column", local!.db.countRows(t.id), `${t.name} › ${col.name}`, { hint: "removes the column and its cells from every row" });
+    local!.db.deleteColumn(col.id);
+    return ok({ deleted: col.name });
+  },
+);
+
+server.tool(
+  "delete_table",
+  "Delete an entire table — all of its columns and rows. DESTRUCTIVE: needs confirm:true after the user approves.",
+  { table: z.string(), confirm: z.boolean().optional() },
+  async ({ table, confirm }) => {
+    if (cloudSource) return cloudUnsupported("delete_table");
+    const t = localTableOr(table);
+    if (!confirm) return needsConfirm("Delete table", local!.db.countRows(t.id), t.name, { hint: "permanently removes the whole table" });
+    local!.db.deleteTable(t.id);
+    return ok({ deleted: t.name });
+  },
+);
+
+server.tool(
+  "update_column",
+  "Change a column's config: name, type, condition, or its function (provider/method/params/code). Non-destructive — it doesn't clear existing cells. Re-run with run_column afterwards if the change should recompute.",
+  {
+    table: z.string(),
+    column: z.string(),
+    patch: z.object({
+      name: z.string().optional(),
+      type: z.string().optional(),
+      condition: z.string().nullable().optional(),
+      provider: z.string().nullable().optional(),
+      method: z.string().nullable().optional(),
+      code: z.string().nullable().optional(),
+      params: z.record(z.string(), z.any()).optional(),
+    }),
+  },
+  async ({ table, column, patch }) => {
+    if (cloudSource) return cloudUnsupported("update_column");
+    const t = localTableOr(table);
+    const col = local!.db.resolveColumn(t.id, column);
+    if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
+    // patch.type arrives as a string; the db's ColumnType union accepts it at runtime.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const updated = local!.db.updateColumn(col.id, patch as any);
+    return ok({ column: updated?.name ?? col.name });
+  },
+);
+
+server.tool(
+  "rename_table",
+  "Rename a table.",
+  { table: z.string(), name: z.string() },
+  async ({ table, name }) => {
+    if (cloudSource) return cloudUnsupported("rename_table");
+    const t = localTableOr(table);
+    local!.db.renameTable(t.id, name.trim() || t.name);
+    return ok({ renamed: name.trim() || t.name });
   },
 );
 
