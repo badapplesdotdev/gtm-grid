@@ -164,6 +164,9 @@ export const gridRouter = router({
         method: z.string().nullish(),
         code: z.string().nullish(),
         params: z.unknown().optional(),
+        // The "only run if" rule — carried so a local→cloud push preserves a
+        // function column's run condition (GridService/repo already persist it).
+        condition: z.string().nullish(),
       }),
     )
     .mutation(({ ctx, input }) =>
@@ -180,6 +183,7 @@ export const gridRouter = router({
             method: input.method ?? null,
             code: input.code ?? null,
             params: input.params,
+            condition: input.condition ?? null,
           });
         }),
       ),
