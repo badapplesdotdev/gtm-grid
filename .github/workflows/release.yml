@@ -86,16 +86,27 @@ jobs:
       # a time means each completes its fetch→merge→upload before the next starts.
       max-parallel: 1
       matrix:
+        # `os` drives the per-platform conditionals; `runner` is the runs-on
+        # target. The two macOS targets build on the self-hosted Apple-silicon
+        # Mac mini (labels: self-hosted + macOS) so the long notarization waits
+        # don't consume GitHub-hosted macOS minutes; Linux + Windows stay on
+        # GitHub-hosted runners (the mini can't build them).
         include:
-          - platform: macos-14 # Apple silicon (native)
+          - platform: macOS (Apple silicon)
+            os: macos
+            runner: [self-hosted, macOS]
             rust_target: aarch64-apple-darwin
             sidecar_arch: ""
             args: "--target aarch64-apple-darwin"
-          - platform: macos-14 # Intel (cross-compiled on the arm runner)
+          - platform: macOS (Intel)
+            os: macos
+            runner: [self-hosted, macOS]
             rust_target: x86_64-apple-darwin
             sidecar_arch: "x64"
             args: "--target x86_64-apple-darwin"
-          - platform: ubuntu-22.04
+          - platform: Linux
+            os: linux
+            runner: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
             sidecar_arch: ""
             # `.deb` only. The AppImage bundler downloads `linuxdeploy-x86_64.AppImage`
@@ -104,11 +115,13 @@ jobs:
             # external tool download, so Linux ships reliably (re-add `,appimage` once
             # that upstream download is stable).
             args: "--bundles deb"
-          - platform: windows-latest
+          - platform: Windows
+            os: windows
+            runner: windows-latest
             rust_target: x86_64-pc-windows-msvc
             sidecar_arch: ""
             args: "--bundles nsis"
-    runs-on: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
     env:
       # True only when the macOS signing + notarization secrets are configured.
       # Lets the signing steps skip cleanly (producing an unsigned build) until
@@ -120,7 +133,7 @@ jobs:
           ref: ${{ needs.version.outputs.tag }}
 
       - name: Install Linux build dependencies
-        if: startsWith(matrix.platform, 'ubuntu')
+        if: matrix.os == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -152,7 +165,7 @@ jobs:
       # whole step is skipped when the secret is absent so unsigned dev releases
       # still build.
       - name: Import Apple Developer ID certificate
-        if: ${{ startsWith(matrix.platform, 'macos') && env.HAS_APPLE_SIGNING == 'true' }}
+        if: ${{ matrix.os == 'macos' && env.HAS_APPLE_SIGNING == 'true' }}
         uses: apple-actions/import-codesign-certs@v3
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
@@ -161,7 +174,7 @@ jobs:
       # Notarization uses an App Store Connect API key. Write the .p8 to a file
       # and expose its path to tauri-action via $GITHUB_ENV (APPLE_API_KEY_PATH).
       - name: Stage notarization API key
-        if: ${{ startsWith(matrix.platform, 'macos') && env.HAS_APPLE_SIGNING == 'true' }}
+        if: ${{ matrix.os == 'macos' && env.HAS_APPLE_SIGNING == 'true' }}
         run: |
           mkdir -p "$RUNNER_TEMP/asc"
           printf '%s' "${{ secrets.APPLE_API_KEY_P8 }}" | base64 -D > "$RUNNER_TEMP/asc/AuthKey.p8"
