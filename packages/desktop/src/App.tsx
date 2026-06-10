@@ -75,10 +75,8 @@ import { type SignalsCloud } from "./SignalsModal";
 import type { AgentCloudContext } from "./AgentPanel";
 import type { ImportWriter } from "./csvImport";
 import type { Id } from "./cloud/ids";
-import { VirtualGridBody } from "./VirtualGridBody";
+import { DataGrid } from "./DataGrid";
 import { resolveRowHeight } from "./gridVirtual";
-import { useColumnWindow } from "./useColumnWindow";
-import { GridColSpacer } from "./GridColSpacer";
 import "./styles.css";
 
 // ── Lazy-loaded panels (TRI-3287) ─────────────────────────────────────
@@ -1421,9 +1419,8 @@ export default function App() {
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try { return (localStorage.getItem("gtmgrid:theme") as "light" | "dark") || "light"; } catch { return "light"; }
   });
-  // Row-virtualization plumbing (TRI-3267): the scroll container ref the
-  // virtualizer reads, and the resolved per-density row height it estimates with.
-  const gridScrollRef = useRef<HTMLDivElement>(null);
+  // Per-density row height the virtualizer estimates with (the scroll container
+  // + column windowing now live inside the shared DataGrid).
   const [rowHeight, setRowHeight] = useState(resolveRowHeight);
   useEffect(() => {
     const root = document.documentElement;
@@ -1492,22 +1489,6 @@ export default function App() {
     [colWidths],
   );
 
-  // Column virtualization (TRI-3286): window the DATA columns horizontally so a
-  // table with hundreds of columns mounts only the visible columns × visible
-  // rows. The gutter is NOT part of this window — it is the always-present
-  // sticky gutter <th>/<td> rendered once below, so it is reserved exactly once
-  // and `spacers.left` is the first visible data column's offset (gutter
-  // excluded). The hook runs unconditionally (count 0 when no table) to keep
-  // hook order stable.
-  const gridColumns = tableData?.columns ?? [];
-  const columnWindow = useColumnWindow({
-    count: gridColumns.length,
-    scrollRef: gridScrollRef,
-    getColumnWidth: (i) => {
-      const col = gridColumns[i];
-      return col ? colW(col.id) : DEFAULT_COL_W;
-    },
-  });
 
   // Right-click context menu
   const [ctxMenu, setCtxMenu] = useState<{
@@ -2144,14 +2125,31 @@ export default function App() {
   // ONE merged, de-duplicated list of local + cloud tables (a local table linked
   // via `syncLinks` is rendered ONCE as a synced local row; its cloud copy is
   // folded in). Drives a SINGLE active-table selection so only one row highlights.
+  // CLEAR local/cloud separation (TRI-3313 follow-up): the Tables list shows ONE
+  // environment's tables, never both. In CLOUD mode it is purely the cloud
+  // tables; in LOCAL mode it is purely the local tables (still synced-tagged so
+  // the sync dot / cloud icon renders). Because exactly one environment's rows
+  // exist, exactly one row can be active — no more dual highlight from two
+  // independent lists. Cloud rows are built directly (no dedup against local
+  // links) so EVERY cloud table is visible in cloud mode, including ones a local
+  // table is linked to.
   const tableList = useMemo(
     () =>
-      buildTableList({
-        localTables: tables.map((t) => ({ id: t.id, name: t.name, favorite: t.favorite, rows: t.rows })),
-        cloudTables: (cloudTables ?? []).map((t) => ({ _id: t._id, name: t.name })),
-        syncLinks,
-      }),
-    [tables, cloudTables, syncLinks],
+      inCloud
+        ? (cloudTables ?? []).map<TableListRow>((t) => ({
+            kind: "cloud" as const,
+            id: t._id,
+            name: t.name,
+            synced: true,
+            favorite: false,
+            rows: 0,
+          }))
+        : buildTableList({
+            localTables: tables.map((t) => ({ id: t.id, name: t.name, favorite: t.favorite, rows: t.rows })),
+            cloudTables: [],
+            syncLinks,
+          }),
+    [inCloud, tables, cloudTables, syncLinks],
   );
   // Lookups by id so the unified rows can recover their original summaries (the
   // local TableSummary for context-menu / rename / delete; the branded cloud id
@@ -2549,12 +2547,12 @@ export default function App() {
         </div>
 
         <div className="sidebar-scroll">
-          {/* Unified Tables section (TRI-3313-C). ONE merged, de-duplicated list
-              of local + cloud tables with a SINGLE active-table selection (only
-              one row highlighted). A cloud-backed (synced) row shows a cloud icon;
-              an unsynced local row shows its sync dot (cloud users) or row count.
-              Selecting a row sets the one active table and switches the main grid
-              to the cloud-table or local-table view as appropriate. */}
+          {/* Tables section — CLEAR local/cloud separation. The list shows ONE
+              environment's tables: in CLOUD mode the cloud tables, in LOCAL mode
+              the local tables. Because only one environment's rows exist at a
+              time, only one row can ever be active (no dual highlight). The sync
+              affordances (sync-all button, per-row sync dots, auto-sync toggle)
+              appear ONLY in local mode while signed into cloud (`showSyncUi`). */}
           <div className="sidebar-section">
             <div className="sidebar-section-label">
               <span className="sidebar-label-text">Tables{cloudLocked && inCloud ? " 🔒" : ""}</span>
@@ -2977,7 +2975,13 @@ export default function App() {
             CSV import is open in this pane. */}
         {!importMode && inCloud && !cloudLocked && view.kind === "table" && (
           <Suspense fallback={<PanelFallback />}>
-            <CloudGrid tableId={cloudTableId} openWebhookToken={openWebhookToken} onMissing={onCloudTableMissing} />
+            <CloudGrid
+              tableId={cloudTableId}
+              connectors={connectors}
+              onOpenAiSettings={() => setView({ kind: "ai", id: aiProviders[0]?.id ?? "anthropic" })}
+              openWebhookToken={openWebhookToken}
+              onMissing={onCloudTableMissing}
+            />
           </Suspense>
         )}
 
@@ -3055,243 +3059,71 @@ export default function App() {
           </Suspense>
         )}
 
-        {!importMode && !inCloud && view.kind === "table" && <>
-        {/* Toolbar */}
-        <div className="toolbar">
-          {tableData ? (
-            <>
-              <span className="toolbar-title">{tableData.name}</span>
-              <span className="toolbar-meta">{tableData.rows.length} rows · {tableData.columns.length} cols</span>
-            </>
-          ) : (
-            <span className="toolbar-title" style={{ color: "var(--text-3)" }}>
-              {selectedTableId ? "Loading…" : "No table selected"}
-            </span>
-          )}
-
-          {tableData && (
-            <button
-              className="autorun-toggle"
-              onClick={toggleAutoRun}
-              title="Computed fields auto-run when inputs change"
-            >
-              <span className="autorun-label">Auto-run</span>
-              <span className={`autorun-switch${autoRun ? " on" : ""}`}><span className="autorun-knob" /></span>
-            </button>
-          )}
-
-          <div className="toolbar-spacer" />
-
-          {runProgress && (
-            <span className="run-progress">
-              <span className="cell-spinner" style={{ width: 11, height: 11 }} />
-              Running {runProgress.current}/{runProgress.total}
-            </span>
-          )}
-
-          {tableData && (
-            <>
-              <button
-                className="btn btn-outline btn-sm"
-                onClick={addRow}
-                disabled={!!runProgress}
-              >
-                <Icon.Plus size={11} /> Add row
-              </button>
-              <div className="toolbar-sep" />
-              <button
-                className="btn btn-primary btn-sm"
-                onClick={runAll}
-                disabled={!!runProgress || fnColCount === 0}
-                title={fnColCount === 0 ? "No function columns to run" : `Run ${fnColCount} function column${fnColCount !== 1 ? "s" : ""}`}
-              >
-                <Icon.Play size={10} />
-                {runProgress ? "Running…" : "Run"}
-              </button>
-            </>
-          )}
-        </div>
-
-        {/* Grid / Empty state */}
-        {!selectedTableId ? (
-          <div className="empty-state">
-            <div className="empty-icon"><Icon.Grid /></div>
-            <div className="empty-title">No table selected</div>
-            <p className="empty-sub">Create your first table to start building your GTM data grid.</p>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button className="btn btn-primary" onClick={() => setShowNewTableChooser(true)}>
-                <Icon.Plus /> Create table
-              </button>
-              <button className="btn btn-outline" onClick={() => setImportMode("local")}>
-                <Icon.Table /> Import CSV
-              </button>
+        {!importMode && !inCloud && view.kind === "table" && (
+          !selectedTableId ? (
+            <div className="empty-state">
+              <div className="empty-icon"><Icon.Grid /></div>
+              <div className="empty-title">No table selected</div>
+              <p className="empty-sub">Create your first table to start building your GTM data grid.</p>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn btn-primary" onClick={() => setShowNewTableChooser(true)}>
+                  <Icon.Plus /> Create table
+                </button>
+                <button className="btn btn-outline" onClick={() => setImportMode("local")}>
+                  <Icon.Table /> Import CSV
+                </button>
+              </div>
             </div>
-          </div>
-        ) : tableLoading ? (
-          <div className="empty-state">
-            <div className="cell-spinner" style={{ width: 20, height: 20, borderWidth: 2 }} />
-          </div>
-        ) : tableData && tableData.columns.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-icon"><Icon.Zap /></div>
-            <div className="empty-title">No columns yet</div>
-            <p className="empty-sub">Add columns to define your data structure. Use function columns to enrich rows automatically.</p>
-            <button className="btn btn-primary" onClick={openAddCol}>
-              <Icon.Plus /> Add first column
-            </button>
-          </div>
-        ) : tableData && tableData.rows.length === 0 && warmingTableId === tableData.id ? (
-          <div className="empty-state">
-            <div className="cell-spinner" style={{ width: 22, height: 22, borderWidth: 2, marginBottom: 14 }} />
-            <div className="empty-title">Pulling results from Trigify…</div>
-            <p className="empty-sub">Trigify is scraping your signal — first results can take a few minutes. They'll appear here automatically, and keep updating on your schedule.</p>
-          </div>
-        ) : tableData ? (
-          <div className="grid-wrap" ref={gridScrollRef}>
-            <table
-              className="grid-table"
-              style={{ width: GUTTER_W + tableData.columns.reduce((s, c) => s + colW(c.id), 0) + ADD_COL_W }}
-            >
-              <thead>
-                <tr>
-                  {/* Row-number gutter — the ONLY gutter cell (reserved once) */}
-                  <th className="grid-th row-num-th col-row-num" />
-                  <GridColSpacer side="left" width={columnWindow.spacers.left} as="th" />
-                  {columnWindow.virtualColumns.map(vc => {
-                    const col = tableData.columns[vc.index];
-                    return (
-                    <th
-                      key={col.id}
-                      className="grid-th"
-                      style={{ width: colW(col.id), minWidth: MIN_COL_W, maxWidth: MAX_COL_W }}
-                      onContextMenu={(e) =>
-                        openCtx(e, [
-                          { label: `Edit column “${col.name}”`, onClick: () => setEditCol(col) },
-                          { label: `Delete column “${col.name}”`, danger: true, onClick: () => deleteColumn(col.id) },
-                        ])
-                      }
-                    >
-                      <div className="th-inner">
-                        <span className="th-name">{col.name}</span>
-                        {col.kind === "function" && col.fn && (
-                          <span className="th-fn-badge" title={col.fn}>{col.fn.split(".").pop()}</span>
-                        )}
-                        {col.kind === "function" && (
-                          <button
-                            className="th-run-btn"
-                            title={`Run ${col.name}`}
-                            onClick={() => runColumn(col.id)}
-                            disabled={runningColId === col.id || !!runProgress}
-                          >
-                            {runningColId === col.id
-                              ? <span className="cell-spinner" />
-                              : <Icon.Play size={9} />}
-                          </button>
-                        )}
-                      </div>
-                      <div
-                        className="col-resize"
-                        title="Drag to resize"
-                        onMouseDown={e => {
-                          e.preventDefault();
-                          startResize(col.id, e.clientX, colW(col.id));
-                        }}
-                      />
-                    </th>
-                    );
-                  })}
-                  <GridColSpacer side="right" width={columnWindow.spacers.right} as="th" />
-                  {/* Add column */}
-                  <th className="grid-th add-col-th" style={{ width: ADD_COL_W }}>
-                    <button className="add-col-btn" onClick={openAddCol} title="Add column">
-                      <Icon.Plus size={16} />
-                    </button>
-                  </th>
-                </tr>
-              </thead>
-              {tableData.rows.length === 0 ? (
-                <tbody>
-                  <tr>
-                    <td className="grid-td row-num-td" />
-                    <GridColSpacer side="left" width={columnWindow.spacers.left} />
-                    {columnWindow.virtualColumns.map(vc => {
-                      const col = tableData.columns[vc.index];
-                      return (
-                      <td key={col.id} className="grid-td">
-                        <div className="cell-wrap"><span className="cell-empty">—</span></div>
-                      </td>
-                      );
-                    })}
-                    <GridColSpacer side="right" width={columnWindow.spacers.right} />
-                    <td className="grid-td" />
-                  </tr>
-                </tbody>
-              ) : (
-                <VirtualGridBody
-                  rows={tableData.rows}
-                  scrollRef={gridScrollRef}
-                  rowHeight={rowHeight}
-                  colSpan={tableData.columns.length + 2}
-                  columnWindow={columnWindow}
-                  renderRow={(row, idx, cw) => (
-                    <tr key={row.id} className="grid-tr">
-                      <td
-                        className="grid-td row-num-td"
-                        onContextMenu={(e) => openCtx(e, [{ label: "Delete row", danger: true, onClick: () => deleteRow(row.id) }])}
-                      >
-                        {idx + 1}
-                      </td>
-                      <GridColSpacer side="left" width={cw.spacers.left} />
-                      {cw.virtualColumns.map(vc => {
-                        const col = tableData.columns[vc.index];
-                        const cell: Cell | undefined = row.cells[col.id];
-                        return (
-                          <td
-                            key={col.id}
-                            className="grid-td"
-                            onContextMenu={(e) =>
-                              openCtx(e, [
-                                { label: "Clear cell", onClick: () => clearCell(row.id, col.id) },
-                                { label: "Delete row", danger: true, onClick: () => deleteRow(row.id) },
-                              ])
-                            }
-                          >
-                            <CellContent
-                              cell={cell}
-                              col={col}
-                              onEdit={v => setCell(row.id, col.id, v)}
-                              onOpenDetails={() =>
-                                setDetail({
-                                  columnName: col.name,
-                                  value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
-                                })
-                              }
-                              onExpand={(anchor) =>
-                                setExpandCell({
-                                  rowId: row.id,
-                                  colId: col.id,
-                                  columnName: col.name,
-                                  value: cell?.value != null ? String(cell.value) : "",
-                                  editable: col.kind === "manual",
-                                  anchor,
-                                })
-                              }
-                              onRunCell={col.kind === "function" ? () => runCell(row.id, col.id) : undefined}
-                              running={runningCells.has(`${row.id}:${col.id}`)}
-                            />
-                          </td>
-                        );
-                      })}
-                      <GridColSpacer side="right" width={cw.spacers.right} />
-                      <td className="grid-td" />
-                    </tr>
-                  )}
-                />
-              )}
-            </table>
-          </div>
-        ) : null}
-        </>}
+          ) : tableLoading ? (
+            <div className="empty-state">
+              <div className="cell-spinner" style={{ width: 20, height: 20, borderWidth: 2 }} />
+            </div>
+          ) : tableData ? (
+            <DataGrid
+              controller={{
+                table: tableData,
+                rowHeight,
+                columnWidth: colW,
+                minColWidth: MIN_COL_W,
+                maxColWidth: MAX_COL_W,
+                runProgress,
+                runningColId,
+                runningCells,
+                fnColCount,
+                canRun: !runProgress,
+                runDisabledReason: runProgress ? "Running…" : undefined,
+                canAddRow: !runProgress,
+                autoRun: { value: autoRun, onToggle: toggleAutoRun },
+                addRow,
+                runAll,
+                runColumn,
+                runCell,
+                setCell,
+                deleteRow,
+                deleteColumn,
+                clearCell,
+                editColumn: (col) => setEditCol(col),
+                openAddColumn: (anchor) => { setAddColAnchor(anchor); setShowAddCol(true); },
+                resizeColumn: startResize,
+                openCellDetails: (col, cell) =>
+                  setDetail({
+                    columnName: col.name,
+                    value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
+                  }),
+                expandCell: (a) => setExpandCell(a),
+              }}
+              bodyOverride={
+                tableData.rows.length === 0 && warmingTableId === tableData.id ? (
+                  <div className="empty-state">
+                    <div className="cell-spinner" style={{ width: 22, height: 22, borderWidth: 2, marginBottom: 14 }} />
+                    <div className="empty-title">Pulling results from Trigify…</div>
+                    <p className="empty-sub">Trigify is scraping your signal — first results can take a few minutes. They'll appear here automatically, and keep updating on your schedule.</p>
+                  </div>
+                ) : undefined
+              }
+            />
+          ) : null
+        )}
       </div>
 
       {/* ── Agent panel (Claude Code / Codex) ─ */}

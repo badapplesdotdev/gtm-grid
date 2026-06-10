@@ -1028,8 +1028,31 @@ export function useCloudGridMutations() {
     const res = await apiClient!.grid.deleteColumn.mutate({ columnId });
     return res;
   }, []);
+  /**
+   * Patch a column's definition (rename / type / function config). The server
+   * broadcasts `column.update`, so the realtime reducer patches the grid live —
+   * no manual refetch needed (mirrors how setCell relies on the broadcast).
+   */
+  const updateColumn = useCallback(
+    async (
+      columnId: Id<"columns">,
+      patch: {
+        name?: string;
+        type?: "text" | "number" | "boolean" | "date" | "json";
+        kind?: "manual" | "function";
+        provider?: string | null;
+        method?: string | null;
+        code?: string | null;
+        params?: Record<string, unknown>;
+        condition?: string | null;
+      },
+    ) => {
+      return apiClient!.grid.updateColumn.mutate({ columnId, ...patch });
+    },
+    [],
+  );
 
-  return { setCell, addRow, addRowsWithCells, addColumn, deleteRow, deleteColumn };
+  return { setCell, addRow, addRowsWithCells, addColumn, updateColumn, deleteRow, deleteColumn };
 }
 
 /**

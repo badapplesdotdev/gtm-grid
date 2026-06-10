@@ -85,25 +85,25 @@ describe("mapSyncStatus", () => {
   });
 });
 
-describe("syncUiVisible (TRI-3313-A — no cloud project required)", () => {
-  it("visible for any cloud-enabled, signed-in user (cloud project open)", () => {
-    expect(syncUiVisible({ cloudEnabled: true, inCloud: true, isAuthenticated: true })).toBe(true);
+describe("syncUiVisible (local-mode only — clear local/cloud separation)", () => {
+  it("HIDDEN when a cloud project is open (cloud mode shows cloud tables directly, no sync)", () => {
+    expect(syncUiVisible({ cloudEnabled: true, inCloud: true, isAuthenticated: true })).toBe(false);
   });
 
   it("hidden in a pure-local build (cloud disabled)", () => {
-    expect(syncUiVisible({ cloudEnabled: false, inCloud: true, isAuthenticated: true })).toBe(false);
+    expect(syncUiVisible({ cloudEnabled: false, inCloud: false, isAuthenticated: true })).toBe(false);
   });
 
   it("visible in the LOCAL env when signed in (no cloud project open)", () => {
     expect(syncUiVisible({ cloudEnabled: true, inCloud: false, isAuthenticated: true })).toBe(true);
   });
 
-  it("visible even when inCloud is omitted entirely", () => {
+  it("visible when inCloud is omitted entirely (treated as local mode)", () => {
     expect(syncUiVisible({ cloudEnabled: true, isAuthenticated: true })).toBe(true);
   });
 
   it("hidden when signed out", () => {
-    expect(syncUiVisible({ cloudEnabled: true, inCloud: true, isAuthenticated: false })).toBe(false);
+    expect(syncUiVisible({ cloudEnabled: true, inCloud: false, isAuthenticated: false })).toBe(false);
   });
 });
 
@@ -278,9 +278,10 @@ describe("parseAutoSyncFlag (default OFF)", () => {
 });
 
 describe("autoSyncNudgeVisible", () => {
-  const base = { cloudEnabled: true, inCloud: true, isAuthenticated: true, autoSyncOn: false, dismissed: false };
+  // Auto-sync is a LOCAL-mode activity, so the nudge lives in local mode too.
+  const base = { cloudEnabled: true, inCloud: false, isAuthenticated: true, autoSyncOn: false, dismissed: false };
 
-  it("shows for an eligible cloud user with auto-sync OFF and not dismissed", () => {
+  it("shows for an eligible local-mode user with auto-sync OFF and not dismissed", () => {
     expect(autoSyncNudgeVisible(base)).toBe(true);
   });
 
@@ -297,15 +298,16 @@ describe("autoSyncNudgeVisible", () => {
     expect(autoSyncNudgeVisible({ ...base, isAuthenticated: false })).toBe(false);
   });
 
-  it("shown in the LOCAL env too (TRI-3313-A — no cloud project required)", () => {
-    expect(autoSyncNudgeVisible({ ...base, inCloud: false })).toBe(true);
+  it("HIDDEN in cloud mode (cloud tables are edited directly, nothing to nudge)", () => {
+    expect(autoSyncNudgeVisible({ ...base, inCloud: true })).toBe(false);
   });
 });
 
 describe("shouldAutoPush (trigger gating)", () => {
-  const eligible = { autoSyncOn: true, cloudEnabled: true, inCloud: true, isAuthenticated: true };
+  // Auto-push sends LOCAL edits up to cloud, so it only fires in local mode.
+  const eligible = { autoSyncOn: true, cloudEnabled: true, inCloud: false, isAuthenticated: true };
 
-  it("ON + eligible cloud user → auto-push", () => {
+  it("ON + eligible local-mode user → auto-push", () => {
     expect(shouldAutoPush(eligible)).toBe(true);
   });
 
@@ -318,8 +320,8 @@ describe("shouldAutoPush (trigger gating)", () => {
     expect(shouldAutoPush({ ...eligible, cloudEnabled: false })).toBe(false);
   });
 
-  it("ON + signed-in user in the LOCAL env → auto-push (TRI-3313-A)", () => {
-    expect(shouldAutoPush({ ...eligible, inCloud: false })).toBe(true);
+  it("HIDDEN in cloud mode (editing cloud tables directly — no push needed)", () => {
+    expect(shouldAutoPush({ ...eligible, inCloud: true })).toBe(false);
   });
 });
 

@@ -402,6 +402,20 @@ describe("GridService deletes — cascade + meter", () => {
     expect(store.columns.map((c) => c.id)).toEqual(["c2"]);
     expect(store.cells.map((c) => c.columnId)).toEqual(["c2"]);
   });
+
+  it("updateColumn patches only the provided fields and meters one action", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [column({ name: "A", type: "text", condition: "keep" })],
+    });
+    const quotas = new Map<string, MeterQuota>();
+    const { run } = harness({ store, quotas });
+    await run(
+      Effect.flatMap(GridService, (s) => s.updateColumn("c1", { name: "Renamed", type: "number" })),
+    );
+    expect(store.columns[0]).toMatchObject({ name: "Renamed", type: "number", condition: "keep" });
+    expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
+  });
 });
 
 describe("GridService structural inserts — meter + position", () => {
@@ -480,6 +494,16 @@ describe("GridService realtime publishing (TRI-3251)", () => {
     expect(events[0].event).toMatchObject({
       type: "column.insert",
       column: { name: "B", type: "number", kind: "manual" },
+    });
+  });
+
+  it("updateColumn publishes a column.update with the updated projection", async () => {
+    const store = makeGridStore({ tables: [table()], columns: [column({ name: "A" })] });
+    const { run, events } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.updateColumn("c1", { name: "Renamed", type: "number" })));
+    expect(events[0].event).toMatchObject({
+      type: "column.update",
+      column: { _id: "c1", name: "Renamed", type: "number" },
     });
   });
 
