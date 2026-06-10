@@ -97,13 +97,17 @@ jobs:
             runner: [self-hosted, macOS]
             rust_target: aarch64-apple-darwin
             sidecar_arch: ""
-            args: "--target aarch64-apple-darwin"
+            # No Tauri `dmg` target: its bundle_dmg.sh drives Finder via
+            # AppleScript, which times out on the self-hosted runner. We build the
+            # signed+notarized .app (+ updater) here and package the DMG with
+            # hdiutil in a later step (Finder-free).
+            args: "--bundles app,updater --target aarch64-apple-darwin"
           - platform: macOS (Intel)
             os: macos
             runner: [self-hosted, macOS]
             rust_target: x86_64-apple-darwin
             sidecar_arch: "x64"
-            args: "--target x86_64-apple-darwin"
+            args: "--bundles app,updater --target x86_64-apple-darwin"
           - platform: Linux
             os: linux
             runner: ubuntu-22.04
@@ -230,6 +234,48 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      # Package the DMG with hdiutil (NO Finder/AppleScript, unlike Tauri's
+      # bundle_dmg.sh which times out on the self-hosted runner). The .app built
+      # above is already signed + notarized + stapled; we wrap it in a compressed
+      # DMG with a drag-to-Applications symlink, then sign + notarize + staple the
+      # DMG itself so it opens clean on download, and upload it to the release.
+      - name: Package, notarize & upload DMG (Finder-free)
+        if: ${{ matrix.os == 'macos' && env.HAS_APPLE_SIGNING == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG: ${{ needs.version.outputs.tag }}
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          set -euo pipefail
+          bundle_dir="packages/desktop/src-tauri/target/${RUST_TARGET}/release/bundle"
+          app="$(/usr/bin/find "$bundle_dir/macos" -maxdepth 1 -name '*.app' | head -1)"
+          [ -n "$app" ] || { echo "::error::no .app found under $bundle_dir/macos"; exit 1; }
+          app_name="$(basename "$app" .app)"
+          case "$RUST_TARGET" in aarch64*) arch=aarch64 ;; *) arch=x64 ;; esac
+          dmg="$bundle_dir/dmg/${app_name}_${VERSION}_${arch}.dmg"
+          mkdir -p "$(dirname "$dmg")"
+
+          # Clean DMG layout — no Finder: the .app + an Applications symlink.
+          staging="$(mktemp -d)"
+          cp -R "$app" "$staging/"
+          ln -s /Applications "$staging/Applications"
+          rm -f "$dmg"
+          hdiutil create -volname "$app_name" -srcfolder "$staging" -fs HFS+ -format UDZO -ov "$dmg"
+          rm -rf "$staging"
+
+          # Sign + notarize + staple the DMG (free wall-clock on the mini).
+          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
+          xcrun notarytool submit "$dmg" \
+            --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" --wait
+          xcrun stapler staple "$dmg"
+
+          gh release upload "$TAG" "$dmg" --repo "$GITHUB_REPOSITORY" --clobber
+          echo "Uploaded $(basename "$dmg")"
 
   # ── 3. Publish the release once all platforms succeed ───────────────────
   publish:
