@@ -1,5 +1,16 @@
 # @gtmgrid/desktop
 
+## 0.7.4
+
+### Patch Changes
+
+- c13f497: Package the macOS DMG without Finder so it builds on the self-hosted runner.
+  Tauri's bundle_dmg.sh drives Finder via AppleScript (times out headless), so the
+  macOS build now produces the signed+notarized .app (+ updater) and a later step
+  wraps it in a DMG via hdiutil, then signs + notarizes + staples the DMG.
+  - @gtmgrid/cloud@0.7.4
+  - @gtmgrid/services@0.7.4
+
 ## 0.7.3
 
 ### Patch Changes
