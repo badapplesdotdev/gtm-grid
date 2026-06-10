@@ -171,7 +171,8 @@ export function CloudGrid({
         return { id: String(id) };
       },
       updateColumn: async (columnId, patch) => {
-        const col = await updateColumn(columnId as Id<"columns">, {
+        if (tableId === null) throw new Error("No table selected");
+        const col = await updateColumn(tableId, columnId as Id<"columns">, {
           name: patch.name,
           type: patch.type as
             | "text" | "number" | "boolean" | "date" | "json" | undefined,
@@ -189,7 +190,7 @@ export function CloudGrid({
       generateFormula: api.generateFormula,
       aiProviders: api.aiProviders,
     }),
-    [addColumn, updateColumn],
+    [addColumn, updateColumn, tableId],
   );
 
   if (tableId === null) {
@@ -273,8 +274,8 @@ export function CloudGrid({
     runCell,
     setCell: (rowId, colId, value) =>
       void guard(() => setCell(rowId as Id<"rows">, colId as Id<"columns">, value), "set cell"),
-    deleteRow: (rowId) => void guard(() => deleteRow(rowId as Id<"rows">), "delete row"),
-    deleteColumn: (colId) => void guard(() => deleteColumn(colId as Id<"columns">), "delete column"),
+    deleteRow: (rowId) => void guard(() => deleteRow(tableId, rowId as Id<"rows">), "delete row"),
+    deleteColumn: (colId) => void guard(() => deleteColumn(tableId, colId as Id<"columns">), "delete column"),
     clearCell: (rowId, colId) =>
       void guard(() => setCell(rowId as Id<"rows">, colId as Id<"columns">, ""), "clear cell"),
     editColumn: (col) => setEditCol(col),
