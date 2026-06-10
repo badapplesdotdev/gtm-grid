@@ -1,5 +1,12 @@
 # @gtmgrid/mcp
 
+## 0.7.7
+
+### Patch Changes
+
+- Updated dependencies [c64cbf5]
+  - @gtmgrid/engine@0.7.7
+
 ## 0.7.6
 
 ### Patch Changes
