@@ -198,8 +198,12 @@ export function openProject(
   const config =
     opts.config ?? { ai: aiConfigFromEnv() ?? storedAiConfig(credsDb), aiProviders: storedAiProviders(credsDb) };
   const registry = opts.registry ?? defaultRegistry();
-  // Load any uploaded JSON-manifest extensions into the registry.
-  for (const manifest of db.listExtensions()) {
+  // Load JSON-manifest extensions from the GLOBAL db, not the project db — they
+  // live alongside credentials in the shared global store (see {@link globalDbPath}),
+  // and the server seeds the current `extensions/*.json` set there on startup. A
+  // project db only ever held a stale snapshot, so the MCP agent (which opens a
+  // project) was missing connectors the UI showed — firecrawl, notion, supabase…
+  for (const manifest of credsDb.listExtensions()) {
     try {
       registry.add(connectorFromManifest(parseManifest(manifest)));
     } catch (err) {
