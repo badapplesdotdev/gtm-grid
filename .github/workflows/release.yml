@@ -109,6 +109,11 @@ jobs:
             sidecar_arch: ""
             args: "--bundles nsis"
     runs-on: ${{ matrix.platform }}
+    env:
+      # True only when the macOS signing + notarization secrets are configured.
+      # Lets the signing steps skip cleanly (producing an unsigned build) until
+      # the secrets exist, instead of failing the macOS job.
+      HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_API_KEY_P8 != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -140,6 +145,28 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # macOS code signing: import the Developer ID Application cert into a
+      # temporary keychain BEFORE the build, so BOTH our sidecar codesigning
+      # (scripts/bundle-sidecar.mjs, run inside beforeBuildCommand) and Tauri's
+      # own .app signing can find the identity. No-op on non-mac runners. The
+      # whole step is skipped when the secret is absent so unsigned dev releases
+      # still build.
+      - name: Import Apple Developer ID certificate
+        if: ${{ startsWith(matrix.platform, 'macos') && env.HAS_APPLE_SIGNING == 'true' }}
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      # Notarization uses an App Store Connect API key. Write the .p8 to a file
+      # and expose its path to tauri-action via $GITHUB_ENV (APPLE_API_KEY_PATH).
+      - name: Stage notarization API key
+        if: ${{ startsWith(matrix.platform, 'macos') && env.HAS_APPLE_SIGNING == 'true' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/asc"
+          printf '%s' "${{ secrets.APPLE_API_KEY_P8 }}" | base64 -D > "$RUNNER_TEMP/asc/AuthKey.p8"
+          echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/asc/AuthKey.p8" >> "$GITHUB_ENV"
+
       # tauri-action runs the Tauri build (which runs beforeBuildCommand: build
       # the frontend + bundle the sidecar — including this runner's native node +
       # better-sqlite3), then uploads the installers to the release for this tag.
@@ -163,6 +190,15 @@ jobs:
           # tauri.conf.json; the app verifies updates against it. No password set.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          # macOS Developer ID signing + notarization. The cert is already in the
+          # keychain (import step above); APPLE_SIGNING_IDENTITY tells Tauri which
+          # identity to sign the .app with, and the App Store Connect API key trio
+          # (issuer + key id + APPLE_API_KEY_PATH, the last exported to $GITHUB_ENV
+          # by "Stage notarization API key") drives notarization. All empty/unused
+          # on non-mac runners, so Linux/Windows builds are unaffected.
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
         with:
           projectPath: packages/desktop
           tagName: ${{ needs.version.outputs.tag }}

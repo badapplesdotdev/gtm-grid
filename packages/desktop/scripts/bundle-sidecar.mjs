@@ -124,6 +124,41 @@ if (!existsSync(nodeDst)) {
 
 console.log(`Sidecar ready at ${out} (target arch: ${targetArch})`);
 
+signMacSidecar();
+
+/**
+ * Codesign every Mach-O binary inside the sidecar (the bundled `node` runtime +
+ * native `.node`/`.dylib` addons) BEFORE Tauri bundles the .app. macOS
+ * notarization rejects any unsigned nested executable, so each must carry our
+ * Developer ID signature + the Hardened Runtime + a secure timestamp, with the
+ * JIT/library-validation entitlements Node needs to run (see sidecar.entitlements).
+ * No-op unless we're on macOS with APPLE_SIGNING_IDENTITY set (i.e. signed CI
+ * release builds) — local/dev and non-mac builds are untouched.
+ */
+function signMacSidecar() {
+  if (process.platform !== "darwin") return;
+  const identity = process.env.APPLE_SIGNING_IDENTITY;
+  if (!identity) {
+    console.log("Sidecar codesigning skipped (no APPLE_SIGNING_IDENTITY).");
+    return;
+  }
+  const entitlements = resolve(here, "..", "src-tauri", "sidecar.entitlements");
+  const found = execSync(
+    `find "${out}" -type f \\( -name node -o -name '*.node' -o -name '*.dylib' \\)`,
+    { encoding: "utf8" },
+  )
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const f of found) {
+    execSync(
+      `codesign --force --timestamp --options runtime --entitlements "${entitlements}" --sign "${identity}" "${f}"`,
+      { stdio: "inherit" },
+    );
+  }
+  console.log(`Codesigned ${found.length} sidecar binaries as "${identity}".`);
+}
+
 /** Download the official node binary for a platform+arch and place it at dest. */
 function downloadNode(platform, arch, version, dest) {
   const plat = platform === "win32" ? "win" : platform; // darwin | linux | win
