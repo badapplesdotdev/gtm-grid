@@ -571,8 +571,8 @@ export function streamClaude(
   // `detached` makes the child its own process-group leader so we can later
   // signal the WHOLE tree (CLI + MCP server + grandchildren) via `-pid` (TRI-3305).
   const child = spawn(bin, args, { env: agentSpawnEnv(bin), cwd: opts.repoRoot, detached: true });
+  child.stdin?.end(); // we pass the prompt via `-p`; close stdin so claude doesn't wait on it (the "no stdin data in 3s" warning)
   let sessionId = resumeId ?? null;
-  let emittedSession = false;
   let buf = "";
   let gridDirty = false;
   const lifecycle = manageChildLifecycle(child, {
@@ -596,14 +596,13 @@ export function streamClaude(
       } catch {
         continue;
       }
+      // Track the session id but DON'T surface it early: in `-p` mode the init
+      // message can carry a transient id that is never saved as a resumable
+      // conversation (`--resume` on it → "No conversation found"). Only the id on
+      // the final `result` is durable, so we report it on `done`/`end`. Continuity
+      // after a Stop/restart comes from the on-disk latest-session fallback above,
+      // which is always a real resumable transcript.
       if (e.session_id) sessionId = e.session_id;
-      // Surface the session id as soon as the CLI reports it (the init message),
-      // not just at the end — so a Stop mid-turn still leaves the UI/History
-      // pointing at the right native session to resume.
-      if (sessionId && !emittedSession) {
-        emittedSession = true;
-        sse.write({ type: "session", sessionId });
-      }
 
       if (e.type === "assistant") {
         for (const block of e.message?.content ?? []) {
