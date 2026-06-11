@@ -1,5 +1,18 @@
 # @gtmgrid/desktop
 
+## 0.9.3
+
+### Patch Changes
+
+- e476861: Fix: running a function/code column on a cloud table that was synced from local did
+  nothing — it flicked to "running" and immediately exited without computing. A
+  local→cloud synced table arrives with every cell marked `done`, and a non-forced
+  run skips `done` cells, so there was nothing left to run. An explicit column Run in
+  the cloud now force-recomputes the column (per-cell run already forced), so Run
+  actually executes the logic over the synced data.
+  - @gtmgrid/cloud@0.9.3
+  - @gtmgrid/services@0.9.3
+
 ## 0.9.2
 
 ### Patch Changes
