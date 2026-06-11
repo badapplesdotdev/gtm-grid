@@ -161,7 +161,12 @@ export function CloudGrid({
       if (tableId === null) return;
       setRunningColId(columnId);
       try {
-        await runCloudColumn(session, { tableId, columnId });
+        // FORCE on an explicit column run. A synced-from-local table arrives with
+        // every cell "done", and a non-forced run skips "done" cells — so without
+        // this, hitting Run on a synced function/code column flips to "running" and
+        // instantly exits without recomputing anything. An explicit Run should
+        // (re)compute the column. (Per-cell run already forces.)
+        await runCloudColumn(session, { tableId, columnId, force: true });
       } catch {
         /* surfaced live via the cell error status from Convex */
       } finally {
