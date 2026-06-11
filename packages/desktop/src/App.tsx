@@ -274,6 +274,18 @@ const RUN_ALL_CONCURRENCY = 4;
 // reopens it (default-to-cloud for signed-in users).
 const LAST_CLOUD_PROJECT_KEY = "gtmgrid:lastCloudProject";
 
+// A function column is "free" to run when it computes locally and dispatches no
+// billable connector call: a formula column (`provider === "formula"`) or a
+// mapped/code column with no connector provider. Free columns always cascade —
+// running them spends no credits — even with Auto-run off; a real enrichment
+// (a connector provider) cascades only when Auto-run is on. (A hand-written code
+// column that itself calls `sdk.<connector>` is treated as free here — an
+// uncommon edge the heuristic doesn't catch; the promote/map-to-column columns
+// are pure value extraction.)
+export function isFreeColumn(col: Pick<Column, "kind" | "provider">): boolean {
+  return col.kind === "function" && (col.provider == null || col.provider === "formula");
+}
+
 // True if any of a function column's params reference {{columnName}}.
 function columnDependsOn(col: Column, columnName: string): boolean {
   const re = new RegExp(`\\{\\{\\s*${columnName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\}\\}`);
@@ -2333,6 +2345,44 @@ export default function App() {
     setRunProgress(null);
   };
 
+  // ── Auto-run cascade ───────────────────────
+  //
+  // A single-column or single-cell run doesn't walk the dependency graph the way
+  // Run-all does, so columns that map from the one we just ran would otherwise sit
+  // empty until the user hit play on each. These helpers auto-populate them.
+  //
+  // Free/mapped columns always cascade (no credit cost), even with Auto-run off;
+  // a billed enrichment cascades only when Auto-run is on. See `isFreeColumn`.
+  const cascadeEligible = (c: Column): boolean =>
+    c.kind === "function" && (autoRunRef.current || isFreeColumn(c));
+
+  // After the columns named by `sourceColIds` have run, run the eligible function
+  // columns that reference them, transitively (a dependent we run becomes a source
+  // for its own dependents). `opts` mirrors the triggering run: a single-cell edit
+  // cascades force-scoped to that row; a full-column run fills empty dependent cells
+  // without forcing, so already-`done` cells are never re-billed (TRI-3283 L2).
+  const cascadeDependents = async (
+    tableId: string,
+    sourceColIds: string[],
+    opts: { force?: boolean; rowIds?: string[] } = {},
+  ) => {
+    const ran = new Set<string>(sourceColIds);
+    let snapshot = await api.table(tableId);
+    let frontier = snapshot.columns.filter((c) => sourceColIds.includes(c.id)).map((c) => c.name);
+    while (frontier.length) {
+      const deps = snapshot.columns.filter(
+        (c) => !ran.has(c.id) && cascadeEligible(c) && frontier.some((n) => columnDependsOn(c, n)),
+      );
+      if (!deps.length) break;
+      for (const dc of deps) {
+        ran.add(dc.id);
+        await api.runColumnStream(dc.id, (e) => patchCell(tableId, e), opts).catch(() => {});
+      }
+      frontier = deps.map((c) => c.name);
+      snapshot = await api.table(tableId);
+    }
+  };
+
   // ── Run single column ──────────────────────
 
   const runColumn = async (colId: string) => {
@@ -2341,7 +2391,10 @@ export default function App() {
     setRunningColId(colId);
     // Patch cells in place as the sidecar streams per-cell progress (SSE),
     // instead of refetching+replacing the whole grid after the run.
-    try { await api.runColumnStream(colId, (e) => patchCell(tableId, e)); } catch { /* ignore */ }
+    try {
+      await api.runColumnStream(colId, (e) => patchCell(tableId, e));
+      await cascadeDependents(tableId, [colId]);
+    } catch { /* ignore */ }
     setRunningColId(null);
   };
 
@@ -2356,8 +2409,27 @@ export default function App() {
       // so re-running this cell never re-runs (or re-bills) any other row's
       // already-`done` cell in the column (TRI-3283 L2).
       await api.runColumnStream(colId, (e) => patchCell(tableId, e), { force: true, rowIds: [rowId] });
+      await cascadeDependents(tableId, [colId], { force: true, rowIds: [rowId] });
     } catch { /* ignore */ }
     setRunningCells(s => { const n = new Set(s); n.delete(key); return n; });
+  };
+
+  // ── Column added (from Add-column / Functions) ──
+  // A newly added mapped/formula column whose inputs already have values should
+  // populate immediately — it's free. A new billed enrichment auto-runs only when
+  // Auto-run is on; otherwise it waits for the user to hit play. Manual columns
+  // (and any non-eligible column) just refresh the grid.
+  const onColumnAdded = async (tableId: string, newColId?: string) => {
+    await loadTable(tableId);
+    if (!newColId) return;
+    const col = (await api.table(tableId).catch(() => null))?.columns.find((c) => c.id === newColId);
+    if (!col || !cascadeEligible(col)) return;
+    setRunningColId(newColId);
+    try {
+      await api.runColumnStream(newColId, (e) => patchCell(tableId, e));
+      await cascadeDependents(tableId, [newColId]);
+    } catch { /* ignore */ }
+    setRunningColId(null);
   };
 
   // ── Add row ────────────────────────────────
@@ -2445,28 +2517,15 @@ export default function App() {
   const setCell = async (rowId: string, colId: string, value: string) => {
     await api.setCell(rowId, colId, value);
     if (!selectedTableId) return;
-    let updated = await api.table(selectedTableId);
-    setTableData(updated);
+    setTableData(await api.table(selectedTableId));
 
-    // Auto-run: re-run function columns that reference the edited column, for this row.
-    // Read via the ref so a stale (memoized) onEdit closure still respects the toggle.
-    if (autoRunRef.current) {
-      const changed = updated.columns.find((c) => c.id === colId);
-      if (changed) {
-        const deps = updated.columns.filter((c) => c.kind === "function" && columnDependsOn(c, changed.name));
-        if (deps.length) {
-          for (const dc of deps) {
-            // Force is scoped to the edited row only (`rowIds:[rowId]`): only the
-            // cells whose input actually changed (this row's dependents) are
-            // recomputed/re-billed — every OTHER row's already-`done` dependent
-            // cell is left untouched (TRI-3283 L2).
-            await api.runColumn(dc.id, { force: true, rowIds: [rowId] }).catch(() => {});
-          }
-          updated = await api.table(selectedTableId);
-          setTableData(updated);
-        }
-      }
-    }
+    // Auto-run: re-run the columns that map from the edited one, for this row only
+    // (`rowIds:[rowId]`, so other rows' already-`done` dependents aren't re-billed —
+    // TRI-3283 L2). Free/mapped dependents always cascade; billed enrichments only
+    // when Auto-run is on (handled by `cascadeEligible`).
+    await cascadeDependents(selectedTableId, [colId], { force: true, rowIds: [rowId] });
+    setTableData(await api.table(selectedTableId));
+
     // Auto-sync (TRI-3298): a debounced push after the edit settles.
     scheduleAutoPush(selectedTableId);
   };
@@ -3326,7 +3385,7 @@ export default function App() {
             connectors={connectors}
             columns={tableData.columns.map((c) => c.name)}
             onClose={() => setShowFunctions(false)}
-            onAdded={() => loadTable(tableData.id)}
+            onAdded={(newColId) => onColumnAdded(tableData.id, newColId)}
             onOpenAiSettings={() => {
               setShowFunctions(false);
               const target = aiProviders[0]?.id ?? "anthropic";
