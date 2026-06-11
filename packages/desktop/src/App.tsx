@@ -491,13 +491,33 @@ function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCel
     );
   }
 
-  // done / has value — objects collapse to a status pill (click to open fields)
+  // done / has value — objects collapse to a status pill (click to open fields).
+  // A connector can return an error AS a value (e.g. `{ error: "timeout" }`) without
+  // throwing, so the cell is `done` yet really failed — surface that as an error pill
+  // rather than a misleading green success. Show a real status code when the object
+  // carries one; otherwise don't fabricate "200".
   if (isObjectOrArray(cell.value)) {
+    const obj = !Array.isArray(cell.value) && cell.value && typeof cell.value === "object"
+      ? (cell.value as Record<string, unknown>)
+      : null;
+    const errMsg = obj && typeof obj.error === "string" && obj.error.trim() ? obj.error.trim() : null;
+    if (errMsg) {
+      return (
+        <div className="cell-wrap" title={errMsg}>
+          {runBtn}
+          <span className="cell-status err" onClick={onOpenDetails}>
+            {errMsg.length > 28 ? `${errMsg.slice(0, 28)}…` : errMsg}
+          </span>
+        </div>
+      );
+    }
+    const code = obj && (typeof obj.status === "number" ? obj.status
+      : typeof obj.statusCode === "number" ? obj.statusCode : null);
     return (
       <div className="cell-wrap">
         {runBtn}
         <span className="cell-status ok" title="Click to view fields" onClick={onOpenDetails}>
-          Status Code: 200
+          {code != null ? `Status Code: ${code}` : "View data"}
         </span>
       </div>
     );
