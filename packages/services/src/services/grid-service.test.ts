@@ -372,6 +372,31 @@ describe("GridService.addRowsWithCells — bulk quota + meter", () => {
     expect(quotas.get(WS)?.cloudActionsUsed).toBe(2);
   });
 
+  it("stamps function-column cells 'empty' (re-runnable) but manual cells 'done'", async () => {
+    // A synced table with a manual column (c1) and a function column (c2): the
+    // function column's cells must land 'empty' so a plain cloud Run recomputes
+    // them, while the manual cell stays 'done'. The function VALUE is still stored
+    // so a chained column can read it.
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [
+        column({ id: "c1", kind: "manual" }),
+        column({ id: "c2", kind: "function", position: 1 }),
+      ],
+    });
+    const { run } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addRowsWithCells({ tableId: "t1", rows: [{ c1: "Acme", c2: "enriched" }] }),
+      ),
+    );
+    const manualCell = store.cells.find((c) => c.columnId === "c1");
+    const fnCell = store.cells.find((c) => c.columnId === "c2");
+    expect(manualCell?.status).toBe("done");
+    expect(fnCell?.status).toBe("empty");
+    expect(fnCell?.value).toBe("enriched"); // value carried for chained reads
+  });
+
   it("skips empty values and values for columns not in the table", async () => {
     const store = makeGridStore({ tables: [table()], columns: [column()] });
     const { run } = harness({ store });
