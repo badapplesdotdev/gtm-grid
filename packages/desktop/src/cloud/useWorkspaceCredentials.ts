@@ -15,10 +15,13 @@
 
 import { useQuery as useReactQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { Id } from "./ids";
 import type { WorkspaceCredSource } from "../Panels";
+import type { CloudSession } from "./cloud-run";
 import { runSaveCredential, useCredentialLayer } from "./credentials";
 import { apiClient, cloudEnabled } from "./client";
+import { api } from "../api";
 
 /** A credential metadata row from `listCredentials` (never includes plaintext). */
 interface CredentialMeta {
@@ -35,6 +38,7 @@ interface CredentialMeta {
 export function useWorkspaceCredentials(
   workspaceId: Id<"workspaces"> | null,
   isAuthenticated: boolean,
+  session: CloudSession | null,
 ): WorkspaceCredSource | undefined {
   const active = cloudEnabled && workspaceId !== null && isAuthenticated;
 
@@ -45,6 +49,11 @@ export function useWorkspaceCredentials(
   // The Live save Layer (tRPC `credentials.save`). The session/empty-key guards
   // live in the Effect orchestration.
   const layer = useCredentialLayer();
+  const queryClient = useQueryClient();
+
+  // A usable cloud session (apps/web URL + bearer) is required for the sidecar to
+  // forward the local key to the cloud; gate `copyLocalKey` on it.
+  const hasSession = session !== null && session.token.trim() !== "";
 
   return useMemo<WorkspaceCredSource | undefined>(() => {
     if (!active || workspaceId === null) return undefined;
@@ -67,8 +76,36 @@ export function useWorkspaceCredentials(
           },
           layer,
         ),
+      // Copy the local key up to the shared Cloud key via the sidecar (plaintext
+      // never enters the renderer), then refresh the connected listing so the
+      // panel flips to "connected". Only available with a live cloud session.
+      copyLocalKey:
+        hasSession && session !== null
+          ? async (extensionId, name) => {
+              await api.copyLocalKeyToCloud({
+                credId: extensionId,
+                extensionId,
+                name,
+                apiUrl: session.apiUrl,
+                token: session.token,
+                workspaceId,
+              });
+              await queryClient.invalidateQueries({
+                queryKey: ["credentials", "list", workspaceId],
+              });
+            }
+          : undefined,
     };
-  }, [active, workspaceId, credentials, isAuthenticated, layer]);
+  }, [
+    active,
+    workspaceId,
+    credentials,
+    isAuthenticated,
+    layer,
+    hasSession,
+    session,
+    queryClient,
+  ]);
 }
 
 /**

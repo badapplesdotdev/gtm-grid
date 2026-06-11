@@ -792,6 +792,47 @@ route("POST", "/api/ai-providers/:id/connect", (p, body) => {
   return { ok: true };
 });
 
+// Copy a LOCAL connector/AI key up to the shared CLOUD (workspace) key — the
+// desktop "Use my local key" action. SECURITY: the plaintext is revealed ONLY
+// inside this sidecar process (the user's own machine) and forwarded to the cloud
+// over TLS; it is never returned to the caller (the renderer), never logged, and
+// stored only as ciphertext server-side. The cloud save is member-authenticated
+// (the forwarded Better Auth bearer in `X-Gtmgrid-Member`), so a non-member is
+// rejected server-side. This route inherits the loopback-`Host` / allowed-`Origin`
+// gate every route is wrapped in, so it is not LAN-reachable.
+route("POST", "/api/credentials/copy-to-cloud", async (_p, body) => {
+  const credId = String(body?.credId ?? "").trim();
+  const extensionId = String(body?.extensionId ?? credId).trim() || credId;
+  const apiUrl = String(body?.apiUrl ?? "").trim();
+  const token = String(body?.token ?? "").trim();
+  const workspaceId = String(body?.workspaceId ?? "").trim();
+  const name = String(body?.name ?? extensionId).trim() || extensionId;
+  if (!credId || !apiUrl || !token || !workspaceId)
+    return { error: "credId, apiUrl, token and workspaceId are required" };
+
+  // Reveal the LOCAL plaintext — only ever in this process; never returned/logged.
+  const secrets = globalDb.getCredential(credId)?.secrets ?? null;
+  if (!secrets || Object.keys(secrets).length === 0)
+    return { error: "No local key found to copy to the cloud." };
+
+  // Server-to-server save over TLS, authenticated as the signed-in member. The
+  // cloud worker route encrypts the map at rest (CredentialService.saveCredential).
+  const base = apiUrl.replace(/\/+$/, "");
+  const res = await fetch(`${base}/api/worker/saveCredential`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Gtmgrid-Member": token },
+    body: JSON.stringify({ workspaceId, extensionId, name, secrets }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    return {
+      error:
+        `Cloud save failed (${res.status} ${res.statusText}). ${text}`.trim(),
+    };
+  }
+  return { ok: true };
+});
+
 // Persisted local↔cloud sync links for the CURRENT project (TRI-3311). Returns
 // `{ [localTableId]: cloudTableId }` straight from the project's SQLite meta
 // (the authoritative store `setCloudTableLink` writes on push), so the desktop

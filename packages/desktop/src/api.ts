@@ -324,6 +324,29 @@ export const api = {
     id: string,
     body: { apiKey?: string; baseURL?: string; scope?: CredentialScope },
   ) => http<{ ok: boolean }>(`/api/ai-providers/${id}/connect`, { method: "POST", body: JSON.stringify(body) }),
+  /**
+   * Copy a LOCAL connector/AI key up to the shared CLOUD (workspace) key. The
+   * sidecar decrypts the local key in-process and posts the plaintext to the
+   * cloud over TLS (member-authenticated) — the plaintext never reaches the
+   * renderer. Throws (so the panel can surface it) when no local key exists or
+   * the cloud save fails. `credId` is the local credential id; `extensionId` the
+   * shared cloud key id (identical in practice: `ai:<id>` for AI providers, the
+   * extension id for connectors).
+   */
+  copyLocalKeyToCloud: async (body: {
+    credId: string;
+    extensionId: string;
+    name: string;
+    apiUrl: string;
+    token: string;
+    workspaceId: string;
+  }): Promise<void> => {
+    const r = await http<{ ok?: boolean; error?: string }>(
+      "/api/credentials/copy-to-cloud",
+      { method: "POST", body: JSON.stringify(body) },
+    );
+    if (r.error || !r.ok) throw new Error(r.error ?? "Failed to copy local key");
+  },
   projects: () => http<ProjectInfo[]>("/api/projects"),
   createProject: (name: string) =>
     http<{ ok: boolean; project: string }>("/api/projects", { method: "POST", body: JSON.stringify({ name }) }),
