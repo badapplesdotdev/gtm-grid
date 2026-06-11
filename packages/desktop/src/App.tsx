@@ -64,6 +64,7 @@ import { useWorkspaceCredentials } from "./cloud/useWorkspaceCredentials";
 import {
   useCloudProjects,
   useCloudTables,
+  useWorkspaceRealtime,
   useCloudProjectMutations,
   useCloudGridMutations,
   useCloudSyncRefresh,
@@ -1212,6 +1213,9 @@ export default function App() {
     isAuthenticated,
   );
   const cloudProjects = useCloudProjects(activeWorkspace?._id ?? null);
+  // Live sidebar: refresh the table/project lists when any teammate creates,
+  // syncs, or deletes a table in this workspace.
+  useWorkspaceRealtime(activeWorkspace?._id ?? null);
   const [cloudProject, setCloudProject] = useState<CloudProject | null>(null);
   const [cloudTableId, setCloudTableId] = useState<Id<"tables"> | null>(null);
   // The LOCAL table the open cloud view corresponds to, when known (set on a
@@ -3450,9 +3454,10 @@ export default function App() {
 
       {dedupeOpen && tableData && (
         <DedupePopover
-          tableId={tableData.id}
           columns={tableData.columns.map((c) => ({ id: c.id, name: c.name }))}
           current={tableData.dedupe ?? null}
+          setDedupe={(body) => api.setDedupe(tableData.id, body)}
+          dedupeTable={() => api.dedupeTable(tableData.id)}
           onClose={() => setDedupeOpen(false)}
           onChanged={() => loadTable(tableData.id)}
         />

@@ -65,7 +65,8 @@ import {
   type TableRepoError,
 } from "../repositories/table-repo.js";
 import type { WorkspaceRepoError } from "../repositories/workspace-repo.js";
-import type { GridChangeEvent } from "../realtime/events.js";
+import type { GridChangeEvent, GridDedupe } from "../realtime/events.js";
+import { WORKSPACE_ROOM_TABLE_ID } from "../realtime/events.js";
 import { EntitlementService, type PlanRequiredError } from "./entitlement-service.js";
 import { MeterService } from "./meter-service.js";
 import { RealtimePublisher } from "./realtime-publisher.js";
@@ -115,7 +116,11 @@ export interface GridCell {
 }
 
 export interface FullGrid {
-  readonly table: { readonly _id: string; readonly name: string };
+  readonly table: {
+    readonly _id: string;
+    readonly name: string;
+    readonly dedupe: GridDedupe | null;
+  };
   readonly columns: readonly GridColumn[];
   readonly rows: readonly { readonly _id: string }[];
   readonly cells: readonly GridCell[];
@@ -134,7 +139,11 @@ export interface FullGrid {
  * inserts.
  */
 export interface TablePage {
-  readonly table: { readonly _id: string; readonly name: string };
+  readonly table: {
+    readonly _id: string;
+    readonly name: string;
+    readonly dedupe: GridDedupe | null;
+  };
   readonly columns: readonly GridColumn[];
   readonly rows: readonly { readonly _id: string }[];
   readonly cells: readonly GridCell[];
@@ -165,6 +174,30 @@ const toGridCell = (c: Cell): GridCell => ({
   status: c.status,
   error: c.error,
 });
+
+/** Project a table record's stored dedupe config onto the snapshot shape (null = off). */
+const toDedupe = (table: {
+  readonly dedupeColumn?: string | null;
+  readonly dedupeKeep?: string | null;
+}): GridDedupe | null =>
+  table.dedupeColumn == null
+    ? null
+    : {
+        column: table.dedupeColumn,
+        keep: table.dedupeKeep === "newest" ? "newest" : "oldest",
+      };
+
+/**
+ * The dedup grouping key for a cell value (mirrors the local engine,
+ * packages/engine/src/db.ts): trimmed; a blank or >200-char value is NEVER
+ * merged (returns null so the row is left untouched).
+ */
+const dedupeKeyOf = (value: unknown): string | null => {
+  if (value == null) return null;
+  const s = (typeof value === "string" ? value : String(value)).trim();
+  if (s === "" || s.length > 200) return null;
+  return s;
+};
 
 /**
  * Grid domain service. Defined with the `Effect.Service` pattern; the composed
@@ -209,6 +242,18 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       tableId: string,
       event: GridChangeEvent,
     ) => realtime.publish({ workspaceId, tableId, event });
+
+    /**
+     * Broadcast a tables-list change on the WORKSPACE channel — the reserved
+     * room `${workspaceId}:_workspace` (no real table has this id). The sidebar
+     * subscribes to this one room so a member's table list refreshes live when a
+     * teammate creates/syncs/deletes a table they don't currently have open
+     * (the per-table channel above has no subscriber for a brand-new table).
+     */
+    const publishWorkspaceTablesChanged = (
+      workspaceId: string,
+      event: GridChangeEvent,
+    ) => realtime.publish({ workspaceId, tableId: WORKSPACE_ROOM_TABLE_ID, event });
 
     /** Load a project or fail typed. */
     const requireProject = (
@@ -353,7 +398,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         const rws = yield* rows.listByTable(tableId);
         const cls = yield* cells.listByTable(tableId);
         return {
-          table: { _id: table.id, name: table.name },
+          table: { _id: table.id, name: table.name, dedupe: toDedupe(table) },
           columns: cols.map(toGridColumn),
           rows: rws.map((r) => ({ _id: r.id })),
           cells: cls.map(toGridCell),
@@ -398,7 +443,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         // table's cells.
         const pageCells = yield* cells.listByRowIds(page.rows.map((r) => r.id));
         return {
-          table: { _id: table.id, name: table.name },
+          table: { _id: table.id, name: table.name, dedupe: toDedupe(table) },
           columns: cols.map(toGridColumn),
           rows: page.rows.map((r) => ({ _id: r.id })),
           cells: pageCells.map(toGridCell),
@@ -423,12 +468,14 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
           createdAt: Date.now(),
         });
         yield* meter.meterActions(project.workspaceId, 1);
-        yield* publish(project.workspaceId, id, {
-          type: "table.insert",
+        const insertEvent = {
+          type: "table.insert" as const,
           tableId: id,
           projectId: args.projectId,
           name: args.name,
-        });
+        };
+        yield* publish(project.workspaceId, id, insertEvent);
+        yield* publishWorkspaceTablesChanged(project.workspaceId, insertEvent);
         return id;
       });
 
@@ -610,10 +657,9 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         yield* requireCloudMember(table.workspaceId);
         yield* tables.remove(tableId);
         yield* meter.meterActions(table.workspaceId, 1);
-        yield* publish(table.workspaceId, tableId, {
-          type: "table.delete",
-          tableId,
-        });
+        const deleteEvent = { type: "table.delete" as const, tableId };
+        yield* publish(table.workspaceId, tableId, deleteEvent);
+        yield* publishWorkspaceTablesChanged(table.workspaceId, deleteEvent);
       });
 
     /**
@@ -670,6 +716,82 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
           type: "row.delete",
           rowId,
         });
+      });
+
+    /**
+     * One-shot dedup sweep (mirrors the local engine, packages/engine/src/db.ts):
+     * group rows by the dedupe column's value IN TABLE ORDER, keep the first
+     * (oldest) or last (newest) per group, delete the rest. Each delete is
+     * metered + broadcast as a `row.delete` so every other client live-updates.
+     * Members-only. No-op when dedupe is off.
+     */
+    const dedupeTable = (tableId: string) =>
+      Effect.gen(function* () {
+        const table = yield* requireTable(tableId);
+        yield* requireCloudMember(table.workspaceId);
+        const cfg = toDedupe(table);
+        if (cfg === null) return { deleted: 0 };
+        const rws = yield* rows.listByTable(tableId); // position, createdAt order
+        const cls = yield* cells.listByTable(tableId);
+        const valueByRow = new Map<string, unknown>();
+        for (const c of cls) {
+          if (c.columnId === cfg.column) valueByRow.set(c.rowId, c.value);
+        }
+        const groups = new Map<string, string[]>();
+        for (const r of rws) {
+          const key = dedupeKeyOf(valueByRow.get(r.id));
+          if (key === null) continue;
+          const g = groups.get(key);
+          if (g === undefined) groups.set(key, [r.id]);
+          else g.push(r.id);
+        }
+        const victims: string[] = [];
+        for (const ids of groups.values()) {
+          if (ids.length <= 1) continue;
+          const keepIdx = cfg.keep === "newest" ? ids.length - 1 : 0;
+          ids.forEach((id, i) => {
+            if (i !== keepIdx) victims.push(id);
+          });
+        }
+        for (const id of victims) {
+          yield* rows.remove(id);
+          yield* publish(table.workspaceId, tableId, {
+            type: "row.delete",
+            rowId: id,
+          });
+        }
+        if (victims.length > 0) {
+          yield* meter.meterActions(table.workspaceId, victims.length);
+        }
+        return { deleted: victims.length };
+      });
+
+    /**
+     * Set (or clear) a table's row-dedup config, then immediately sweep so the
+     * existing rows reflect the new rule. `column: null` disables dedupe (no
+     * sweep). Members-only.
+     */
+    const setDedupe = (args: {
+      readonly tableId: string;
+      readonly column: string | null;
+      readonly keep: "oldest" | "newest";
+    }) =>
+      Effect.gen(function* () {
+        const table = yield* requireTable(args.tableId);
+        yield* requireCloudMember(table.workspaceId);
+        yield* tables.setDedupe(args.tableId, {
+          column: args.column,
+          keep: args.keep,
+        });
+        const swept =
+          args.column === null
+            ? { deleted: 0 }
+            : yield* dedupeTable(args.tableId);
+        const dedupe: GridDedupe | null =
+          args.column === null
+            ? null
+            : { column: args.column, keep: args.keep };
+        return { dedupe, deleted: swept.deleted };
       });
 
     // ── cells ─────────────────────────────────────────────────────────────
@@ -831,6 +953,8 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       updateColumn,
       deleteColumn,
       deleteRow,
+      setDedupe,
+      dedupeTable,
       setCell,
       setCellStatus,
     } as const;

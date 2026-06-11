@@ -21,7 +21,11 @@ import {
   useQuery as useRqQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { applyGridEvent, subscribeToGrid } from "@gtmgrid/services/realtime";
+import {
+  applyGridEvent,
+  subscribeToGrid,
+  WORKSPACE_ROOM_TABLE_ID,
+} from "@gtmgrid/services/realtime";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { Id } from "./ids";
 import { gridPresenceStore } from "./presenceStore";
@@ -345,7 +349,11 @@ function toCell(c: {
 
 /** The `getTable`-shaped snapshot {@link createIncrementalTableView} projects. */
 type GetTableData = {
-  table: { _id: string; name: string };
+  table: {
+    _id: string;
+    name: string;
+    dedupe?: { column: string; keep: "oldest" | "newest" } | null;
+  };
   columns: readonly {
     _id: string;
     name: string;
@@ -458,7 +466,13 @@ export function createIncrementalTableView(): {
     });
 
     prevByRow = nextByRow;
-    return { id: data.table._id, name: data.table.name, columns, rows };
+    return {
+      id: data.table._id,
+      name: data.table.name,
+      dedupe: data.table.dedupe ?? null,
+      columns,
+      rows,
+    };
   };
 
   return { derive };
@@ -763,6 +777,58 @@ function usePagedGridRealtime(
       if (teardown) void teardown();
     };
   }, [tableId, workspaceId]);
+}
+
+/**
+ * Subscribe to the WORKSPACE realtime room (`${workspaceId}:_workspace`) and
+ * refresh the sidebar's cloud table + project lists when ANY member creates,
+ * syncs, or deletes a table — so a teammate's change shows up live without an
+ * app restart. We don't patch the list in place (table create/delete is rare and
+ * the events don't carry the list's count metadata); we invalidate the
+ * `grid/tables` + `grid/projects` queries and let them refetch. Opens its own
+ * socket (separate from any open table's grid socket). No-op when realtime is
+ * unconfigured or no workspace is active.
+ */
+export function useWorkspaceRealtime(
+  workspaceId: Id<"workspaces"> | null,
+): void {
+  const qc = useQueryClient();
+  const qcRef = useRef(qc);
+  qcRef.current = qc;
+
+  useEffect(() => {
+    if (!realtimeConfigured || workspaceId === null || PARTY_URL === undefined) {
+      return;
+    }
+    let disposed = false;
+    let teardown: (() => Promise<void>) | null = null;
+
+    void (async () => {
+      const token = await mintRealtimeToken(workspaceId).catch(() => null);
+      if (token === null || disposed) return;
+      const sub = subscribeToGrid({
+        url: PARTY_URL,
+        token,
+        workspaceId,
+        tableId: WORKSPACE_ROOM_TABLE_ID,
+        onEvent: () => {
+          qcRef.current.invalidateQueries({
+            predicate: (query) =>
+              query.queryKey[0] === "grid" &&
+              (query.queryKey[1] === "tables" ||
+                query.queryKey[1] === "projects"),
+          });
+        },
+      });
+      teardown = sub.unsubscribe;
+      if (disposed) void sub.unsubscribe();
+    })();
+
+    return () => {
+      disposed = true;
+      if (teardown) void teardown();
+    };
+  }, [workspaceId]);
 }
 
 /**
@@ -1131,7 +1197,47 @@ export function useCloudGridMutations() {
     [refresh],
   );
 
-  return { setCell, addRow, addRowsWithCells, addColumn, updateColumn, deleteRow, deleteColumn };
+  /** Set (or clear) the table's dedupe config; the server sweeps immediately. */
+  const setDedupe = useCallback(
+    async (
+      tableId: Id<"tables">,
+      body: { column: string | null; keep?: "oldest" | "newest" },
+    ) => {
+      try {
+        return await apiClient!.grid.setDedupe.mutate({
+          tableId,
+          column: body.column,
+          ...(body.keep ? { keep: body.keep } : {}),
+        });
+      } finally {
+        await refresh(tableId);
+      }
+    },
+    [refresh],
+  );
+  /** Run a one-shot dedup sweep using the table's saved config. */
+  const dedupeTable = useCallback(
+    async (tableId: Id<"tables">) => {
+      try {
+        return await apiClient!.grid.dedupe.mutate({ tableId });
+      } finally {
+        await refresh(tableId);
+      }
+    },
+    [refresh],
+  );
+
+  return {
+    setCell,
+    addRow,
+    addRowsWithCells,
+    addColumn,
+    updateColumn,
+    deleteRow,
+    deleteColumn,
+    setDedupe,
+    dedupeTable,
+  };
 }
 
 /**

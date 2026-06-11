@@ -299,6 +299,45 @@ export const gridRouter = router({
       ),
     ),
 
+  /**
+   * Set (or clear) a table's row-dedup config and sweep duplicates immediately.
+   * `column: null` disables dedupe. Members-only; the sweep is metered + live.
+   */
+  setDedupe: protectedProcedure
+    .input(
+      z.object({
+        tableId: z.string().min(1),
+        column: z.string().min(1).nullable(),
+        keep: z.enum(["oldest", "newest"]).optional(),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* GridService;
+          return yield* svc.setDedupe({
+            tableId: input.tableId,
+            column: input.column,
+            keep: input.keep ?? "oldest",
+          });
+        }),
+      ),
+    ),
+
+  /** Run a one-shot dedup sweep using the table's saved config. Members-only. */
+  dedupe: protectedProcedure
+    .input(z.object({ tableId: z.string().min(1) }))
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* GridService;
+          return yield* svc.dedupeTable(input.tableId);
+        }),
+      ),
+    ),
+
   // ── cells ─────────────────────────────────────────────────────────────────
 
   /**

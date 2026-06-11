@@ -31,6 +31,7 @@ import {
   type ColumnAuthoringApi,
 } from "../AddColumn";
 import { DataGrid, type GridController } from "../DataGrid";
+import { DedupePopover } from "../DedupePopover";
 import { resolveRowHeight } from "../gridVirtual";
 import { buildPresenceView } from "../gridPresence";
 import { runCloudColumn } from "./cloud-run";
@@ -75,8 +76,16 @@ export function CloudGrid({
 }: CloudGridProps) {
   const { data, loadMore, hasMore, isLoadingMore } = useCloudTablePaged(tableId);
   const session = useCloudSession();
-  const { setCell, addRow, addColumn, updateColumn, deleteRow, deleteColumn } =
-    useCloudGridMutations();
+  const {
+    setCell,
+    addRow,
+    addColumn,
+    updateColumn,
+    deleteRow,
+    deleteColumn,
+    setDedupe,
+    dedupeTable,
+  } = useCloudGridMutations();
 
   const [runningColId, setRunningColId] = useState<string | null>(null);
   const [runningCells, setRunningCells] = useState<Set<string>>(new Set());
@@ -86,6 +95,7 @@ export function CloudGrid({
   const [addColAnchor, setAddColAnchor] = useState<{ left: number; top: number } | null>(null);
   const [showFunctions, setShowFunctions] = useState(false);
   const [editCol, setEditCol] = useState<Column | null>(null);
+  const [dedupeOpen, setDedupeOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const rowHeight = resolveRowHeight();
@@ -279,6 +289,16 @@ export function CloudGrid({
     canRun: session !== null,
     runDisabledReason: session === null ? "Sign in to run cloud columns" : undefined,
     canAddRow: true,
+    toolbarLeftExtras: (
+      <button
+        className="autorun-toggle"
+        onClick={() => setDedupeOpen(true)}
+        title="Deduplicate rows on a column"
+      >
+        <span className="autorun-label">Dedupe</span>
+        {table.dedupe && <span className="dedupe-on-dot" title="Auto-dedupe is on" />}
+      </button>
+    ),
     toolbarExtras: (
       <>
         <span className="free-badge" title="Live multiplayer">LIVE</span>
@@ -336,6 +356,17 @@ export function CloudGrid({
         </div>
       )}
       <DataGrid controller={controller} />
+
+      {dedupeOpen && (
+        <DedupePopover
+          columns={table.columns.map((c) => ({ id: c.id, name: c.name }))}
+          current={table.dedupe ?? null}
+          setDedupe={(body) => setDedupe(table.id as Id<"tables">, body)}
+          dedupeTable={() => dedupeTable(table.id as Id<"tables">)}
+          onClose={() => setDedupeOpen(false)}
+          onChanged={() => setDedupeOpen(false)}
+        />
+      )}
 
       {showAddCol && (
         <AddColumnPopover

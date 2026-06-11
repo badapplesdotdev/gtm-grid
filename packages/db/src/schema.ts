@@ -29,6 +29,7 @@
 
 import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   bigint,
   boolean,
   doublePrecision,
@@ -366,6 +367,14 @@ export const tables = pgTable(
     name: text("name").notNull(),
     position: doublePrecision("position").notNull(),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    // Optional row-deduplication config (mirrors the local engine): the column
+    // whose value rows are deduped on, and which duplicate to keep. Null = off.
+    // The `(): AnyPgColumn` annotation breaks the tables↔columns circular type
+    // reference (columns.table_id → tables, tables.dedupe_column → columns).
+    dedupeColumn: uuid("dedupe_column").references((): AnyPgColumn => columns.id, {
+      onDelete: "set null",
+    }),
+    dedupeKeep: text("dedupe_keep"),
   },
   (t) => [
     index("tables_by_project").on(t.projectId),

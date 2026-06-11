@@ -22,6 +22,10 @@ export interface Table {
   readonly name: string;
   readonly position: number;
   readonly createdAt: number;
+  /** Dedupe config: the column rows are deduped on (null = off). */
+  readonly dedupeColumn: string | null;
+  /** Which duplicate to keep ("oldest" | "newest"); null when dedupe is off. */
+  readonly dedupeKeep: string | null;
 }
 
 /** Fields a `createTable` insert supplies. */
@@ -74,6 +78,11 @@ export class TableRepo extends Context.Tag("TableRepo")<
     ) => Effect.Effect<string, TableRepoError>;
     /** Delete a table (FK cascade drops its columns/rows/cells/webhooks). */
     readonly remove: (id: string) => Effect.Effect<void, TableRepoError>;
+    /** Set (or clear) a table's dedupe config. `column: null` disables it. */
+    readonly setDedupe: (
+      id: string,
+      config: { readonly column: string | null; readonly keep: string | null },
+    ) => Effect.Effect<void, TableRepoError>;
   }
 >() {}
 
@@ -90,6 +99,8 @@ export const TableRepoLive: Layer.Layer<TableRepo, never, DbClient> =
         name: schema.tables.name,
         position: schema.tables.position,
         createdAt: schema.tables.createdAt,
+        dedupeColumn: schema.tables.dedupeColumn,
+        dedupeKeep: schema.tables.dedupeKeep,
       } as const;
       return {
         findById: (id) =>
@@ -157,6 +168,19 @@ export const TableRepoLive: Layer.Layer<TableRepo, never, DbClient> =
             },
             catch: fail("table delete"),
           }),
+        setDedupe: (id, config) =>
+          Effect.tryPromise({
+            try: async () => {
+              await db
+                .update(schema.tables)
+                .set({
+                  dedupeColumn: config.column,
+                  dedupeKeep: config.column === null ? null : config.keep,
+                })
+                .where(eq(schema.tables.id, id));
+            },
+            catch: fail("table set dedupe"),
+          }),
       };
     }),
   );
@@ -183,8 +207,16 @@ export const tableRepoLayer = (store: GridStore): Layer.Layer<TableRepo> =>
     insert: (values) =>
       Effect.sync(() => {
         const id = store.nextId("table");
-        store.tables.push({ id, ...values });
+        store.tables.push({ id, ...values, dedupeColumn: null, dedupeKeep: null });
         return id;
       }),
     remove: (id) => Effect.sync(() => cascadeDeleteTable(store, id)),
+    setDedupe: (id, config) =>
+      Effect.sync(() => {
+        const t = store.tables.find((x) => x.id === id);
+        if (t) {
+          t.dedupeColumn = config.column;
+          t.dedupeKeep = config.column === null ? null : config.keep;
+        }
+      }),
   });

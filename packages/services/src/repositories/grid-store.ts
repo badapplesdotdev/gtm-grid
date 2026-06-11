@@ -31,6 +31,8 @@ export interface StoreTable {
   name: string;
   position: number;
   createdAt: number;
+  dedupeColumn: string | null;
+  dedupeKeep: string | null;
 }
 
 /** An in-memory column row (the full projection getTable returns). */
