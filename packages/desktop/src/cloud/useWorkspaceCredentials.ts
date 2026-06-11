@@ -64,8 +64,8 @@ export function useWorkspaceCredentials(
     );
     return {
       connectedExtensionIds,
-      save: (extensionId, name, apiKey) =>
-        runSaveCredential(
+      save: async (extensionId, name, apiKey) => {
+        await runSaveCredential(
           isAuthenticated,
           {
             workspaceId,
@@ -75,7 +75,13 @@ export function useWorkspaceCredentials(
             secrets: { apiKey },
           },
           layer,
-        ),
+        );
+        // Refresh the connected listing so the panel flips to "connected"
+        // immediately — without this the indicator stayed stale until restart.
+        await queryClient.invalidateQueries({
+          queryKey: ["credentials", "list", workspaceId],
+        });
+      },
       // Copy the local key up to the shared Cloud key via the sidecar (plaintext
       // never enters the renderer), then refresh the connected listing so the
       // panel flips to "connected". Only available with a live cloud session.
