@@ -24,7 +24,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Effect } from "effect";
-import { runWorker } from "../../app/api/worker/_lib";
+import { runWorker, runWorkerSecretOrMember } from "../../app/api/worker/_lib";
 
 const SECRET = "whk_secret_value";
 
@@ -121,6 +121,39 @@ describe("worker shared-secret gate (runWorker)", () => {
   it("a bogus X-Gtmgrid-Member does NOT bypass the secret gate (401)", async () => {
     const res = await runWorker(
       workerRequest({ auth: null, member: "spoofed-member-token" }),
+      succeedBuild,
+    );
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("worker dual-auth boundary (runWorkerSecretOrMember)", () => {
+  it("HEADLESS path: a valid worker secret passes the gate, then 400 on bad body (no DB / no member resolve)", async () => {
+    const res = await runWorkerSecretOrMember(
+      workerRequest({ auth: `Bearer ${SECRET}`, body: "{ not json" }),
+      succeedBuild,
+    );
+    // Secret authorized → headless path → body parse runs BEFORE any member
+    // resolution or the dynamic @gtmgrid/db/client import, so this is a clean 400.
+    expect(res.status).toBe(400);
+  });
+
+  it("MEMBER path: NO worker secret AND NO member token → 401 (fail-closed before Better Auth / DB)", async () => {
+    // No Authorization (so not the headless path) and no X-Gtmgrid-Member, so
+    // resolveMemberUserId returns null WITHOUT calling Better Auth → 401 here,
+    // before the service ever runs. This is the path the prod desktop must NOT
+    // hit: it always forwards a member token.
+    const res = await runWorkerSecretOrMember(
+      workerRequest({ auth: null }),
+      succeedBuild,
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "Unauthorized" });
+  });
+
+  it("MEMBER path: a wrong worker secret is NOT headless — falls through, and with no member token → 401", async () => {
+    const res = await runWorkerSecretOrMember(
+      workerRequest({ auth: "Bearer not-the-secret" }),
       succeedBuild,
     );
     expect(res.status).toBe(401);

@@ -99,8 +99,14 @@ function harness(opts: {
     credentials: opts.credentials ?? new Map(),
   });
   const deliveryRepo = webhookDeliveryRepoLayer(opts.deliveries ?? []);
+  // `currentUserId: null` is an EXPLICIT headless caller (no identity → the
+  // worker-secret path); only an absent option defaults to the member "member".
   const membership = MembershipService.Default.pipe(
-    Layer.provide(cloudIdentityLayer(opts.currentUserId ?? "member")),
+    Layer.provide(
+      cloudIdentityLayer(
+        opts.currentUserId === undefined ? "member" : opts.currentUserId,
+      ),
+    ),
     Layer.provide(cloudMemberRepoLayer(memberships)),
   );
   // EntitlementService reads the workspace plan; default "team" (cloud on).
@@ -724,6 +730,89 @@ describe("WebhookService.getCredential", () => {
       ),
     );
     expect(Exit.isSuccess(exit) && exit.value).toBe(null);
+  });
+});
+
+// The desktop sidecar + spawned MCP reach getTable/getTableMeta/setCell/
+// getCredential/assertColumnRunQuota via the dual-auth `runWorkerSecretOrMember`
+// route wrapper. On its MEMBER path the service runs with the caller's identity
+// and `assertMemberIfIdentified` rejects a non-member (→ 403); on the HEADLESS
+// worker-secret path there is no identity, so the assertion is skipped (the
+// inngest worker keeps working). `currentUserId: null` models the headless caller.
+describe("WebhookService worker paths — member-auth gate", () => {
+  it("getTable rejects a non-member of the table's workspace", async () => {
+    const { run } = harness({ rows: [], cells: [], currentUserId: "stranger" });
+    const exit = await run(svc.pipe(Effect.flatMap((s) => s.getTable(TABLE))));
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const f = Cause.failureOption(exit.cause);
+      expect(f._tag === "Some" && f.value._tag).toBe("NotAMemberError");
+    }
+  });
+
+  it("getTable allows the headless worker-secret path (no identity → skip)", async () => {
+    const { run } = harness({ rows: [], cells: [], currentUserId: null });
+    const exit = await run(svc.pipe(Effect.flatMap((s) => s.getTable(TABLE))));
+    expect(Exit.isSuccess(exit)).toBe(true);
+  });
+
+  it("getTableMeta rejects a non-member", async () => {
+    const { run } = harness({ currentUserId: "stranger" });
+    const exit = await run(
+      svc.pipe(Effect.flatMap((s) => s.getTableMeta(TABLE))),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const f = Cause.failureOption(exit.cause);
+      expect(f._tag === "Some" && f.value._tag).toBe("NotAMemberError");
+    }
+  });
+
+  it("getCredential rejects a non-member (no plaintext secret leak)", async () => {
+    const crypto = credentialCryptoTest();
+    const enc = await Effect.runPromise(
+      Effect.gen(function* () {
+        const c = yield* CredentialCryptoService;
+        return yield* c.encrypt(WS, { apiKey: "sekret" });
+      }).pipe(Effect.provide(crypto)),
+    );
+    const credentials = new Map<string, string>([[`${WS}:apollo`, enc]]);
+    const { run } = harness({ credentials, crypto, currentUserId: "stranger" });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.getCredential({ workspaceId: WS, extensionId: "apollo" }),
+        ),
+      ),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const f = Cause.failureOption(exit.cause);
+      expect(f._tag === "Some" && f.value._tag).toBe("NotAMemberError");
+    }
+  });
+
+  it("getCredential allows the headless worker-secret path (no identity → skip)", async () => {
+    const crypto = credentialCryptoTest();
+    const enc = await Effect.runPromise(
+      Effect.gen(function* () {
+        const c = yield* CredentialCryptoService;
+        return yield* c.encrypt(WS, { apiKey: "sekret" });
+      }).pipe(Effect.provide(crypto)),
+    );
+    const credentials = new Map<string, string>([[`${WS}:apollo`, enc]]);
+    const { run } = harness({ credentials, crypto, currentUserId: null });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.getCredential({ workspaceId: WS, extensionId: "apollo" }),
+        ),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value?.secrets).toEqual({ apiKey: "sekret" });
+    }
   });
 });
 
