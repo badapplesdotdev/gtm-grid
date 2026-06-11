@@ -1,5 +1,11 @@
 # @gtmgrid/cli
 
+## 0.9.6
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.6
+
 ## 0.9.5
 
 ### Patch Changes
