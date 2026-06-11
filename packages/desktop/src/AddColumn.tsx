@@ -307,7 +307,7 @@ export function FunctionsModal({
   connectors: ConnectorInfo[];
   columns: string[];
   onClose: () => void;
-  onAdded: () => void;
+  onAdded: (columnId?: string) => void;
   onOpenAiSettings?: () => void;
 }) {
   const fns: Fn[] = useMemo(
@@ -437,15 +437,15 @@ export function FunctionsModal({
                   fn={selected}
                   tableId={tableId}
                   columns={columns}
-                  onAdded={() => { onAdded(); onClose(); }}
+                  onAdded={(id) => { onAdded(id); onClose(); }}
                   onOpenAiSettings={onOpenAiSettings}
                 />
               ) : selected.provider === "formula" ? (
-                <FormulaDetail key={selected.fnKey} tableId={tableId} columns={columns} onAdded={() => { onAdded(); onClose(); }} />
+                <FormulaDetail key={selected.fnKey} tableId={tableId} columns={columns} onAdded={(id) => { onAdded(id); onClose(); }} />
               ) : selected.provider === "http" ? (
-                <HttpRequestDetail key={selected.fnKey} fn={selected} tableId={tableId} columns={columns} onAdded={() => { onAdded(); onClose(); }} />
+                <HttpRequestDetail key={selected.fnKey} fn={selected} tableId={tableId} columns={columns} onAdded={(id) => { onAdded(id); onClose(); }} />
               ) : (
-                <FunctionDetail key={selected.fnKey} fn={selected} tableId={tableId} columns={columns} onAdded={() => { onAdded(); onClose(); }} />
+                <FunctionDetail key={selected.fnKey} fn={selected} tableId={tableId} columns={columns} onAdded={(id) => { onAdded(id); onClose(); }} />
               )
             ) : (
               <div className="fnx-detail-empty">
@@ -471,7 +471,7 @@ function FunctionDetail({
   fn: Fn;
   tableId: string;
   columns: string[];
-  onAdded: () => void;
+  onAdded: (columnId?: string) => void;
 }) {
   const gridApi = useColumnApi();
   const props = (fn.input?.properties ?? {}) as Record<string, { description?: string; type?: string }>;
@@ -494,8 +494,8 @@ function FunctionDetail({
     try {
       const params: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(values)) if (v.trim()) params[k] = v.trim();
-      await gridApi.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, params, condition: condition.trim() || null });
-      onAdded();
+      const { id } = await gridApi.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, params, condition: condition.trim() || null });
+      onAdded(id);
     } catch (e: any) {
       setErr(e?.message ?? "Failed to add column");
       setSaving(false);
@@ -622,7 +622,7 @@ function AiGenerateDetail({
   fn: Fn;
   tableId: string;
   columns: string[];
-  onAdded: () => void;
+  onAdded: (columnId?: string) => void;
   onOpenAiSettings?: () => void;
 }) {
   const gridApi = useColumnApi();
@@ -705,8 +705,8 @@ function AiGenerateDetail({
       if (model) params.model = model;
       const mt = parseInt(maxTokens, 10);
       if (!Number.isNaN(mt) && mt > 0) params.maxTokens = mt;
-      await gridApi.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, params, condition: condition.trim() || null });
-      onAdded();
+      const { id } = await gridApi.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, params, condition: condition.trim() || null });
+      onAdded(id);
     } catch (e: any) {
       setErr(e?.message ?? "Failed to add column");
       setSaving(false);
@@ -1076,7 +1076,7 @@ function FormulaDetail({
 }: {
   tableId: string;
   columns: string[];
-  onAdded: () => void;
+  onAdded: (columnId?: string) => void;
 }) {
   const gridApi = useColumnApi();
   const [colName, setColName] = useState("Formula");
@@ -1092,14 +1092,14 @@ function FormulaDetail({
     setSaving(true);
     setErr("");
     try {
-      await gridApi.addColumn(tableId, {
+      const { id } = await gridApi.addColumn(tableId, {
         name: colName.trim(),
         type,
         fn: "formula.eval",
         params: { expression: expression.trim() },
         condition: condition.trim() || null,
       });
-      onAdded();
+      onAdded(id);
     } catch (e: any) {
       setErr(e?.message ?? "Failed to add column");
       setSaving(false);
@@ -1433,7 +1433,7 @@ function HttpRequestDetail({
   fn: Fn;
   tableId: string;
   columns: string[];
-  onAdded: () => void;
+  onAdded: (columnId?: string) => void;
 }) {
   const gridApi = useColumnApi();
   const [colName, setColName] = useState("HTTP API");
@@ -1448,8 +1448,8 @@ function HttpRequestDetail({
     setSaving(true);
     setErr("");
     try {
-      await gridApi.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, type: "json", params, condition: condition.trim() || null });
-      onAdded();
+      const { id } = await gridApi.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, type: "json", params, condition: condition.trim() || null });
+      onAdded(id);
     } catch (e) {
       setErr((e as Error)?.message ?? "Failed to add column");
       setSaving(false);
