@@ -545,7 +545,7 @@ export const CellContent = memo(CellContentInner, cellPropsEqual);
 // A popover for viewing / editing long cell content (transcripts, summaries…)
 // without ballooning the grid. Fixed width, with a maximize toggle.
 
-function ExpandedEditor({
+export function ExpandedEditor({
   columnName,
   value,
   editable,

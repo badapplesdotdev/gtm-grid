@@ -20,7 +20,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Id } from "./ids";
-import { Icon } from "../App";
+import { Icon, ExpandedEditor } from "../App";
+import CellDetails from "../CellDetails";
 import { api } from "../api";
 import type { ConnectorInfo, Column, FullTable } from "../api";
 import {
@@ -96,6 +97,17 @@ export function CloudGrid({
   const [showFunctions, setShowFunctions] = useState(false);
   const [editCol, setEditCol] = useState<Column | null>(null);
   const [dedupeOpen, setDedupeOpen] = useState(false);
+  // Cell-details drawer (view a function/HTTP cell's full response) + expanded
+  // editor (long text). Mirrors the local grid so synced responses are inspectable.
+  const [detail, setDetail] = useState<{ columnName: string; value: unknown } | null>(null);
+  const [cellExpand, setCellExpand] = useState<{
+    rowId: string;
+    colId: string;
+    columnName: string;
+    value: string;
+    editable: boolean;
+    anchor: { left: number; top: number; width: number };
+  } | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const rowHeight = resolveRowHeight();
@@ -330,6 +342,14 @@ export function CloudGrid({
     openAddColumn: (anchor) => { setAddColAnchor(anchor); setShowAddCol(true); },
     // Cloud columns are a fixed width (no resize) — omit `resizeColumn`.
     onScrollNearBottom: hasMore && !isLoadingMore ? loadMore : undefined,
+    // Inspect a cell's full response (status-code/JSON) like the local grid. The
+    // drawer is view-only in cloud (no promote-to-column yet) — omit onCreate/onMapTo.
+    openCellDetails: (col, cell) =>
+      setDetail({
+        columnName: col.name,
+        value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
+      }),
+    expandCell: (a) => setCellExpand(a),
     // ── Multiplayer presence ──
     presence: presenceView,
     onActiveCellChange: (cell) =>
@@ -356,6 +376,35 @@ export function CloudGrid({
         </div>
       )}
       <DataGrid controller={controller} />
+
+      {detail && (
+        <CellDetails
+          source={detail}
+          columns={table.columns.map((c) => ({ id: c.id, name: c.name }))}
+          onClose={() => setDetail(null)}
+        />
+      )}
+
+      {cellExpand && (
+        <ExpandedEditor
+          columnName={cellExpand.columnName}
+          value={cellExpand.value}
+          editable={cellExpand.editable}
+          anchor={cellExpand.anchor}
+          onSave={(v) =>
+            void guard(
+              () =>
+                setCell(
+                  cellExpand.rowId as Id<"rows">,
+                  cellExpand.colId as Id<"columns">,
+                  v,
+                ),
+              "set cell",
+            )
+          }
+          onClose={() => setCellExpand(null)}
+        />
+      )}
 
       {dedupeOpen && (
         <DedupePopover

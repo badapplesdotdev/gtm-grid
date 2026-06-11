@@ -578,15 +578,9 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
           }
         }
 
-        const cols = yield* columns.listByTable(args.tableId);
-        const valid = new Set(cols.map((c) => c.id));
-        // Function/code/AI columns aren't computed yet in the cloud copy — stamp
-        // their synced cells "empty" (not "done") so a plain Run in cloud actually
-        // recomputes them over the synced input data. Manual columns are real data
-        // and stay "done". (A non-forced run skips only "done" cells; see
-        // engine/execute.ts.) The cell VALUE is still carried either way, so a
-        // chained column can read a prior function column's output immediately.
-        const isManual = new Map(cols.map((c) => [c.id, c.kind === "manual"]));
+        const valid = new Set(
+          (yield* columns.listByTable(args.tableId)).map((c) => c.id),
+        );
         const basePosition = yield* rows.nextPosition(args.tableId);
         const now = Date.now();
 
@@ -623,7 +617,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
                   rowId,
                   columnId,
                   value,
-                  status: isManual.get(columnId) === false ? "empty" : "done",
+                  status: "done",
                   error: null,
                   updatedAt: now,
                 }),
