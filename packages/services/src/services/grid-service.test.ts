@@ -36,6 +36,7 @@ import {
 } from "../repositories/workspace-repo.js";
 import { EntitlementService } from "./entitlement-service.js";
 import { GridService } from "./grid-service.js";
+import { WORKSPACE_ROOM_TABLE_ID } from "../realtime/events.js";
 import { type MeterQuota, meterServiceLayer } from "./meter-service.js";
 import {
   type RecordedGridEvent,
@@ -133,7 +134,7 @@ describe("GridService.getTable", () => {
     const exit = await run(Effect.flatMap(GridService, (s) => s.getTable("t1")));
     expect(Exit.isSuccess(exit)).toBe(true);
     if (Exit.isSuccess(exit)) {
-      expect(exit.value.table).toEqual({ _id: "t1", name: "T1" });
+      expect(exit.value.table).toEqual({ _id: "t1", name: "T1", dedupe: null });
       expect(exit.value.columns[0]).toMatchObject({ _id: "c1", name: "A", type: "text", kind: "manual" });
       expect(exit.value.rows).toEqual([{ _id: "r1" }]);
       expect(exit.value.cells[0]).toEqual({ rowId: "r1", columnId: "c1", value: "x", status: "done", error: null });
@@ -151,6 +152,67 @@ describe("GridService.getTable", () => {
     const { run } = harness({});
     const exit = await run(Effect.flatMap(GridService, (s) => s.getTable("missing")));
     expect(failTag(exit)).toBe("GridNotFoundError");
+  });
+});
+
+describe("GridService.dedupe (cloud parity with the local engine)", () => {
+  const dupStore = (keep: "oldest" | "newest") =>
+    makeGridStore({
+      tables: [table({ dedupeColumn: "c1", dedupeKeep: keep })],
+      columns: [column()],
+      rows: [
+        row({ id: "r1", position: 0 }),
+        row({ id: "r2", position: 1 }),
+        row({ id: "r3", position: 2 }),
+      ],
+      cells: [
+        // r1 & r3 share value "a" (duplicates); r2 is unique "b".
+        { id: "x1", workspaceId: WS, tableId: "t1", rowId: "r1", columnId: "c1", value: "a", status: "done", error: null, updatedAt: 1 },
+        { id: "x2", workspaceId: WS, tableId: "t1", rowId: "r2", columnId: "c1", value: "b", status: "done", error: null, updatedAt: 1 },
+        { id: "x3", workspaceId: WS, tableId: "t1", rowId: "r3", columnId: "c1", value: "a", status: "done", error: null, updatedAt: 1 },
+      ],
+    });
+
+  it("keep=oldest deletes the later duplicate (keeps the first in table order)", async () => {
+    const store = dupStore("oldest");
+    const { run, events } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.dedupeTable("t1")));
+    expect(Exit.isSuccess(exit) && exit.value).toEqual({ deleted: 1 });
+    expect(store.rows.map((r) => r.id).sort()).toEqual(["r1", "r2"]);
+    // The deletion is broadcast so other clients live-update.
+    expect(events.some((e) => e.event.type === "row.delete" && e.event.rowId === "r3")).toBe(true);
+  });
+
+  it("keep=newest deletes the earlier duplicate (keeps the last)", async () => {
+    const store = dupStore("newest");
+    const { run } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.dedupeTable("t1")));
+    expect(store.rows.map((r) => r.id).sort()).toEqual(["r2", "r3"]);
+  });
+
+  it("setDedupe persists config and sweeps immediately", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [column()],
+      rows: [row({ id: "r1", position: 0 }), row({ id: "r2", position: 1 })],
+      cells: [
+        { id: "x1", workspaceId: WS, tableId: "t1", rowId: "r1", columnId: "c1", value: "dup", status: "done", error: null, updatedAt: 1 },
+        { id: "x2", workspaceId: WS, tableId: "t1", rowId: "r2", columnId: "c1", value: "dup", status: "done", error: null, updatedAt: 1 },
+      ],
+    });
+    const { run } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.setDedupe({ tableId: "t1", column: "c1", keep: "oldest" })));
+    expect(Exit.isSuccess(exit) && exit.value).toEqual({ dedupe: { column: "c1", keep: "oldest" }, deleted: 1 });
+    expect(store.tables[0].dedupeColumn).toBe("c1");
+    expect(store.rows).toHaveLength(1);
+  });
+
+  it("setDedupe with column:null disables dedupe and sweeps nothing", async () => {
+    const store = makeGridStore({ tables: [table({ dedupeColumn: "c1", dedupeKeep: "oldest" })] });
+    const { run } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.setDedupe({ tableId: "t1", column: null, keep: "oldest" })));
+    expect(Exit.isSuccess(exit) && exit.value).toEqual({ dedupe: null, deleted: 0 });
+    expect(store.tables[0].dedupeColumn).toBe(null);
   });
 });
 
@@ -181,7 +243,7 @@ describe("GridService.getTablePage — keyset pagination (TRI-3272)", () => {
       expect(exit.value.rows).toEqual([{ _id: "r1" }, { _id: "r2" }]);
       expect(exit.value.cells.map((c) => c.value).sort()).toEqual(["a", "b"]);
       expect(exit.value.columns[0]).toMatchObject({ _id: "c1" });
-      expect(exit.value.table).toEqual({ _id: "t1", name: "T1" });
+      expect(exit.value.table).toEqual({ _id: "t1", name: "T1", dedupe: null });
       expect(exit.value.nextCursor).not.toBeNull();
     }
   });
@@ -363,13 +425,19 @@ describe("GridService deletes — cascade + meter", () => {
       cells: [{ id: "cell1", workspaceId: WS, tableId: "t1", rowId: "r1", columnId: "c1", value: "x", status: "done", error: null, updatedAt: 1 }],
     });
     const quotas = new Map<string, MeterQuota>();
-    const { run } = harness({ store, quotas });
+    const { run, events } = harness({ store, quotas });
     await run(Effect.flatMap(GridService, (s) => s.deleteTable("t1")));
     expect(store.tables).toHaveLength(0);
     expect(store.columns).toHaveLength(0);
     expect(store.rows).toHaveLength(0);
     expect(store.cells).toHaveLength(0);
     expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
+    // Live sidebar (E): a table.delete is broadcast on the workspace room too.
+    expect(
+      events.some(
+        (e) => e.tableId === WORKSPACE_ROOM_TABLE_ID && e.event.type === "table.delete",
+      ),
+    ).toBe(true);
   });
 
   it("deleteRow cascades to that row's cells only", async () => {
@@ -425,11 +493,17 @@ describe("GridService structural inserts — meter + position", () => {
       tables: [table({ position: 3 })],
     });
     const quotas = new Map<string, MeterQuota>();
-    const { run } = harness({ store, quotas });
+    const { run, events } = harness({ store, quotas });
     const exit = await run(Effect.flatMap(GridService, (s) => s.createTable({ projectId: "p1", name: "New" })));
     expect(Exit.isSuccess(exit)).toBe(true);
     expect(store.tables.find((t) => t.name === "New")?.position).toBe(4);
     expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
+    // Live sidebar (E): a table.insert is broadcast on the workspace room too.
+    expect(
+      events.some(
+        (e) => e.tableId === WORKSPACE_ROOM_TABLE_ID && e.event.type === "table.insert",
+      ),
+    ).toBe(true);
   });
 
   it("createProject is NOT metered", async () => {

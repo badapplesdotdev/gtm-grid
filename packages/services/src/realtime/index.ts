@@ -17,6 +17,7 @@ export {
   type ColumnInsertEvent,
   GRID_EVENT_NAME,
   type GridChangeEvent,
+  type GridDedupe,
   type GridEventCell,
   type GridEventColumn,
   type GridEventRow,
@@ -26,6 +27,7 @@ export {
   type RowInsertEvent,
   type TableDeleteEvent,
   type TableInsertEvent,
+  WORKSPACE_ROOM_TABLE_ID,
 } from "./events.js";
 export { applyGridEvent } from "./reducer.js";
 export {
