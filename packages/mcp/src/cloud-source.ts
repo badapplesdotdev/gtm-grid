@@ -76,21 +76,16 @@ export class CloudToolUnsupportedError extends Error {
   }
 }
 
-/** Resolve the shared worker bearer secret, failing closed when unset. */
-function workerSecret(): string {
-  const secret = process.env.WEBHOOK_WORKER_SECRET;
-  if (secret === undefined || secret === "") {
-    throw new Error("WEBHOOK_WORKER_SECRET is not configured");
-  }
-  return secret;
-}
-
 /**
  * Build the HTTP {@link CloudClientLike} the cloud store injects: each ref is an
  * `/api/worker/*` route path, and query/mutation/action POST the JSON args to
- * `${apiUrl}<route>` with the shared worker bearer (the spawned MCP runs on the
- * trusted localhost boundary, same as the sidecar). The member `token` is
- * forwarded so the worker attributes the run to the signed-in member. Mirrors
+ * `${apiUrl}<route>`.
+ *
+ * AUTH: the spawned MCP authenticates as the SIGNED-IN MEMBER via the
+ * `X-Gtmgrid-Member` session token — NOT the shared `WEBHOOK_WORKER_SECRET`. The
+ * worker secret is a server-only secret the desktop (and therefore the MCP it
+ * spawns) never has, so the dual-auth worker routes take their member path and
+ * enforce workspace membership server-side. Mirrors
  * `packages/server/src/cloud-run.ts` `makeWorkerClient`.
  */
 export function makeWorkerClient(
@@ -109,7 +104,6 @@ export function makeWorkerClient(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${workerSecret()}`,
         "X-Gtmgrid-Member": token,
       },
       body: JSON.stringify(args),

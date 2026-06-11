@@ -346,7 +346,32 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           yield* repo.remove(webhookId);
         });
 
-      // ── WORKER PATHS (secret-gated upstream, NOT member-gated) ────────────
+      // ── WORKER PATHS (dual-auth upstream: secret OR member) ───────────────
+
+      /**
+       * Membership gate for the dual-auth worker routes (the desktop sidecar +
+       * spawned MCP reach these via `runWorkerSecretOrMember`). Two cases:
+       *
+       *  - MEMBER path: the request carried a member SESSION token, so the route
+       *    runs with that member's identity — assert they belong to `workspaceId`
+       *    (else `NotAMemberError` → 403). This is what lets the prod desktop, which
+       *    ships no worker secret, authenticate cloud reads/runs as the signed-in
+       *    member instead of a shared client secret.
+       *  - HEADLESS path: the request was authorized by the `WEBHOOK_WORKER_SECRET`
+       *    bearer (the inngest webhook worker), so there is NO current user;
+       *    `requireMember` fails `UnauthenticatedError`, which we SWALLOW — the
+       *    secret is the trust boundary, exactly as before.
+       *
+       * Safe because the route wrapper guarantees a null identity reaches here ONLY
+       * on the secret path: a member request whose token does not resolve is
+       * rejected 401 at the route, never reaching the service. So swallowing
+       * `UnauthenticatedError` cannot bypass the member-path membership check.
+       */
+      const assertMemberIfIdentified = (workspaceId: string) =>
+        membership.requireMember(workspaceId).pipe(
+          Effect.asVoid,
+          Effect.catchTag("UnauthenticatedError", () => Effect.void),
+        );
 
       /** Resolve a token to its (enabled) webhook, or `null`. */
       const resolveToken = (token: string) =>
@@ -612,6 +637,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
               new WebhookNotFoundError({ message: `Table ${tableId} not found.` }),
             );
           }
+          yield* assertMemberIfIdentified(table.value.workspaceId);
           const [columns, rows, cells] = [
             yield* repo.listColumns(tableId),
             yield* repo.listRows(tableId),
@@ -640,6 +666,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
               new WebhookNotFoundError({ message: `Table ${tableId} not found.` }),
             );
           }
+          yield* assertMemberIfIdentified(table.value.workspaceId);
           return {
             table: { id: table.value.id, workspaceId: table.value.workspaceId },
           } satisfies WorkerTableMeta;
@@ -678,6 +705,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             );
           }
           const workspaceId = table.value.workspaceId;
+          yield* assertMemberIfIdentified(workspaceId);
 
           const candidateRowIds =
             args.rowIds ??
@@ -759,6 +787,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             args.rowId,
             args.columnId,
           );
+          yield* assertMemberIfIdentified(workspaceId);
           return yield* repo.upsertCell({
             workspaceId,
             tableId,
@@ -787,6 +816,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             args.rowId,
             args.columnId,
           );
+          yield* assertMemberIfIdentified(workspaceId);
           return yield* repo.upsertCell({
             workspaceId,
             tableId,
@@ -838,9 +868,17 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         readonly extensionId: string;
       }): Effect.Effect<
         { readonly secrets: SecretMap } | null,
-        WebhookRepoError | import("@gtmgrid/cloud").DecryptError
+        | WebhookRepoError
+        | import("@gtmgrid/cloud").DecryptError
+        | import("@gtmgrid/cloud").NotAMemberError
+        | import("@gtmgrid/cloud").MemberRepoError
       > =>
         Effect.gen(function* () {
+          // Decrypting a workspace's SHARED credential is member-gated on the
+          // member path (a non-member gets 403); on the headless secret path the
+          // assertion is skipped. Especially important here — this returns
+          // plaintext connector secrets for a run.
+          yield* assertMemberIfIdentified(args.workspaceId);
           const enc = yield* repo.findSharedCredentialEnc(
             args.workspaceId,
             args.extensionId,

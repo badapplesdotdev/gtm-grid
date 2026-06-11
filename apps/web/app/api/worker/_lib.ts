@@ -170,27 +170,83 @@ async function resolveMemberUserId(req: Request): Promise<string | null> {
 
 /**
  * Guard + run a MEMBER-ATTRIBUTED worker handler — the agent's cloud WRITE/LIST
- * tools (createTable / createColumn / addRows / listTables). Like
- * {@link runWorker} it first rejects an unauthorized worker (401 on a bad
- * `WEBHOOK_WORKER_SECRET` bearer) and parses the body (400), BUT it then resolves
- * the forwarded `X-Gtmgrid-Member` token to a user id and runs the Effect against
- * a PER-REQUEST runtime carrying that member's identity. The member-authz +
- * cloud-actions metering live inside the domain service (`GridService` reuses
+ * tools (createTable / createColumn / addRows / listTables). It resolves the
+ * forwarded `X-Gtmgrid-Member` session token to a user id and runs the Effect
+ * against a PER-REQUEST runtime carrying that member's identity. The member-authz
+ * + cloud-actions metering live inside the domain service (`GridService` reuses
  * `MembershipService.requireMember` + `MeterService`), so a non-member is
  * rejected (403) and the quota is enforced (402) server-side — exactly as the
- * authenticated tRPC grid path, with no parallel logic at the route. Fail-closed:
- * a missing/invalid member token resolves to `null` and the service rejects with
+ * authenticated tRPC grid path, with no parallel logic at the route.
+ *
+ * MEMBER-AUTH ONLY (no worker secret): these tools are driven by the signed-in
+ * desktop user / spawned MCP, never the headless inngest worker, and the prod
+ * desktop ships no worker secret. Authorization is therefore the member session
+ * token alone — the shared secret is NOT accepted here. Fail-closed: a
+ * missing/invalid member token resolves to `null` and the service rejects with
  * `UnauthenticatedError` (→ 401) before touching workspace data.
  */
 export async function runWorkerAsMember<T, A, E>(
   req: Request,
   build: (body: T) => Effect.Effect<A, E, AppServices>,
 ): Promise<Response> {
-  if (!isAuthorizedWorker(req)) return unauthorized();
   const body = await readJson<T>(req);
   if (body === null) return badRequest("Invalid JSON body");
 
   const userId = await resolveMemberUserId(req);
+  const { db } = await import("@gtmgrid/db/client");
+  const runtime = ManagedRuntime.make(appLayer({ db, userId }));
+  try {
+    const exit = await runtime.runPromiseExit(build(body));
+    return exitToResponse(exit);
+  } finally {
+    await runtime.dispose();
+  }
+}
+
+/**
+ * Guard + run a worker handler that accepts EITHER trust path (prod desktop
+ * cloud auth). Used by the routes the desktop sidecar + spawned MCP call directly
+ * (getTable / getTableMeta / setCell / setCellStatus / setCells / getCredential /
+ * assertColumnRunQuota):
+ *
+ *   1. HEADLESS (worker secret): a valid `WEBHOOK_WORKER_SECRET` bearer is full
+ *      trust — the inngest webhook worker (server-to-server, no member identity).
+ *      Runs on the shared `userId: null` runtime, exactly as {@link runWorker}.
+ *   2. MEMBER (session token): no/invalid secret → resolve the forwarded
+ *      `X-Gtmgrid-Member` session token to a user id and run on a PER-REQUEST
+ *      runtime carrying that identity. The service method then enforces workspace
+ *      membership via `assertMemberIfIdentified` (→ 403 for a non-member). A
+ *      missing/invalid member token resolves to `null` → 401 here, BEFORE any
+ *      handler runs.
+ *
+ * INVARIANT this wrapper guarantees (and `assertMemberIfIdentified` relies on):
+ * the handler only ever sees `userId: null` when the WORKER SECRET authorized the
+ * call. A member-path request with no resolvable identity is rejected 401 here,
+ * so it never reaches the service. This is why the service can treat "no current
+ * user" as the trusted headless path and skip the membership check.
+ *
+ * The prod desktop ships NO worker secret (it is a server-only secret), so it
+ * always takes path 2 — which is the whole point: cloud reads/runs authenticate
+ * as the signed-in member, not a shared client secret.
+ */
+export async function runWorkerSecretOrMember<T, A, E>(
+  req: Request,
+  build: (body: T) => Effect.Effect<A, E, AppServices>,
+): Promise<Response> {
+  const body = await readJson<T>(req);
+  if (body === null) return badRequest("Invalid JSON body");
+
+  // Path 1 — headless worker secret: full trust, shared runtime (userId: null).
+  if (isAuthorizedWorker(req)) {
+    const runtime = await workerRuntime();
+    const exit = await runtime.runPromiseExit(build(body));
+    return exitToResponse(exit);
+  }
+
+  // Path 2 — member session token. Fail-closed: an unresolved token is 401 here,
+  // so the service never runs with a null identity on the member path.
+  const userId = await resolveMemberUserId(req);
+  if (userId === null) return unauthorized();
   const { db } = await import("@gtmgrid/db/client");
   const runtime = ManagedRuntime.make(appLayer({ db, userId }));
   try {
