@@ -30,15 +30,21 @@ function PresenceAvatar({
   user: PresenceUser;
   onJump: (user: PresenceUser) => void;
 }) {
-  const followable = user.cursor !== null;
+  // You can't follow yourself; only a remote member with a cursor is followable.
+  const followable = !user.isSelf && user.cursor !== null;
+  const label = user.isSelf
+    ? user.name
+      ? `${user.name} (you)`
+      : "You"
+    : (user.name ?? user.userId);
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <button
           type="button"
-          aria-label={user.name ?? user.userId}
-          onClick={() => onJump(user)}
-          className="relative cursor-pointer outline-none transition-transform hover:z-10 hover:-translate-y-0.5"
+          aria-label={label}
+          onClick={() => { if (followable) onJump(user); }}
+          className={`relative outline-none transition-transform hover:z-10 hover:-translate-y-0.5 ${followable ? "cursor-pointer" : "cursor-default"}`}
         >
           <Avatar
             className="size-[24px] border-2 border-background"
@@ -57,7 +63,7 @@ function PresenceAvatar({
         </button>
       </TooltipTrigger>
       <TooltipContent>
-        <span className="font-semibold">{user.name ?? user.userId}</span>
+        <span className="font-semibold">{label}</span>
         {followable && <span className="opacity-70"> · click to follow</span>}
       </TooltipContent>
     </Tooltip>

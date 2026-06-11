@@ -456,6 +456,8 @@ export function AccountBar(props: AccountBarProps) {
                 <SignOutButton onDone={() => setOpen(false)} />
               </div>
             )}
+
+            <div className="account-menu-version">GTM Grid v{__APP_VERSION__}</div>
           </div>
         </>
       )}
