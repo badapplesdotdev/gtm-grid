@@ -33,12 +33,24 @@ describe("presenceColor", () => {
 });
 
 describe("buildPresenceView", () => {
-  it("excludes the local user", () => {
+  it("includes the local user in the stack, flagged isSelf and sorted first", () => {
     const view = buildPresenceView(
-      [state({ userId: "me" }), state({ userId: "them" })],
+      [state({ userId: "them" }), state({ userId: "me" })],
       "me",
     );
-    expect(view.users.map((u) => u.userId)).toEqual(["them"]);
+    expect(view.users.map((u) => u.userId)).toEqual(["me", "them"]);
+    expect(view.users[0].isSelf).toBe(true);
+    expect(view.users[1].isSelf).toBe(false);
+  });
+
+  it("excludes the local user from cell cursors (no ring on your own cell)", () => {
+    const cell = { rowId: "r1", columnId: "c1" };
+    const view = buildPresenceView(
+      [state({ userId: "me", cursor: cell }), state({ userId: "them", cursor: cell })],
+      "me",
+    );
+    const here = view.byCell.get(presenceCellKey("r1", "c1"));
+    expect(here?.map((u) => u.userId)).toEqual(["them"]);
   });
 
   it("dedups one user across tabs, preferring the connection with a cursor", () => {

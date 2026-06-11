@@ -1,11 +1,19 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+
+// The shipped app version of record (bumped by changesets at release). Inlined as
+// __APP_VERSION__ so it renders in both the Tauri app and the browser dev build.
+const appVersion = JSON.parse(
+  readFileSync(new URL("./package.json", import.meta.url), "utf-8"),
+).version as string;
 
 // Tauri expects a fixed port and no clearing of the screen.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   clearScreen: false,
+  define: { __APP_VERSION__: JSON.stringify(appVersion) },
   server: { port: 5173, strictPort: true },
   build: {
     outDir: "dist",

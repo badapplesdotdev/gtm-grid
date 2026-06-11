@@ -2752,6 +2752,11 @@ html, body, #root {
 .account-menu-head-text strong { font: 600 13px var(--font-sans); color: var(--text); }
 .account-menu-head-text span { font-size: 11.5px; color: var(--text-3); }
 .account-menu-sec { padding: 8px; }
+.account-menu-version {
+  padding: 8px 14px 12px; text-align: center;
+  font: 500 11px var(--font-sans); color: var(--text-3);
+  border-top: 1px solid var(--border);
+}
 .account-menu-label {
   font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); padding: 4px 8px 6px;
 }

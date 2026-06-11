@@ -18,7 +18,7 @@ import type {
   GridPresenceState,
 } from "@gtmgrid/services/realtime";
 
-/** A remote member resolved for rendering (one row in the avatar stack). */
+/** A member resolved for rendering (one row in the avatar stack). */
 export interface PresenceUser {
   readonly userId: string;
   readonly name: string | null;
@@ -29,13 +29,19 @@ export interface PresenceUser {
   readonly cursor: GridPresenceCell | null;
   /** True when the member is actively editing their cursor cell. */
   readonly editing: boolean;
+  /** True for the local user (shown in the stack as "you", not followable). */
+  readonly isSelf: boolean;
 }
 
 /** What the grid renders: the deduped roster + a per-cell lookup. */
 export interface GridPresenceView {
-  /** Deduped by userId, self excluded — the toolbar avatar stack. */
+  /** Deduped by userId, the local user first — the toolbar avatar stack. */
   readonly users: readonly PresenceUser[];
-  /** `${rowId}:${columnId}` → the members whose cursor/edit is on that cell. */
+  /**
+   * `${rowId}:${columnId}` → the OTHER members whose cursor/edit is on that cell.
+   * The local user is excluded so your own selection isn't decorated as a remote
+   * cursor.
+   */
   readonly byCell: ReadonlyMap<string, readonly PresenceUser[]>;
 }
 
@@ -78,12 +84,14 @@ const activeCell = (state: GridPresenceState): GridPresenceCell | null =>
 /**
  * Build the render-ready {@link GridPresenceView} from a raw roster.
  *
- * - Drops the local user (`selfUserId`) — you don't follow your own cursor.
+ * - Includes the local user (`selfUserId`) in the avatar stack — flagged
+ *   `isSelf` and sorted first — so you always see you're connected.
  * - Dedups by userId (a member open in multiple tabs appears once), preferring
  *   the connection that has a cursor so an idle background tab can't blank out an
  *   active one.
- * - Indexes each remaining member by their active cell so the grid can decorate
- *   cells in O(1); `editing` wins over `cursor` when both are present.
+ * - Indexes each member by their active cell so the grid can decorate cells in
+ *   O(1) (`editing` wins over `cursor`), but EXCLUDES the local user so your own
+ *   selection isn't drawn as a remote cursor.
  */
 export const buildPresenceView = (
   states: readonly GridPresenceState[],
@@ -92,7 +100,6 @@ export const buildPresenceView = (
   // Dedup by userId, preferring a state that carries a cursor/edit position.
   const byUser = new Map<string, GridPresenceState>();
   for (const state of states) {
-    if (state.userId === selfUserId) continue;
     const existing = byUser.get(state.userId);
     if (existing === undefined || (activeCell(existing) === null && activeCell(state) !== null)) {
       byUser.set(state.userId, state);
@@ -103,6 +110,7 @@ export const buildPresenceView = (
   const byCell = new Map<string, PresenceUser[]>();
   for (const state of byUser.values()) {
     const cell = activeCell(state);
+    const isSelf = state.userId === selfUserId;
     const user: PresenceUser = {
       userId: state.userId,
       name: state.name ?? null,
@@ -110,15 +118,20 @@ export const buildPresenceView = (
       color: presenceColor(state.userId),
       cursor: cell,
       editing: state.editing != null,
+      isSelf,
     };
     users.push(user);
-    if (cell !== null) {
+    // Only OTHER members decorate cells — never ring your own selection.
+    if (cell !== null && !isSelf) {
       const key = presenceCellKey(cell.rowId, cell.columnId);
       const bucket = byCell.get(key);
       if (bucket === undefined) byCell.set(key, [user]);
       else bucket.push(user);
     }
   }
+
+  // Local user first so "you" anchors the left of the stack.
+  users.sort((a, b) => (a.isSelf === b.isSelf ? 0 : a.isSelf ? -1 : 1));
 
   return { users, byCell };
 };
