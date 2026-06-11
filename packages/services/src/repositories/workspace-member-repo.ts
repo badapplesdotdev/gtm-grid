@@ -50,6 +50,7 @@ export interface MemberRow {
 export interface MemberWithUser extends MemberRow {
   readonly name: string | null;
   readonly email: string | null;
+  readonly image: string | null;
 }
 
 /** A new membership insert (owner on create / invitee on invite). */
@@ -165,6 +166,7 @@ export const WorkspaceMemberRepoLive: Layer.Layer<
                 createdAt: schema.members.createdAt,
                 name: schema.users.name,
                 email: schema.users.email,
+                image: schema.users.image,
               })
               .from(schema.members)
               .leftJoin(
@@ -180,6 +182,7 @@ export const WorkspaceMemberRepoLive: Layer.Layer<
               createdAt: r.createdAt,
               name: r.name ?? null,
               email: r.email ?? null,
+              image: r.image ?? null,
             }));
           },
           catch: fail("member listByWorkspace"),
@@ -327,6 +330,7 @@ export const memberStoreLayers = (
           createdAt: member.createdAt,
           name: null,
           email: null,
+          image: null,
         });
         return id;
       }),

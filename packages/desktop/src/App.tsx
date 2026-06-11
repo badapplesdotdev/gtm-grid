@@ -380,9 +380,11 @@ type CellContentProps = {
   onExpand?: (anchor: { left: number; top: number; width: number }) => void;
   onRunCell?: () => void;
   running?: boolean;
+  /** Notifies the grid when this cell enters/leaves edit mode (presence). */
+  onEditingChange?: (editing: boolean) => void;
 };
 
-function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running }: CellContentProps) {
+function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running, onEditingChange }: CellContentProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -392,11 +394,13 @@ function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCel
     const current = cell?.value != null ? String(cell.value) : "";
     setDraft(current);
     setEditing(true);
+    onEditingChange?.(true);
     setTimeout(() => inputRef.current?.select(), 0);
   };
 
   const commit = () => {
     setEditing(false);
+    onEditingChange?.(false);
     onEdit(draft);
   };
 
@@ -436,7 +440,10 @@ function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCel
         onBlur={commit}
         onKeyDown={e => {
           if (e.key === "Enter") commit();
-          if (e.key === "Escape") setEditing(false);
+          if (e.key === "Escape") {
+            setEditing(false);
+            onEditingChange?.(false);
+          }
         }}
         autoFocus
       />

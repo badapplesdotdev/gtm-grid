@@ -359,6 +359,7 @@ export interface TestLayerFixtures {
     readonly id: string;
     readonly name?: string | null;
     readonly email?: string | null;
+    readonly image?: string | null;
   }[];
   /**
    * Configures the fake Autumn port (@gtmgrid/cloud `fakeAutumnLayer`) backing
@@ -451,6 +452,7 @@ const membershipsToMemberRows = (
     createdAt: i,
     name: null,
     email: null,
+    image: null,
   }));
 
 /**
@@ -472,6 +474,7 @@ export const TestLayer = (
       id: u.id,
       name: u.name ?? null,
       email: u.email ?? null,
+      image: u.image ?? null,
     })),
   );
   const webhookRepo = webhookRepoLayer({

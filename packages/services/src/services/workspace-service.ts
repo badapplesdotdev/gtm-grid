@@ -81,6 +81,7 @@ export interface MeUser {
   readonly _id: string;
   readonly name: string | null;
   readonly email: string | null;
+  readonly image: string | null;
 }
 
 /** The full `me` result (auth.ts:75 `Me`). */
@@ -97,6 +98,7 @@ export interface WorkspaceMember {
   readonly createdAt: number;
   readonly name: string | null;
   readonly email: string | null;
+  readonly image: string | null;
 }
 
 /** The `listMembers` result (auth.ts:91 `WorkspaceMembers`). */
@@ -169,6 +171,7 @@ const toWorkspaceMember = (m: MemberWithUser): WorkspaceMember => ({
   createdAt: m.createdAt,
   name: m.name,
   email: m.email,
+  image: m.image,
 });
 
 /**
@@ -283,6 +286,10 @@ export class WorkspaceService extends Effect.Service<WorkspaceService>()(
               email: Option.match(userOpt, {
                 onNone: () => null,
                 onSome: (u) => u.email,
+              }),
+              image: Option.match(userOpt, {
+                onNone: () => null,
+                onSome: (u) => u.image,
               }),
             },
             workspaces,

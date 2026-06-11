@@ -2694,6 +2694,36 @@ html, body, #root {
   width: 28px; height: 28px; border-radius: var(--r-sm); flex-shrink: 0; display: flex; align-items: center; justify-content: center;
   background: var(--accent-soft); color: var(--accent); font: 700 13px var(--font-sans);
 }
+/* ── Multiplayer presence — cell cursors ────────────────────────────────────
+   The avatar stack + name tooltip now render via shadcn primitives
+   (components/ui/avatar-stack, avatar, tooltip) styled with Tailwind. Only the
+   per-cell cursor decoration below stays hand-rolled, since it hooks into the
+   grid's own `.grid-td` cells. */
+
+/* The colored ring + corner chip a remote member's cursor paints on a cell. */
+.grid-td.cell-presence { box-shadow: inset 0 0 0 2px var(--presence-color); }
+.grid-td.presence-editing {
+  box-shadow: inset 0 0 0 2px var(--presence-color);
+  animation: presence-pulse 1.2s ease-in-out infinite;
+}
+.presence-cell-chip {
+  position: absolute; top: 3px; right: 3px; z-index: 2;
+  width: 15px; height: 15px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font: 700 8px var(--font-sans); overflow: hidden; pointer-events: none;
+  /* A thin surface ring lifts the chip off the cell ring + content for breathing room. */
+  box-shadow: 0 0 0 1.5px var(--surface);
+}
+.presence-cell-chip img { width: 100%; height: 100%; object-fit: cover; }
+.grid-td.presence-flash { animation: presence-flash 1.2s ease; }
+@keyframes presence-pulse {
+  50% { box-shadow: inset 0 0 0 3px var(--presence-color); }
+}
+@keyframes presence-flash {
+  0% { background: var(--accent-soft); }
+  100% { background: var(--surface); }
+}
+
 .account-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .account-name { font: 600 13px var(--font-sans); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account-sub { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-3); }

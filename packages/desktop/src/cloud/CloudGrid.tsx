@@ -32,8 +32,11 @@ import {
 } from "../AddColumn";
 import { DataGrid, type GridController } from "../DataGrid";
 import { resolveRowHeight } from "../gridVirtual";
+import { buildPresenceView } from "../gridPresence";
 import { runCloudColumn } from "./cloud-run";
 import { WebhookModal } from "./WebhookModal";
+import { useMe } from "./auth";
+import { gridPresenceStore, useGridPresenceRoster } from "./presenceStore";
 import {
   useCloudGridMutations,
   useCloudSession,
@@ -86,6 +89,28 @@ export function CloudGrid({
   const [actionError, setActionError] = useState<string | null>(null);
 
   const rowHeight = resolveRowHeight();
+
+  // ── Multiplayer presence ───────────────────────────────────────────────
+  // The live roster (fed by the realtime hook) resolved into the avatar stack +
+  // per-cell cursor index, with the local user excluded.
+  const me = useMe();
+  const selfId = me?.user._id ?? null;
+  const roster = useGridPresenceRoster();
+  const presenceView = useMemo(
+    () => buildPresenceView(roster, selfId),
+    [roster, selfId],
+  );
+  // Seed our identity (name/image) so cursor publishes carry it; re-seed when the
+  // open table changes (a fresh subscription registers a new publisher).
+  useEffect(() => {
+    if (me?.user) {
+      gridPresenceStore.updateLocal({
+        userId: me.user._id,
+        name: me.user.name,
+        image: me.user.image,
+      });
+    }
+  }, [me, tableId]);
 
   // Auto-open the webhook form when the chooser's "Webhook" flow bumps the token.
   const lastTokenRef = useRef(0);
@@ -285,6 +310,22 @@ export function CloudGrid({
     openAddColumn: (anchor) => { setAddColAnchor(anchor); setShowAddCol(true); },
     // Cloud columns are a fixed width (no resize) — omit `resizeColumn`.
     onScrollNearBottom: hasMore && !isLoadingMore ? loadMore : undefined,
+    // ── Multiplayer presence ──
+    presence: presenceView,
+    onActiveCellChange: (cell) =>
+      gridPresenceStore.updateLocal({
+        cursor: cell ? { rowId: cell.rowId, columnId: cell.colId } : null,
+        editing: null,
+      }),
+    onEditingCellChange: (cell) =>
+      gridPresenceStore.updateLocal(
+        cell
+          ? {
+              editing: { rowId: cell.rowId, columnId: cell.colId },
+              cursor: { rowId: cell.rowId, columnId: cell.colId },
+            }
+          : { editing: null }, // stopped editing — keep the selection cursor
+      ),
   };
 
   return (

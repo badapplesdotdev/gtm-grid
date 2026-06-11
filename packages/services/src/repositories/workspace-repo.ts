@@ -77,6 +77,7 @@ export interface WorkspaceUser {
   readonly id: string;
   readonly name: string | null;
   readonly email: string | null;
+  readonly image: string | null;
 }
 
 /** Raised when a workspace read/write fails (DB/transport error). */
@@ -273,6 +274,7 @@ export const WorkspaceRepoLive: Layer.Layer<WorkspaceRepo, never, DbClient> =
                   id: schema.users.id,
                   name: schema.users.name,
                   email: schema.users.email,
+                  image: schema.users.image,
                 })
                 .from(schema.users)
                 .where(eq(schema.users.id, userId))
@@ -281,7 +283,12 @@ export const WorkspaceRepoLive: Layer.Layer<WorkspaceRepo, never, DbClient> =
               return Option.fromNullable(
                 row === undefined
                   ? null
-                  : { id: row.id, name: row.name ?? null, email: row.email },
+                  : {
+                      id: row.id,
+                      name: row.name ?? null,
+                      email: row.email,
+                      image: row.image ?? null,
+                    },
               );
             },
             catch: fail("user lookup"),
