@@ -421,8 +421,18 @@ export function SignalsModal({
             )}
 
             <div className="sig-note">
-              This pulls results into the table <strong>once now</strong>. Recurring auto-refresh on a
-              schedule (hourly / daily) runs 24/7 server-side and is a <strong>cloud plan</strong> feature.
+              {cloud ? (
+                <>
+                  Trigify starts scraping immediately — first results stream in over the
+                  <strong> first minute</strong>, then refresh automatically on a daily schedule
+                  (with a <strong>Sync now</strong> available on the table any time).
+                </>
+              ) : (
+                <>
+                  This pulls results into the table <strong>once now</strong>. Recurring auto-refresh on a
+                  schedule (hourly / daily) runs 24/7 server-side and is a <strong>cloud plan</strong> feature.
+                </>
+              )}
             </div>
 
             {error && <div className="sig-error">{error}</div>}

@@ -2509,6 +2509,20 @@ html, body, #root {
   padding: 9px 11px; margin: 4px 0;
 }
 
+/* Social-signal status strip (cloud grid): per-binding pull status + Sync now.
+   The user's recourse when a signal table looks empty — shows warming/ok/error. */
+.signal-strip { display: flex; flex-direction: column; gap: 4px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.signal-strip-row { display: flex; align-items: center; gap: 8px; min-height: 24px; font-size: 12px; }
+.signal-strip-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.signal-strip-dot[data-state="ok"] { background: var(--success, #30a46c); }
+.signal-strip-dot[data-state="warming"] { background: var(--warning, #f5a623); animation: signal-pulse 1.6s ease-in-out infinite; }
+.signal-strip-dot[data-state="error"] { background: var(--danger, #e5484d); }
+.signal-strip-label { font-weight: 600; color: var(--text-1); }
+.signal-strip-meta { color: var(--text-2); }
+.signal-strip-error { color: var(--danger, #e5484d); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }
+.signal-strip-row .btn { margin-left: auto; }
+@keyframes signal-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
 /* Boolean keyword builder (OR / AND / NOT) + live query preview */
 .sig-bool { border: 1px solid var(--border); border-radius: var(--r-md); padding: 14px; margin-bottom: 14px; background: var(--surface-2); }
 .sig-bool .sig-field:last-of-type { margin-bottom: 0; }

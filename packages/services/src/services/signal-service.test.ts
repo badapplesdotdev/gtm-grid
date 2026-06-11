@@ -176,6 +176,49 @@ describe("SignalService.syncForWorker (membership-free credential path)", () => 
   });
 });
 
+// Trigify searches take ~10-30s to start returning results, so the create-time
+// pull is almost always 0. Stamping `lastSyncedAt` on that empty pull deferred
+// the next pull by the full schedule interval (a "daily" cloud binding sat empty
+// for 24h). The rule: `lastSyncedAt` stays NULL until the binding has EVER
+// pulled data (always-due → the hourly cron retries), then stamps normally.
+describe("SignalService sync — lastSyncedAt stamping (empty-table warm-up)", () => {
+  const fixtures = async (bindings: SignalBinding[]) => ({
+    currentUserId: null,
+    workspaces: [{ id: WS, name: "WS", ownerId: "owner", currentPlanId: "team" }],
+    signalBindings: bindings,
+    tables: [table(WS)],
+    webhookCredentials: new Map([[`${WS}:trigify`, await encryptedKey(WS, "tk_live")]]),
+  });
+
+  it("keeps lastSyncedAt NULL on a 0-result pull before first data (binding stays due)", async () => {
+    stubTrigify([]); // search still scraping — nothing back yet
+    const bindings = [binding({ rowsPulled: 0, lastSyncedAt: null })];
+    const exit = await run(await fixtures(bindings), (s) => s.syncForWorker("sig-1"));
+    expect(Exit.isSuccess(exit) && exit.value).toBe(0);
+    expect(bindings[0].lastSyncedAt).toBeNull();
+    expect(bindings[0].lastError).toBeNull();
+  });
+
+  it("stamps lastSyncedAt once the pull delivers first data", async () => {
+    stubTrigify([{ id: "r1" }]);
+    const bindings = [binding({ rowsPulled: 0, lastSyncedAt: null })];
+    const exit = await run(await fixtures(bindings), (s) => s.syncForWorker("sig-1"));
+    expect(Exit.isSuccess(exit) && exit.value).toBe(1);
+    expect(bindings[0].lastSyncedAt).not.toBeNull();
+    expect(bindings[0].rowsPulled).toBe(1);
+  });
+
+  it("stamps lastSyncedAt on an empty pull AFTER first data (no hot-loop once seeded)", async () => {
+    stubTrigify([]); // nothing new this round
+    const bindings = [binding({ rowsPulled: 5, lastSyncedAt: 1000 })];
+    const exit = await run(await fixtures(bindings), (s) => s.syncForWorker("sig-1"));
+    expect(Exit.isSuccess(exit) && exit.value).toBe(0);
+    // Re-stamped (not nulled): the binding has data, so schedule semantics hold.
+    expect(bindings[0].lastSyncedAt).not.toBeNull();
+    expect(bindings[0].lastSyncedAt).not.toBe(1000);
+  });
+});
+
 describe("SignalService.syncForWorker (durable dedupe + bulk insert)", () => {
   it("dedupes a result already seen even when the binding has >1000 cumulative results (no SEEN_CAP truncation dup)", async () => {
     // Seed a large history: the OLD code truncated `seen` to the last 1000 keys,
