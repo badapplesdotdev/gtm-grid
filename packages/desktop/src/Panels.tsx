@@ -33,6 +33,14 @@ export interface WorkspaceCredContext {
    * server-side). Throws on failure so the form can surface the message.
    */
   readonly onSaveWorkspace: (apiKey: string) => Promise<void>;
+  /**
+   * Copy this connector's LOCAL key up to the shared Cloud key in one click. The
+   * sidecar reveals the local plaintext in-process and saves it server-side — the
+   * plaintext never enters the renderer. Present only when a cloud session is
+   * available; the panel shows the affordance only when a local key also exists.
+   * Throws on failure so the form can surface the message.
+   */
+  readonly copyLocalKey?: () => Promise<void>;
 }
 
 /**
@@ -53,6 +61,12 @@ export interface WorkspaceCredSource {
     name: string,
     apiKey: string,
   ) => Promise<void>;
+  /**
+   * Copy a connector's LOCAL key (its full secret map) to the shared Cloud key,
+   * via the sidecar (plaintext never enters the renderer). Present only when a
+   * signed-in cloud session exists; `undefined` otherwise.
+   */
+  readonly copyLocalKey?: (extensionId: string, name: string) => Promise<void>;
 }
 
 /** Narrow an app-level {@link WorkspaceCredSource} to one connector's context. */
@@ -65,6 +79,9 @@ function workspaceCtxFor(
   return {
     connected: source.connectedExtensionIds.has(extensionId),
     onSaveWorkspace: (apiKey) => source.save(extensionId, name, apiKey),
+    copyLocalKey: source.copyLocalKey
+      ? () => source.copyLocalKey!(extensionId, name)
+      : undefined,
   };
 }
 
@@ -249,8 +266,12 @@ function ConnectionsSection({
   const [keyDraft, setKeyDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
+  const [copying, setCopying] = useState(false);
 
   const isWorkspace = scope === "workspace";
+  // A LOCAL key exists for this connector (any machine-local scope, incl. legacy
+  // personal/team) — the prerequisite for offering the one-click copy-to-cloud.
+  const hasLocalKey = connectedScopes.length > 0;
   // The single Local tab represents ALL machine-local scopes, so it's "connected"
   // when any local credential exists (incl. legacy personal/team rows).
   const connectedHere = isWorkspace
@@ -275,6 +296,22 @@ function ConnectionsSection({
       setErr(e?.message ?? "Failed to connect");
     } finally {
       setSaving(false);
+    }
+  };
+
+  // One-click copy of the local key up to the shared Cloud key (the sidecar does
+  // the reveal+save; the plaintext never reaches here).
+  const copyLocal = async () => {
+    if (!workspace?.copyLocalKey) return;
+    setCopying(true);
+    setErr("");
+    try {
+      await workspace.copyLocalKey();
+      reset();
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to copy your local key");
+    } finally {
+      setCopying(false);
     }
   };
 
@@ -327,6 +364,19 @@ function ConnectionsSection({
             <button className="btn btn-primary btn-sm conn-add-btn" onClick={() => setAdding(true)}>
               <I.Plus /> Add connection
             </button>
+            {/* Offer the one-click copy only in the Cloud tab, when a local key
+                exists and the cloud session can save it. */}
+            {isWorkspace && hasLocalKey && workspace?.copyLocalKey && (
+              <button
+                className="btn btn-outline btn-sm conn-add-btn"
+                onClick={copyLocal}
+                disabled={copying}
+                title={`Copy your local ${name} key to the shared Cloud key`}
+              >
+                {copying ? "Copying…" : "Use my local key"}
+              </button>
+            )}
+            {err && <div className="conn-err">{err}</div>}
           </div>
         )}
       </div>

@@ -1227,11 +1227,15 @@ export default function App() {
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [activeWorkspaceForPlan, isAuthenticated]);
+  // The signed-in cloud session (apps/web URL + bearer); also threaded into the
+  // credential source so "Use my local key" can forward the key to the cloud.
+  const cloudSession = useCloudSession();
   // Shared (workspace-scoped) credential source for the connector / AI panels.
   // `undefined` when signed out / local-only, so those panels behave as before.
   const workspaceCreds = useWorkspaceCredentials(
     activeWorkspace?._id ?? null,
     isAuthenticated,
+    cloudSession,
   );
   const cloudProjects = useCloudProjects(activeWorkspace?._id ?? null);
   // Live sidebar: refresh the table/project lists when any teammate creates,
@@ -1324,7 +1328,7 @@ export default function App() {
   // cloud workspace/project/table, so the agent's MCP table tools operate on
   // Supabase. Null unless ALL are present (a cloud project + table is open and
   // we have a session), in which case the agent keeps its local-SQLite path.
-  const cloudSession = useCloudSession();
+  // (`cloudSession` is declared above, alongside the credential source.)
   const agentCloud = useMemo<AgentCloudContext | null>(() => {
     if (!cloudSession || !activeWorkspace || !cloudProject || !cloudTableId) {
       return null;
