@@ -1,5 +1,17 @@
 # @gtmgrid/desktop
 
+## 0.9.2
+
+### Patch Changes
+
+- a1756d5: You can now click a cell in a **cloud** table to view its full response (the
+  status-code / JSON fields), just like local tables. The cloud grid was never
+  wiring the cell-details drawer or the expanded editor, so synced responses
+  (e.g. "Status Code: 200") weren't inspectable even though the data was present.
+  The drawer is view-only in the cloud for now (no promote-field-to-column yet).
+  - @gtmgrid/cloud@0.9.2
+  - @gtmgrid/services@0.9.2
+
 ## 0.9.1
 
 ### Patch Changes
