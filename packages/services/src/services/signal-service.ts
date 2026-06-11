@@ -195,10 +195,20 @@ export class SignalService extends Effect.Service<SignalService>()("SignalServic
           added = rowIds.length;
         }
 
+        // Stamp `lastSyncedAt` only once the binding has EVER pulled data.
+        // Trigify searches take ~10-30s to start returning results, so the
+        // create-time pull is almost always 0 — stamping it deferred the next
+        // pull by the full schedule interval (a "daily" binding sat empty for
+        // 24h). While `rowsPulled` is still 0 the binding keeps `lastSyncedAt`
+        // NULL, which the cron's due-predicate (`isNull(lastSyncedAt)` branch)
+        // treats as always-due — so the hourly tick retries until first data
+        // lands, then normal schedule semantics resume. Bounded cost: ≤24
+        // results-calls/day per still-empty binding.
+        const totalPulled = (binding.rowsPulled ?? 0) + added;
         yield* repo.patch(binding.id, {
-          lastSyncedAt: Date.now(),
+          lastSyncedAt: totalPulled > 0 ? Date.now() : null,
           lastError: null,
-          rowsPulled: (binding.rowsPulled ?? 0) + added,
+          rowsPulled: totalPulled,
         });
         return added;
       }).pipe(
@@ -245,7 +255,9 @@ export class SignalService extends Effect.Service<SignalService>()("SignalServic
         if (Option.isSome(binding)) {
           added = yield* runSync(binding.value, apiKey).pipe(Effect.catchTag("SignalError", () => Effect.succeed(0)));
         }
-        return { bindingId, searchId, added };
+        // `workspaceId` rides along so the caller (the tRPC router) can key the
+        // post-create warm-up event without re-resolving the table.
+        return { bindingId, searchId, added, workspaceId };
       });
 
     const listByTable = (tableId: string) =>

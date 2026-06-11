@@ -11,6 +11,7 @@
 import { SignalService, SIGNAL_SOURCES } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { z } from "zod";
+import { inngest } from "../../inngest/client";
 import { protectedProcedure, router, runEffect } from "../trpc";
 
 /** A field-path → column id mapping entry. */
@@ -62,8 +63,8 @@ export const signalsRouter = router({
         columns: z.array(columnEntry),
       }),
     )
-    .mutation(({ ctx, input }) =>
-      runEffect(
+    .mutation(async ({ ctx, input }) => {
+      const created = await runEffect(
         ctx.runtime,
         Effect.gen(function* () {
           const svc = yield* SignalService;
@@ -76,8 +77,26 @@ export const signalsRouter = router({
             columns: input.columns,
           });
         }),
-      ),
-    ),
+      );
+      // Kick off the durable post-create warm-up: a fresh Trigify search takes
+      // ~10-30s to start returning, so the create-time pull above is almost
+      // always 0 — the warm-up function retries until first data lands.
+      // BEST-EFFORT: an enqueue failure must not fail the create (the binding
+      // exists and works); the cron's always-due-while-empty predicate is the
+      // fallback that still fills the table within the hour.
+      try {
+        await inngest.send({
+          name: "signals/binding.created",
+          data: { bindingId: created.bindingId, workspaceId: created.workspaceId },
+        });
+      } catch (err) {
+        console.error(
+          `[signals] warm-up enqueue failed for binding ${created.bindingId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+      return created;
+    }),
 
   /** Manual "pull now" for a binding. Members-only. */
   syncSignalBinding: protectedProcedure

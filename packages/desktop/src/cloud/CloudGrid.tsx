@@ -19,7 +19,12 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useQuery as useReactQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import type { Id } from "./ids";
+import { apiClient } from "./client";
 import { Icon, ExpandedEditor } from "../App";
 import CellDetails from "../CellDetails";
 import { api } from "../api";
@@ -40,6 +45,7 @@ import { WebhookModal } from "./WebhookModal";
 import { useMe } from "./auth";
 import { gridPresenceStore, useGridPresenceRoster } from "./presenceStore";
 import {
+  gridQueryKeys,
   useCloudGridMutations,
   useCloudSession,
   useCloudTablePaged,
@@ -48,6 +54,103 @@ import { isCloudTableMissing } from "../cloudSync";
 
 /** Fixed cloud column width (px) — cloud columns are not resizable. */
 const CLOUD_COL_W = 180;
+
+/** A signal binding's status fields the strip renders (tRPC listSignalBindings). */
+interface SignalBindingStatus {
+  readonly id: string;
+  readonly label: string;
+  readonly rowsPulled: number | null;
+  readonly lastSyncedAt: number | null;
+  readonly lastError: string | null;
+  readonly enabled: boolean;
+}
+
+/** Compact relative timestamp for the signal strip. */
+function agoLabel(ts: number): string {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+/**
+ * Social-signal status strip for a cloud table backed by Trigify bindings:
+ * shows each binding's pull progress (rows pulled, last synced, last error) and
+ * a "Sync now" that triggers the member-gated tRPC pull. This is the user's
+ * RECOURSE when a signal table looks empty — previously there was no way to
+ * see a binding error or re-pull without recreating the table. Renders nothing
+ * for tables with no bindings (the common case — one cheap cached query).
+ * Auto-refetches while a binding is still waiting for its first results so the
+ * strip flips to "n rows" on its own as the warm-up lands them.
+ */
+function SignalStatusStrip({ tableId }: { tableId: string }) {
+  const qc = useQueryClient();
+  const [syncing, setSyncing] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const q = useReactQuery({
+    queryKey: ["signals", "bindings", tableId],
+    enabled: apiClient !== null,
+    queryFn: async (): Promise<readonly SignalBindingStatus[]> =>
+      (await apiClient!.signals.listSignalBindings.query({
+        tableId,
+      })) as readonly SignalBindingStatus[],
+    staleTime: 15_000,
+    // Poll the strip while any binding is pre-first-data (the cloud warm-up is
+    // filling it server-side); idle once data has landed.
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some((b) => (b.rowsPulled ?? 0) === 0 && b.enabled)
+        ? 10_000
+        : false,
+  });
+  const bindings = q.data ?? [];
+  if (bindings.length === 0) return null;
+
+  const syncNow = async (bindingId: string) => {
+    if (apiClient === null) return;
+    setSyncing(bindingId);
+    setSyncError(null);
+    try {
+      await apiClient.signals.syncSignalBinding.mutate({ bindingId });
+      // Refresh the strip AND the grid page so newly-pulled rows appear without
+      // waiting for a window-focus refetch.
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["signals", "bindings", tableId] }),
+        qc.invalidateQueries({ queryKey: gridQueryKeys.tablePaged(tableId) }),
+      ]);
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : "Sync failed");
+    } finally {
+      setSyncing(null);
+    }
+  };
+
+  return (
+    <div className="signal-strip" role="status">
+      {bindings.map((b) => (
+        <div key={b.id} className="signal-strip-row">
+          <span className="signal-strip-dot" data-state={b.lastError ? "error" : (b.rowsPulled ?? 0) > 0 ? "ok" : "warming"} />
+          <span className="signal-strip-label">{b.label}</span>
+          <span className="signal-strip-meta">
+            {(b.rowsPulled ?? 0) > 0
+              ? `${b.rowsPulled} rows pulled${b.lastSyncedAt ? ` · synced ${agoLabel(b.lastSyncedAt)}` : ""}`
+              : "waiting for first results — Trigify is scraping (~1 min)"}
+          </span>
+          {b.lastError && <span className="signal-strip-error" title={b.lastError}>{b.lastError}</span>}
+          <button
+            className="btn btn-outline btn-sm"
+            disabled={syncing !== null}
+            onClick={() => void syncNow(b.id)}
+            title="Pull the latest results from Trigify now"
+          >
+            {syncing === b.id ? "Syncing…" : "Sync now"}
+          </button>
+        </div>
+      ))}
+      {syncError && <div className="signal-strip-error">{syncError}</div>}
+    </div>
+  );
+}
 
 interface CloudGridProps {
   /** The active cloud table to render, or `null` when none is selected. */
@@ -380,6 +483,7 @@ export function CloudGrid({
           {actionError}
         </div>
       )}
+      <SignalStatusStrip tableId={String(table.id)} />
       <DataGrid controller={controller} />
 
       {detail && (
