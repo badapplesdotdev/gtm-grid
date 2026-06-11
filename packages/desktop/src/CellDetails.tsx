@@ -48,8 +48,13 @@ export default function CellDetails({
   source: { columnName: string; value: unknown };
   columns: { id: string; name: string }[];
   onClose: () => void;
-  onCreate: (path: string[], label: string) => Promise<void> | void;
-  onMapTo: (path: string[], targetId: string) => Promise<void> | void;
+  /**
+   * Promote a response field to a new column / map onto an existing one. Optional:
+   * when omitted (e.g. the cloud grid, which doesn't yet support promote/map), the
+   * drawer is VIEW-ONLY — you can still inspect and copy the full response.
+   */
+  onCreate?: (path: string[], label: string) => Promise<void> | void;
+  onMapTo?: (path: string[], targetId: string) => Promise<void> | void;
 }) {
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<number | null>(null);
@@ -70,6 +75,7 @@ export default function CellDetails({
     setDoneMsg(null);
   };
   const create = async (f: FlatField, name: string) => {
+    if (!onCreate) return;
     setBusy(true);
     try {
       await onCreate(f.path, name.trim() || leafName(f));
@@ -80,6 +86,7 @@ export default function CellDetails({
     }
   };
   const map = async (f: FlatField, targetId: string, targetName: string) => {
+    if (!onMapTo) return;
     setBusy(true);
     try {
       await onMapTo(f.path, targetId);
@@ -115,7 +122,7 @@ export default function CellDetails({
                 <span className="cd-value">{preview(f.value)}</span>
               </button>
 
-              {selected === i && (
+              {selected === i && onCreate && (
                 <div className="cd-action">
                   <div className="cd-action-title">Add “{leafName(f)}” as new column</div>
                   <div className="cd-create-row">
@@ -130,7 +137,7 @@ export default function CellDetails({
                       {busy ? "…" : "Create column"}
                     </button>
                   </div>
-                  {columns.length > 0 && (
+                  {onMapTo && columns.length > 0 && (
                     <>
                       <div className="cd-or">or map to an existing column</div>
                       <div className="cd-map-list">
