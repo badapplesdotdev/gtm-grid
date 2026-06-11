@@ -4,12 +4,16 @@ import {
   type Connector,
   type ConnectorMethod,
 } from "@gtmgrid/engine";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { CloudContext } from "./cloud-context.js";
 import {
   CloudToolUnsupportedError,
   defaultCloudSourceDeps,
   makeCloudSource,
+  registryWithExtensions,
   type CloudSourceDeps,
 } from "./cloud-source.js";
 
@@ -445,5 +449,38 @@ describe("defaultCloudSourceDeps — production wiring", () => {
     expect(deps.registry).toBeDefined();
     expect(typeof deps.makeClient).toBe("function");
     expect(typeof deps.resolveWorkspaceId).toBe("function");
+  });
+});
+
+// Parity: the cloud agent must load the SAME JSON-manifest connectors the local
+// agent does (engine `openProject`), so enrichment/social connectors like Trigify
+// are available for `list_functions` / `run_column` in cloud mode — not just the
+// built-ins. `registryWithExtensions` is the shared loader both paths use.
+describe("registryWithExtensions — cloud == local connectors", () => {
+  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
+  const trigifyManifest = readFileSync(
+    join(repoRoot, "extensions/trigify.json"),
+    "utf8",
+  );
+
+  it("loads a JSON-manifest extension (Trigify) on top of the built-ins", () => {
+    const registry = registryWithExtensions([trigifyManifest]);
+    const ids = registry.list().map((c) => c.id);
+    // The built-ins are still present…
+    expect(ids).toContain("ai");
+    expect(ids).toContain("http");
+    // …AND the Trigify connector + its methods are now dispatchable.
+    expect(ids).toContain("trigify");
+    expect(registry.method("trigify", "enrichProfile")).toBeDefined();
+  });
+
+  it("the default (no extensions) registry does NOT expose Trigify — proving the load is what adds it", () => {
+    const registry = registryWithExtensions([]);
+    expect(registry.list().map((c) => c.id)).not.toContain("trigify");
+  });
+
+  it("skips a malformed manifest without dropping the valid ones", () => {
+    const registry = registryWithExtensions(["{ not valid json", trigifyManifest]);
+    expect(registry.list().map((c) => c.id)).toContain("trigify");
   });
 });

@@ -15,22 +15,56 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { openProject, parseManifest, connectorFromManifest } from "@gtmgrid/engine";
+import {
+  Db,
+  connectorFromManifest,
+  globalDbPath,
+  openProject,
+  parseManifest,
+  type Registry,
+} from "@gtmgrid/engine";
 import { describeGridEnv, selectGridEnv } from "./cloud-context.js";
 import {
   CloudToolUnsupportedError,
   defaultCloudSourceDeps,
   makeCloudSource,
+  registryWithExtensions,
 } from "./cloud-source.js";
 
 const gridEnv = selectGridEnv(process.env);
 
+/**
+ * Build the CLOUD registry: the built-in connectors PLUS every JSON-manifest
+ * extension from the SHARED global db — the SAME set `openProject` loads for a
+ * LOCAL project (engine `openProject` reads `globalDb.listExtensions()`). Without
+ * this the cloud agent only saw the built-ins (ai/formatting/formula/github/http)
+ * and reported enrichment/social connectors like Trigify as "not available",
+ * diverging from local. The MCP runs on the user's machine (spawned by the
+ * sidecar), so `globalDbPath()` resolves to the same global.db the sidecar uses.
+ * Read-only + best-effort: a missing db or a bad manifest degrades to the
+ * built-ins rather than failing the whole MCP.
+ */
+function cloudRegistry(): Registry {
+  try {
+    const globalDb = new Db(globalDbPath());
+    try {
+      return registryWithExtensions(globalDb.listExtensions());
+    } finally {
+      globalDb.close();
+    }
+  } catch {
+    // No global db (e.g. fresh install) → built-in connectors only.
+    return registryWithExtensions([]);
+  }
+}
+
 // LOCAL mode opens the SQLite project (and exposes its registry of connectors).
 // CLOUD mode opens NO SQLite file (the engine is Db-free, backed by the cloud
 // store); it still needs a registry for connector discovery + cloud runs, so we
-// reuse the cloud source's registry/config and skip `openProject` entirely.
+// build one with the SAME extensions loaded so cloud == local (skip `openProject`).
 const local = gridEnv.mode === "local" ? openProject(gridEnv.project) : undefined;
-const cloudDeps = gridEnv.mode === "cloud" ? defaultCloudSourceDeps() : undefined;
+const cloudDeps =
+  gridEnv.mode === "cloud" ? defaultCloudSourceDeps(cloudRegistry()) : undefined;
 const cloudSource =
   gridEnv.mode === "cloud" && cloudDeps
     ? makeCloudSource(gridEnv.context, cloudDeps)

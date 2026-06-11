@@ -26,8 +26,10 @@ import {
   CloudSchemaMapping,
   Engine,
   cloudGridStoreShape,
+  connectorFromManifest,
   defaultRegistry,
   fetchWithRetry,
+  parseManifest,
   type CloudClientLike,
   type CloudFunctionRefs,
   type EngineConfig,
@@ -243,6 +245,34 @@ export interface CloudSourceDeps {
     client: CloudClientLike,
     tableId: string,
   ) => Promise<string>;
+}
+
+/**
+ * Build a registry with the user's JSON-manifest extensions loaded on top of the
+ * built-in connectors — the SAME set the engine's `openProject` loads for a LOCAL
+ * project (`registry.add(connectorFromManifest(parseManifest(m)))` per stored
+ * manifest). The cloud agent MUST use this so `list_functions` / `run_column` see
+ * the enrichment/social connectors (Trigify, Apollo, …) exactly as local does —
+ * otherwise cloud only exposes the built-ins (ai/formatting/formula/github/http)
+ * and the agent reports those connectors as "not available", diverging from local.
+ *
+ * `manifests` are raw manifests — objects (e.g. `globalDb.listExtensions()`) or
+ * JSON strings; `parseManifest` accepts either. Decoupled from any Db so it is
+ * unit-testable. Best-effort per manifest: a single malformed entry is skipped,
+ * never failing the whole registry.
+ */
+export function registryWithExtensions(
+  manifests: Iterable<unknown>,
+  base: Registry = defaultRegistry(),
+): Registry {
+  for (const manifest of manifests) {
+    try {
+      base.add(connectorFromManifest(parseManifest(manifest)));
+    } catch {
+      /* skip a single malformed manifest — keep the rest */
+    }
+  }
+  return base;
 }
 
 /** Default deps: an HTTP worker client + the metadata workspace resolver. */
