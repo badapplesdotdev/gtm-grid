@@ -30,6 +30,7 @@ export {
 export { applyGridEvent } from "./reducer.js";
 export {
   type GridPartyMessage,
+  type GridPresenceCell,
   type GridPresenceState,
   type GridPresenceUpdate,
   type GridSubscription,

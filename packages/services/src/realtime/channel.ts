@@ -36,12 +36,27 @@ export interface GridPresenceUpdate {
   readonly state: GridPresenceState;
 }
 
+/** A cell address a member is selected on / editing (scopes a presence cursor). */
+export interface GridPresenceCell {
+  readonly rowId: string;
+  readonly columnId: string;
+}
+
 /** Presence state a member publishes (cursor / editing target). Extensible. */
 export interface GridPresenceState {
   readonly userId: string;
+  /**
+   * Server-stamped per-socket id so the same user across tabs can be deduped.
+   * Clients never set this — the party fills it in on broadcast.
+   */
+  readonly connectionId?: string;
   readonly name?: string | null;
-  /** The cell the member is currently editing, if any. */
-  readonly editing?: { readonly rowId: string; readonly columnId: string } | null;
+  /** Avatar URL (from `users.image`), if the member has one. */
+  readonly image?: string | null;
+  /** The cell the member has selected (renders as the colored ring). */
+  readonly cursor?: GridPresenceCell | null;
+  /** The cell the member is currently editing, if any (stronger indicator). */
+  readonly editing?: GridPresenceCell | null;
 }
 
 /** Options for {@link subscribeToGrid}. */
@@ -114,15 +129,20 @@ export const subscribeToGrid = (
     }
   });
 
+  // The last state we published, re-sent on every (re)connect. partysocket opens
+  // a NEW socket on reconnect, so a one-shot open listener would drop presence
+  // after any network blip — we must re-publish `lastState` on each `open`.
+  let lastState: GridPresenceState | undefined = options.presence;
+
   const sendPresence = (state: GridPresenceState): void => {
+    lastState = state;
     const update: GridPresenceUpdate = { kind: "presence", state };
     socket.send(JSON.stringify(update));
   };
 
-  if (options.presence) {
-    const initial = options.presence;
-    socket.addEventListener("open", () => sendPresence(initial), { once: true });
-  }
+  socket.addEventListener("open", () => {
+    if (lastState) sendPresence(lastState);
+  });
 
   return {
     updatePresence: async (state) => {

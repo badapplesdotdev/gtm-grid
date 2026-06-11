@@ -24,6 +24,7 @@ import {
 import { applyGridEvent, subscribeToGrid } from "@gtmgrid/services/realtime";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { Id } from "./ids";
+import { gridPresenceStore } from "./presenceStore";
 import type { Cell, CellStatus, Column, FullTable } from "../api";
 import { apiClient, queryClient } from "./client";
 import type { CloudSession } from "./cloud-run";
@@ -663,14 +664,24 @@ function useGridRealtime(
           buffer.push(event);
           flush.schedule();
         },
+        onPresence: (states) => gridPresenceStore.setRoster(states),
       });
+      // Publish this client's cursor/identity through the SAME socket (no second
+      // connection); CloudGrid feeds local cursor moves into the store.
+      gridPresenceStore.setPublisher((state) => void sub.updatePresence(state));
       teardown = sub.unsubscribe;
-      if (disposed) void sub.unsubscribe();
+      if (disposed) {
+        gridPresenceStore.setPublisher(null);
+        gridPresenceStore.clear();
+        void sub.unsubscribe();
+      }
     })();
 
     return () => {
       disposed = true;
       flush.cancel();
+      gridPresenceStore.setPublisher(null);
+      gridPresenceStore.clear();
       if (teardown) void teardown();
     };
   }, [tableId, workspaceId]);
@@ -731,14 +742,24 @@ function usePagedGridRealtime(
           buffer.push(event);
           flush.schedule();
         },
+        onPresence: (states) => gridPresenceStore.setRoster(states),
       });
+      // Publish this client's cursor/identity through the SAME socket (no second
+      // connection); CloudGrid feeds local cursor moves into the store.
+      gridPresenceStore.setPublisher((state) => void sub.updatePresence(state));
       teardown = sub.unsubscribe;
-      if (disposed) void sub.unsubscribe();
+      if (disposed) {
+        gridPresenceStore.setPublisher(null);
+        gridPresenceStore.clear();
+        void sub.unsubscribe();
+      }
     })();
 
     return () => {
       disposed = true;
       flush.cancel();
+      gridPresenceStore.setPublisher(null);
+      gridPresenceStore.clear();
       if (teardown) void teardown();
     };
   }, [tableId, workspaceId]);
