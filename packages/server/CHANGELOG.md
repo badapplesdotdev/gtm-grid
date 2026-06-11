@@ -1,5 +1,11 @@
 # @gtmgrid/server
 
+## 0.9.7
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.7
+
 ## 0.9.6
 
 ### Patch Changes
