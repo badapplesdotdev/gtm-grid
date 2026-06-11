@@ -1098,6 +1098,27 @@ export default function App() {
       return false;
     }
   });
+  // Boot-loader timing (see the boot gate before the main return). A signed-in
+  // cloud user lands in a cloud project; we hold the full-screen branded loader
+  // until that resolves so the app never flashes local-then-cloud on open.
+  //   - `bootMinElapsed`: a MINIMUM display window so that when cloud state loads
+  //     instantly (warm cache / fast network) the loader still shows briefly
+  //     instead of flickering — the boot reads as an intentional branded splash.
+  //   - `bootTimedOut`: a safety ceiling so a degenerate account (e.g. no
+  //     workspace) reveals the app instead of spinning forever; never fires on a
+  //     normal boot.
+  const BOOT_MIN_MS = 900;
+  const BOOT_MAX_MS = 8000;
+  const [bootMinElapsed, setBootMinElapsed] = useState(false);
+  const [bootTimedOut, setBootTimedOut] = useState(false);
+  useEffect(() => {
+    const min = setTimeout(() => setBootMinElapsed(true), BOOT_MIN_MS);
+    const max = setTimeout(() => setBootTimedOut(true), BOOT_MAX_MS);
+    return () => {
+      clearTimeout(min);
+      clearTimeout(max);
+    };
+  }, []);
   const continueLocally = useCallback(() => {
     try {
       localStorage.setItem("gtmgrid:localMode", "1");
@@ -2502,6 +2523,25 @@ export default function App() {
         />
       </Suspense>
     );
+  }
+
+  // Boot loader: a signed-in cloud user is always routed into a cloud project (the
+  // effect above auto-opens the last/most-recent one, or creates a Default). Until
+  // that resolves, `cloudProject` is null and the app would otherwise render in
+  // LOCAL mode and then visibly flip to cloud. Hold the full-screen branded loader
+  // until the cloud environment is settled (a project is open).
+  //
+  // We deliberately do NOT gate on `localMode`: a signed-in user auto-enters cloud
+  // on every boot regardless of a stale localMode flag, so they'd otherwise still
+  // see the flash. Skipped only when the trial is locked (its own panel owns the
+  // screen). The loader holds until BOTH the project is open AND the minimum window
+  // has elapsed (so an instant load still reads as an intentional branded splash),
+  // bounded by the safety ceiling so it can never stick.
+  const cloudUser = cloudEnabled && !cloudLocked && isAuthenticated;
+  const bootingCloud =
+    cloudUser && !bootTimedOut && (cloudProject === null || !bootMinElapsed);
+  if (bootingCloud) {
+    return <AppLoader inShell label="Loading your workspace…" />;
   }
 
   return (
