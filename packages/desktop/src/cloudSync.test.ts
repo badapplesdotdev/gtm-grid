@@ -35,6 +35,9 @@ import {
   resolveStaleCloudTableFallback,
   resolveTargetCloudProject,
   buildTableList,
+  groupTableList,
+  positionForMove,
+  type TableListRow,
   type TableSyncFacts,
 } from "./cloudSync";
 
@@ -599,7 +602,7 @@ describe("buildTableList (TRI-3313-C — merge / dedup / synced-tagging)", () =>
   it("renders an unlinked local table as a non-synced local row", () => {
     const rows = buildTableList({ localTables: [local("l1", "Leads", false, 12)], cloudTables: [], syncLinks: {} });
     expect(rows).toEqual([
-      { kind: "local", id: "l1", name: "Leads", synced: false, favorite: false, rows: 12 },
+      { kind: "local", id: "l1", name: "Leads", synced: false, favorite: false, rows: 12, folderId: null, position: 0 },
     ]);
   });
 
@@ -635,7 +638,84 @@ describe("buildTableList (TRI-3313-C — merge / dedup / synced-tagging)", () =>
   it("lists an unlinked cloud table as a plain synced cloud row", () => {
     const rows = buildTableList({ localTables: [], cloudTables: [cloud("c1", "Signals")], syncLinks: {} });
     expect(rows).toEqual([
-      { kind: "cloud", id: "c1", name: "Signals", synced: true, favorite: false, rows: 0 },
+      { kind: "cloud", id: "c1", name: "Signals", synced: true, favorite: false, rows: 0, folderId: null, position: 0 },
     ]);
+  });
+
+  it("carries a local table's folderId and position onto its row", () => {
+    const rows = buildTableList({
+      localTables: [{ ...local("l1", "Leads"), folderId: "f1", position: 3.5 }],
+      cloudTables: [],
+      syncLinks: {},
+    });
+    expect(rows[0]).toMatchObject({ folderId: "f1", position: 3.5 });
+  });
+});
+
+describe("groupTableList (sidebar folder partitioning)", () => {
+  const row = (id: string, folderId: string | null = null, position = 0): TableListRow => ({
+    kind: "local", id, name: id, synced: false, favorite: false, rows: 0, folderId, position,
+  });
+  const folder = (id: string, position = 0) => ({ id, name: id, position });
+
+  it("partitions rows into folder sections and the root, preserving order", () => {
+    const grouped = groupTableList(
+      [row("a", "f1"), row("b"), row("c", "f1"), row("d", "f2")],
+      [folder("f1", 0), folder("f2", 1)],
+    );
+    expect(grouped.folders.map((s) => s.folder.id)).toEqual(["f1", "f2"]);
+    expect(grouped.folders[0]?.rows.map((r) => r.id)).toEqual(["a", "c"]);
+    expect(grouped.folders[1]?.rows.map((r) => r.id)).toEqual(["d"]);
+    expect(grouped.root.map((r) => r.id)).toEqual(["b"]);
+  });
+
+  it("orders folder sections by folder position", () => {
+    const grouped = groupTableList([], [folder("f2", 5), folder("f1", 1)]);
+    expect(grouped.folders.map((s) => s.folder.id)).toEqual(["f1", "f2"]);
+  });
+
+  it("keeps an empty folder as a section (a valid drop target)", () => {
+    const grouped = groupTableList([row("a")], [folder("f1")]);
+    expect(grouped.folders).toHaveLength(1);
+    expect(grouped.folders[0]?.rows).toEqual([]);
+  });
+
+  it("falls a row pointing at an unknown folder back to the root", () => {
+    const grouped = groupTableList([row("a", "ghost")], [folder("f1")]);
+    expect(grouped.root.map((r) => r.id)).toEqual(["a"]);
+    expect(grouped.folders[0]?.rows).toEqual([]);
+  });
+});
+
+describe("positionForMove (fractional drag-reorder positions)", () => {
+  const row = (id: string, position: number, folderId: string | null = null): TableListRow => ({
+    kind: "local", id, name: id, synced: false, favorite: false, rows: 0, folderId, position,
+  });
+
+  it("returns undefined for an empty target group (membership-only move)", () => {
+    expect(positionForMove([row("a", 0)], "a", { folderId: "f1" })).toBeUndefined();
+  });
+
+  it("files at the tail of a folder when dropped on its head", () => {
+    const rows = [row("a", 1, "f1"), row("b", 4, "f1"), row("m", 0)];
+    expect(positionForMove(rows, "m", { folderId: "f1" })).toBe(5);
+  });
+
+  it("takes the midpoint when dropped between two rows", () => {
+    const rows = [row("a", 1), row("b", 3), row("m", 9)];
+    expect(positionForMove(rows, "m", { folderId: null, beforeId: "b" })).toBe(2);
+    expect(positionForMove(rows, "m", { folderId: null, afterId: "a" })).toBe(2);
+  });
+
+  it("steps past the edge when dropped before the first / after the last row", () => {
+    const rows = [row("a", 1), row("b", 3), row("m", 9)];
+    expect(positionForMove(rows, "m", { folderId: null, beforeId: "a" })).toBe(0);
+    expect(positionForMove(rows, "m", { folderId: null, afterId: "b" })).toBe(4);
+  });
+
+  it("ignores the moved row itself when finding neighbours", () => {
+    const rows = [row("a", 1), row("m", 2), row("b", 3)];
+    // Moving m after a: its old position is excluded, so the midpoint is with b.
+    expect(positionForMove(rows, "m", { folderId: null, afterId: "a" })).toBe(2);
   });
 });

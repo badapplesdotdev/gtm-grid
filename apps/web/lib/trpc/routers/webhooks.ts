@@ -44,13 +44,15 @@ export const webhooksRouter = router({
       ),
     ),
 
-  /** Create a webhook bound to a table (mints token + secret). Members-only. */
+  /** Create a webhook bound to a table (mints a token; a signing secret only
+   *  when `auth` opts in — default is an unauthenticated endpoint). Members-only. */
   createWebhook: protectedProcedure
     .input(
       z.object({
         tableId: z.string().min(1),
         name: z.string().nullish(),
         mapping: z.array(mappingEntry).optional(),
+        auth: z.boolean().optional(),
       }),
     )
     .mutation(({ ctx, input }) =>
@@ -62,6 +64,7 @@ export const webhooksRouter = router({
             tableId: input.tableId,
             name: input.name ?? null,
             mapping: input.mapping,
+            ...(input.auth !== undefined ? { auth: input.auth } : {}),
           });
         }),
       ),
@@ -134,7 +137,7 @@ export const webhooksRouter = router({
       ),
     ),
 
-  /** Rotate a webhook's token + signing secret. Members-only. */
+  /** Rotate a webhook's token (+ signing secret when auth is on). Members-only. */
   rotateSecret: protectedProcedure
     .input(z.object({ webhookId: z.string().min(1) }))
     .mutation(({ ctx, input }) =>
@@ -143,6 +146,23 @@ export const webhooksRouter = router({
         Effect.gen(function* () {
           const svc = yield* WebhookService;
           return yield* svc.rotateSecret(input.webhookId);
+        }),
+      ),
+    ),
+
+  /** Opt a webhook in to (or out of) signature auth. Opting in mints and
+   *  returns a fresh signing secret; opting out clears it. Members-only. */
+  setAuth: protectedProcedure
+    .input(z.object({ webhookId: z.string().min(1), enabled: z.boolean() }))
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* WebhookService;
+          return yield* svc.setAuth({
+            webhookId: input.webhookId,
+            enabled: input.enabled,
+          });
         }),
       ),
     ),

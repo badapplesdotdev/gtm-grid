@@ -33,6 +33,12 @@ import type {
 } from "../repositories/webhook-repo.js";
 import { webhookRepoLayer } from "../repositories/webhook-repo.js";
 import { workspaceRepoLayer } from "../repositories/workspace-repo.js";
+import { columnRepoLayer } from "../repositories/column-repo.js";
+import { makeGridStore, type StoreColumn } from "../repositories/grid-store.js";
+import {
+  recordingRealtimePublisherLayer,
+  type RecordedGridEvent,
+} from "./realtime-publisher.js";
 import { EntitlementService } from "./entitlement-service.js";
 import { WebhookService } from "./webhook-service.js";
 
@@ -88,6 +94,8 @@ function harness(opts: {
   crypto?: Layer.Layer<CredentialCryptoService>;
   /** The workspace's cached plan; `undefined` defaults to "team" (cloud on). */
   plan?: string | null;
+  /** Columns visible to ColumnRepo (MUTATED by ensureWebhookColumn). */
+  gridColumns?: StoreColumn[];
 }) {
   const webhookRepo = webhookRepoLayer({
     webhooks: opts.webhooks ?? [{ ...webhook }],
@@ -99,8 +107,14 @@ function harness(opts: {
     credentials: opts.credentials ?? new Map(),
   });
   const deliveryRepo = webhookDeliveryRepoLayer(opts.deliveries ?? []);
+  // `currentUserId: null` is an EXPLICIT headless caller (no identity → the
+  // worker-secret path); only an absent option defaults to the member "member".
   const membership = MembershipService.Default.pipe(
-    Layer.provide(cloudIdentityLayer(opts.currentUserId ?? "member")),
+    Layer.provide(
+      cloudIdentityLayer(
+        opts.currentUserId === undefined ? "member" : opts.currentUserId,
+      ),
+    ),
     Layer.provide(cloudMemberRepoLayer(memberships)),
   );
   // EntitlementService reads the workspace plan; default "team" (cloud on).
@@ -117,6 +131,11 @@ function harness(opts: {
       ]),
     ),
   );
+  // ColumnRepo backs ensureWebhookColumn (the Clay-style raw-payload column).
+  const gridColumns = opts.gridColumns ?? [];
+  const columnRepo = columnRepoLayer(makeGridStore({ columns: gridColumns }));
+  // Recording publisher: tests read back the realtime events worker writes emit.
+  const published: RecordedGridEvent[] = [];
   const layer = WebhookService.Default.pipe(
     Layer.provide(webhookRepo),
     Layer.provide(deliveryRepo),
@@ -124,10 +143,12 @@ function harness(opts: {
     Layer.provide(CellMerge.Default),
     Layer.provide(opts.crypto ?? credentialCryptoTest()),
     Layer.provide(entitlement),
+    Layer.provide(columnRepo),
+    Layer.provide(recordingRealtimePublisherLayer(published)),
   );
   const run = <A, E>(program: Effect.Effect<A, E, WebhookService>) =>
     Effect.runPromiseExit(program.pipe(Effect.provide(layer)));
-  return { run };
+  return { run, gridColumns, published };
 }
 
 const svc = Effect.gen(function* () {
@@ -194,6 +215,32 @@ describe("WebhookService.insertRow", () => {
     expect(rows).toHaveLength(1);
     expect(cells).toHaveLength(2);
     expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
+  });
+
+  it("broadcasts row.insert (with the written cells) so open grids patch live", async () => {
+    const rows: GridRow[] = [];
+    const { run, published } = harness({ rows, cells: [] });
+    await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.insertRow({
+            webhookId: "wh-1",
+            cells: { [COL_EMAIL]: "a@b.com", "col-foreign": "dropped", [COL_NAME]: "" },
+          }),
+        ),
+      ),
+    );
+    expect(published).toHaveLength(1);
+    expect(published[0].workspaceId).toBe(WS);
+    expect(published[0].tableId).toBe(TABLE);
+    expect(published[0].event).toEqual({
+      type: "row.insert",
+      row: { _id: rows[0].id },
+      // Mirrors writeCells: blank + foreign cells are NOT in the event either.
+      cells: [
+        { rowId: rows[0].id, columnId: COL_EMAIL, value: "a@b.com", status: "done", error: null },
+      ],
+    });
   });
 
   it("skips empty/foreign cells", async () => {
@@ -402,6 +449,30 @@ describe("WebhookService.upsertRow", () => {
     expect(cells.find((c) => c.columnId === COL_NAME)?.value).toBe("Updated");
   });
 
+  it("broadcasts cell.upsert per written cell on a MATCHED upsert (no row.insert)", async () => {
+    const rows: GridRow[] = [{ id: "row-1", tableId: TABLE, position: 0 }];
+    const cells: GridCell[] = [
+      { id: "cell-1", rowId: "row-1", columnId: COL_EMAIL, value: "a@b.com", status: "done", error: null, updatedAt: 1 },
+    ];
+    const { run, published } = harness({ rows, cells });
+    await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.upsertRow({
+            webhookId: "wh-1",
+            upsertKey: COL_EMAIL,
+            cells: { [COL_EMAIL]: "a@b.com", [COL_NAME]: "Updated" },
+          }),
+        ),
+      ),
+    );
+    expect(published.map((p) => p.event.type)).toEqual(["cell.upsert", "cell.upsert"]);
+    expect(published[1].event).toEqual({
+      type: "cell.upsert",
+      cell: { rowId: "row-1", columnId: COL_NAME, value: "Updated", status: "done", error: null },
+    });
+  });
+
   it("INSERTS a fresh row when no upsert key matches", async () => {
     const rows: GridRow[] = [{ id: "row-1", tableId: TABLE, position: 0 }];
     const cells: GridCell[] = [
@@ -522,6 +593,8 @@ describe("WebhookService.upsertRow — TRI-3270 indexed point lookup", () => {
       Layer.provide(CellMerge.Default),
       Layer.provide(credentialCryptoTest()),
       Layer.provide(entitlement),
+      Layer.provide(columnRepoLayer(makeGridStore())),
+      Layer.provide(recordingRealtimePublisherLayer()),
     );
     const run = <A, E>(program: Effect.Effect<A, E, WebhookService>) =>
       Effect.runPromiseExit(program.pipe(Effect.provide(layer)));
@@ -644,6 +717,28 @@ describe("WebhookService.setCell metering", () => {
     );
     expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
   });
+
+  it("broadcasts the POST-MERGE cell so engine column runs paint live", async () => {
+    const { run, published } = harness({ rows: [...rows], cells: [] });
+    await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.setCell({
+            rowId: "row-1",
+            columnId: COL_EMAIL,
+            hasValue: true,
+            value: "x",
+            status: "done",
+          }),
+        ),
+      ),
+    );
+    expect(published).toHaveLength(1);
+    expect(published[0].event).toEqual({
+      type: "cell.upsert",
+      cell: { rowId: "row-1", columnId: COL_EMAIL, value: "x", status: "done", error: null },
+    });
+  });
 });
 
 describe("WebhookService.setCells (batched)", () => {
@@ -727,6 +822,89 @@ describe("WebhookService.getCredential", () => {
   });
 });
 
+// The desktop sidecar + spawned MCP reach getTable/getTableMeta/setCell/
+// getCredential/assertColumnRunQuota via the dual-auth `runWorkerSecretOrMember`
+// route wrapper. On its MEMBER path the service runs with the caller's identity
+// and `assertMemberIfIdentified` rejects a non-member (→ 403); on the HEADLESS
+// worker-secret path there is no identity, so the assertion is skipped (the
+// inngest worker keeps working). `currentUserId: null` models the headless caller.
+describe("WebhookService worker paths — member-auth gate", () => {
+  it("getTable rejects a non-member of the table's workspace", async () => {
+    const { run } = harness({ rows: [], cells: [], currentUserId: "stranger" });
+    const exit = await run(svc.pipe(Effect.flatMap((s) => s.getTable(TABLE))));
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const f = Cause.failureOption(exit.cause);
+      expect(f._tag === "Some" && f.value._tag).toBe("NotAMemberError");
+    }
+  });
+
+  it("getTable allows the headless worker-secret path (no identity → skip)", async () => {
+    const { run } = harness({ rows: [], cells: [], currentUserId: null });
+    const exit = await run(svc.pipe(Effect.flatMap((s) => s.getTable(TABLE))));
+    expect(Exit.isSuccess(exit)).toBe(true);
+  });
+
+  it("getTableMeta rejects a non-member", async () => {
+    const { run } = harness({ currentUserId: "stranger" });
+    const exit = await run(
+      svc.pipe(Effect.flatMap((s) => s.getTableMeta(TABLE))),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const f = Cause.failureOption(exit.cause);
+      expect(f._tag === "Some" && f.value._tag).toBe("NotAMemberError");
+    }
+  });
+
+  it("getCredential rejects a non-member (no plaintext secret leak)", async () => {
+    const crypto = credentialCryptoTest();
+    const enc = await Effect.runPromise(
+      Effect.gen(function* () {
+        const c = yield* CredentialCryptoService;
+        return yield* c.encrypt(WS, { apiKey: "sekret" });
+      }).pipe(Effect.provide(crypto)),
+    );
+    const credentials = new Map<string, string>([[`${WS}:apollo`, enc]]);
+    const { run } = harness({ credentials, crypto, currentUserId: "stranger" });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.getCredential({ workspaceId: WS, extensionId: "apollo" }),
+        ),
+      ),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const f = Cause.failureOption(exit.cause);
+      expect(f._tag === "Some" && f.value._tag).toBe("NotAMemberError");
+    }
+  });
+
+  it("getCredential allows the headless worker-secret path (no identity → skip)", async () => {
+    const crypto = credentialCryptoTest();
+    const enc = await Effect.runPromise(
+      Effect.gen(function* () {
+        const c = yield* CredentialCryptoService;
+        return yield* c.encrypt(WS, { apiKey: "sekret" });
+      }).pipe(Effect.provide(crypto)),
+    );
+    const credentials = new Map<string, string>([[`${WS}:apollo`, enc]]);
+    const { run } = harness({ credentials, crypto, currentUserId: null });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.getCredential({ workspaceId: WS, extensionId: "apollo" }),
+        ),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value?.secrets).toEqual({ apiKey: "sekret" });
+    }
+  });
+});
+
 describe("WebhookService config CRUD (member-gated)", () => {
   it("rejects a non-member from listWebhooks", async () => {
     const { run } = harness({ currentUserId: "stranger" });
@@ -740,7 +918,7 @@ describe("WebhookService config CRUD (member-gated)", () => {
     }
   });
 
-  it("creates a webhook with a minted token + secret", async () => {
+  it("creates a webhook with a minted token and NO secret by default (auth is opt-in)", async () => {
     const webhooks: Webhook[] = [];
     const { run } = harness({ webhooks });
     const exit = await run(
@@ -757,6 +935,57 @@ describe("WebhookService config CRUD (member-gated)", () => {
     expect(Exit.isSuccess(exit)).toBe(true);
     expect(webhooks).toHaveLength(1);
     expect(webhooks[0].token.length).toBeGreaterThan(20);
+    expect(webhooks[0].signingSecret).toBeNull();
+  });
+
+  it("creates the Webhook raw-payload column and a leading `$` mapping entry", async () => {
+    const webhooks: Webhook[] = [];
+    const { run, gridColumns } = harness({ webhooks });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.createWebhook({
+            tableId: TABLE,
+            mapping: [{ path: "email", columnId: COL_EMAIL }],
+          }),
+        ),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    // A "Webhook" json column was created on the table…
+    const webhookCol = gridColumns.find((c) => c.name === "Webhook");
+    expect(webhookCol?.type).toBe("json");
+    expect(webhookCol?.kind).toBe("manual");
+    // …and the mapping leads with the `$` whole-payload entry targeting it.
+    expect(webhooks[0].mapping[0]).toEqual({ path: "$", columnId: webhookCol?.id });
+    expect(webhooks[0].mapping[1]).toEqual({ path: "email", columnId: COL_EMAIL });
+  });
+
+  it("reuses an existing Webhook column instead of duplicating it", async () => {
+    const webhooks: Webhook[] = [];
+    const existing: StoreColumn = {
+      id: "col-webhook", workspaceId: WS, tableId: TABLE, name: "Webhook",
+      type: "json", kind: "manual", provider: null, method: null, code: null,
+      params: {}, position: 0, createdAt: 1,
+    };
+    const { run, gridColumns } = harness({ webhooks, gridColumns: [existing] });
+    const exit = await run(
+      svc.pipe(Effect.flatMap((s) => s.createWebhook({ tableId: TABLE }))),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(gridColumns).toHaveLength(1);
+    expect(webhooks[0].mapping[0]).toEqual({ path: "$", columnId: "col-webhook" });
+  });
+
+  it("creates a webhook WITH a minted secret when auth opts in", async () => {
+    const webhooks: Webhook[] = [];
+    const { run } = harness({ webhooks });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) => s.createWebhook({ tableId: TABLE, auth: true })),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
     expect(webhooks[0].signingSecret?.startsWith("whsec_")).toBe(true);
   });
 
@@ -805,7 +1034,103 @@ describe("WebhookService config CRUD (member-gated)", () => {
     if (Exit.isSuccess(exit)) {
       expect(exit.value.token).not.toBe("tok-123");
       expect(webhooks[0].token).toBe(exit.value.token);
+      // The seeded webhook HAS auth on (whsec_x) — rotation mints a fresh secret.
+      expect(exit.value.signingSecret?.startsWith("whsec_")).toBe(true);
+      expect(exit.value.signingSecret).not.toBe("whsec_x");
     }
+  });
+
+  it("rotateSecret preserves the opted-OUT state (no secret minted)", async () => {
+    const webhooks: Webhook[] = [{ ...webhook, signingSecret: null }];
+    const { run } = harness({ webhooks });
+    const exit = await run(
+      svc.pipe(Effect.flatMap((s) => s.rotateSecret("wh-1"))),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.signingSecret).toBeNull();
+      expect(webhooks[0].signingSecret).toBeNull();
+      expect(webhooks[0].token).toBe(exit.value.token);
+    }
+  });
+
+  it("setAuth opts in (mints + returns a secret) and back out (clears it)", async () => {
+    const webhooks: Webhook[] = [{ ...webhook, signingSecret: null }];
+    const { run } = harness({ webhooks });
+
+    const on = await run(
+      svc.pipe(Effect.flatMap((s) => s.setAuth({ webhookId: "wh-1", enabled: true }))),
+    );
+    expect(Exit.isSuccess(on)).toBe(true);
+    if (Exit.isSuccess(on)) {
+      expect(on.value.signingSecret?.startsWith("whsec_")).toBe(true);
+      expect(webhooks[0].signingSecret).toBe(on.value.signingSecret);
+    }
+
+    const off = await run(
+      svc.pipe(Effect.flatMap((s) => s.setAuth({ webhookId: "wh-1", enabled: false }))),
+    );
+    expect(Exit.isSuccess(off)).toBe(true);
+    if (Exit.isSuccess(off)) {
+      expect(off.value.signingSecret).toBeNull();
+      expect(webhooks[0].signingSecret).toBeNull();
+    }
+  });
+
+  it("rejects a non-member from setAuth", async () => {
+    const { run } = harness({ currentUserId: "stranger" });
+    const exit = await run(
+      svc.pipe(Effect.flatMap((s) => s.setAuth({ webhookId: "wh-1", enabled: true }))),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const f = Cause.failureOption(exit.cause);
+      expect(f._tag === "Some" && f.value._tag).toBe("NotAMemberError");
+    }
+  });
+
+  it("toggleEnabled(true) HEALS a legacy webhook without a `$` mapping entry", async () => {
+    const webhooks: Webhook[] = [{ ...webhook, enabled: false }];
+    const { run, gridColumns } = harness({ webhooks });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) => s.toggleEnabled({ webhookId: "wh-1", enabled: true })),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    const webhookCol = gridColumns.find((c) => c.name === "Webhook");
+    expect(webhookCol).toBeDefined();
+    expect(webhooks[0].mapping[0]).toEqual({ path: "$", columnId: webhookCol?.id });
+    expect(webhooks[0].mapping[1]).toEqual({ path: "email", columnId: COL_EMAIL });
+    expect(webhooks[0].enabled).toBe(true);
+  });
+
+  it("updateWebhookMapping preserves the `$` raw-payload entry", async () => {
+    const webhooks: Webhook[] = [
+      {
+        ...webhook,
+        mapping: [
+          { path: "$", columnId: "col-webhook" },
+          { path: "email", columnId: COL_EMAIL },
+        ],
+      },
+    ];
+    const { run } = harness({ webhooks });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.updateWebhookMapping({
+            webhookId: "wh-1",
+            mapping: [{ path: "name", columnId: COL_NAME }],
+          }),
+        ),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(webhooks[0].mapping).toEqual([
+      { path: "$", columnId: "col-webhook" },
+      { path: "name", columnId: COL_NAME },
+    ]);
   });
 
   it("toggleEnabled + deleteWebhook mutate the store", async () => {

@@ -22,6 +22,12 @@ export interface Table {
   readonly name: string;
   readonly position: number;
   readonly createdAt: number;
+  /** Dedupe config: the column rows are deduped on (null = off). */
+  readonly dedupeColumn: string | null;
+  /** Which duplicate to keep ("oldest" | "newest"); null when dedupe is off. */
+  readonly dedupeKeep: string | null;
+  /** Sidebar folder this table is filed under (null = root). */
+  readonly folderId: string | null;
 }
 
 /** Fields a `createTable` insert supplies. */
@@ -31,6 +37,8 @@ export interface NewTable {
   readonly name: string;
   readonly position: number;
   readonly createdAt: number;
+  /** Sidebar folder to file the new table under (omitted/null = root). */
+  readonly folderId?: string | null;
 }
 
 /** Raised when a table read/write fails (DB/transport error). */
@@ -74,6 +82,20 @@ export class TableRepo extends Context.Tag("TableRepo")<
     ) => Effect.Effect<string, TableRepoError>;
     /** Delete a table (FK cascade drops its columns/rows/cells/webhooks). */
     readonly remove: (id: string) => Effect.Effect<void, TableRepoError>;
+    /** Set (or clear) a table's dedupe config. `column: null` disables it. */
+    readonly setDedupe: (
+      id: string,
+      config: { readonly column: string | null; readonly keep: string | null },
+    ) => Effect.Effect<void, TableRepoError>;
+    /**
+     * File a table under a folder (`folderId: null` → root), optionally with a
+     * new sort position (drag-reorder passes a fractional midpoint).
+     */
+    readonly setFolder: (
+      id: string,
+      folderId: string | null,
+      position?: number,
+    ) => Effect.Effect<void, TableRepoError>;
   }
 >() {}
 
@@ -90,6 +112,9 @@ export const TableRepoLive: Layer.Layer<TableRepo, never, DbClient> =
         name: schema.tables.name,
         position: schema.tables.position,
         createdAt: schema.tables.createdAt,
+        dedupeColumn: schema.tables.dedupeColumn,
+        dedupeKeep: schema.tables.dedupeKeep,
+        folderId: schema.tables.folderId,
       } as const;
       return {
         findById: (id) =>
@@ -157,6 +182,32 @@ export const TableRepoLive: Layer.Layer<TableRepo, never, DbClient> =
             },
             catch: fail("table delete"),
           }),
+        setDedupe: (id, config) =>
+          Effect.tryPromise({
+            try: async () => {
+              await db
+                .update(schema.tables)
+                .set({
+                  dedupeColumn: config.column,
+                  dedupeKeep: config.column === null ? null : config.keep,
+                })
+                .where(eq(schema.tables.id, id));
+            },
+            catch: fail("table set dedupe"),
+          }),
+        setFolder: (id, folderId, position) =>
+          Effect.tryPromise({
+            try: async () => {
+              await db
+                .update(schema.tables)
+                .set({
+                  folderId,
+                  ...(position !== undefined ? { position } : {}),
+                })
+                .where(eq(schema.tables.id, id));
+            },
+            catch: fail("table set folder"),
+          }),
       };
     }),
   );
@@ -183,8 +234,30 @@ export const tableRepoLayer = (store: GridStore): Layer.Layer<TableRepo> =>
     insert: (values) =>
       Effect.sync(() => {
         const id = store.nextId("table");
-        store.tables.push({ id, ...values });
+        store.tables.push({
+          id,
+          ...values,
+          dedupeColumn: null,
+          dedupeKeep: null,
+          folderId: values.folderId ?? null,
+        });
         return id;
       }),
     remove: (id) => Effect.sync(() => cascadeDeleteTable(store, id)),
+    setDedupe: (id, config) =>
+      Effect.sync(() => {
+        const t = store.tables.find((x) => x.id === id);
+        if (t) {
+          t.dedupeColumn = config.column;
+          t.dedupeKeep = config.column === null ? null : config.keep;
+        }
+      }),
+    setFolder: (id, folderId, position) =>
+      Effect.sync(() => {
+        const t = store.tables.find((x) => x.id === id);
+        if (t) {
+          t.folderId = folderId;
+          if (position !== undefined) t.position = position;
+        }
+      }),
   });

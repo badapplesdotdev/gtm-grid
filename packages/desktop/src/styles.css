@@ -1734,7 +1734,9 @@ html, body, #root {
 /* ─── Cell details panel (right rail, over the agent panel) ── */
 .cell-details {
   position: fixed; top: 0; right: 0; bottom: 0; width: 384px;
-  background: #e8eaf1; border-left: 1px solid var(--border);
+  /* Themed backdrop (was hardcoded #e8eaf1, which stayed light in dark mode):
+     surface-3 keeps the drawer slightly tinted vs the white/dark pills. */
+  background: var(--surface-3); border-left: 1px solid var(--border);
   z-index: 50; display: flex; flex-direction: column;
   animation: cdSlide .16s ease;
 }
@@ -1758,7 +1760,7 @@ html, body, #root {
 }
 .cd-search input:focus { box-shadow: var(--shadow-sm), 0 0 0 2px var(--accent-soft); }
 .cd-done {
-  margin: 0 0 8px; padding: 7px 10px; background: var(--success-bg); color: #15803d;
+  margin: 0 0 8px; padding: 7px 10px; background: var(--success-bg); color: var(--success-ink);
   border-radius: var(--r-sm); font: 500 12px var(--font-sans);
 }
 .cd-fields { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
@@ -1801,10 +1803,13 @@ html, body, #root {
 }
 .cd-map-list button:hover { background: var(--accent-bg); color: var(--accent); }
 .cd-footer {
-  flex-shrink: 0; padding: 10px 14px; border-top: 1px solid rgba(0,0,0,.06);
+  flex-shrink: 0; padding: 10px 14px; border-top: 1px solid var(--border);
   font: 400 11.5px var(--font-sans); color: var(--text-3);
 }
 .cd-footer strong { color: var(--accent); }
+/* Brighten the fixed type-glyph hues for contrast on dark pills. */
+[data-theme="dark"] .cd-type-number { color: #82adff; }
+[data-theme="dark"] .cd-type-boolean { color: var(--success-ink); }
 
 /* column resize handle */
 .grid-th { position: relative; }
@@ -2026,6 +2031,66 @@ html, body, #root {
 .sidebar-item:hover .sidebar-item-more { opacity: 1; }
 .sidebar-item-more:hover { background: var(--surface-3); color: var(--text); }
 .sidebar-item:hover .sidebar-item-count { display: none; }
+
+/* ── Sidebar folders (table groups) ───────────────────────── */
+.folder-head {
+  display: flex; align-items: center; gap: 6px; padding: 6px 16px; cursor: pointer;
+  color: var(--text-2); font-size: 13px; user-select: none; position: relative;
+  transition: background 0.1s, color 0.1s, box-shadow 0.1s;
+}
+.folder-head:hover { background: var(--surface-2); color: var(--text); }
+.folder-head .connector-group-toggle { width: 12px; height: 12px; }
+.folder-ic { display: flex; color: var(--text-3); flex-shrink: 0; transition: color 0.1s; }
+.folder-head:hover .folder-ic { color: var(--accent); }
+.folder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.folder-head .sidebar-item-more { opacity: 0; }
+.folder-head:hover .sidebar-item-more { opacity: 1; }
+.folder-head:hover .sidebar-item-count { display: none; }
+.folder-head.drop-into {
+  background: var(--accent-soft); color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--accent-ring); border-radius: var(--r-xs);
+}
+.folder-head.drop-into .folder-ic { color: var(--accent); }
+.sidebar-item.in-folder { padding-left: 34px; }
+.folder-empty {
+  margin: 1px 12px 3px 34px; padding: 7px 10px; border: 1px dashed var(--border-2);
+  border-radius: var(--r-xs); color: var(--text-3); font-size: 11px; text-align: center;
+  transition: border-color 0.1s, color 0.1s, background 0.1s;
+}
+.folder-empty.drop-into { border-color: var(--accent); border-style: solid; color: var(--accent); background: var(--accent-soft); }
+
+/* table drag-and-drop states */
+.sidebar-item[draggable="true"] { cursor: grab; }
+.sidebar-item.dragging { opacity: 0.4; }
+.sidebar-item.drop-before::after,
+.sidebar-item.drop-after::after {
+  content: ''; position: absolute; left: 16px; right: 10px; height: 2px;
+  background: var(--accent); border-radius: 2px; box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.sidebar-item.drop-before::after { top: -1px; }
+.sidebar-item.drop-after::after { bottom: -1px; }
+.sidebar-item.in-folder.drop-before::after,
+.sidebar-item.in-folder.drop-after::after { left: 34px; }
+.root-drop { min-height: 6px; border-radius: var(--r-xs); transition: box-shadow 0.1s, background 0.1s; }
+.root-drop.drop-into { box-shadow: inset 0 0 0 1px var(--accent-ring); background: var(--accent-soft); }
+
+/* the header "+" menu (New table / New folder) */
+.add-menu-wrap { position: relative; display: flex; }
+.menu-scrim { position: fixed; inset: 0; z-index: 40; }
+.add-menu {
+  position: absolute; top: 24px; right: 0; z-index: 50; min-width: 158px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm);
+  box-shadow: var(--shadow-lg); padding: 5px; display: flex; flex-direction: column; gap: 1px;
+  animation: add-menu-in 0.12s ease-out;
+}
+@keyframes add-menu-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+.add-menu button {
+  all: unset; box-sizing: border-box; width: 100%; cursor: pointer; display: flex; align-items: center; gap: 9px;
+  padding: 7px 9px; border-radius: var(--r-xs); font-size: 12.5px; color: var(--text-2);
+}
+.add-menu button:hover { background: var(--surface-2); color: var(--text); }
+.add-menu-ic { display: flex; color: var(--text-3); }
+.add-menu button:hover .add-menu-ic { color: var(--accent); }
 
 /* ── Extensions gallery (Browse all) ─────────────────────── */
 .ext-browse-all {
@@ -2509,6 +2574,20 @@ html, body, #root {
   padding: 9px 11px; margin: 4px 0;
 }
 
+/* Social-signal status strip (cloud grid): per-binding pull status + Sync now.
+   The user's recourse when a signal table looks empty — shows warming/ok/error. */
+.signal-strip { display: flex; flex-direction: column; gap: 4px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.signal-strip-row { display: flex; align-items: center; gap: 8px; min-height: 24px; font-size: 12px; }
+.signal-strip-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.signal-strip-dot[data-state="ok"] { background: var(--success, #30a46c); }
+.signal-strip-dot[data-state="warming"] { background: var(--warning, #f5a623); animation: signal-pulse 1.6s ease-in-out infinite; }
+.signal-strip-dot[data-state="error"] { background: var(--danger, #e5484d); }
+.signal-strip-label { font-weight: 600; color: var(--text-1); }
+.signal-strip-meta { color: var(--text-2); }
+.signal-strip-error { color: var(--danger, #e5484d); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }
+.signal-strip-row .btn { margin-left: auto; }
+@keyframes signal-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
 /* Boolean keyword builder (OR / AND / NOT) + live query preview */
 .sig-bool { border: 1px solid var(--border); border-radius: var(--r-md); padding: 14px; margin-bottom: 14px; background: var(--surface-2); }
 .sig-bool .sig-field:last-of-type { margin-bottom: 0; }
@@ -2694,6 +2773,41 @@ html, body, #root {
   width: 28px; height: 28px; border-radius: var(--r-sm); flex-shrink: 0; display: flex; align-items: center; justify-content: center;
   background: var(--accent-soft); color: var(--accent); font: 700 13px var(--font-sans);
 }
+/* ── Multiplayer presence — cell cursors ────────────────────────────────────
+   The avatar stack + name tooltip now render via shadcn primitives
+   (components/ui/avatar-stack, avatar, tooltip) styled with Tailwind. Only the
+   per-cell cursor decoration below stays hand-rolled, since it hooks into the
+   grid's own `.grid-td` cells. */
+
+/* The colored ring + corner chip a remote member's cursor paints on a cell. */
+.grid-td.cell-presence { box-shadow: inset 0 0 0 2px var(--presence-color); }
+.grid-td.presence-editing {
+  box-shadow: inset 0 0 0 2px var(--presence-color);
+  animation: presence-pulse 1.2s ease-in-out infinite;
+}
+.presence-cell-chip {
+  position: absolute; top: 3px; right: 3px; z-index: 2;
+  width: 15px; height: 15px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font: 700 8px var(--font-sans); overflow: hidden; pointer-events: none;
+  /* A thin surface ring lifts the chip off the cell ring + content for breathing room. */
+  box-shadow: 0 0 0 1.5px var(--surface);
+}
+.presence-cell-chip img { width: 100%; height: 100%; object-fit: cover; }
+.grid-td.presence-flash { animation: presence-flash 1.2s ease; }
+/* Column-header ring — a participant (the agent) is working over this column. */
+.grid-th.col-presence {
+  box-shadow: inset 0 0 0 2px var(--presence-color);
+  animation: presence-pulse 1.6s ease-in-out infinite;
+}
+@keyframes presence-pulse {
+  50% { box-shadow: inset 0 0 0 3px var(--presence-color); }
+}
+@keyframes presence-flash {
+  0% { background: var(--accent-soft); }
+  100% { background: var(--surface); }
+}
+
 .account-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .account-name { font: 600 13px var(--font-sans); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account-sub { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-3); }
@@ -2711,13 +2825,22 @@ html, body, #root {
    the TOP of the screen. This higher-specificity rule re-anchors it DOWN-left so
    the bell popover is fully on-screen. */
 .account-menu.notif-pop {
-  position: fixed; inset: auto; transform-origin: top left; max-width: calc(100vw - 16px);
+  /* Above .popover-scrim (z-index 100): the scrim is a transparent full-viewport
+     sibling that closes the popover on mousedown. .account-menu's z-index (61)
+     left the scrim ON TOP, so clicks (e.g. "Update & restart") hit the scrim and
+     just closed the popover instead of firing the button. */
+  position: fixed; inset: auto; transform-origin: top left; max-width: calc(100vw - 16px); z-index: 101;
 }
 .account-menu-head { display: flex; align-items: center; gap: 10px; padding: 14px 14px; border-bottom: 1px solid var(--border); }
 .account-menu-head-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .account-menu-head-text strong { font: 600 13px var(--font-sans); color: var(--text); }
 .account-menu-head-text span { font-size: 11.5px; color: var(--text-3); }
 .account-menu-sec { padding: 8px; }
+.account-menu-version {
+  padding: 8px 14px 12px; text-align: center;
+  font: 500 11px var(--font-sans); color: var(--text-3);
+  border-top: 1px solid var(--border);
+}
 .account-menu-label {
   font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); padding: 4px 8px 6px;
 }
@@ -3554,7 +3677,9 @@ button.import-type:hover { background: var(--surface-3); }
 /* ── Deduplication popover (Clay-style) ───────────────────── */
 .dedupe-on-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-left: 5px; flex: none; }
 .dedupe-pop {
-  position: fixed; top: 54px; right: 16px; z-index: 50; width: 360px; max-height: calc(100vh - 70px); overflow-y: auto;
+  /* z-index 101 keeps this ABOVE its .popover-scrim (z-index 100); at 50 the
+     scrim sat on top and a click inside just closed the popover. */
+  position: fixed; top: 54px; right: 16px; z-index: 101; width: 360px; max-height: calc(100vh - 70px); overflow-y: auto;
   background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--r-md); box-shadow: var(--shadow-lg);
   padding: 14px; display: flex; flex-direction: column; gap: 12px;
 }

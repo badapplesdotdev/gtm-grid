@@ -13,7 +13,8 @@
  *   - Re-push of a LINKED table is detected via the link and OVERWRITES (with
  *     explicit confirmation); without confirmation it fails LinkConflictError.
  *   - A stale link (cloud table gone) fails LinkConflictError.
- *   - Mapping rejects an unpushable (`local`-scoped) credential column (FatalPush).
+ *   - Credential scope is NOT a push gate: a `local`-scoped credential column still
+ *     pushes (credentials are never synced; cloud runs use the shared workspace key).
  *   - The retry predicate retries TransientPushError but NOT FatalPushError, and a
  *     transient failure that recovers within budget succeeds.
  *   - The structured result distinguishes created vs overwritten + row/column count.
@@ -38,6 +39,9 @@ import {
 /** A scriptable in-memory fake of the thin cloud transport. */
 class FakeTransport implements CloudPushTransport {
   tables = new Map<string, { columns: string[]; rows: CloudCellMap[] }>();
+  /** Every column spec passed to addColumn, so tests can assert the full
+   *  function config (kind/provider/method/code/params/condition) is forwarded. */
+  columnSpecs: Array<Record<string, unknown>> = [];
   createdCount = 0;
   private seq = 0;
   /** operation -> number of times to fail before succeeding (transient). */
@@ -90,12 +94,21 @@ class FakeTransport implements CloudPushTransport {
 
   addColumn(
     cloudTableId: string,
-    col: { name: string; type: string },
+    col: {
+      name: string;
+      type: string;
+      kind: string;
+      provider: string | null;
+      method: string | null;
+      code: string | null;
+      params: Record<string, unknown>;
+      condition: string | null;
+    },
   ): Effect.Effect<string, CloudPushError> {
     return this.guarded("addColumn", () => {
       const id = `cloud-col-${this.seq++}`;
       this.tables.get(cloudTableId)?.columns.push(id);
-      void col;
+      this.columnSpecs.push({ ...col });
       return id;
     });
   }
@@ -342,18 +355,21 @@ describe("CloudPushService.pushTable", () => {
     });
   });
 
-  describe("schema mapping rejection", () => {
-    it("FAILS FatalPushError for a column backed by a `local`-scoped credential", async () => {
+  describe("credential scope is not a push gate", () => {
+    it("PUSHES a column backed by a `local`-scoped credential (no unpushable-scope failure)", async () => {
       const tableId = seedTable({ rows: 1, functionColumnScope: "local" });
       const transport = new FakeTransport();
       const exit = await runPush(transport, { localTableId: tableId });
-      const err = expectFailureTag(exit, "FatalPushError");
-      expect(err.message).toMatch(/unpushable credential scope/i);
-      // Nothing was created in the cloud (validation runs before any write).
-      expect(transport.createdCount).toBe(0);
+      // Local-only credentials no longer block the push — credentials are never
+      // synced; a cloud run resolves the team's shared workspace key at run time.
+      expect(Exit.isSuccess(exit)).toBe(true);
+      if (Exit.isSuccess(exit)) {
+        expect(exit.value.outcome).toBe("created");
+        expect(exit.value.columnCount).toBe(3);
+      }
     });
 
-    it("ALLOWS a function column backed by a `team`/`personal` credential", async () => {
+    it("PUSHES a function column backed by a `team`/`personal` credential", async () => {
       const tableId = seedTable({ rows: 1, functionColumnScope: "team" });
       const transport = new FakeTransport();
       const exit = await runPush(transport, { localTableId: tableId });
@@ -362,6 +378,24 @@ describe("CloudPushService.pushTable", () => {
         expect(exit.value.outcome).toBe("created");
         expect(exit.value.columnCount).toBe(3);
       }
+    });
+
+    it("CARRIES the function-column config to the cloud (stays runnable, not flattened to manual)", async () => {
+      const tableId = seedTable({ rows: 1, functionColumnScope: "team" });
+      const transport = new FakeTransport();
+      const exit = await runPush(transport, { localTableId: tableId });
+      expect(Exit.isSuccess(exit)).toBe(true);
+      // The pushed "Enriched" column keeps kind:function + provider/method, so the
+      // cloud cell can be run/enriched (the bug was it landing as a manual column).
+      const enriched = transport.columnSpecs.find((c) => c.name === "Enriched");
+      expect(enriched).toMatchObject({
+        kind: "function",
+        provider: "apollo",
+        method: "enrich",
+      });
+      // A plain manual column is still pushed as manual.
+      const nameCol = transport.columnSpecs.find((c) => c.name === "Name");
+      expect(nameCol).toMatchObject({ kind: "manual", provider: null, method: null });
     });
   });
 

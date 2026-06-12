@@ -25,6 +25,14 @@
 /** The Realtime Broadcast event name every grid change event is sent under. */
 export const GRID_EVENT_NAME = "grid_change" as const;
 
+/**
+ * Reserved sentinel "table id" for the WORKSPACE-level realtime room
+ * (`${workspaceId}:_workspace`). Used to broadcast tables-list changes (a table
+ * created / synced / deleted) so members refresh their sidebar live without
+ * having that table open. No real table is ever created with this id.
+ */
+export const WORKSPACE_ROOM_TABLE_ID = "_workspace" as const;
+
 /** A column as it appears in the `getTable` snapshot (mirrors `FullGrid.columns`). */
 export interface GridEventColumn {
   readonly _id: string;
@@ -118,6 +126,18 @@ export interface TableDeleteEvent {
 }
 
 /**
+ * A project's sidebar folders changed (folder created/renamed/deleted, or a
+ * table moved between folders). Broadcast on the WORKSPACE room only — it does
+ * not mutate any `getTable` snapshot (folders are list-organization metadata),
+ * so the reducer passes it through; the sidebar refetches its folder/table
+ * lists instead.
+ */
+export interface FoldersChangedEvent {
+  readonly type: "folders.changed";
+  readonly projectId: string;
+}
+
+/**
  * The discriminated union of every grid change the publisher emits and the
  * reducer applies. Discriminated on `type` so a `switch` is exhaustive.
  */
@@ -129,15 +149,26 @@ export type GridChangeEvent =
   | ColumnUpdateEvent
   | ColumnDeleteEvent
   | TableInsertEvent
-  | TableDeleteEvent;
+  | TableDeleteEvent
+  | FoldersChangedEvent;
 
 /**
  * The `getTable`-shaped client cache the reducer patches. Identical in shape to
  * `FullGrid` (services/grid-service.ts) so W4 can store the tRPC `getTable`
  * result directly and feed it back through {@link applyGridEvent}.
  */
+/** A table's row-dedup config in the `getTable` snapshot (null = off). */
+export interface GridDedupe {
+  readonly column: string;
+  readonly keep: "oldest" | "newest";
+}
+
 export interface GridSnapshot {
-  readonly table: { readonly _id: string; readonly name: string };
+  readonly table: {
+    readonly _id: string;
+    readonly name: string;
+    readonly dedupe?: GridDedupe | null;
+  };
   readonly columns: readonly GridEventColumn[];
   readonly rows: readonly GridEventRow[];
   readonly cells: readonly GridEventCell[];

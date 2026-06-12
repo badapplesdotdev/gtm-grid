@@ -1,5 +1,176 @@
 # @gtmgrid/server
 
+## 0.9.13
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.13
+
+## 0.9.12
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.12
+
+## 0.9.11
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.11
+
+## 0.9.10
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.10
+
+## 0.9.9
+
+### Patch Changes
+
+- 67f3d44: Agent sessions can now use your saved provider keys, and webhook signature
+  auth is opt-in:
+
+  - Provider CLIs and skills the agent runs (trigify-cli, gh, …) authenticate
+    automatically: saved credentials are injected as conventional env vars
+    (`TRIGIFY_API_KEY`, `GITHUB_TOKEN`, …) at agent spawn — cloud workspace
+    credentials in cloud mode, the local credential store in local mode. An
+    explicitly exported env var still wins, and values never appear in args
+    or logs.
+  - Inbound webhooks no longer force HMAC signing: new webhooks accept
+    unsigned posts (the unguessable token URL is the credential), with a
+    "Require signed requests" toggle to opt in to `X-GTMGrid-Signature`
+    verification. Existing webhooks keep their secrets and behave as before.
+  - @gtmgrid/engine@0.9.9
+
+## 0.9.8
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.8
+
+## 0.9.7
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.7
+
+## 0.9.6
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.6
+
+## 0.9.5
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.5
+
+## 0.9.4
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.4
+
+## 0.9.3
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.3
+
+## 0.9.2
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.2
+
+## 0.9.1
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.1
+
+## 0.9.0
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.0
+
+## 0.8.0
+
+### Patch Changes
+
+- @gtmgrid/engine@0.8.0
+
+## 0.7.8
+
+### Patch Changes
+
+- Updated dependencies [6ab6cf9]
+  - @gtmgrid/engine@0.7.8
+
+## 0.7.7
+
+### Patch Changes
+
+- c64cbf5: Fix two desktop bugs:
+
+  - **In-app updater / notification popover was unclickable.** The transparent
+    full-viewport `.popover-scrim` (z-index 100) sat _above_ the bell notification
+    popover (z-index 61), so clicking "Update & restart" (or any action) hit the
+    scrim and just closed the popover instead of firing the button. Raised the
+    notification popover — and the dedupe popover, which had the same z-index 50 <
+    scrim bug — above the scrim.
+
+  - **Pushing a local table to the cloud dropped function-column config.** The
+    local→cloud push only sent each column's name/type (and the sidecar hardcoded
+    `kind: "manual"`), so a function/formula/code column landed in the cloud as a
+    plain manual column and its cells could no longer be run/enriched. The push now
+    carries the full config (kind/provider/method/code/params/condition); the
+    `grid.addColumn` tRPC mutation also accepts `condition` so the "only run if"
+    rule survives the push.
+
+- Updated dependencies [c64cbf5]
+  - @gtmgrid/engine@0.7.7
+
+## 0.7.6
+
+### Patch Changes
+
+- 25938ea: Agent column runs now enrich rows in grid order. The `run_column` MCP tool gains
+  optional `limit`/`offset` params that scope a run to the next N **unfilled** rows
+  in the order the grid displays them (threaded into the engine's existing ordered
+  `rowIds` scope). Previously the tool could only run _all_ pending rows, so when a
+  user asked an agent to "run this column for 10 rows" the agent improvised and
+  enriched a scattered, seemingly-random subset. The agent operating manual now
+  directs the model to use `limit` for "run N rows" / "do the next N" requests.
+  - @gtmgrid/engine@0.7.6
+
+## 0.7.5
+
+### Patch Changes
+
+- @gtmgrid/engine@0.7.5
+
+## 0.7.4
+
+### Patch Changes
+
+- @gtmgrid/engine@0.7.4
+
+## 0.7.3
+
+### Patch Changes
+
+- @gtmgrid/engine@0.7.3
+
+## 0.7.2
+
+### Patch Changes
+
+- @gtmgrid/engine@0.7.2
+
 ## 0.7.1
 
 ### Patch Changes

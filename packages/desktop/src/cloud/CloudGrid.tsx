@@ -19,8 +19,15 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useQuery as useReactQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import type { Id } from "./ids";
-import { Icon } from "../App";
+import { apiClient } from "./client";
+import { Icon, ExpandedEditor } from "../App";
+import CellDetails, { extractCode } from "../CellDetails";
+import { setAgentPresenceTable } from "./agentPresence";
 import { api } from "../api";
 import type { ConnectorInfo, Column, FullTable } from "../api";
 import {
@@ -31,10 +38,15 @@ import {
   type ColumnAuthoringApi,
 } from "../AddColumn";
 import { DataGrid, type GridController } from "../DataGrid";
+import { DedupePopover } from "../DedupePopover";
 import { resolveRowHeight } from "../gridVirtual";
+import { buildPresenceView } from "../gridPresence";
 import { runCloudColumn } from "./cloud-run";
 import { WebhookModal } from "./WebhookModal";
+import { useMe } from "./auth";
+import { gridPresenceStore, useGridPresenceRoster } from "./presenceStore";
 import {
+  gridQueryKeys,
   useCloudGridMutations,
   useCloudSession,
   useCloudTablePaged,
@@ -43,6 +55,103 @@ import { isCloudTableMissing } from "../cloudSync";
 
 /** Fixed cloud column width (px) — cloud columns are not resizable. */
 const CLOUD_COL_W = 180;
+
+/** A signal binding's status fields the strip renders (tRPC listSignalBindings). */
+interface SignalBindingStatus {
+  readonly id: string;
+  readonly label: string;
+  readonly rowsPulled: number | null;
+  readonly lastSyncedAt: number | null;
+  readonly lastError: string | null;
+  readonly enabled: boolean;
+}
+
+/** Compact relative timestamp for the signal strip. */
+function agoLabel(ts: number): string {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+/**
+ * Social-signal status strip for a cloud table backed by Trigify bindings:
+ * shows each binding's pull progress (rows pulled, last synced, last error) and
+ * a "Sync now" that triggers the member-gated tRPC pull. This is the user's
+ * RECOURSE when a signal table looks empty — previously there was no way to
+ * see a binding error or re-pull without recreating the table. Renders nothing
+ * for tables with no bindings (the common case — one cheap cached query).
+ * Auto-refetches while a binding is still waiting for its first results so the
+ * strip flips to "n rows" on its own as the warm-up lands them.
+ */
+function SignalStatusStrip({ tableId }: { tableId: string }) {
+  const qc = useQueryClient();
+  const [syncing, setSyncing] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const q = useReactQuery({
+    queryKey: ["signals", "bindings", tableId],
+    enabled: apiClient !== null,
+    queryFn: async (): Promise<readonly SignalBindingStatus[]> =>
+      (await apiClient!.signals.listSignalBindings.query({
+        tableId,
+      })) as readonly SignalBindingStatus[],
+    staleTime: 15_000,
+    // Poll the strip while any binding is pre-first-data (the cloud warm-up is
+    // filling it server-side); idle once data has landed.
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some((b) => (b.rowsPulled ?? 0) === 0 && b.enabled)
+        ? 10_000
+        : false,
+  });
+  const bindings = q.data ?? [];
+  if (bindings.length === 0) return null;
+
+  const syncNow = async (bindingId: string) => {
+    if (apiClient === null) return;
+    setSyncing(bindingId);
+    setSyncError(null);
+    try {
+      await apiClient.signals.syncSignalBinding.mutate({ bindingId });
+      // Refresh the strip AND the grid page so newly-pulled rows appear without
+      // waiting for a window-focus refetch.
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["signals", "bindings", tableId] }),
+        qc.invalidateQueries({ queryKey: gridQueryKeys.tablePaged(tableId) }),
+      ]);
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : "Sync failed");
+    } finally {
+      setSyncing(null);
+    }
+  };
+
+  return (
+    <div className="signal-strip" role="status">
+      {bindings.map((b) => (
+        <div key={b.id} className="signal-strip-row">
+          <span className="signal-strip-dot" data-state={b.lastError ? "error" : (b.rowsPulled ?? 0) > 0 ? "ok" : "warming"} />
+          <span className="signal-strip-label">{b.label}</span>
+          <span className="signal-strip-meta">
+            {(b.rowsPulled ?? 0) > 0
+              ? `${b.rowsPulled} rows pulled${b.lastSyncedAt ? ` · synced ${agoLabel(b.lastSyncedAt)}` : ""}`
+              : "waiting for first results — Trigify is scraping (~1 min)"}
+          </span>
+          {b.lastError && <span className="signal-strip-error" title={b.lastError}>{b.lastError}</span>}
+          <button
+            className="btn btn-outline btn-sm"
+            disabled={syncing !== null}
+            onClick={() => void syncNow(b.id)}
+            title="Pull the latest results from Trigify now"
+          >
+            {syncing === b.id ? "Syncing…" : "Sync now"}
+          </button>
+        </div>
+      ))}
+      {syncError && <div className="signal-strip-error">{syncError}</div>}
+    </div>
+  );
+}
 
 interface CloudGridProps {
   /** The active cloud table to render, or `null` when none is selected. */
@@ -72,8 +181,16 @@ export function CloudGrid({
 }: CloudGridProps) {
   const { data, loadMore, hasMore, isLoadingMore } = useCloudTablePaged(tableId);
   const session = useCloudSession();
-  const { setCell, addRow, addColumn, updateColumn, deleteRow, deleteColumn } =
-    useCloudGridMutations();
+  const {
+    setCell,
+    addRow,
+    addColumn,
+    updateColumn,
+    deleteRow,
+    deleteColumn,
+    setDedupe,
+    dedupeTable,
+  } = useCloudGridMutations();
 
   const [runningColId, setRunningColId] = useState<string | null>(null);
   const [runningCells, setRunningCells] = useState<Set<string>>(new Set());
@@ -83,9 +200,58 @@ export function CloudGrid({
   const [addColAnchor, setAddColAnchor] = useState<{ left: number; top: number } | null>(null);
   const [showFunctions, setShowFunctions] = useState(false);
   const [editCol, setEditCol] = useState<Column | null>(null);
+  const [dedupeOpen, setDedupeOpen] = useState(false);
+  // Cell-details drawer (view a function/HTTP cell's full response) + expanded
+  // editor (long text). Mirrors the local grid so synced responses are inspectable.
+  const [detail, setDetail] = useState<{ columnName: string; value: unknown } | null>(null);
+  const [cellExpand, setCellExpand] = useState<{
+    rowId: string;
+    colId: string;
+    columnName: string;
+    value: string;
+    editable: boolean;
+    anchor: { left: number; top: number; width: number };
+  } | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const rowHeight = resolveRowHeight();
+
+  // ── Multiplayer presence ───────────────────────────────────────────────
+  // The live roster (fed by the realtime hook) resolved into the avatar stack +
+  // per-cell cursor index, with the local user excluded.
+  const me = useMe();
+  const selfId = me?.user._id ?? null;
+  const roster = useGridPresenceRoster();
+  const presenceView = useMemo(
+    () => buildPresenceView(roster, selfId),
+    [roster, selfId],
+  );
+  // Seed our identity (name/image) so cursor publishes carry it; re-seed when the
+  // open table changes (a fresh subscription registers a new publisher).
+  useEffect(() => {
+    if (me?.user) {
+      gridPresenceStore.updateLocal({
+        userId: me.user._id,
+        name: me.user.name,
+        image: me.user.image,
+      });
+    }
+  }, [me, tableId]);
+
+  // Publish the open table's identity (name + column name→id) for the agent
+  // presence mapper — read at tool-event time, never re-rendering anything.
+  useEffect(() => {
+    if (tableId !== null && data != null) {
+      setAgentPresenceTable({
+        tableId,
+        tableName: data.name,
+        columnIdByName: new Map(
+          data.columns.map((col) => [col.name.trim().toLowerCase(), col.id]),
+        ),
+      });
+    }
+    return () => setAgentPresenceTable(null);
+  }, [tableId, data]);
 
   // Auto-open the webhook form when the chooser's "Webhook" flow bumps the token.
   const lastTokenRef = useRef(0);
@@ -114,7 +280,12 @@ export function CloudGrid({
       if (tableId === null) return;
       setRunningColId(columnId);
       try {
-        await runCloudColumn(session, { tableId, columnId });
+        // FORCE on an explicit column run. A synced-from-local table arrives with
+        // every cell "done", and a non-forced run skips "done" cells — so without
+        // this, hitting Run on a synced function/code column flips to "running" and
+        // instantly exits without recomputing anything. An explicit Run should
+        // (re)compute the column. (Per-cell run already forces.)
+        await runCloudColumn(session, { tableId, columnId, force: true });
       } catch {
         /* surfaced live via the cell error status from Convex */
       } finally {
@@ -242,6 +413,40 @@ export function CloudGrid({
   const fnColCount = table.columns.filter((c) => c.kind === "function").length;
   const columnNames = table.columns.map((c) => c.name);
 
+  // ── Promote a JSON field to a column (from the Cell details drawer) ──
+  // Mirrors the local grid's promoteCreate/promoteMap: a FUNCTION column whose
+  // code extracts the chosen path from the source cell ({{<source column>}}),
+  // so the mapping applies to every row — existing (run now) and future (the
+  // webhook worker's auto-run enriches new rows).
+  const uniqueColName = (base: string): string => {
+    const existing = new Set(table.columns.map((c) => c.name.toLowerCase()));
+    if (!existing.has(base.toLowerCase())) return base;
+    let n = 2;
+    while (existing.has(`${base} ${n}`.toLowerCase())) n++;
+    return `${base} ${n}`;
+  };
+  const promoteCreate = async (path: string[], label: string) => {
+    if (!detail) return;
+    const id = await addColumn(tableId, {
+      name: uniqueColName(label),
+      type: "text",
+      code: extractCode(path),
+      params: { src: `{{${detail.columnName}}}` },
+    });
+    await runColumn(String(id)).catch(() => {});
+  };
+  const promoteMap = async (path: string[], targetId: string) => {
+    if (!detail) return;
+    await updateColumn(tableId, targetId as Id<"columns">, {
+      kind: "function",
+      provider: null,
+      method: null,
+      code: extractCode(path),
+      params: { src: `{{${detail.columnName}}}` },
+    });
+    await runColumn(targetId).catch(() => {});
+  };
+
   const controller: GridController = {
     table,
     rowHeight,
@@ -254,6 +459,16 @@ export function CloudGrid({
     canRun: session !== null,
     runDisabledReason: session === null ? "Sign in to run cloud columns" : undefined,
     canAddRow: true,
+    toolbarLeftExtras: (
+      <button
+        className="autorun-toggle"
+        onClick={() => setDedupeOpen(true)}
+        title="Deduplicate rows on a column"
+      >
+        <span className="autorun-label">Dedupe</span>
+        {table.dedupe && <span className="dedupe-on-dot" title="Auto-dedupe is on" />}
+      </button>
+    ),
     toolbarExtras: (
       <>
         <span className="free-badge" title="Live multiplayer">LIVE</span>
@@ -285,6 +500,30 @@ export function CloudGrid({
     openAddColumn: (anchor) => { setAddColAnchor(anchor); setShowAddCol(true); },
     // Cloud columns are a fixed width (no resize) — omit `resizeColumn`.
     onScrollNearBottom: hasMore && !isLoadingMore ? loadMore : undefined,
+    // Inspect a cell's full response (status-code/JSON) like the local grid;
+    // the drawer supports promote-to-column (Clay-style field mapping).
+    openCellDetails: (col, cell) =>
+      setDetail({
+        columnName: col.name,
+        value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
+      }),
+    expandCell: (a) => setCellExpand(a),
+    // ── Multiplayer presence ──
+    presence: presenceView,
+    onActiveCellChange: (cell) =>
+      gridPresenceStore.updateLocal({
+        cursor: cell ? { rowId: cell.rowId, columnId: cell.colId } : null,
+        editing: null,
+      }),
+    onEditingCellChange: (cell) =>
+      gridPresenceStore.updateLocal(
+        cell
+          ? {
+              editing: { rowId: cell.rowId, columnId: cell.colId },
+              cursor: { rowId: cell.rowId, columnId: cell.colId },
+            }
+          : { editing: null }, // stopped editing — keep the selection cursor
+      ),
   };
 
   return (
@@ -294,7 +533,50 @@ export function CloudGrid({
           {actionError}
         </div>
       )}
+      <SignalStatusStrip tableId={String(table.id)} />
       <DataGrid controller={controller} />
+
+      {detail && (
+        <CellDetails
+          source={detail}
+          columns={table.columns.map((c) => ({ id: c.id, name: c.name }))}
+          onClose={() => setDetail(null)}
+          onCreate={(path, label) => guard(() => promoteCreate(path, label), "add column")}
+          onMapTo={(path, targetId) => guard(() => promoteMap(path, targetId), "map column")}
+        />
+      )}
+
+      {cellExpand && (
+        <ExpandedEditor
+          columnName={cellExpand.columnName}
+          value={cellExpand.value}
+          editable={cellExpand.editable}
+          anchor={cellExpand.anchor}
+          onSave={(v) =>
+            void guard(
+              () =>
+                setCell(
+                  cellExpand.rowId as Id<"rows">,
+                  cellExpand.colId as Id<"columns">,
+                  v,
+                ),
+              "set cell",
+            )
+          }
+          onClose={() => setCellExpand(null)}
+        />
+      )}
+
+      {dedupeOpen && (
+        <DedupePopover
+          columns={table.columns.map((c) => ({ id: c.id, name: c.name }))}
+          current={table.dedupe ?? null}
+          setDedupe={(body) => setDedupe(table.id as Id<"tables">, body)}
+          dedupeTable={() => dedupeTable(table.id as Id<"tables">)}
+          onClose={() => setDedupeOpen(false)}
+          onChanged={() => setDedupeOpen(false)}
+        />
+      )}
 
       {showAddCol && (
         <AddColumnPopover

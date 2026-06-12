@@ -230,7 +230,14 @@ export function makeTrpcPushTransport(
         tableId: cloudTableId,
         name: col.name,
         type: col.type,
-        kind: "manual",
+        // Forward the full function config (not a hardcoded "manual") so a pushed
+        // function/formula/code column keeps its run capability in the cloud.
+        kind: col.kind,
+        provider: col.provider,
+        method: col.method,
+        code: col.code,
+        params: col.params,
+        condition: col.condition,
       }).pipe(Effect.flatMap((data) => expectId("grid.addColumn", data))),
 
     addRowsWithCells: (cloudTableId, rows) =>

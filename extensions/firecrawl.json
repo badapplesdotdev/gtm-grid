@@ -226,6 +226,40 @@
     },
 
     {
+      "id": "extract",
+      "label": "Extract (LLM, waits for completion)",
+      "description": "Run an LLM structured-extraction across one or more URLs and BLOCK until it finishes, returning the structured data (the object/array matching your schema). Same inputs as startExtract — but no polling needed: this starts the job and waits server-side, throwing on failure or timeout. Prefer this over startExtract+getExtractStatus when you just want the result in one call (e.g. from a column). 1 credit.",
+      "verb": "POST",
+      "path": "/v2/extract",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": ["urls"],
+        "properties": {
+          "urls": { "type": "array", "items": { "type": "string" }, "description": "URLs to extract from; glob patterns allowed, e.g. 'https://site.com/*'" },
+          "prompt": { "type": "string", "description": "Guidance for what to extract" },
+          "schema": { "type": "object", "description": "JSON Schema defining the structure of the extracted data" },
+          "enableWebSearch": { "type": "boolean", "description": "Allow web search for supporting data (default false)" },
+          "includeSubdomains": { "type": "boolean", "description": "Include subdomains when expanding URLs (default true)" },
+          "showSources": { "type": "boolean", "description": "Return the source URLs for each field (default false)" },
+          "scrapeOptions": { "type": "object", "description": "Scrape config applied to source pages" },
+          "ignoreInvalidURLs": { "type": "boolean", "description": "Skip invalid URLs instead of failing (default true)" }
+        }
+      },
+      "poll": {
+        "statusMethod": "getExtractStatus",
+        "idFrom": "id",
+        "idParam": "id",
+        "statusFrom": "status",
+        "doneWhen": "completed",
+        "failWhen": ["failed", "cancelled"],
+        "dataFrom": "data",
+        "intervalMs": 3000,
+        "timeoutMs": 300000
+      }
+    },
+
+    {
       "id": "startBatchScrape",
       "label": "Start Batch Scrape (Async Job)",
       "description": "Scrape many known URLs in one job (same scrape options applied to all). Body: { urls[] (required), formats[], onlyMainContent (default true), maxConcurrency, ignoreInvalidURLs (default true), zeroDataRetention, scrapeOptions{ headers, waitFor, timeout, actions, location, ... }, webhook }. ASYNC — returns { success, id, invalidURLs[] }; poll getBatchScrapeStatus. 1 credit (the job burns 1 credit per URL scraped).",

@@ -136,9 +136,15 @@ export const gridRouter = router({
       ),
     ),
 
-  /** Create a table in a project. Members-only. Metered. */
+  /** Create a table in a project (optionally inside a folder). Members-only. Metered. */
   createTable: protectedProcedure
-    .input(z.object({ projectId: z.string().min(1), name: z.string() }))
+    .input(
+      z.object({
+        projectId: z.string().min(1),
+        name: z.string(),
+        folderId: z.string().min(1).nullish(),
+      }),
+    )
     .mutation(({ ctx, input }) =>
       runEffect(
         ctx.runtime,
@@ -147,7 +153,97 @@ export const gridRouter = router({
           return yield* svc.createTable({
             projectId: input.projectId,
             name: input.name,
+            folderId: input.folderId ?? null,
           });
+        }),
+      ),
+    ),
+
+  // ── folders (sidebar table groups) ────────────────────────────────────────
+
+  /** A project's sidebar folders (position order). Members-only. */
+  listFolders: protectedProcedure
+    .input(z.object({ projectId: z.string().min(1) }))
+    .query(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* GridService;
+          return yield* svc.listFolders(input.projectId);
+        }),
+      ),
+    ),
+
+  /** Create a sidebar folder in a project. Members-only. Not metered. */
+  createFolder: protectedProcedure
+    .input(z.object({ projectId: z.string().min(1), name: z.string() }))
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* GridService;
+          return yield* svc.createFolder({
+            projectId: input.projectId,
+            name: input.name,
+          });
+        }),
+      ),
+    ),
+
+  /** Rename a sidebar folder. Members-only. Not metered. */
+  renameFolder: protectedProcedure
+    .input(z.object({ folderId: z.string().min(1), name: z.string().min(1) }))
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* GridService;
+          yield* svc.renameFolder({
+            folderId: input.folderId,
+            name: input.name,
+          });
+          return { ok: true as const };
+        }),
+      ),
+    ),
+
+  /** Delete a sidebar folder (its tables unfile to the root). Members-only. */
+  deleteFolder: protectedProcedure
+    .input(z.object({ folderId: z.string().min(1) }))
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* GridService;
+          yield* svc.deleteFolder(input.folderId);
+          return { ok: true as const };
+        }),
+      ),
+    ),
+
+  /**
+   * Move a table into a folder (`folderId: null` → root), optionally with a new
+   * fractional sort position (drag-reorder). Members-only. Not metered.
+   */
+  moveTable: protectedProcedure
+    .input(
+      z.object({
+        tableId: z.string().min(1),
+        folderId: z.string().min(1).nullable(),
+        position: z.number().finite().optional(),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* GridService;
+          yield* svc.moveTable({
+            tableId: input.tableId,
+            folderId: input.folderId,
+            ...(input.position !== undefined ? { position: input.position } : {}),
+          });
+          return { ok: true as const };
         }),
       ),
     ),
@@ -164,6 +260,9 @@ export const gridRouter = router({
         method: z.string().nullish(),
         code: z.string().nullish(),
         params: z.unknown().optional(),
+        // The "only run if" rule — carried so a local→cloud push preserves a
+        // function column's run condition (GridService/repo already persist it).
+        condition: z.string().nullish(),
       }),
     )
     .mutation(({ ctx, input }) =>
@@ -180,6 +279,7 @@ export const gridRouter = router({
             method: input.method ?? null,
             code: input.code ?? null,
             params: input.params,
+            condition: input.condition ?? null,
           });
         }),
       ),
@@ -291,6 +391,45 @@ export const gridRouter = router({
           const svc = yield* GridService;
           yield* svc.deleteRow(input.rowId);
           return { ok: true as const };
+        }),
+      ),
+    ),
+
+  /**
+   * Set (or clear) a table's row-dedup config and sweep duplicates immediately.
+   * `column: null` disables dedupe. Members-only; the sweep is metered + live.
+   */
+  setDedupe: protectedProcedure
+    .input(
+      z.object({
+        tableId: z.string().min(1),
+        column: z.string().min(1).nullable(),
+        keep: z.enum(["oldest", "newest"]).optional(),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* GridService;
+          return yield* svc.setDedupe({
+            tableId: input.tableId,
+            column: input.column,
+            keep: input.keep ?? "oldest",
+          });
+        }),
+      ),
+    ),
+
+  /** Run a one-shot dedup sweep using the table's saved config. Members-only. */
+  dedupe: protectedProcedure
+    .input(z.object({ tableId: z.string().min(1) }))
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* GridService;
+          return yield* svc.dedupeTable(input.tableId);
         }),
       ),
     ),

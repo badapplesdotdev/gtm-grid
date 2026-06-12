@@ -1,5 +1,160 @@
 # @gtmgrid/auth
 
+## 0.9.13
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.13
+- @gtmgrid/email@0.9.13
+
+## 0.9.12
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.12
+- @gtmgrid/email@0.9.12
+
+## 0.9.11
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.11
+- @gtmgrid/email@0.9.11
+
+## 0.9.10
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.10
+- @gtmgrid/email@0.9.10
+
+## 0.9.9
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.9
+- @gtmgrid/email@0.9.9
+
+## 0.9.8
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.8
+- @gtmgrid/email@0.9.8
+
+## 0.9.7
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.7
+- @gtmgrid/email@0.9.7
+
+## 0.9.6
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.6
+- @gtmgrid/email@0.9.6
+
+## 0.9.5
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.5
+- @gtmgrid/email@0.9.5
+
+## 0.9.4
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.4
+- @gtmgrid/email@0.9.4
+
+## 0.9.3
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.3
+- @gtmgrid/email@0.9.3
+
+## 0.9.2
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.2
+- @gtmgrid/email@0.9.2
+
+## 0.9.1
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.1
+- @gtmgrid/email@0.9.1
+
+## 0.9.0
+
+### Patch Changes
+
+- Updated dependencies [a6d488d]
+  - @gtmgrid/db@0.9.0
+  - @gtmgrid/email@0.9.0
+
+## 0.8.0
+
+### Patch Changes
+
+- @gtmgrid/db@0.8.0
+- @gtmgrid/email@0.8.0
+
+## 0.7.8
+
+### Patch Changes
+
+- @gtmgrid/db@0.7.8
+- @gtmgrid/email@0.7.8
+
+## 0.7.7
+
+### Patch Changes
+
+- @gtmgrid/db@0.7.7
+- @gtmgrid/email@0.7.7
+
+## 0.7.6
+
+### Patch Changes
+
+- @gtmgrid/db@0.7.6
+- @gtmgrid/email@0.7.6
+
+## 0.7.5
+
+### Patch Changes
+
+- @gtmgrid/db@0.7.5
+- @gtmgrid/email@0.7.5
+
+## 0.7.4
+
+### Patch Changes
+
+- @gtmgrid/db@0.7.4
+- @gtmgrid/email@0.7.4
+
+## 0.7.3
+
+### Patch Changes
+
+- @gtmgrid/db@0.7.3
+- @gtmgrid/email@0.7.3
+
+## 0.7.2
+
+### Patch Changes
+
+- @gtmgrid/db@0.7.2
+- @gtmgrid/email@0.7.2
+
 ## 0.7.1
 
 ### Patch Changes

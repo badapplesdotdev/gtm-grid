@@ -41,7 +41,12 @@ const run = <A, E>(
 
 describe("WorkspaceService.me", () => {
   const users: readonly WorkspaceUser[] = [
-    { id: "user_owner", name: "Olive Owner", email: "olive@example.com" },
+    {
+      id: "user_owner",
+      name: "Olive Owner",
+      email: "olive@example.com",
+      image: "https://avatars.example.com/olive.png",
+    },
   ];
   const workspaces: readonly Workspace[] = [
     {
@@ -81,7 +86,12 @@ describe("WorkspaceService.me", () => {
     expect(Exit.isSuccess(exit)).toBe(true);
     if (!Exit.isSuccess(exit)) return;
     expect(exit.value).toEqual({
-      user: { _id: "user_owner", name: "Olive Owner", email: "olive@example.com" },
+      user: {
+        _id: "user_owner",
+        name: "Olive Owner",
+        email: "olive@example.com",
+        image: "https://avatars.example.com/olive.png",
+      },
       workspaces: [
         {
           _id: WS_ID,
@@ -167,6 +177,7 @@ describe("WorkspaceService.listMembers", () => {
       createdAt: 100,
       name: "Olive",
       email: "olive@example.com",
+      image: null,
     },
     {
       id: "m_member",
@@ -176,6 +187,7 @@ describe("WorkspaceService.listMembers", () => {
       createdAt: 50,
       name: "Mira",
       email: "mira@example.com",
+      image: "https://avatars.example.com/mira.png",
     },
   ];
 
@@ -194,6 +206,7 @@ describe("WorkspaceService.listMembers", () => {
       createdAt: 50,
       name: "Mira",
       email: "mira@example.com",
+      image: "https://avatars.example.com/mira.png",
     });
     expect(exit.value.seatUsage).toEqual({ used: 2, limit: null });
   });

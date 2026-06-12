@@ -21,9 +21,14 @@ import {
   useQuery as useRqQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { applyGridEvent, subscribeToGrid } from "@gtmgrid/services/realtime";
+import {
+  applyGridEvent,
+  subscribeToGrid,
+  WORKSPACE_ROOM_TABLE_ID,
+} from "@gtmgrid/services/realtime";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { Id } from "./ids";
+import { gridPresenceStore } from "./presenceStore";
 import type { Cell, CellStatus, Column, FullTable } from "../api";
 import { apiClient, queryClient } from "./client";
 import type { CloudSession } from "./cloud-run";
@@ -36,7 +41,7 @@ import { useApiAuthToken } from "./useApiAuth";
  * token (`realtime.token`) that the party validates against the room — all
  * reads/writes still go through tRPC.
  */
-const PARTY_URL: string | undefined =
+export const PARTY_URL: string | undefined =
   (import.meta.env.VITE_PARTY_URL as string | undefined) || undefined;
 
 /**
@@ -79,6 +84,17 @@ export interface CloudTableSummary {
   readonly name: string;
   readonly position: number;
   readonly createdAt: number;
+  /** Sidebar folder this table is filed under (null = root). */
+  readonly folderId: string | null;
+}
+
+/** A cloud sidebar folder (the `listFolders` query shape). */
+export interface CloudFolderSummary {
+  readonly _id: string;
+  readonly projectId: Id<"projects">;
+  readonly name: string;
+  readonly position: number;
+  readonly createdAt: number;
 }
 
 // ───────────────────────────── react-query keys ─────────────────────────────
@@ -91,6 +107,7 @@ export interface CloudTableSummary {
 export const gridQueryKeys = {
   projects: (workspaceId: string) => ["grid", "projects", workspaceId] as const,
   tables: (projectId: string) => ["grid", "tables", projectId] as const,
+  folders: (projectId: string) => ["grid", "folders", projectId] as const,
   table: (tableId: string) => ["grid", "table", tableId] as const,
   /** The keyset-paginated grid (an infinite query of {@link gridRouter.getTablePage}). */
   tablePaged: (tableId: string) => ["grid", "tablePaged", tableId] as const,
@@ -124,9 +141,10 @@ type GridPageCursor = GridPage["nextCursor"];
 /**
  * Mint the Supabase realtime JWT via the tRPC `realtime.token` MUTATION. Thrown
  * if the cloud layer is disabled (callers guard on `apiClient` first). Extracted
- * so the realtime-token plumbing is a single named seam.
+ * so the realtime-token plumbing is a single named seam. Exported for the agent
+ * presence controller (agentPresence.ts), which opens its OWN party connection.
  */
-async function mintRealtimeToken(workspaceId: string): Promise<string> {
+export async function mintRealtimeToken(workspaceId: string): Promise<string> {
   if (apiClient === null) throw new Error("API client unavailable");
   const { token } = await apiClient.realtime.token.mutate({ workspaceId });
   return token;
@@ -193,6 +211,32 @@ export function useCloudTables(
         name: t.name,
         position: t.position,
         createdAt: t.createdAt,
+        folderId: t.folderId ?? null,
+      })),
+    [q.data],
+  );
+}
+
+/**
+ * Reactive list of a cloud project's sidebar folders. `undefined` while
+ * loading; issues zero calls when cloud is off or no cloud project is active.
+ */
+export function useCloudFolders(
+  projectId: Id<"projects"> | null,
+): CloudFolderSummary[] | undefined {
+  const q = useRqQuery({
+    queryKey: gridQueryKeys.folders(projectId ?? ""),
+    enabled: apiClient !== null && projectId !== null,
+    queryFn: () => apiClient!.grid.listFolders.query({ projectId: projectId! }),
+  });
+  return useMemo<CloudFolderSummary[] | undefined>(
+    () =>
+      q.data?.map((f) => ({
+        _id: f.id,
+        projectId: f.projectId as Id<"projects">,
+        name: f.name,
+        position: f.position,
+        createdAt: f.createdAt,
       })),
     [q.data],
   );
@@ -227,10 +271,12 @@ export function useCloudProjectMutations() {
     async (
       projectId: Id<"projects">,
       name: string,
+      folderId?: string | null,
     ): Promise<Id<"tables">> => {
       const id = await apiClient!.grid.createTable.mutate({
         projectId,
         name,
+        folderId: folderId ?? null,
       });
       await qc.invalidateQueries({
         queryKey: gridQueryKeys.tables(projectId),
@@ -253,7 +299,60 @@ export function useCloudProjectMutations() {
     },
     [qc],
   );
-  return { createProject, createTable, deleteTable };
+  // ── Sidebar folders ───────────────────────────────────────────────────────
+  // Folder CRUD + table moves refresh BOTH the folders and tables lists for the
+  // project (a move changes a table's folderId; a folder delete unfiles tables).
+  const invalidateFolderLists = useCallback(
+    (projectId: Id<"projects">) =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: gridQueryKeys.folders(projectId) }),
+        qc.invalidateQueries({ queryKey: gridQueryKeys.tables(projectId) }),
+      ]),
+    [qc],
+  );
+  const createFolder = useCallback(
+    async (projectId: Id<"projects">, name: string): Promise<string> => {
+      const id = await apiClient!.grid.createFolder.mutate({ projectId, name });
+      await invalidateFolderLists(projectId);
+      return id as string;
+    },
+    [invalidateFolderLists],
+  );
+  const renameFolder = useCallback(
+    async (projectId: Id<"projects">, folderId: string, name: string) => {
+      await apiClient!.grid.renameFolder.mutate({ folderId, name });
+      await invalidateFolderLists(projectId);
+    },
+    [invalidateFolderLists],
+  );
+  const deleteFolder = useCallback(
+    async (projectId: Id<"projects">, folderId: string) => {
+      await apiClient!.grid.deleteFolder.mutate({ folderId });
+      await invalidateFolderLists(projectId);
+    },
+    [invalidateFolderLists],
+  );
+  const moveTable = useCallback(
+    async (
+      projectId: Id<"projects">,
+      tableId: Id<"tables">,
+      folderId: string | null,
+      position?: number,
+    ) => {
+      await apiClient!.grid.moveTable.mutate({ tableId, folderId, position });
+      await invalidateFolderLists(projectId);
+    },
+    [invalidateFolderLists],
+  );
+  return {
+    createProject,
+    createTable,
+    deleteTable,
+    createFolder,
+    renameFolder,
+    deleteFolder,
+    moveTable,
+  };
 }
 
 /**
@@ -344,7 +443,11 @@ function toCell(c: {
 
 /** The `getTable`-shaped snapshot {@link createIncrementalTableView} projects. */
 type GetTableData = {
-  table: { _id: string; name: string };
+  table: {
+    _id: string;
+    name: string;
+    dedupe?: { column: string; keep: "oldest" | "newest" } | null;
+  };
   columns: readonly {
     _id: string;
     name: string;
@@ -457,7 +560,13 @@ export function createIncrementalTableView(): {
     });
 
     prevByRow = nextByRow;
-    return { id: data.table._id, name: data.table.name, columns, rows };
+    return {
+      id: data.table._id,
+      name: data.table.name,
+      dedupe: data.table.dedupe ?? null,
+      columns,
+      rows,
+    };
   };
 
   return { derive };
@@ -663,14 +772,24 @@ function useGridRealtime(
           buffer.push(event);
           flush.schedule();
         },
+        onPresence: (states) => gridPresenceStore.setRoster(states),
       });
+      // Publish this client's cursor/identity through the SAME socket (no second
+      // connection); CloudGrid feeds local cursor moves into the store.
+      gridPresenceStore.setPublisher((state) => void sub.updatePresence(state));
       teardown = sub.unsubscribe;
-      if (disposed) void sub.unsubscribe();
+      if (disposed) {
+        gridPresenceStore.setPublisher(null);
+        gridPresenceStore.clear();
+        void sub.unsubscribe();
+      }
     })();
 
     return () => {
       disposed = true;
       flush.cancel();
+      gridPresenceStore.setPublisher(null);
+      gridPresenceStore.clear();
       if (teardown) void teardown();
     };
   }, [tableId, workspaceId]);
@@ -731,6 +850,70 @@ function usePagedGridRealtime(
           buffer.push(event);
           flush.schedule();
         },
+        onPresence: (states) => gridPresenceStore.setRoster(states),
+      });
+      // Publish this client's cursor/identity through the SAME socket (no second
+      // connection); CloudGrid feeds local cursor moves into the store.
+      gridPresenceStore.setPublisher((state) => void sub.updatePresence(state));
+      teardown = sub.unsubscribe;
+      if (disposed) {
+        gridPresenceStore.setPublisher(null);
+        gridPresenceStore.clear();
+        void sub.unsubscribe();
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      flush.cancel();
+      gridPresenceStore.setPublisher(null);
+      gridPresenceStore.clear();
+      if (teardown) void teardown();
+    };
+  }, [tableId, workspaceId]);
+}
+
+/**
+ * Subscribe to the WORKSPACE realtime room (`${workspaceId}:_workspace`) and
+ * refresh the sidebar's cloud table + project lists when ANY member creates,
+ * syncs, or deletes a table — so a teammate's change shows up live without an
+ * app restart. We don't patch the list in place (table create/delete is rare and
+ * the events don't carry the list's count metadata); we invalidate the
+ * `grid/tables` + `grid/projects` queries and let them refetch. Opens its own
+ * socket (separate from any open table's grid socket). No-op when realtime is
+ * unconfigured or no workspace is active.
+ */
+export function useWorkspaceRealtime(
+  workspaceId: Id<"workspaces"> | null,
+): void {
+  const qc = useQueryClient();
+  const qcRef = useRef(qc);
+  qcRef.current = qc;
+
+  useEffect(() => {
+    if (!realtimeConfigured || workspaceId === null || PARTY_URL === undefined) {
+      return;
+    }
+    let disposed = false;
+    let teardown: (() => Promise<void>) | null = null;
+
+    void (async () => {
+      const token = await mintRealtimeToken(workspaceId).catch(() => null);
+      if (token === null || disposed) return;
+      const sub = subscribeToGrid({
+        url: PARTY_URL,
+        token,
+        workspaceId,
+        tableId: WORKSPACE_ROOM_TABLE_ID,
+        onEvent: () => {
+          qcRef.current.invalidateQueries({
+            predicate: (query) =>
+              query.queryKey[0] === "grid" &&
+              (query.queryKey[1] === "tables" ||
+                query.queryKey[1] === "folders" ||
+                query.queryKey[1] === "projects"),
+          });
+        },
       });
       teardown = sub.unsubscribe;
       if (disposed) void sub.unsubscribe();
@@ -738,10 +921,9 @@ function usePagedGridRealtime(
 
     return () => {
       disposed = true;
-      flush.cancel();
       if (teardown) void teardown();
     };
-  }, [tableId, workspaceId]);
+  }, [workspaceId]);
 }
 
 /**
@@ -1110,7 +1292,47 @@ export function useCloudGridMutations() {
     [refresh],
   );
 
-  return { setCell, addRow, addRowsWithCells, addColumn, updateColumn, deleteRow, deleteColumn };
+  /** Set (or clear) the table's dedupe config; the server sweeps immediately. */
+  const setDedupe = useCallback(
+    async (
+      tableId: Id<"tables">,
+      body: { column: string | null; keep?: "oldest" | "newest" },
+    ) => {
+      try {
+        return await apiClient!.grid.setDedupe.mutate({
+          tableId,
+          column: body.column,
+          ...(body.keep ? { keep: body.keep } : {}),
+        });
+      } finally {
+        await refresh(tableId);
+      }
+    },
+    [refresh],
+  );
+  /** Run a one-shot dedup sweep using the table's saved config. */
+  const dedupeTable = useCallback(
+    async (tableId: Id<"tables">) => {
+      try {
+        return await apiClient!.grid.dedupe.mutate({ tableId });
+      } finally {
+        await refresh(tableId);
+      }
+    },
+    [refresh],
+  );
+
+  return {
+    setCell,
+    addRow,
+    addRowsWithCells,
+    addColumn,
+    updateColumn,
+    deleteRow,
+    deleteColumn,
+    setDedupe,
+    dedupeTable,
+  };
 }
 
 /**
@@ -1391,6 +1613,17 @@ export function useWebhookMutations() {
     },
     [refresh],
   );
+  const setAuth = useCallback(
+    async (webhookId: Id<"webhooks">, enabled: boolean) => {
+      const res = await apiClient!.webhooks.setAuth.mutate({
+        webhookId,
+        enabled,
+      });
+      await refresh();
+      return res;
+    },
+    [refresh],
+  );
   const deleteWebhook = useCallback(
     async (webhookId: Id<"webhooks">) => {
       const res = await apiClient!.webhooks.deleteWebhook.mutate({
@@ -1408,6 +1641,7 @@ export function useWebhookMutations() {
     updateConfig,
     toggleEnabled,
     rotateSecret,
+    setAuth,
     deleteWebhook,
   };
 }

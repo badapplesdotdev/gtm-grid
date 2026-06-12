@@ -24,6 +24,7 @@ import {
 } from "@gtmgrid/engine";
 import type { CellProgress } from "@gtmgrid/engine";
 import { detectAgents, streamClaude, streamCodex, streamHermes, setAgentPath, rescanAgents, generateWithAgent, parseAgentCloud, type AgentKind } from "./agent.js";
+import { localProviderEnv, resolveCloudProviderEnv } from "./provider-env.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
 import { runCloudPush, defaultCloudPushDeps } from "./cloud-push.js";
@@ -212,12 +213,14 @@ function normScope(s: unknown): "personal" | "team" | "local" {
   return s === "team" || s === "local" || s === "personal" ? s : "personal";
 }
 
-const tableSummary = (t: { id: string; name: string }) => ({
+const tableSummary = (t: { id: string; name: string; position?: number; folder_id?: string | null }) => ({
   id: t.id,
   name: t.name,
   columns: current.projectDb.listColumns(t.id).length,
   rows: current.projectDb.listRows(t.id).length,
   favorite: current.projectDb.isFavorite(t.id),
+  position: t.position ?? 0,
+  folderId: t.folder_id ?? null,
 });
 
 function fullTable(tableId: string) {
@@ -792,6 +795,47 @@ route("POST", "/api/ai-providers/:id/connect", (p, body) => {
   return { ok: true };
 });
 
+// Copy a LOCAL connector/AI key up to the shared CLOUD (workspace) key — the
+// desktop "Use my local key" action. SECURITY: the plaintext is revealed ONLY
+// inside this sidecar process (the user's own machine) and forwarded to the cloud
+// over TLS; it is never returned to the caller (the renderer), never logged, and
+// stored only as ciphertext server-side. The cloud save is member-authenticated
+// (the forwarded Better Auth bearer in `X-Gtmgrid-Member`), so a non-member is
+// rejected server-side. This route inherits the loopback-`Host` / allowed-`Origin`
+// gate every route is wrapped in, so it is not LAN-reachable.
+route("POST", "/api/credentials/copy-to-cloud", async (_p, body) => {
+  const credId = String(body?.credId ?? "").trim();
+  const extensionId = String(body?.extensionId ?? credId).trim() || credId;
+  const apiUrl = String(body?.apiUrl ?? "").trim();
+  const token = String(body?.token ?? "").trim();
+  const workspaceId = String(body?.workspaceId ?? "").trim();
+  const name = String(body?.name ?? extensionId).trim() || extensionId;
+  if (!credId || !apiUrl || !token || !workspaceId)
+    return { error: "credId, apiUrl, token and workspaceId are required" };
+
+  // Reveal the LOCAL plaintext — only ever in this process; never returned/logged.
+  const secrets = globalDb.getCredential(credId)?.secrets ?? null;
+  if (!secrets || Object.keys(secrets).length === 0)
+    return { error: "No local key found to copy to the cloud." };
+
+  // Server-to-server save over TLS, authenticated as the signed-in member. The
+  // cloud worker route encrypts the map at rest (CredentialService.saveCredential).
+  const base = apiUrl.replace(/\/+$/, "");
+  const res = await fetch(`${base}/api/worker/saveCredential`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Gtmgrid-Member": token },
+    body: JSON.stringify({ workspaceId, extensionId, name, secrets }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    return {
+      error:
+        `Cloud save failed (${res.status} ${res.statusText}). ${text}`.trim(),
+    };
+  }
+  return { ok: true };
+});
+
 // Persisted local↔cloud sync links for the CURRENT project (TRI-3311). Returns
 // `{ [localTableId]: cloudTableId }` straight from the project's SQLite meta
 // (the authoritative store `setCloudTableLink` writes on push), so the desktop
@@ -802,8 +846,40 @@ route("POST", "/api/ai-providers/:id/connect", (p, body) => {
 route("GET", "/api/cloud/tables/links", () => current.projectDb.listCloudTableLinks());
 
 route("GET", "/api/tables", () => current.projectDb.listTables().map(tableSummary));
-route("POST", "/api/tables", (_p, body) => tableSummary(current.projectDb.createTable(body?.name ?? "Untitled")));
+route("POST", "/api/tables", (_p, body) =>
+  tableSummary(
+    current.projectDb.createTable(
+      body?.name ?? "Untitled",
+      typeof body?.folderId === "string" && body.folderId ? body.folderId : null,
+    ),
+  ));
 route("GET", "/api/tables/:id", (p) => fullTable(p.id) ?? { error: "not found" });
+
+// Move a table into a folder (folderId: null → root), optionally with a new
+// fractional sort position (drag-reorder midpoints).
+route("POST", "/api/tables/:id/move", (p, body) => {
+  const folderId = typeof body?.folderId === "string" && body.folderId ? body.folderId : null;
+  const position = typeof body?.position === "number" && Number.isFinite(body.position) ? body.position : undefined;
+  current.projectDb.moveTable(p.id, folderId, position);
+  return { ok: true };
+});
+
+// ── Sidebar folders (organize tables; deleting a folder unfiles its tables) ──
+route("GET", "/api/folders", () => current.projectDb.listFolders());
+route("POST", "/api/folders", (_p, body) => {
+  const name = typeof body?.name === "string" && body.name.trim() ? body.name.trim() : "New folder";
+  return current.projectDb.createFolder(name);
+});
+route("POST", "/api/folders/:id/update", (p, body) => {
+  const name = typeof body?.name === "string" ? body.name.trim() : "";
+  if (!name) return { error: "name required" };
+  current.projectDb.renameFolder(p.id, name);
+  return { ok: true };
+});
+route("POST", "/api/folders/:id/delete", (p) => {
+  current.projectDb.deleteFolder(p.id);
+  return { ok: true };
+});
 
 route("POST", "/api/tables/:id/update", (p, body) => {
   const name = typeof body?.name === "string" ? body.name.trim() : "";
@@ -897,8 +973,13 @@ route("POST", "/api/columns/:id/run", async (p, body) => {
 // the work outlives the 5-min agent turn (a synchronous MCP run would time out and
 // be killed). The caller polls cell counts (get_column / get_table) for progress.
 route("POST", "/api/columns/:id/run/async", (p, body) => {
+  // Optional explicit row scope (the MCP's limit/offset-scoped large runs) —
+  // forwarded so a "run the next 500" background run doesn't balloon to ALL rows.
+  const rowIds: string[] | undefined = Array.isArray(body?.rowIds)
+    ? body.rowIds.filter((r: unknown): r is string => typeof r === "string")
+    : undefined;
   void runLimiter
-    .run(() => current.engine.runColumn(p.id, { force: !!body?.force, concurrency: body?.concurrency ?? 5 }))
+    .run(() => current.engine.runColumn(p.id, { force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds }))
     .catch((e) => console.error(`async run of column ${p.id} failed:`, e instanceof Error ? e.message : e));
   return { started: true, columnId: p.id };
 });
@@ -1106,12 +1187,23 @@ const server = createServer(async (req, res) => {
       // and the MCP opens the local SQLite project exactly as before. The token
       // rides the MCP child env (set by agent.ts), never a log line here.
       const cloud = parseAgentCloud(body?.cloud);
+      // Saved provider keys → conventional env vars (TRIGIFY_API_KEY etc.) so
+      // the CLIs/skills the agent shells out to authenticate with the user's
+      // stored credential. CLOUD: the workspace credential store via the
+      // member's bearer; LOCAL: the local encrypted credential Db. Fail-open —
+      // a resolution error spawns the agent without injected keys.
+      const providerEnv = cloud
+        ? await resolveCloudProviderEnv(cloud)
+        : localProviderEnv(
+            current.engine.registry.list().map((c) => c.id),
+            (id) => globalDb.getCredential(id)?.secrets ?? null,
+          );
       // Hermes is LOCAL-only by design — it drives the local SQLite project via
       // ACP and is never threaded the cloud context.
       const newChat = body?.newChat === true;
       if (agent === "hermes") streamHermes(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model });
-      else if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, newChat, context, origin, model, cloud });
-      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, newChat, context, origin, model, cloud });
+      else if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, newChat, context, origin, model, cloud, providerEnv });
+      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, newChat, context, origin, model, cloud, providerEnv });
     } catch (e) {
       send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
     }

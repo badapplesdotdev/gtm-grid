@@ -193,9 +193,11 @@ export async function syncWorkspacePlan(workspaceId: string): Promise<void> {
 }
 
 /**
- * Build the react-query `QueryClient`. Defaults mirror a desktop app: no
- * window-focus refetch (the Tauri webview's focus events are noisy) and a short
- * stale time so cloud reads stay fresh without thrashing. A factory (not a
+ * Build the react-query `QueryClient`. Defaults mirror a desktop app: refetch on
+ * window focus so cloud changes made elsewhere (a teammate creating a table,
+ * adding an integration key, etc.) show up when you return to the app — gated by
+ * a 30s `staleTime` so the Tauri webview's noisy focus events don't thrash the
+ * network (a query refetches on focus only once it's stale). A factory (not a
  * module singleton) so each provider mount — and each test — gets an isolated
  * cache.
  */
@@ -203,7 +205,7 @@ export function makeQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
       queries: {
-        refetchOnWindowFocus: false,
+        refetchOnWindowFocus: true,
         staleTime: 30_000,
       },
     },

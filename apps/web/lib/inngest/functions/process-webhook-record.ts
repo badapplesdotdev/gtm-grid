@@ -304,8 +304,11 @@ export const processWebhookRecord = inngest.createFunction(
     // unbounded as the number of workspaces grows), while the per-workspace key
     // still prevents one busy workspace from starving others. Retries cover
     // transient worker/engine failures (step memoization makes them safe).
+    // Account-scoped limits REQUIRE a key (Inngest rejects the whole app sync
+    // without one, leaving prod functions unregistered); a constant key makes
+    // one shared account-wide pool for this function's runs.
     concurrency: [
-      { scope: "account", limit: 50 },
+      { scope: "account", key: '"webhook-enrich"', limit: 50 },
       { key: "event.data.workspaceId", limit: 5 },
     ],
     retries: 3,

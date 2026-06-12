@@ -4,6 +4,7 @@ import { processWebhookRecord } from "../../../lib/inngest/functions/process-web
 import {
   pollTrigifySignals,
   processSignalBinding,
+  warmUpSignalBinding,
 } from "../../../lib/inngest/functions/poll-trigify-signals";
 import { sendTrialReminders } from "../../../lib/inngest/functions/send-trial-reminders";
 
@@ -22,5 +23,6 @@ export const { GET, POST, PUT } = serve({
     sendTrialReminders,
     pollTrigifySignals,
     processSignalBinding,
+    warmUpSignalBinding,
   ],
 });

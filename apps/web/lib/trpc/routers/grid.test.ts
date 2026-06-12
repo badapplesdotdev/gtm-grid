@@ -50,7 +50,8 @@ const callerFor = (fixtures: TestLayerFixtures) =>
   );
 
 const table = (over: Partial<StoreTable> = {}): StoreTable => ({
-  id: "t1", workspaceId: WS, projectId: "p1", name: "T1", position: 0, createdAt: 1, ...over,
+  id: "t1", workspaceId: WS, projectId: "p1", name: "T1", position: 0, createdAt: 1,
+  dedupeColumn: null, dedupeKeep: null, folderId: null, ...over,
 });
 const column = (over: Partial<StoreColumn> = {}): StoreColumn => ({
   id: "c1", workspaceId: WS, tableId: "t1", name: "A", type: "text",
@@ -95,7 +96,7 @@ describe("grid.getTable", () => {
       gridTables: [table()], gridColumns: [column()], gridRows: [row()], gridCells: [cell()],
     });
     const grid = await caller.grid.getTable({ tableId: "t1" });
-    expect(grid.table).toEqual({ _id: "t1", name: "T1" });
+    expect(grid.table).toEqual({ _id: "t1", name: "T1", dedupe: null });
     expect(grid.columns[0]).toMatchObject({ _id: "c1", name: "A", type: "text", kind: "manual" });
     expect(grid.rows).toEqual([{ _id: "r1" }]);
     expect(grid.cells[0]).toEqual({ rowId: "r1", columnId: "c1", value: "x", status: "done", error: null });

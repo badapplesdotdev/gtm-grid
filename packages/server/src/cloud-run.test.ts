@@ -449,30 +449,46 @@ describe("resolveWorkspaceId — metadata-only fast path (TRI-3273)", () => {
   });
 });
 
-describe("makeWorkerClient — transient retry + 402 fatal (TRI-3276)", () => {
-  const OLD_SECRET = process.env.WEBHOOK_WORKER_SECRET;
-
-  beforeEach(() => {
-    process.env.WEBHOOK_WORKER_SECRET = "test-secret";
-  });
+describe("makeWorkerClient — member auth + transient retry + 402 fatal (TRI-3276)", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
-    if (OLD_SECRET === undefined) delete process.env.WEBHOOK_WORKER_SECRET;
-    else process.env.WEBHOOK_WORKER_SECRET = OLD_SECRET;
   });
 
-  /** A scripted global fetch returning the given Responses in order. */
-  function scriptFetch(steps: Response[]): { calls: number } {
-    const state = { calls: 0 };
+  /**
+   * A scripted global fetch returning the given Responses in order, recording
+   * each call's request init so tests can assert the auth headers. The client
+   * authenticates as the signed-in MEMBER (`X-Gtmgrid-Member`) and presents NO
+   * shared worker secret — it never reads `WEBHOOK_WORKER_SECRET`.
+   */
+  function scriptFetch(steps: Response[]): {
+    calls: number;
+    inits: RequestInit[];
+  } {
+    const state: { calls: number; inits: RequestInit[] } = {
+      calls: 0,
+      inits: [],
+    };
     const queue = [...steps];
-    vi.stubGlobal("fetch", async () => {
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
       state.calls++;
+      state.inits.push(init);
       const next = queue.shift();
       if (next === undefined) throw new Error("fetch over-called");
       return next;
     });
     return state;
   }
+
+  it("authenticates as the member (X-Gtmgrid-Member) with NO worker-secret Authorization header", async () => {
+    const state = scriptFetch([
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    ]);
+    const client = makeWorkerClient("https://app.test", "member-jwt");
+    await client.query("/api/worker/getTableMeta", { tableId: "t1" });
+    const headers = (state.inits[0]?.headers ?? {}) as Record<string, string>;
+    expect(headers["X-Gtmgrid-Member"]).toBe("member-jwt");
+    expect(headers.Authorization).toBeUndefined();
+  });
 
   it("retries a 503 then returns the eventual success payload", async () => {
     const state = scriptFetch([

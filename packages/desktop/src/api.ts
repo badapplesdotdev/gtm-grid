@@ -155,6 +155,17 @@ export interface TableSummary {
   columns: number;
   rows: number;
   favorite: boolean;
+  /** Sort position within the sidebar list (fractional after drag-reorders). */
+  position: number;
+  /** Sidebar folder this table is filed under (null = root). */
+  folderId: string | null;
+}
+/** A sidebar folder grouping tables (local project; mirrors engine `Folder`). */
+export interface FolderSummary {
+  id: string;
+  name: string;
+  position: number;
+  created_at: number;
 }
 export interface Column {
   id: string;
@@ -324,14 +335,46 @@ export const api = {
     id: string,
     body: { apiKey?: string; baseURL?: string; scope?: CredentialScope },
   ) => http<{ ok: boolean }>(`/api/ai-providers/${id}/connect`, { method: "POST", body: JSON.stringify(body) }),
+  /**
+   * Copy a LOCAL connector/AI key up to the shared CLOUD (workspace) key. The
+   * sidecar decrypts the local key in-process and posts the plaintext to the
+   * cloud over TLS (member-authenticated) — the plaintext never reaches the
+   * renderer. Throws (so the panel can surface it) when no local key exists or
+   * the cloud save fails. `credId` is the local credential id; `extensionId` the
+   * shared cloud key id (identical in practice: `ai:<id>` for AI providers, the
+   * extension id for connectors).
+   */
+  copyLocalKeyToCloud: async (body: {
+    credId: string;
+    extensionId: string;
+    name: string;
+    apiUrl: string;
+    token: string;
+    workspaceId: string;
+  }): Promise<void> => {
+    const r = await http<{ ok?: boolean; error?: string }>(
+      "/api/credentials/copy-to-cloud",
+      { method: "POST", body: JSON.stringify(body) },
+    );
+    if (r.error || !r.ok) throw new Error(r.error ?? "Failed to copy local key");
+  },
   projects: () => http<ProjectInfo[]>("/api/projects"),
   createProject: (name: string) =>
     http<{ ok: boolean; project: string }>("/api/projects", { method: "POST", body: JSON.stringify({ name }) }),
   switchProject: (name: string) =>
     http<{ ok: boolean; project: string }>("/api/projects/switch", { method: "POST", body: JSON.stringify({ name }) }),
   tables: () => http<TableSummary[]>("/api/tables"),
-  createTable: (name: string) => http<TableSummary>("/api/tables", { method: "POST", body: JSON.stringify({ name }) }),
+  createTable: (name: string, folderId?: string | null) =>
+    http<TableSummary>("/api/tables", { method: "POST", body: JSON.stringify({ name, folderId: folderId ?? null }) }),
   table: (id: string) => http<FullTable>(`/api/tables/${id}`),
+  moveTable: (id: string, folderId: string | null, position?: number) =>
+    http<{ ok: boolean }>(`/api/tables/${id}/move`, { method: "POST", body: JSON.stringify({ folderId, position }) }),
+  folders: () => http<FolderSummary[]>("/api/folders"),
+  createFolder: (name: string) =>
+    http<FolderSummary>("/api/folders", { method: "POST", body: JSON.stringify({ name }) }),
+  renameFolder: (id: string, name: string) =>
+    http<{ ok: boolean }>(`/api/folders/${id}/update`, { method: "POST", body: JSON.stringify({ name }) }),
+  deleteFolder: (id: string) => http<{ ok: boolean }>(`/api/folders/${id}/delete`, { method: "POST" }),
   renameTable: (id: string, name: string) =>
     http<{ ok: boolean }>(`/api/tables/${id}/update`, { method: "POST", body: JSON.stringify({ name }) }),
   deleteTable: (id: string) => http<{ ok: boolean }>(`/api/tables/${id}/delete`, { method: "POST" }),
