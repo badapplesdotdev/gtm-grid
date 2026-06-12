@@ -33,6 +33,8 @@ import type {
 } from "../repositories/webhook-repo.js";
 import { webhookRepoLayer } from "../repositories/webhook-repo.js";
 import { workspaceRepoLayer } from "../repositories/workspace-repo.js";
+import { columnRepoLayer } from "../repositories/column-repo.js";
+import { makeGridStore, type StoreColumn } from "../repositories/grid-store.js";
 import { EntitlementService } from "./entitlement-service.js";
 import { WebhookService } from "./webhook-service.js";
 
@@ -88,6 +90,8 @@ function harness(opts: {
   crypto?: Layer.Layer<CredentialCryptoService>;
   /** The workspace's cached plan; `undefined` defaults to "team" (cloud on). */
   plan?: string | null;
+  /** Columns visible to ColumnRepo (MUTATED by ensureWebhookColumn). */
+  gridColumns?: StoreColumn[];
 }) {
   const webhookRepo = webhookRepoLayer({
     webhooks: opts.webhooks ?? [{ ...webhook }],
@@ -123,6 +127,9 @@ function harness(opts: {
       ]),
     ),
   );
+  // ColumnRepo backs ensureWebhookColumn (the Clay-style raw-payload column).
+  const gridColumns = opts.gridColumns ?? [];
+  const columnRepo = columnRepoLayer(makeGridStore({ columns: gridColumns }));
   const layer = WebhookService.Default.pipe(
     Layer.provide(webhookRepo),
     Layer.provide(deliveryRepo),
@@ -130,10 +137,11 @@ function harness(opts: {
     Layer.provide(CellMerge.Default),
     Layer.provide(opts.crypto ?? credentialCryptoTest()),
     Layer.provide(entitlement),
+    Layer.provide(columnRepo),
   );
   const run = <A, E>(program: Effect.Effect<A, E, WebhookService>) =>
     Effect.runPromiseExit(program.pipe(Effect.provide(layer)));
-  return { run };
+  return { run, gridColumns };
 }
 
 const svc = Effect.gen(function* () {
@@ -528,6 +536,7 @@ describe("WebhookService.upsertRow — TRI-3270 indexed point lookup", () => {
       Layer.provide(CellMerge.Default),
       Layer.provide(credentialCryptoTest()),
       Layer.provide(entitlement),
+      Layer.provide(columnRepoLayer(makeGridStore())),
     );
     const run = <A, E>(program: Effect.Effect<A, E, WebhookService>) =>
       Effect.runPromiseExit(program.pipe(Effect.provide(layer)));
@@ -849,6 +858,45 @@ describe("WebhookService config CRUD (member-gated)", () => {
     expect(webhooks[0].signingSecret).toBeNull();
   });
 
+  it("creates the Webhook raw-payload column and a leading `$` mapping entry", async () => {
+    const webhooks: Webhook[] = [];
+    const { run, gridColumns } = harness({ webhooks });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.createWebhook({
+            tableId: TABLE,
+            mapping: [{ path: "email", columnId: COL_EMAIL }],
+          }),
+        ),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    // A "Webhook" json column was created on the table…
+    const webhookCol = gridColumns.find((c) => c.name === "Webhook");
+    expect(webhookCol?.type).toBe("json");
+    expect(webhookCol?.kind).toBe("manual");
+    // …and the mapping leads with the `$` whole-payload entry targeting it.
+    expect(webhooks[0].mapping[0]).toEqual({ path: "$", columnId: webhookCol?.id });
+    expect(webhooks[0].mapping[1]).toEqual({ path: "email", columnId: COL_EMAIL });
+  });
+
+  it("reuses an existing Webhook column instead of duplicating it", async () => {
+    const webhooks: Webhook[] = [];
+    const existing: StoreColumn = {
+      id: "col-webhook", workspaceId: WS, tableId: TABLE, name: "Webhook",
+      type: "json", kind: "manual", provider: null, method: null, code: null,
+      params: {}, position: 0, createdAt: 1,
+    };
+    const { run, gridColumns } = harness({ webhooks, gridColumns: [existing] });
+    const exit = await run(
+      svc.pipe(Effect.flatMap((s) => s.createWebhook({ tableId: TABLE }))),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(gridColumns).toHaveLength(1);
+    expect(webhooks[0].mapping[0]).toEqual({ path: "$", columnId: "col-webhook" });
+  });
+
   it("creates a webhook WITH a minted secret when auth opts in", async () => {
     const webhooks: Webhook[] = [];
     const { run } = harness({ webhooks });
@@ -959,6 +1007,50 @@ describe("WebhookService config CRUD (member-gated)", () => {
       const f = Cause.failureOption(exit.cause);
       expect(f._tag === "Some" && f.value._tag).toBe("NotAMemberError");
     }
+  });
+
+  it("toggleEnabled(true) HEALS a legacy webhook without a `$` mapping entry", async () => {
+    const webhooks: Webhook[] = [{ ...webhook, enabled: false }];
+    const { run, gridColumns } = harness({ webhooks });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) => s.toggleEnabled({ webhookId: "wh-1", enabled: true })),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    const webhookCol = gridColumns.find((c) => c.name === "Webhook");
+    expect(webhookCol).toBeDefined();
+    expect(webhooks[0].mapping[0]).toEqual({ path: "$", columnId: webhookCol?.id });
+    expect(webhooks[0].mapping[1]).toEqual({ path: "email", columnId: COL_EMAIL });
+    expect(webhooks[0].enabled).toBe(true);
+  });
+
+  it("updateWebhookMapping preserves the `$` raw-payload entry", async () => {
+    const webhooks: Webhook[] = [
+      {
+        ...webhook,
+        mapping: [
+          { path: "$", columnId: "col-webhook" },
+          { path: "email", columnId: COL_EMAIL },
+        ],
+      },
+    ];
+    const { run } = harness({ webhooks });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.updateWebhookMapping({
+            webhookId: "wh-1",
+            mapping: [{ path: "name", columnId: COL_NAME }],
+          }),
+        ),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(webhooks[0].mapping).toEqual([
+      { path: "$", columnId: "col-webhook" },
+      { path: "name", columnId: COL_NAME },
+    ]);
   });
 
   it("toggleEnabled + deleteWebhook mutate the store", async () => {

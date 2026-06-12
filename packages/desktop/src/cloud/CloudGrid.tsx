@@ -26,7 +26,7 @@ import {
 import type { Id } from "./ids";
 import { apiClient } from "./client";
 import { Icon, ExpandedEditor } from "../App";
-import CellDetails from "../CellDetails";
+import CellDetails, { extractCode } from "../CellDetails";
 import { api } from "../api";
 import type { ConnectorInfo, Column, FullTable } from "../api";
 import {
@@ -397,6 +397,40 @@ export function CloudGrid({
   const fnColCount = table.columns.filter((c) => c.kind === "function").length;
   const columnNames = table.columns.map((c) => c.name);
 
+  // ── Promote a JSON field to a column (from the Cell details drawer) ──
+  // Mirrors the local grid's promoteCreate/promoteMap: a FUNCTION column whose
+  // code extracts the chosen path from the source cell ({{<source column>}}),
+  // so the mapping applies to every row — existing (run now) and future (the
+  // webhook worker's auto-run enriches new rows).
+  const uniqueColName = (base: string): string => {
+    const existing = new Set(table.columns.map((c) => c.name.toLowerCase()));
+    if (!existing.has(base.toLowerCase())) return base;
+    let n = 2;
+    while (existing.has(`${base} ${n}`.toLowerCase())) n++;
+    return `${base} ${n}`;
+  };
+  const promoteCreate = async (path: string[], label: string) => {
+    if (!detail) return;
+    const id = await addColumn(tableId, {
+      name: uniqueColName(label),
+      type: "text",
+      code: extractCode(path),
+      params: { src: `{{${detail.columnName}}}` },
+    });
+    await runColumn(String(id)).catch(() => {});
+  };
+  const promoteMap = async (path: string[], targetId: string) => {
+    if (!detail) return;
+    await updateColumn(tableId, targetId as Id<"columns">, {
+      kind: "function",
+      provider: null,
+      method: null,
+      code: extractCode(path),
+      params: { src: `{{${detail.columnName}}}` },
+    });
+    await runColumn(targetId).catch(() => {});
+  };
+
   const controller: GridController = {
     table,
     rowHeight,
@@ -450,8 +484,8 @@ export function CloudGrid({
     openAddColumn: (anchor) => { setAddColAnchor(anchor); setShowAddCol(true); },
     // Cloud columns are a fixed width (no resize) — omit `resizeColumn`.
     onScrollNearBottom: hasMore && !isLoadingMore ? loadMore : undefined,
-    // Inspect a cell's full response (status-code/JSON) like the local grid. The
-    // drawer is view-only in cloud (no promote-to-column yet) — omit onCreate/onMapTo.
+    // Inspect a cell's full response (status-code/JSON) like the local grid;
+    // the drawer supports promote-to-column (Clay-style field mapping).
     openCellDetails: (col, cell) =>
       setDetail({
         columnName: col.name,
@@ -491,6 +525,8 @@ export function CloudGrid({
           source={detail}
           columns={table.columns.map((c) => ({ id: c.id, name: c.name }))}
           onClose={() => setDetail(null)}
+          onCreate={(path, label) => guard(() => promoteCreate(path, label), "add column")}
+          onMapTo={(path, targetId) => guard(() => promoteMap(path, targetId), "map column")}
         />
       )}
 

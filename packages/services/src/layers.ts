@@ -270,6 +270,7 @@ export const appLayer = (params: {
     Layer.provide(CellMerge.Default),
     Layer.provide(credentialCryptoLive),
     Layer.provide(entitlementService),
+    Layer.provide(columnRepo),
   );
   const extensionService = ExtensionService.Default.pipe(
     Layer.provide(extensionRepo),
@@ -585,6 +586,7 @@ export const TestLayer = (
     Layer.provide(CellMerge.Default),
     Layer.provide(fixtures.crypto ?? credentialCryptoTest()),
     Layer.provide(entitlementService),
+    Layer.provide(columnRepo),
   );
   const extensionService = ExtensionService.Default.pipe(
     Layer.provide(extensionRepo),

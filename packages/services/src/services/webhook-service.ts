@@ -46,6 +46,15 @@ import {
   WebhookRepo,
   type WebhookRepoError,
 } from "../repositories/webhook-repo.js";
+import { ColumnRepo } from "../repositories/column-repo.js";
+
+/** Name of the Clay-style raw-payload column every webhook lands records in. */
+export const WEBHOOK_COLUMN_NAME = "Webhook";
+
+/** The mapping path that means "the whole request body" — the receiver writes
+ *  `{ receivedAt, payload }` into the mapped column for this entry, so every
+ *  record is visible in the grid even before any field mapping exists. */
+export const WEBHOOK_PAYLOAD_PATH = "$";
 
 /** Max delivery-log rows retained PER WEBHOOK (convex/webhooks.ts:676). */
 export const DELIVERY_RETENTION = 50;
@@ -137,6 +146,34 @@ export class WebhookService extends Effect.Service<WebhookService>()(
       const membership = yield* MembershipService;
       const crypto = yield* CredentialCryptoService;
       const entitlement = yield* EntitlementService;
+      const columnRepo = yield* ColumnRepo;
+
+      /** Find-or-create the table's "Webhook" raw-payload column (json, manual).
+       *  Records land here via the `$` mapping entry, so a webhook table always
+       *  shows its received data — even with zero user-configured mappings. */
+      const ensureWebhookColumn = (tableId: string, workspaceId: string) =>
+        Effect.gen(function* () {
+          const cols = yield* columnRepo.listByTable(tableId);
+          const existing = cols.find(
+            (c) => c.name === WEBHOOK_COLUMN_NAME && c.type === "json",
+          );
+          if (existing !== undefined) return existing.id;
+          const position = yield* columnRepo.nextPosition(tableId);
+          return yield* columnRepo.insert({
+            workspaceId,
+            tableId,
+            name: WEBHOOK_COLUMN_NAME,
+            type: "json",
+            kind: "manual",
+            provider: null,
+            method: null,
+            code: null,
+            params: {},
+            condition: null,
+            position,
+            createdAt: Date.now(),
+          });
+        });
 
       /** Load a webhook or fail typed. */
       const requireWebhook = (
@@ -209,13 +246,23 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             }
           }
 
+          // Clay-style raw-payload column: every record lands here via the `$`
+          // entry, so the table shows received data with zero configuration.
+          const webhookColumnId = yield* ensureWebhookColumn(
+            args.tableId,
+            table.value.workspaceId,
+          );
+
           return yield* repo.insert({
             workspaceId: table.value.workspaceId,
             tableId: args.tableId,
             name: args.name ?? null,
             token: mintToken(),
             signingSecret: args.auth === true ? mintSigningSecret() : null,
-            mapping,
+            mapping: [
+              { path: WEBHOOK_PAYLOAD_PATH, columnId: webhookColumnId },
+              ...mapping.filter((m) => m.path !== WEBHOOK_PAYLOAD_PATH),
+            ],
             enabled: true,
             autoRun: true,
             mode: "create",
@@ -292,10 +339,22 @@ export class WebhookService extends Effect.Service<WebhookService>()(
               );
             }
           }
-          yield* repo.patch(args.webhookId, { mapping: args.mapping });
+          // A mapping replace must never drop the `$` raw-payload entry — it is
+          // what keeps every record visible in the Webhook column.
+          const payloadEntry = webhook.mapping.find(
+            (m) => m.path === WEBHOOK_PAYLOAD_PATH,
+          );
+          yield* repo.patch(args.webhookId, {
+            mapping: [
+              ...(payloadEntry === undefined ? [] : [payloadEntry]),
+              ...args.mapping.filter((m) => m.path !== WEBHOOK_PAYLOAD_PATH),
+            ],
+          });
         });
 
-      /** Enable/disable a webhook. */
+      /** Enable/disable a webhook. Enabling also HEALS a legacy webhook that
+       *  predates the raw-payload column: it gains the "Webhook" column + `$`
+       *  mapping entry, so records become visible without recreating it. */
       const toggleEnabled = (args: {
         readonly webhookId: string;
         readonly enabled: boolean;
@@ -303,6 +362,21 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         Effect.gen(function* () {
           const webhook = yield* requireWebhook(args.webhookId);
           yield* membership.requireMember(webhook.workspaceId);
+          if (
+            args.enabled &&
+            !webhook.mapping.some((m) => m.path === WEBHOOK_PAYLOAD_PATH)
+          ) {
+            const webhookColumnId = yield* ensureWebhookColumn(
+              webhook.tableId,
+              webhook.workspaceId,
+            );
+            yield* repo.patch(args.webhookId, {
+              mapping: [
+                { path: WEBHOOK_PAYLOAD_PATH, columnId: webhookColumnId },
+                ...webhook.mapping,
+              ],
+            });
+          }
           yield* repo.patch(args.webhookId, { enabled: args.enabled });
         });
 
