@@ -84,6 +84,7 @@ import type { AgentCloudContext } from "./AgentPanel";
 import type { ImportWriter } from "./csvImport";
 import type { Id } from "./cloud/ids";
 import { DataGrid } from "./DataGrid";
+import { buildColumnMetaMap } from "./FnIcon";
 import { resolveRowHeight } from "./gridVirtual";
 import "./styles.css";
 
@@ -2836,15 +2837,17 @@ export default function App() {
 
   // ── Run single column ──────────────────────
 
-  const runColumn = async (colId: string) => {
+  const runColumn = async (colId: string, opts?: { force?: boolean; rowIds?: string[] }) => {
     const tableId = selectedTableId;
     if (!tableId) return;
     setRunningColId(colId);
     // Patch cells in place as the sidecar streams per-cell progress (SSE),
     // instead of refetching+replacing the whole grid after the run.
     try {
-      await api.runColumnStream(colId, (e) => patchCell(tableId, e));
-      await cascadeDependents(tableId, [colId]);
+      await api.runColumnStream(colId, (e) => patchCell(tableId, e), opts);
+      // Cascade keeps the triggering run's ROW scope but never its force —
+      // dependents fill empty cells only, so done cells are never re-billed.
+      await cascadeDependents(tableId, [colId], opts?.rowIds ? { rowIds: opts.rowIds } : {});
     } catch { /* ignore */ }
     setRunningColId(null);
   };
@@ -2927,6 +2930,30 @@ export default function App() {
     await loadTable(selectedTableId);
   };
 
+  // ── Rename / duplicate a column (header context menu) ──
+
+  const renameColumn = async (colId: string, name: string) => {
+    await api.updateColumn(colId, { name }).catch(() => {});
+    reloadCurrent();
+    if (selectedTableId) scheduleAutoPush(selectedTableId);
+  };
+
+  const duplicateColumn = async (col: Column) => {
+    if (!selectedTableId) return;
+    const body: Parameters<typeof api.addColumn>[1] = {
+      name: uniqueColName(`${col.name} copy`),
+      type: col.type,
+      params: col.params,
+      condition: col.condition ?? null,
+    };
+    // The server synthesizes fn === "code" for custom-code columns — those
+    // round-trip via `code`, everything else via the real `provider.method`.
+    if (col.fn === "code") body.code = col.code ?? undefined;
+    else if (col.fn) body.fn = col.fn;
+    await api.addColumn(selectedTableId, body).catch(() => {});
+    reloadCurrent();
+  };
+
   // ── Column resize (drag the header edge) ──
 
   const startResize = (colId: string, startX: number, startW: number) => {
@@ -3001,6 +3028,10 @@ export default function App() {
   // ─────────────────────────────────────────
 
   const fnColCount = tableData?.columns.filter(c => c.kind === "function").length ?? 0;
+
+  // "provider.method" → presentation metadata (logo, labels, credits) for the
+  // grid headers; rebuilt only when the connector catalog changes.
+  const fnColumnMeta = useMemo(() => buildColumnMetaMap(connectors), [connectors]);
 
   // ── Cloud sign-in welcome (dismissable to local) ─────────────
   // When cloud is configured, first launch shows the sign-in/onboarding screen —
@@ -3664,6 +3695,7 @@ export default function App() {
                     {tableData.dedupe && <span className="dedupe-on-dot" title="Auto-dedupe is on" />}
                   </button>
                 ),
+                columnMeta: (col) => (col.fn ? fnColumnMeta.get(col.fn) ?? null : null),
                 addRow,
                 runAll,
                 runRows,
@@ -3674,6 +3706,8 @@ export default function App() {
                 deleteColumn,
                 clearCell,
                 editColumn: (col) => setEditCol(col),
+                renameColumn,
+                duplicateColumn,
                 openAddColumn: (anchor) => { setAddColAnchor(anchor); setShowAddCol(true); },
                 resizeColumn: startResize,
                 openCellDetails: (col, cell) =>

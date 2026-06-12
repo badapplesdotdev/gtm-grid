@@ -175,6 +175,8 @@ export interface Column {
   provider: string | null;
   method: string | null;
   fn: string | null;
+  /** Custom QuickJS body for code columns (fn === "code"); null otherwise. */
+  code?: string | null;
   params: Record<string, unknown>;
   /** Optional "only run if" expression gating per-row execution. */
   condition?: string | null;

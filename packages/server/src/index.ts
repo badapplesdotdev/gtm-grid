@@ -234,6 +234,7 @@ function fullTable(tableId: string) {
     provider: c.provider,
     method: c.method,
     fn: c.provider ? `${c.provider}.${c.method}` : c.code ? "code" : null,
+    code: c.code,
     params: c.params,
     condition: c.condition,
   }));

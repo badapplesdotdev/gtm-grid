@@ -38,6 +38,7 @@ import {
   type ColumnAuthoringApi,
 } from "../AddColumn";
 import { DataGrid, type GridController } from "../DataGrid";
+import { buildColumnMetaMap } from "../FnIcon";
 import { DedupePopover } from "../DedupePopover";
 import { resolveRowHeight } from "../gridVirtual";
 import { buildPresenceView } from "../gridPresence";
@@ -226,6 +227,10 @@ export function CloudGrid({
     () => buildPresenceView(roster, selfId),
     [roster, selfId],
   );
+
+  // "provider.method" → presentation metadata (logo, labels, credits) for the
+  // grid headers; rebuilt only when the connector catalog changes.
+  const fnColumnMeta = useMemo(() => buildColumnMetaMap(connectors), [connectors]);
   // Seed our identity (name/image) so cursor publishes carry it; re-seed when the
   // open table changes (a fresh subscription registers a new publisher).
   useEffect(() => {
@@ -276,16 +281,22 @@ export function CloudGrid({
   }, [tableId, data, onMissing]);
 
   const runColumn = useCallback(
-    async (columnId: string) => {
+    async (columnId: string, opts?: { force?: boolean; rowIds?: string[] }) => {
       if (tableId === null) return;
       setRunningColId(columnId);
       try {
-        // FORCE on an explicit column run. A synced-from-local table arrives with
-        // every cell "done", and a non-forced run skips "done" cells — so without
-        // this, hitting Run on a synced function/code column flips to "running" and
-        // instantly exits without recomputing anything. An explicit Run should
-        // (re)compute the column. (Per-cell run already forces.)
-        await runCloudColumn(session, { tableId, columnId, force: true });
+        // FORCE by default on an explicit column run. A synced-from-local table
+        // arrives with every cell "done", and a non-forced run skips "done"
+        // cells — so without this, hitting Run on a synced function/code column
+        // flips to "running" and instantly exits without recomputing anything.
+        // The header context menu's scoped variants pass `opts` explicitly
+        // (e.g. force:false for "Run unrun & errored rows").
+        await runCloudColumn(session, {
+          tableId,
+          columnId,
+          force: opts?.force ?? true,
+          rowIds: opts?.rowIds,
+        });
       } catch {
         /* surfaced live via the cell error status from Convex */
       } finally {
@@ -468,6 +479,24 @@ export function CloudGrid({
     await runColumn(targetId).catch(() => {});
   };
 
+  // Duplicate a column: copy the config (incl. custom code), then carry the run
+  // condition over via updateColumn (the cloud addColumn mutation has no
+  // condition field). Cells start empty — duplicating copies the recipe, not
+  // the results.
+  const duplicateColumn = async (col: Column) => {
+    const body: { name: string; type?: string; fn?: string; code?: string; params?: Record<string, unknown> } = {
+      name: uniqueColName(`${col.name} copy`),
+      type: col.type,
+      params: col.params,
+    };
+    if (col.fn === "code") body.code = col.code ?? undefined;
+    else if (col.fn) body.fn = col.fn;
+    const id = await addColumn(tableId, body);
+    if (col.condition) {
+      await updateColumn(tableId, id as Id<"columns">, { condition: col.condition });
+    }
+  };
+
   const controller: GridController = {
     table,
     rowHeight,
@@ -503,6 +532,7 @@ export function CloudGrid({
         </button>
       </>
     ),
+    columnMeta: (col) => (col.fn ? fnColumnMeta.get(col.fn) ?? null : null),
     addRow: () => void guard(() => addRow(tableId), "add row"),
     runAll: async () => {
       for (const col of table.columns.filter((c) => c.kind === "function")) {
@@ -519,6 +549,9 @@ export function CloudGrid({
     clearCell: (rowId, colId) =>
       void guard(() => setCell(rowId as Id<"rows">, colId as Id<"columns">, ""), "clear cell"),
     editColumn: (col) => setEditCol(col),
+    renameColumn: (colId, name) =>
+      void guard(() => updateColumn(tableId, colId as Id<"columns">, { name }), "rename column"),
+    duplicateColumn: (col) => void guard(() => duplicateColumn(col), "duplicate column"),
     openAddColumn: (anchor) => { setAddColAnchor(anchor); setShowAddCol(true); },
     // Cloud columns are a fixed width (no resize) — omit `resizeColumn`.
     onScrollNearBottom: hasMore && !isLoadingMore ? loadMore : undefined,

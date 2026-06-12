@@ -755,6 +755,32 @@ html, body, #root {
   min-width: 0;
 }
 
+/* Provider identity (brand favicon / category glyph) before the column name. */
+.th-provider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.th-provider .fn-cat-icon { color: var(--accent); }
+
+/* Inline header rename input (Clay-style rename without opening the editor). */
+.th-rename-input {
+  flex: 1;
+  min-width: 0;
+  font: 600 12px var(--font-sans);
+  color: var(--text-1);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-xs);
+  padding: 2px 5px;
+  outline: none;
+}
+
 .th-fn-badge {
   font-size: 10px;
   font-weight: 600;
@@ -2066,6 +2092,14 @@ html, body, #root {
 .ctx-item.danger:hover { background: var(--danger-bg); }
 .ctx-item:disabled { opacity: 0.45; cursor: default; }
 .ctx-item:disabled:hover { background: transparent; }
+.ctx-sep { height: 1px; background: var(--border); margin: 4px 6px; }
+.ctx-header {
+  padding: 5px 10px 2px;
+  font: 600 10px var(--font-sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
 
 /* ── Selection toolbar pill (shown when ≥1 row is selected) ─── */
 .sel-bar {

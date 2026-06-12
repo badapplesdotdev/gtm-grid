@@ -20,8 +20,9 @@
  * by each parent and opened via controller intents.
  */
 
-import { useCallback, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { CellContent, Icon } from "./App";
+import { FnIcon, type ColumnMeta } from "./FnIcon";
 import type { Cell, Column, FullTable } from "./api";
 import { VirtualGridBody } from "./VirtualGridBody";
 import { useColumnWindow } from "./useColumnWindow";
@@ -78,6 +79,12 @@ export interface GridController {
   /** Extra toolbar controls rendered in the right cluster (e.g. cloud Webhook). */
   readonly toolbarExtras?: ReactNode;
 
+  // ── Column presentation (provider identity) ────────────────────────────
+  /** Resolve presentation metadata for a function column (provider logo/name,
+   *  method label, credits) from the connector catalog. Omit to fall back to
+   *  the plain text method badge. */
+  readonly columnMeta?: (col: Column) => ColumnMeta | null;
+
   // ── Actions / intents (fire the correct local-vs-cloud function) ───────
   readonly addRow: () => void;
   readonly runAll: () => void;
@@ -85,13 +92,20 @@ export interface GridController {
    *  user's current selection). Lets the user process a custom batch at a time
    *  instead of the whole table. */
   readonly runRows: (rowIds: string[]) => void;
-  readonly runColumn: (colId: string) => void;
+  /** Run a function column. `opts` scopes the run: `force` re-runs cells that
+   *  are already done; `rowIds` restricts to specific rows. No opts = the
+   *  environment's default run (local: unrun + errored rows; cloud: force). */
+  readonly runColumn: (colId: string, opts?: { force?: boolean; rowIds?: string[] }) => void;
   readonly runCell: (rowId: string, colId: string) => void;
   readonly setCell: (rowId: string, colId: string, value: string) => void;
   readonly deleteRow: (rowId: string) => void;
   readonly deleteColumn: (colId: string) => void;
   readonly clearCell: (rowId: string, colId: string) => void;
   readonly editColumn: (col: Column) => void;
+  /** Rename a column in place (header inline input); omit to hide Rename. */
+  readonly renameColumn?: (colId: string, name: string) => void;
+  /** Duplicate a column (config copied, cells empty); omit to hide Duplicate. */
+  readonly duplicateColumn?: (col: Column) => void;
   /** Open the add-column popover anchored at the clicked "+" button. */
   readonly openAddColumn: (anchor: { left: number; top: number }) => void;
   /** Drag-resize a column; omit to disable resizing (cloud columns are fixed). */
@@ -125,7 +139,10 @@ export interface GridController {
  * warming state for a freshly-created, still-empty Trigify table).
  */
 
-type CtxItem = { label: string; danger?: boolean; disabled?: boolean; onClick: () => void };
+type CtxItem =
+  | { label: string; danger?: boolean; disabled?: boolean; onClick: () => void }
+  | { separator: true }
+  | { header: string };
 
 export function DataGrid({
   controller: c,
@@ -140,6 +157,19 @@ export function DataGrid({
   // The cell briefly flashed after a follow-jump, keyed `${rowId}:${colId}`.
   const [flashCell, setFlashCell] = useState<string | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Inline header rename (the Clay flow: rename without opening the editor).
+  const [renaming, setRenaming] = useState<{ colId: string; draft: string } | null>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (renaming) renameInputRef.current?.select();
+  }, [renaming?.colId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const commitRename = useCallback(() => {
+    setRenaming((r) => {
+      if (r && r.draft.trim() && c.renameColumn) c.renameColumn(r.colId, r.draft.trim());
+      return null;
+    });
+  }, [c]);
 
   const openCtx = useCallback((e: React.MouseEvent, items: CtxItem[]) => {
     e.preventDefault();
@@ -290,6 +320,51 @@ export function DataGrid({
   const totalWidth =
     GUTTER_W + table.columns.reduce((s, col) => s + c.columnWidth(col.id), 0) + ADD_COL_W;
 
+  // Column-header right-click menu (Clay-style): edit/rename/duplicate, scoped
+  // run variants for function columns, then delete. Every run item maps onto
+  // the engine's existing `{ force, rowIds }` options — a run is always the
+  // stored column config executing, never anything AI-mediated.
+  const columnMenuItems = (col: Column): CtxItem[] => {
+    const items: CtxItem[] = [
+      { label: "Edit column", onClick: () => c.editColumn(col) },
+    ];
+    if (c.renameColumn) {
+      items.push({ label: "Rename", onClick: () => setRenaming({ colId: col.id, draft: col.name }) });
+    }
+    if (c.duplicateColumn) {
+      items.push({ label: "Duplicate", onClick: () => c.duplicateColumn!(col) });
+    }
+    if (col.kind === "function") {
+      items.push({ separator: true }, { header: "Run" });
+      const busy = runDisabled || c.runningColId === col.id;
+      items.push(
+        {
+          label: "Run unrun & errored rows",
+          disabled: busy,
+          // Explicit force:false — the non-forced run skips `done` cells, so
+          // exactly the unrun + errored rows execute (in both environments).
+          onClick: () => c.runColumn(col.id, { force: false }),
+        },
+        {
+          label: "Run first 10 rows",
+          disabled: busy || table.rows.length === 0,
+          onClick: () =>
+            c.runColumn(col.id, { force: true, rowIds: table.rows.slice(0, 10).map((r) => r.id) }),
+        },
+        {
+          label: "Force run all rows",
+          disabled: busy,
+          onClick: () => c.runColumn(col.id, { force: true }),
+        },
+      );
+    }
+    items.push(
+      { separator: true },
+      { label: `Delete column “${col.name}”`, danger: true, onClick: () => c.deleteColumn(col.id) },
+    );
+    return items;
+  };
+
   return (
     <>
       {/* Toolbar */}
@@ -439,23 +514,44 @@ export function DataGrid({
                     maxWidth: c.maxColWidth,
                     ...(colHere ? { "--presence-color": colHere[0].color } : {}),
                   };
+                  const meta = col.kind === "function" ? c.columnMeta?.(col) ?? null : null;
+                  const headTitle = meta
+                    ? `${meta.providerName} · ${meta.methodLabel}${meta.credits ? ` · ${meta.credits} credit${meta.credits !== 1 ? "s" : ""}/row` : ""}`
+                    : col.fn ?? undefined;
                   return (
                     <th
                       key={col.id}
                       className={`grid-th${colHere ? " col-presence" : ""}`}
                       title={colHere ? colHere.map((u) => `${u.name ?? u.userId}${u.activity ? ` — ${u.activity}` : ""}`).join(", ") : undefined}
                       style={thStyle}
-                      onContextMenu={(e) =>
-                        openCtx(e, [
-                          { label: `Edit column “${col.name}”`, onClick: () => c.editColumn(col) },
-                          { label: `Delete column “${col.name}”`, danger: true, onClick: () => c.deleteColumn(col.id) },
-                        ])
-                      }
+                      onContextMenu={(e) => openCtx(e, columnMenuItems(col))}
                     >
-                      <div className="th-inner">
-                        <span className="th-name">{col.name}</span>
-                        {col.kind === "function" && col.fn && (
-                          <span className="th-fn-badge" title={col.fn}>{col.fn.split(".").pop()}</span>
+                      <div className="th-inner" title={headTitle}>
+                        {meta && (
+                          <span className="th-provider">
+                            <FnIcon fn={{ logo: meta.logo, providerName: meta.providerName, category: meta.category }} size={16} />
+                          </span>
+                        )}
+                        {renaming?.colId === col.id ? (
+                          <input
+                            ref={renameInputRef}
+                            className="th-rename-input"
+                            value={renaming.draft}
+                            onChange={(e) => setRenaming({ colId: col.id, draft: e.target.value })}
+                            onBlur={commitRename}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") commitRename();
+                              if (e.key === "Escape") setRenaming(null);
+                            }}
+                            onContextMenu={(e) => e.stopPropagation()}
+                          />
+                        ) : (
+                          <span className="th-name">{col.name}</span>
+                        )}
+                        {col.kind === "function" && (meta || col.fn) && (
+                          <span className="th-fn-badge" title={headTitle}>
+                            {meta ? meta.methodLabel : col.fn!.split(".").pop()}
+                          </span>
                         )}
                         {col.kind === "function" && (
                           <button
@@ -564,6 +660,22 @@ export function DataGrid({
                           }
                           onContextMenu={(e) =>
                             openCtx(e, rowCtxItems(row.id, [
+                              ...(col.kind === "function"
+                                ? ([
+                                    { label: "Run cell", disabled: runDisabled, onClick: () => c.runCell(row.id, col.id) },
+                                    ...(c.openCellDetails
+                                      ? [{ label: "View cell details", onClick: () => c.openCellDetails!(col, cell) }]
+                                      : []),
+                                  ] satisfies CtxItem[])
+                                : []),
+                              {
+                                label: "Copy value",
+                                onClick: () => {
+                                  const v = cell?.value;
+                                  const text = v == null ? "" : typeof v === "string" ? v : JSON.stringify(v);
+                                  void navigator.clipboard?.writeText(text).catch(() => {});
+                                },
+                              },
                               { label: "Clear cell", onClick: () => c.clearCell(row.id, col.id) },
                             ]))
                           }
@@ -637,16 +749,20 @@ export function DataGrid({
             onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null); }}
           />
           <div className="ctx-menu" style={{ left: ctxMenu.x, top: ctxMenu.y }}>
-            {ctxMenu.items.map((it, i) => (
-              <button
-                key={i}
-                className={`ctx-item ${it.danger ? "danger" : ""}`}
-                disabled={it.disabled}
-                onClick={() => { setCtxMenu(null); it.onClick(); }}
-              >
-                {it.label}
-              </button>
-            ))}
+            {ctxMenu.items.map((it, i) => {
+              if ("separator" in it) return <div key={i} className="ctx-sep" />;
+              if ("header" in it) return <div key={i} className="ctx-header">{it.header}</div>;
+              return (
+                <button
+                  key={i}
+                  className={`ctx-item ${it.danger ? "danger" : ""}`}
+                  disabled={it.disabled}
+                  onClick={() => { setCtxMenu(null); it.onClick(); }}
+                >
+                  {it.label}
+                </button>
+              );
+            })}
           </div>
         </>
       )}
