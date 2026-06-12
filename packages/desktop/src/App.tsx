@@ -72,6 +72,7 @@ import {
   type CloudProject,
   type CloudTableSummary,
 } from "./cloud/useCloudGrid";
+import { useAgentPresence } from "./cloud/agentPresence";
 import { type SignalsCloud } from "./SignalsModal";
 // Type-only import (erased at build) so the AgentPanel lazy chunk stays split.
 import type { AgentCloudContext } from "./AgentPanel";
@@ -1390,6 +1391,10 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the table name + serialized column names, not the FullTable identity
     [tableData?.name, activeTableColumnNames],
   );
+  // Agent presence (Co-Pilot cursor): the agent's gtmgrid tool calls — streamed
+  // through the panel's SSE — light up the cell/column it's working on for
+  // EVERYONE in the cloud table's room. Cloud-only; no-ops in local mode.
+  const onAgentEvent = useAgentPresence(agentCloud);
   // Cloud-access lock: the active workspace's trial lapsed / it's on Free (no
   // plan id). Cloud tables/projects are shown but LOCKED — opening or editing
   // them prompts an upgrade; local tables are unaffected. The server enforces the
@@ -3235,6 +3240,7 @@ export default function App() {
           onGridChange={refreshAll}
           activeTable={activeTable}
           cloud={agentCloud}
+          onAgentEvent={onAgentEvent}
         />
       </Suspense>
 

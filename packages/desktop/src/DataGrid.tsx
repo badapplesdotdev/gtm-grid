@@ -26,7 +26,7 @@ import type { Cell, Column, FullTable } from "./api";
 import { VirtualGridBody } from "./VirtualGridBody";
 import { useColumnWindow } from "./useColumnWindow";
 import { GridColSpacer } from "./GridColSpacer";
-import { PresenceAvatars } from "./PresenceAvatars";
+import { BotGlyph, PresenceAvatars } from "./PresenceAvatars";
 import { type GridPresenceView, presenceCellKey } from "./gridPresence";
 
 /** A `<td>` style that also carries the per-cell presence-ring color variable. */
@@ -291,11 +291,21 @@ export function DataGrid({
                 <GridColSpacer side="left" width={columnWindow.spacers.left} as="th" />
                 {columnWindow.virtualColumns.map((vc) => {
                   const col = table.columns[vc.index];
+                  // Column-header ring: a participant (the agent) is working
+                  // over this whole column (run_column etc.).
+                  const colHere = c.presence?.byColumn.get(col.id);
+                  const thStyle: PresenceTdStyle = {
+                    width: c.columnWidth(col.id),
+                    minWidth: c.minColWidth,
+                    maxWidth: c.maxColWidth,
+                    ...(colHere ? { "--presence-color": colHere[0].color } : {}),
+                  };
                   return (
                     <th
                       key={col.id}
-                      className="grid-th"
-                      style={{ width: c.columnWidth(col.id), minWidth: c.minColWidth, maxWidth: c.maxColWidth }}
+                      className={`grid-th${colHere ? " col-presence" : ""}`}
+                      title={colHere ? colHere.map((u) => `${u.name ?? u.userId}${u.activity ? ` — ${u.activity}` : ""}`).join(", ") : undefined}
+                      style={thStyle}
                       onContextMenu={(e) =>
                         openCtx(e, [
                           { label: `Edit column “${col.name}”`, onClick: () => c.editColumn(col) },
@@ -413,9 +423,13 @@ export function DataGrid({
                             <span
                               className="presence-cell-chip"
                               style={{ background: here[0].color }}
-                              title={here.map((u) => u.name ?? u.userId).join(", ")}
+                              title={here
+                                .map((u) => `${u.name ?? u.userId}${u.isAgent && u.activity ? ` — ${u.activity}` : ""}`)
+                                .join(", ")}
                             >
-                              {here[0].image ? (
+                              {here[0].isAgent ? (
+                                <BotGlyph size={9} color="#fff" />
+                              ) : here[0].image ? (
                                 <img src={here[0].image} alt="" referrerPolicy="no-referrer" />
                               ) : (
                                 (here[0].name ?? "?").slice(0, 1).toUpperCase()

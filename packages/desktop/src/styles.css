@@ -2735,6 +2735,11 @@ html, body, #root {
 }
 .presence-cell-chip img { width: 100%; height: 100%; object-fit: cover; }
 .grid-td.presence-flash { animation: presence-flash 1.2s ease; }
+/* Column-header ring — a participant (the agent) is working over this column. */
+.grid-th.col-presence {
+  box-shadow: inset 0 0 0 2px var(--presence-color);
+  animation: presence-pulse 1.6s ease-in-out infinite;
+}
 @keyframes presence-pulse {
   50% { box-shadow: inset 0 0 0 3px var(--presence-color); }
 }

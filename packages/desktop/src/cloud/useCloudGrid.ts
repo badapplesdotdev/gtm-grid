@@ -41,7 +41,7 @@ import { useApiAuthToken } from "./useApiAuth";
  * token (`realtime.token`) that the party validates against the room — all
  * reads/writes still go through tRPC.
  */
-const PARTY_URL: string | undefined =
+export const PARTY_URL: string | undefined =
   (import.meta.env.VITE_PARTY_URL as string | undefined) || undefined;
 
 /**
@@ -129,9 +129,10 @@ type GridPageCursor = GridPage["nextCursor"];
 /**
  * Mint the Supabase realtime JWT via the tRPC `realtime.token` MUTATION. Thrown
  * if the cloud layer is disabled (callers guard on `apiClient` first). Extracted
- * so the realtime-token plumbing is a single named seam.
+ * so the realtime-token plumbing is a single named seam. Exported for the agent
+ * presence controller (agentPresence.ts), which opens its OWN party connection.
  */
-async function mintRealtimeToken(workspaceId: string): Promise<string> {
+export async function mintRealtimeToken(workspaceId: string): Promise<string> {
   if (apiClient === null) throw new Error("API client unavailable");
   const { token } = await apiClient.realtime.token.mutate({ workspaceId });
   return token;
