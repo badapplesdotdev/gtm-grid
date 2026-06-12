@@ -290,3 +290,77 @@ describe("applyGridEvent · cell.upsert is O(1) + preserves untouched identity",
     expect(largeBuilds).toBe(smallBuilds);
   });
 });
+
+describe("applyGridEvent · column.reorder", () => {
+  const threeCol = () =>
+    snapshot({
+      columns: [column({ _id: "c1" }), column({ _id: "c2" }), column({ _id: "c3" })],
+    });
+
+  it("reorders columns to match the event's id order", () => {
+    const next = applyGridEvent(threeCol(), {
+      type: "column.reorder",
+      columnIds: ["c3", "c1", "c2"],
+    });
+    expect(next?.columns.map((c) => c._id)).toEqual(["c3", "c1", "c2"]);
+  });
+
+  it("keeps columns the event omits, appended in prior order", () => {
+    const next = applyGridEvent(threeCol(), {
+      type: "column.reorder",
+      columnIds: ["c2"],
+    });
+    expect(next?.columns.map((c) => c._id)).toEqual(["c2", "c1", "c3"]);
+  });
+
+  it("is a no-op (same reference) when the order already matches", () => {
+    const snap = threeCol();
+    const next = applyGridEvent(snap, {
+      type: "column.reorder",
+      columnIds: ["c1", "c2", "c3"],
+    });
+    expect(next).toBe(snap);
+  });
+});
+
+describe("applyGridEvent · row.reorder", () => {
+  it("reorders rows to match the event's id order", () => {
+    const snap = snapshot({ rows: [{ _id: "r1" }, { _id: "r2" }, { _id: "r3" }] });
+    const next = applyGridEvent(snap, {
+      type: "row.reorder",
+      rowIds: ["r3", "r2", "r1"],
+    });
+    expect(next?.rows.map((r) => r._id)).toEqual(["r3", "r2", "r1"]);
+  });
+
+  it("ignores unknown ids and converges (idempotent re-delivery)", () => {
+    const snap = snapshot({ rows: [{ _id: "r1" }, { _id: "r2" }] });
+    const once = applyGridEvent(snap, { type: "row.reorder", rowIds: ["r2", "ghost", "r1"] });
+    expect(once?.rows.map((r) => r._id)).toEqual(["r2", "r1"]);
+    const twice = applyGridEvent(once, { type: "row.reorder", rowIds: ["r2", "r1"] });
+    expect(twice).toBe(once); // already in order → same reference
+  });
+});
+
+describe("applyGridEvent · table.rename", () => {
+  it("relabels the table in place when it is the viewed table", () => {
+    const next = applyGridEvent(snapshot(), {
+      type: "table.rename",
+      tableId: "t1",
+      name: "Renamed",
+    });
+    expect(next?.table.name).toBe("Renamed");
+    // Rows/columns/cells untouched.
+    expect(next?.rows).toHaveLength(1);
+  });
+
+  it("ignores a rename for a different table", () => {
+    const snap = snapshot();
+    const next = applyGridEvent(snap, {
+      type: "table.rename",
+      tableId: "other",
+      name: "Nope",
+    });
+    expect(next).toBe(snap);
+  });
+});

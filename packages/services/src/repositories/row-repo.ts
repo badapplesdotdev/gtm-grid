@@ -154,6 +154,11 @@ export class RowRepo extends Context.Tag("RowRepo")<
     readonly bulkImport: (
       input: BulkImport,
     ) => Effect.Effect<readonly string[], RowRepoError>;
+    /** Set a row's display position (reorder). */
+    readonly setPosition: (
+      id: string,
+      position: number,
+    ) => Effect.Effect<void, RowRepoError>;
     /** Delete a row (FK cascade drops its cells). */
     readonly remove: (id: string) => Effect.Effect<void, RowRepoError>;
   }
@@ -355,6 +360,16 @@ export const RowRepoLive: Layer.Layer<RowRepo, never, DbClient> = Layer.effect(
                 }),
               catch: fail("row bulk import"),
             }),
+      setPosition: (id, position) =>
+        Effect.tryPromise({
+          try: async () => {
+            await db
+              .update(schema.rows)
+              .set({ position })
+              .where(eq(schema.rows.id, id));
+          },
+          catch: fail("row set position"),
+        }),
       remove: (id) =>
         Effect.tryPromise({
           try: async () => {
@@ -472,6 +487,11 @@ export const rowRepoLayer = (
           return out;
         },
         catch: fail("row bulk import"),
+      }),
+    setPosition: (id, position) =>
+      Effect.sync(() => {
+        const r = store.rows.find((x) => x.id === id);
+        if (r) r.position = position;
       }),
     remove: (id) => Effect.sync(() => cascadeDeleteRow(store, id)),
   });

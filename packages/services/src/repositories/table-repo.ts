@@ -76,6 +76,11 @@ export class TableRepo extends Context.Tag("TableRepo")<
     readonly insert: (
       values: NewTable,
     ) => Effect.Effect<string, TableRepoError>;
+    /** Rename a table (name only; position/dedupe/etc. unchanged). */
+    readonly rename: (
+      id: string,
+      name: string,
+    ) => Effect.Effect<void, TableRepoError>;
     /** Delete a table (FK cascade drops its columns/rows/cells/webhooks). */
     readonly remove: (id: string) => Effect.Effect<void, TableRepoError>;
     /** Set (or clear) a table's dedupe config. `column: null` disables it. */
@@ -161,6 +166,16 @@ export const TableRepoLive: Layer.Layer<TableRepo, never, DbClient> =
             },
             catch: fail("table insert"),
           }),
+        rename: (id, name) =>
+          Effect.tryPromise({
+            try: async () => {
+              await db
+                .update(schema.tables)
+                .set({ name })
+                .where(eq(schema.tables.id, id));
+            },
+            catch: fail("table rename"),
+          }),
         remove: (id) =>
           Effect.tryPromise({
             try: async () => {
@@ -209,6 +224,11 @@ export const tableRepoLayer = (store: GridStore): Layer.Layer<TableRepo> =>
         const id = store.nextId("table");
         store.tables.push({ id, ...values, dedupeColumn: null, dedupeKeep: null });
         return id;
+      }),
+    rename: (id, name) =>
+      Effect.sync(() => {
+        const t = store.tables.find((x) => x.id === id);
+        if (t) t.name = name;
       }),
     remove: (id) => Effect.sync(() => cascadeDeleteTable(store, id)),
     setDedupe: (id, config) =>

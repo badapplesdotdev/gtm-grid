@@ -67,6 +67,22 @@ const CREATE_TABLE_REF = "/api/worker/createTable";
 const CREATE_COLUMN_REF = "/api/worker/createColumn";
 const ADD_ROWS_REF = "/api/worker/addRows";
 
+/**
+ * The member-attributed MUTATION worker refs for the agent's cloud WRITE tools
+ * that mirror the local SQLite mutators (delete/update/rename/reorder/dedupe).
+ * Each is secured by the same `X-Gtmgrid-Member` attribution + server-side
+ * metering as the create/add refs above. `setCells` (CLOUD_REFS) backs cell
+ * writes; these cover the structural mutations.
+ */
+const DELETE_ROW_REF = "/api/worker/deleteRow";
+const DELETE_COLUMN_REF = "/api/worker/deleteColumn";
+const DELETE_TABLE_REF = "/api/worker/deleteTable";
+const UPDATE_COLUMN_REF = "/api/worker/updateColumn";
+const RENAME_TABLE_REF = "/api/worker/renameTable";
+const REORDER_COLUMN_REF = "/api/worker/reorderColumn";
+const REORDER_ROW_REF = "/api/worker/reorderRow";
+const SET_DEDUPE_REF = "/api/worker/setDedupe";
+
 /** Raised when a cloud MCP tool needs a worker route that does not exist yet. */
 export class CloudToolUnsupportedError extends Error {
   readonly _tag = "CloudToolUnsupportedError";
@@ -229,6 +245,94 @@ export interface CloudGridSource {
     columnRef: string,
     opts: { force?: boolean; concurrency?: number; limit?: number; offset?: number },
   ) => Promise<{ column: string; ran: number; errors: number }>;
+  /**
+   * The function columns of the active cloud table in grid (left-to-right) order,
+   * each with whether it still has pending (not-`done`) cells. The `run_table`
+   * tool drives a full-table run off this, calling {@link runColumn} per column.
+   */
+  readonly functionColumns: (
+    tableRef: string,
+  ) => Promise<{ name: string; pending: number }[]>;
+  /** Set or clear specific cells (value null/''/undefined clears). Returns how many wrote. */
+  readonly updateCells: (
+    tableRef: string,
+    updates: { row: string; column: string; value?: unknown }[],
+  ) => Promise<{ updated: number }>;
+  /** Row + column counts for the active cloud table (one grid read). */
+  readonly tableStats: (
+    tableRef: string,
+  ) => Promise<{ rows: number; columns: number }>;
+  /**
+   * Delete rows by _id and/or a `where` match. With `dryRun`, resolves the target
+   * set and returns its size WITHOUT deleting (the confirm-gate preview). Returns
+   * how many were (or would be) deleted.
+   */
+  readonly deleteRows: (
+    tableRef: string,
+    opts: { ids?: string[]; where?: Record<string, unknown>; dryRun?: boolean },
+  ) => Promise<{ deleted: number }>;
+  /** Delete a column (and its cells). */
+  readonly deleteColumn: (
+    tableRef: string,
+    columnRef: string,
+  ) => Promise<{ deleted: string }>;
+  /** Delete the active cloud table entirely. */
+  readonly deleteTable: (tableRef: string) => Promise<{ deleted: string }>;
+  /** Patch a column's config (name/type/condition/function). */
+  readonly updateColumn: (
+    tableRef: string,
+    columnRef: string,
+    patch: Record<string, unknown>,
+  ) => Promise<{ column: string }>;
+  /** Rename the active cloud table. */
+  readonly renameTable: (
+    tableRef: string,
+    name: string,
+  ) => Promise<{ renamed: string }>;
+  /** Set or clear the table's dedup config (column NAME, or null to disable). */
+  readonly setDedupe: (
+    tableRef: string,
+    column: string | null,
+    keep: "oldest" | "newest",
+  ) => Promise<{
+    dedupe: { column: string; keep: string } | null;
+    removedExistingDuplicates: number;
+  }>;
+  /** Search rows by an exact `where` match across columns (client-side). */
+  readonly findRows: (
+    tableRef: string,
+    where: Record<string, unknown>,
+    columns: string[] | undefined,
+    limit: number | undefined,
+  ) => Promise<{ matched: number; rows: Record<string, unknown>[] }>;
+  /** Read one column's values (each with its row _id). */
+  readonly getColumn: (
+    tableRef: string,
+    columnRef: string,
+    limit: number | undefined,
+  ) => Promise<{
+    column: string;
+    total: number;
+    returned: number;
+    values: { _id: string; value: unknown }[];
+  }>;
+  /** Describe how a column computes (fn/params/condition/code). */
+  readonly describeColumn: (
+    tableRef: string,
+    columnRef: string,
+  ) => Promise<Record<string, unknown>>;
+  /** Move a column to a new display index. Returns the new column-id order. */
+  readonly reorderColumn: (
+    tableRef: string,
+    columnRef: string,
+    toIndex: number,
+  ) => Promise<{ columnIds: string[] }>;
+  /** Move a row to a new display index. Returns the new row-id order. */
+  readonly reorderRow: (
+    tableRef: string,
+    rowId: string,
+    toIndex: number,
+  ) => Promise<{ rowIds: string[] }>;
 }
 
 /** The engine config + registry a cloud run dispatches functions against. */
@@ -297,10 +401,13 @@ export function defaultCloudSourceDeps(
 interface CloudColumnDoc {
   readonly _id: string;
   readonly name: string;
+  readonly type?: string;
   readonly kind: string;
   readonly provider: string | null;
   readonly method: string | null;
   readonly code: string | null;
+  readonly params?: unknown;
+  readonly condition?: string | null;
 }
 interface CloudRowDoc {
   readonly _id: string;
@@ -331,6 +438,51 @@ function isCloudGrid(payload: unknown): payload is CloudGrid {
 function columnFn(c: CloudColumnDoc): string | null {
   if (c.provider && c.method) return `${c.provider}.${c.method}`;
   return c.code ? "code" : null;
+}
+
+/** Exact cell equality for client-side `where` matching — trims strings, JSON-compares the rest (mirrors the local engine's `findRows`). */
+function cellEq(a: unknown, b: unknown): boolean {
+  if (typeof a === "string" && typeof b === "string") return a.trim() === b.trim();
+  if (typeof a === "string" || typeof b === "string") {
+    return String(a ?? "").trim() === String(b ?? "").trim();
+  }
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+/** Read the `dedupe`/`deleted` fields off the setDedupe worker payload. */
+function readDedupeResult(payload: unknown): {
+  column: string | null;
+  keep: string;
+  deleted: number;
+} {
+  const o =
+    typeof payload === "object" && payload !== null
+      ? (payload as Record<string, unknown>)
+      : {};
+  const dedupe =
+    typeof o.dedupe === "object" && o.dedupe !== null
+      ? (o.dedupe as Record<string, unknown>)
+      : null;
+  return {
+    column: dedupe && typeof dedupe.column === "string" ? dedupe.column : null,
+    keep: dedupe && typeof dedupe.keep === "string" ? dedupe.keep : "oldest",
+    deleted: typeof o.deleted === "number" ? o.deleted : 0,
+  };
+}
+
+/** Narrow a reorder worker payload to its id-order array under `key`. */
+function readIdOrder(payload: unknown, key: string): string[] {
+  if (
+    typeof payload === "object" &&
+    payload !== null &&
+    key in payload &&
+    Array.isArray((payload as Record<string, unknown>)[key])
+  ) {
+    return ((payload as Record<string, unknown>)[key] as unknown[]).filter(
+      (x): x is string => typeof x === "string",
+    );
+  }
+  return [];
 }
 
 /** Narrow an unknown worker payload to a `{ id, name }` create result. */
@@ -413,7 +565,9 @@ export function makeCloudSource(
         byCell.set(`${cell.rowId}:${cell.columnId}`, cell);
       }
       const rows = grid.rows.map((r) => {
-        const obj: Record<string, unknown> = {};
+        // Carry the row _id (matching the LOCAL get_table) so the agent can feed
+        // it back into update_cells / delete_rows / reorder_rows.
+        const obj: Record<string, unknown> = { _id: r._id };
         for (const c of grid.columns) {
           const cell = byCell.get(`${r._id}:${c._id}`);
           obj[c.name] = cell
@@ -570,6 +724,253 @@ export function makeCloudSource(
         rowIds: opts.limit != null ? scoped.map((r) => r._id) : undefined,
       });
       return { column: col.name, ...res };
+    },
+
+    functionColumns: async () => {
+      const grid = await fetchGrid();
+      const statusByCol = new Map<string, Map<string, string>>();
+      for (const cell of grid.cells) {
+        let m = statusByCol.get(cell.columnId);
+        if (m === undefined) statusByCol.set(cell.columnId, (m = new Map()));
+        m.set(cell.rowId, cell.status);
+      }
+      return grid.columns
+        .filter((c) => (c.provider && c.method) || c.code) // function columns only
+        .map((c) => {
+          const st = statusByCol.get(c._id);
+          const pending = grid.rows.filter(
+            (r) => (st?.get(r._id) ?? "empty") !== "done",
+          ).length;
+          return { name: c.name, pending };
+        });
+    },
+
+    updateCells: async (_tableRef, updates) => {
+      const grid = await fetchGrid();
+      const idByCol = new Map<string, string>();
+      for (const c of grid.columns) idByCol.set(c.name, c._id);
+      const rowIds = new Set(grid.rows.map((r) => r._id));
+      const cells = updates.map((u) => {
+        if (!rowIds.has(u.row)) {
+          throw new Error(`Row "${u.row}" is not in the cloud table.`);
+        }
+        const columnId = idByCol.get(u.column);
+        if (columnId === undefined) {
+          throw new Error(`No column "${u.column}" in the cloud table.`);
+        }
+        const clear = u.value === null || u.value === undefined || u.value === "";
+        return {
+          rowId: u.row,
+          columnId,
+          value: clear ? null : u.value,
+          status: clear ? "empty" : "done",
+        };
+      });
+      await client.mutation(CLOUD_REFS.setCells, { cells });
+      return { updated: cells.length };
+    },
+
+    tableStats: async () => {
+      const grid = await fetchGrid();
+      return { rows: grid.rows.length, columns: grid.columns.length };
+    },
+
+    deleteRows: async (_tableRef, opts) => {
+      const grid = await fetchGrid();
+      const rowIds = new Set(grid.rows.map((r) => r._id));
+      const targets = new Set<string>();
+      for (const id of opts.ids ?? []) {
+        if (!rowIds.has(id)) {
+          throw new Error(`Row "${id}" is not in the cloud table.`);
+        }
+        targets.add(id);
+      }
+      if (opts.where && Object.keys(opts.where).length > 0) {
+        const idByCol = new Map<string, string>();
+        for (const c of grid.columns) idByCol.set(c.name, c._id);
+        const match: { columnId: string; value: unknown }[] = [];
+        for (const [name, value] of Object.entries(opts.where)) {
+          const columnId = idByCol.get(name);
+          if (columnId === undefined) {
+            throw new Error(`No column "${name}" in the cloud table.`);
+          }
+          match.push({ columnId, value });
+        }
+        const cellAt = new Map<string, unknown>();
+        for (const cell of grid.cells) {
+          cellAt.set(`${cell.rowId}:${cell.columnId}`, cell.value);
+        }
+        for (const r of grid.rows) {
+          if (
+            match.every((m) => cellEq(cellAt.get(`${r._id}:${m.columnId}`), m.value))
+          ) {
+            targets.add(r._id);
+          }
+        }
+      }
+      if (opts.dryRun) return { deleted: targets.size };
+      for (const id of targets) {
+        await client.mutation(DELETE_ROW_REF, { rowId: id });
+      }
+      return { deleted: targets.size };
+    },
+
+    deleteColumn: async (_tableRef, columnRef) => {
+      const grid = await fetchGrid();
+      const col = resolveColumn(grid, columnRef);
+      if (!col) throw new Error(`No column "${columnRef}" in the cloud table.`);
+      await client.mutation(DELETE_COLUMN_REF, { columnId: col._id });
+      return { deleted: col.name };
+    },
+
+    deleteTable: async () => {
+      await client.mutation(DELETE_TABLE_REF, { tableId: context.tableId });
+      return { deleted: context.tableId };
+    },
+
+    updateColumn: async (_tableRef, columnRef, patch) => {
+      const grid = await fetchGrid();
+      const col = resolveColumn(grid, columnRef);
+      if (!col) throw new Error(`No column "${columnRef}" in the cloud table.`);
+      const updated = readCreated(
+        await client.mutation(UPDATE_COLUMN_REF, { columnId: col._id, patch }),
+      );
+      return { column: updated.name };
+    },
+
+    renameTable: async (_tableRef, name) => {
+      const payload = await client.mutation(RENAME_TABLE_REF, {
+        tableId: context.tableId,
+        name,
+      });
+      const renamed =
+        typeof payload === "object" &&
+        payload !== null &&
+        "name" in payload &&
+        typeof payload.name === "string"
+          ? payload.name
+          : name;
+      return { renamed };
+    },
+
+    setDedupe: async (_tableRef, column, keep) => {
+      const grid = await fetchGrid();
+      let columnId: string | null = null;
+      if (column !== null && column !== "") {
+        const col = resolveColumn(grid, column);
+        if (!col) throw new Error(`No column "${column}" in the cloud table.`);
+        columnId = col._id;
+      }
+      const payload = await client.mutation(SET_DEDUPE_REF, {
+        tableId: context.tableId,
+        column: columnId,
+        keep,
+      });
+      const res = readDedupeResult(payload);
+      // Map the stored column ID back to its NAME for the agent's view.
+      const nameById = new Map(grid.columns.map((c) => [c._id, c.name]));
+      return {
+        dedupe:
+          res.column === null
+            ? null
+            : { column: nameById.get(res.column) ?? res.column, keep: res.keep },
+        removedExistingDuplicates: res.deleted,
+      };
+    },
+
+    findRows: async (_tableRef, where, columns, limit) => {
+      const grid = await fetchGrid();
+      const idByCol = new Map<string, string>();
+      for (const c of grid.columns) idByCol.set(c.name, c._id);
+      const match: { columnId: string; value: unknown }[] = [];
+      for (const [name, value] of Object.entries(where ?? {})) {
+        const columnId = idByCol.get(name);
+        if (columnId === undefined) {
+          throw new Error(`No column "${name}" in the cloud table.`);
+        }
+        match.push({ columnId, value });
+      }
+      const wantCols = (columns ?? grid.columns.map((c) => c.name))
+        .map((n) => grid.columns.find((c) => c.name === n))
+        .filter((c): c is CloudColumnDoc => !!c);
+      const cellAt = new Map<string, unknown>();
+      for (const cell of grid.cells) {
+        cellAt.set(`${cell.rowId}:${cell.columnId}`, cell.value);
+      }
+      const cap = Math.min(limit ?? 100, 1000);
+      const out: Record<string, unknown>[] = [];
+      for (const r of grid.rows) {
+        if (
+          !match.every((m) => cellEq(cellAt.get(`${r._id}:${m.columnId}`), m.value))
+        ) {
+          continue;
+        }
+        const obj: Record<string, unknown> = { _id: r._id };
+        for (const c of wantCols) {
+          obj[c.name] = cellAt.get(`${r._id}:${c._id}`) ?? null;
+        }
+        out.push(obj);
+        if (out.length >= cap) break;
+      }
+      return { matched: out.length, rows: out };
+    },
+
+    getColumn: async (_tableRef, columnRef, limit) => {
+      const grid = await fetchGrid();
+      const col = resolveColumn(grid, columnRef);
+      if (!col) throw new Error(`No column "${columnRef}" in the cloud table.`);
+      const valueAt = new Map<string, unknown>();
+      for (const cell of grid.cells) {
+        if (cell.columnId === col._id) valueAt.set(cell.rowId, cell.value);
+      }
+      const cap = Math.min(limit ?? 1000, 5000);
+      const values = grid.rows.slice(0, cap).map((r) => ({
+        _id: r._id,
+        value: valueAt.get(r._id) ?? null,
+      }));
+      return {
+        column: col.name,
+        total: grid.rows.length,
+        returned: values.length,
+        values,
+      };
+    },
+
+    describeColumn: async (_tableRef, columnRef) => {
+      const grid = await fetchGrid();
+      const col = resolveColumn(grid, columnRef);
+      if (!col) throw new Error(`No column "${columnRef}" in the cloud table.`);
+      return {
+        name: col.name,
+        kind: col.kind,
+        type: col.type ?? null,
+        fn: columnFn(col),
+        provider: col.provider,
+        method: col.method,
+        params: col.params ?? {},
+        condition: col.condition ?? null,
+        code: col.code ?? null,
+      };
+    },
+
+    reorderColumn: async (_tableRef, columnRef, toIndex) => {
+      const grid = await fetchGrid();
+      const col = resolveColumn(grid, columnRef);
+      if (!col) throw new Error(`No column "${columnRef}" in the cloud table.`);
+      const payload = await client.mutation(REORDER_COLUMN_REF, {
+        columnId: col._id,
+        toIndex,
+      });
+      return { columnIds: readIdOrder(payload, "columnIds") };
+    },
+
+    reorderRow: async (_tableRef, rowId, toIndex) => {
+      const grid = await fetchGrid();
+      if (!grid.rows.some((r) => r._id === rowId)) {
+        throw new Error(`Row "${rowId}" is not in the cloud table.`);
+      }
+      const payload = await client.mutation(REORDER_ROW_REF, { rowId, toIndex });
+      return { rowIds: readIdOrder(payload, "rowIds") };
     },
   };
 }

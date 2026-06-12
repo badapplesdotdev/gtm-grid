@@ -663,6 +663,94 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       });
 
     /**
+     * Rename a table. Members-only. Metered ONE. Broadcasts a `table.rename` on
+     * BOTH the table's channel (open grids relabel their header) and the
+     * workspace room (sidebars relabel without that table open). An empty/blank
+     * name is ignored (keeps the current name). Returns the effective name.
+     */
+    const renameTable = (tableId: string, name: string) =>
+      Effect.gen(function* () {
+        const table = yield* requireTable(tableId);
+        yield* requireCloudMember(table.workspaceId);
+        const next = name.trim() === "" ? table.name : name.trim();
+        yield* tables.rename(tableId, next);
+        yield* meter.meterActions(table.workspaceId, 1);
+        const event = {
+          type: "table.rename" as const,
+          tableId,
+          name: next,
+        };
+        yield* publish(table.workspaceId, tableId, event);
+        yield* publishWorkspaceTablesChanged(table.workspaceId, event);
+        return { name: next };
+      });
+
+    /**
+     * Move a column to a new display index within its table (0-based, clamped to
+     * the column count). Members-only. Metered ONE. Reindexes the affected
+     * columns to a contiguous 0..N-1 order — writing ONLY the columns whose
+     * position actually changes — then broadcasts a `column.reorder` carrying the
+     * FULL new id order so every viewer's grid splices identically. Returns the
+     * new column-id order.
+     */
+    const reorderColumn = (columnId: string, toIndex: number) =>
+      Effect.gen(function* () {
+        const col = yield* requireColumn(columnId);
+        yield* requireCloudMember(col.workspaceId);
+        const ordered = yield* columns.listByTable(col.tableId);
+        const from = ordered.findIndex((c) => c.id === columnId);
+        const dest = Math.max(0, Math.min(toIndex, ordered.length - 1));
+        const next = ordered.map((c) => c.id);
+        if (from !== -1 && from !== dest) {
+          const [moved] = next.splice(from, 1);
+          next.splice(dest, 0, moved!);
+        }
+        for (let i = 0; i < next.length; i++) {
+          if (ordered[i]?.id !== next[i]) {
+            yield* columns.setPosition(next[i]!, i);
+          }
+        }
+        yield* meter.meterActions(col.workspaceId, 1);
+        yield* publish(col.workspaceId, col.tableId, {
+          type: "column.reorder",
+          columnIds: next,
+        });
+        return { columnIds: next };
+      });
+
+    /**
+     * Move a row to a new display index within its table (0-based, clamped).
+     * Members-only. Metered ONE. Reindexes to a contiguous order, writing ONLY
+     * the rows whose position changes (so moving one row touches just the rows
+     * between its old and new slot, not the whole table), then broadcasts a
+     * `row.reorder` with the full new id order. Returns the new row-id order.
+     */
+    const reorderRow = (rowId: string, toIndex: number) =>
+      Effect.gen(function* () {
+        const row = yield* requireRow(rowId);
+        yield* requireCloudMember(row.workspaceId);
+        const ordered = yield* rows.listByTable(row.tableId);
+        const from = ordered.findIndex((r) => r.id === rowId);
+        const dest = Math.max(0, Math.min(toIndex, ordered.length - 1));
+        const next = ordered.map((r) => r.id);
+        if (from !== -1 && from !== dest) {
+          const [moved] = next.splice(from, 1);
+          next.splice(dest, 0, moved!);
+        }
+        for (let i = 0; i < next.length; i++) {
+          if (ordered[i]?.id !== next[i]) {
+            yield* rows.setPosition(next[i]!, i);
+          }
+        }
+        yield* meter.meterActions(row.workspaceId, 1);
+        yield* publish(row.workspaceId, row.tableId, {
+          type: "row.reorder",
+          rowIds: next,
+        });
+        return { rowIds: next };
+      });
+
+    /**
      * Patch a column's definition (rename / type / function provider-method-
      * code-params-condition). Members-only. Metered ONE. Broadcasts a
      * `column.update` with the full updated projection so every viewer's grid
@@ -950,6 +1038,9 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       addRow,
       addRowsWithCells,
       deleteTable,
+      renameTable,
+      reorderColumn,
+      reorderRow,
       updateColumn,
       deleteColumn,
       deleteRow,
