@@ -1150,8 +1150,13 @@ export function useCloudGridMutations() {
   // with server truth. Reuses the same pure reducers the realtime path uses.
   const applyOptimistic = useCallback(
     (tableId: string, event: Parameters<typeof patchGridCache>[1]) => {
+      // The unpaged snapshot is usually ABSENT (the grid loads paged) — an
+      // undefined cache entry must stay undefined, not be patched into being
+      // (and the reducer must never see undefined.columns).
       qc.setQueryData(gridQueryKeys.table(tableId), (prev) =>
-        patchGridCache(prev as Parameters<typeof patchGridCache>[0], event),
+        prev == null
+          ? prev
+          : patchGridCache(prev as Parameters<typeof patchGridCache>[0], event),
       );
       qc.setQueryData<{ pages: GridPage[]; pageParams: unknown[] }>(
         gridQueryKeys.tablePaged(tableId),

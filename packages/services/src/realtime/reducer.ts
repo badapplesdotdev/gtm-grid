@@ -154,10 +154,13 @@ const reorderById = <T extends { readonly _id: string }>(
  * snapshot to `null`.
  */
 export const applyGridEvent = (
-  snapshot: GridSnapshot | null,
+  snapshot: GridSnapshot | null | undefined,
   event: GridChangeEvent,
 ): GridSnapshot | null => {
-  if (snapshot === null) return null;
+  // `undefined` reaches us via react-query's setQueryData updater when the
+  // target cache key has no entry (e.g. the unpaged `table` snapshot while the
+  // grid is paged) — there is nothing to patch either way.
+  if (snapshot == null) return null;
 
   switch (event.type) {
     case "cell.upsert":
