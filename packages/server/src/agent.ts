@@ -29,6 +29,9 @@ const GTM_TOOLS = [
   "describe_column",
   "set_dedupe",
   "run_column",
+  "run_table",
+  "reorder_columns",
+  "reorder_rows",
   "get_table",
   "run_function",
   "upload_extension",
@@ -37,7 +40,8 @@ const MUTATING = new Set([
   "create_table", "rename_table", "delete_table",
   "add_column", "update_column", "delete_column",
   "add_rows", "update_cells", "delete_rows",
-  "set_dedupe", "run_column", "upload_extension",
+  "set_dedupe", "run_column", "run_table",
+  "reorder_columns", "reorder_rows", "upload_extension",
 ]);
 
 export interface AgentContext {
