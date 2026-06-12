@@ -838,6 +838,27 @@ html, body, #root {
   user-select: none;
 }
 
+/* ── Row selection ────────────────────────── */
+/* The gutter shows the row number by default and swaps to a checkbox on hover
+   or when the row is selected, so the per-row affordance stays out of the way. */
+.row-select {
+  cursor: pointer;
+  accent-color: var(--accent);
+  margin: 0 auto;
+  vertical-align: middle;
+}
+.row-num-td .row-select { display: none; }
+.grid-tr:hover .row-num-td .row-select,
+.grid-tr.is-selected .row-num-td .row-select { display: block; }
+.grid-tr:hover .row-num-td .row-num-val,
+.grid-tr.is-selected .row-num-td .row-num-val { display: none; }
+.grid-th.row-num-th .row-select { display: block; }
+
+/* Selected-row tint — wins over the plain :hover background (same specificity,
+   later in source), and a slightly stronger tint when hovering a selected row. */
+.grid-tr.is-selected .grid-td { background: var(--accent-bg); }
+.grid-tr.is-selected:hover .grid-td { background: var(--accent-soft); }
+
 /* cell content wrapper */
 .cell-wrap {
   display: flex;
@@ -1943,6 +1964,25 @@ html, body, #root {
 .ctx-item:hover { background: var(--bg); }
 .ctx-item.danger { color: var(--danger); }
 .ctx-item.danger:hover { background: var(--danger-bg); }
+.ctx-item:disabled { opacity: 0.45; cursor: default; }
+.ctx-item:disabled:hover { background: transparent; }
+
+/* ── Selection toolbar pill (shown when ≥1 row is selected) ─── */
+.sel-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px 3px 10px;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-ring);
+  border-radius: var(--r-md);
+}
+.sel-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
 
 /* ── Connections design (extension / AI provider panels) ─── */
 .detail-desc { font-size: 13px; color: var(--text-2); }
