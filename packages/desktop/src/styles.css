@@ -1444,6 +1444,13 @@ html, body, #root {
 .agent-model-opt:hover { background: var(--surface-2); }
 .agent-model-opt.active { color: var(--accent-2); font-weight: 600; }
 .agent-model-opt svg { color: var(--accent-2); }
+/* Permission-mode dropdown: each option shows a label + a one-line hint. */
+.agent-mode-menu { min-width: 240px; }
+.agent-mode-opt { align-items: flex-start; }
+.agent-mode-opt-text { display: flex; flex-direction: column; gap: 1px; text-align: left; }
+.agent-mode-opt-label { font-weight: 600; }
+.agent-mode-opt-hint { font-size: 11px; font-weight: 400; color: var(--text-3); }
+.agent-mode-opt.active .agent-mode-opt-hint { color: var(--text-2); }
 .agent-tab {
   all: unset; cursor: pointer;
   display: flex; align-items: center; gap: 8px;
@@ -1520,6 +1527,57 @@ html, body, #root {
 .agent-msg.error .agent-text { color: var(--danger); }
 .agent-text strong { font-weight: 600; }
 .agent-text em { color: var(--text-2); }
+/* Inline Approve/Deny bar for a gtm-grid confirmationRequired pause. */
+.agent-confirm {
+  margin-top: 8px; padding: 9px 11px;
+  border: 1px solid var(--border-2); border-radius: var(--r-md);
+  background: var(--surface-2);
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+}
+.agent-confirm-head { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; color: var(--text); }
+.agent-confirm-detail { font-size: 11.5px; color: var(--text-3); }
+.agent-confirm-actions { display: flex; gap: 6px; }
+.agent-confirm-deny, .agent-confirm-approve {
+  all: unset; cursor: pointer; padding: 5px 14px; border-radius: var(--r-sm);
+  font: 600 12px var(--font-sans); text-align: center;
+}
+.agent-confirm-deny { color: var(--text-2); border: 1px solid var(--border); }
+.agent-confirm-deny:hover { background: var(--surface); color: var(--text); }
+.agent-confirm-approve { background: var(--accent); color: #fff; }
+.agent-confirm-approve:hover { filter: brightness(1.06); }
+/* Plan-mode affordances: a "Plan" bar under the message + a slide-out drawer. */
+.agent-plan-bar {
+  margin-top: 8px; padding: 7px 10px;
+  border: 1px solid var(--border-2); border-radius: var(--r-md);
+  background: var(--surface-2);
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+}
+.agent-plan-label { display: inline-flex; align-items: center; gap: 6px; font: 600 12px var(--font-sans); color: var(--accent-2); }
+.agent-plan-actions { display: flex; gap: 6px; }
+.agent-plan-view, .agent-plan-approve {
+  all: unset; cursor: pointer; padding: 5px 12px; border-radius: var(--r-sm); font: 600 12px var(--font-sans);
+}
+.agent-plan-view { color: var(--text-2); border: 1px solid var(--border); }
+.agent-plan-view:hover { background: var(--surface); color: var(--text); }
+.agent-plan-approve { background: var(--accent); color: #fff; }
+.agent-plan-approve:hover { filter: brightness(1.06); }
+/* Slide-out plan drawer — sits just LEFT of the agent panel so the chat stays
+   visible to its right (over the grid area). */
+.plan-drawer {
+  position: fixed; top: 0; bottom: 0; right: var(--agent-w); width: min(520px, 46vw);
+  background: var(--surface); border-left: 1px solid var(--border); border-right: 1px solid var(--border);
+  box-shadow: -10px 0 28px rgba(0, 0, 0, 0.14); z-index: 49;
+  display: flex; flex-direction: column; animation: cdSlide .16s ease;
+}
+.plan-drawer-head {
+  height: var(--toolbar-h); flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
+  padding: 0 14px; border-bottom: 1px solid var(--border);
+}
+.plan-drawer-title { display: inline-flex; align-items: center; gap: 7px; font: 600 13.5px var(--font-sans); color: var(--text); }
+.plan-drawer-close { all: unset; cursor: pointer; color: var(--text-3); display: inline-flex; padding: 4px; border-radius: var(--r-xs); }
+.plan-drawer-close:hover { background: var(--surface-2); color: var(--text); }
+.plan-drawer-body { flex: 1; overflow-y: auto; padding: 16px 18px; }
+.plan-drawer-foot { flex-shrink: 0; padding: 10px 14px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; }
 
 /* collapsible tool calls */
 .tc { display: flex; flex-direction: column; }
@@ -1582,6 +1640,24 @@ html, body, #root {
   transition: border-color .12s, background .12s;
 }
 .agent-input textarea:focus { border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 3px var(--accent-ring); }
+/* Slash-command menu — pops ABOVE the composer (the input sits at the panel foot). */
+.agent-slash-menu {
+  position: absolute; left: 12px; right: 12px; bottom: calc(100% - 6px); z-index: 6;
+  background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg); padding: 4px; max-height: 240px; overflow-y: auto;
+}
+.agent-slash-head {
+  font-size: 10.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--text-3); padding: 6px 8px 4px;
+}
+.agent-slash-item {
+  all: unset; cursor: pointer; display: flex; align-items: baseline; gap: 8px; width: 100%;
+  padding: 6px 8px; border-radius: var(--r-sm); box-sizing: border-box;
+}
+.agent-slash-item.sel { background: var(--accent-soft); }
+.agent-slash-name { font-size: 12.5px; font-weight: 600; color: var(--accent); }
+.agent-slash-arg { font-size: 11.5px; color: var(--text-3); }
+.agent-slash-desc { font-size: 11.5px; color: var(--text-2); margin-left: auto; text-align: right; }
 .agent-send {
   all: unset; cursor: pointer;
   position: absolute; right: 18px; top: 50%; transform: translateY(-50%);
@@ -1635,6 +1711,30 @@ html, body, #root {
 .agent-text .md-h3 { font-size: 13.5px; }
 .agent-text .md-ul { margin: 4px 0 8px; padding-left: 18px; }
 .agent-text .md-ul li { margin: 3px 0; font: 400 13px var(--font-sans); line-height: 1.5; }
+/* GFM tables rendered by the chat markdown renderer. */
+.agent-text .md-table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  width: 100%;
+  font: 400 12.5px var(--font-sans);
+  display: block;
+  overflow-x: auto;
+}
+.agent-text .md-table th,
+.agent-text .md-table td {
+  border: 1px solid var(--border);
+  padding: 5px 9px;
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.agent-text .md-table th {
+  background: var(--surface-2);
+  font-weight: 600;
+  color: var(--text);
+}
+.agent-text .md-table tbody tr:nth-child(even) { background: var(--surface-2); }
+.agent-text .md-table .md-code { white-space: nowrap; }
 .agent-text .md-code {
   font: 12px var(--font-mono);
   background: var(--accent-soft);

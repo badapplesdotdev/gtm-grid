@@ -3,6 +3,9 @@ import type { ServerResponse } from "node:http";
 import {
   appendCapped,
   codexEnvToml,
+  codexSandboxFlags,
+  claudePermissionMode,
+  contextPreamble,
   manageChildLifecycle,
   mcpEnv,
   parseAgentCloud,
@@ -383,5 +386,55 @@ describe("appendCapped — bound the stderr buffer (TRI-3305)", () => {
     let buf = "";
     for (let i = 0; i < 1000; i++) buf = appendCapped(buf, "x".repeat(1024));
     expect(buf.length).toBe(STDERR_CAP);
+  });
+});
+
+describe("contextPreamble — bakes in the /goal slash-command protocol", () => {
+  it("teaches /goal in the base manual (always injected, no context needed)", () => {
+    const p = contextPreamble();
+    expect(p).toContain("## Slash commands");
+    expect(p).toContain("/goal");
+    // The protocol's spine — plan then execute autonomously.
+    expect(p).toMatch(/objective/i);
+    expect(p).toMatch(/Execute autonomously/i);
+  });
+
+  it("keeps the /goal protocol when an active table is present", () => {
+    const p = contextPreamble({ tableName: "Leads", columns: ["Email"] });
+    expect(p).toContain("/goal");
+    expect(p).toContain('viewing **"Leads"**');
+  });
+});
+
+describe("codexSandboxFlags — codex exec uses the resume-compatible bypass for every mode", () => {
+  it("returns the full-bypass flag regardless of mode (works on exec AND exec resume)", () => {
+    for (const m of ["plan", "auto", "acceptEdits", "bypassPermissions", undefined, "weird"]) {
+      expect(codexSandboxFlags(m as string | undefined)).toEqual(["--dangerously-bypass-approvals-and-sandbox"]);
+    }
+  });
+});
+
+describe("claudePermissionMode — composer mode → claude --permission-mode", () => {
+  it("plan maps to bypassPermissions (research tools must not be denied)", () => {
+    expect(claudePermissionMode("plan")).toBe("bypassPermissions");
+  });
+  it("other modes pass through; absent → bypass", () => {
+    expect(claudePermissionMode("acceptEdits")).toBe("acceptEdits");
+    expect(claudePermissionMode("auto")).toBe("auto");
+    expect(claudePermissionMode(undefined)).toBe("bypassPermissions");
+  });
+});
+
+describe("contextPreamble — PLAN MODE note", () => {
+  it("injects the plan-only protocol only when mode is 'plan'", () => {
+    expect(contextPreamble(undefined, "plan")).toContain("PLAN MODE (active)");
+    expect(contextPreamble(undefined, "plan")).toMatch(/do NOT.*ExitPlanMode/i);
+    expect(contextPreamble(undefined, "bypassPermissions")).not.toContain("PLAN MODE (active)");
+    expect(contextPreamble(undefined)).not.toContain("PLAN MODE (active)");
+  });
+  it("keeps the plan note alongside an active table", () => {
+    const p = contextPreamble({ tableName: "Leads", columns: ["Email"] }, "plan");
+    expect(p).toContain("PLAN MODE (active)");
+    expect(p).toContain('viewing **"Leads"**');
   });
 });

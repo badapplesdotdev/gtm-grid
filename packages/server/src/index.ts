@@ -1131,6 +1131,11 @@ const server = createServer(async (req, res) => {
       // Pass `origin` through so the SSE stream emits the allowlisted CORS
       // header on this privileged route (#22).
       const model = typeof body?.model === "string" && body.model.trim() ? body.model.trim() : undefined;
+      // Permission mode the user picked in the composer → Claude's --permission-mode.
+      // Validated against the headless-safe set; unknown/absent ⇒ undefined (the
+      // claude bridge then applies its bypass default).
+      const ALLOWED_MODES = new Set(["bypassPermissions", "auto", "acceptEdits", "plan"]);
+      const mode = typeof body?.mode === "string" && ALLOWED_MODES.has(body.mode) ? body.mode : undefined;
       // CLOUD context (TRI-3296): when the desktop is operating a CLOUD project
       // it forwards apiUrl/token/workspace/project/table so the spawned MCP's
       // table tools read/write Supabase. A partial/absent block ⇒ undefined,
@@ -1151,9 +1156,9 @@ const server = createServer(async (req, res) => {
       // Hermes is LOCAL-only by design — it drives the local SQLite project via
       // ACP and is never threaded the cloud context.
       const newChat = body?.newChat === true;
-      if (agent === "hermes") streamHermes(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model });
-      else if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, newChat, context, origin, model, cloud, providerEnv });
-      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, newChat, context, origin, model, cloud, providerEnv });
+      if (agent === "hermes") streamHermes(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model, mode });
+      else if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, newChat, context, origin, model, mode, cloud, providerEnv });
+      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, newChat, context, origin, model, mode, cloud, providerEnv });
     } catch (e) {
       send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
     }

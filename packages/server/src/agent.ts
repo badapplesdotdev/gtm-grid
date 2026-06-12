@@ -92,7 +92,25 @@ function renderConnectorsSection(providers?: AgentContext["providers"]): string 
 
 /** Operating context for the agent: how gtm grid works + the active table.
  *  This IS the GTM Grid skill — the agent reads this on every turn. */
-export function contextPreamble(ctx?: AgentContext): string {
+/**
+ * Extra instructions injected when the composer's PLAN MODE is active. Headless
+ * `-p` can't surface an interactive plan-approval prompt, so Claude's native
+ * plan flow (the `ExitPlanMode` tool) just spins — it presents a plan, gets no
+ * approval, retries blocked tools, and narrates "Standing by" forever. We instead
+ * teach the agent to plan-then-stop in plain text, which the desktop renders with
+ * an Approve button. The agent runs with full tool access here (so research/read
+ * tools aren't denied), and THIS note is what keeps it from executing.
+ */
+const PLAN_MODE_NOTE = `
+
+## PLAN MODE (active)
+The user turned on **Plan mode** — they want a PLAN to review, not execution.
+- **Investigate, then plan.** Use read-only tools (\`get_table\`, \`describe_column\`, search/web reads) to ground the plan, then present it.
+- **Present ONE plan as your FINAL message** — a short markdown doc: a one-line goal, then numbered steps (what to source, which columns to add left-to-right, what to run), and any open questions. Use a markdown table if it helps.
+- **Then STOP.** Do NOT execute the plan, create/modify columns, run columns, write files, or change any data. Do NOT call \`ExitPlanMode\` (it does nothing here). After the plan, end your turn and wait — the user will click **Approve** to run it.
+- **Never loop.** If a tool is blocked or you're unsure, fold that into the plan as a note or open question — do NOT retry it, and do NOT repeat yourself or narrate "standing by". One plan, then stop.`;
+
+export function contextPreamble(ctx?: AgentContext, mode?: string): string {
   const base = `# GTM Grid — operating manual
 
 You are operating **GTM Grid**, a Clay-style local spreadsheet where every column is a function. Tables live in a local SQLite project. The user runs you to build GTM pipelines: source prospects, enrich them, score/personalize, push to outreach tools.
@@ -102,6 +120,17 @@ You are operating **GTM Grid**, a Clay-style local spreadsheet where every colum
 - A function column is wired to one connector method: \`provider.method\` (e.g. \`trigify.enrichProfile\`, \`leadmagic.emailFinder\`, \`ai.generate\`, \`formatting.normalizeDomain\`).
 - A function column's params can reference OTHER columns via \`{{Column Name}}\` templates — that's how data flows row-by-row. Example: an Email column with \`fn: 'leadmagic.emailFinder'\` and \`params: { first_name: "{{First Name}}", last_name: "{{Last Name}}", domain: "{{Domain}}" }\`.
 - "Code" columns run a sandboxed JS body (\`function(inputs, sdk){ ... }\`) for custom transforms or to call \`sdk.<provider>.<method>(...)\` directly.
+
+## Slash commands
+The user can steer you with slash commands typed in the chat. When their message STARTS with one (e.g. \`/goal …\`), treat the leading \`/word\` as the command and the rest of the line as its argument, follow the protocol below, then resume normal operation. An unrecognized \`/word\` is just ordinary text — answer normally.
+
+- **/goal <objective>** — the user is handing you an OBJECTIVE to pursue end-to-end, not a single instruction. Work it like an agent:
+  1. **Align** — restate the goal in one line so the user can correct course early.
+  2. **Plan** — lay out a short numbered plan of how you'll reach it with the table tools (what to source, which columns to add left-to-right, what to run).
+  3. **Execute autonomously** — carry out the plan in order without waiting for "continue" between steps: \`get_table\` first, build columns, and TEST on 1 row before any bulk \`run_column\`. Use real \`provider.method\`s (discover via \`search_functions\`).
+  4. **Honor the confirm protocol** — you still STOP for the user's explicit OK before any delete, a \`run_column\` over ~25 paid rows, or spending >~50 credits (never set \`confirm:true\` on your own).
+  5. **Report** — when the goal is met (or you're blocked), give a short summary of what you achieved vs the objective and the next step / what you need.
+  If the objective after \`/goal\` is empty, ask the user what the goal is rather than guessing.
 
 ## Tool discovery (DO NOT call list_functions blindly)
 The catalog is huge (Trigify alone exposes 122 methods). Discover in this order:
@@ -183,12 +212,26 @@ ${renderSkillsSection(ctx?.skills)}
 - When the user says "this table", "this row", "this column" — they mean the one they're viewing (passed in context below).
 - If a step fails, surface the error (status code + message) and ASK before retrying with different inputs.`;
 
-  if (!ctx?.tableName) return base;
+  const plan = mode === "plan" ? PLAN_MODE_NOTE : "";
+  if (!ctx?.tableName) return base + plan;
   const cols = ctx.columns?.length ? ` Its columns are: ${ctx.columns.join(", ")}.` : "";
   return (
     base +
+    plan +
     `\n\n## Active table\nThe user is viewing **"${ctx.tableName}"**.${cols} When they say "this table" or don't name one, operate on this one.`
   );
+}
+
+/**
+ * The Claude `--permission-mode` value for the composer mode. PLAN mode maps to
+ * `bypassPermissions` (full tool access) on purpose: the native `plan` permission
+ * mode denies research/read tools in headless `-p` and the agent loops on the
+ * denials — the {@link PLAN_MODE_NOTE} preamble is what enforces plan-only here,
+ * not the permission mode. Every other mode passes through; absent ⇒ bypass.
+ */
+export function claudePermissionMode(mode?: string): string {
+  if (mode === "plan") return "bypassPermissions";
+  return mode ?? "bypassPermissions";
 }
 
 export type AgentKind = "claude" | "codex" | "hermes";
@@ -554,7 +597,7 @@ export function mcpConfig(
 /** Stream a Claude Code turn over SSE, driving gtmgrid via MCP. */
 export function streamClaude(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; sessionId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; cloud?: AgentCloud; providerEnv?: Record<string, string> },
+  opts: { message: string; project: string; repoRoot: string; sessionId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; mode?: string; cloud?: AgentCloud; providerEnv?: Record<string, string> },
 ): void {
   const sse = sseClient(res, opts.origin);
   // Optionally also expose the user's Hermes agent as an MCP tool (off unless
@@ -577,9 +620,16 @@ export function streamClaude(
     ...GTM_TOOLS.map((t) => `mcp__gtmgrid__${t}`),
     ...(hermesTool ? ["mcp__hermes"] : []),
   ];
-  const preamble = contextPreamble(opts.context);
+  const preamble = contextPreamble(opts.context, opts.mode);
   if (preamble) args.push("--append-system-prompt", preamble);
   if (opts.model) args.push("--model", opts.model);
+  // Permission posture (the composer's mode picker). Default to bypass — it
+  // matches the codex/hermes bridges and stops non-grid tools (Bash, grep) being
+  // denied in headless `-p`, where an "ask" prompt can't be surfaced anyway. PLAN
+  // mode also runs at bypass (see claudePermissionMode) so research tools aren't
+  // denied; the PLAN_MODE_NOTE preamble keeps it from executing. The gtmgrid
+  // tools stay pre-approved via --allowedTools regardless of the mode.
+  args.push("--permission-mode", claudePermissionMode(opts.mode));
   // Bind to the user's OWN session, not a client-stored id: an explicit id (a
   // History pick) wins; otherwise — unless they asked for a New chat — resume the
   // latest native session for this project. So continuity survives a Stop or app
@@ -706,13 +756,29 @@ export function codexEnvToml(env: Record<string, string>): string {
   return `{ ${entries.join(", ")} }`;
 }
 
+/**
+ * Codex `exec` sandbox/approval flags for the composer's permission mode.
+ *
+ * We use `--dangerously-bypass-approvals-and-sandbox` for EVERY mode because it's
+ * the only sandbox flag accepted by BOTH `codex exec <msg>` AND the
+ * `codex exec resume <id> <msg>` subcommand a follow-up turn uses — `-s/--sandbox`
+ * exists on a fresh `exec` but is rejected by `resume` ("unexpected argument
+ * '--sandbox'"), which broke multi-turn Codex chats. Mode differentiation for
+ * Codex therefore comes from the PREAMBLE instead: PLAN mode injects
+ * {@link PLAN_MODE_NOTE} (plan-only, don't execute), exactly as Claude's plan
+ * mode does. `mode` is kept in the signature for symmetry with the Claude bridge.
+ */
+export function codexSandboxFlags(_mode?: string): string[] {
+  return ["--dangerously-bypass-approvals-and-sandbox"];
+}
+
 export function streamCodex(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; threadId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; cloud?: AgentCloud; providerEnv?: Record<string, string> },
+  opts: { message: string; project: string; repoRoot: string; threadId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; mode?: string; cloud?: AgentCloud; providerEnv?: Record<string, string> },
 ): void {
   const sse = sseClient(res, opts.origin);
   const launcher = mcpLauncher(opts.repoRoot);
-  const preamble = contextPreamble(opts.context);
+  const preamble = contextPreamble(opts.context, opts.mode);
   const message = preamble ? `${preamble}\n\n${opts.message}` : opts.message;
   // Optionally also expose the user's Hermes agent as an MCP tool (off unless
   // `hermesAsTool` is set in ~/.gtmgrid/agents.json).
@@ -723,7 +789,7 @@ export function streamCodex(
   const flags = [
     "--json",
     "--skip-git-repo-check",
-    "--dangerously-bypass-approvals-and-sandbox",
+    ...codexSandboxFlags(opts.mode),
     // Replace Codex's whole MCP table with ONLY gtmgrid (+ Hermes when enabled),
     // so it ignores the user's other registered servers (Trigify/exa/etc.) and
     // drives gtmgrid. The gtmgrid env (incl. cloud context in cloud mode) is
@@ -1023,7 +1089,7 @@ const defaultSpawnHermes: SpawnHermes = (cmd, args, cwd) =>
 /** Stream a Hermes turn over SSE via the Agent Client Protocol. */
 export function streamHermes(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext; origin?: string; model?: string },
+  opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext; origin?: string; model?: string; mode?: string },
   deps: {
     spawn?: SpawnHermes;
     control?: ProcessControl;
@@ -1157,7 +1223,7 @@ export function streamHermes(
       // Best-effort model switch (panel passes an ACP modelId); keep default on failure.
       if (opts.model) await request("session/set_model", { sessionId, modelId: opts.model });
 
-      const preamble = contextPreamble(opts.context);
+      const preamble = contextPreamble(opts.context, opts.mode);
       const text = preamble ? `${preamble}\n\n${opts.message}` : opts.message;
       forwarding = true;
       const result = await request("session/prompt", { sessionId, prompt: [{ type: "text", text }] });

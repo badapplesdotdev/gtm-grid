@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, API_BASE, type AgentSession, type AgentStatus } from "./api";
-import { abortInFlight, agentAbortKey } from "./agentAbort";
+import { abortAllRuns, abortRun, tableAbortKey, type AbortControllers } from "./agentAbort";
 
 type AgentKind = "claude" | "codex" | "hermes";
 
@@ -21,9 +21,59 @@ interface Message {
   text: string;
   tools: ToolCallT[];
   error?: boolean;
+  /** This assistant turn was produced in PLAN MODE — render the plan affordances. */
+  plan?: boolean;
 }
 
 const AGENT_LABEL: Record<AgentKind, string> = { claude: "Claude Code", codex: "Codex", hermes: "Hermes" };
+
+/**
+ * Slash commands the user can type in the chat. Typing `/` at the start of an
+ * empty composer opens a menu of these; picking one inserts `/<name> ` so they
+ * can type the argument. The command itself is interpreted by the AGENT (the
+ * `## Slash commands` protocol in the server preamble, packages/server/src/agent.ts)
+ * — the message is sent verbatim, so this is purely the discoverability surface.
+ * Claude Code also expands its own user-invoked skills/commands in `-p` mode, so
+ * anything the user has installed still works even if it's not listed here.
+ */
+interface SlashCommand {
+  name: string;
+  hint: string;
+  description: string;
+}
+const SLASH_COMMANDS: SlashCommand[] = [
+  {
+    name: "goal",
+    hint: "<objective>",
+    description: "Hand the agent an objective — it plans, then works it end-to-end",
+  },
+];
+
+/**
+ * Permission modes the user picks in the composer — mapped to the CLI's
+ * `--permission-mode` on the server (packages/server/src/agent.ts). Only the
+ * headless-safe modes are offered: in `-p` the "ask" mode can't surface a prompt
+ * (stdin is closed), so it's omitted. Bypass is the default — it matches the
+ * Codex/Hermes bridges' existing posture and stops non-grid tools (Bash, grep)
+ * from being denied.
+ */
+type PermMode = "bypassPermissions" | "auto" | "acceptEdits" | "plan";
+const MODE_OPTIONS: { value: PermMode; label: string; hint: string }[] = [
+  { value: "bypassPermissions", label: "Bypass permissions", hint: "Run every tool without asking" },
+  { value: "auto", label: "Auto", hint: "Auto-approve actions that match your request" },
+  { value: "acceptEdits", label: "Accept edits", hint: "Auto-approve edits; deny the rest" },
+  { value: "plan", label: "Plan mode", hint: "Draft a plan first — don't execute yet" },
+];
+const MODE_KEY = "gtmgrid.agentMode";
+function loadMode(): PermMode {
+  try {
+    const v = localStorage.getItem(MODE_KEY);
+    if (v && MODE_OPTIONS.some((o) => o.value === v)) return v as PermMode;
+  } catch {
+    /* storage disabled — fall through */
+  }
+  return "bypassPermissions";
+}
 
 function relativeTime(ts: number): string {
   const s = Math.floor((Date.now() - ts) / 1000);
@@ -55,6 +105,7 @@ function loadModels(): Record<AgentKind, string> {
 const MODEL_OPTIONS: Record<AgentKind, { value: string; label: string }[]> = {
   claude: [
     { value: "", label: "Default" },
+    { value: "claude-fable-5", label: "Fable 5" },
     { value: "claude-opus-4-8", label: "Opus 4.8" },
     { value: "claude-opus-4-7", label: "Opus 4.7" },
     { value: "claude-opus-4-6", label: "Opus 4.6" },
@@ -193,6 +244,64 @@ function renderInline(text: string, keyBase: string): ReactNode[] {
   return nodes;
 }
 
+/** Split a GFM table row into trimmed cells, tolerating optional outer pipes. */
+function splitTableRow(line: string): string[] {
+  let s = line.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
+  return s.split("|").map((c) => c.trim());
+}
+
+/** A GFM table separator row, e.g. `| --- | :--: | ---: |`. */
+const TABLE_SEP = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)+\|?\s*$/;
+
+/**
+ * Parse a GFM table starting at `lines[start]` — a header row immediately
+ * followed by a `---` separator, then zero or more body rows. Returns the
+ * rendered `<table>` and the index past the table, or null if there isn't one.
+ * Cells render through {@link renderInline} so inline bold/code/links work.
+ */
+function parseTable(
+  lines: string[],
+  start: number,
+  keyBase: string,
+): { node: ReactNode; next: number } | null {
+  const header = lines[start];
+  const sep = lines[start + 1];
+  if (!header || !header.includes("|") || !sep || !TABLE_SEP.test(sep)) return null;
+  const heads = splitTableRow(header);
+  const aligns = splitTableRow(sep).map((c) =>
+    c.startsWith(":") && c.endsWith(":") ? "center" : c.endsWith(":") ? "right" : c.startsWith(":") ? "left" : undefined,
+  );
+  const body: string[][] = [];
+  let i = start + 2;
+  for (; i < lines.length; i++) {
+    if (!lines[i].includes("|") || !lines[i].trim()) break;
+    body.push(splitTableRow(lines[i]));
+  }
+  const node = (
+    <table key={`tbl-${keyBase}`} className="md-table">
+      <thead>
+        <tr>
+          {heads.map((h, c) => (
+            <th key={c} style={aligns[c] ? { textAlign: aligns[c] } : undefined}>{renderInline(h, `${keyBase}-h${c}`)}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {body.map((row, r) => (
+          <tr key={r}>
+            {heads.map((_, c) => (
+              <td key={c} style={aligns[c] ? { textAlign: aligns[c] } : undefined}>{renderInline(row[c] ?? "", `${keyBase}-r${r}c${c}`)}</td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+  return { node, next: i };
+}
+
 export function Markdown({ text }: { text: string }): ReactNode {
   const out: ReactNode[] = [];
   const parts = text.split(/```/);
@@ -210,8 +319,19 @@ export function Markdown({ text }: { text: string }): ReactNode {
         list = null;
       }
     };
-    lines.forEach((line, li) => {
+    // Index loop (not forEach) so a GFM table can look ahead at the separator row
+    // and consume its body rows.
+    let li = 0;
+    while (li < lines.length) {
+      const line = lines[li];
       const key = `${pi}-${li}`;
+      const table = parseTable(lines, li, key);
+      if (table) {
+        flush();
+        out.push(table.node);
+        li = table.next;
+        continue;
+      }
       const h = /^(#{1,3})\s+(.*)/.exec(line);
       const bullet = /^\s*[-*]\s+(.*)/.exec(line);
       if (bullet) {
@@ -225,7 +345,8 @@ export function Markdown({ text }: { text: string }): ReactNode {
       } else {
         flush();
       }
-    });
+      li++;
+    }
     flush();
   });
   return <>{out}</>;
@@ -260,6 +381,45 @@ function summarize(result: string): string {
   }
   const len = trimmed.length;
   return `${len} char${len !== 1 ? "s" : ""}`;
+}
+
+/**
+ * If the message's most-recent tool result is a gtm-grid `confirmationRequired`
+ * payload (a destructive/large op the agent paused on), return it so the UI can
+ * render Approve/Deny buttons. The agent stops and waits after emitting one of
+ * these, so the LAST resolved tool result is the pending confirmation. Returns
+ * null otherwise.
+ */
+function pendingConfirm(
+  m: Message,
+): { action?: string; willAffect?: number; target?: string; message?: string; estimatedCredits?: number } | null {
+  const last = [...m.tools].reverse().find((t) => t.result !== undefined);
+  if (!last?.result) return null;
+  try {
+    const p = JSON.parse(last.result.trim());
+    if (p && typeof p === "object" && p.confirmationRequired === true) {
+      return { action: p.action, willAffect: p.willAffect, target: p.target, message: p.message, estimatedCredits: p.estimatedCredits };
+    }
+  } catch {
+    /* not JSON — no confirmation */
+  }
+  return null;
+}
+
+/**
+ * The plan markdown for a plan-mode assistant turn: the `ExitPlanMode` tool's
+ * `plan` input if the agent used it, otherwise the message's own text (our PLAN
+ * MODE preamble asks the agent to present the plan as plain text). Empty while
+ * the turn is still streaming with nothing yet.
+ */
+function planBody(m: Message): string {
+  for (let i = m.tools.length - 1; i >= 0; i--) {
+    const t = m.tools[i];
+    if (t.name === "ExitPlanMode" && typeof t.input?.plan === "string" && t.input.plan.trim()) {
+      return t.input.plan;
+    }
+  }
+  return m.text;
 }
 
 // Pretty-print JSON results; pass other text through unchanged.
@@ -330,6 +490,48 @@ function ModelPicker({ agent, value, onChange }: { agent: AgentKind; value: stri
   );
 }
 
+/** Permission-mode picker — a small shield button + dropdown beside History. */
+function ModePicker({ value, onChange }: { value: PermMode; onChange: (v: PermMode) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  const current = MODE_OPTIONS.find((o) => o.value === value) ?? MODE_OPTIONS[0];
+  return (
+    <div className="agent-model-picker" ref={ref}>
+      {open && (
+        <div className="agent-model-menu agent-mode-menu">
+          <div className="agent-model-menu-head">Permission mode</div>
+          {MODE_OPTIONS.map((o) => (
+            <button
+              key={o.value}
+              className={`agent-model-opt agent-mode-opt ${o.value === value ? "active" : ""}`}
+              onClick={() => { onChange(o.value); setOpen(false); }}
+            >
+              <span className="agent-mode-opt-text">
+                <span className="agent-mode-opt-label">{o.label}</span>
+                <span className="agent-mode-opt-hint">{o.hint}</span>
+              </span>
+              {o.value === value && <IconCheck s={12} />}
+            </button>
+          ))}
+        </div>
+      )}
+      <button className="agent-model-btn" onClick={() => setOpen((o) => !o)} title="Permission mode">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l8 4v6c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V6z" /></svg>
+        {current.label}
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+      </button>
+    </div>
+  );
+}
+
 /**
  * The CLOUD context forwarded to the agent so its MCP table tools operate on the
  * user's CLOUD (Supabase) project instead of local SQLite (TRI-3296). `null`
@@ -357,10 +559,21 @@ export default function AgentPanel({
   const [agent, setAgent] = useState<AgentKind>("claude");
   // Which model each agent's CLI runs with ("" = the plan's default). Persisted.
   const [models, setModels] = useState<Record<AgentKind, string>>(loadModels);
+  // Permission mode (global across agents), persisted. Maps to --permission-mode.
+  const [mode, setMode] = useState<PermMode>(loadMode);
   const [status, setStatus] = useState<{ claude?: AgentStatus; codex?: AgentStatus; hermes?: AgentStatus }>({});
   const [threads, setThreads] = useState<Record<AgentKind, Message[]>>({ claude: [], codex: [], hermes: [] });
   const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
+  // Slash-command menu: open while the composer holds just `/word` (the command
+  // name being typed, before any space/argument). `index` is the keyboard cursor.
+  const [slash, setSlash] = useState<{ query: string; index: number } | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  // The plan currently open in the slide-out drawer (null = closed).
+  const [planView, setPlanView] = useState<string | null>(null);
+  // Busy is PER AGENT: a Claude run doesn't disable the Codex composer, and
+  // switching tabs shows the busy state of the tab you're viewing.
+  const [busyByAgent, setBusyByAgent] = useState<Record<AgentKind, boolean>>({ claude: false, codex: false, hermes: false });
+  const busy = busyByAgent[agent];
   const [collapsed, setCollapsed] = useState(false);
   const [pathInput, setPathInput] = useState("");
   const [connecting, setConnecting] = useState(false);
@@ -370,7 +583,9 @@ export default function AgentPanel({
   // here), so a New chat must be signalled explicitly — otherwise an empty
   // sessionRef would just resume the latest thread.
   const newChatRef = useRef<Record<AgentKind, boolean>>({ claude: false, codex: false, hermes: false });
-  const abortRef = useRef<AbortController | null>(null);
+  // One in-flight controller PER agent so runs are independent — switching tabs
+  // never aborts another agent's live turn (only an unmount / table switch does).
+  const abortRefs = useRef<AbortControllers>({ claude: null, codex: null, hermes: null });
   const scrollRef = useRef<HTMLDivElement>(null);
   // History dropdown: past conversations from the agent's OWN native transcript
   // store (read via the sidecar), NOT a local copy. Opening one loads its messages
@@ -389,6 +604,15 @@ export default function AgentPanel({
       /* quota / disabled storage — ignore */
     }
   }, [models]);
+
+  // Persist the permission mode (survives relaunch).
+  useEffect(() => {
+    try {
+      localStorage.setItem(MODE_KEY, mode);
+    } catch {
+      /* storage disabled — ignore */
+    }
+  }, [mode]);
 
   // Load the native session list when the dropdown opens (refetch per open so it
   // reflects conversations the CLI wrote since last time). Close on outside click.
@@ -451,59 +675,68 @@ export default function AgentPanel({
   const current = status[agent];
   const ready = current?.installed;
 
-  const setMessages = (fn: (m: Message[]) => Message[]) =>
-    setThreads((t) => ({ ...t, [agent]: fn(t[agent]) }));
-
   function stop() {
-    abortInFlight(abortRef);
+    abortRun(abortRefs.current, agent);
   }
 
-  // Abort the in-flight turn when the panel UNMOUNTS (closing it) or when the
-  // active agent / table changes — otherwise the SSE fetch keeps streaming and
-  // the server keeps the spawned CLI (+ MCP tree) alive, leaking memory
-  // (TRI-3305). The empty effect body means the abort only runs on cleanup,
-  // never tearing down a turn just started against the current context.
+  // Abort EVERY agent's in-flight turn when the panel UNMOUNTS (closing it) or
+  // when the active TABLE changes — otherwise the SSE fetches keep streaming and
+  // the server keeps the spawned CLIs (+ MCP trees) alive, leaking memory
+  // (TRI-3305). The empty effect body means the abort only runs on cleanup.
   //
-  // TRI-3306: depend on a STABLE SCALAR key derived from `agent` +
-  // `activeTable.name`, NOT the `activeTable`/`cloud` OBJECT identities.
-  // `activeTable` is passed as an inline object literal from App.tsx so its
-  // identity changes on every App re-render (e.g. react-query cloud polling);
-  // depending on it made the cleanup fire on every unrelated re-render and abort
-  // the live turn mid-stream. The cloud project name is reflected in
-  // `activeTable.name`, so the key still changes when the user actually switches
-  // context. See `agentAbortKey` for the keying rationale + regression test.
-  const abortKey = agentAbortKey(agent, activeTable);
+  // An AGENT switch is deliberately NOT a trigger: each agent's run is tracked in
+  // its own `abortRefs` slot and keeps streaming into its own thread, so flipping
+  // tabs just changes which thread is rendered. TRI-3306: key off the STABLE
+  // SCALAR table name (not the `activeTable` object identity, which App.tsx
+  // churns every re-render) so unrelated re-renders never tear down a live turn.
+  const tableKey = tableAbortKey(activeTable);
   useEffect(() => {
-    return () => abortInFlight(abortRef);
-  }, [abortKey]);
+    const refs = abortRefs.current;
+    return () => abortAllRuns(refs);
+  }, [tableKey]);
 
-  async function send(preset?: string) {
+  async function send(preset?: string, modeOverride?: PermMode) {
+    // Bind this turn to the agent it was started on. Everything below uses `a`,
+    // not the live `agent` state, so the run keeps writing to ITS OWN thread and
+    // toggling ITS OWN busy flag even after the user switches tabs mid-stream.
+    const a = agent;
     const text = (preset ?? input).trim();
-    if (!text || busy) return;
+    if (!text || busyByAgent[a]) return;
+    // `modeOverride` lets "Approve & run" resume a plan in an execute mode; it
+    // also becomes the new sticky mode so follow-ups keep executing.
+    const effMode = modeOverride ?? mode;
+    if (modeOverride && modeOverride !== mode) setMode(modeOverride);
     setInput("");
-    setMessages((m) => [...m, { role: "user", text, tools: [] }, { role: "assistant", text: "", tools: [] }]);
-    setBusy(true);
+    setSlash(null);
+    setPlanView(null);
+    // Thread updaters scoped to `a` (not the current `agent`), so streaming into
+    // a backgrounded tab lands in the right conversation.
+    const setMsgs = (fn: (m: Message[]) => Message[]) =>
+      setThreads((t) => ({ ...t, [a]: fn(t[a]) }));
+    setMsgs((m) => [...m, { role: "user", text, tools: [] }, { role: "assistant", text: "", tools: [], plan: effMode === "plan" }]);
+    setBusyByAgent((b) => ({ ...b, [a]: true }));
     const controller = new AbortController();
-    abortRef.current = controller;
+    abortRefs.current[a] = controller;
 
     const updateLast = (fn: (m: Message) => Message) =>
-      setMessages((msgs) => msgs.map((m, i) => (i === msgs.length - 1 ? fn(m) : m)));
+      setMsgs((msgs) => msgs.map((m, i) => (i === msgs.length - 1 ? fn(m) : m)));
 
     // Consume the one-shot "start fresh" intent for this turn. Without it, the
     // server resumes the latest native session — which is exactly what we want
     // after a Stop or app restart (no client-stored id required).
-    const fresh = newChatRef.current[agent];
-    newChatRef.current[agent] = false;
+    const fresh = newChatRef.current[a];
+    newChatRef.current[a] = false;
 
     try {
       const res = await fetch(`${API_BASE}/api/agent/chat`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          agent,
+          agent: a,
           message: text,
-          model: models[agent] || undefined,
-          sessionId: sessionRef.current[agent],
+          model: models[a] || undefined,
+          mode: effMode,
+          sessionId: sessionRef.current[a],
           newChat: fresh || undefined,
           context: activeTable ? { tableName: activeTable.name, columns: activeTable.columns } : undefined,
           // CLOUD context (TRI-3296): forwarded only when a cloud project is
@@ -546,9 +779,9 @@ export default function AgentPanel({
               return { ...m, tools };
             });
           else if (e.type === "grid") onGridChange();
-          else if (e.type === "session") sessionRef.current[agent] = e.sessionId;
+          else if (e.type === "session") sessionRef.current[a] = e.sessionId;
           else if (e.type === "done") {
-            if (e.sessionId) sessionRef.current[agent] = e.sessionId;
+            if (e.sessionId) sessionRef.current[a] = e.sessionId;
             if (e.isError) updateLast((m) => ({ ...m, error: true }));
           } else if (e.type === "error") updateLast((m) => ({ ...m, text: m.text || e.message, error: true }));
         }
@@ -557,10 +790,32 @@ export default function AgentPanel({
       if ((err as any)?.name === "AbortError") updateLast((m) => ({ ...m, text: m.text || "⏹ stopped" }));
       else updateLast((m) => ({ ...m, text: m.text || (err instanceof Error ? err.message : "stream failed"), error: true }));
     } finally {
-      setBusy(false);
-      abortRef.current = null;
+      setBusyByAgent((b) => ({ ...b, [a]: false }));
+      // Only clear our own slot — a fresh turn for this agent may have already
+      // installed a new controller.
+      if (abortRefs.current[a] === controller) abortRefs.current[a] = null;
       onGridChange();
     }
+  }
+
+  // Commands matching the slash query (empty query → all), bounded for display.
+  const slashMatches = slash
+    ? SLASH_COMMANDS.filter((c) => c.name.startsWith(slash.query.toLowerCase())).slice(0, 8)
+    : [];
+
+  /** Recompute the slash menu from the composer value: open only while it's a
+   *  lone `/word` (no space yet), reset the cursor to the top on every keystroke. */
+  function onComposerChange(v: string) {
+    setInput(v);
+    const m = /^\/(\w*)$/.exec(v);
+    setSlash(m ? { query: m[1], index: 0 } : null);
+  }
+
+  /** Accept a command: fill `/<name> ` and keep focus so the user types the arg. */
+  function acceptSlash(cmd: SlashCommand) {
+    setInput(`/${cmd.name} `);
+    setSlash(null);
+    requestAnimationFrame(() => inputRef.current?.focus());
   }
 
   // Derive the thinking-indicator label from the live stream state.
@@ -699,6 +954,41 @@ export default function AgentPanel({
                   {m.text && (m.role === "assistant"
                     ? <div className="agent-text"><Markdown text={m.text} /></div>
                     : <div className="agent-text">{m.text}</div>)}
+                  {m.role === "assistant" && m.plan && planBody(m).trim() !== "" && (
+                    <div className="agent-plan-bar">
+                      <span className="agent-plan-label">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" /><rect x="9" y="3" width="6" height="4" rx="1" /></svg>
+                        Plan
+                      </span>
+                      <div className="agent-plan-actions">
+                        <button className="agent-plan-view" onClick={() => setPlanView(planBody(m))}>View plan</button>
+                        {isLast && !busy && (
+                          <button className="agent-plan-approve" onClick={() => send("Approved — execute this plan now, step by step.", "bypassPermissions")}>Approve &amp; run</button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {isLast && m.role === "assistant" && !busy && (() => {
+                    const c = pendingConfirm(m);
+                    if (!c) return null;
+                    const detail = [
+                      typeof c.willAffect === "number" ? `${c.willAffect} item${c.willAffect !== 1 ? "s" : ""}` : null,
+                      c.target,
+                      typeof c.estimatedCredits === "number" && c.estimatedCredits > 0 ? `~${c.estimatedCredits} credits` : null,
+                    ].filter(Boolean).join(" · ");
+                    return (
+                      <div className="agent-confirm">
+                        <div className="agent-confirm-head">
+                          <strong>{c.action ?? "Confirm action"}</strong>
+                          {detail && <span className="agent-confirm-detail">{detail}</span>}
+                        </div>
+                        <div className="agent-confirm-actions">
+                          <button className="agent-confirm-deny" onClick={() => send("Cancel — do NOT perform that action.")}>Deny</button>
+                          <button className="agent-confirm-approve" onClick={() => send("Approved — proceed, calling the same tool with confirm: true.")}>Approve</button>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}
@@ -712,21 +1002,88 @@ export default function AgentPanel({
           </div>
           )}
 
+          {planView !== null && (
+            <aside className="plan-drawer">
+              <div className="plan-drawer-head">
+                <span className="plan-drawer-title">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" /><rect x="9" y="3" width="6" height="4" rx="1" /></svg>
+                  Plan
+                </span>
+                <button className="plan-drawer-close" onClick={() => setPlanView(null)} title="Close">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                </button>
+              </div>
+              <div className="plan-drawer-body agent-text">
+                <Markdown text={planView} />
+              </div>
+              {!busy && (
+                <div className="plan-drawer-foot">
+                  <button className="agent-plan-approve" onClick={() => send("Approved — execute this plan now, step by step.", "bypassPermissions")}>Approve &amp; run</button>
+                </div>
+              )}
+            </aside>
+          )}
+
           {activeTable && (
             <div className="agent-context-chip" title="The agent operates on this table by default">
               <span className="agent-context-dot" /> on <strong>{activeTable.name}</strong>
             </div>
           )}
           <div className="agent-input">
+            {slash && slashMatches.length > 0 && (
+              <div className="agent-slash-menu">
+                <div className="agent-slash-head">Commands</div>
+                {slashMatches.map((c, i) => (
+                  <button
+                    key={c.name}
+                    className={`agent-slash-item${i === slash.index ? " sel" : ""}`}
+                    onMouseEnter={() => setSlash((s) => (s ? { ...s, index: i } : s))}
+                    onMouseDown={(e) => {
+                      e.preventDefault(); // keep focus in the textarea
+                      acceptSlash(c);
+                    }}
+                  >
+                    <span className="agent-slash-name">/{c.name}</span>
+                    <span className="agent-slash-arg">{c.hint}</span>
+                    <span className="agent-slash-desc">{c.description}</span>
+                  </button>
+                ))}
+              </div>
+            )}
             <textarea
+              ref={inputRef}
               value={input}
               placeholder={
                 activeTable
-                  ? `Message ${AGENT_LABEL[agent]} about "${activeTable.name}"…`
-                  : `Message ${AGENT_LABEL[agent]}…`
+                  ? `Message ${AGENT_LABEL[agent]} about "${activeTable.name}"… (/ for commands)`
+                  : `Message ${AGENT_LABEL[agent]}… (/ for commands)`
               }
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => onComposerChange(e.target.value)}
               onKeyDown={(e) => {
+                // Slash menu open: arrows move the cursor, Enter/Tab accept the
+                // highlighted command, Escape closes it — none of these send.
+                if (slash && slashMatches.length > 0) {
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setSlash((s) => (s ? { ...s, index: (s.index + 1) % slashMatches.length } : s));
+                    return;
+                  }
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setSlash((s) => (s ? { ...s, index: (s.index - 1 + slashMatches.length) % slashMatches.length } : s));
+                    return;
+                  }
+                  if (e.key === "Enter" || e.key === "Tab") {
+                    e.preventDefault();
+                    acceptSlash(slashMatches[slash.index] ?? slashMatches[0]);
+                    return;
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setSlash(null);
+                    return;
+                  }
+                }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   send();
@@ -770,6 +1127,7 @@ export default function AgentPanel({
                 History
               </button>
             </div>
+            <ModePicker value={mode} onChange={setMode} />
             <span style={{ marginLeft: "auto" }} />
             <ModelPicker agent={agent} value={models[agent]} onChange={(v) => setModels((p) => ({ ...p, [agent]: v }))} />
           </div>
