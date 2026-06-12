@@ -233,6 +233,8 @@ export function DataGrid({
       return items;
     },
     [c, selectedRows, selectedCount, selectedIds, clearSelection],
+  );
+
   // Follow a member: scroll their cell into view and flash it. Rows are
   // fixed-height so the vertical offset is exact; the horizontal offset sums the
   // widths of the columns before the target. No-op if the row/column isn't loaded.

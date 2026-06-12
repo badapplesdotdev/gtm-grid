@@ -75,6 +75,20 @@ describe("escapeCsvField", () => {
     expect(escapeCsvField("line1\nline2")).toBe('"line1\nline2"');
     expect(escapeCsvField("carriage\rreturn")).toBe('"carriage\rreturn"');
   });
+
+  it("neutralizes spreadsheet formula injection (leading =, +, -, @, tab)", () => {
+    // Scraped/enriched third-party text must never execute when the CSV opens
+    // in Excel/Sheets — the OWASP apostrophe prefix forces treat-as-text.
+    expect(escapeCsvField("=cmd|' /C calc'!A0")).toBe("'=cmd|' /C calc'!A0");
+    expect(escapeCsvField("=1+2")).toBe("'=1+2");
+    expect(escapeCsvField("+44 7700 900000")).toBe("'+44 7700 900000");
+    expect(escapeCsvField("-2")).toBe("'-2");
+    expect(escapeCsvField("@handle")).toBe("'@handle");
+    expect(escapeCsvField("\tindented")).toBe("'\tindented");
+    // Interior occurrences stay untouched — only the LEADING char triggers.
+    expect(escapeCsvField("a=b")).toBe("a=b");
+    expect(escapeCsvField("x+y")).toBe("x+y");
+  });
 });
 
 describe("tableToCsv", () => {

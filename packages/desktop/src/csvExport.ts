@@ -32,9 +32,16 @@ export function cellToCsvValue(cell: Cell | undefined): string {
 /**
  * RFC-4180 field escaping: wrap in double quotes (doubling any embedded quote)
  * when the value contains a comma, quote, CR or LF; otherwise return as-is.
+ *
+ * FORMULA-INJECTION guard: a leading `=`, `+`, `-`, `@`, tab or CR makes Excel /
+ * Sheets EXECUTE the field as a formula (e.g. `=cmd|...`), and this grid exports
+ * third-party scraped/enriched data — a realistic attack vector. Such fields are
+ * prefixed with a single quote (the standard spreadsheet "treat as text" escape,
+ * per OWASP CSV-injection guidance) and quoted.
  */
 export function escapeCsvField(value: string): string {
-  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+  const guarded = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  return /[",\r\n]/.test(guarded) ? `"${guarded.replace(/"/g, '""')}"` : guarded;
 }
 
 /**
