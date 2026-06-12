@@ -968,6 +968,22 @@ route("POST", "/api/columns/:id/run", async (p, body) => {
   );
 });
 
+// Fire-and-forget run: start the column run in the BACKGROUND on this persistent
+// sidecar and return immediately. The agent's MCP delegates here for large runs so
+// the work outlives the 5-min agent turn (a synchronous MCP run would time out and
+// be killed). The caller polls cell counts (get_column / get_table) for progress.
+route("POST", "/api/columns/:id/run/async", (p, body) => {
+  // Optional explicit row scope (the MCP's limit/offset-scoped large runs) —
+  // forwarded so a "run the next 500" background run doesn't balloon to ALL rows.
+  const rowIds: string[] | undefined = Array.isArray(body?.rowIds)
+    ? body.rowIds.filter((r: unknown): r is string => typeof r === "string")
+    : undefined;
+  void runLimiter
+    .run(() => current.engine.runColumn(p.id, { force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds }))
+    .catch((e) => console.error(`async run of column ${p.id} failed:`, e instanceof Error ? e.message : e));
+  return { started: true, columnId: p.id };
+});
+
 // "Try on N rows": dry-run an UNSAVED function column (provider/method/params)
 // against the first `limit` rows and return the results without persisting a
 // column or writing cells. Powers the column-editor preview button.
