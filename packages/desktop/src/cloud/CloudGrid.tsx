@@ -27,6 +27,7 @@ import type { Id } from "./ids";
 import { apiClient } from "./client";
 import { Icon, ExpandedEditor } from "../App";
 import CellDetails, { extractCode } from "../CellDetails";
+import { setAgentPresenceTable } from "./agentPresence";
 import { api } from "../api";
 import type { ConnectorInfo, Column, FullTable } from "../api";
 import {
@@ -236,6 +237,21 @@ export function CloudGrid({
       });
     }
   }, [me, tableId]);
+
+  // Publish the open table's identity (name + column name→id) for the agent
+  // presence mapper — read at tool-event time, never re-rendering anything.
+  useEffect(() => {
+    if (tableId !== null && data != null) {
+      setAgentPresenceTable({
+        tableId,
+        tableName: data.name,
+        columnIdByName: new Map(
+          data.columns.map((col) => [col.name.trim().toLowerCase(), col.id]),
+        ),
+      });
+    }
+    return () => setAgentPresenceTable(null);
+  }, [tableId, data]);
 
   // Auto-open the webhook form when the chooser's "Webhook" flow bumps the token.
   const lastTokenRef = useRef(0);

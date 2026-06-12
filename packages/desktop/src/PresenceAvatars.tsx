@@ -22,6 +22,30 @@ const MAX_VISIBLE = 5;
 const initial = (user: PresenceUser): string =>
   (user.name ?? "?").trim().slice(0, 1).toUpperCase() || "?";
 
+/** The agent's bot glyph (no photo) — sized for the 24px stacked avatar. */
+export function BotGlyph({ size = 13, color }: { size?: number; color?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke={color ?? "currentColor"}
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 8V4H8" />
+      <rect width="16" height="12" x="4" y="8" rx="2" />
+      <path d="M2 14h2" />
+      <path d="M20 14h2" />
+      <path d="M15 13v2" />
+      <path d="M9 13v2" />
+    </svg>
+  );
+}
+
 /** One stacked avatar: surface-ring separator + per-user color ring, name on hover. */
 function PresenceAvatar({
   user,
@@ -50,20 +74,23 @@ function PresenceAvatar({
             className="size-[24px] border-2 border-background"
             style={{ boxShadow: `0 0 0 1.5px ${user.color}` }}
           >
-            {user.image !== null && (
+            {!user.isAgent && user.image !== null && (
               <AvatarImage src={user.image} alt="" referrerPolicy="no-referrer" />
             )}
             <AvatarFallback
               className="text-[11px] font-bold"
               style={{ color: user.color }}
             >
-              {initial(user)}
+              {user.isAgent ? <BotGlyph color={user.color} /> : initial(user)}
             </AvatarFallback>
           </Avatar>
         </button>
       </TooltipTrigger>
       <TooltipContent>
         <span className="font-semibold">{label}</span>
+        {user.isAgent && user.activity !== null && (
+          <span className="opacity-70"> — {user.activity}</span>
+        )}
         {followable && <span className="opacity-70"> · click to follow</span>}
       </TooltipContent>
     </Tooltip>
@@ -87,7 +114,7 @@ export function PresenceAvatars({
     >
       <AvatarStack>
         {visible.map((user) => (
-          <PresenceAvatar key={user.userId} user={user} onJump={onJump} />
+          <PresenceAvatar key={user.key} user={user} onJump={onJump} />
         ))}
       </AvatarStack>
       {overflow.length > 0 && (
@@ -102,7 +129,7 @@ export function PresenceAvatars({
           </TooltipTrigger>
           <TooltipContent>
             {overflow.map((u) => (
-              <div key={u.userId}>{u.name ?? u.userId}</div>
+              <div key={u.key}>{u.name ?? u.userId}</div>
             ))}
           </TooltipContent>
         </Tooltip>
