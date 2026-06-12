@@ -363,4 +363,20 @@ describe("applyGridEvent · table.rename", () => {
     });
     expect(next).toBe(snap);
   });
+
+  it("tolerates a missing snapshot (null AND undefined) for every event type", () => {
+    // react-query's setQueryData updater passes `undefined` when the cache key
+    // has no entry — the unpaged snapshot usually doesn't while the grid pages.
+    // REGRESSION: optimistic column.delete crashed with
+    // "undefined is not an object (evaluating 'snapshot.columns')".
+    const events = [
+      { type: "column.delete", columnId: "c1" },
+      { type: "row.delete", rowId: "r1" },
+      { type: "cell.upsert", cell: { rowId: "r1", columnId: "c1", value: 1, status: "done", error: null } },
+    ] as const;
+    for (const event of events) {
+      expect(applyGridEvent(null, event)).toBeNull();
+      expect(applyGridEvent(undefined, event)).toBeNull();
+    }
+  });
 });
