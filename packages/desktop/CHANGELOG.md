@@ -1,5 +1,19 @@
 # @gtmgrid/desktop
 
+## 0.9.16
+
+### Patch Changes
+
+- 9f01681: Fix "undefined is not an object (evaluating 'snapshot.columns')" when
+  deleting a column (or row) on a cloud table: the optimistic cache patch fed
+  react-query's `undefined` (no cached unpaged snapshot — the normal state
+  while the grid loads paged) into the grid reducer, which only guarded
+  `null`. The reducer now tolerates both, and the optimistic path skips absent
+  cache entries entirely.
+- Updated dependencies [9f01681]
+  - @gtmgrid/services@0.9.16
+  - @gtmgrid/cloud@0.9.16
+
 ## 0.9.15
 
 ### Patch Changes
