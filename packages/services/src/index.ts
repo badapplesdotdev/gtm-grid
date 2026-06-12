@@ -224,6 +224,8 @@ export {
   InvalidConfigError,
   InvalidMappingError,
   type ResolvedWebhook,
+  WEBHOOK_COLUMN_NAME,
+  WEBHOOK_PAYLOAD_PATH,
   WebhookNotFoundError,
   WebhookService,
   type WorkerGrid,

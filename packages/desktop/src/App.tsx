@@ -259,6 +259,25 @@ function isObjectOrArray(val: unknown): boolean {
   return val !== null && typeof val === "object";
 }
 
+/** The `receivedAt` of a webhook raw-payload cell (`{receivedAt, payload}`),
+ *  or `null` when the value is any other shape. */
+export function webhookCellReceivedAt(val: unknown): number | null {
+  if (val === null || typeof val !== "object" || Array.isArray(val)) return null;
+  const o = val as { receivedAt?: unknown; payload?: unknown };
+  return typeof o.receivedAt === "number" && "payload" in o ? o.receivedAt : null;
+}
+
+/** "Received <date>" label — e.g. "Jun 12, 2026, 10:26 AM". */
+function formatReceivedAt(ms: number): string {
+  return new Date(ms).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 // Column width: a modest default, hard min/max so cells stay readable & clipped.
 const DEFAULT_COL_W = 200;
 const MIN_COL_W = 80;
@@ -486,6 +505,23 @@ function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCel
         {runBtn}
         <span className="cell-status err" onClick={onOpenDetails}>
           {code ? `Status Code: ${code}` : "Error"}
+        </span>
+      </div>
+    );
+  }
+
+  // Webhook raw-payload cell ({receivedAt, payload}) — render the Clay-style
+  // "Received <date>" pill; click opens the details panel to map fields out.
+  const webhookReceivedAt = webhookCellReceivedAt(cell.value);
+  if (webhookReceivedAt !== null) {
+    return (
+      <div className="cell-wrap">
+        <span
+          className="cell-status ok"
+          title="Click to view the received payload"
+          onClick={onOpenDetails}
+        >
+          ⚡ Received {formatReceivedAt(webhookReceivedAt)}
         </span>
       </div>
     );

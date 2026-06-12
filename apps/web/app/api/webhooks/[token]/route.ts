@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { inngest } from "../../../../lib/inngest/client";
 import { resolveSiteUrl } from "../../../../lib/site-url";
+import { applyMapping, type MappingEntry } from "../../../../lib/webhook-mapping";
 import { signatureCheckPasses } from "../../../../lib/webhook-signature";
 
 /**
@@ -29,12 +30,6 @@ import { signatureCheckPasses } from "../../../../lib/webhook-signature";
  * Node runtime: uses `node:crypto` for HMAC verification + hashing.
  */
 export const runtime = "nodejs";
-
-/** A single field-mapping entry: a JSON path → the target column id. */
-interface MappingEntry {
-  readonly path: string;
-  readonly columnId: string;
-}
 
 /** The resolved webhook config the worker route returns (or `null`). */
 interface ResolvedWebhook {
@@ -86,37 +81,6 @@ async function resolveToken(token: string): Promise<ResolvedWebhook | null> {
   if (text === "") return null;
   const parsed = JSON.parse(text);
   return parsed === null ? null : (parsed as ResolvedWebhook);
-}
-
-/**
- * Read a value out of `body` at a dotted/bracketed `path` (e.g. `a.b[0].c` or
- * `payload.email`). Returns `undefined` when any segment is missing.
- */
-function valueAtPath(body: unknown, path: string): unknown {
-  const segments = path
-    .replace(/\[(\w+)\]/g, ".$1")
-    .split(".")
-    .filter((s) => s.length > 0);
-  let current: unknown = body;
-  for (const segment of segments) {
-    if (current === null || typeof current !== "object") return undefined;
-    current = (current as Record<string, unknown>)[segment];
-  }
-  return current;
-}
-
-/** Apply the stored mapping to the body → `{ columnId: value }` (skip missing). */
-function applyMapping(
-  body: unknown,
-  mapping: readonly MappingEntry[],
-): Record<string, unknown> {
-  const cells: Record<string, unknown> = {};
-  for (const entry of mapping) {
-    const value = valueAtPath(body, entry.path);
-    if (value === undefined) continue;
-    cells[entry.columnId] = value;
-  }
-  return cells;
 }
 
 /**
@@ -184,7 +148,7 @@ export async function POST(
     return json({ error: "Invalid JSON body" }, 400);
   }
 
-  const mappedCells = applyMapping(body, webhook.mapping);
+  const mappedCells = applyMapping(body, webhook.mapping, Date.now());
 
   const idempotencyHeader =
     req.headers.get("Idempotency-Key") ?? req.headers.get("X-Idempotency-Key");
