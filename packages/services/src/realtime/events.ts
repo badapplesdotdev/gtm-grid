@@ -104,6 +104,24 @@ export interface ColumnDeleteEvent {
 }
 
 /**
+ * Columns were reordered (the agent's `reorder_columns` tool / a drag in the
+ * grid). The payload is the FULL new column-id order so the reducer is a stable
+ * splice independent of which column moved — idempotent under at-least-once /
+ * out-of-order delivery (any id the snapshot doesn't hold is ignored; any column
+ * the event omits is kept, appended after the listed ones in its prior order).
+ */
+export interface ColumnReorderEvent {
+  readonly type: "column.reorder";
+  readonly columnIds: readonly string[];
+}
+
+/** Rows were reordered (the agent's `reorder_rows` tool / a drag). Full new id order. */
+export interface RowReorderEvent {
+  readonly type: "row.reorder";
+  readonly rowIds: readonly string[];
+}
+
+/**
  * A table was created in a project. Carried on the project's channel so a
  * member viewing the project's table list can react; it does NOT mutate a
  * `getTable` snapshot (a brand-new table has no rows/cells yet), so the reducer
@@ -126,6 +144,18 @@ export interface TableDeleteEvent {
 }
 
 /**
+ * A table was renamed. Carried on BOTH the table's own channel (so an open grid
+ * patches its header live) and the workspace room (so a member's sidebar list
+ * relabels without that table open). The reducer updates `table.name` in place
+ * when the viewed snapshot is this table; cells/rows/columns are untouched.
+ */
+export interface TableRenameEvent {
+  readonly type: "table.rename";
+  readonly tableId: string;
+  readonly name: string;
+}
+
+/**
  * A project's sidebar folders changed (folder created/renamed/deleted, or a
  * table moved between folders). Broadcast on the WORKSPACE room only — it does
  * not mutate any `getTable` snapshot (folders are list-organization metadata),
@@ -145,11 +175,14 @@ export type GridChangeEvent =
   | CellUpsertEvent
   | RowInsertEvent
   | RowDeleteEvent
+  | RowReorderEvent
   | ColumnInsertEvent
   | ColumnUpdateEvent
   | ColumnDeleteEvent
+  | ColumnReorderEvent
   | TableInsertEvent
   | TableDeleteEvent
+  | TableRenameEvent
   | FoldersChangedEvent;
 
 /**

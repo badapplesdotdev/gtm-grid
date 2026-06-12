@@ -115,6 +115,37 @@ const upsertCell = (
 };
 
 /**
+ * Reorder `items` to match the id order in `order`, stably. Items whose id is in
+ * `order` come first in that exact order; any item the event omits (or that was
+ * added after the event was produced) is kept and appended in its prior relative
+ * order. Ids in `order` that the snapshot doesn't hold are skipped. Returns the
+ * SAME array reference when the order is already correct, so an idempotent
+ * re-delivery is a no-op (no needless re-render).
+ */
+const reorderById = <T extends { readonly _id: string }>(
+  items: readonly T[],
+  order: readonly string[],
+): readonly T[] => {
+  const byId = new Map(items.map((it) => [it._id, it]));
+  const seen = new Set<string>();
+  const next: T[] = [];
+  for (const id of order) {
+    const it = byId.get(id);
+    if (it !== undefined && !seen.has(id)) {
+      next.push(it);
+      seen.add(id);
+    }
+  }
+  for (const it of items) {
+    if (!seen.has(it._id)) next.push(it);
+  }
+  // Preserve referential identity when nothing actually moved.
+  const unchanged =
+    next.length === items.length && next.every((it, i) => it === items[i]);
+  return unchanged ? items : next;
+};
+
+/**
  * Apply one grid change event to a snapshot, returning the next snapshot.
  *
  * A `null` snapshot (table not loaded / already deleted) is passed through
@@ -178,6 +209,22 @@ export const applyGridEvent = (
         // Cascade: drop the deleted column's cells (mirrors the FK ON DELETE).
         cells: snapshot.cells.filter((c) => c.columnId !== event.columnId),
       };
+
+    case "column.reorder": {
+      const columns = reorderById(snapshot.columns, event.columnIds);
+      return columns === snapshot.columns ? snapshot : { ...snapshot, columns };
+    }
+
+    case "row.reorder": {
+      const rows = reorderById(snapshot.rows, event.rowIds);
+      return rows === snapshot.rows ? snapshot : { ...snapshot, rows };
+    }
+
+    case "table.rename":
+      // Relabel in place only when the viewed snapshot IS this table.
+      return event.tableId === snapshot.table._id
+        ? { ...snapshot, table: { ...snapshot.table, name: event.name } }
+        : snapshot;
 
     case "table.insert":
       // A sibling table was created — a `getTable` snapshot for THIS table is

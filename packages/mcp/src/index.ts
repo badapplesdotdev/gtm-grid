@@ -309,7 +309,7 @@ server.tool(
   "Turn deduplication on/off for a table. With it ON, the table stays unique on one column — add_rows skips incoming duplicates automatically (ideal for sourcing N unique rows across paginated searches). Pass column:null to turn it off. keep:'oldest' keeps the first row seen; keep:'newest' replaces it with the new one. Enabling also sweeps existing duplicates once. Match is EXACT (no URL/email normalization), and a blank or over-200-char key cell is never merged.",
   { table: z.string(), column: z.string().nullable().describe("Column NAME to dedupe on, or null to disable"), keep: z.enum(["oldest", "newest"]).optional() },
   async ({ table, column, keep }) => {
-    if (cloudSource) return cloudUnsupported("set_dedupe");
+    if (cloudSource) return ok(await cloudSource.setDedupe(table, column, keep ?? "oldest"));
     const t = localTableOr(table);
     if (column === null || column === "") {
       local!.db.setTableDedupe(t.id, null);
@@ -448,7 +448,7 @@ server.tool(
     limit: z.number().optional(),
   },
   async ({ table, where, columns, limit }) => {
-    if (cloudSource) return cloudUnsupported("find_rows");
+    if (cloudSource) return ok(await cloudSource.findRows(table, where, columns, limit));
     const t = localTableOr(table);
     const match: Record<string, unknown> = {};
     for (const [name, val] of Object.entries(where ?? {})) {
@@ -476,7 +476,7 @@ server.tool(
   "Read one column's values (each with its row _id) — a lean alternative to get_table for assessing a big table on a single field. Bounded by `limit`.",
   { table: z.string(), column: z.string(), limit: z.number().optional() },
   async ({ table, column, limit }) => {
-    if (cloudSource) return cloudUnsupported("get_column");
+    if (cloudSource) return ok(await cloudSource.getColumn(table, column, limit));
     const t = localTableOr(table);
     const col = local!.db.resolveColumn(t.id, column);
     if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
@@ -494,7 +494,7 @@ server.tool(
   "Show exactly HOW a column computes its values — its function (provider.method), params (the {{Column}} input mapping), 'only run if' condition, full custom code (uncapped), output type and kind. Use this to understand how an EXISTING column was worked out — e.g. one that already has data filled in — before you edit it, re-run it, or answer 'how is this calculated?'. For a quick overview of every column at once, get_table now also returns a (capped) condition/code/params per column.",
   { table: z.string(), column: z.string() },
   async ({ table, column }) => {
-    if (cloudSource) return cloudUnsupported("describe_column");
+    if (cloudSource) return ok(await cloudSource.describeColumn(table, column));
     const t = localTableOr(table);
     const col = local!.db.resolveColumn(t.id, column);
     if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
@@ -521,7 +521,11 @@ server.tool(
     confirm: z.boolean().optional(),
   },
   async ({ table, updates, confirm }) => {
-    if (cloudSource) return cloudUnsupported("update_cells");
+    if (cloudSource) {
+      if (updates.length > CONFIRM_THRESHOLD && !confirm)
+        return needsConfirm("Update cells", updates.length, table);
+      return ok(await cloudSource.updateCells(table, updates));
+    }
     const t = localTableOr(table);
     if (updates.length > CONFIRM_THRESHOLD && !confirm) return needsConfirm("Update cells", updates.length, t.name);
     // Scope row ids to THIS table — never write a cell against a row id that
@@ -550,7 +554,16 @@ server.tool(
     confirm: z.boolean().optional(),
   },
   async ({ table, ids, where, confirm }) => {
-    if (cloudSource) return cloudUnsupported("delete_rows");
+    if (cloudSource) {
+      // Preview the target count WITHOUT deleting, so a destructive run asks the
+      // user first (mirrors the local preview), then deletes on confirm:true.
+      if (!confirm) {
+        const preview = await cloudSource.deleteRows(table, { ids, where, dryRun: true });
+        if (preview.deleted === 0) return ok({ deleted: 0, note: "no matching rows" });
+        return needsConfirm("Delete rows", preview.deleted, table);
+      }
+      return ok(await cloudSource.deleteRows(table, { ids, where }));
+    }
     const t = localTableOr(table);
     const targets = new Set<string>();
     if (ids?.length) {
@@ -583,7 +596,13 @@ server.tool(
   "Delete a column and its values from every row. DESTRUCTIVE: needs confirm:true after the user approves.",
   { table: z.string(), column: z.string(), confirm: z.boolean().optional() },
   async ({ table, column, confirm }) => {
-    if (cloudSource) return cloudUnsupported("delete_column");
+    if (cloudSource) {
+      if (!confirm) {
+        const { rows } = await cloudSource.tableStats(table);
+        return needsConfirm("Delete column", rows, `${table} › ${column}`, { hint: "removes the column and its cells from every row" });
+      }
+      return ok(await cloudSource.deleteColumn(table, column));
+    }
     const t = localTableOr(table);
     const col = local!.db.resolveColumn(t.id, column);
     if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
@@ -598,7 +617,13 @@ server.tool(
   "Delete an entire table — all of its columns and rows. DESTRUCTIVE: needs confirm:true after the user approves.",
   { table: z.string(), confirm: z.boolean().optional() },
   async ({ table, confirm }) => {
-    if (cloudSource) return cloudUnsupported("delete_table");
+    if (cloudSource) {
+      if (!confirm) {
+        const { rows } = await cloudSource.tableStats(table);
+        return needsConfirm("Delete table", rows, table, { hint: "permanently removes the whole table" });
+      }
+      return ok(await cloudSource.deleteTable(table));
+    }
     const t = localTableOr(table);
     if (!confirm) return needsConfirm("Delete table", local!.db.countRows(t.id), t.name, { hint: "permanently removes the whole table" });
     local!.db.deleteTable(t.id);
@@ -623,7 +648,7 @@ server.tool(
     }),
   },
   async ({ table, column, patch }) => {
-    if (cloudSource) return cloudUnsupported("update_column");
+    if (cloudSource) return ok(await cloudSource.updateColumn(table, column, patch));
     const t = localTableOr(table);
     const col = local!.db.resolveColumn(t.id, column);
     if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
@@ -639,10 +664,76 @@ server.tool(
   "Rename a table.",
   { table: z.string(), name: z.string() },
   async ({ table, name }) => {
-    if (cloudSource) return cloudUnsupported("rename_table");
+    if (cloudSource) return ok(await cloudSource.renameTable(table, name));
     const t = localTableOr(table);
     local!.db.renameTable(t.id, name.trim() || t.name);
     return ok({ renamed: name.trim() || t.name });
+  },
+);
+
+server.tool(
+  "reorder_columns",
+  "Move a column to a new 0-based display position within its table (0 = first/leftmost; out-of-range clamps to the ends). Non-destructive — only the column order changes, no cells are touched. Returns the new column-id order.",
+  { table: z.string(), column: z.string(), toIndex: z.number().describe("0-based target position (0 = leftmost)") },
+  async ({ table, column, toIndex }) => {
+    if (cloudSource) return ok(await cloudSource.reorderColumn(table, column, toIndex));
+    const t = localTableOr(table);
+    const col = local!.db.resolveColumn(t.id, column);
+    if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
+    return ok({ columnIds: local!.db.moveColumn(col.id, toIndex) });
+  },
+);
+
+server.tool(
+  "reorder_rows",
+  "Move a row (by its _id from get_table/find_rows) to a new 0-based display position within its table (0 = first/top; out-of-range clamps). Non-destructive — only the row order changes. Returns the new row-id order.",
+  { table: z.string(), row: z.string().describe("The row _id from get_table/find_rows"), toIndex: z.number().describe("0-based target position (0 = top)") },
+  async ({ table, row, toIndex }) => {
+    if (cloudSource) return ok(await cloudSource.reorderRow(table, row, toIndex));
+    const t = localTableOr(table);
+    if (!local!.db.listRows(t.id).some((r) => r.id === row)) throw new Error(`Row "${row}" is not in "${t.name}"`);
+    return ok({ rowIds: local!.db.moveRow(row, toIndex) });
+  },
+);
+
+server.tool(
+  "run_table",
+  "Run EVERY function column over all its pending rows, LEFT-TO-RIGHT (grid order — the natural dependency order, since a later column can reference an earlier column's output). Without `force` each column only fills cells that aren't already `done`; with `force` it recomputes every cell. A large run (more than ~50 pending cells in total) asks first: it returns the pending count + the function-column count — surface that and only re-call with confirm:true once the user approves. Returns a per-column ran/errors breakdown plus the totals.",
+  { table: z.string(), force: z.boolean().optional(), concurrency: z.number().optional(), confirm: z.boolean().optional() },
+  async ({ table, force, concurrency, confirm }) => {
+    const totals = (cols: { ran: number; errors: number }[]) => ({
+      ran: cols.reduce((n, c) => n + c.ran, 0),
+      errors: cols.reduce((n, c) => n + c.errors, 0),
+    });
+    if (cloudSource) {
+      const fns = await cloudSource.functionColumns(table);
+      const pending = force
+        ? (await cloudSource.tableStats(table)).rows * fns.length
+        : fns.reduce((n, c) => n + c.pending, 0);
+      if (pending > CONFIRM_THRESHOLD && !confirm)
+        return needsConfirm("Run table", pending, table, { functionColumns: fns.length });
+      const targets = force ? fns : fns.filter((c) => c.pending > 0);
+      const results: { column: string; ran: number; errors: number }[] = [];
+      for (const c of targets) results.push(await cloudSource.runColumn(table, c.name, { force, concurrency }));
+      return ok({ columns: results, ...totals(results) });
+    }
+    const t = localTableOr(table);
+    const rows = local!.db.listRows(t.id);
+    const fnCols = local!.db.listColumns(t.id).filter((c) => c.kind === "function");
+    const perCol = fnCols.map((col) => ({
+      col,
+      pending: force ? rows.length : rows.filter((r) => (local!.db.getCell(r.id, col.id)?.status ?? "empty") !== "done").length,
+    }));
+    const pending = perCol.reduce((n, c) => n + c.pending, 0);
+    if (pending > CONFIRM_THRESHOLD && !confirm)
+      return needsConfirm("Run table", pending, t.name, { functionColumns: fnCols.length });
+    const results: { column: string; ran: number; errors: number }[] = [];
+    for (const { col, pending: p } of perCol) {
+      if (!force && p === 0) continue; // nothing to do for this column
+      const res = await local!.engine.runColumn(col.id, { force, concurrency: concurrency ?? 5 });
+      results.push({ column: col.name, ...res });
+    }
+    return ok({ columns: results, ...totals(results) });
   },
 );
 

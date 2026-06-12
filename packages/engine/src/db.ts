@@ -353,6 +353,32 @@ export class Db {
     this.raw.prepare(`DELETE FROM columns WHERE id = ?`).run(id);
   }
 
+  /**
+   * Move a column to a new 0-based display index within its table (clamped to the
+   * column count). Reindexes the table's columns to a contiguous 0..N-1 order,
+   * writing ONLY the columns whose position actually changes, in one transaction.
+   * Returns the new column-id order (empty if the column doesn't exist).
+   */
+  moveColumn(columnId: string, toIndex: number): string[] {
+    const col = this.getColumn(columnId);
+    if (!col) return [];
+    const ordered = this.listColumns(col.table_id);
+    const from = ordered.findIndex((c) => c.id === columnId);
+    const dest = Math.max(0, Math.min(toIndex, ordered.length - 1));
+    const ids = ordered.map((c) => c.id);
+    if (from !== -1 && from !== dest) {
+      const [moved] = ids.splice(from, 1);
+      ids.splice(dest, 0, moved!);
+    }
+    const stmt = this.raw.prepare(`UPDATE columns SET position = ? WHERE id = ?`);
+    this.raw.transaction(() => {
+      ids.forEach((id, i) => {
+        if (ordered[i]?.id !== id) stmt.run(i, id);
+      });
+    })();
+    return ids;
+  }
+
   private hydrateColumn(r: ColumnRow): Column {
     return {
       ...r,
@@ -412,6 +438,35 @@ export class Db {
 
   deleteRow(rowId: string): void {
     this.raw.prepare(`DELETE FROM rows WHERE id = ?`).run(rowId);
+  }
+
+  /**
+   * Move a row to a new 0-based display index within its table (clamped).
+   * Reindexes to a contiguous order, writing ONLY the rows whose position changes
+   * (so moving one row touches just the rows between its old and new slot, not the
+   * whole table), in one transaction. Returns the new row-id order (empty if the
+   * row doesn't exist).
+   */
+  moveRow(rowId: string, toIndex: number): string[] {
+    const row = this.raw.prepare(`SELECT * FROM rows WHERE id = ?`).get(rowId) as
+      | Row
+      | undefined;
+    if (!row) return [];
+    const ordered = this.listRows(row.table_id);
+    const from = ordered.findIndex((r) => r.id === rowId);
+    const dest = Math.max(0, Math.min(toIndex, ordered.length - 1));
+    const ids = ordered.map((r) => r.id);
+    if (from !== -1 && from !== dest) {
+      const [moved] = ids.splice(from, 1);
+      ids.splice(dest, 0, moved!);
+    }
+    const stmt = this.raw.prepare(`UPDATE rows SET position = ? WHERE id = ?`);
+    this.raw.transaction(() => {
+      ids.forEach((id, i) => {
+        if (ordered[i]?.id !== id) stmt.run(i, id);
+      });
+    })();
+    return ids;
   }
 
   /** Clear a single cell (back to empty). */

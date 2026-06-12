@@ -105,6 +105,11 @@ export class ColumnRepo extends Context.Tag("ColumnRepo")<
       id: string,
       patch: ColumnPatch,
     ) => Effect.Effect<Option.Option<Column>, ColumnRepoError>;
+    /** Set a column's display position (reorder). */
+    readonly setPosition: (
+      id: string,
+      position: number,
+    ) => Effect.Effect<void, ColumnRepoError>;
     /** Delete a column (FK cascade drops its cells). */
     readonly remove: (id: string) => Effect.Effect<void, ColumnRepoError>;
   }
@@ -236,6 +241,16 @@ export const ColumnRepoLive: Layer.Layer<ColumnRepo, never, DbClient> =
                 },
                 catch: fail("column update"),
               }),
+        setPosition: (id, position) =>
+          Effect.tryPromise({
+            try: async () => {
+              await db
+                .update(schema.columns)
+                .set({ position })
+                .where(eq(schema.columns.id, id));
+            },
+            catch: fail("column set position"),
+          }),
         remove: (id) =>
           Effect.tryPromise({
             try: async () => {
@@ -287,6 +302,11 @@ export const columnRepoLayer = (store: GridStore): Layer.Layer<ColumnRepo> =>
         if (patch.params !== undefined) col.params = patch.params;
         if (patch.condition !== undefined) col.condition = patch.condition;
         return Option.some(col);
+      }),
+    setPosition: (id, position) =>
+      Effect.sync(() => {
+        const col = store.columns.find((c) => c.id === id);
+        if (col) col.position = position;
       }),
     remove: (id) => Effect.sync(() => cascadeDeleteColumn(store, id)),
   });

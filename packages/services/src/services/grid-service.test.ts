@@ -733,6 +733,85 @@ describe("GridService.listTablesWithCounts (project-wide list for the agent — 
   });
 });
 
+describe("GridService.renameTable", () => {
+  it("renames the table, meters one, and broadcasts table.rename (table + workspace room)", async () => {
+    const store = makeGridStore({ tables: [table({ name: "Old" })] });
+    const { run, events, quotas } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.renameTable("t1", "New")));
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) expect(exit.value).toEqual({ name: "New" });
+    expect(store.tables[0]!.name).toBe("New");
+    expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
+    const renames = events.filter((e) => e.event.type === "table.rename");
+    expect(renames.map((e) => e.tableId).sort()).toEqual(["_workspace", "t1"]);
+    expect(renames[0]!.event).toMatchObject({ type: "table.rename", tableId: "t1", name: "New" });
+  });
+
+  it("ignores a blank name (keeps the current one)", async () => {
+    const store = makeGridStore({ tables: [table({ name: "Keep" })] });
+    const { run } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.renameTable("t1", "   ")));
+    if (Exit.isSuccess(exit)) expect(exit.value).toEqual({ name: "Keep" });
+    expect(store.tables[0]!.name).toBe("Keep");
+  });
+
+  it("rejects a non-member before touching data", async () => {
+    const store = makeGridStore({ tables: [table()] });
+    const { run } = harness({ store, currentUserId: "stranger" });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.renameTable("t1", "X")));
+    expect(failTag(exit)).toBe("NotAMemberError");
+  });
+});
+
+describe("GridService.reorderColumn / reorderRow", () => {
+  const threeColStore = () =>
+    makeGridStore({
+      tables: [table()],
+      columns: [
+        column({ id: "c1", name: "A", position: 0 }),
+        column({ id: "c2", name: "B", position: 1 }),
+        column({ id: "c3", name: "C", position: 2 }),
+      ],
+    });
+
+  it("reorderColumn moves the column, reindexes positions, returns the new order", async () => {
+    const store = threeColStore();
+    const { run, events, quotas } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.reorderColumn("c3", 0)));
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) expect(exit.value).toEqual({ columnIds: ["c3", "c1", "c2"] });
+    // Positions now match the new order.
+    const posOf = (id: string) => store.columns.find((c) => c.id === id)!.position;
+    expect([posOf("c3"), posOf("c1"), posOf("c2")]).toEqual([0, 1, 2]);
+    expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
+    const reorder = events.find((e) => e.event.type === "column.reorder");
+    expect(reorder?.event).toEqual({ type: "column.reorder", columnIds: ["c3", "c1", "c2"] });
+  });
+
+  it("reorderColumn clamps an out-of-range index to the last slot", async () => {
+    const store = threeColStore();
+    const { run } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.reorderColumn("c1", 99)));
+    if (Exit.isSuccess(exit)) expect(exit.value).toEqual({ columnIds: ["c2", "c3", "c1"] });
+  });
+
+  it("reorderRow moves the row and broadcasts row.reorder", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      rows: [
+        row({ id: "r1", position: 0 }),
+        row({ id: "r2", position: 1 }),
+        row({ id: "r3", position: 2 }),
+      ],
+    });
+    const { run, events } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.reorderRow("r3", 0)));
+    if (Exit.isSuccess(exit)) expect(exit.value).toEqual({ rowIds: ["r3", "r1", "r2"] });
+    const reorder = events.find((e) => e.event.type === "row.reorder");
+    expect(reorder?.event).toEqual({ type: "row.reorder", rowIds: ["r3", "r1", "r2"] });
+  });
+});
+
 describe("GridService folders (sidebar table groups)", () => {
   const proj = { id: "p1", workspaceId: WS, name: "P", createdAt: 1 };
 

@@ -121,6 +121,51 @@ function fakeClient(grid: FakeGrid): {
         const n = ((args.rows as unknown[]) ?? []).length;
         return { rowIds: Array.from({ length: n }, (_, i) => `r_new_${i}`) };
       }
+      if (name === "/api/worker/deleteRow") {
+        const id = args.rowId as string;
+        grid.rows = grid.rows.filter((r) => r._id !== id);
+        grid.cells = grid.cells.filter((c) => c.rowId !== id);
+        return null;
+      }
+      if (name === "/api/worker/deleteColumn") {
+        const id = args.columnId as string;
+        grid.columns = grid.columns.filter((c) => c._id !== id);
+        grid.cells = grid.cells.filter((c) => c.columnId !== id);
+        return null;
+      }
+      if (name === "/api/worker/deleteTable") return { deleted: args.tableId };
+      if (name === "/api/worker/updateColumn") {
+        const col = grid.columns.find((c) => c._id === args.columnId);
+        if (col) Object.assign(col, (args.patch as Record<string, unknown>) ?? {});
+        return { id: args.columnId, name: col?.name ?? "" };
+      }
+      if (name === "/api/worker/renameTable") return { name: args.name };
+      if (name === "/api/worker/setDedupe") {
+        return {
+          dedupe: args.column ? { column: args.column, keep: args.keep } : null,
+          deleted: 0,
+        };
+      }
+      if (name === "/api/worker/reorderColumn") {
+        const ids = grid.columns.map((c) => c._id as string);
+        const from = ids.indexOf(args.columnId as string);
+        const dest = Math.max(0, Math.min(args.toIndex as number, ids.length - 1));
+        if (from !== -1) {
+          const [m] = ids.splice(from, 1);
+          ids.splice(dest, 0, m!);
+        }
+        return { columnIds: ids };
+      }
+      if (name === "/api/worker/reorderRow") {
+        const ids = grid.rows.map((r) => r._id as string);
+        const from = ids.indexOf(args.rowId as string);
+        const dest = Math.max(0, Math.min(args.toIndex as number, ids.length - 1));
+        if (from !== -1) {
+          const [m] = ids.splice(from, 1);
+          ids.splice(dest, 0, m!);
+        }
+        return { rowIds: ids };
+      }
       return null;
     },
     action: async () => null,
@@ -164,9 +209,11 @@ describe("makeCloudSource.getTable — reads the active cloud table from Supabas
       { name: "Username", kind: "manual", fn: null },
       { name: "Upper", kind: "function", fn: "test.upper" },
     ]);
+    // Each row carries its _id (matching the LOCAL get_table) so the agent can
+    // feed it into update_cells / delete_rows / reorder_rows.
     expect(out.rows).toEqual([
-      { Username: "torvalds", Upper: "TORVALDS" },
-      { Username: "ada", Upper: { error: "boom" } },
+      { _id: "r1", Username: "torvalds", Upper: "TORVALDS" },
+      { _id: "r2", Username: "ada", Upper: { error: "boom" } },
     ]);
   });
 });
@@ -482,5 +529,188 @@ describe("registryWithExtensions — cloud == local connectors", () => {
   it("skips a malformed manifest without dropping the valid ones", () => {
     const registry = registryWithExtensions(["{ not valid json", trigifyManifest]);
     expect(registry.list().map((c) => c.id)).toContain("trigify");
+  });
+});
+
+// ── The cloud WRITE/REORDER/READ gap tools (parity with the local SQLite source) ──
+
+/** A two-column (Username manual + Upper function), three-row grid for the mutators. */
+function gapGrid(): FakeGrid {
+  return {
+    columns: [
+      { _id: "c1", tableId: "t1", name: "Username", type: "text", kind: "manual", provider: null, method: null, code: null, params: {}, condition: null, position: 0, createdAt: 0 },
+      { _id: "c2", tableId: "t1", name: "Upper", type: "text", kind: "function", provider: "test", method: "upper", code: null, params: { value: "{{Username}}" }, condition: "Boolean({{Username}})", position: 1, createdAt: 0 },
+    ],
+    rows: [
+      { _id: "r1", tableId: "t1", position: 0, createdAt: 0 },
+      { _id: "r2", tableId: "t1", position: 1, createdAt: 0 },
+      { _id: "r3", tableId: "t1", position: 2, createdAt: 0 },
+    ],
+    cells: [
+      { rowId: "r1", columnId: "c1", value: "torvalds", status: "done", error: null, updatedAt: 1 },
+      { rowId: "r2", columnId: "c1", value: "ada", status: "done", error: null, updatedAt: 1 },
+      { rowId: "r3", columnId: "c1", value: "ada", status: "done", error: null, updatedAt: 1 },
+    ],
+  };
+}
+
+describe("makeCloudSource — write tools mirror the local SQLite mutators", () => {
+  it("updateCells resolves column NAME→id, sets values done and clears via empty", async () => {
+    const grid = gapGrid();
+    const { deps, client } = depsFor(grid);
+    const src = makeCloudSource(CTX, deps);
+    const res = await src.updateCells("t1", [
+      { row: "r1", column: "Upper", value: "TORVALDS" },
+      { row: "r2", column: "Upper", value: "" }, // clear
+    ]);
+    expect(res).toEqual({ updated: 2 });
+    const setCells = client.mutations.find((m) => m.name === "/api/worker/setCells");
+    expect(setCells?.args.cells).toEqual([
+      { rowId: "r1", columnId: "c2", value: "TORVALDS", status: "done" },
+      { rowId: "r2", columnId: "c2", value: null, status: "empty" },
+    ]);
+  });
+
+  it("updateCells rejects a row id that is not in the table", async () => {
+    const { deps } = depsFor(gapGrid());
+    const src = makeCloudSource(CTX, deps);
+    await expect(
+      src.updateCells("t1", [{ row: "nope", column: "Upper", value: "x" }]),
+    ).rejects.toThrow(/not in the cloud table/);
+  });
+
+  it("deleteRows by ids posts one deleteRow per target", async () => {
+    const grid = gapGrid();
+    const { deps, client } = depsFor(grid);
+    const res = await makeCloudSource(CTX, deps).deleteRows("t1", { ids: ["r1", "r3"] });
+    expect(res).toEqual({ deleted: 2 });
+    expect(client.mutations.filter((m) => m.name === "/api/worker/deleteRow").map((m) => m.args.rowId)).toEqual(["r1", "r3"]);
+  });
+
+  it("deleteRows by `where` matches client-side (trimmed exact)", async () => {
+    const { deps } = depsFor(gapGrid());
+    const res = await makeCloudSource(CTX, deps).deleteRows("t1", { where: { Username: "ada" } });
+    expect(res.deleted).toBe(2); // r2 + r3
+  });
+
+  it("deleteRows dryRun returns the count WITHOUT posting any delete", async () => {
+    const { deps, client } = depsFor(gapGrid());
+    const res = await makeCloudSource(CTX, deps).deleteRows("t1", { where: { Username: "ada" }, dryRun: true });
+    expect(res.deleted).toBe(2);
+    expect(client.mutations.some((m) => m.name === "/api/worker/deleteRow")).toBe(false);
+  });
+
+  it("deleteColumn resolves the name and posts its id", async () => {
+    const grid = gapGrid();
+    const { deps, client } = depsFor(grid);
+    const res = await makeCloudSource(CTX, deps).deleteColumn("t1", "Upper");
+    expect(res).toEqual({ deleted: "Upper" });
+    expect(client.mutations.find((m) => m.name === "/api/worker/deleteColumn")?.args.columnId).toBe("c2");
+  });
+
+  it("deleteTable targets the active context table", async () => {
+    const { deps, client } = depsFor(gapGrid());
+    const res = await makeCloudSource(CTX, deps).deleteTable("t1");
+    expect(res).toEqual({ deleted: "t1" });
+    expect(client.mutations.find((m) => m.name === "/api/worker/deleteTable")?.args.tableId).toBe("t1");
+  });
+
+  it("updateColumn resolves the name, forwards the patch, returns the (new) name", async () => {
+    const grid = gapGrid();
+    const { deps, client } = depsFor(grid);
+    const res = await makeCloudSource(CTX, deps).updateColumn("t1", "Upper", { name: "Caps" });
+    expect(res).toEqual({ column: "Caps" });
+    expect(client.mutations.find((m) => m.name === "/api/worker/updateColumn")?.args).toMatchObject({ columnId: "c2", patch: { name: "Caps" } });
+  });
+
+  it("renameTable posts the active table id + name", async () => {
+    const { deps, client } = depsFor(gapGrid());
+    const res = await makeCloudSource(CTX, deps).renameTable("t1", "Renamed");
+    expect(res).toEqual({ renamed: "Renamed" });
+    expect(client.mutations.find((m) => m.name === "/api/worker/renameTable")?.args).toEqual({ tableId: "t1", name: "Renamed" });
+  });
+
+  it("setDedupe resolves the column name→id and maps the result back to the name", async () => {
+    const grid = gapGrid();
+    const { deps, client } = depsFor(grid);
+    const res = await makeCloudSource(CTX, deps).setDedupe("t1", "Username", "newest");
+    expect(client.mutations.find((m) => m.name === "/api/worker/setDedupe")?.args).toEqual({ tableId: "t1", column: "c1", keep: "newest" });
+    expect(res).toEqual({ dedupe: { column: "Username", keep: "newest" }, removedExistingDuplicates: 0 });
+  });
+
+  it("setDedupe with null disables (no column resolution)", async () => {
+    const { deps, client } = depsFor(gapGrid());
+    const res = await makeCloudSource(CTX, deps).setDedupe("t1", null, "oldest");
+    expect(client.mutations.find((m) => m.name === "/api/worker/setDedupe")?.args.column).toBeNull();
+    expect(res.dedupe).toBeNull();
+  });
+});
+
+describe("makeCloudSource — read tools are served CLIENT-SIDE from the grid", () => {
+  it("findRows returns matching rows (with _id) and respects a column projection", async () => {
+    const { deps } = depsFor(gapGrid());
+    const res = await makeCloudSource(CTX, deps).findRows("t1", { Username: "ada" }, ["Username"], undefined);
+    expect(res.matched).toBe(2);
+    expect(res.rows).toEqual([
+      { _id: "r2", Username: "ada" },
+      { _id: "r3", Username: "ada" },
+    ]);
+  });
+
+  it("getColumn returns each row's value keyed by _id + the total", async () => {
+    const { deps } = depsFor(gapGrid());
+    const res = await makeCloudSource(CTX, deps).getColumn("t1", "Username", undefined);
+    expect(res.total).toBe(3);
+    expect(res.values).toEqual([
+      { _id: "r1", value: "torvalds" },
+      { _id: "r2", value: "ada" },
+      { _id: "r3", value: "ada" },
+    ]);
+  });
+
+  it("describeColumn exposes the recipe (fn/params/condition)", async () => {
+    const { deps } = depsFor(gapGrid());
+    const res = await makeCloudSource(CTX, deps).describeColumn("t1", "Upper");
+    expect(res).toMatchObject({
+      name: "Upper",
+      kind: "function",
+      fn: "test.upper",
+      provider: "test",
+      method: "upper",
+      params: { value: "{{Username}}" },
+      condition: "Boolean({{Username}})",
+    });
+  });
+
+  it("tableStats returns row + column counts", async () => {
+    const { deps } = depsFor(gapGrid());
+    expect(await makeCloudSource(CTX, deps).tableStats("t1")).toEqual({ rows: 3, columns: 2 });
+  });
+
+  it("functionColumns lists only function columns with their pending counts", async () => {
+    const { deps } = depsFor(gapGrid());
+    // Upper is a function column; none of its cells are done → 3 pending.
+    expect(await makeCloudSource(CTX, deps).functionColumns("t1")).toEqual([
+      { name: "Upper", pending: 3 },
+    ]);
+  });
+});
+
+describe("makeCloudSource — reorder tools return the new id order", () => {
+  it("reorderColumn moves a column and returns the new column-id order", async () => {
+    const { deps } = depsFor(gapGrid());
+    const res = await makeCloudSource(CTX, deps).reorderColumn("t1", "Upper", 0);
+    expect(res).toEqual({ columnIds: ["c2", "c1"] });
+  });
+
+  it("reorderRow moves a row (by _id) and returns the new row-id order", async () => {
+    const { deps } = depsFor(gapGrid());
+    const res = await makeCloudSource(CTX, deps).reorderRow("t1", "r3", 0);
+    expect(res).toEqual({ rowIds: ["r3", "r1", "r2"] });
+  });
+
+  it("reorderRow rejects a row id not in the table", async () => {
+    const { deps } = depsFor(gapGrid());
+    await expect(makeCloudSource(CTX, deps).reorderRow("t1", "nope", 0)).rejects.toThrow(/not in the cloud table/);
   });
 });
