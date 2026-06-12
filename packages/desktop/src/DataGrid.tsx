@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { CellContent, Icon } from "./App";
 import { FnIcon, type ColumnMeta } from "./FnIcon";
+import { missingInputs } from "./columnInputs";
 import type { Cell, Column, FullTable } from "./api";
 import { VirtualGridBody } from "./VirtualGridBody";
 import { useColumnWindow } from "./useColumnWindow";
@@ -320,6 +321,44 @@ export function DataGrid({
   const totalWidth =
     GUTTER_W + table.columns.reduce((s, col) => s + c.columnWidth(col.id), 0) + ADD_COL_W;
 
+  // ── Per-column run telemetry (Clay's header health bar) ────────────────
+  // One pass over the rows per table-state change; streaming runs patch cells
+  // in place, so the counts update live as a run progresses.
+  const fnStats = useMemo(() => {
+    const map = new Map<string, { done: number; error: number; running: number; queued: number; skipped: number }>();
+    const fnCols = table.columns.filter((col) => col.kind === "function");
+    if (!fnCols.length) return map;
+    for (const col of fnCols) map.set(col.id, { done: 0, error: 0, running: 0, queued: 0, skipped: 0 });
+    for (const row of table.rows) {
+      for (const col of fnCols) {
+        const s = map.get(col.id)!;
+        const cell = row.cells[col.id];
+        const status = cell?.status ?? "empty";
+        if (status === "done") s.done++;
+        else if (status === "error") s.error++;
+        else if (status === "running") s.running++;
+        else if (status === "pending") s.queued++;
+        else if (cell?.error) s.skipped++; // empty + note = condition-gated row
+      }
+    }
+    return map;
+  }, [table]);
+
+  // ── Waiting-for-inputs: required params unset, or {{Refs}} to deleted
+  // columns. Cheap (columns × params), recomputed when columns change.
+  const columnNameSet = useMemo(() => new Set(table.columns.map((col) => col.name)), [table.columns]);
+  const waitingByCol = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const col of table.columns) {
+      if (col.kind !== "function") continue;
+      const meta = c.columnMeta?.(col) ?? null;
+      const missing = missingInputs(col.params ?? {}, meta?.requiredInputs ?? [], columnNameSet);
+      if (missing.length) m.set(col.id, missing);
+    }
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [table.columns, columnNameSet, c.columnMeta]);
+
   // Column-header right-click menu (Clay-style): edit/rename/duplicate, scoped
   // run variants for function columns, then delete. Every run item maps onto
   // the engine's existing `{ force, rowIds }` options — a run is always the
@@ -515,9 +554,19 @@ export function DataGrid({
                     ...(colHere ? { "--presence-color": colHere[0].color } : {}),
                   };
                   const meta = col.kind === "function" ? c.columnMeta?.(col) ?? null : null;
+                  const stats = fnStats.get(col.id);
+                  const totalRows = table.rows.length;
+                  const settled = stats ? stats.done + stats.error + stats.skipped : 0;
+                  const showBar =
+                    !!stats && totalRows > 0 &&
+                    (stats.running > 0 || stats.queued > 0 || (settled > 0 && settled < totalRows));
+                  const waiting = waitingByCol.get(col.id);
+                  const statsLine = stats && totalRows > 0
+                    ? ` — ✓ ${stats.done}${stats.error ? ` · ✕ ${stats.error}` : ""}${stats.skipped ? ` · ⊘ ${stats.skipped}` : ""} of ${totalRows}`
+                    : "";
                   const headTitle = meta
-                    ? `${meta.providerName} · ${meta.methodLabel}${meta.credits ? ` · ${meta.credits} credit${meta.credits !== 1 ? "s" : ""}/row` : ""}`
-                    : col.fn ?? undefined;
+                    ? `${meta.providerName} · ${meta.methodLabel}${meta.credits ? ` · ${meta.credits} credit${meta.credits !== 1 ? "s" : ""}/row` : ""}${statsLine}`
+                    : col.fn ? `${col.fn}${statsLine}` : undefined;
                   return (
                     <th
                       key={col.id}
@@ -548,10 +597,29 @@ export function DataGrid({
                         ) : (
                           <span className="th-name">{col.name}</span>
                         )}
-                        {col.kind === "function" && (meta || col.fn) && (
-                          <span className="th-fn-badge" title={headTitle}>
-                            {meta ? meta.methodLabel : col.fn!.split(".").pop()}
+                        {waiting ? (
+                          <span
+                            className="th-wait-badge"
+                            title={`Waiting for inputs: ${waiting.join(", ")}`}
+                          >
+                            Waiting for inputs
                           </span>
+                        ) : (
+                          col.kind === "function" && (meta || col.fn) && (
+                            <span className="th-fn-badge" title={headTitle}>
+                              {meta ? meta.methodLabel : col.fn!.split(".").pop()}
+                            </span>
+                          )
+                        )}
+                        {stats && stats.error > 0 && (
+                          <button
+                            className="th-err-chip"
+                            title={`${stats.error} row${stats.error !== 1 ? "s" : ""} errored — click to re-run errored & unrun rows`}
+                            onClick={() => c.runColumn(col.id, { force: false })}
+                            disabled={runDisabled || c.runningColId === col.id}
+                          >
+                            ✕ {stats.error}
+                          </button>
                         )}
                         {col.kind === "function" && (
                           <button
@@ -564,6 +632,12 @@ export function DataGrid({
                           </button>
                         )}
                       </div>
+                      {showBar && stats && (
+                        <div className="th-progress" aria-hidden>
+                          <span className="th-progress-done" style={{ width: `${(stats.done / totalRows) * 100}%` }} />
+                          <span className="th-progress-err" style={{ width: `${(stats.error / totalRows) * 100}%` }} />
+                        </div>
+                      )}
                       {c.resizeColumn && (
                         <div
                           className="col-resize"
@@ -725,6 +799,7 @@ export function DataGrid({
                             }
                             onRunCell={col.kind === "function" ? () => c.runCell(row.id, col.id) : undefined}
                             running={c.runningCells.has(`${row.id}:${col.id}`)}
+                            waiting={waitingByCol.has(col.id)}
                           />
                         </td>
                       );

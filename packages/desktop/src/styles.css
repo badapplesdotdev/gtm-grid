@@ -819,6 +819,50 @@ html, body, #root {
   background: var(--accent-bg);
 }
 
+/* Per-column run telemetry: a 2px health bar along the header's bottom edge
+   (green = done fraction, red = errored fraction) while a run is in flight or
+   the column is partially run. */
+.th-progress {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 2px;
+  display: flex;
+  background: var(--border);
+  z-index: 1;
+}
+.th-progress-done { background: var(--success); height: 100%; transition: width 0.15s; }
+.th-progress-err { background: var(--danger); height: 100%; transition: width 0.15s; }
+
+/* Errored-rows chip — always visible when a column has failures. */
+.th-err-chip {
+  all: unset;
+  cursor: pointer;
+  font: 600 10px var(--font-mono);
+  color: var(--danger);
+  background: var(--danger-bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.th-err-chip:hover { box-shadow: inset 0 0 0 1px var(--danger); }
+.th-err-chip:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
+
+/* "Waiting for inputs" — a required mapping is unset or references a deleted
+   column; shown in place of the method badge. */
+.th-wait-badge {
+  font: 600 10px var(--font-sans);
+  color: #92400e;
+  background: #fef3c7;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 110px;
+  flex-shrink: 0;
+}
+
 /* ── Body rows ────────────────────────────── */
 
 /* Row-virtualization spacers (TRI-3267): zero-content <tr>s that pad the
@@ -3764,11 +3808,31 @@ button.import-type:hover { background: var(--surface-3); }
   flex-shrink: 0;
 }
 
-/* A cell whose row was gated off by the column's run condition ("Condition not met"). */
+/* A cell whose row was gated off by the column's run condition ("⊘ Skipped"). */
 .cell-skipped {
+  font-size: 11.5px;
+  color: var(--text-3);
+  background: var(--bg);
+  padding: 2px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A cell claimed by a run but not yet executed. */
+.cell-queued {
   font-size: 11.5px;
   font-style: italic;
   color: var(--text-3);
+  white-space: nowrap;
+}
+
+/* A function cell whose column has unmet required inputs / broken {{Refs}}. */
+.cell-waiting {
+  font-size: 11.5px;
+  font-style: italic;
+  color: #92400e;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

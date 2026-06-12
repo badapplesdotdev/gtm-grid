@@ -438,11 +438,14 @@ type CellContentProps = {
   onExpand?: (anchor: { left: number; top: number; width: number }) => void;
   onRunCell?: () => void;
   running?: boolean;
+  /** The column has unmet required inputs / broken {{Refs}} — empty cells
+   *  render "waiting for inputs" instead of a dash. */
+  waiting?: boolean;
   /** Notifies the grid when this cell enters/leaves edit mode (presence). */
   onEditingChange?: (editing: boolean) => void;
 };
 
-function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running, onEditingChange }: CellContentProps) {
+function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running, waiting, onEditingChange }: CellContentProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -520,17 +523,31 @@ function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCel
   }
 
   if (!cell || cell.status === "empty" || cell.status === "pending") {
-    // A row gated off by the column's run condition carries a note on an empty cell —
-    // surface it ("Condition not met") so it's clear why the cell is blank.
+    // A row gated off by the column's run condition carries a note on an empty
+    // cell — render the Clay-style neutral "Skipped" pill (full note on hover).
     if (cell?.status === "empty" && cell.error) {
       return (
         <div className="cell-wrap" title={cell.error}>
           {runBtn}
-          <span className="cell-skipped">{cell.error}</span>
+          <span className="cell-skipped">⊘ Skipped</span>
         </div>
       );
     }
+    // Queued: the run has claimed this cell but hasn't reached it yet.
+    if (cell?.status === "pending") {
+      return <div className="cell-wrap">{runBtn}<span className="cell-queued">queued</span></div>;
+    }
     if (col.kind === "function") {
+      // Column-level "waiting for inputs": a required mapping is unset or
+      // points at a deleted column — running now would fail, so say why.
+      if (waiting) {
+        return (
+          <div className="cell-wrap" title="A required input is unmapped or references a missing column — edit the column to fix its mapping">
+            {runBtn}
+            <span className="cell-waiting">waiting for inputs</span>
+          </div>
+        );
+      }
       return <div className="cell-wrap">{runBtn}<span className="cell-empty">—</span></div>;
     }
     return <div className="cell-wrap cell-editable" onClick={startEdit}><span className="cell-empty">empty</span></div>;
@@ -623,6 +640,7 @@ function cellPropsEqual(prev: CellContentProps, next: CellContentProps): boolean
   return (
     prev.col === next.col &&
     prev.running === next.running &&
+    prev.waiting === next.waiting &&
     prev.cell?.value === next.cell?.value &&
     prev.cell?.status === next.cell?.status &&
     prev.cell?.error === next.cell?.error &&
