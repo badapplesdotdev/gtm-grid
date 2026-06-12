@@ -57,6 +57,20 @@ export interface GridPresenceState {
   readonly cursor?: GridPresenceCell | null;
   /** The cell the member is currently editing, if any (stronger indicator). */
   readonly editing?: GridPresenceCell | null;
+  /**
+   * True for an AI-AGENT participant (the user's in-app agent working the
+   * table over its own connection). Rendered with a bot glyph + fixed accent
+   * color, and deduped SEPARATELY from the driving member (who shares the
+   * same token-stamped `userId`). The party passes this through untouched.
+   */
+  readonly agent?: boolean;
+  /** Human-readable activity label, e.g. "adding 5 rows" (agent presence). */
+  readonly activity?: string | null;
+  /**
+   * Column the participant is working over (columnId) when the activity is
+   * column-scoped rather than cell-scoped — renders a column-header ring.
+   */
+  readonly column?: string | null;
 }
 
 /** Options for {@link subscribeToGrid}. */

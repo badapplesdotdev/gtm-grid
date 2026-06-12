@@ -2,6 +2,7 @@ import type {
   CloudClientLike,
   CloudFunctionRefs,
 } from "@gtmgrid/engine";
+import { resolveSiteUrl } from "../site-url";
 
 /**
  * A {@link CloudClientLike} (the structural cloud-store client the engine's
@@ -27,14 +28,11 @@ import type {
 /**
  * Resolve the base URL of the apps/web deployment that serves the worker
  * endpoints. The Inngest worker and the `/api/worker/*` routes run in the SAME
- * Next.js deployment, so they share `SITE_URL`.
+ * Next.js deployment — `SITE_URL` when configured, else the Vercel-injected
+ * deployment URL (see {@link resolveSiteUrl}).
  */
 function workerBaseUrl(): string {
-  const url = process.env.SITE_URL;
-  if (url === undefined || url === "") {
-    throw new Error("SITE_URL is not configured");
-  }
-  return url.replace(/\/$/, "");
+  return resolveSiteUrl();
 }
 
 /** Resolve the shared worker bearer secret, failing closed when unset. */

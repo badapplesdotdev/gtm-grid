@@ -17,6 +17,7 @@ import type {
   ColumnType,
   Credential,
   CredentialScope,
+  Folder,
   Row,
   Table,
 } from "./types.js";
@@ -25,6 +26,13 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 
 CREATE TABLE IF NOT EXISTS tables (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS folders (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   position INTEGER NOT NULL DEFAULT 0,
@@ -133,6 +141,8 @@ export class Db {
       // match on (null = off); dedupe_keep is "oldest" | "newest".
       "ALTER TABLE tables ADD COLUMN dedupe_column TEXT",
       "ALTER TABLE tables ADD COLUMN dedupe_keep TEXT",
+      // Sidebar folders: which folder a table is filed under (NULL = root).
+      "ALTER TABLE tables ADD COLUMN folder_id TEXT",
     ]) {
       try {
         this.raw.exec(sql);
@@ -147,11 +157,17 @@ export class Db {
   }
 
   // ---- Tables ----
-  createTable(name: string): Table {
-    const t: Table = { id: randomUUID(), name, position: this.nextPos("tables"), created_at: Date.now() };
+  createTable(name: string, folderId: string | null = null): Table {
+    const t: Table = {
+      id: randomUUID(),
+      name,
+      position: this.nextPos("tables"),
+      created_at: Date.now(),
+      folder_id: folderId,
+    };
     this.raw
-      .prepare(`INSERT INTO tables (id, name, position, created_at) VALUES (?, ?, ?, ?)`)
-      .run(t.id, t.name, t.position, t.created_at);
+      .prepare(`INSERT INTO tables (id, name, position, created_at, folder_id) VALUES (?, ?, ?, ?, ?)`)
+      .run(t.id, t.name, t.position, t.created_at, t.folder_id);
     return t;
   }
 
@@ -179,6 +195,49 @@ export class Db {
   deleteTable(id: string): void {
     this.raw.prepare(`DELETE FROM tables WHERE id = ?`).run(id);
     this.setFavorite(id, false);
+  }
+
+  /**
+   * Move a table into a folder (or to the root with `folderId: null`), optionally
+   * updating its sort position (callers pass a fractional midpoint to reorder —
+   * SQLite's INTEGER affinity stores reals losslessly).
+   */
+  moveTable(id: string, folderId: string | null, position?: number): void {
+    if (position === undefined) {
+      this.raw.prepare(`UPDATE tables SET folder_id = ? WHERE id = ?`).run(folderId, id);
+    } else {
+      this.raw
+        .prepare(`UPDATE tables SET folder_id = ?, position = ? WHERE id = ?`)
+        .run(folderId, position, id);
+    }
+  }
+
+  // ---- Folders (sidebar table groups) ----
+  createFolder(name: string): Folder {
+    const f: Folder = {
+      id: randomUUID(),
+      name,
+      position: this.nextPos("folders"),
+      created_at: Date.now(),
+    };
+    this.raw
+      .prepare(`INSERT INTO folders (id, name, position, created_at) VALUES (?, ?, ?, ?)`)
+      .run(f.id, f.name, f.position, f.created_at);
+    return f;
+  }
+
+  listFolders(): Folder[] {
+    return this.raw.prepare(`SELECT * FROM folders ORDER BY position, created_at`).all() as Folder[];
+  }
+
+  renameFolder(id: string, name: string): void {
+    this.raw.prepare(`UPDATE folders SET name = ? WHERE id = ?`).run(name, id);
+  }
+
+  /** Delete a folder; its tables are unfiled back to the root, never deleted. */
+  deleteFolder(id: string): void {
+    this.raw.prepare(`UPDATE tables SET folder_id = NULL WHERE folder_id = ?`).run(id);
+    this.raw.prepare(`DELETE FROM folders WHERE id = ?`).run(id);
   }
 
   // ---- Favorites (pinned tables, stored in meta) ----

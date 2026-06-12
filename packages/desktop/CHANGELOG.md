@@ -1,5 +1,145 @@
 # @gtmgrid/desktop
 
+## 0.9.13
+
+### Patch Changes
+
+- 891e3b8: Agent presence (Co-Pilot cursor): the in-app AI agent now appears in cloud
+  tables like a teammate. As it reads or writes — get_table, run_column,
+  update_cells, add_rows — the grid shows "<Your name>'s Agent" in the avatar
+  stack (bot glyph, brand-accent ring), rings the cell or column it's working
+  on, and labels the activity ("reading the table", "updating 2 cells",
+  "running Email"). Visible to everyone in the table's room, clears when the
+  turn ends. Works against the already-deployed realtime party.
+- Updated dependencies [891e3b8]
+  - @gtmgrid/services@0.9.13
+  - @gtmgrid/cloud@0.9.13
+
+## 0.9.12
+
+### Patch Changes
+
+- fee2724: Fix the cell-details (field mapping) drawer in dark mode: the panel kept a
+  hardcoded light backdrop while its title, pills, and footer used dark-theme
+  colors — making the title invisible and the panel clash with the app. The
+  drawer now uses theme tokens throughout, and the number/boolean type glyphs
+  brighten on dark for contrast.
+- Updated dependencies [9bf183f]
+  - @gtmgrid/services@0.9.12
+  - @gtmgrid/cloud@0.9.12
+
+## 0.9.11
+
+### Patch Changes
+
+- 2ddf117: Clay-style webhook tables: every webhook now lands records in a dedicated
+  "Webhook" column, so received data is always visible — even on a table with
+  no other columns and no field mappings. Cells render as "Received <date>";
+  clicking opens the payload in the cell-details panel, where each field has
+  an "Add to column" action that promotes it to a real column applied to all
+  existing and future rows. Re-enabling an existing webhook heals it with the
+  new column. Mapping replaces never drop the raw-payload entry.
+- Updated dependencies [2ddf117]
+  - @gtmgrid/services@0.9.11
+  - @gtmgrid/cloud@0.9.11
+
+## 0.9.10
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.10
+- @gtmgrid/services@0.9.10
+
+## 0.9.9
+
+### Patch Changes
+
+- Updated dependencies [67f3d44]
+  - @gtmgrid/services@0.9.9
+  - @gtmgrid/cloud@0.9.9
+
+## 0.9.8
+
+### Patch Changes
+
+- Updated dependencies [3cbb8b2]
+  - @gtmgrid/services@0.9.8
+  - @gtmgrid/cloud@0.9.8
+
+## 0.9.7
+
+### Patch Changes
+
+- b49517c: Fix cloud Trigify signal tables staying empty, end to end:
+
+  - The prod Inngest app sync was rejected ("A concurrency key must be specified
+    for Account scoped limits"), leaving every background function — including the
+    hourly signal poll — unregistered. Account-scoped concurrency caps now carry
+    the required key, so the cron actually runs.
+  - A fresh Trigify search takes ~10–30s to return results, but the create-time
+    pull stamped the binding as synced, deferring the next pull by the full
+    schedule (a daily binding sat empty for 24h). A new durable warm-up retries
+    the pull until first data lands (~15–60s, like local), and still-empty
+    bindings stay due for the hourly cron as a safety net.
+  - The cloud grid now shows a signal status strip (waiting / rows pulled / last
+    synced / errors) with a "Sync now" button — previously an empty signal table
+    gave no visibility or recourse.
+  - @gtmgrid/cloud@0.9.7
+  - @gtmgrid/services@0.9.7
+
+## 0.9.6
+
+### Patch Changes
+
+- ba86bc8: Fix two cloud credential/connector issues so cloud behaves like local:
+
+  - The cloud agent (spawned MCP) only loaded the built-in connectors
+    (ai/formatting/formula/github/http), so it reported extension connectors like
+    Trigify and Apollo as "not available" — diverging from a local project. The
+    cloud agent now loads the SAME JSON-manifest extensions from the global db that
+    `openProject` loads locally, so every connector is available to
+    `list_functions` / `run_column` in cloud mode (credentials resolve via the
+    shared workspace key).
+  - After saving a shared Cloud connector key, the Cloud tab kept showing "No X
+    credentials yet" until app restart because the save path didn't refresh the
+    credential listing. It now refreshes immediately, flipping the panel to
+    "connected".
+  - @gtmgrid/cloud@0.9.6
+  - @gtmgrid/services@0.9.6
+
+## 0.9.5
+
+### Patch Changes
+
+- b1fed4b: Add "Use my local key" — one-click copy of a connector/AI provider's local API
+  key up to the shared Cloud (workspace) key. Shown in each connector's Cloud tab
+  when a local key exists. Security-first: the sidecar decrypts the local key
+  in-process and forwards the plaintext to the cloud over TLS authenticated as the
+  signed-in member; the plaintext never enters the renderer, is never logged, and is
+  never returned in the response. The cloud save encrypts at rest and is
+  member-gated (only a workspace member can write the shared key).
+  - @gtmgrid/cloud@0.9.5
+  - @gtmgrid/services@0.9.5
+
+## 0.9.4
+
+### Patch Changes
+
+- 296e4cd: Fix: the agent (and the UI cloud column run) failed on cloud tables in a packaged
+  prod build with `WEBHOOK_WORKER_SECRET is not configured`. The desktop sidecar and
+  the MCP it spawns authenticated to the cloud `/api/worker/*` endpoints with the
+  shared worker secret, which a prod build does not ship (it is a server-only
+  secret) — so it only ever worked in dev. The worker routes the desktop calls
+  (getTable / getTableMeta / setCell / setCellStatus / setCells / getCredential /
+  assertColumnRunQuota, plus the create/list tools) now authenticate as the
+  signed-in MEMBER via the session token and enforce workspace membership
+  server-side (a non-member is rejected). The shared secret remains the boundary for
+  the headless inngest webhook worker only. This makes the agent run/create columns
+  and the UI run columns on cloud tables in prod, and the agent-derived column logic
+  persists and is re-runnable.
+  - @gtmgrid/cloud@0.9.4
+  - @gtmgrid/services@0.9.4
+
 ## 0.9.3
 
 ### Patch Changes

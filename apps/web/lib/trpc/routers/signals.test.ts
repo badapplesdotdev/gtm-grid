@@ -13,7 +13,8 @@ import type {
   SignalBinding,
 } from "@gtmgrid/services";
 import { TestLayer, type TestLayerFixtures } from "@gtmgrid/services";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { inngest } from "../../inngest/client";
 import { createTestContext } from "../context";
 import { appRouter } from "../root";
 import { createCallerFactory } from "../trpc";
@@ -153,5 +154,80 @@ describe("signals.syncSignalBinding / deleteSignalBinding (entitlement gated)", 
     await expect(
       caller.signals.deleteSignalBinding({ bindingId: "sig-1" }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
+
+// The post-create warm-up: a fresh Trigify search returns nothing for ~10-30s,
+// so createSignalBinding must enqueue `signals/binding.created` (the durable
+// warm-up function retries the pull until first data). The enqueue is
+// BEST-EFFORT — a failed send must never fail the create.
+describe("signals.createSignalBinding — warm-up event", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** Stub Trigify HTTP: POST create → a search id; GET results → empty. */
+  const stubTrigify = () =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) =>
+        init?.method === "POST"
+          ? new Response(JSON.stringify({ id: "srch-9" }), { status: 200 })
+          : new Response("[]", { status: 200 }),
+      ),
+    );
+
+  /** A caller whose workspace has a SHARED Trigify key saved (decryptable). */
+  const callerWithKey = async () => {
+    const caller = callerFor({
+      memberships,
+      tables,
+      signalBindings: [],
+      credentials: [],
+      currentUserId: "member",
+    });
+    // Seed the shared key through the same runtime so the create's
+    // decrypt-for-run round-trips against the in-memory credential repo.
+    await caller.credentials.save({
+      workspaceId: WS,
+      extensionId: "trigify",
+      scope: "workspace",
+      name: "Trigify",
+      secrets: { apiKey: "tk_live" },
+    });
+    return caller;
+  };
+
+  it("emits signals/binding.created with the new bindingId + workspaceId", async () => {
+    stubTrigify();
+    const send = vi.spyOn(inngest, "send").mockResolvedValue({ ids: [] });
+    const caller = await callerWithKey();
+    const out = await caller.signals.createSignalBinding({
+      tableId: TABLE,
+      sourceId: "linkedin-posts",
+      name: "LinkedIn Posts",
+      columns: [],
+    });
+    expect(out.searchId).toBe("srch-9");
+    expect(send).toHaveBeenCalledWith({
+      name: "signals/binding.created",
+      data: { bindingId: out.bindingId, workspaceId: WS },
+    });
+  });
+
+  it("still succeeds when the warm-up enqueue fails (best-effort send)", async () => {
+    stubTrigify();
+    vi.spyOn(inngest, "send").mockRejectedValue(new Error("inngest down"));
+    const caller = await callerWithKey();
+    const out = await caller.signals.createSignalBinding({
+      tableId: TABLE,
+      sourceId: "linkedin-posts",
+      name: "LinkedIn Posts",
+      columns: [],
+    });
+    // The binding exists and the create returns normally — the hourly cron's
+    // always-due-while-empty predicate covers the missed warm-up.
+    expect(out.bindingId).toBeTruthy();
   });
 });
