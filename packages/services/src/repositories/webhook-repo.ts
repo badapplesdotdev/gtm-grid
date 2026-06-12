@@ -105,6 +105,9 @@ export interface GridRow {
   readonly id: string;
   readonly tableId: string;
   readonly position: number;
+  /** Creation time — carried into the worker getTable grid (engine row docs).
+   *  Optional so in-memory fixtures stay terse; the live repo always sets it. */
+  readonly createdAt?: number;
 }
 
 /** A grid cell projection the worker reads/writes. */
@@ -615,6 +618,7 @@ export const WebhookRepoLive: Layer.Layer<WebhookRepo, never, DbClient> =
                   id: schema.rows.id,
                   tableId: schema.rows.tableId,
                   position: schema.rows.position,
+                  createdAt: schema.rows.createdAt,
                 })
                 .from(schema.rows)
                 .where(eq(schema.rows.tableId, tableId))
