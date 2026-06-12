@@ -31,11 +31,17 @@ export class GridStoreError extends Data.TaggedError("GridStoreError")<{
   readonly cause?: unknown;
 }> {}
 
-/** Patch shape accepted by {@link GridStore.setCell} — mirrors `Db.setCell`. */
+/** Patch shape accepted by {@link GridStore.setCell} — mirrors `Db.setCell`.
+ *  The run-metadata fields (`ranAt`/`runMs`/`raw`) are written by the engine's
+ *  terminal markDone/markError; stores that don't persist them (cloud) simply
+ *  ignore the extra fields. */
 export interface CellPatch {
   value?: unknown;
   status?: CellStatus;
   error?: string | null;
+  ranAt?: number | null;
+  runMs?: number | null;
+  raw?: unknown;
 }
 
 /**

@@ -110,6 +110,9 @@ interface CellRow {
   status: string;
   error: string | null;
   updated_at: number | null;
+  ran_at: number | null;
+  run_ms: number | null;
+  raw: string | null;
 }
 
 export class Db {
@@ -143,6 +146,12 @@ export class Db {
       "ALTER TABLE tables ADD COLUMN dedupe_keep TEXT",
       // Sidebar folders: which folder a table is filed under (NULL = root).
       "ALTER TABLE tables ADD COLUMN folder_id TEXT",
+      // Per-cell run metadata (Clay-style audit trail): when the last run wrote
+      // the cell, how long it took, and the raw pre-simplify response (only
+      // when it differs from value; size-capped at write time).
+      "ALTER TABLE cells ADD COLUMN ran_at INTEGER",
+      "ALTER TABLE cells ADD COLUMN run_ms INTEGER",
+      "ALTER TABLE cells ADD COLUMN raw TEXT",
     ]) {
       try {
         this.raw.exec(sql);
@@ -485,18 +494,35 @@ export class Db {
   setCell(
     rowId: string,
     columnId: string,
-    patch: { value?: unknown; status?: CellStatus; error?: string | null },
+    patch: {
+      value?: unknown;
+      status?: CellStatus;
+      error?: string | null;
+      ranAt?: number | null;
+      runMs?: number | null;
+      raw?: unknown;
+    },
   ): void {
     const value = patch.value === undefined ? undefined : JSON.stringify(patch.value ?? null);
+    // Run metadata is written as a unit: when `ranAt` is present in the patch
+    // (the engine's terminal done/error write) ran_at/run_ms/raw are all
+    // OVERWRITTEN (raw may overwrite to null — a fresh run clears a stale
+    // archive); otherwise (manual edits, status-only writes) all three keep
+    // their existing values.
+    const setMeta = patch.ranAt !== undefined ? 1 : 0;
+    const rawJson = patch.raw === undefined || patch.raw === null ? null : JSON.stringify(patch.raw);
     this.raw
       .prepare(
-        `INSERT INTO cells (row_id, column_id, value, status, error, updated_at)
-         VALUES (@row_id, @column_id, @value, @status, @error, @updated_at)
+        `INSERT INTO cells (row_id, column_id, value, status, error, updated_at, ran_at, run_ms, raw)
+         VALUES (@row_id, @column_id, @value, @status, @error, @updated_at, @ran_at, @run_ms, @raw)
          ON CONFLICT(row_id, column_id) DO UPDATE SET
            value = COALESCE(@value, cells.value),
            status = COALESCE(@status, cells.status),
            error = @error,
-           updated_at = @updated_at`,
+           updated_at = @updated_at,
+           ran_at = CASE WHEN @set_meta = 1 THEN @ran_at ELSE cells.ran_at END,
+           run_ms = CASE WHEN @set_meta = 1 THEN @run_ms ELSE cells.run_ms END,
+           raw    = CASE WHEN @set_meta = 1 THEN @raw    ELSE cells.raw    END`,
       )
       .run({
         row_id: rowId,
@@ -505,6 +531,10 @@ export class Db {
         status: patch.status ?? null,
         error: patch.error ?? null,
         updated_at: Date.now(),
+        ran_at: patch.ranAt ?? null,
+        run_ms: patch.runMs ?? null,
+        raw: rawJson,
+        set_meta: setMeta,
       });
   }
 
@@ -515,6 +545,14 @@ export class Db {
   }
 
   private hydrateCell(r: CellRow): Cell {
+    let raw: unknown;
+    if (r.raw != null) {
+      try {
+        raw = JSON.parse(r.raw);
+      } catch {
+        raw = r.raw; // tolerate a non-JSON archive rather than failing the read
+      }
+    }
     return {
       row_id: r.row_id,
       column_id: r.column_id,
@@ -522,6 +560,9 @@ export class Db {
       status: r.status as CellStatus,
       error: r.error,
       updated_at: r.updated_at,
+      ran_at: r.ran_at,
+      run_ms: r.run_ms,
+      raw,
     };
   }
 

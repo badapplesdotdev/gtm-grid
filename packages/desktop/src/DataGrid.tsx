@@ -111,8 +111,9 @@ export interface GridController {
   readonly openAddColumn: (anchor: { left: number; top: number }) => void;
   /** Drag-resize a column; omit to disable resizing (cloud columns are fixed). */
   readonly resizeColumn?: (colId: string, startX: number, startWidth: number) => void;
-  /** Open the cell-details drawer (object/error cells); omit to disable. */
-  readonly openCellDetails?: (col: Column, cell: Cell | undefined) => void;
+  /** Open the cell-details drawer (object/error cells); omit to disable.
+   *  `rowId` lets the drawer fetch run metadata / the raw response archive. */
+  readonly openCellDetails?: (col: Column, cell: Cell | undefined, rowId?: string) => void;
   /** Open the expanded cell editor; omit to disable. */
   readonly expandCell?: (args: {
     rowId: string;
@@ -738,7 +739,7 @@ export function DataGrid({
                                 ? ([
                                     { label: "Run cell", disabled: runDisabled, onClick: () => c.runCell(row.id, col.id) },
                                     ...(c.openCellDetails
-                                      ? [{ label: "View cell details", onClick: () => c.openCellDetails!(col, cell) }]
+                                      ? [{ label: "View cell details", onClick: () => c.openCellDetails!(col, cell, row.id) }]
                                       : []),
                                   ] satisfies CtxItem[])
                                 : []),
@@ -782,7 +783,7 @@ export function DataGrid({
                                 : undefined
                             }
                             onOpenDetails={
-                              c.openCellDetails ? () => c.openCellDetails!(col, cell) : undefined
+                              c.openCellDetails ? () => c.openCellDetails!(col, cell, row.id) : undefined
                             }
                             onExpand={
                               c.expandCell

@@ -1655,7 +1655,12 @@ export default function App() {
   }, []);
 
   // Cell details drawer + column widths (resize)
-  const [detail, setDetail] = useState<{ columnName: string; value: unknown } | null>(null);
+  const [detail, setDetail] = useState<{
+    columnName: string;
+    value: unknown;
+    /** Run metadata + ids for the raw-response fetch (function cells only). */
+    meta?: { rowId: string; colId: string; fn: string | null; ranAt?: number | null; runMs?: number | null } | null;
+  } | null>(null);
   const [expandCell, setExpandCell] = useState<
     { rowId: string; colId: string; columnName: string; value: string; editable: boolean; anchor: { left: number; top: number; width: number } } | null
   >(null);
@@ -3728,11 +3733,15 @@ export default function App() {
                 duplicateColumn,
                 openAddColumn: (anchor) => { setAddColAnchor(anchor); setShowAddCol(true); },
                 resizeColumn: startResize,
-                openCellDetails: (col, cell) => {
+                openCellDetails: (col, cell, rowId) => {
                   setEditCol(null);
                   setDetail({
                     columnName: col.name,
                     value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
+                    meta:
+                      col.kind === "function" && rowId
+                        ? { rowId, colId: col.id, fn: col.fn, ranAt: cell?.ranAt, runMs: cell?.runMs }
+                        : null,
                   });
                 },
                 expandCell: (a) => setExpandCell(a),
@@ -3769,6 +3778,12 @@ export default function App() {
           onClose={() => setDetail(null)}
           onCreate={promoteCreate}
           onMapTo={promoteMap}
+          meta={detail.meta}
+          fetchRaw={
+            detail.meta
+              ? () => api.cell(detail.meta!.rowId, detail.meta!.colId).then((c) => c.raw)
+              : undefined
+          }
         />
       )}
 

@@ -240,11 +240,16 @@ function fullTable(tableId: string) {
   }));
   const rows = current.projectDb.listRows(t.id).map((r) => {
     const cells = current.projectDb.rowCells(r.id);
-    const out: Record<string, { value: unknown; status: string; error: string | null }> = {};
+    // `raw` (the archived pre-simplify response) is deliberately NOT in the grid
+    // payload — it can be large; GET /api/cells/:rowId/:columnId serves it.
+    const out: Record<
+      string,
+      { value: unknown; status: string; error: string | null; ranAt?: number | null; runMs?: number | null }
+    > = {};
     for (const c of columns) {
       const cell = cells.get(c.id);
       out[c.id] = cell
-        ? { value: cell.value, status: cell.status, error: cell.error }
+        ? { value: cell.value, status: cell.status, error: cell.error, ranAt: cell.ran_at ?? null, runMs: cell.run_ms ?? null }
         : { value: null, status: "empty", error: null };
     }
     return { id: r.id, cells: out };
@@ -957,6 +962,21 @@ route("POST", "/api/tables/:id/dedupe", (p) => current.projectDb.dedupeTable(p.i
 route("POST", "/api/cells", (_p, body) => {
   current.projectDb.setCell(body.rowId, body.columnId, { value: body.value, status: "done" });
   return { ok: true };
+});
+
+// Full single-cell read INCLUDING the archived raw response + run metadata.
+// The grid payload omits `raw` (size); the cell-details drawer fetches it here.
+route("GET", "/api/cells/:rowId/:columnId", (p) => {
+  const cell = current.projectDb.getCell(p.rowId, p.columnId);
+  if (!cell) return { value: null, status: "empty", error: null, ranAt: null, runMs: null, raw: null };
+  return {
+    value: cell.value,
+    status: cell.status,
+    error: cell.error,
+    ranAt: cell.ran_at ?? null,
+    runMs: cell.run_ms ?? null,
+    raw: cell.raw ?? null,
+  };
 });
 
 route("POST", "/api/columns/:id/run", async (p, body) => {
