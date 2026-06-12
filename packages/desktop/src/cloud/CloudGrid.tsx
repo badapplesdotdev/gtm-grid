@@ -33,10 +33,10 @@ import type { ConnectorInfo, Column, FullTable } from "../api";
 import {
   AddColumnPopover,
   FunctionsModal,
-  ColumnSettingsModal,
   ColumnAuthoringApiProvider,
   type ColumnAuthoringApi,
 } from "../AddColumn";
+import { ColumnEditPanel } from "../ColumnEditPanel";
 import { DataGrid, type GridController } from "../DataGrid";
 import { buildColumnMetaMap } from "../FnIcon";
 import { DedupePopover } from "../DedupePopover";
@@ -548,7 +548,8 @@ export function CloudGrid({
     deleteColumn: (colId) => void guard(() => deleteColumn(tableId, colId as Id<"columns">), "delete column"),
     clearCell: (rowId, colId) =>
       void guard(() => setCell(rowId as Id<"rows">, colId as Id<"columns">, ""), "clear cell"),
-    editColumn: (col) => setEditCol(col),
+    // One right rail at a time: the edit panel overlaps the details drawer.
+    editColumn: (col) => { setDetail(null); setEditCol(col); },
     renameColumn: (colId, name) =>
       void guard(() => updateColumn(tableId, colId as Id<"columns">, { name }), "rename column"),
     duplicateColumn: (col) => void guard(() => duplicateColumn(col), "duplicate column"),
@@ -557,11 +558,13 @@ export function CloudGrid({
     onScrollNearBottom: hasMore && !isLoadingMore ? loadMore : undefined,
     // Inspect a cell's full response (status-code/JSON) like the local grid;
     // the drawer supports promote-to-column (Clay-style field mapping).
-    openCellDetails: (col, cell) =>
+    openCellDetails: (col, cell) => {
+      setEditCol(null);
       setDetail({
         columnName: col.name,
         value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
-      }),
+      });
+    },
     expandCell: (a) => setCellExpand(a),
     // ── Multiplayer presence ──
     presence: presenceView,
@@ -655,11 +658,19 @@ export function CloudGrid({
       )}
 
       {editCol && (
-        <ColumnSettingsModal
+        <ColumnEditPanel
           column={editCol}
-          columns={columnNames}
+          columns={table.columns.map((c) => ({ id: c.id, name: c.name, type: c.type }))}
+          connectors={connectors}
+          // No tableId: the preview dry-run resolves rows via the LOCAL sidecar,
+          // which can't see cloud tables — the panel hides Try-on-rows without it.
+          rows={table.rows}
           onClose={() => setEditCol(null)}
-          onSaved={() => setEditCol(null)}
+          onSaved={(run) => {
+            const colId = editCol.id;
+            setEditCol(null);
+            if (run) void runColumn(colId, run);
+          }}
         />
       )}
     </ColumnAuthoringApiProvider>

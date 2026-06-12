@@ -123,9 +123,7 @@ const AddColumnPopover = lazy(() =>
 const FunctionsModal = lazy(() =>
   import("./AddColumn").then((m) => ({ default: m.FunctionsModal })),
 );
-const ColumnSettingsModal = lazy(() =>
-  import("./AddColumn").then((m) => ({ default: m.ColumnSettingsModal })),
-);
+const ColumnEditPanel = lazy(() => import("./ColumnEditPanel"));
 const SignalsModal = lazy(() =>
   import("./SignalsModal").then((m) => ({ default: m.SignalsModal })),
 );
@@ -3705,16 +3703,20 @@ export default function App() {
                 deleteRow,
                 deleteColumn,
                 clearCell,
-                editColumn: (col) => setEditCol(col),
+                // One right rail at a time: the edit panel and the cell-details
+                // drawer overlap, so opening one closes the other.
+                editColumn: (col) => { setDetail(null); setEditCol(col); },
                 renameColumn,
                 duplicateColumn,
                 openAddColumn: (anchor) => { setAddColAnchor(anchor); setShowAddCol(true); },
                 resizeColumn: startResize,
-                openCellDetails: (col, cell) =>
+                openCellDetails: (col, cell) => {
+                  setEditCol(null);
                   setDetail({
                     columnName: col.name,
                     value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
-                  }),
+                  });
+                },
                 expandCell: (a) => setExpandCell(a),
               }}
               bodyOverride={
@@ -3881,12 +3883,18 @@ export default function App() {
 
       {editCol && tableData && (
         <Suspense fallback={<PanelFallback />}>
-          <ColumnSettingsModal
+          <ColumnEditPanel
             column={editCol}
-            columns={tableData.columns.map((c) => c.name)}
+            columns={tableData.columns.map((c) => ({ id: c.id, name: c.name, type: c.type }))}
+            connectors={connectors}
             tableId={tableData.id}
+            rows={tableData.rows}
             onClose={() => setEditCol(null)}
-            onSaved={() => loadTable(tableData.id)}
+            onSaved={(run) => {
+              void loadTable(tableData.id);
+              if (run) void runColumn(editCol.id, run);
+            }}
+            onOpenExtension={(id) => setView({ kind: "extension", id })}
           />
         </Suspense>
       )}

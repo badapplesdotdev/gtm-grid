@@ -33,7 +33,7 @@ const ColumnAuthoringApiContext = createContext<ColumnAuthoringApi>(api);
 export const ColumnAuthoringApiProvider = ColumnAuthoringApiContext.Provider;
 
 /** The active column-authoring backend (local `api` by default). */
-function useColumnApi(): ColumnAuthoringApi {
+export function useColumnApi(): ColumnAuthoringApi {
   return useContext(ColumnAuthoringApiContext);
 }
 
@@ -62,7 +62,7 @@ import { CATEGORY_ICON, FnIcon, categorize } from "./FnIcon";
 export { CATEGORY_ICON, FnIcon };
 
 // Column-type tiles.
-const TYPE_ICONS: Record<string, ReactNode> = {
+export const TYPE_ICONS: Record<string, ReactNode> = {
   text: <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700 }}>T</span>,
   number: <span style={{ fontWeight: 700 }}>#</span>,
   boolean: (
@@ -774,7 +774,7 @@ const FxGlyph = <span style={{ fontFamily: "var(--font-mono)", fontStyle: "itali
 /** A textarea with the shared "/" column-insertion menu (mirrors AiGenerateDetail).
  *  Pass `footer` to render an in-box footer bar (a hint + e.g. a Generate button),
  *  which also draws the border around the textarea+footer as one box. */
-function SlashTextarea({
+export function SlashTextarea({
   value, onChange, columns, placeholder, rows = 4, className = "", footer,
 }: {
   value: string;
@@ -841,7 +841,7 @@ function SlashTextarea({
 /** A formula/expression editor: a "/"-aware box with an in-box footer ("Type / to
  *  insert column" + a Generate button). Clicking Generate reveals a one-line
  *  natural-language prompt that fills the box via the AI generator. Manual or AI. */
-function FormulaInput({
+export function FormulaInput({
   value, setValue, columns, mode = "formula", rows = 4, placeholder,
 }: {
   value: string;
@@ -915,7 +915,7 @@ function FormulaInput({
 /** "Run settings → Add run condition" — gates per-row execution (mirrors Clay).
  *  A natural-language box (with "/" insertion + Generate) drives the resolved
  *  boolean formula below it; either field can also be edited manually. */
-function RunSettings({
+export function RunSettings({
   condition, setCondition, columns,
 }: {
   condition: string;
@@ -991,7 +991,7 @@ function RunSettings({
   );
 }
 
-const FX_TYPES: Array<[string, string]> = [
+export const FX_TYPES: Array<[string, string]> = [
   ["text", "Text"],
   ["number", "Number"],
   ["boolean", "Boolean"],
@@ -1203,7 +1203,7 @@ function KeyValueEditor({
 }
 
 /** A collapsible "— Optional" field section, mirroring the request-builder layout. */
-function HttpField({ title, optional, defaultOpen, children }: { title: string; optional?: boolean; defaultOpen?: boolean; children: ReactNode }) {
+export function HttpField({ title, optional, defaultOpen, children }: { title: string; optional?: boolean; defaultOpen?: boolean; children: ReactNode }) {
   const [open, setOpen] = useState(!!defaultOpen);
   return (
     <div className="http-field">
@@ -1231,7 +1231,7 @@ function HttpToggle({ label, checked, onChange }: { label: string; checked: bool
 }
 
 /** The shared HTTP request field set. Reports serialized params via onChange on every edit. */
-function HttpRequestForm({
+export function HttpRequestForm({
   columns, initial, onChange,
 }: {
   columns: string[];
@@ -1305,7 +1305,7 @@ function previewValueText(v: unknown): string {
 
 /** "Try on N rows" — dry-runs the current request against the first N rows and shows
  *  each result inline, without saving the column or writing any cell. */
-function TryRowsButton({
+export function TryRowsButton({
   tableId, provider, method, params, limit = 5,
 }: {
   tableId: string;
@@ -1318,7 +1318,9 @@ function TryRowsButton({
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<Array<{ rowId: string; value?: unknown; error?: string }> | null>(null);
   const [err, setErr] = useState("");
-  const noUrl = !String(params.url ?? "").trim();
+  // Only the HTTP connector needs an endpoint before it can preview; other
+  // providers dry-run with whatever params are mapped.
+  const noUrl = provider === "http" && !String(params.url ?? "").trim();
 
   const run = async () => {
     setBusy(true); setErr(""); setResults(null);
@@ -1412,191 +1414,6 @@ function HttpRequestDetail({
       <button className="btn btn-primary fnx-cfg-add" onClick={add} disabled={saving}>
         {saving ? "Adding…" : "Add column"}
       </button>
-    </div>
-  );
-}
-
-// ─── Column settings (edit an existing column) ───────────
-// Reachable from the column header menu — edit the name, a formula column's
-// expression, and the "only run if" condition on any function column.
-
-export function ColumnSettingsModal({
-  column, columns, tableId, onClose, onSaved,
-}: {
-  column: {
-    id: string;
-    name: string;
-    type?: string;
-    provider: string | null;
-    fn: string | null;
-    params: Record<string, unknown>;
-    condition?: string | null;
-  };
-  columns: string[];
-  tableId?: string;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const gridApi = useColumnApi();
-  const isFormula = column.provider === "formula" || column.fn === "formula.eval";
-  const isAi = column.provider === "ai";
-  const isHttp = column.provider === "http";
-  const isFunction = !!column.provider || !!column.fn;
-  const isEnrichment = isFunction && !isFormula && !isAi && !isHttp; // connector/enrichment column
-  const p: Record<string, unknown> = column.params ?? {};
-
-  const [name, setName] = useState(column.name);
-  const [type, setType] = useState(column.type ?? "text");
-  const [condition, setCondition] = useState(column.condition ?? "");
-  // formula
-  const [expression, setExpression] = useState(isFormula ? String(p.expression ?? "") : "");
-  // ai
-  const [prompt, setPrompt] = useState(isAi ? String(p.prompt ?? "") : "");
-  const [system, setSystem] = useState(isAi ? String(p.system ?? "") : "");
-  const [model, setModel] = useState(isAi ? String(p.model ?? "") : "");
-  const [maxTokens, setMaxTokens] = useState(isAi && p.maxTokens != null ? String(p.maxTokens) : "");
-  // http: re-edit the full request builder (params reported by HttpRequestForm)
-  const [httpParams, setHttpParams] = useState<Record<string, unknown>>(p);
-  // enrichment: re-edit the existing input mappings
-  const [params, setParams] = useState<Record<string, string>>(() => {
-    const out: Record<string, string> = {};
-    if (isEnrichment) for (const [k, v] of Object.entries(p)) out[k] = v == null ? "" : typeof v === "string" ? v : String(v);
-    return out;
-  });
-  const [models, setModels] = useState<string[]>([]);
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState("");
-
-  // A column should never reference itself in an expression/condition/mapping.
-  const otherColumns = columns.filter((c) => c !== column.name);
-
-  useEffect(() => {
-    if (!isAi) return;
-    gridApi.aiProviders().then((ps) => setModels(ps.filter((x) => x.connected).flatMap((x) => x.models))).catch(() => {});
-  }, [isAi, gridApi]);
-
-  const save = async () => {
-    if (!name.trim()) { setErr("Column name is required"); return; }
-    setSaving(true);
-    setErr("");
-    try {
-      const patch: Parameters<typeof api.updateColumn>[1] = {
-        name: name.trim(),
-        condition: condition.trim() || null,
-      };
-      if (isFormula) {
-        patch.params = { ...p, expression: expression.trim() };
-        patch.type = type;
-      } else if (isAi) {
-        const np: Record<string, unknown> = { ...p, prompt: prompt.trim() };
-        np.system = system.trim() || undefined;
-        np.model = model.trim() || undefined;
-        const mt = parseInt(maxTokens, 10);
-        np.maxTokens = !Number.isNaN(mt) && mt > 0 ? mt : undefined;
-        for (const k of Object.keys(np)) if (np[k] === undefined) delete np[k];
-        patch.params = np;
-      } else if (isHttp) {
-        patch.params = httpParams;
-      } else if (isEnrichment) {
-        patch.params = { ...p, ...params };
-      } else {
-        patch.type = type; // manual column
-      }
-      await gridApi.updateColumn(column.id, patch);
-      onSaved();
-      onClose();
-    } catch (e: any) {
-      setErr(e?.message ?? "Failed to save");
-      setSaving(false);
-    }
-  };
-
-  const TypePicker = (
-    <div className="fx-types">
-      {FX_TYPES.map(([id, label]) => (
-        <button key={id} type="button" className={`fx-type${type === id ? " active" : ""}`} onClick={() => setType(id)}>
-          <span className="fx-type-icon">{TYPE_ICONS[id]}</span>
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-
-  return (
-    <div className="popover-scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="col-settings" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="col-settings-head">
-          <div className="col-settings-title">Edit column{column.fn ? ` · ${column.fn}` : ""}</div>
-          <button className="fnx-x" onClick={onClose}>{X}</button>
-        </div>
-        <div className="col-settings-body">
-          <label className="form-label">Column name</label>
-          <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} />
-
-          {isFormula && (
-            <>
-              <label className="form-label">Formula</label>
-              <FormulaInput value={expression} setValue={setExpression} columns={otherColumns} mode="formula" placeholder={'{{Email}}.split("@")[1]'} />
-              <label className="form-label">Output type</label>
-              {TypePicker}
-            </>
-          )}
-
-          {isAi && (
-            <>
-              <label className="form-label">Prompt</label>
-              <SlashTextarea value={prompt} onChange={setPrompt} columns={otherColumns} rows={5} placeholder="Write a personalized opener for {{First Name}} at {{Company}}…" />
-              <label className="form-label">System prompt <span className="form-label-opt">(optional)</span></label>
-              <textarea className="form-input ai-textarea" rows={2} value={system} onChange={(e) => setSystem(e.target.value)} placeholder="You are a helpful assistant…" />
-              <label className="form-label">Model</label>
-              <input className="form-input" list="colsettings-models" value={model} onChange={(e) => setModel(e.target.value)} placeholder="e.g. claude-haiku-4-5" />
-              <datalist id="colsettings-models">{models.map((m) => <option key={m} value={m} />)}</datalist>
-              <label className="form-label">Max tokens <span className="form-label-opt">(optional)</span></label>
-              <input className="form-input" type="number" min={1} value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} placeholder="512" />
-            </>
-          )}
-
-          {isHttp && <HttpRequestForm columns={otherColumns} initial={p} onChange={setHttpParams} />}
-          {isHttp && tableId && (
-            <TryRowsButton tableId={tableId} provider={column.provider ?? "http"} method={(column.fn ?? "http.request").split(".")[1] ?? "request"} params={httpParams} />
-          )}
-
-          {isEnrichment && Object.keys(params).length > 0 && (
-            <>
-              <div className="fnx-cfg-section">Inputs</div>
-              {Object.keys(params).map((k) => (
-                <div key={k} className="fnx-param">
-                  <label className="fnx-param-label">{k}</label>
-                  <input
-                    className="form-input"
-                    list="colsettings-cols"
-                    value={params[k]}
-                    onChange={(e) => setParams((prev) => ({ ...prev, [k]: e.target.value }))}
-                    placeholder="value or {{Column}}"
-                  />
-                </div>
-              ))}
-              <datalist id="colsettings-cols">{otherColumns.map((c) => <option key={c} value={`{{${c}}}`} />)}</datalist>
-              <p className="params-hint">Map each input to a value, or reference a column with <code>{"{{Column}}"}</code>.</p>
-            </>
-          )}
-
-          {!isFunction && (
-            <>
-              <label className="form-label">Type</label>
-              {TypePicker}
-            </>
-          )}
-
-          {isFunction && <RunSettings condition={condition} setCondition={setCondition} columns={otherColumns} />}
-
-          {err && <div className="conn-err">{err}</div>}
-        </div>
-        <div className="col-settings-foot">
-          <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
-        </div>
-      </div>
     </div>
   );
 }
