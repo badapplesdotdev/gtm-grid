@@ -1,5 +1,24 @@
 # @gtmgrid/mcp
 
+## 0.9.14
+
+### Patch Changes
+
+- 7b8ad7d: Large agent-triggered column runs (>50 pending rows, after the user
+  confirms) now start in the background on the persistent sidecar instead of
+  running inside the agent turn — a run of hundreds of rows previously hit
+  the 5-minute turn limit and was killed mid-way. The agent gets
+  {started:true} immediately and polls progress; limit-scoped runs forward
+  their row scope so a "run the next N" stays bounded.
+- 7eda629: Agent grid mutation tools + chat UX: the agent can now rename tables,
+  reorder columns/rows, run a whole table, and use the full mutation surface
+  on CLOUD tables (member-gated worker routes, metered, with confirm-protocol
+  dry-runs for destructive ops). Chat gains slash commands, /goal, permission
+  modes (bypass/auto/accept-edits/plan), a plan drawer, per-agent threads, and
+  table rename/reorder realtime events.
+- Updated dependencies [c7bd3fc]
+  - @gtmgrid/engine@0.9.14
+
 ## 0.9.13
 
 ### Patch Changes

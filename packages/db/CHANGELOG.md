@@ -1,5 +1,16 @@
 # @gtmgrid/db
 
+## 0.9.14
+
+### Patch Changes
+
+- 17ea929: Sidebar folders for tables, on both local and cloud projects: create, rename,
+  and delete folders, file tables into them ("New table here" included), and
+  drag to reorder. Deleting a folder unfiles its tables (never deletes them).
+  Folder changes broadcast on the workspace room so teammates' sidebars update
+  live. Cloud adds a `folders` table + `tables.folder_id` (migration 0009);
+  local SQLite upgrades in place.
+
 ## 0.9.13
 
 ## 0.9.12

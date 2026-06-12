@@ -1,5 +1,26 @@
 # @gtmgrid/services
 
+## 0.9.14
+
+### Patch Changes
+
+- 7eda629: Agent grid mutation tools + chat UX: the agent can now rename tables,
+  reorder columns/rows, run a whole table, and use the full mutation surface
+  on CLOUD tables (member-gated worker routes, metered, with confirm-protocol
+  dry-runs for destructive ops). Chat gains slash commands, /goal, permission
+  modes (bypass/auto/accept-edits/plan), a plan drawer, per-agent threads, and
+  table rename/reorder realtime events.
+- 17ea929: Sidebar folders for tables, on both local and cloud projects: create, rename,
+  and delete folders, file tables into them ("New table here" included), and
+  drag to reorder. Deleting a folder unfiles its tables (never deletes them).
+  Folder changes broadcast on the workspace room so teammates' sidebars update
+  live. Cloud adds a `folders` table + `tables.folder_id` (migration 0009);
+  local SQLite upgrades in place.
+- Updated dependencies [17ea929]
+  - @gtmgrid/db@0.9.14
+  - @gtmgrid/cloud@0.9.14
+  - @gtmgrid/email@0.9.14
+
 ## 0.9.13
 
 ### Patch Changes

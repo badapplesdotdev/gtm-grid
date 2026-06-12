@@ -1,5 +1,40 @@
 # @gtmgrid/desktop
 
+## 0.9.14
+
+### Patch Changes
+
+- 7eda629: Agent grid mutation tools + chat UX: the agent can now rename tables,
+  reorder columns/rows, run a whole table, and use the full mutation surface
+  on CLOUD tables (member-gated worker routes, metered, with confirm-protocol
+  dry-runs for destructive ops). Chat gains slash commands, /goal, permission
+  modes (bypass/auto/accept-edits/plan), a plan drawer, per-agent threads, and
+  table rename/reorder realtime events.
+- 0cbab23: Cascade auto-run: when a column runs (or a cell is edited), dependent mapped
+  columns now auto-populate — free columns (formulas and no-provider code)
+  always cascade; billed enrichment columns cascade only when Auto-run is on.
+  Cycles are guarded (each column runs at most once per cascade).
+- c7bd3fc: Async-job connectors (e.g. Firecrawl extract) now block-poll until the job
+  completes — with a wall-clock timeout and typed fail states — instead of
+  returning a job id the grid can't use. Cells whose value carries an `error`
+  field render an honest red error pill (with the real status code when one
+  exists) instead of a fabricated "Status Code: 200".
+- f5851bc: Run selected rows + export to CSV: row checkboxes with shift-click range
+  select, a "Run N selected" action (dependency-aware, non-force — done cells
+  aren't re-billed), context-menu actions on the selection, and a CSV export
+  of mapped scalar values (RFC-4180, UTF-8 BOM for Excel, and spreadsheet
+  formula-injection neutralized with the OWASP apostrophe guard).
+- 17ea929: Sidebar folders for tables, on both local and cloud projects: create, rename,
+  and delete folders, file tables into them ("New table here" included), and
+  drag to reorder. Deleting a folder unfiles its tables (never deletes them).
+  Folder changes broadcast on the workspace room so teammates' sidebars update
+  live. Cloud adds a `folders` table + `tables.folder_id` (migration 0009);
+  local SQLite upgrades in place.
+- Updated dependencies [7eda629]
+- Updated dependencies [17ea929]
+  - @gtmgrid/services@0.9.14
+  - @gtmgrid/cloud@0.9.14
+
 ## 0.9.13
 
 ### Patch Changes
