@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { inngest } from "../../../../lib/inngest/client";
+import { resolveSiteUrl } from "../../../../lib/site-url";
 import { signatureCheckPasses } from "../../../../lib/webhook-signature";
 
 /**
@@ -53,13 +54,10 @@ const json = (body: unknown, status: number): Response =>
     headers: { "Content-Type": "application/json" },
   });
 
-/** Resolve the base URL of the apps/web deployment serving the worker endpoints. */
+/** Resolve the base URL of the apps/web deployment serving the worker endpoints
+ *  — `SITE_URL` when configured, else the Vercel-injected deployment URL. */
 function workerBaseUrl(): string {
-  const url = process.env.SITE_URL;
-  if (url === undefined || url === "") {
-    throw new Error("SITE_URL is not configured");
-  }
-  return url.replace(/\/$/, "");
+  return resolveSiteUrl();
 }
 
 /** Resolve the shared worker bearer secret, failing closed when unset. */
