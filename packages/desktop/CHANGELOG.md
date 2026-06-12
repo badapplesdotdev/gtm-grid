@@ -1,5 +1,13 @@
 # @gtmgrid/desktop
 
+## 0.9.9
+
+### Patch Changes
+
+- Updated dependencies [67f3d44]
+  - @gtmgrid/services@0.9.9
+  - @gtmgrid/cloud@0.9.9
+
 ## 0.9.8
 
 ### Patch Changes

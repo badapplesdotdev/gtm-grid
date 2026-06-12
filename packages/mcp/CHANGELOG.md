@@ -1,5 +1,11 @@
 # @gtmgrid/mcp
 
+## 0.9.9
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.9
+
 ## 0.9.8
 
 ### Patch Changes
