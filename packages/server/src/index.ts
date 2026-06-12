@@ -363,6 +363,7 @@ route("GET", "/api/functions", () =>
         method: m.id,
         label: m.label,
         description: m.description,
+        category: m.category ?? null,
         credits: m.credits,
         input: m.inputSchema ?? null,
         source: m.source ?? null,

@@ -89,6 +89,9 @@ export interface ConnectorMethod {
   id: string; // e.g. "generate"
   label: string; // e.g. "AI Generate"
   description: string; // agent-readable
+  /** Functions-gallery category for THIS method (per-method because one
+   *  connector's methods span use cases). Absent/unknown → listed under "All" only. */
+  category?: string;
   /** JSON Schema for inputs (derived from zod via zod-to-json-schema). */
   inputSchema: Record<string, unknown>;
   batchSize: number;

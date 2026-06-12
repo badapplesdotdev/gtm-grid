@@ -7,7 +7,11 @@
   "featured": true,
   "baseUrl": "https://smuggler.dev/api/v1",
   "logo": "https://www.google.com/s2/favicons?domain=smuggler.dev&sz=128",
-  "auth": { "type": "apiKey", "header": "x-api-key", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "x-api-key",
+    "secretKey": "apiKey"
+  },
   "methods": [
     {
       "id": "searchPersons",
@@ -19,14 +23,29 @@
       "input": {
         "type": "object",
         "properties": {
-          "query": { "type": "string", "description": "Free-text search (name/headline)" },
-          "company": { "type": "string" },
-          "title": { "type": "string" },
-          "location": { "type": "string" },
-          "limit": { "type": "integer", "description": "Max 100 (default 50)" },
-          "offset": { "type": "integer" }
+          "query": {
+            "type": "string",
+            "description": "Free-text search (name/headline)"
+          },
+          "company": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max 100 (default 50)"
+          },
+          "offset": {
+            "type": "integer"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "getPerson",
@@ -37,9 +56,17 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string", "description": "Smuggler person id" } }
-      }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Smuggler person id"
+          }
+        }
+      },
+      "category": "Enrich people"
     },
     {
       "id": "findEmail",
@@ -50,9 +77,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string", "description": "Smuggler person id" } }
-      }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Smuggler person id"
+          }
+        }
+      },
+      "category": "Find email"
     },
     {
       "id": "bulkFindEmail",
@@ -63,11 +98,20 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["personIds"],
+        "required": [
+          "personIds"
+        ],
         "properties": {
-          "personIds": { "type": "array", "items": { "type": "string" }, "description": "1-500 person ids" }
+          "personIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "1-500 person ids"
+          }
         }
-      }
+      },
+      "category": "Find email"
     },
     {
       "id": "searchCompanies",
@@ -79,11 +123,20 @@
       "input": {
         "type": "object",
         "properties": {
-          "query": { "type": "string", "description": "Company name" },
-          "limit": { "type": "integer", "description": "Max 100" },
-          "offset": { "type": "integer" }
+          "query": {
+            "type": "string",
+            "description": "Company name"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "offset": {
+            "type": "integer"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "getCompany",
@@ -94,9 +147,16 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string" } }
-      }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "category": "Enrich company"
     },
     {
       "id": "listLeads",
@@ -108,13 +168,25 @@
       "input": {
         "type": "object",
         "properties": {
-          "limit": { "type": "integer", "description": "Max 100" },
-          "offset": { "type": "integer" },
-          "campaignId": { "type": "string" },
-          "profileId": { "type": "string" },
-          "search": { "type": "string" }
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "campaignId": {
+            "type": "string"
+          },
+          "profileId": {
+            "type": "string"
+          },
+          "search": {
+            "type": "string"
+          }
         }
-      }
+      },
+      "category": "Signals"
     },
     {
       "id": "postEngagements",
@@ -125,9 +197,17 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string", "description": "Smuggler post id" } }
-      }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Smuggler post id"
+          }
+        }
+      },
+      "category": "Signals"
     },
     {
       "id": "topEngagers",
@@ -138,9 +218,17 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string", "description": "Smuggler profile id" } }
-      }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Smuggler profile id"
+          }
+        }
+      },
+      "category": "Signals"
     },
     {
       "id": "credits",
@@ -149,7 +237,10 @@
       "verb": "GET",
       "path": "/billing/credits",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     }
   ]
 }

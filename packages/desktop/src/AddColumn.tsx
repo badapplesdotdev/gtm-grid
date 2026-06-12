@@ -55,7 +55,7 @@ const FnGlyph = (
 // Category glyphs, the function icon, and the categorizer live in ./FnIcon
 // (eager module) so the DataGrid headers can render provider identity without
 // loading this lazy chunk; re-exported here for backwards compatibility.
-import { CATEGORY_ICON, FnIcon, categorize } from "./FnIcon";
+import { CATEGORY_ICON, CATEGORY_ORDER, FnIcon, OTHER_CATEGORY, categorize } from "./FnIcon";
 export { CATEGORY_ICON, FnIcon };
 
 // Column-type tiles.
@@ -196,25 +196,6 @@ interface Fn {
   category: string;
 }
 
-const CATEGORY_ORDER = [
-  "AI",
-  "Formula",
-  "Enrich people",
-  "Enrich company",
-  "Find email",
-  "Verify email",
-  "Find phone",
-  "Search",
-  "Formatting",
-  "Scoring",
-  "Verification",
-  "Scraping",
-  "Extraction",
-  "Ads",
-  "Jobs",
-  "Signals",
-];
-
 // Nav clusters — categories grouped with a divider line between each group.
 // "All" is rendered first and sits with the AI cluster (no line in between).
 const NAV_CLUSTERS: string[][] = [
@@ -287,7 +268,7 @@ export function FunctionsModal({
           source: m.source ?? null,
           batchSize: m.batchSize ?? 1,
           output: m.output ?? "text",
-          category: categorize(c.provider, c.category, m.label, m.description),
+          category: categorize(c.provider, m.category),
         })),
       ),
     [connectors],
@@ -319,8 +300,9 @@ export function FunctionsModal({
       return [...byProvider.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([label, items]) => ({ label, items }));
     }
 
-    // group by category (canonical order)
-    const order = nav === "All" ? presentCats : [nav];
+    // group by category (canonical order); methods that fit no category are
+    // listed under "Other" in the All view ONLY — never miscategorised.
+    const order = nav === "All" ? [...presentCats, OTHER_CATEGORY] : [nav];
     return order
       .map((cat) => ({ label: cat, items: list.filter((f) => f.category === cat) }))
       .filter((g) => g.items.length > 0);

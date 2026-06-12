@@ -12,6 +12,8 @@ export interface HttpMethodDef {
   id: string;
   label: string;
   description: string;
+  /** Functions-gallery category for this method (absent → "All" only). */
+  category?: string;
   verb: "GET" | "POST";
   /** Path with `{param}` placeholders filled from validated inputs. */
   path: string;
@@ -131,6 +133,7 @@ export function defineHttpConnector(def: HttpConnectorDef): Connector {
       id: m.id,
       label: m.label,
       description: m.description,
+      category: m.category,
       inputSchema: zodToJsonSchema(m.input, m.id) as Record<string, unknown>,
       batchSize,
       credits: m.credits ?? 1,

@@ -6,7 +6,11 @@
   "description": "Waterfall email & phone enrichment across 20+ providers. Async: enrich, then poll for the result.",
   "baseUrl": "https://app.bettercontact.rocks/api/v2",
   "logo": "https://www.google.com/s2/favicons?domain=bettercontact.rocks&sz=128",
-  "auth": { "type": "apiKey", "header": "X-API-Key", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "X-API-Key",
+    "secretKey": "apiKey"
+  },
   "methods": [
     {
       "id": "enrich",
@@ -17,18 +21,32 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["data"],
+        "required": [
+          "data"
+        ],
         "properties": {
           "data": {
             "type": "array",
             "description": "Array of leads (1-100). Each: { first_name, last_name, company, company_domain, linkedin_url, custom_fields }",
-            "items": { "type": "object" }
+            "items": {
+              "type": "object"
+            }
           },
-          "enrich_email_address": { "type": "boolean", "description": "Find a verified work email (default true)" },
-          "enrich_phone_number": { "type": "boolean", "description": "Find a direct phone number" },
-          "webhook": { "type": "string", "description": "Optional webhook URL POSTed when enrichment finishes" }
+          "enrich_email_address": {
+            "type": "boolean",
+            "description": "Find a verified work email (default true)"
+          },
+          "enrich_phone_number": {
+            "type": "boolean",
+            "description": "Find a direct phone number"
+          },
+          "webhook": {
+            "type": "string",
+            "description": "Optional webhook URL POSTed when enrichment finishes"
+          }
         }
-      }
+      },
+      "category": "Find email"
     },
     {
       "id": "getResult",
@@ -39,9 +57,17 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["request_id"],
-        "properties": { "request_id": { "type": "string", "description": "The id returned by Enrich" } }
-      }
+        "required": [
+          "request_id"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "description": "The id returned by Enrich"
+          }
+        }
+      },
+      "category": "Find email"
     }
   ]
 }

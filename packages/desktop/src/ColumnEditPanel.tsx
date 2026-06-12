@@ -256,7 +256,7 @@ export function ColumnEditPanel({
     providerName: column.provider ?? (isCode ? "Code" : "Column"),
     logo: null,
     methodLabel: column.method ?? (isCode ? "code" : column.type),
-    category: isCode ? "Code" : categorize(column.provider ?? "", connector?.category ?? "", "", ""),
+    category: isCode ? "Code" : categorize(column.provider ?? "", methodInfo?.category),
     credits: undefined as number | undefined,
   };
 

@@ -6,7 +6,11 @@
   "description": "Sales intelligence — enrich people & companies and search Apollo's B2B database.",
   "baseUrl": "https://api.apollo.io/api/v1",
   "logo": "https://www.google.com/s2/favicons?domain=apollo.io&sz=128",
-  "auth": { "type": "apiKey", "header": "X-Api-Key", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "X-Api-Key",
+    "secretKey": "apiKey"
+  },
   "methods": [
     {
       "id": "enrichPerson",
@@ -18,16 +22,38 @@
       "input": {
         "type": "object",
         "properties": {
-          "first_name": { "type": "string" },
-          "last_name": { "type": "string" },
-          "name": { "type": "string", "description": "Full name (alternative to first+last)" },
-          "email": { "type": "string", "description": "Known email (best identifier)" },
-          "organization_name": { "type": "string", "description": "Employer company name" },
-          "domain": { "type": "string", "description": "Employer domain, e.g. 'stripe.com'" },
-          "linkedin_url": { "type": "string" },
-          "reveal_personal_emails": { "type": "boolean", "description": "Also return personal emails" }
+          "first_name": {
+            "type": "string"
+          },
+          "last_name": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "Full name (alternative to first+last)"
+          },
+          "email": {
+            "type": "string",
+            "description": "Known email (best identifier)"
+          },
+          "organization_name": {
+            "type": "string",
+            "description": "Employer company name"
+          },
+          "domain": {
+            "type": "string",
+            "description": "Employer domain, e.g. 'stripe.com'"
+          },
+          "linkedin_url": {
+            "type": "string"
+          },
+          "reveal_personal_emails": {
+            "type": "boolean",
+            "description": "Also return personal emails"
+          }
         }
-      }
+      },
+      "category": "Enrich people"
     },
     {
       "id": "bulkEnrichPeople",
@@ -38,7 +64,9 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["details"],
+        "required": [
+          "details"
+        ],
         "properties": {
           "details": {
             "type": "array",
@@ -46,17 +74,30 @@
             "items": {
               "type": "object",
               "properties": {
-                "first_name": { "type": "string" },
-                "last_name": { "type": "string" },
-                "organization_name": { "type": "string" },
-                "domain": { "type": "string" },
-                "email": { "type": "string" }
+                "first_name": {
+                  "type": "string"
+                },
+                "last_name": {
+                  "type": "string"
+                },
+                "organization_name": {
+                  "type": "string"
+                },
+                "domain": {
+                  "type": "string"
+                },
+                "email": {
+                  "type": "string"
+                }
               }
             }
           },
-          "reveal_personal_emails": { "type": "boolean" }
+          "reveal_personal_emails": {
+            "type": "boolean"
+          }
         }
-      }
+      },
+      "category": "Enrich people"
     },
     {
       "id": "enrichOrganization",
@@ -67,9 +108,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["domain"],
-        "properties": { "domain": { "type": "string", "description": "Company domain, no http:// or www." } }
-      }
+        "required": [
+          "domain"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string",
+            "description": "Company domain, no http:// or www."
+          }
+        }
+      },
+      "category": "Enrich company"
     },
     {
       "id": "searchPeople",
@@ -81,17 +130,58 @@
       "input": {
         "type": "object",
         "properties": {
-          "person_titles": { "type": "array", "items": { "type": "string" }, "description": "e.g. ['VP of Sales']" },
-          "person_seniorities": { "type": "array", "items": { "type": "string" }, "description": "e.g. ['c_suite','vp','director']" },
-          "person_locations": { "type": "array", "items": { "type": "string" } },
-          "organization_locations": { "type": "array", "items": { "type": "string" } },
-          "q_organization_domains_list": { "type": "array", "items": { "type": "string" } },
-          "organization_num_employees_ranges": { "type": "array", "items": { "type": "string" }, "description": "e.g. ['11,50','51,200']" },
-          "q_keywords": { "type": "string" },
-          "page": { "type": "integer" },
-          "per_page": { "type": "integer", "description": "Max 100" }
+          "person_titles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "e.g. ['VP of Sales']"
+          },
+          "person_seniorities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "e.g. ['c_suite','vp','director']"
+          },
+          "person_locations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "organization_locations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "q_organization_domains_list": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "organization_num_employees_ranges": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "e.g. ['11,50','51,200']"
+          },
+          "q_keywords": {
+            "type": "string"
+          },
+          "page": {
+            "type": "integer"
+          },
+          "per_page": {
+            "type": "integer",
+            "description": "Max 100"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "searchOrganizations",
@@ -103,14 +193,36 @@
       "input": {
         "type": "object",
         "properties": {
-          "q_organization_name": { "type": "string" },
-          "organization_num_employees_ranges": { "type": "array", "items": { "type": "string" } },
-          "organization_locations": { "type": "array", "items": { "type": "string" } },
-          "q_organization_keyword_tags": { "type": "array", "items": { "type": "string" } },
-          "page": { "type": "integer" },
-          "per_page": { "type": "integer" }
+          "q_organization_name": {
+            "type": "string"
+          },
+          "organization_num_employees_ranges": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "organization_locations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "q_organization_keyword_tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "per_page": {
+            "type": "integer"
+          }
         }
-      }
+      },
+      "category": "Search"
     }
   ]
 }

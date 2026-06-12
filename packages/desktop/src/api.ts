@@ -210,6 +210,8 @@ export interface FunctionMethod {
   method: string;
   label: string;
   description: string;
+  /** Explicit gallery category for this method (null → listed under "All" only). */
+  category?: string | null;
   credits: number;
   input?: Record<string, unknown> | null;
   source?: string | null;

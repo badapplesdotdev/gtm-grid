@@ -39,41 +39,44 @@ export const CATEGORY_ICON: Record<string, ReactNode> = {
   Jobs: I("M3 7h18v13H3z|M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"),
   Signals: I("M4 11a9 9 0 0 1 9 9|M4 4a16 16 0 0 1 16 16|M5 19a1 1 0 1 0 0 .01z"),
   Code: <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 12, lineHeight: 1 }}>{"{ }"}</span>,
+  Other: I("M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z|M3.27 6.96 12 12.01l8.73-5.05|M12 22.08V12"),
 };
 
-// Connector categories that map directly to a gallery category.
-export const CONNECTOR_CATEGORY: Record<string, string> = {
-  formatting: "Formatting",
-  ai: "AI",
-  formula: "Formula",
-  scoring: "Scoring",
-  verification: "Verification",
-  scraping: "Scraping",
-  extraction: "Extraction",
-};
+/** Canonical gallery category order (left nav + group ordering). */
+export const CATEGORY_ORDER: string[] = [
+  "AI",
+  "Formula",
+  "Enrich people",
+  "Enrich company",
+  "Find email",
+  "Verify email",
+  "Find phone",
+  "Search",
+  "Formatting",
+  "Scoring",
+  "Verification",
+  "Scraping",
+  "Extraction",
+  "Ads",
+  "Jobs",
+  "Signals",
+];
+const CATEGORY_SET = new Set<string>(CATEGORY_ORDER);
 
-/** Resolve a method's gallery category from its provider/category/wording. */
-export function categorize(provider: string, connectorCategory: string, label: string, description: string): string {
+/** Methods with no (or an unknown) explicit category land here — they are
+ *  listed under "All" only, never miscategorised into a subsection. */
+export const OTHER_CATEGORY = "Other";
+
+/** Resolve a method's gallery category. Categories are EXPLICIT, per method
+ *  (set in the connector manifest / built-in definition) — no keyword guessing.
+ *  Built-in single-purpose providers carry an implicit category; everything
+ *  else without a valid explicit category goes to {@link OTHER_CATEGORY}. */
+export function categorize(provider: string, methodCategory?: string | null): string {
+  if (methodCategory && CATEGORY_SET.has(methodCategory)) return methodCategory;
   if (provider === "ai") return "AI";
   if (provider === "formula") return "Formula";
-  if (CONNECTOR_CATEGORY[connectorCategory]) return CONNECTOR_CATEGORY[connectorCategory];
-  const s = `${label} ${description}`.toLowerCase();
-  const has = (...ws: string[]) => ws.some((w) => s.includes(w));
-  if (has("mobile", "phone")) return "Find phone";
-  if (has("verify", "validation", "validate", "deliverab")) return "Verify email";
-  if (has("reverse email", "email finder", "find email", "work email", "personal email") || (has("email") && has("find")))
-    return "Find email";
-  if (has("scrap")) return "Scraping";
-  if (has("score", "scoring", "intent")) return "Scoring";
-  if (has("extract")) return "Extraction";
-  if (has("format", "normalize")) return "Formatting";
-  if (has("advert", " ads", "ad intelligence", "ad library")) return "Ads";
-  if (has("job", "hiring", "posting")) return "Jobs";
-  if (has("signal", "post", "engage", "comment", "reaction", "follower", "tweet")) return "Signals";
-  if (has("company", "organization", "firmograph", "technograph")) return "Enrich company";
-  if (has("person", "people", "profile", "contact", "enrich", "lookup")) return "Enrich people";
-  if (has("search")) return "Search";
-  return "Enrich people";
+  if (provider === "formatting") return "Formatting";
+  return OTHER_CATEGORY;
 }
 
 /** Presentation metadata for a function column's provider/method, resolved from
@@ -111,7 +114,7 @@ export function buildColumnMetaMap(connectors: ConnectorInfo[]): Map<string, Col
         providerName: c.name,
         logo: c.logo ?? null,
         methodLabel: m.label || m.method,
-        category: categorize(c.provider, c.category, m.label, m.description),
+        category: categorize(c.provider, m.category),
         credits: m.credits,
         requiredInputs: Array.isArray(required) ? required.map(String) : undefined,
       });
