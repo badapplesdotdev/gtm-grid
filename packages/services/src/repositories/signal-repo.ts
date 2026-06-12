@@ -220,13 +220,16 @@ export const SignalRepoLive: Layer.Layer<SignalRepo, never, DbClient> = Layer.ef
             // `last_synced_at <= now - interval(schedule)`. Express the per-
             // schedule interval as a CASE so the whole predicate stays in SQL.
             // A `manual`/unknown schedule never matches (it's excluded by the
-            // `ne(schedule, "manual")` clause and falls through the CASE to a
-            // threshold of -inf, mirroring `isBindingDue` returning false).
+            // `ne(schedule, "manual")` clause and falls through the CASE to
+            // NULL, so the `lte` below is never true — mirroring
+            // `isBindingDue` returning false). NULL, not -Infinity:
+            // `last_synced_at` is bigint and Postgres rejects -Infinity for
+            // integer types, which made this query fail on every execution.
             const dueThreshold = sql<number>`CASE ${sb.schedule}
               WHEN 'hourly' THEN ${now - SCHEDULE_DUE_MS.hourly}
               WHEN 'daily' THEN ${now - SCHEDULE_DUE_MS.daily}
               WHEN 'weekly' THEN ${now - SCHEDULE_DUE_MS.weekly}
-              ELSE ${Number.NEGATIVE_INFINITY}
+              ELSE NULL
             END`;
             const duePredicate = and(
               eq(sb.enabled, true),
