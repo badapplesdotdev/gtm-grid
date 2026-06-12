@@ -24,6 +24,7 @@ import {
 } from "@gtmgrid/engine";
 import type { CellProgress } from "@gtmgrid/engine";
 import { detectAgents, streamClaude, streamCodex, streamHermes, setAgentPath, rescanAgents, generateWithAgent, parseAgentCloud, type AgentKind } from "./agent.js";
+import { localProviderEnv, resolveCloudProviderEnv } from "./provider-env.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
 import { runCloudPush, defaultCloudPushDeps } from "./cloud-push.js";
@@ -1136,12 +1137,23 @@ const server = createServer(async (req, res) => {
       // and the MCP opens the local SQLite project exactly as before. The token
       // rides the MCP child env (set by agent.ts), never a log line here.
       const cloud = parseAgentCloud(body?.cloud);
+      // Saved provider keys → conventional env vars (TRIGIFY_API_KEY etc.) so
+      // the CLIs/skills the agent shells out to authenticate with the user's
+      // stored credential. CLOUD: the workspace credential store via the
+      // member's bearer; LOCAL: the local encrypted credential Db. Fail-open —
+      // a resolution error spawns the agent without injected keys.
+      const providerEnv = cloud
+        ? await resolveCloudProviderEnv(cloud)
+        : localProviderEnv(
+            current.engine.registry.list().map((c) => c.id),
+            (id) => globalDb.getCredential(id)?.secrets ?? null,
+          );
       // Hermes is LOCAL-only by design — it drives the local SQLite project via
       // ACP and is never threaded the cloud context.
       const newChat = body?.newChat === true;
       if (agent === "hermes") streamHermes(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model });
-      else if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, newChat, context, origin, model, cloud });
-      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, newChat, context, origin, model, cloud });
+      else if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, newChat, context, origin, model, cloud, providerEnv });
+      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, newChat, context, origin, model, cloud, providerEnv });
     } catch (e) {
       send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
     }
