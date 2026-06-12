@@ -829,7 +829,7 @@ describe("WebhookService config CRUD (member-gated)", () => {
     }
   });
 
-  it("creates a webhook with a minted token + secret", async () => {
+  it("creates a webhook with a minted token and NO secret by default (auth is opt-in)", async () => {
     const webhooks: Webhook[] = [];
     const { run } = harness({ webhooks });
     const exit = await run(
@@ -846,6 +846,18 @@ describe("WebhookService config CRUD (member-gated)", () => {
     expect(Exit.isSuccess(exit)).toBe(true);
     expect(webhooks).toHaveLength(1);
     expect(webhooks[0].token.length).toBeGreaterThan(20);
+    expect(webhooks[0].signingSecret).toBeNull();
+  });
+
+  it("creates a webhook WITH a minted secret when auth opts in", async () => {
+    const webhooks: Webhook[] = [];
+    const { run } = harness({ webhooks });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) => s.createWebhook({ tableId: TABLE, auth: true })),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
     expect(webhooks[0].signingSecret?.startsWith("whsec_")).toBe(true);
   });
 
@@ -894,6 +906,58 @@ describe("WebhookService config CRUD (member-gated)", () => {
     if (Exit.isSuccess(exit)) {
       expect(exit.value.token).not.toBe("tok-123");
       expect(webhooks[0].token).toBe(exit.value.token);
+      // The seeded webhook HAS auth on (whsec_x) — rotation mints a fresh secret.
+      expect(exit.value.signingSecret?.startsWith("whsec_")).toBe(true);
+      expect(exit.value.signingSecret).not.toBe("whsec_x");
+    }
+  });
+
+  it("rotateSecret preserves the opted-OUT state (no secret minted)", async () => {
+    const webhooks: Webhook[] = [{ ...webhook, signingSecret: null }];
+    const { run } = harness({ webhooks });
+    const exit = await run(
+      svc.pipe(Effect.flatMap((s) => s.rotateSecret("wh-1"))),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.signingSecret).toBeNull();
+      expect(webhooks[0].signingSecret).toBeNull();
+      expect(webhooks[0].token).toBe(exit.value.token);
+    }
+  });
+
+  it("setAuth opts in (mints + returns a secret) and back out (clears it)", async () => {
+    const webhooks: Webhook[] = [{ ...webhook, signingSecret: null }];
+    const { run } = harness({ webhooks });
+
+    const on = await run(
+      svc.pipe(Effect.flatMap((s) => s.setAuth({ webhookId: "wh-1", enabled: true }))),
+    );
+    expect(Exit.isSuccess(on)).toBe(true);
+    if (Exit.isSuccess(on)) {
+      expect(on.value.signingSecret?.startsWith("whsec_")).toBe(true);
+      expect(webhooks[0].signingSecret).toBe(on.value.signingSecret);
+    }
+
+    const off = await run(
+      svc.pipe(Effect.flatMap((s) => s.setAuth({ webhookId: "wh-1", enabled: false }))),
+    );
+    expect(Exit.isSuccess(off)).toBe(true);
+    if (Exit.isSuccess(off)) {
+      expect(off.value.signingSecret).toBeNull();
+      expect(webhooks[0].signingSecret).toBeNull();
+    }
+  });
+
+  it("rejects a non-member from setAuth", async () => {
+    const { run } = harness({ currentUserId: "stranger" });
+    const exit = await run(
+      svc.pipe(Effect.flatMap((s) => s.setAuth({ webhookId: "wh-1", enabled: true }))),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const f = Cause.failureOption(exit.cause);
+      expect(f._tag === "Some" && f.value._tag).toBe("NotAMemberError");
     }
   });
 

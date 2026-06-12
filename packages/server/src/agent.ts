@@ -554,7 +554,7 @@ export function mcpConfig(
 /** Stream a Claude Code turn over SSE, driving gtmgrid via MCP. */
 export function streamClaude(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; sessionId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; cloud?: AgentCloud },
+  opts: { message: string; project: string; repoRoot: string; sessionId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; cloud?: AgentCloud; providerEnv?: Record<string, string> },
 ): void {
   const sse = sseClient(res, opts.origin);
   // Optionally also expose the user's Hermes agent as an MCP tool (off unless
@@ -595,7 +595,9 @@ export function streamClaude(
   }
   // `detached` makes the child its own process-group leader so we can later
   // signal the WHOLE tree (CLI + MCP server + grandchildren) via `-pid` (TRI-3305).
-  const child = spawn(bin, args, { env: agentSpawnEnv(bin), cwd: opts.repoRoot, detached: true });
+  // Saved provider keys (TRIGIFY_API_KEY etc.) fill in UNDER process.env so an
+  // explicitly exported var still wins; values never appear in args or logs.
+  const child = spawn(bin, args, { env: { ...opts.providerEnv, ...agentSpawnEnv(bin) }, cwd: opts.repoRoot, detached: true });
   child.stdin?.end(); // we pass the prompt via `-p`; close stdin so claude doesn't wait on it (the "no stdin data in 3s" warning)
   let sessionId = resumeId ?? null;
   let buf = "";
@@ -706,7 +708,7 @@ export function codexEnvToml(env: Record<string, string>): string {
 
 export function streamCodex(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; threadId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; cloud?: AgentCloud },
+  opts: { message: string; project: string; repoRoot: string; threadId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; cloud?: AgentCloud; providerEnv?: Record<string, string> },
 ): void {
   const sse = sseClient(res, opts.origin);
   const launcher = mcpLauncher(opts.repoRoot);
@@ -745,7 +747,8 @@ export function streamCodex(
   }
   // `detached` → own process group, so cleanup can kill the CLI + the gtmgrid
   // MCP server + their subprocesses as one group, not just the codex parent.
-  const child = spawn(bin, args, { env: agentSpawnEnv(bin), cwd: opts.repoRoot, detached: true });
+  // Saved provider keys fill in UNDER process.env — an exported var still wins.
+  const child = spawn(bin, args, { env: { ...opts.providerEnv, ...agentSpawnEnv(bin) }, cwd: opts.repoRoot, detached: true });
   child.stdin?.end(); // codex exec otherwise waits on stdin
 
   let threadId = resumeThread ?? null;

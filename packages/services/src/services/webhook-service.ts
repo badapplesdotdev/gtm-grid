@@ -180,6 +180,10 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         readonly tableId: string;
         readonly name?: string | null;
         readonly mapping?: readonly WebhookMappingEntry[];
+        /** OPT-IN signature auth: mint a signing secret only when true. The
+         *  default is an unauthenticated endpoint (the unguessable token URL is
+         *  the credential), so senders that can't compute an HMAC still work. */
+        readonly auth?: boolean;
       }) =>
         Effect.gen(function* () {
           const table = yield* repo.findTable(args.tableId);
@@ -210,7 +214,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             tableId: args.tableId,
             name: args.name ?? null,
             token: mintToken(),
-            signingSecret: mintSigningSecret(),
+            signingSecret: args.auth === true ? mintSigningSecret() : null,
             mapping,
             enabled: true,
             autoRun: true,
@@ -302,15 +306,31 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           yield* repo.patch(args.webhookId, { enabled: args.enabled });
         });
 
-      /** Rotate a webhook's token + signing secret (revokes the old pair). */
+      /** Rotate a webhook's token (+ signing secret when auth is enabled —
+       *  rotation preserves the opt-in/opt-out state, it never enables auth). */
       const rotateSecret = (webhookId: string) =>
         Effect.gen(function* () {
           const webhook = yield* requireWebhook(webhookId);
           yield* membership.requireMember(webhook.workspaceId);
           const token = mintToken();
-          const signingSecret = mintSigningSecret();
+          const signingSecret = webhook.signingSecret === null ? null : mintSigningSecret();
           yield* repo.patch(webhookId, { token, signingSecret });
           return { token, signingSecret };
+        });
+
+      /** Opt a webhook in to (or out of) signature auth. Opting in mints a
+       *  fresh signing secret and returns it; opting out clears it so the
+       *  receiver accepts unsigned posts again. */
+      const setAuth = (args: {
+        readonly webhookId: string;
+        readonly enabled: boolean;
+      }) =>
+        Effect.gen(function* () {
+          const webhook = yield* requireWebhook(args.webhookId);
+          yield* membership.requireMember(webhook.workspaceId);
+          const signingSecret = args.enabled ? mintSigningSecret() : null;
+          yield* repo.patch(args.webhookId, { signingSecret });
+          return { signingSecret };
         });
 
       /** A KEYSET page of a webhook's deliveries (newest first). */
@@ -895,6 +915,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         updateWebhookMapping,
         toggleEnabled,
         rotateSecret,
+        setAuth,
         listDeliveriesPaged,
         deleteWebhook,
         resolveToken,

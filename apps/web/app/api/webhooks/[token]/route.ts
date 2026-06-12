@@ -1,6 +1,6 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
 import { createHash } from "node:crypto";
 import { inngest } from "../../../../lib/inngest/client";
+import { signatureCheckPasses } from "../../../../lib/webhook-signature";
 
 /**
  * The public webhook receiver. A third party POSTs JSON to
@@ -10,8 +10,12 @@ import { inngest } from "../../../../lib/inngest/client";
  *     (secret-gated with `WEBHOOK_WORKER_SECRET`). Unknown OR disabled tokens
  *     resolve to `null` and are rejected with 404 WITHOUT leaking which (no
  *     per-reason message).
- *  2. Verifies the `X-GTMGrid-Signature` header — `hex(HMAC-SHA256(signingSecret,
- *     rawBody))` — in constant time. A missing/invalid signature → 401.
+ *  2. When the webhook has OPTED IN to signature auth (a `signingSecret` is
+ *     set), verifies the `X-GTMGrid-Signature` header —
+ *     `hex(HMAC-SHA256(signingSecret, rawBody))` — in constant time; a
+ *     missing/invalid signature → 401. Without a secret the endpoint accepts
+ *     unsigned posts: the unguessable token IS the credential, which is what
+ *     most third-party senders (no custom HMAC support) can work with.
  *  3. Applies the stored field mapping (`[{ path, columnId }]`) to the parsed
  *     JSON, producing a `{ columnId: value }` map.
  *  4. Computes an idempotent `recordId` (an inbound idempotency header, else
@@ -84,25 +88,6 @@ async function resolveToken(token: string): Promise<ResolvedWebhook | null> {
   if (text === "") return null;
   const parsed = JSON.parse(text);
   return parsed === null ? null : (parsed as ResolvedWebhook);
-}
-
-/**
- * Verify `hex(HMAC-SHA256(secret, rawBody)) === header` in constant time.
- * Returns false on any missing input or length mismatch (length is not secret).
- */
-function verifySignature(
-  rawBody: string,
-  signatureHeader: string | null,
-  signingSecret: string | null,
-): boolean {
-  if (signatureHeader === null || signingSecret === null || signingSecret === "") {
-    return false;
-  }
-  const expected = createHmac("sha256", signingSecret).update(rawBody).digest("hex");
-  const a = Buffer.from(expected, "utf8");
-  const b = Buffer.from(signatureHeader, "utf8");
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
 }
 
 /**
@@ -187,9 +172,10 @@ export async function POST(
     return json({ error: "Not found" }, 404);
   }
 
-  // Verify the signature BEFORE parsing/acting on the body.
+  // Auth gate BEFORE parsing/acting on the body: signature auth is OPT-IN —
+  // enforced only for webhooks that have a signing secret set.
   const signature = req.headers.get("X-GTMGrid-Signature");
-  if (!verifySignature(rawBody, signature, webhook.signingSecret)) {
+  if (!signatureCheckPasses(rawBody, signature, webhook.signingSecret)) {
     return json({ error: "Invalid signature" }, 401);
   }
 

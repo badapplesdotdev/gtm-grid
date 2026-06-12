@@ -1518,6 +1518,17 @@ export function useWebhookMutations() {
     },
     [refresh],
   );
+  const setAuth = useCallback(
+    async (webhookId: Id<"webhooks">, enabled: boolean) => {
+      const res = await apiClient!.webhooks.setAuth.mutate({
+        webhookId,
+        enabled,
+      });
+      await refresh();
+      return res;
+    },
+    [refresh],
+  );
   const deleteWebhook = useCallback(
     async (webhookId: Id<"webhooks">) => {
       const res = await apiClient!.webhooks.deleteWebhook.mutate({
@@ -1535,6 +1546,7 @@ export function useWebhookMutations() {
     updateConfig,
     toggleEnabled,
     rotateSecret,
+    setAuth,
     deleteWebhook,
   };
 }

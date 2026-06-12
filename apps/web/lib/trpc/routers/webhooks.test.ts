@@ -119,8 +119,23 @@ describe("webhooks.createWebhook + deleteWebhook", () => {
       mapping: [{ path: "email", columnId: COL }],
     });
     expect(webhooks).toHaveLength(1);
+    // Signature auth is OPT-IN: no secret unless `auth: true` is passed.
+    expect(webhooks[0].signingSecret).toBeNull();
     await caller.webhooks.deleteWebhook({ webhookId: id });
     expect(webhooks).toHaveLength(0);
+  });
+
+  it("mints a signing secret when `auth: true` opts in", async () => {
+    const webhooks: Webhook[] = [];
+    const caller = callerFor({
+      memberships,
+      tables,
+      columns,
+      webhooks,
+      currentUserId: "member",
+    });
+    await caller.webhooks.createWebhook({ tableId: TABLE, auth: true });
+    expect(webhooks[0].signingSecret?.startsWith("whsec_")).toBe(true);
   });
 
   it("maps a foreign mapping column to BAD_REQUEST", async () => {
@@ -171,6 +186,24 @@ describe("webhooks.toggleEnabled + rotateSecret", () => {
     expect(webhooks[0].enabled).toBe(false);
     const rotated = await caller.webhooks.rotateSecret({ webhookId: "wh-1" });
     expect(rotated.token).not.toBe("tok");
+  });
+});
+
+describe("webhooks.setAuth", () => {
+  it("opts in (mints + returns a secret) and back out (clears it)", async () => {
+    const webhooks: Webhook[] = [{ ...webhook, signingSecret: null }];
+    const caller = callerFor({
+      memberships,
+      tables,
+      webhooks,
+      currentUserId: "member",
+    });
+    const on = await caller.webhooks.setAuth({ webhookId: "wh-1", enabled: true });
+    expect(on.signingSecret?.startsWith("whsec_")).toBe(true);
+    expect(webhooks[0].signingSecret).toBe(on.signingSecret);
+    const off = await caller.webhooks.setAuth({ webhookId: "wh-1", enabled: false });
+    expect(off.signingSecret).toBeNull();
+    expect(webhooks[0].signingSecret).toBeNull();
   });
 });
 
