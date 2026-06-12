@@ -2108,6 +2108,18 @@ html, body, #root {
   box-shadow: var(--shadow-lg); padding: 4px; z-index: 5;
 }
 
+/* ─── Cell range selection (Clay-style) ───────────────────── */
+/* Grid cells behave like a spreadsheet: drag selects a range, never text.
+   Inline editors stay text-selectable. */
+.grid-tr .grid-td { user-select: none; }
+.grid-td input, .grid-td textarea { user-select: text; }
+.grid-td.cell-selected {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+.grid-td.cell-sel-anchor {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
 /* column resize handle */
 .grid-th { position: relative; }
 .col-resize {

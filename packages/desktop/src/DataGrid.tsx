@@ -98,6 +98,9 @@ export interface GridController {
    *  environment's default run (local: unrun + errored rows; cloud: force). */
   readonly runColumn: (colId: string, opts?: { force?: boolean; rowIds?: string[] }) => void;
   readonly runCell: (rowId: string, colId: string) => void;
+  /** Run an explicit set of function cells (the range-selection "Run N cells");
+   *  grouped per column into force+rowIds runs. Omit to hide the menu item. */
+  readonly runCells?: (cells: Array<{ rowId: string; colId: string }>) => void;
   readonly setCell: (rowId: string, colId: string, value: string) => void;
   readonly deleteRow: (rowId: string) => void;
   readonly deleteColumn: (colId: string) => void;
@@ -266,6 +269,116 @@ export function DataGrid({
     },
     [c, selectedRows, selectedCount, selectedIds, clearSelection],
   );
+
+  // ── Cell range selection (Clay-style) ──────────────────────────────────
+  // Click selects a cell, drag or shift+click extends a rectangular range over
+  // row/column INDICES; right-click inside it offers Run N cells / Copy /
+  // Clear / Delete rows. Selection is presentation-only local state.
+  const [sel, setSel] = useState<{ anchor: { r: number; c: number }; head: { r: number; c: number } } | null>(null);
+  const dragSelRef = useRef(false);
+  // True when a drag extended past its anchor — used to swallow the click that
+  // fires on mouseup so it doesn't open a manual cell's inline editor.
+  const dragMovedRef = useRef(false);
+
+  useEffect(() => {
+    const onUp = () => { dragSelRef.current = false; };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSel(null);
+    };
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, []);
+  // Selection indices are only meaningful within one table.
+  useEffect(() => setSel(null), [table.id]);
+
+  const selRect = useMemo(() => {
+    if (!sel) return null;
+    return {
+      r1: Math.min(sel.anchor.r, sel.head.r),
+      r2: Math.max(sel.anchor.r, sel.head.r),
+      c1: Math.min(sel.anchor.c, sel.head.c),
+      c2: Math.max(sel.anchor.c, sel.head.c),
+    };
+  }, [sel]);
+  const selCellCount = selRect ? (selRect.r2 - selRect.r1 + 1) * (selRect.c2 - selRect.c1 + 1) : 0;
+
+  /** Copy the selected range to the clipboard as TSV (Excel/Sheets-pasteable). */
+  const copySelection = useCallback(() => {
+    if (!selRect) return;
+    const cols = table.columns.slice(selRect.c1, selRect.c2 + 1);
+    const tsv = table.rows
+      .slice(selRect.r1, selRect.r2 + 1)
+      .map((row) =>
+        cols
+          .map((col) => {
+            const v = row.cells[col.id]?.value;
+            return v == null ? "" : typeof v === "string" ? v : JSON.stringify(v);
+          })
+          .join("\t"),
+      )
+      .join("\n");
+    void navigator.clipboard?.writeText(tsv).catch(() => {});
+  }, [selRect, table]);
+
+  // Cmd/Ctrl+C copies the selection — unless the user is typing in an input.
+  useEffect(() => {
+    if (!selRect) return;
+    const onCopy = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "c") return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (window.getSelection()?.toString()) return; // native text selection wins
+      e.preventDefault();
+      copySelection();
+    };
+    window.addEventListener("keydown", onCopy);
+    return () => window.removeEventListener("keydown", onCopy);
+  }, [selRect, copySelection]);
+
+  /** The context menu for a multi-cell selection (right-click inside the rect). */
+  const selectionMenuItems = (): CtxItem[] => {
+    if (!selRect) return [];
+    const rows = table.rows.slice(selRect.r1, selRect.r2 + 1);
+    const cols = table.columns.slice(selRect.c1, selRect.c2 + 1);
+    const fnCells: Array<{ rowId: string; colId: string }> = [];
+    for (const col of cols) {
+      if (col.kind !== "function") continue;
+      for (const row of rows) fnCells.push({ rowId: row.id, colId: col.id });
+    }
+    const items: CtxItem[] = [];
+    if (c.runCells && fnCells.length > 0) {
+      items.push({
+        label: `Run ${fnCells.length} cell${fnCells.length !== 1 ? "s" : ""}`,
+        disabled: runDisabled,
+        onClick: () => c.runCells!(fnCells),
+      });
+      items.push({ separator: true });
+    }
+    items.push({ label: "Copy", onClick: copySelection });
+    items.push(
+      { separator: true },
+      {
+        label: `Clear ${selCellCount} cell${selCellCount !== 1 ? "s" : ""}`,
+        onClick: () => {
+          for (const row of rows) for (const col of cols) c.clearCell(row.id, col.id);
+          setSel(null);
+        },
+      },
+      {
+        label: `Delete ${rows.length} row${rows.length !== 1 ? "s" : ""}`,
+        danger: true,
+        onClick: () => {
+          for (const row of rows) c.deleteRow(row.id);
+          setSel(null);
+        },
+      },
+    );
+    return items;
+  };
 
   // Follow a member: scroll their cell into view and flash it. Rows are
   // fixed-height so the vertical offset is exact; the horizontal offset sums the
@@ -723,17 +836,57 @@ export function DataGrid({
                       const tdStyle: PresenceTdStyle | undefined = here
                         ? { "--presence-color": here[0].color }
                         : undefined;
+                      const inSel =
+                        !!selRect &&
+                        idx >= selRect.r1 && idx <= selRect.r2 &&
+                        vc.index >= selRect.c1 && vc.index <= selRect.c2;
+                      const isAnchor = !!sel && sel.anchor.r === idx && sel.anchor.c === vc.index;
                       return (
                         <td
                           key={col.id}
-                          className={`grid-td${here ? " cell-presence" : ""}${isEditingHere ? " presence-editing" : ""}${flashCell === key ? " presence-flash" : ""}`}
+                          className={`grid-td${here ? " cell-presence" : ""}${isEditingHere ? " presence-editing" : ""}${flashCell === key ? " presence-flash" : ""}${inSel ? " cell-selected" : ""}${isAnchor ? " cell-sel-anchor" : ""}`}
                           style={tdStyle}
+                          onMouseDown={(e) => {
+                            if (e.button !== 0) return;
+                            // Never hijack interactions with an open inline editor.
+                            if ((e.target as HTMLElement).closest("input, textarea")) return;
+                            if (e.shiftKey && sel) {
+                              e.preventDefault(); // extend, don't start a text selection
+                              setSel({ anchor: sel.anchor, head: { r: idx, c: vc.index } });
+                            } else {
+                              setSel({ anchor: { r: idx, c: vc.index }, head: { r: idx, c: vc.index } });
+                            }
+                            dragSelRef.current = true;
+                            dragMovedRef.current = false;
+                          }}
+                          onMouseEnter={() => {
+                            if (!dragSelRef.current) return;
+                            dragMovedRef.current = true;
+                            setSel((s) => (s ? { anchor: s.anchor, head: { r: idx, c: vc.index } } : s));
+                          }}
+                          onClickCapture={(e) => {
+                            // A drag that extended the range must not ALSO open the
+                            // inline editor of the cell it ended on.
+                            if (dragMovedRef.current) {
+                              dragMovedRef.current = false;
+                              e.preventDefault();
+                              e.stopPropagation();
+                            }
+                          }}
                           onClick={
                             c.onActiveCellChange
                               ? () => c.onActiveCellChange!({ rowId: row.id, colId: col.id })
                               : undefined
                           }
-                          onContextMenu={(e) =>
+                          onContextMenu={(e) => {
+                            // Right-click inside a multi-cell range selection acts on the
+                            // range; otherwise the row-selection-aware menu applies.
+                            if (selRect && selCellCount > 1 &&
+                                idx >= selRect.r1 && idx <= selRect.r2 &&
+                                vc.index >= selRect.c1 && vc.index <= selRect.c2) {
+                              openCtx(e, selectionMenuItems());
+                              return;
+                            }
                             openCtx(e, rowCtxItems(row.id, [
                               ...(col.kind === "function"
                                 ? ([
@@ -752,8 +905,8 @@ export function DataGrid({
                                 },
                               },
                               { label: "Clear cell", onClick: () => c.clearCell(row.id, col.id) },
-                            ]))
-                          }
+                            ]));
+                          }}
                         >
                           {here && (
                             <span

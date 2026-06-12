@@ -2873,6 +2873,42 @@ export default function App() {
     setRunningColId(null);
   };
 
+  // ── Run an explicit set of function cells (range selection's "Run N cells") ──
+  // Grouped per column into ONE scoped run each (force + the selected rowIds),
+  // honouring inter-column {{dependencies}} like Run all / Run row do.
+  const runCells = async (cells: Array<{ rowId: string; colId: string }>) => {
+    if (!tableData) return;
+    const tableId = tableData.id;
+    const byCol = new Map<string, string[]>();
+    for (const { rowId, colId } of cells) {
+      const list = byCol.get(colId) ?? [];
+      list.push(rowId);
+      byCol.set(colId, list);
+    }
+    const fnCols = tableData.columns.filter((c) => c.kind === "function" && byCol.has(c.id));
+    if (!fnCols.length) return;
+    const keys = cells.map(({ rowId, colId }) => `${rowId}:${colId}`);
+    setRunningCells((s) => { const n = new Set(s); for (const k of keys) n.add(k); return n; });
+    try {
+      const deps = buildColumnDeps(fnCols);
+      await runColumnsWithDeps(fnCols, deps, RUN_ALL_CONCURRENCY, async (col) => {
+        const rowIds = byCol.get(col.id)!;
+        try {
+          await api.runColumnStream(col.id, (e) => patchCell(tableId, e), { force: true, rowIds });
+        } finally {
+          setRunningCells((s) => {
+            const n = new Set(s);
+            for (const rowId of rowIds) n.delete(`${rowId}:${col.id}`);
+            return n;
+          });
+        }
+      });
+    } finally {
+      setRunningCells((s) => { const n = new Set(s); for (const k of keys) n.delete(k); return n; });
+    }
+  };
+
+
   // ── Run a single cell (this row × this function column) ──
   const runCell = async (rowId: string, colId: string) => {
     const tableId = selectedTableId;
@@ -2888,9 +2924,6 @@ export default function App() {
     } catch { /* ignore */ }
     setRunningCells(s => { const n = new Set(s); n.delete(key); return n; });
   };
-
-  // ── Column added (from Add-column / Functions) ──
-  // A newly added mapped/formula column whose inputs already have values should
 
   // ── Add row ────────────────────────────────
 
@@ -3739,6 +3772,7 @@ export default function App() {
                 runRows,
                 runColumn,
                 runCell,
+                runCells,
                 setCell,
                 deleteRow,
                 deleteColumn,

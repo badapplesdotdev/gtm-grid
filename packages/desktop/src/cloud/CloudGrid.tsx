@@ -384,6 +384,32 @@ export function CloudGrid({
     [tableId, session],
   );
 
+  // Run an explicit set of function cells (range selection's "Run N cells"):
+  // one scoped force+rowIds run per column, sequential like cloud runAll.
+  const runCells = useCallback(
+    async (cells: Array<{ rowId: string; colId: string }>) => {
+      if (tableId === null) return;
+      const byCol = new Map<string, string[]>();
+      for (const { rowId, colId } of cells) {
+        const list = byCol.get(colId) ?? [];
+        list.push(rowId);
+        byCol.set(colId, list);
+      }
+      for (const [columnId, rowIds] of byCol) {
+        const keys = rowIds.map((r) => `${r}:${columnId}`);
+        setRunningCells((s) => { const n = new Set(s); for (const k of keys) n.add(k); return n; });
+        try {
+          await runCloudColumn(session, { tableId, columnId, force: true, rowIds });
+        } catch {
+          /* surfaced live via the cell error status */
+        } finally {
+          setRunningCells((s) => { const n = new Set(s); for (const k of keys) n.delete(k); return n; });
+        }
+      }
+    },
+    [tableId, session],
+  );
+
   // Surface mutation failures inline instead of dropping them as unhandled
   // rejections (a failed add previously looked like the button "did nothing").
   const guard = useCallback(async (fn: () => Promise<unknown>, what: string) => {
@@ -578,6 +604,7 @@ export function CloudGrid({
     runRows,
     runColumn,
     runCell,
+    runCells,
     setCell: (rowId, colId, value) =>
       void guard(() => setCell(rowId as Id<"rows">, colId as Id<"columns">, value), "set cell"),
     deleteRow: (rowId) => void guard(() => deleteRow(tableId, rowId as Id<"rows">), "delete row"),
