@@ -1,5 +1,33 @@
 # @gtmgrid/desktop
 
+## 0.9.13
+
+### Patch Changes
+
+- 891e3b8: Agent presence (Co-Pilot cursor): the in-app AI agent now appears in cloud
+  tables like a teammate. As it reads or writes — get_table, run_column,
+  update_cells, add_rows — the grid shows "<Your name>'s Agent" in the avatar
+  stack (bot glyph, brand-accent ring), rings the cell or column it's working
+  on, and labels the activity ("reading the table", "updating 2 cells",
+  "running Email"). Visible to everyone in the table's room, clears when the
+  turn ends. Works against the already-deployed realtime party.
+- Updated dependencies [891e3b8]
+  - @gtmgrid/services@0.9.13
+  - @gtmgrid/cloud@0.9.13
+
+## 0.9.12
+
+### Patch Changes
+
+- fee2724: Fix the cell-details (field mapping) drawer in dark mode: the panel kept a
+  hardcoded light backdrop while its title, pills, and footer used dark-theme
+  colors — making the title invisible and the panel clash with the app. The
+  drawer now uses theme tokens throughout, and the number/boolean type glyphs
+  brighten on dark for contrast.
+- Updated dependencies [9bf183f]
+  - @gtmgrid/services@0.9.12
+  - @gtmgrid/cloud@0.9.12
+
 ## 0.9.11
 
 ### Patch Changes
