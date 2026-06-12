@@ -1,5 +1,5 @@
-import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, memo, lazy, Suspense, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
-import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource, type CellProgressEvent } from "./api";
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, memo, lazy, Suspense, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type FolderSummary, type SignalSource, type CellProgressEvent } from "./api";
 import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import CellDetails, { extractCode } from "./CellDetails";
@@ -32,6 +32,10 @@ import {
   resolveStaleCloudTableFallback,
   resolveTargetCloudProject,
   buildTableList,
+  groupTableList,
+  positionForMove,
+  type MoveTarget,
+  type SidebarFolder,
   type SyncStatus,
   type TableListRow,
 } from "./cloudSync";
@@ -65,6 +69,7 @@ import {
   useCloudProjects,
   useCloudTables,
   useWorkspaceRealtime,
+  useCloudFolders,
   useCloudProjectMutations,
   useCloudGridMutations,
   useCloudSyncRefresh,
@@ -200,6 +205,22 @@ export const Icon = {
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
       <path d="M10 11v6M14 11v6M9 6V4h6v2"/>
+    </svg>
+  ),
+  Folder: ({ size = 14 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>
+    </svg>
+  ),
+  FolderOpen: ({ size = 14 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>
+    </svg>
+  ),
+  FolderPlus: ({ size = 14 }: { size?: number }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 10v6"/><path d="M9 13h6"/>
+      <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>
     </svg>
   ),
   Star: ({ filled = false }: { filled?: boolean }) => (
@@ -652,7 +673,7 @@ export function ExpandedEditor({
 
 // ─── New Table Modal ──────────────────────────────────────
 
-function NewTableModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
+function NewTableModal({ onClose, onCreated, folderId = null }: { onClose: () => void; onCreated: (id: string) => void; folderId?: string | null }) {
   const [name, setName] = useState("Untitled table");
   const [saving, setSaving] = useState(false);
 
@@ -660,7 +681,7 @@ function NewTableModal({ onClose, onCreated }: { onClose: () => void; onCreated:
     if (!name.trim()) return;
     setSaving(true);
     try {
-      const t = await api.createTable(name.trim());
+      const t = await api.createTable(name.trim(), folderId);
       onCreated(t.id);
       onClose();
     } catch {
@@ -1039,6 +1060,39 @@ export default function App() {
   const [confirmDeleteTable, setConfirmDeleteTable] = useState<TableSummary | null>(null);
   const [confirmDeleteCloudTable, setConfirmDeleteCloudTable] = useState<{ _id: Id<"tables">; name: string } | null>(null);
 
+  // Sidebar folders (local project; cloud folders come from useCloudFolders).
+  const [localFolders, setLocalFolders] = useState<FolderSummary[]>([]);
+  const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
+  const [folderDraft, setFolderDraft] = useState("");
+  // The header "+" add menu (New table / New folder).
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  // Folder a "New table here" should file the created table under (null = root).
+  const [newTableFolderId, setNewTableFolderId] = useState<string | null>(null);
+  // Folder expand/collapse — per-device UI state, persisted across sessions.
+  // Default CLOSED (an absent key = collapsed) so a teammate's new folder
+  // arrives tidy.
+  const [openFolders, setOpenFolders] = useState<Record<string, boolean>>(() => {
+    try {
+      const parsed: unknown = JSON.parse(localStorage.getItem("gtmgrid:openFolders") ?? "{}");
+      return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, boolean>)
+        : {};
+    } catch {
+      return {};
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("gtmgrid:openFolders", JSON.stringify(openFolders)); } catch { /* ignore */ }
+  }, [openFolders]);
+  // Drag-and-drop: the table row being dragged + the current drop target.
+  const [dragTableId, setDragTableId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<
+    | { kind: "table"; id: string; pos: "before" | "after" }
+    | { kind: "folder"; id: string }
+    | { kind: "root" }
+    | null
+  >(null);
+
   // Connectors / extensions / AI providers
   const [connectors, setConnectors] = useState<ConnectorInfo[]>([]);
   const [extensions, setExtensions] = useState<ExtensionInfo[]>([]);
@@ -1287,8 +1341,16 @@ export default function App() {
   // no known local link (nothing to recover to → leave the existing behaviour).
   const [cloudTableLocalId, setCloudTableLocalId] = useState<string | null>(null);
   const cloudTables = useCloudTables(cloudProject?._id ?? null);
-  const { createProject: createCloudProject, createTable: createCloudTable, deleteTable: deleteCloudTable } =
-    useCloudProjectMutations();
+  const cloudFolders = useCloudFolders(cloudProject?._id ?? null);
+  const {
+    createProject: createCloudProject,
+    createTable: createCloudTable,
+    deleteTable: deleteCloudTable,
+    createFolder: createCloudFolder,
+    renameFolder: renameCloudFolder,
+    deleteFolder: deleteCloudFolder,
+    moveTable: moveCloudTable,
+  } = useCloudProjectMutations();
   const { addColumn: cloudAddColumn, addRowsWithCells: cloudAddRowsWithCells } =
     useCloudGridMutations();
   // Post-push cache invalidations (TRI-3309 A/E): refetch the cloud-tables list
@@ -1592,8 +1654,9 @@ export default function App() {
         // Load feature data resiliently: a single missing/failed route (e.g. a
         // version-skewed sidecar lacking a newer endpoint) must degrade that one
         // feature, never blank the whole app with "server not reachable".
-        const [t, f, e, ai, sk] = await Promise.all([
+        const [t, fl, f, e, ai, sk] = await Promise.all([
           api.tables().catch(() => []),
+          api.folders().catch(() => []),
           api.functions().catch(() => []),
           api.extensions().catch(() => []),
           api.aiProviders().catch(() => []),
@@ -1601,6 +1664,7 @@ export default function App() {
         ]);
         if (cancelled) return;
         setTables(t);
+        setLocalFolders(fl);
         setConnectors(f);
         setExtensions(e);
         setAiProviders(ai);
@@ -1700,6 +1764,11 @@ export default function App() {
     if (t) setTables(t);
   }, []);
 
+  const reloadFolders = useCallback(async () => {
+    const f = await api.folders().catch(() => null);
+    if (f) setLocalFolders(f);
+  }, []);
+
   // ── Cloud project selection ──────────────
   // Open a cloud project: leave the local sidecar untouched, switch the main
   // area to the live CloudGrid, and default to its first table once they load.
@@ -1745,12 +1814,13 @@ export default function App() {
   // Create a cloud table in the open project, then select it. Single helper for
   // the (previously duplicated) "New table" affordances in the cloud sidebar.
   // Surfaces any failure and always clears the busy flag so the UI never hangs.
-  const onCreateCloudTable = useCallback(async () => {
+  const onCreateCloudTable = useCallback(async (folderId: string | null = null) => {
     if (!cloudProject || cloudCreating) return;
     setCloudCreating(true);
     setCloudCreateError(null);
     try {
-      const id = await createCloudTable(cloudProject._id, "Untitled");
+      const id = await createCloudTable(cloudProject._id, "Untitled", folderId);
+      if (folderId !== null) setOpenFolders((o) => (o[folderId] ? o : { ...o, [folderId]: true }));
       setCloudTableId(id);
       setView({ kind: "table" });
     } catch (e) {
@@ -2222,13 +2292,36 @@ export default function App() {
             synced: true,
             favorite: false,
             rows: 0,
+            folderId: t.folderId,
+            position: t.position,
           }))
         : buildTableList({
-            localTables: tables.map((t) => ({ id: t.id, name: t.name, favorite: t.favorite, rows: t.rows })),
+            localTables: tables.map((t) => ({
+              id: t.id,
+              name: t.name,
+              favorite: t.favorite,
+              rows: t.rows,
+              folderId: t.folderId,
+              position: t.position,
+            })),
             cloudTables: [],
             syncLinks,
           }),
     [inCloud, tables, cloudTables, syncLinks],
+  );
+  // The sidebar's folders for the ACTIVE environment (cloud project's folders in
+  // cloud mode; the local project's folders otherwise), in position order.
+  const sidebarFolders = useMemo<SidebarFolder[]>(
+    () =>
+      inCloud
+        ? (cloudFolders ?? []).map((f) => ({ id: f._id, name: f.name, position: f.position }))
+        : localFolders.map((f) => ({ id: f.id, name: f.name, position: f.position })),
+    [inCloud, cloudFolders, localFolders],
+  );
+  // Folder sections + root rows the sidebar renders.
+  const groupedTables = useMemo(
+    () => groupTableList(tableList, sidebarFolders),
+    [tableList, sidebarFolders],
   );
   // Lookups by id so the unified rows can recover their original summaries (the
   // local TableSummary for context-menu / rename / delete; the branded cloud id
@@ -2270,6 +2363,111 @@ export default function App() {
     [inCloud, cloudById],
   );
 
+  // One unified sidebar table row (root or inside a folder). Not memoized — it
+  // closes over the drag/drop + rename state and renders a handful of rows.
+  const renderTableRow = (row: TableListRow, inFolder: boolean) => {
+    const local = row.kind === "local" ? localById.get(row.id) : undefined;
+    const cloudRowLocked = row.kind === "cloud" && cloudLocked;
+    if (local && renamingTableId === local.id) {
+      return (
+        <div key={`local:${row.id}`} className={`sidebar-item${inFolder ? " in-folder" : ""}`} style={{ paddingTop: 2, paddingBottom: 2 }}>
+          <span className="sidebar-item-icon"><Icon.Table /></span>
+          <input
+            className="sidebar-rename-input"
+            value={renameDraft}
+            autoFocus
+            onChange={e => setRenameDraft(e.target.value)}
+            onBlur={() => commitRename(local.id, renameDraft)}
+            onKeyDown={e => {
+              if (e.key === "Enter") commitRename(local.id, renameDraft);
+              if (e.key === "Escape") setRenamingTableId(null);
+            }}
+          />
+        </div>
+      );
+    }
+    const dropCls =
+      dropTarget?.kind === "table" && dropTarget.id === row.id ? ` drop-${dropTarget.pos}` : "";
+    return (
+      <div
+        key={`${row.kind}:${row.id}`}
+        className={`sidebar-item${inFolder ? " in-folder" : ""}${row.id === activeRowId && view.kind === "table" && !cloudRowLocked ? " active" : ""}${dragTableId === row.id ? " dragging" : ""}${dropCls}`}
+        style={cloudRowLocked ? { opacity: 0.6 } : undefined}
+        title={cloudRowLocked ? "Upgrade to unlock cloud tables" : undefined}
+        draggable={!cloudRowLocked}
+        onDragStart={e => onRowDragStart(e, row)}
+        onDragEnd={clearDrag}
+        onDragOver={e => onRowDragOver(e, row)}
+        onDrop={e => onRowDrop(e, row)}
+        onClick={() => (cloudRowLocked ? setShowUpgrade(true) : onSelectTableRow(row))}
+        onContextMenu={local ? (e => openCtx(e, tableMenuItems(local))) : undefined}
+      >
+        <span className="sidebar-item-icon">
+          {cloudRowLocked ? "🔒" : <Icon.Table />}
+        </span>
+        <span className="sidebar-item-name">{row.name}</span>
+        {row.favorite && <span className="sidebar-item-star"><Icon.Star filled /></span>}
+        {local && (
+          <>
+            <button
+              className="sidebar-item-del"
+              title="Delete table"
+              onClick={e => { e.stopPropagation(); setConfirmDeleteTable(local); }}
+            >
+              <Icon.Trash />
+            </button>
+            <button
+              className="sidebar-item-more"
+              title="Table options"
+              onClick={e => { e.stopPropagation(); openCtx(e, tableMenuItems(local)); }}
+            >
+              <Icon.More />
+            </button>
+          </>
+        )}
+        {row.kind === "cloud" && !cloudRowLocked && cloudById.get(row.id) && (
+          <button
+            className="sidebar-item-del"
+            title="Delete table"
+            onClick={e => {
+              e.stopPropagation();
+              const ct = cloudById.get(row.id);
+              if (ct) setConfirmDeleteCloudTable({ _id: ct._id, name: ct.name });
+            }}
+          >
+            <Icon.Trash />
+          </button>
+        )}
+        {/* Trailing indicator: a cloud icon on cloud/synced rows; the
+            sync dot (cloud users) or row count on unsynced local rows. */}
+        {row.synced ? (
+          <span className="sidebar-item-cloud" title="Synced to cloud">{CloudIcon}</span>
+        ) : showSyncUi && local ? (
+          <button
+            className={`row-sync is-${syncStatusFor(local.id)}`}
+            title={SYNC_META[syncStatusFor(local.id)].label}
+            onClick={e => {
+              e.stopPropagation();
+              const host = e.currentTarget.closest(".sidebar-item");
+              const top = host instanceof HTMLElement ? host.getBoundingClientRect().top : 80;
+              setSyncPopover({ tableId: local.id, anchorTop: top });
+              // TRI-3310 bug C: the popover diff + the overwrite-confirm
+              // copy read the row count from the cached TableSummary,
+              // which goes stale after edits. Refresh the summary at
+              // popover-open so the count reflects the table's real
+              // current rows (the push itself always sends the live rows).
+              void reloadTables();
+            }}
+          >
+            <SyncDot status={syncStatusFor(local.id)} />
+          </button>
+        ) : (
+          <span className="sidebar-item-count">{row.rows}</span>
+        )}
+      </div>
+    );
+  };
+
   // Default the active cloud table to the first one once the list loads.
   useEffect(() => {
     if (!inCloud) return;
@@ -2304,12 +2502,14 @@ export default function App() {
     setCloudTableLocalId(null);
     setProjectName(name);
     setView({ kind: "table" });
-    const [t, e, ai] = await Promise.all([
+    const [t, fl, e, ai] = await Promise.all([
       api.tables().catch(() => [] as TableSummary[]),
+      api.folders().catch(() => [] as FolderSummary[]),
       api.extensions().catch(() => null),
       api.aiProviders().catch(() => null),
     ]);
     setTables(t);
+    setLocalFolders(fl);
     setSelectedTableId(t.length ? t[0].id : null);
     if (e) setExtensions(e);
     if (ai) setAiProviders(ai);
@@ -2354,6 +2554,164 @@ export default function App() {
     { label: "Rename", onClick: () => { setRenameDraft(t.name); setRenamingTableId(t.id); } },
     { label: "Delete", danger: true, onClick: () => setConfirmDeleteTable(t) },
   ];
+
+  // ── Sidebar folders (create / rename / delete / move) ─────────────────────
+  // One set of handlers serving BOTH environments: cloud mode goes through the
+  // tRPC folder mutations (shared with teammates), local mode through the
+  // sidecar's /api/folders routes (per-project SQLite).
+
+  const uniqueFolderName = (base: string): string => {
+    const names = new Set(sidebarFolders.map((f) => f.name.toLowerCase()));
+    if (!names.has(base.toLowerCase())) return base;
+    let n = 2;
+    while (names.has(`${base} ${n}`.toLowerCase())) n++;
+    return `${base} ${n}`;
+  };
+
+  const onCreateFolder = async () => {
+    const name = uniqueFolderName("New folder");
+    try {
+      let id: string;
+      if (inCloud) {
+        if (!cloudProject) return;
+        id = await createCloudFolder(cloudProject._id, name);
+      } else {
+        id = (await api.createFolder(name)).id;
+        await reloadFolders();
+      }
+      // Open the new folder and drop straight into rename (matching the design).
+      setOpenFolders((o) => ({ ...o, [id]: true }));
+      setFolderDraft(name);
+      setRenamingFolderId(id);
+    } catch { /* surfaced by the list simply not changing */ }
+  };
+
+  const commitFolderRename = async (id: string, name: string) => {
+    setRenamingFolderId(null);
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (inCloud) {
+      if (!cloudProject) return;
+      await renameCloudFolder(cloudProject._id, id, trimmed).catch(() => {});
+    } else {
+      await api.renameFolder(id, trimmed).catch(() => {});
+      await reloadFolders();
+    }
+  };
+
+  // Deleting a folder UNFILES its tables back to the root (both backends), so
+  // no confirm modal is needed — nothing destructive happens to table data.
+  const onDeleteFolder = async (id: string) => {
+    if (inCloud) {
+      if (!cloudProject) return;
+      await deleteCloudFolder(cloudProject._id, id).catch(() => {});
+    } else {
+      await api.deleteFolder(id).catch(() => {});
+      await Promise.all([reloadFolders(), reloadTables()]);
+    }
+    setOpenFolders((o) => {
+      if (!(id in o)) return o;
+      const next = { ...o };
+      delete next[id];
+      return next;
+    });
+  };
+
+  const toggleFolder = (id: string) =>
+    setOpenFolders((o) => ({ ...o, [id]: !o[id] }));
+  const openFolder = (id: string) =>
+    setOpenFolders((o) => (o[id] ? o : { ...o, [id]: true }));
+
+  // Move a dragged table row into a folder / to the root / next to another row.
+  // The fractional position is computed CLIENT-side from the visible list (pure
+  // helper) so both backends get one simple "set folderId + position" write.
+  const onMoveTableRow = async (row: TableListRow, target: MoveTarget) => {
+    const position = positionForMove(tableList, row.id, target);
+    if (row.kind === "cloud") {
+      if (!cloudProject) return;
+      await moveCloudTable(cloudProject._id, row.id as Id<"tables">, target.folderId, position).catch(() => {});
+    } else {
+      await api.moveTable(row.id, target.folderId, position).catch(() => {});
+      await reloadTables();
+    }
+    if (target.folderId !== null) openFolder(target.folderId);
+  };
+
+  const startFolderRename = (f: SidebarFolder) => {
+    setFolderDraft(f.name);
+    setRenamingFolderId(f.id);
+  };
+
+  const newTableInFolder = (folderId: string) => {
+    setNewTableFolderId(folderId);
+    setShowNewTableChooser(true);
+  };
+
+  const folderMenuItems = (f: SidebarFolder) => [
+    { label: "Rename", onClick: () => startFolderRename(f) },
+    { label: "New table here", onClick: () => newTableInFolder(f.id) },
+    { label: "Delete folder", danger: true, onClick: () => { void onDeleteFolder(f.id); } },
+  ];
+
+  // ── Sidebar drag & drop (tables ↔ folders) ─────────────────────────────────
+
+  const clearDrag = () => { setDragTableId(null); setDropTarget(null); };
+  const dragPosOf = (e: ReactDragEvent): "before" | "after" => {
+    const r = e.currentTarget.getBoundingClientRect();
+    return e.clientY - r.top < r.height / 2 ? "before" : "after";
+  };
+  const onRowDragStart = (e: ReactDragEvent, row: TableListRow) => {
+    setDragTableId(row.id);
+    e.dataTransfer.effectAllowed = "move";
+    try { e.dataTransfer.setData("text/plain", row.id); } catch { /* webview quirk */ }
+  };
+  const onRowDragOver = (e: ReactDragEvent, row: TableListRow) => {
+    if (!dragTableId || dragTableId === row.id) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDropTarget({ kind: "table", id: row.id, pos: dragPosOf(e) });
+  };
+  const onRowDrop = (e: ReactDragEvent, row: TableListRow) => {
+    const dragged = tableList.find((r) => r.id === dragTableId);
+    if (!dragged || dragged.id === row.id) { clearDrag(); return; }
+    e.preventDefault();
+    e.stopPropagation();
+    const target: MoveTarget =
+      dragPosOf(e) === "after"
+        ? { folderId: row.folderId, afterId: row.id }
+        : { folderId: row.folderId, beforeId: row.id };
+    void onMoveTableRow(dragged, target);
+    clearDrag();
+  };
+  const onFolderDragEnter = (f: SidebarFolder) => {
+    // Auto-expand a collapsed folder while hovering a drag over it.
+    if (dragTableId) openFolder(f.id);
+  };
+  const onFolderDragOver = (e: ReactDragEvent, f: SidebarFolder) => {
+    if (!dragTableId) return;
+    e.preventDefault();
+    setDropTarget({ kind: "folder", id: f.id });
+  };
+  const onFolderDrop = (e: ReactDragEvent, f: SidebarFolder) => {
+    const dragged = tableList.find((r) => r.id === dragTableId);
+    if (!dragged) { clearDrag(); return; }
+    e.preventDefault();
+    e.stopPropagation();
+    void onMoveTableRow(dragged, { folderId: f.id });
+    clearDrag();
+  };
+  const onRootDragOver = (e: ReactDragEvent) => {
+    if (!dragTableId) return;
+    e.preventDefault();
+    setDropTarget({ kind: "root" });
+  };
+  const onRootDrop = (e: ReactDragEvent) => {
+    const dragged = tableList.find((r) => r.id === dragTableId);
+    if (!dragged) { clearDrag(); return; }
+    e.preventDefault();
+    void onMoveTableRow(dragged, { folderId: null });
+    clearDrag();
+  };
 
   // ── Run all function cols ──────────────────
 
@@ -2666,9 +3024,24 @@ export default function App() {
                     {syncPending ? <span className="sync-all-count">{syncPending}</span> : null}
                   </button>
                 )}
-                <button onClick={() => setShowNewTableChooser(true)} title="New table" disabled={inCloud && cloudLocked}>
-                  <Icon.Plus />
-                </button>
+                <span className="add-menu-wrap">
+                  <button onClick={() => setAddMenuOpen(o => !o)} title="Add table or folder" disabled={inCloud && cloudLocked}>
+                    <Icon.Plus />
+                  </button>
+                  {addMenuOpen && (
+                    <>
+                      <div className="menu-scrim" onClick={() => setAddMenuOpen(false)} />
+                      <div className="add-menu">
+                        <button onClick={() => { setAddMenuOpen(false); setNewTableFolderId(null); setShowNewTableChooser(true); }}>
+                          <span className="add-menu-ic"><Icon.Table /></span> New table
+                        </button>
+                        <button onClick={() => { setAddMenuOpen(false); void onCreateFolder(); }}>
+                          <span className="add-menu-ic"><Icon.FolderPlus /></span> New folder
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </span>
               </span>
             </div>
             {/* Auto-sync setting (TRI-3298): default OFF. Turning it ON requires
@@ -2692,103 +3065,85 @@ export default function App() {
               <div className="skeleton-row">
                 <div className="shimmer skeleton-bar" style={{ width: "65%", height: 13 }} />
               </div>
-            ) : tableList.length === 0 ? (
+            ) : tableList.length === 0 && sidebarFolders.length === 0 ? (
               <div style={{ padding: "4px 16px", fontSize: 12, color: "var(--text-3)" }}>No tables yet</div>
-            ) : tableList.map((row) => {
-              const local = row.kind === "local" ? localById.get(row.id) : undefined;
-              const cloudRowLocked = row.kind === "cloud" && cloudLocked;
-              if (local && renamingTableId === local.id) {
-                return (
-                  <div key={`local:${row.id}`} className="sidebar-item" style={{ paddingTop: 2, paddingBottom: 2 }}>
-                    <span className="sidebar-item-icon"><Icon.Table /></span>
-                    <input
-                      className="sidebar-rename-input"
-                      value={renameDraft}
-                      autoFocus
-                      onChange={e => setRenameDraft(e.target.value)}
-                      onBlur={() => commitRename(local.id, renameDraft)}
-                      onKeyDown={e => {
-                        if (e.key === "Enter") commitRename(local.id, renameDraft);
-                        if (e.key === "Escape") setRenamingTableId(null);
-                      }}
-                    />
-                  </div>
-                );
-              }
-              return (
+            ) : (
+              <>
+                {groupedTables.folders.map(({ folder, rows: folderRows }) => {
+                  const isOpen = !!openFolders[folder.id];
+                  const into = dropTarget?.kind === "folder" && dropTarget.id === folder.id;
+                  return (
+                    <div key={`folder:${folder.id}`} className="sidebar-folder">
+                      {renamingFolderId === folder.id ? (
+                        <div className="folder-head">
+                          <span className="connector-group-toggle open"><Icon.ChevronRight /></span>
+                          <span className="folder-ic"><Icon.FolderOpen /></span>
+                          <input
+                            className="sidebar-rename-input"
+                            value={folderDraft}
+                            autoFocus
+                            onChange={e => setFolderDraft(e.target.value)}
+                            onBlur={() => commitFolderRename(folder.id, folderDraft)}
+                            onKeyDown={e => {
+                              if (e.key === "Enter") commitFolderRename(folder.id, folderDraft);
+                              if (e.key === "Escape") setRenamingFolderId(null);
+                            }}
+                          />
+                        </div>
+                      ) : (
+                        <div
+                          className={`folder-head${into ? " drop-into" : ""}`}
+                          onClick={() => toggleFolder(folder.id)}
+                          onContextMenu={e => openCtx(e, folderMenuItems(folder))}
+                          onDragEnter={() => onFolderDragEnter(folder)}
+                          onDragOver={e => onFolderDragOver(e, folder)}
+                          onDrop={e => onFolderDrop(e, folder)}
+                        >
+                          <span className={`connector-group-toggle${isOpen ? " open" : ""}`}><Icon.ChevronRight /></span>
+                          <span className="folder-ic">{isOpen ? <Icon.FolderOpen /> : <Icon.Folder />}</span>
+                          <span
+                            className="folder-name"
+                            onDoubleClick={e => { e.stopPropagation(); startFolderRename(folder); }}
+                          >
+                            {folder.name}
+                          </span>
+                          <button
+                            className="sidebar-item-more"
+                            title="Folder options"
+                            onClick={e => { e.stopPropagation(); openCtx(e, folderMenuItems(folder)); }}
+                          >
+                            <Icon.More />
+                          </button>
+                          <span className="sidebar-item-count">{folderRows.length}</span>
+                        </div>
+                      )}
+                      {isOpen && (
+                        <div className="folder-body">
+                          {folderRows.length === 0 ? (
+                            <div
+                              className={`folder-empty${into ? " drop-into" : ""}`}
+                              onDragOver={e => onFolderDragOver(e, folder)}
+                              onDrop={e => onFolderDrop(e, folder)}
+                            >
+                              Drop tables here
+                            </div>
+                          ) : (
+                            folderRows.map((row) => renderTableRow(row, true))
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
                 <div
-                  key={`${row.kind}:${row.id}`}
-                  className={`sidebar-item${row.id === activeRowId && view.kind === "table" && !cloudRowLocked ? " active" : ""}`}
-                  style={cloudRowLocked ? { opacity: 0.6 } : undefined}
-                  title={cloudRowLocked ? "Upgrade to unlock cloud tables" : undefined}
-                  onClick={() => (cloudRowLocked ? setShowUpgrade(true) : onSelectTableRow(row))}
-                  onContextMenu={local ? (e => openCtx(e, tableMenuItems(local))) : undefined}
+                  className={`root-drop${dropTarget?.kind === "root" ? " drop-into" : ""}`}
+                  onDragOver={onRootDragOver}
+                  onDrop={onRootDrop}
                 >
-                  <span className="sidebar-item-icon">
-                    {cloudRowLocked ? "🔒" : <Icon.Table />}
-                  </span>
-                  <span className="sidebar-item-name">{row.name}</span>
-                  {row.favorite && <span className="sidebar-item-star"><Icon.Star filled /></span>}
-                  {local && (
-                    <>
-                      <button
-                        className="sidebar-item-del"
-                        title="Delete table"
-                        onClick={e => { e.stopPropagation(); setConfirmDeleteTable(local); }}
-                      >
-                        <Icon.Trash />
-                      </button>
-                      <button
-                        className="sidebar-item-more"
-                        title="Table options"
-                        onClick={e => { e.stopPropagation(); openCtx(e, tableMenuItems(local)); }}
-                      >
-                        <Icon.More />
-                      </button>
-                    </>
-                  )}
-                  {row.kind === "cloud" && !cloudRowLocked && cloudById.get(row.id) && (
-                    <button
-                      className="sidebar-item-del"
-                      title="Delete table"
-                      onClick={e => {
-                        e.stopPropagation();
-                        const ct = cloudById.get(row.id);
-                        if (ct) setConfirmDeleteCloudTable({ _id: ct._id, name: ct.name });
-                      }}
-                    >
-                      <Icon.Trash />
-                    </button>
-                  )}
-                  {/* Trailing indicator: a cloud icon on cloud/synced rows; the
-                      sync dot (cloud users) or row count on unsynced local rows. */}
-                  {row.synced ? (
-                    <span className="sidebar-item-cloud" title="Synced to cloud">{CloudIcon}</span>
-                  ) : showSyncUi && local ? (
-                    <button
-                      className={`row-sync is-${syncStatusFor(local.id)}`}
-                      title={SYNC_META[syncStatusFor(local.id)].label}
-                      onClick={e => {
-                        e.stopPropagation();
-                        const host = e.currentTarget.closest(".sidebar-item");
-                        const top = host instanceof HTMLElement ? host.getBoundingClientRect().top : 80;
-                        setSyncPopover({ tableId: local.id, anchorTop: top });
-                        // TRI-3310 bug C: the popover diff + the overwrite-confirm
-                        // copy read the row count from the cached TableSummary,
-                        // which goes stale after edits. Refresh the summary at
-                        // popover-open so the count reflects the table's real
-                        // current rows (the push itself always sends the live rows).
-                        void reloadTables();
-                      }}
-                    >
-                      <SyncDot status={syncStatusFor(local.id)} />
-                    </button>
-                  ) : (
-                    <span className="sidebar-item-count">{row.rows}</span>
-                  )}
+                  {groupedTables.root.map((row) => renderTableRow(row, false))}
                 </div>
-              );
-            })}
+              </>
+            )}
             {inCloud && cloudLocked ? (
               <button
                 className="btn btn--primary"
@@ -2802,7 +3157,7 @@ export default function App() {
                 <div
                   className="sidebar-item"
                   style={{ marginTop: 2, opacity: cloudCreating ? 0.6 : 1 }}
-                  onClick={() => setShowNewTableChooser(true)}
+                  onClick={() => { setNewTableFolderId(null); setShowNewTableChooser(true); }}
                 >
                   <span className="sidebar-item-icon" style={{ color: "var(--accent)" }}><Icon.Plus /></span>
                   <span className="sidebar-item-name" style={{ color: "var(--accent)" }}>
@@ -3164,7 +3519,7 @@ export default function App() {
               <div className="empty-title">No table selected</div>
               <p className="empty-sub">Create your first table to start building your GTM data grid.</p>
               <div style={{ display: "flex", gap: 8 }}>
-                <button className="btn btn-primary" onClick={() => setShowNewTableChooser(true)}>
+                <button className="btn btn-primary" onClick={() => { setNewTableFolderId(null); setShowNewTableChooser(true); }}>
                   <Icon.Plus /> Create table
                 </button>
                 <button className="btn btn-outline" onClick={() => setImportMode("local")}>
@@ -3399,7 +3754,7 @@ export default function App() {
           inCloud={inCloud}
           onClose={() => setShowNewTableChooser(false)}
           onBlank={() => {
-            if (inCloud) void onCreateCloudTable();
+            if (inCloud) void onCreateCloudTable(newTableFolderId);
             else setShowNewTable(true);
           }}
           onCsv={() => setImportMode(inCloud ? "cloud" : "local")}
@@ -3434,8 +3789,13 @@ export default function App() {
 
       {showNewTable && (
         <NewTableModal
-          onClose={() => setShowNewTable(false)}
+          folderId={newTableFolderId}
+          onClose={() => { setShowNewTable(false); setNewTableFolderId(null); }}
           onCreated={id => {
+            if (newTableFolderId !== null) {
+              const fid = newTableFolderId;
+              setOpenFolders((o) => (o[fid] ? o : { ...o, [fid]: true }));
+            }
             api.tables().then(t => {
               setTables(t);
               setSelectedTableId(id);
