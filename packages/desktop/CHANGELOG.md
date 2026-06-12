@@ -1,5 +1,18 @@
 # @gtmgrid/desktop
 
+## 0.9.12
+
+### Patch Changes
+
+- fee2724: Fix the cell-details (field mapping) drawer in dark mode: the panel kept a
+  hardcoded light backdrop while its title, pills, and footer used dark-theme
+  colors — making the title invisible and the panel clash with the app. The
+  drawer now uses theme tokens throughout, and the number/boolean type glyphs
+  brighten on dark for contrast.
+- Updated dependencies [9bf183f]
+  - @gtmgrid/services@0.9.12
+  - @gtmgrid/cloud@0.9.12
+
 ## 0.9.11
 
 ### Patch Changes
