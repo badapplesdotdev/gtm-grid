@@ -213,12 +213,14 @@ function normScope(s: unknown): "personal" | "team" | "local" {
   return s === "team" || s === "local" || s === "personal" ? s : "personal";
 }
 
-const tableSummary = (t: { id: string; name: string }) => ({
+const tableSummary = (t: { id: string; name: string; position?: number; folder_id?: string | null }) => ({
   id: t.id,
   name: t.name,
   columns: current.projectDb.listColumns(t.id).length,
   rows: current.projectDb.listRows(t.id).length,
   favorite: current.projectDb.isFavorite(t.id),
+  position: t.position ?? 0,
+  folderId: t.folder_id ?? null,
 });
 
 function fullTable(tableId: string) {
@@ -844,8 +846,40 @@ route("POST", "/api/credentials/copy-to-cloud", async (_p, body) => {
 route("GET", "/api/cloud/tables/links", () => current.projectDb.listCloudTableLinks());
 
 route("GET", "/api/tables", () => current.projectDb.listTables().map(tableSummary));
-route("POST", "/api/tables", (_p, body) => tableSummary(current.projectDb.createTable(body?.name ?? "Untitled")));
+route("POST", "/api/tables", (_p, body) =>
+  tableSummary(
+    current.projectDb.createTable(
+      body?.name ?? "Untitled",
+      typeof body?.folderId === "string" && body.folderId ? body.folderId : null,
+    ),
+  ));
 route("GET", "/api/tables/:id", (p) => fullTable(p.id) ?? { error: "not found" });
+
+// Move a table into a folder (folderId: null → root), optionally with a new
+// fractional sort position (drag-reorder midpoints).
+route("POST", "/api/tables/:id/move", (p, body) => {
+  const folderId = typeof body?.folderId === "string" && body.folderId ? body.folderId : null;
+  const position = typeof body?.position === "number" && Number.isFinite(body.position) ? body.position : undefined;
+  current.projectDb.moveTable(p.id, folderId, position);
+  return { ok: true };
+});
+
+// ── Sidebar folders (organize tables; deleting a folder unfiles its tables) ──
+route("GET", "/api/folders", () => current.projectDb.listFolders());
+route("POST", "/api/folders", (_p, body) => {
+  const name = typeof body?.name === "string" && body.name.trim() ? body.name.trim() : "New folder";
+  return current.projectDb.createFolder(name);
+});
+route("POST", "/api/folders/:id/update", (p, body) => {
+  const name = typeof body?.name === "string" ? body.name.trim() : "";
+  if (!name) return { error: "name required" };
+  current.projectDb.renameFolder(p.id, name);
+  return { ok: true };
+});
+route("POST", "/api/folders/:id/delete", (p) => {
+  current.projectDb.deleteFolder(p.id);
+  return { ok: true };
+});
 
 route("POST", "/api/tables/:id/update", (p, body) => {
   const name = typeof body?.name === "string" ? body.name.trim() : "";

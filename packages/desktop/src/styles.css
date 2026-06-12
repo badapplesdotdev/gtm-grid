@@ -2027,6 +2027,66 @@ html, body, #root {
 .sidebar-item-more:hover { background: var(--surface-3); color: var(--text); }
 .sidebar-item:hover .sidebar-item-count { display: none; }
 
+/* ── Sidebar folders (table groups) ───────────────────────── */
+.folder-head {
+  display: flex; align-items: center; gap: 6px; padding: 6px 16px; cursor: pointer;
+  color: var(--text-2); font-size: 13px; user-select: none; position: relative;
+  transition: background 0.1s, color 0.1s, box-shadow 0.1s;
+}
+.folder-head:hover { background: var(--surface-2); color: var(--text); }
+.folder-head .connector-group-toggle { width: 12px; height: 12px; }
+.folder-ic { display: flex; color: var(--text-3); flex-shrink: 0; transition: color 0.1s; }
+.folder-head:hover .folder-ic { color: var(--accent); }
+.folder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.folder-head .sidebar-item-more { opacity: 0; }
+.folder-head:hover .sidebar-item-more { opacity: 1; }
+.folder-head:hover .sidebar-item-count { display: none; }
+.folder-head.drop-into {
+  background: var(--accent-soft); color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--accent-ring); border-radius: var(--r-xs);
+}
+.folder-head.drop-into .folder-ic { color: var(--accent); }
+.sidebar-item.in-folder { padding-left: 34px; }
+.folder-empty {
+  margin: 1px 12px 3px 34px; padding: 7px 10px; border: 1px dashed var(--border-2);
+  border-radius: var(--r-xs); color: var(--text-3); font-size: 11px; text-align: center;
+  transition: border-color 0.1s, color 0.1s, background 0.1s;
+}
+.folder-empty.drop-into { border-color: var(--accent); border-style: solid; color: var(--accent); background: var(--accent-soft); }
+
+/* table drag-and-drop states */
+.sidebar-item[draggable="true"] { cursor: grab; }
+.sidebar-item.dragging { opacity: 0.4; }
+.sidebar-item.drop-before::after,
+.sidebar-item.drop-after::after {
+  content: ''; position: absolute; left: 16px; right: 10px; height: 2px;
+  background: var(--accent); border-radius: 2px; box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.sidebar-item.drop-before::after { top: -1px; }
+.sidebar-item.drop-after::after { bottom: -1px; }
+.sidebar-item.in-folder.drop-before::after,
+.sidebar-item.in-folder.drop-after::after { left: 34px; }
+.root-drop { min-height: 6px; border-radius: var(--r-xs); transition: box-shadow 0.1s, background 0.1s; }
+.root-drop.drop-into { box-shadow: inset 0 0 0 1px var(--accent-ring); background: var(--accent-soft); }
+
+/* the header "+" menu (New table / New folder) */
+.add-menu-wrap { position: relative; display: flex; }
+.menu-scrim { position: fixed; inset: 0; z-index: 40; }
+.add-menu {
+  position: absolute; top: 24px; right: 0; z-index: 50; min-width: 158px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm);
+  box-shadow: var(--shadow-lg); padding: 5px; display: flex; flex-direction: column; gap: 1px;
+  animation: add-menu-in 0.12s ease-out;
+}
+@keyframes add-menu-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+.add-menu button {
+  all: unset; box-sizing: border-box; width: 100%; cursor: pointer; display: flex; align-items: center; gap: 9px;
+  padding: 7px 9px; border-radius: var(--r-xs); font-size: 12.5px; color: var(--text-2);
+}
+.add-menu button:hover { background: var(--surface-2); color: var(--text); }
+.add-menu-ic { display: flex; color: var(--text-3); }
+.add-menu button:hover .add-menu-ic { color: var(--accent); }
+
 /* ── Extensions gallery (Browse all) ─────────────────────── */
 .ext-browse-all {
   padding: 7px 16px; font-size: 12.5px; color: var(--text-3); cursor: pointer; user-select: none;

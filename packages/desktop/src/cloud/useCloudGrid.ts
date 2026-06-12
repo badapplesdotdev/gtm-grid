@@ -84,6 +84,17 @@ export interface CloudTableSummary {
   readonly name: string;
   readonly position: number;
   readonly createdAt: number;
+  /** Sidebar folder this table is filed under (null = root). */
+  readonly folderId: string | null;
+}
+
+/** A cloud sidebar folder (the `listFolders` query shape). */
+export interface CloudFolderSummary {
+  readonly _id: string;
+  readonly projectId: Id<"projects">;
+  readonly name: string;
+  readonly position: number;
+  readonly createdAt: number;
 }
 
 // ───────────────────────────── react-query keys ─────────────────────────────
@@ -96,6 +107,7 @@ export interface CloudTableSummary {
 export const gridQueryKeys = {
   projects: (workspaceId: string) => ["grid", "projects", workspaceId] as const,
   tables: (projectId: string) => ["grid", "tables", projectId] as const,
+  folders: (projectId: string) => ["grid", "folders", projectId] as const,
   table: (tableId: string) => ["grid", "table", tableId] as const,
   /** The keyset-paginated grid (an infinite query of {@link gridRouter.getTablePage}). */
   tablePaged: (tableId: string) => ["grid", "tablePaged", tableId] as const,
@@ -198,6 +210,32 @@ export function useCloudTables(
         name: t.name,
         position: t.position,
         createdAt: t.createdAt,
+        folderId: t.folderId ?? null,
+      })),
+    [q.data],
+  );
+}
+
+/**
+ * Reactive list of a cloud project's sidebar folders. `undefined` while
+ * loading; issues zero calls when cloud is off or no cloud project is active.
+ */
+export function useCloudFolders(
+  projectId: Id<"projects"> | null,
+): CloudFolderSummary[] | undefined {
+  const q = useRqQuery({
+    queryKey: gridQueryKeys.folders(projectId ?? ""),
+    enabled: apiClient !== null && projectId !== null,
+    queryFn: () => apiClient!.grid.listFolders.query({ projectId: projectId! }),
+  });
+  return useMemo<CloudFolderSummary[] | undefined>(
+    () =>
+      q.data?.map((f) => ({
+        _id: f.id,
+        projectId: f.projectId as Id<"projects">,
+        name: f.name,
+        position: f.position,
+        createdAt: f.createdAt,
       })),
     [q.data],
   );
@@ -232,10 +270,12 @@ export function useCloudProjectMutations() {
     async (
       projectId: Id<"projects">,
       name: string,
+      folderId?: string | null,
     ): Promise<Id<"tables">> => {
       const id = await apiClient!.grid.createTable.mutate({
         projectId,
         name,
+        folderId: folderId ?? null,
       });
       await qc.invalidateQueries({
         queryKey: gridQueryKeys.tables(projectId),
@@ -258,7 +298,60 @@ export function useCloudProjectMutations() {
     },
     [qc],
   );
-  return { createProject, createTable, deleteTable };
+  // ── Sidebar folders ───────────────────────────────────────────────────────
+  // Folder CRUD + table moves refresh BOTH the folders and tables lists for the
+  // project (a move changes a table's folderId; a folder delete unfiles tables).
+  const invalidateFolderLists = useCallback(
+    (projectId: Id<"projects">) =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: gridQueryKeys.folders(projectId) }),
+        qc.invalidateQueries({ queryKey: gridQueryKeys.tables(projectId) }),
+      ]),
+    [qc],
+  );
+  const createFolder = useCallback(
+    async (projectId: Id<"projects">, name: string): Promise<string> => {
+      const id = await apiClient!.grid.createFolder.mutate({ projectId, name });
+      await invalidateFolderLists(projectId);
+      return id as string;
+    },
+    [invalidateFolderLists],
+  );
+  const renameFolder = useCallback(
+    async (projectId: Id<"projects">, folderId: string, name: string) => {
+      await apiClient!.grid.renameFolder.mutate({ folderId, name });
+      await invalidateFolderLists(projectId);
+    },
+    [invalidateFolderLists],
+  );
+  const deleteFolder = useCallback(
+    async (projectId: Id<"projects">, folderId: string) => {
+      await apiClient!.grid.deleteFolder.mutate({ folderId });
+      await invalidateFolderLists(projectId);
+    },
+    [invalidateFolderLists],
+  );
+  const moveTable = useCallback(
+    async (
+      projectId: Id<"projects">,
+      tableId: Id<"tables">,
+      folderId: string | null,
+      position?: number,
+    ) => {
+      await apiClient!.grid.moveTable.mutate({ tableId, folderId, position });
+      await invalidateFolderLists(projectId);
+    },
+    [invalidateFolderLists],
+  );
+  return {
+    createProject,
+    createTable,
+    deleteTable,
+    createFolder,
+    renameFolder,
+    deleteFolder,
+    moveTable,
+  };
 }
 
 /**
@@ -816,6 +909,7 @@ export function useWorkspaceRealtime(
             predicate: (query) =>
               query.queryKey[0] === "grid" &&
               (query.queryKey[1] === "tables" ||
+                query.queryKey[1] === "folders" ||
                 query.queryKey[1] === "projects"),
           });
         },

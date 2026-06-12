@@ -108,6 +108,7 @@ export {
   makeGridStore,
   type StoreCell,
   type StoreColumn,
+  type StoreFolder,
   type StoreProject,
   type StoreRow,
   type StoreTable,
@@ -128,6 +129,14 @@ export {
   TableRepoLive,
   tableRepoLayer,
 } from "./repositories/table-repo.js";
+export {
+  type Folder,
+  FolderRepo,
+  FolderRepoError,
+  FolderRepoLive,
+  folderRepoLayer,
+  type NewFolder,
+} from "./repositories/folder-repo.js";
 export {
   type Column,
   type ColumnKind,
