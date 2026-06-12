@@ -47,6 +47,8 @@ import {
   type WebhookRepoError,
 } from "../repositories/webhook-repo.js";
 import { ColumnRepo } from "../repositories/column-repo.js";
+import type { GridChangeEvent, GridEventCell } from "../realtime/events.js";
+import { RealtimePublisher } from "./realtime-publisher.js";
 
 /** Name of the Clay-style raw-payload column every webhook lands records in. */
 export const WEBHOOK_COLUMN_NAME = "Webhook";
@@ -147,6 +149,42 @@ export class WebhookService extends Effect.Service<WebhookService>()(
       const crypto = yield* CredentialCryptoService;
       const entitlement = yield* EntitlementService;
       const columnRepo = yield* ColumnRepo;
+      const realtime = yield* RealtimePublisher;
+
+      /**
+       * Broadcast a grid change on the table's party room so open grids patch
+       * live — the worker analogue of GridService's publish. Best-effort by
+       * construction: the live publisher swallows transport errors, so realtime
+       * never fails a write that already succeeded.
+       */
+      const publish = (
+        workspaceId: string,
+        tableId: string,
+        event: GridChangeEvent,
+      ) => realtime.publish({ workspaceId, tableId, event });
+
+      /** The cells {@link writeCells} will actually persist, as realtime event
+       *  payloads (same skip rules: blank values and foreign columns dropped). */
+      const eventCells = (
+        rowId: string,
+        cells: CellMap,
+        validColumnIds: ReadonlySet<string>,
+      ): GridEventCell[] =>
+        Object.entries(cells)
+          .filter(
+            ([columnId, value]) =>
+              value !== "" &&
+              value !== null &&
+              value !== undefined &&
+              validColumnIds.has(columnId),
+          )
+          .map(([columnId, value]) => ({
+            rowId,
+            columnId,
+            value,
+            status: "done",
+            error: null,
+          }));
 
       /** Find-or-create the table's "Webhook" raw-payload column (json, manual).
        *  Records land here via the `$` mapping entry, so a webhook table always
@@ -639,6 +677,12 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           });
           // Exactly ONE billable cloud action per received record.
           yield* repo.meterActions(table.value.workspaceId, 1);
+          // Open grids see the record land live (row + its mapped cells).
+          yield* publish(table.value.workspaceId, webhook.tableId, {
+            type: "row.insert",
+            row: { _id: rowId },
+            cells: eventCells(rowId, args.cells, validColumnIds),
+          });
           return { rowId };
         });
 
@@ -719,6 +763,23 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             receivedAt: now,
           });
           yield* repo.meterActions(table.value.workspaceId, 1);
+          // Open grids see the upsert live: a fresh row inserts whole; a matched
+          // row patches each written cell in place.
+          const written = eventCells(rowId, args.cells, validColumnIds);
+          if (matchedRowId === null) {
+            yield* publish(table.value.workspaceId, webhook.tableId, {
+              type: "row.insert",
+              row: { _id: rowId },
+              cells: written,
+            });
+          } else {
+            for (const cell of written) {
+              yield* publish(table.value.workspaceId, webhook.tableId, {
+                type: "cell.upsert",
+                cell,
+              });
+            }
+          }
           return { rowId };
         });
 
@@ -863,6 +924,33 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         });
 
       /**
+       * Broadcast a cell's POST-MERGE state (one point read-back after the
+       * COALESCE upsert, so the event carries the kept value/status, not just
+       * the partial patch). This is what makes engine column runs over cloud
+       * tables paint live — their cell writes land through this worker path.
+       */
+      const publishMergedCell = (
+        workspaceId: string,
+        tableId: string,
+        rowId: string,
+        columnId: string,
+      ) =>
+        Effect.gen(function* () {
+          const merged = yield* repo.findCell(rowId, columnId);
+          if (merged._tag === "None") return;
+          yield* publish(workspaceId, tableId, {
+            type: "cell.upsert",
+            cell: {
+              rowId,
+              columnId,
+              value: merged.value.value,
+              status: merged.value.status,
+              error: merged.value.error,
+            },
+          });
+        });
+
+      /**
        * Worker cell upsert (COALESCE merge; meters only terminal). Two queries:
        * resolveCell (validate + workspace) then a single
        * INSERT…ON CONFLICT DO UPDATE that merges value/status/error and folds the
@@ -882,7 +970,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             args.columnId,
           );
           yield* assertMemberIfIdentified(workspaceId);
-          return yield* repo.upsertCell({
+          const id = yield* repo.upsertCell({
             workspaceId,
             tableId,
             rowId: args.rowId,
@@ -896,6 +984,8 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             meter: true,
             updatedAt: Date.now(),
           });
+          yield* publishMergedCell(workspaceId, tableId, args.rowId, args.columnId);
+          return id;
         });
 
       /** Worker status-only cell write (meters only terminal). */
@@ -911,7 +1001,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             args.columnId,
           );
           yield* assertMemberIfIdentified(workspaceId);
-          return yield* repo.upsertCell({
+          const id = yield* repo.upsertCell({
             workspaceId,
             tableId,
             rowId: args.rowId,
@@ -924,6 +1014,8 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             meter: true,
             updatedAt: Date.now(),
           });
+          yield* publishMergedCell(workspaceId, tableId, args.rowId, args.columnId);
+          return id;
         });
 
       /**

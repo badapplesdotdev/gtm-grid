@@ -353,6 +353,31 @@ export const projects = pgTable(
   (t) => [index("projects_by_workspace").on(t.workspaceId)],
 );
 
+/**
+ * A sidebar folder grouping a project's tables (organizational only — one level
+ * deep, no folder nesting). Deleting a folder unfiles its tables back to the
+ * root via the `tables.folder_id` ON DELETE SET NULL foreign key.
+ */
+export const folders = pgTable(
+  "folders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    position: doublePrecision("position").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  },
+  (t) => [
+    index("folders_by_project").on(t.projectId),
+    index("folders_by_workspace").on(t.workspaceId),
+  ],
+);
+
 /** A grid/table within a project (convex/schema.ts:206). */
 export const tables = pgTable(
   "tables",
@@ -367,6 +392,11 @@ export const tables = pgTable(
     name: text("name").notNull(),
     position: doublePrecision("position").notNull(),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    // The sidebar folder this table is filed under (null = root). SET NULL on
+    // folder delete so removing a folder unfiles its tables, never deletes them.
+    folderId: uuid("folder_id").references(() => folders.id, {
+      onDelete: "set null",
+    }),
     // Optional row-deduplication config (mirrors the local engine): the column
     // whose value rows are deduped on, and which duplicate to keep. Null = off.
     // The `(): AnyPgColumn` annotation breaks the tables↔columns circular type

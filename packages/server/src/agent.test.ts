@@ -50,13 +50,17 @@ describe("parseAgentCloud — validate the chat body's cloud block (TRI-3296)", 
 });
 
 describe("mcpEnv — the env the spawned MCP receives (data-source selection)", () => {
-  it("LOCAL: only GTMGRID_PROJECT, byte-identical to before", () => {
-    expect(mcpEnv("my-project")).toEqual({ GTMGRID_PROJECT: "my-project" });
+  it("LOCAL: GTMGRID_PROJECT plus the sidecar port (for background-run delegation)", () => {
+    expect(mcpEnv("my-project")).toEqual({
+      GTMGRID_PROJECT: "my-project",
+      GTMGRID_PORT: "8787",
+    });
   });
 
   it("CLOUD: threads mode + apiUrl/token/workspace/project/table", () => {
     expect(mcpEnv("my-project", CLOUD)).toEqual({
       GTMGRID_PROJECT: "my-project",
+      GTMGRID_PORT: "8787",
       GTMGRID_MODE: "cloud",
       GTMGRID_API_URL: "https://app.test",
       GTMGRID_TOKEN: "secret-bearer",
@@ -69,7 +73,7 @@ describe("mcpEnv — the env the spawned MCP receives (data-source selection)", 
 
 describe("codexEnvToml — safe inline-TOML rendering for the codex -c flag", () => {
   it("renders the local env as a quoted TOML table", () => {
-    expect(codexEnvToml(mcpEnv("p"))).toBe('{ GTMGRID_PROJECT = "p" }');
+    expect(codexEnvToml(mcpEnv("p"))).toBe('{ GTMGRID_PROJECT = "p", GTMGRID_PORT = "8787" }');
   });
 
   it("escapes double-quotes and backslashes in a value so a token cannot break out", () => {

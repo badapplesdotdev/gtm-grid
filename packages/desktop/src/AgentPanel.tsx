@@ -546,15 +546,23 @@ export interface AgentCloudContext {
   readonly tableId: string;
 }
 
+/** Agent activity forwarded to the host (drives agent presence in the grid). */
+export type AgentActivityEvent =
+  | { readonly type: "tool"; readonly name: string; readonly input: Record<string, unknown> }
+  | { readonly type: "turn-end" };
+
 export default function AgentPanel({
   onGridChange,
   activeTable,
   cloud,
+  onAgentEvent,
 }: {
   onGridChange: () => void;
   activeTable: { name: string; columns: string[] } | null;
   /** Cloud context when a cloud project is active; `null` in local mode. */
   cloud?: AgentCloudContext | null;
+  /** Tool-call / turn-end notifications (drives the grid's agent presence). */
+  onAgentEvent?: (e: AgentActivityEvent) => void;
 }) {
   const [agent, setAgent] = useState<AgentKind>("claude");
   // Which model each agent's CLI runs with ("" = the plan's default). Persisted.
@@ -766,8 +774,10 @@ export default function AgentPanel({
             continue;
           }
           if (e.type === "text") updateLast((m) => ({ ...m, text: m.text + e.text }));
-          else if (e.type === "tool")
+          else if (e.type === "tool") {
             updateLast((m) => ({ ...m, tools: [...m.tools, { name: e.name, input: e.input ?? {} }] }));
+            onAgentEvent?.({ type: "tool", name: e.name, input: e.input ?? {} });
+          }
           else if (e.type === "tool_result")
             updateLast((m) => {
               const tools = [...m.tools];
@@ -795,6 +805,8 @@ export default function AgentPanel({
       // installed a new controller.
       if (abortRefs.current[a] === controller) abortRefs.current[a] = null;
       onGridChange();
+      // Turn over (done, error, or aborted) — clear the agent's grid presence.
+      onAgentEvent?.({ type: "turn-end" });
     }
   }
 

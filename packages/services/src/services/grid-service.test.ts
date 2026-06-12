@@ -27,6 +27,7 @@ import {
   type StoreRow,
   type StoreTable,
 } from "../repositories/grid-store.js";
+import { folderRepoLayer } from "../repositories/folder-repo.js";
 import { projectRepoLayer } from "../repositories/project-repo.js";
 import { rowRepoLayer } from "../repositories/row-repo.js";
 import { tableRepoLayer } from "../repositories/table-repo.js";
@@ -88,6 +89,7 @@ function harness(opts: {
   const layer = GridService.Default.pipe(
     Layer.provide(projectRepoLayer(store)),
     Layer.provide(tableRepoLayer(store)),
+    Layer.provide(folderRepoLayer(store)),
     Layer.provide(columnRepoLayer(store)),
     Layer.provide(rowRepoLayer(store, meterIncrement)),
     Layer.provide(cellRepoLayer(store)),
@@ -109,7 +111,8 @@ const failTag = (exit: Exit.Exit<unknown, unknown>): string | undefined => {
 };
 
 const table = (over: Partial<StoreTable> = {}): StoreTable => ({
-  id: "t1", workspaceId: WS, projectId: "p1", name: "T1", position: 0, createdAt: 1, ...over,
+  id: "t1", workspaceId: WS, projectId: "p1", name: "T1", position: 0, createdAt: 1,
+  dedupeColumn: null, dedupeKeep: null, folderId: null, ...over,
 });
 const column = (over: Partial<StoreColumn> = {}): StoreColumn => ({
   id: "c1", workspaceId: WS, tableId: "t1", name: "A", type: "text",
@@ -806,5 +809,101 @@ describe("GridService.reorderColumn / reorderRow", () => {
     if (Exit.isSuccess(exit)) expect(exit.value).toEqual({ rowIds: ["r3", "r1", "r2"] });
     const reorder = events.find((e) => e.event.type === "row.reorder");
     expect(reorder?.event).toEqual({ type: "row.reorder", rowIds: ["r3", "r1", "r2"] });
+  });
+});
+
+describe("GridService folders (sidebar table groups)", () => {
+  const proj = { id: "p1", workspaceId: WS, name: "P", createdAt: 1 };
+
+  it("creates, lists (position order), and renames folders — never metered", async () => {
+    const store = makeGridStore({ projects: [proj] });
+    const quotas = new Map<string, MeterQuota>();
+    const { run } = harness({ store, quotas });
+    const created = await run(
+      Effect.flatMap(GridService, (s) =>
+        Effect.all([
+          s.createFolder({ projectId: "p1", name: "Pipeline" }),
+          s.createFolder({ projectId: "p1", name: "Inbound" }),
+        ]),
+      ),
+    );
+    expect(Exit.isSuccess(created)).toBe(true);
+    const listed = await run(Effect.flatMap(GridService, (s) => s.listFolders("p1")));
+    expect(Exit.isSuccess(listed)).toBe(true);
+    if (Exit.isSuccess(listed)) {
+      expect(listed.value.map((f) => f.name)).toEqual(["Pipeline", "Inbound"]);
+    }
+    const renamed = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.renameFolder({ folderId: store.folders[0]!.id, name: "Outbound" }),
+      ),
+    );
+    expect(Exit.isSuccess(renamed)).toBe(true);
+    expect(store.folders[0]?.name).toBe("Outbound");
+    // Folder ops are organizational — zero cloud actions metered.
+    expect(quotas.get(WS)?.cloudActionsUsed ?? 0).toBe(0);
+  });
+
+  it("moveTable files a table into a folder (and validates the folder's project)", async () => {
+    const store = makeGridStore({
+      projects: [proj, { id: "p2", workspaceId: WS, name: "Q", createdAt: 1 }],
+      tables: [table()],
+      folders: [
+        { id: "f1", workspaceId: WS, projectId: "p1", name: "F", position: 0, createdAt: 1 },
+        { id: "f2", workspaceId: WS, projectId: "p2", name: "Other", position: 0, createdAt: 1 },
+      ],
+    });
+    const { run } = harness({ store });
+    const moved = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.moveTable({ tableId: "t1", folderId: "f1", position: 2.5 }),
+      ),
+    );
+    expect(Exit.isSuccess(moved)).toBe(true);
+    expect(store.tables[0]).toMatchObject({ folderId: "f1", position: 2.5 });
+    // A folder in ANOTHER project is rejected typed.
+    const cross = await run(
+      Effect.flatMap(GridService, (s) => s.moveTable({ tableId: "t1", folderId: "f2" })),
+    );
+    expect(failTag(cross)).toBe("GridNotFoundError");
+  });
+
+  it("createTable files the new table under the given folder", async () => {
+    const store = makeGridStore({
+      projects: [proj],
+      folders: [{ id: "f1", workspaceId: WS, projectId: "p1", name: "F", position: 0, createdAt: 1 }],
+    });
+    const { run } = harness({ store });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.createTable({ projectId: "p1", name: "Leads", folderId: "f1" }),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(store.tables[0]?.folderId).toBe("f1");
+  });
+
+  it("deleteFolder unfiles its tables to the root (SET NULL semantics)", async () => {
+    const store = makeGridStore({
+      projects: [proj],
+      tables: [table({ folderId: "f1" })],
+      folders: [{ id: "f1", workspaceId: WS, projectId: "p1", name: "F", position: 0, createdAt: 1 }],
+    });
+    const { run, events } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.deleteFolder("f1")));
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(store.folders).toEqual([]);
+    expect(store.tables[0]?.folderId).toBeNull();
+    // The workspace room hears folders.changed so teammates' sidebars refetch.
+    expect(events.some((e) => e.event.type === "folders.changed")).toBe(true);
+  });
+
+  it("rejects a non-member's folder write (authz before data)", async () => {
+    const store = makeGridStore({ projects: [proj] });
+    const { run } = harness({ store, currentUserId: "stranger" });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.createFolder({ projectId: "p1", name: "X" })),
+    );
+    expect(failTag(exit)).toBe("NotAMemberError");
   });
 });

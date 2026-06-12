@@ -60,6 +60,11 @@ import {
   type RowRepoError,
 } from "../repositories/row-repo.js";
 import {
+  type Folder,
+  FolderRepo,
+  type FolderRepoError,
+} from "../repositories/folder-repo.js";
+import {
   type Table,
   TableRepo,
   type TableRepoError,
@@ -208,6 +213,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
   effect: Effect.gen(function* () {
     const projects = yield* ProjectRepo;
     const tables = yield* TableRepo;
+    const folders = yield* FolderRepo;
     const columns = yield* ColumnRepo;
     const rows = yield* RowRepo;
     const cells = yield* CellRepo;
@@ -278,6 +284,20 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         if (found._tag === "None") {
           return yield* Effect.fail(
             new GridNotFoundError({ message: `Table ${id} not found.` }),
+          );
+        }
+        return found.value;
+      });
+
+    /** Load a folder or fail typed. */
+    const requireFolder = (
+      id: string,
+    ): Effect.Effect<Folder, FolderRepoError | GridNotFoundError> =>
+      Effect.gen(function* () {
+        const found = yield* folders.findById(id);
+        if (found._tag === "None") {
+          return yield* Effect.fail(
+            new GridNotFoundError({ message: `Folder ${id} not found.` }),
           );
         }
         return found.value;
@@ -455,10 +475,27 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
     const createTable = (args: {
       readonly projectId: string;
       readonly name: string;
+      /** Sidebar folder to file the new table under (omitted/null = root). */
+      readonly folderId?: string | null;
     }) =>
       Effect.gen(function* () {
         const project = yield* requireProject(args.projectId);
         yield* requireCloudMember(project.workspaceId);
+        // A target folder must exist and live in the SAME project (no cross-
+        // project filing); a vanished folder fails typed rather than silently
+        // creating at the root.
+        let folderId: string | null = null;
+        if (args.folderId != null) {
+          const folder = yield* requireFolder(args.folderId);
+          if (folder.projectId !== args.projectId) {
+            return yield* Effect.fail(
+              new GridNotFoundError({
+                message: `Folder ${args.folderId} is not in project ${args.projectId}.`,
+              }),
+            );
+          }
+          folderId = folder.id;
+        }
         const position = yield* tables.nextPosition(args.projectId);
         const id = yield* tables.insert({
           workspaceId: project.workspaceId,
@@ -466,6 +503,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
           name: args.name,
           position,
           createdAt: Date.now(),
+          folderId,
         });
         yield* meter.meterActions(project.workspaceId, 1);
         const insertEvent = {
@@ -660,6 +698,106 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         const deleteEvent = { type: "table.delete" as const, tableId };
         yield* publish(table.workspaceId, tableId, deleteEvent);
         yield* publishWorkspaceTablesChanged(table.workspaceId, deleteEvent);
+      });
+
+    // ── folders (sidebar table groups) ──────────────────────────────────────
+    //
+    // Organizational metadata only — folder ops are NOT metered (mirroring
+    // createProject: no data is computed or stored beyond a name), but they ARE
+    // cloud-gated writes so a lapsed-trial workspace can't reorganize either.
+    // Every write broadcasts `folders.changed` on the workspace room so other
+    // members' sidebars refetch live.
+
+    /** A project's folders (position order). Members-only. */
+    const listFolders = (projectId: string) =>
+      Effect.gen(function* () {
+        const project = yield* requireProject(projectId);
+        yield* membership.requireMember(project.workspaceId);
+        return yield* folders.listByProject(projectId);
+      });
+
+    /** Create a folder in a project. Members-only. NOT metered. */
+    const createFolder = (args: {
+      readonly projectId: string;
+      readonly name: string;
+    }) =>
+      Effect.gen(function* () {
+        const project = yield* requireProject(args.projectId);
+        yield* requireCloudMember(project.workspaceId);
+        const position = yield* folders.nextPosition(args.projectId);
+        const id = yield* folders.insert({
+          workspaceId: project.workspaceId,
+          projectId: args.projectId,
+          name: args.name,
+          position,
+          createdAt: Date.now(),
+        });
+        yield* publishWorkspaceTablesChanged(project.workspaceId, {
+          type: "folders.changed",
+          projectId: args.projectId,
+        });
+        return id;
+      });
+
+    /** Rename a folder. Members-only. NOT metered. */
+    const renameFolder = (args: {
+      readonly folderId: string;
+      readonly name: string;
+    }) =>
+      Effect.gen(function* () {
+        const folder = yield* requireFolder(args.folderId);
+        yield* requireCloudMember(folder.workspaceId);
+        yield* folders.rename(args.folderId, args.name);
+        yield* publishWorkspaceTablesChanged(folder.workspaceId, {
+          type: "folders.changed",
+          projectId: folder.projectId,
+        });
+      });
+
+    /**
+     * Delete a folder. Its tables are unfiled back to the root (the
+     * `tables.folder_id` FK is ON DELETE SET NULL) — never deleted. Members-only.
+     * NOT metered.
+     */
+    const deleteFolder = (folderId: string) =>
+      Effect.gen(function* () {
+        const folder = yield* requireFolder(folderId);
+        yield* requireCloudMember(folder.workspaceId);
+        yield* folders.remove(folderId);
+        yield* publishWorkspaceTablesChanged(folder.workspaceId, {
+          type: "folders.changed",
+          projectId: folder.projectId,
+        });
+      });
+
+    /**
+     * Move a table into a folder (`folderId: null` → root), optionally with a
+     * new sort position (drag-reorder passes a fractional midpoint between the
+     * drop neighbours). Members-only. NOT metered (organizational only).
+     */
+    const moveTable = (args: {
+      readonly tableId: string;
+      readonly folderId: string | null;
+      readonly position?: number;
+    }) =>
+      Effect.gen(function* () {
+        const table = yield* requireTable(args.tableId);
+        yield* requireCloudMember(table.workspaceId);
+        if (args.folderId !== null) {
+          const folder = yield* requireFolder(args.folderId);
+          if (folder.projectId !== table.projectId) {
+            return yield* Effect.fail(
+              new GridNotFoundError({
+                message: `Folder ${args.folderId} is not in table ${args.tableId}'s project.`,
+              }),
+            );
+          }
+        }
+        yield* tables.setFolder(args.tableId, args.folderId, args.position);
+        yield* publishWorkspaceTablesChanged(table.workspaceId, {
+          type: "folders.changed",
+          projectId: table.projectId,
+        });
       });
 
     /**
@@ -1041,6 +1179,11 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       renameTable,
       reorderColumn,
       reorderRow,
+      listFolders,
+      createFolder,
+      renameFolder,
+      deleteFolder,
+      moveTable,
       updateColumn,
       deleteColumn,
       deleteRow,

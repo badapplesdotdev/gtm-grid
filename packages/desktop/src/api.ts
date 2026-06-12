@@ -155,6 +155,17 @@ export interface TableSummary {
   columns: number;
   rows: number;
   favorite: boolean;
+  /** Sort position within the sidebar list (fractional after drag-reorders). */
+  position: number;
+  /** Sidebar folder this table is filed under (null = root). */
+  folderId: string | null;
+}
+/** A sidebar folder grouping tables (local project; mirrors engine `Folder`). */
+export interface FolderSummary {
+  id: string;
+  name: string;
+  position: number;
+  created_at: number;
 }
 export interface Column {
   id: string;
@@ -353,8 +364,17 @@ export const api = {
   switchProject: (name: string) =>
     http<{ ok: boolean; project: string }>("/api/projects/switch", { method: "POST", body: JSON.stringify({ name }) }),
   tables: () => http<TableSummary[]>("/api/tables"),
-  createTable: (name: string) => http<TableSummary>("/api/tables", { method: "POST", body: JSON.stringify({ name }) }),
+  createTable: (name: string, folderId?: string | null) =>
+    http<TableSummary>("/api/tables", { method: "POST", body: JSON.stringify({ name, folderId: folderId ?? null }) }),
   table: (id: string) => http<FullTable>(`/api/tables/${id}`),
+  moveTable: (id: string, folderId: string | null, position?: number) =>
+    http<{ ok: boolean }>(`/api/tables/${id}/move`, { method: "POST", body: JSON.stringify({ folderId, position }) }),
+  folders: () => http<FolderSummary[]>("/api/folders"),
+  createFolder: (name: string) =>
+    http<FolderSummary>("/api/folders", { method: "POST", body: JSON.stringify({ name }) }),
+  renameFolder: (id: string, name: string) =>
+    http<{ ok: boolean }>(`/api/folders/${id}/update`, { method: "POST", body: JSON.stringify({ name }) }),
+  deleteFolder: (id: string) => http<{ ok: boolean }>(`/api/folders/${id}/delete`, { method: "POST" }),
   renameTable: (id: string, name: string) =>
     http<{ ok: boolean }>(`/api/tables/${id}/update`, { method: "POST", body: JSON.stringify({ name }) }),
   deleteTable: (id: string) => http<{ ok: boolean }>(`/api/tables/${id}/delete`, { method: "POST" }),

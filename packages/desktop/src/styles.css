@@ -838,6 +838,27 @@ html, body, #root {
   user-select: none;
 }
 
+/* ── Row selection ────────────────────────── */
+/* The gutter shows the row number by default and swaps to a checkbox on hover
+   or when the row is selected, so the per-row affordance stays out of the way. */
+.row-select {
+  cursor: pointer;
+  accent-color: var(--accent);
+  margin: 0 auto;
+  vertical-align: middle;
+}
+.row-num-td .row-select { display: none; }
+.grid-tr:hover .row-num-td .row-select,
+.grid-tr.is-selected .row-num-td .row-select { display: block; }
+.grid-tr:hover .row-num-td .row-num-val,
+.grid-tr.is-selected .row-num-td .row-num-val { display: none; }
+.grid-th.row-num-th .row-select { display: block; }
+
+/* Selected-row tint — wins over the plain :hover background (same specificity,
+   later in source), and a slightly stronger tint when hovering a selected row. */
+.grid-tr.is-selected .grid-td { background: var(--accent-bg); }
+.grid-tr.is-selected:hover .grid-td { background: var(--accent-soft); }
+
 /* cell content wrapper */
 .cell-wrap {
   display: flex;
@@ -1834,7 +1855,9 @@ html, body, #root {
 /* ─── Cell details panel (right rail, over the agent panel) ── */
 .cell-details {
   position: fixed; top: 0; right: 0; bottom: 0; width: 384px;
-  background: #e8eaf1; border-left: 1px solid var(--border);
+  /* Themed backdrop (was hardcoded #e8eaf1, which stayed light in dark mode):
+     surface-3 keeps the drawer slightly tinted vs the white/dark pills. */
+  background: var(--surface-3); border-left: 1px solid var(--border);
   z-index: 50; display: flex; flex-direction: column;
   animation: cdSlide .16s ease;
 }
@@ -1858,7 +1881,7 @@ html, body, #root {
 }
 .cd-search input:focus { box-shadow: var(--shadow-sm), 0 0 0 2px var(--accent-soft); }
 .cd-done {
-  margin: 0 0 8px; padding: 7px 10px; background: var(--success-bg); color: #15803d;
+  margin: 0 0 8px; padding: 7px 10px; background: var(--success-bg); color: var(--success-ink);
   border-radius: var(--r-sm); font: 500 12px var(--font-sans);
 }
 .cd-fields { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
@@ -1901,10 +1924,13 @@ html, body, #root {
 }
 .cd-map-list button:hover { background: var(--accent-bg); color: var(--accent); }
 .cd-footer {
-  flex-shrink: 0; padding: 10px 14px; border-top: 1px solid rgba(0,0,0,.06);
+  flex-shrink: 0; padding: 10px 14px; border-top: 1px solid var(--border);
   font: 400 11.5px var(--font-sans); color: var(--text-3);
 }
 .cd-footer strong { color: var(--accent); }
+/* Brighten the fixed type-glyph hues for contrast on dark pills. */
+[data-theme="dark"] .cd-type-number { color: #82adff; }
+[data-theme="dark"] .cd-type-boolean { color: var(--success-ink); }
 
 /* column resize handle */
 .grid-th { position: relative; }
@@ -2038,6 +2064,25 @@ html, body, #root {
 .ctx-item:hover { background: var(--bg); }
 .ctx-item.danger { color: var(--danger); }
 .ctx-item.danger:hover { background: var(--danger-bg); }
+.ctx-item:disabled { opacity: 0.45; cursor: default; }
+.ctx-item:disabled:hover { background: transparent; }
+
+/* ── Selection toolbar pill (shown when ≥1 row is selected) ─── */
+.sel-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px 3px 10px;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-ring);
+  border-radius: var(--r-md);
+}
+.sel-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
 
 /* ── Connections design (extension / AI provider panels) ─── */
 .detail-desc { font-size: 13px; color: var(--text-2); }
@@ -2126,6 +2171,66 @@ html, body, #root {
 .sidebar-item:hover .sidebar-item-more { opacity: 1; }
 .sidebar-item-more:hover { background: var(--surface-3); color: var(--text); }
 .sidebar-item:hover .sidebar-item-count { display: none; }
+
+/* ── Sidebar folders (table groups) ───────────────────────── */
+.folder-head {
+  display: flex; align-items: center; gap: 6px; padding: 6px 16px; cursor: pointer;
+  color: var(--text-2); font-size: 13px; user-select: none; position: relative;
+  transition: background 0.1s, color 0.1s, box-shadow 0.1s;
+}
+.folder-head:hover { background: var(--surface-2); color: var(--text); }
+.folder-head .connector-group-toggle { width: 12px; height: 12px; }
+.folder-ic { display: flex; color: var(--text-3); flex-shrink: 0; transition: color 0.1s; }
+.folder-head:hover .folder-ic { color: var(--accent); }
+.folder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.folder-head .sidebar-item-more { opacity: 0; }
+.folder-head:hover .sidebar-item-more { opacity: 1; }
+.folder-head:hover .sidebar-item-count { display: none; }
+.folder-head.drop-into {
+  background: var(--accent-soft); color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--accent-ring); border-radius: var(--r-xs);
+}
+.folder-head.drop-into .folder-ic { color: var(--accent); }
+.sidebar-item.in-folder { padding-left: 34px; }
+.folder-empty {
+  margin: 1px 12px 3px 34px; padding: 7px 10px; border: 1px dashed var(--border-2);
+  border-radius: var(--r-xs); color: var(--text-3); font-size: 11px; text-align: center;
+  transition: border-color 0.1s, color 0.1s, background 0.1s;
+}
+.folder-empty.drop-into { border-color: var(--accent); border-style: solid; color: var(--accent); background: var(--accent-soft); }
+
+/* table drag-and-drop states */
+.sidebar-item[draggable="true"] { cursor: grab; }
+.sidebar-item.dragging { opacity: 0.4; }
+.sidebar-item.drop-before::after,
+.sidebar-item.drop-after::after {
+  content: ''; position: absolute; left: 16px; right: 10px; height: 2px;
+  background: var(--accent); border-radius: 2px; box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.sidebar-item.drop-before::after { top: -1px; }
+.sidebar-item.drop-after::after { bottom: -1px; }
+.sidebar-item.in-folder.drop-before::after,
+.sidebar-item.in-folder.drop-after::after { left: 34px; }
+.root-drop { min-height: 6px; border-radius: var(--r-xs); transition: box-shadow 0.1s, background 0.1s; }
+.root-drop.drop-into { box-shadow: inset 0 0 0 1px var(--accent-ring); background: var(--accent-soft); }
+
+/* the header "+" menu (New table / New folder) */
+.add-menu-wrap { position: relative; display: flex; }
+.menu-scrim { position: fixed; inset: 0; z-index: 40; }
+.add-menu {
+  position: absolute; top: 24px; right: 0; z-index: 50; min-width: 158px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm);
+  box-shadow: var(--shadow-lg); padding: 5px; display: flex; flex-direction: column; gap: 1px;
+  animation: add-menu-in 0.12s ease-out;
+}
+@keyframes add-menu-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+.add-menu button {
+  all: unset; box-sizing: border-box; width: 100%; cursor: pointer; display: flex; align-items: center; gap: 9px;
+  padding: 7px 9px; border-radius: var(--r-xs); font-size: 12.5px; color: var(--text-2);
+}
+.add-menu button:hover { background: var(--surface-2); color: var(--text); }
+.add-menu-ic { display: flex; color: var(--text-3); }
+.add-menu button:hover .add-menu-ic { color: var(--accent); }
 
 /* ── Extensions gallery (Browse all) ─────────────────────── */
 .ext-browse-all {
@@ -2830,6 +2935,11 @@ html, body, #root {
 }
 .presence-cell-chip img { width: 100%; height: 100%; object-fit: cover; }
 .grid-td.presence-flash { animation: presence-flash 1.2s ease; }
+/* Column-header ring — a participant (the agent) is working over this column. */
+.grid-th.col-presence {
+  box-shadow: inset 0 0 0 2px var(--presence-color);
+  animation: presence-pulse 1.6s ease-in-out infinite;
+}
 @keyframes presence-pulse {
   50% { box-shadow: inset 0 0 0 3px var(--presence-color); }
 }

@@ -562,9 +562,13 @@ export function parseAgentCloud(raw: unknown): AgentCloud | undefined {
  * never appears in a logged command line.
  */
 export function mcpEnv(project: string, cloud?: AgentCloud): Record<string, string> {
-  if (!cloud) return { GTMGRID_PROJECT: project };
+  // The sidecar's own HTTP port — lets the MCP delegate a large run to the
+  // PERSISTENT server (which outlives the 5-min agent turn) instead of blocking.
+  const port = process.env.GTMGRID_PORT ?? "8787";
+  if (!cloud) return { GTMGRID_PROJECT: project, GTMGRID_PORT: port };
   return {
     GTMGRID_PROJECT: project,
+    GTMGRID_PORT: port,
     GTMGRID_MODE: "cloud",
     GTMGRID_API_URL: cloud.apiUrl,
     GTMGRID_TOKEN: cloud.token,

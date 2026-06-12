@@ -27,6 +27,7 @@ import type { Id } from "./ids";
 import { apiClient } from "./client";
 import { Icon, ExpandedEditor } from "../App";
 import CellDetails, { extractCode } from "../CellDetails";
+import { setAgentPresenceTable } from "./agentPresence";
 import { api } from "../api";
 import type { ConnectorInfo, Column, FullTable } from "../api";
 import {
@@ -237,6 +238,21 @@ export function CloudGrid({
     }
   }, [me, tableId]);
 
+  // Publish the open table's identity (name + column name→id) for the agent
+  // presence mapper — read at tool-event time, never re-rendering anything.
+  useEffect(() => {
+    if (tableId !== null && data != null) {
+      setAgentPresenceTable({
+        tableId,
+        tableName: data.name,
+        columnIdByName: new Map(
+          data.columns.map((col) => [col.name.trim().toLowerCase(), col.id]),
+        ),
+      });
+    }
+    return () => setAgentPresenceTable(null);
+  }, [tableId, data]);
+
   // Auto-open the webhook form when the chooser's "Webhook" flow bumps the token.
   const lastTokenRef = useRef(0);
   useEffect(() => {
@@ -277,6 +293,27 @@ export function CloudGrid({
       }
     },
     [tableId, session],
+  );
+
+  // Run every function column scoped to a subset of rows (the user's
+  // selection), so a custom batch can be processed at a time. Sequential to
+  // match the cloud `runAll`; each column reports its spinner via runningColId.
+  const runRows = useCallback(
+    async (rowIds: string[]) => {
+      if (tableId === null || rowIds.length === 0) return;
+      if (!data || isCloudTableMissing(data)) return;
+      for (const col of data.columns.filter((col) => col.kind === "function")) {
+        setRunningColId(col.id);
+        try {
+          await runCloudColumn(session, { tableId, columnId: col.id, rowIds });
+        } catch {
+          /* surfaced live via the cell error status from Convex */
+        } finally {
+          setRunningColId(null);
+        }
+      }
+    },
+    [tableId, session, data],
   );
 
   const runCell = useCallback(
@@ -472,6 +509,7 @@ export function CloudGrid({
         await runColumn(col.id);
       }
     },
+    runRows,
     runColumn,
     runCell,
     setCell: (rowId, colId, value) =>
