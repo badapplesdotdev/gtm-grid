@@ -19,6 +19,35 @@ const methodSchema = z.object({
   bodyOmit: z.array(z.string()).optional(),
   credits: z.number().optional(),
   batchSize: z.number().optional(),
+  /**
+   * Async-job convenience. When set, this method STARTS a job (its own verb/path),
+   * then polls a sibling `statusMethod` until the job reaches `doneWhen` (or a
+   * `failWhen` state / timeout), returning the job's data. The whole poll runs
+   * HOST-SIDE in one connector call, so it is not bound by the in-sandbox per-cell
+   * timeout — the right shape for "start extract → wait for completion" APIs.
+   */
+  poll: z
+    .object({
+      /** Sibling method id whose GET returns the job status (e.g. "getExtractStatus"). */
+      statusMethod: z.string(),
+      /** Dot-path to the job id in THIS method's start response (default "id"; also tries "data.id"). */
+      idFrom: z.string().optional(),
+      /** Param name the status method expects the id under (default "id"). */
+      idParam: z.string().optional(),
+      /** Dot-path to the status string in the status response (default "status"; also tries "data.status"). */
+      statusFrom: z.string().optional(),
+      /** Status value that means "done" (default "completed"). */
+      doneWhen: z.string().optional(),
+      /** Status values that mean "give up and throw" (default ["failed","cancelled"]). */
+      failWhen: z.array(z.string()).optional(),
+      /** Dot-path to the result payload in the status response (default "data"). */
+      dataFrom: z.string().optional(),
+      /** Delay between polls in ms (default 3000). */
+      intervalMs: z.number().optional(),
+      /** Overall wait budget in ms before throwing a timeout (default 300000). */
+      timeoutMs: z.number().optional(),
+    })
+    .optional(),
 });
 
 export const manifestSchema = z.object({
@@ -130,6 +159,71 @@ async function httpCall(
 }
 
 /** Build a runnable Connector from a validated manifest. */
+/** Read a dot-path (e.g. "data.status") out of a parsed response. */
+function getPath(obj: unknown, path: string): unknown {
+  let cur: unknown = obj;
+  for (const seg of path.split(".")) {
+    if (cur == null || typeof cur !== "object") return undefined;
+    cur = (cur as Record<string, unknown>)[seg];
+  }
+  return cur;
+}
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Run a `poll`-flavoured method: start the job (this method's verb/path), then poll
+ * the sibling status method host-side until it reaches `doneWhen` (return its data),
+ * hits a `failWhen` state, or exceeds the timeout (throw). Because this awaits on the
+ * host, the in-sandbox per-cell interrupt never fires mid-wait — a multi-minute job
+ * completes in a single connector call.
+ */
+async function runPollingMethod(
+  man: ExtensionManifest,
+  m: ManifestMethod,
+  input: Record<string, unknown>,
+  ctx: MethodContext,
+): Promise<unknown> {
+  const p = m.poll!;
+  const statusMethod = man.methods.find((x) => x.id === p.statusMethod);
+  if (!statusMethod) {
+    throw new Error(`${man.name} ${m.id}: poll.statusMethod "${p.statusMethod}" is not a method on this connector`);
+  }
+  const idFrom = p.idFrom ?? "id";
+  const idParam = p.idParam ?? "id";
+  const statusFrom = p.statusFrom ?? "status";
+  const doneWhen = p.doneWhen ?? "completed";
+  const failWhen = p.failWhen ?? ["failed", "cancelled"];
+  const dataFrom = p.dataFrom ?? "data";
+  const intervalMs = p.intervalMs ?? 3000;
+  const timeoutMs = p.timeoutMs ?? 300_000;
+
+  const started = await httpCall(man, m, input, ctx);
+  const id = getPath(started, idFrom) ?? getPath(started, `data.${idFrom}`);
+  if (id == null || id === "") {
+    throw new Error(`${man.name} ${m.id}: no job id (looked at "${idFrom}") in start response`);
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const st = await httpCall(man, statusMethod, { [idParam]: id }, ctx);
+    const status = String(getPath(st, statusFrom) ?? getPath(st, `data.${statusFrom}`) ?? "");
+    if (status === doneWhen) {
+      const data = getPath(st, dataFrom);
+      return data === undefined ? st : data;
+    }
+    if (failWhen.includes(status)) {
+      throw new Error(`${man.name} ${m.id}: job ${status} (id ${String(id)})`);
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `${man.name} ${m.id}: timed out after ${timeoutMs}ms waiting for "${doneWhen}" (id ${String(id)}, last status "${status || "unknown"}")`,
+      );
+    }
+    await delay(intervalMs);
+  }
+}
+
 export function connectorFromManifest(man: ExtensionManifest): Connector {
   const methods: ConnectorMethod[] = man.methods.map((m) => ({
     id: m.id,
@@ -138,7 +232,9 @@ export function connectorFromManifest(man: ExtensionManifest): Connector {
     inputSchema: m.input ?? { type: "object", properties: {} },
     batchSize: m.batchSize ?? 1,
     credits: m.credits ?? 1,
-    run: (input, ctx) => httpCall(man, m, input, ctx),
+    run: m.poll
+      ? (input, ctx) => runPollingMethod(man, m, input, ctx)
+      : (input, ctx) => httpCall(man, m, input, ctx),
   }));
   return { id: man.id, name: man.name, category: man.category ?? "custom", auth: man.auth ?? null, methods };
 }

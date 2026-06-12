@@ -15,22 +15,56 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { openProject, parseManifest, connectorFromManifest } from "@gtmgrid/engine";
+import {
+  Db,
+  connectorFromManifest,
+  globalDbPath,
+  openProject,
+  parseManifest,
+  type Registry,
+} from "@gtmgrid/engine";
 import { describeGridEnv, selectGridEnv } from "./cloud-context.js";
 import {
   CloudToolUnsupportedError,
   defaultCloudSourceDeps,
   makeCloudSource,
+  registryWithExtensions,
 } from "./cloud-source.js";
 
 const gridEnv = selectGridEnv(process.env);
 
+/**
+ * Build the CLOUD registry: the built-in connectors PLUS every JSON-manifest
+ * extension from the SHARED global db — the SAME set `openProject` loads for a
+ * LOCAL project (engine `openProject` reads `globalDb.listExtensions()`). Without
+ * this the cloud agent only saw the built-ins (ai/formatting/formula/github/http)
+ * and reported enrichment/social connectors like Trigify as "not available",
+ * diverging from local. The MCP runs on the user's machine (spawned by the
+ * sidecar), so `globalDbPath()` resolves to the same global.db the sidecar uses.
+ * Read-only + best-effort: a missing db or a bad manifest degrades to the
+ * built-ins rather than failing the whole MCP.
+ */
+function cloudRegistry(): Registry {
+  try {
+    const globalDb = new Db(globalDbPath());
+    try {
+      return registryWithExtensions(globalDb.listExtensions());
+    } finally {
+      globalDb.close();
+    }
+  } catch {
+    // No global db (e.g. fresh install) → built-in connectors only.
+    return registryWithExtensions([]);
+  }
+}
+
 // LOCAL mode opens the SQLite project (and exposes its registry of connectors).
 // CLOUD mode opens NO SQLite file (the engine is Db-free, backed by the cloud
 // store); it still needs a registry for connector discovery + cloud runs, so we
-// reuse the cloud source's registry/config and skip `openProject` entirely.
+// build one with the SAME extensions loaded so cloud == local (skip `openProject`).
 const local = gridEnv.mode === "local" ? openProject(gridEnv.project) : undefined;
-const cloudDeps = gridEnv.mode === "cloud" ? defaultCloudSourceDeps() : undefined;
+const cloudDeps =
+  gridEnv.mode === "cloud" ? defaultCloudSourceDeps(cloudRegistry()) : undefined;
 const cloudSource =
   gridEnv.mode === "cloud" && cloudDeps
     ? makeCloudSource(gridEnv.context, cloudDeps)
@@ -291,17 +325,25 @@ server.tool(
 
 server.tool(
   "run_column",
-  "Run a function column over its rows (enriching cells). A large run (more than ~50 pending rows) asks first: it returns the pending-row count + estimated credits — surface that and only re-call with confirm:true once the user approves. Returns how many ran and errored.",
-  { table: z.string(), column: z.string(), force: z.boolean().optional(), concurrency: z.number().optional(), confirm: z.boolean().optional() },
-  async ({ table, column, force, concurrency, confirm }) => {
-    if (cloudSource) return ok(await cloudSource.runColumn(table, column, { force, concurrency }));
+  "Run a function column over its rows (enriching cells), in grid order (top-down — the same order the user sees). Pass `limit` to enrich only the next N rows that still need filling — use this for requests like 'run this for 10 rows' or 'do the next 20': it fills the first N unfilled cells in display order, NEVER a random subset. Add `offset` to skip the first matches (e.g. limit:10, offset:10 = rows 11–20). Omit `limit` to run every pending row. A large run (more than ~50 pending rows) asks first: it returns the pending-row count + estimated credits — surface that and only re-call with confirm:true once the user approves. A confirmed large run is then started in the BACKGROUND on the sidecar (it outlasts this turn — a synchronous run of hundreds of rows would hit the 5-min turn limit and be killed), and returns immediately with {started:true}; poll get_column/get_table to watch the done count rise and tell the user when it's complete. A small run (≤50 rows) runs synchronously and returns {ran, errors}.",
+  { table: z.string(), column: z.string(), force: z.boolean().optional(), concurrency: z.number().optional(), limit: z.number().optional(), offset: z.number().optional(), confirm: z.boolean().optional() },
+  async ({ table, column, force, concurrency, limit, offset, confirm }) => {
+    if (cloudSource) return ok(await cloudSource.runColumn(table, column, { force, concurrency, limit, offset }));
     const t = localTableOr(table);
     const col = local!.db.resolveColumn(t.id, column);
     if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
-    // Cost/scale gate — a massive run needs the user's OK first.
-    const pending = force
-      ? local!.db.countRows(t.id)
-      : local!.db.listRows(t.id).filter((r) => (local!.db.getCell(r.id, col.id)?.status ?? "empty") !== "done").length;
+    // Candidate rows in grid order (listRows is already sorted by position,
+    // created_at). Without `force`, skip cells already `done`; with it, every row
+    // is a candidate. `limit`/`offset` then scope to the next N — so "run 10 rows"
+    // fills the first 10 unfilled cells in display order, not a random subset.
+    const ordered = local!.db.listRows(t.id);
+    const candidates = force
+      ? ordered
+      : ordered.filter((r) => (local!.db.getCell(r.id, col.id)?.status ?? "empty") !== "done");
+    const scoped = limit != null ? candidates.slice(offset ?? 0, (offset ?? 0) + limit) : candidates;
+    // Cost/scale gate — a massive run needs the user's OK first. Counts the SCOPED
+    // set, so a deliberately small `limit` run never trips the confirm threshold.
+    const pending = scoped.length;
     const method = col.provider && col.method ? local!.engine.registry.method(col.provider, col.method) : undefined;
     if (pending > CONFIRM_THRESHOLD && !confirm) {
       return needsConfirm("Run column", pending, `${t.name} › ${col.name}`, {
@@ -314,7 +356,42 @@ server.tool(
           : "enriches every pending row",
       });
     }
-    const res = await local!.engine.runColumn(col.id, { force, concurrency: concurrency ?? 5 });
+    if (pending > CONFIRM_THRESHOLD) {
+      // Large (confirmed) run → delegate to the PERSISTENT sidecar so the work
+      // outlives the 5-min agent turn. A synchronous run here would block the turn
+      // and be killed mid-way (the "connection drop" on big Firecrawl/enrichment runs).
+      // A limit-scoped run forwards its rowIds so the background run honours the scope.
+      const port = process.env.GTMGRID_PORT ?? "8787";
+      try {
+        const r = await fetch(`http://127.0.0.1:${port}/api/columns/${col.id}/run/async`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            force,
+            concurrency,
+            rowIds: limit != null ? scoped.map((row) => row.id) : undefined,
+          }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      } catch (e) {
+        throw new Error(
+          `Couldn't start the background run (${e instanceof Error ? e.message : String(e)}). The user can run it from the column's ▶ button instead.`,
+        );
+      }
+      return ok({
+        column: col.name,
+        started: true,
+        pending,
+        note: `Started enriching ${pending} rows in the background — it keeps running past this turn. Poll get_column("${col.name}") or get_table to watch the done count rise, and tell the user when it finishes. Do NOT re-run the column while it's in progress.`,
+      });
+    }
+    const res = await local!.engine.runColumn(col.id, {
+      force,
+      concurrency: concurrency ?? 5,
+      // Only pass an explicit row scope when the caller asked for one; otherwise
+      // leave it undefined so the engine runs every row exactly as before.
+      rowIds: limit != null ? scoped.map((r) => r.id) : undefined,
+    });
     return ok({ column: col.name, ...res });
   },
 );

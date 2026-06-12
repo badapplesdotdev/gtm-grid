@@ -156,6 +156,10 @@ export interface TableListRow {
   readonly favorite: boolean;
   /** Local row count (for the trailing count on unsynced local rows). */
   readonly rows: number;
+  /** Sidebar folder the table is filed under (null = root). */
+  readonly folderId: string | null;
+  /** Sort position within the sidebar (fractional after drag-reorders). */
+  readonly position: number;
 }
 
 /** A local table summary as seen by the list builder (subset of TableSummary). */
@@ -164,6 +168,8 @@ export interface LocalTableInput {
   readonly name: string;
   readonly favorite: boolean;
   readonly rows: number;
+  readonly folderId?: string | null;
+  readonly position?: number;
 }
 
 /** A cloud table summary as seen by the list builder (subset of CloudTableSummary). */
@@ -201,6 +207,8 @@ export function buildTableList(args: {
       synced: syncLinks[t.id] !== undefined,
       favorite: t.favorite,
       rows: t.rows,
+      folderId: t.folderId ?? null,
+      position: t.position ?? 0,
     }));
   const cloudRows: TableListRow[] = cloudTables
     .filter((t) => !linkedCloudIds.has(t._id))
@@ -211,8 +219,111 @@ export function buildTableList(args: {
       synced: true,
       favorite: false,
       rows: 0,
+      folderId: null,
+      position: 0,
     }));
   return [...localRows, ...cloudRows];
+}
+
+// ── Sidebar folder grouping ─────────────────────────────────────────────────
+//
+// Folders partition the unified Tables list: every folder renders (even empty
+// ones — they're valid drop targets), followed by the root rows. Pure +
+// testable: the partitioning, orphan handling (a row pointing at a deleted /
+// unknown folder falls back to the root), and group ordering are verifiable
+// offline with no React.
+
+/** A sidebar folder as the grouper sees it (local FolderSummary or cloud). */
+export interface SidebarFolder {
+  readonly id: string;
+  readonly name: string;
+  readonly position: number;
+}
+
+/** The grouped sidebar view-model: folder sections first, then root rows. */
+export interface GroupedTableList {
+  readonly folders: ReadonlyArray<{
+    readonly folder: SidebarFolder;
+    readonly rows: TableListRow[];
+  }>;
+  readonly root: TableListRow[];
+}
+
+/**
+ * Partition the unified Tables list by folder. Folder sections come in folder
+ * `position` order; each section's rows (and the root rows) PRESERVE the input
+ * list's order, so {@link buildTableList}'s favorites-first / position ordering
+ * holds within every group. A row whose `folderId` matches no known folder
+ * (deleted out-of-band / not yet synced) falls back to the root rather than
+ * vanishing.
+ */
+export function groupTableList(
+  rows: readonly TableListRow[],
+  folders: readonly SidebarFolder[],
+): GroupedTableList {
+  const ordered = [...folders].sort((a, b) => a.position - b.position);
+  const byFolder = new Map<string, TableListRow[]>(
+    ordered.map((f) => [f.id, []]),
+  );
+  const root: TableListRow[] = [];
+  for (const row of rows) {
+    const bucket = row.folderId !== null ? byFolder.get(row.folderId) : undefined;
+    if (bucket) bucket.push(row);
+    else root.push(row);
+  }
+  return {
+    folders: ordered.map((folder) => ({
+      folder,
+      rows: byFolder.get(folder.id) ?? [],
+    })),
+    root,
+  };
+}
+
+/**
+ * The drop target of a sidebar drag, as the UI reports it:
+ *   - onto a folder head / its empty body → `{ folderId }` (file at the tail)
+ *   - between two rows → `{ folderId, beforeId | afterId }` (reorder)
+ *   - onto the root zone → `{ folderId: null }`
+ */
+export interface MoveTarget {
+  readonly folderId: string | null;
+  readonly beforeId?: string;
+  readonly afterId?: string;
+}
+
+/**
+ * Compute the fractional `position` a moved table should take for a
+ * {@link MoveTarget}, from the CURRENT unified list. Dropping before/after an
+ * anchor row takes the midpoint between the anchor and its same-group
+ * neighbour (so only the moved row's position changes); dropping onto a folder
+ * or the root files at the group's tail (`max position + 1`). Returns
+ * `undefined` when no position change is needed (empty group — keep the
+ * current position; membership alone changes).
+ */
+export function positionForMove(
+  rows: readonly TableListRow[],
+  movedId: string,
+  target: MoveTarget,
+): number | undefined {
+  // The target group's rows in display order, excluding the row being moved.
+  const group = rows.filter(
+    (r) => r.folderId === target.folderId && r.id !== movedId,
+  );
+  if (group.length === 0) return undefined;
+  const anchorId = target.beforeId ?? target.afterId;
+  const i = anchorId !== undefined ? group.findIndex((r) => r.id === anchorId) : -1;
+  if (i < 0) {
+    // No (valid) anchor — file at the tail of the group.
+    return Math.max(...group.map((r) => r.position)) + 1;
+  }
+  const anchor = group[i] as TableListRow;
+  if (target.beforeId !== undefined) {
+    const prev = group[i - 1];
+    return prev === undefined ? anchor.position - 1 : (prev.position + anchor.position) / 2;
+  }
+  const next = group[i + 1];
+  return next === undefined ? anchor.position + 1 : (anchor.position + next.position) / 2;
 }
 
 /** The decision for a push attempt before any network call. */

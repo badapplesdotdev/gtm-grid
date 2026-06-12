@@ -65,6 +65,7 @@ export interface MeUser {
   readonly _id: Id<"users">;
   readonly name: string | null;
   readonly email: string | null;
+  readonly image: string | null;
 }
 
 /** The full `me` result: the user plus the workspaces they can access. */
@@ -81,6 +82,7 @@ export interface WorkspaceMember {
   readonly createdAt: number;
   readonly name: string | null;
   readonly email: string | null;
+  readonly image: string | null;
 }
 
 /** The `listMembers` result: the roster + seat usage for the settings view. */

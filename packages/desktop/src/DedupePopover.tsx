@@ -1,23 +1,30 @@
 // Deduplication settings popover (mirrors Clay's "Deduplication" panel). Keeps a
 // table unique on one column: pick the column, choose keep-oldest/newest, and the
-// server enforces it on insert + sweeps existing duplicates. Reads/writes the
-// /api/tables/:id/dedupe-config + /dedupe endpoints (api.setDedupe / api.dedupeTable).
+// backend sweeps existing duplicates. Backend-agnostic: the caller injects
+// `setDedupe`/`dedupeTable` (the local sidecar `api.*` or the cloud tRPC
+// mutations), so the SAME popover drives both local and cloud tables.
 
 import { useEffect, useRef, useState } from "react";
-import { api } from "./api";
 
 type Keep = "oldest" | "newest";
 
 export function DedupePopover({
-  tableId,
   columns,
   current,
+  setDedupe,
+  dedupeTable,
   onClose,
   onChanged,
 }: {
-  tableId: string;
   columns: { id: string; name: string }[];
   current: { column: string; keep: Keep } | null;
+  /** Persist (or clear) the dedupe config; backend sweeps + returns the count. */
+  setDedupe: (body: {
+    column: string | null;
+    keep?: Keep;
+  }) => Promise<{ deleted: number }>;
+  /** Run a one-shot sweep with the saved config. */
+  dedupeTable: () => Promise<{ deleted: number }>;
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -43,7 +50,7 @@ export function DedupePopover({
     setMsg("");
     try {
       const body = next.on && next.column ? { column: next.column, keep: next.keep } : { column: null };
-      const r = await api.setDedupe(tableId, body);
+      const r = await setDedupe(body);
       if (r.deleted) setMsg(`Removed ${r.deleted} duplicate row${r.deleted === 1 ? "" : "s"}.`);
       else setMsg(next.on && next.column ? "Auto-dedupe on." : "Auto-dedupe off.");
       onChanged();
@@ -71,7 +78,7 @@ export function DedupePopover({
     setSaving(true);
     setErr("");
     try {
-      const r = await api.dedupeTable(tableId);
+      const r = await dedupeTable();
       setMsg(r.deleted ? `Removed ${r.deleted} duplicate row${r.deleted === 1 ? "" : "s"}.` : "No duplicates found.");
       onChanged();
     } catch (e) {

@@ -14,6 +14,16 @@ export interface Table {
   dedupe_column?: string | null;
   /** Which row survives a duplicate: "oldest" (default) keeps the first, "newest" keeps the last. */
   dedupe_keep?: "oldest" | "newest" | null;
+  /** Sidebar folder this table is filed under (null/absent = root). */
+  folder_id?: string | null;
+}
+
+/** A sidebar folder grouping tables (organizational only — no data nesting). */
+export interface Folder {
+  id: string;
+  name: string;
+  position: number;
+  created_at: number;
 }
 
 export interface Column {

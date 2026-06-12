@@ -60,12 +60,18 @@ import {
   type RowRepoError,
 } from "../repositories/row-repo.js";
 import {
+  type Folder,
+  FolderRepo,
+  type FolderRepoError,
+} from "../repositories/folder-repo.js";
+import {
   type Table,
   TableRepo,
   type TableRepoError,
 } from "../repositories/table-repo.js";
 import type { WorkspaceRepoError } from "../repositories/workspace-repo.js";
-import type { GridChangeEvent } from "../realtime/events.js";
+import type { GridChangeEvent, GridDedupe } from "../realtime/events.js";
+import { WORKSPACE_ROOM_TABLE_ID } from "../realtime/events.js";
 import { EntitlementService, type PlanRequiredError } from "./entitlement-service.js";
 import { MeterService } from "./meter-service.js";
 import { RealtimePublisher } from "./realtime-publisher.js";
@@ -115,7 +121,11 @@ export interface GridCell {
 }
 
 export interface FullGrid {
-  readonly table: { readonly _id: string; readonly name: string };
+  readonly table: {
+    readonly _id: string;
+    readonly name: string;
+    readonly dedupe: GridDedupe | null;
+  };
   readonly columns: readonly GridColumn[];
   readonly rows: readonly { readonly _id: string }[];
   readonly cells: readonly GridCell[];
@@ -134,7 +144,11 @@ export interface FullGrid {
  * inserts.
  */
 export interface TablePage {
-  readonly table: { readonly _id: string; readonly name: string };
+  readonly table: {
+    readonly _id: string;
+    readonly name: string;
+    readonly dedupe: GridDedupe | null;
+  };
   readonly columns: readonly GridColumn[];
   readonly rows: readonly { readonly _id: string }[];
   readonly cells: readonly GridCell[];
@@ -166,6 +180,30 @@ const toGridCell = (c: Cell): GridCell => ({
   error: c.error,
 });
 
+/** Project a table record's stored dedupe config onto the snapshot shape (null = off). */
+const toDedupe = (table: {
+  readonly dedupeColumn?: string | null;
+  readonly dedupeKeep?: string | null;
+}): GridDedupe | null =>
+  table.dedupeColumn == null
+    ? null
+    : {
+        column: table.dedupeColumn,
+        keep: table.dedupeKeep === "newest" ? "newest" : "oldest",
+      };
+
+/**
+ * The dedup grouping key for a cell value (mirrors the local engine,
+ * packages/engine/src/db.ts): trimmed; a blank or >200-char value is NEVER
+ * merged (returns null so the row is left untouched).
+ */
+const dedupeKeyOf = (value: unknown): string | null => {
+  if (value == null) return null;
+  const s = (typeof value === "string" ? value : String(value)).trim();
+  if (s === "" || s.length > 200) return null;
+  return s;
+};
+
 /**
  * Grid domain service. Defined with the `Effect.Service` pattern; the composed
  * `appLayer` wires the live repos/services, tests provide in-memory Layers and
@@ -175,6 +213,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
   effect: Effect.gen(function* () {
     const projects = yield* ProjectRepo;
     const tables = yield* TableRepo;
+    const folders = yield* FolderRepo;
     const columns = yield* ColumnRepo;
     const rows = yield* RowRepo;
     const cells = yield* CellRepo;
@@ -210,6 +249,18 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       event: GridChangeEvent,
     ) => realtime.publish({ workspaceId, tableId, event });
 
+    /**
+     * Broadcast a tables-list change on the WORKSPACE channel — the reserved
+     * room `${workspaceId}:_workspace` (no real table has this id). The sidebar
+     * subscribes to this one room so a member's table list refreshes live when a
+     * teammate creates/syncs/deletes a table they don't currently have open
+     * (the per-table channel above has no subscriber for a brand-new table).
+     */
+    const publishWorkspaceTablesChanged = (
+      workspaceId: string,
+      event: GridChangeEvent,
+    ) => realtime.publish({ workspaceId, tableId: WORKSPACE_ROOM_TABLE_ID, event });
+
     /** Load a project or fail typed. */
     const requireProject = (
       id: string,
@@ -233,6 +284,20 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         if (found._tag === "None") {
           return yield* Effect.fail(
             new GridNotFoundError({ message: `Table ${id} not found.` }),
+          );
+        }
+        return found.value;
+      });
+
+    /** Load a folder or fail typed. */
+    const requireFolder = (
+      id: string,
+    ): Effect.Effect<Folder, FolderRepoError | GridNotFoundError> =>
+      Effect.gen(function* () {
+        const found = yield* folders.findById(id);
+        if (found._tag === "None") {
+          return yield* Effect.fail(
+            new GridNotFoundError({ message: `Folder ${id} not found.` }),
           );
         }
         return found.value;
@@ -353,7 +418,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         const rws = yield* rows.listByTable(tableId);
         const cls = yield* cells.listByTable(tableId);
         return {
-          table: { _id: table.id, name: table.name },
+          table: { _id: table.id, name: table.name, dedupe: toDedupe(table) },
           columns: cols.map(toGridColumn),
           rows: rws.map((r) => ({ _id: r.id })),
           cells: cls.map(toGridCell),
@@ -398,7 +463,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         // table's cells.
         const pageCells = yield* cells.listByRowIds(page.rows.map((r) => r.id));
         return {
-          table: { _id: table.id, name: table.name },
+          table: { _id: table.id, name: table.name, dedupe: toDedupe(table) },
           columns: cols.map(toGridColumn),
           rows: page.rows.map((r) => ({ _id: r.id })),
           cells: pageCells.map(toGridCell),
@@ -410,10 +475,27 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
     const createTable = (args: {
       readonly projectId: string;
       readonly name: string;
+      /** Sidebar folder to file the new table under (omitted/null = root). */
+      readonly folderId?: string | null;
     }) =>
       Effect.gen(function* () {
         const project = yield* requireProject(args.projectId);
         yield* requireCloudMember(project.workspaceId);
+        // A target folder must exist and live in the SAME project (no cross-
+        // project filing); a vanished folder fails typed rather than silently
+        // creating at the root.
+        let folderId: string | null = null;
+        if (args.folderId != null) {
+          const folder = yield* requireFolder(args.folderId);
+          if (folder.projectId !== args.projectId) {
+            return yield* Effect.fail(
+              new GridNotFoundError({
+                message: `Folder ${args.folderId} is not in project ${args.projectId}.`,
+              }),
+            );
+          }
+          folderId = folder.id;
+        }
         const position = yield* tables.nextPosition(args.projectId);
         const id = yield* tables.insert({
           workspaceId: project.workspaceId,
@@ -421,14 +503,17 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
           name: args.name,
           position,
           createdAt: Date.now(),
+          folderId,
         });
         yield* meter.meterActions(project.workspaceId, 1);
-        yield* publish(project.workspaceId, id, {
-          type: "table.insert",
+        const insertEvent = {
+          type: "table.insert" as const,
           tableId: id,
           projectId: args.projectId,
           name: args.name,
-        });
+        };
+        yield* publish(project.workspaceId, id, insertEvent);
+        yield* publishWorkspaceTablesChanged(project.workspaceId, insertEvent);
         return id;
       });
 
@@ -610,9 +695,108 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         yield* requireCloudMember(table.workspaceId);
         yield* tables.remove(tableId);
         yield* meter.meterActions(table.workspaceId, 1);
-        yield* publish(table.workspaceId, tableId, {
-          type: "table.delete",
-          tableId,
+        const deleteEvent = { type: "table.delete" as const, tableId };
+        yield* publish(table.workspaceId, tableId, deleteEvent);
+        yield* publishWorkspaceTablesChanged(table.workspaceId, deleteEvent);
+      });
+
+    // ── folders (sidebar table groups) ──────────────────────────────────────
+    //
+    // Organizational metadata only — folder ops are NOT metered (mirroring
+    // createProject: no data is computed or stored beyond a name), but they ARE
+    // cloud-gated writes so a lapsed-trial workspace can't reorganize either.
+    // Every write broadcasts `folders.changed` on the workspace room so other
+    // members' sidebars refetch live.
+
+    /** A project's folders (position order). Members-only. */
+    const listFolders = (projectId: string) =>
+      Effect.gen(function* () {
+        const project = yield* requireProject(projectId);
+        yield* membership.requireMember(project.workspaceId);
+        return yield* folders.listByProject(projectId);
+      });
+
+    /** Create a folder in a project. Members-only. NOT metered. */
+    const createFolder = (args: {
+      readonly projectId: string;
+      readonly name: string;
+    }) =>
+      Effect.gen(function* () {
+        const project = yield* requireProject(args.projectId);
+        yield* requireCloudMember(project.workspaceId);
+        const position = yield* folders.nextPosition(args.projectId);
+        const id = yield* folders.insert({
+          workspaceId: project.workspaceId,
+          projectId: args.projectId,
+          name: args.name,
+          position,
+          createdAt: Date.now(),
+        });
+        yield* publishWorkspaceTablesChanged(project.workspaceId, {
+          type: "folders.changed",
+          projectId: args.projectId,
+        });
+        return id;
+      });
+
+    /** Rename a folder. Members-only. NOT metered. */
+    const renameFolder = (args: {
+      readonly folderId: string;
+      readonly name: string;
+    }) =>
+      Effect.gen(function* () {
+        const folder = yield* requireFolder(args.folderId);
+        yield* requireCloudMember(folder.workspaceId);
+        yield* folders.rename(args.folderId, args.name);
+        yield* publishWorkspaceTablesChanged(folder.workspaceId, {
+          type: "folders.changed",
+          projectId: folder.projectId,
+        });
+      });
+
+    /**
+     * Delete a folder. Its tables are unfiled back to the root (the
+     * `tables.folder_id` FK is ON DELETE SET NULL) — never deleted. Members-only.
+     * NOT metered.
+     */
+    const deleteFolder = (folderId: string) =>
+      Effect.gen(function* () {
+        const folder = yield* requireFolder(folderId);
+        yield* requireCloudMember(folder.workspaceId);
+        yield* folders.remove(folderId);
+        yield* publishWorkspaceTablesChanged(folder.workspaceId, {
+          type: "folders.changed",
+          projectId: folder.projectId,
+        });
+      });
+
+    /**
+     * Move a table into a folder (`folderId: null` → root), optionally with a
+     * new sort position (drag-reorder passes a fractional midpoint between the
+     * drop neighbours). Members-only. NOT metered (organizational only).
+     */
+    const moveTable = (args: {
+      readonly tableId: string;
+      readonly folderId: string | null;
+      readonly position?: number;
+    }) =>
+      Effect.gen(function* () {
+        const table = yield* requireTable(args.tableId);
+        yield* requireCloudMember(table.workspaceId);
+        if (args.folderId !== null) {
+          const folder = yield* requireFolder(args.folderId);
+          if (folder.projectId !== table.projectId) {
+            return yield* Effect.fail(
+              new GridNotFoundError({
+                message: `Folder ${args.folderId} is not in table ${args.tableId}'s project.`,
+              }),
+            );
+          }
+        }
+        yield* tables.setFolder(args.tableId, args.folderId, args.position);
+        yield* publishWorkspaceTablesChanged(table.workspaceId, {
+          type: "folders.changed",
+          projectId: table.projectId,
         });
       });
 
@@ -670,6 +854,82 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
           type: "row.delete",
           rowId,
         });
+      });
+
+    /**
+     * One-shot dedup sweep (mirrors the local engine, packages/engine/src/db.ts):
+     * group rows by the dedupe column's value IN TABLE ORDER, keep the first
+     * (oldest) or last (newest) per group, delete the rest. Each delete is
+     * metered + broadcast as a `row.delete` so every other client live-updates.
+     * Members-only. No-op when dedupe is off.
+     */
+    const dedupeTable = (tableId: string) =>
+      Effect.gen(function* () {
+        const table = yield* requireTable(tableId);
+        yield* requireCloudMember(table.workspaceId);
+        const cfg = toDedupe(table);
+        if (cfg === null) return { deleted: 0 };
+        const rws = yield* rows.listByTable(tableId); // position, createdAt order
+        const cls = yield* cells.listByTable(tableId);
+        const valueByRow = new Map<string, unknown>();
+        for (const c of cls) {
+          if (c.columnId === cfg.column) valueByRow.set(c.rowId, c.value);
+        }
+        const groups = new Map<string, string[]>();
+        for (const r of rws) {
+          const key = dedupeKeyOf(valueByRow.get(r.id));
+          if (key === null) continue;
+          const g = groups.get(key);
+          if (g === undefined) groups.set(key, [r.id]);
+          else g.push(r.id);
+        }
+        const victims: string[] = [];
+        for (const ids of groups.values()) {
+          if (ids.length <= 1) continue;
+          const keepIdx = cfg.keep === "newest" ? ids.length - 1 : 0;
+          ids.forEach((id, i) => {
+            if (i !== keepIdx) victims.push(id);
+          });
+        }
+        for (const id of victims) {
+          yield* rows.remove(id);
+          yield* publish(table.workspaceId, tableId, {
+            type: "row.delete",
+            rowId: id,
+          });
+        }
+        if (victims.length > 0) {
+          yield* meter.meterActions(table.workspaceId, victims.length);
+        }
+        return { deleted: victims.length };
+      });
+
+    /**
+     * Set (or clear) a table's row-dedup config, then immediately sweep so the
+     * existing rows reflect the new rule. `column: null` disables dedupe (no
+     * sweep). Members-only.
+     */
+    const setDedupe = (args: {
+      readonly tableId: string;
+      readonly column: string | null;
+      readonly keep: "oldest" | "newest";
+    }) =>
+      Effect.gen(function* () {
+        const table = yield* requireTable(args.tableId);
+        yield* requireCloudMember(table.workspaceId);
+        yield* tables.setDedupe(args.tableId, {
+          column: args.column,
+          keep: args.keep,
+        });
+        const swept =
+          args.column === null
+            ? { deleted: 0 }
+            : yield* dedupeTable(args.tableId);
+        const dedupe: GridDedupe | null =
+          args.column === null
+            ? null
+            : { column: args.column, keep: args.keep };
+        return { dedupe, deleted: swept.deleted };
       });
 
     // ── cells ─────────────────────────────────────────────────────────────
@@ -828,9 +1088,16 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       addRow,
       addRowsWithCells,
       deleteTable,
+      listFolders,
+      createFolder,
+      renameFolder,
+      deleteFolder,
+      moveTable,
       updateColumn,
       deleteColumn,
       deleteRow,
+      setDedupe,
+      dedupeTable,
       setCell,
       setCellStatus,
     } as const;

@@ -86,16 +86,31 @@ jobs:
       # a time means each completes its fetch→merge→upload before the next starts.
       max-parallel: 1
       matrix:
+        # `os` drives the per-platform conditionals; `runner` is the runs-on
+        # target. The two macOS targets build on the self-hosted Apple-silicon
+        # Mac mini (labels: self-hosted + macOS) so the long notarization waits
+        # don't consume GitHub-hosted macOS minutes; Linux + Windows stay on
+        # GitHub-hosted runners (the mini can't build them).
         include:
-          - platform: macos-14 # Apple silicon (native)
+          - platform: macOS (Apple silicon)
+            os: macos
+            runner: [self-hosted, macOS]
             rust_target: aarch64-apple-darwin
             sidecar_arch: ""
-            args: "--target aarch64-apple-darwin"
-          - platform: macos-14 # Intel (cross-compiled on the arm runner)
+            # No Tauri `dmg` target: its bundle_dmg.sh drives Finder via
+            # AppleScript, which times out on the self-hosted runner. We build the
+            # signed+notarized .app (+ updater) here and package the DMG with
+            # hdiutil in a later step (Finder-free).
+            args: "--bundles app,updater --target aarch64-apple-darwin"
+          - platform: macOS (Intel)
+            os: macos
+            runner: [self-hosted, macOS]
             rust_target: x86_64-apple-darwin
             sidecar_arch: "x64"
-            args: "--target x86_64-apple-darwin"
-          - platform: ubuntu-22.04
+            args: "--bundles app,updater --target x86_64-apple-darwin"
+          - platform: Linux
+            os: linux
+            runner: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
             sidecar_arch: ""
             # `.deb` only. The AppImage bundler downloads `linuxdeploy-x86_64.AppImage`
@@ -104,11 +119,13 @@ jobs:
             # external tool download, so Linux ships reliably (re-add `,appimage` once
             # that upstream download is stable).
             args: "--bundles deb"
-          - platform: windows-latest
+          - platform: Windows
+            os: windows
+            runner: windows-latest
             rust_target: x86_64-pc-windows-msvc
             sidecar_arch: ""
             args: "--bundles nsis"
-    runs-on: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
     env:
       # True only when the macOS signing + notarization secrets are configured.
       # Lets the signing steps skip cleanly (producing an unsigned build) until
@@ -120,7 +137,7 @@ jobs:
           ref: ${{ needs.version.outputs.tag }}
 
       - name: Install Linux build dependencies
-        if: startsWith(matrix.platform, 'ubuntu')
+        if: matrix.os == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -145,6 +162,16 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # The self-hosted Mac mini PERSISTS state between runs (unlike ephemeral
+      # GitHub-hosted runners), so a prior run's `signing_temp` keychain lingers
+      # and makes import-codesign-certs fail with `security ... exit code 48`
+      # (keychain already exists). It also lingers BETWEEN the two macOS jobs in
+      # one run (they share the runner). Delete it first so the import is always
+      # a clean create.
+      - name: Clean leftover signing keychain (self-hosted)
+        if: ${{ matrix.os == 'macos' && env.HAS_APPLE_SIGNING == 'true' }}
+        run: security delete-keychain signing_temp.keychain 2>/dev/null || true
+
       # macOS code signing: import the Developer ID Application cert into a
       # temporary keychain BEFORE the build, so BOTH our sidecar codesigning
       # (scripts/bundle-sidecar.mjs, run inside beforeBuildCommand) and Tauri's
@@ -152,7 +179,7 @@ jobs:
       # whole step is skipped when the secret is absent so unsigned dev releases
       # still build.
       - name: Import Apple Developer ID certificate
-        if: ${{ startsWith(matrix.platform, 'macos') && env.HAS_APPLE_SIGNING == 'true' }}
+        if: ${{ matrix.os == 'macos' && env.HAS_APPLE_SIGNING == 'true' }}
         uses: apple-actions/import-codesign-certs@v3
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
@@ -161,7 +188,7 @@ jobs:
       # Notarization uses an App Store Connect API key. Write the .p8 to a file
       # and expose its path to tauri-action via $GITHUB_ENV (APPLE_API_KEY_PATH).
       - name: Stage notarization API key
-        if: ${{ startsWith(matrix.platform, 'macos') && env.HAS_APPLE_SIGNING == 'true' }}
+        if: ${{ matrix.os == 'macos' && env.HAS_APPLE_SIGNING == 'true' }}
         run: |
           mkdir -p "$RUNNER_TEMP/asc"
           printf '%s' "${{ secrets.APPLE_API_KEY_P8 }}" | base64 -D > "$RUNNER_TEMP/asc/AuthKey.p8"
@@ -207,6 +234,52 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      # Package the DMG with hdiutil (NO Finder/AppleScript, unlike Tauri's
+      # bundle_dmg.sh which times out on the self-hosted runner). The .app built
+      # above is already signed + notarized + stapled; we wrap it in a compressed
+      # DMG with a drag-to-Applications symlink, then sign + notarize + staple the
+      # DMG itself so it opens clean on download, and upload it to the release.
+      - name: Package, notarize & upload DMG (Finder-free)
+        if: ${{ matrix.os == 'macos' && env.HAS_APPLE_SIGNING == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG: ${{ needs.version.outputs.tag }}
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          set -euo pipefail
+          # The self-hosted runner's service PATH is minimal (/usr/bin:/bin); add
+          # Homebrew's bin so `gh` (at /opt/homebrew/bin/gh) is found for the
+          # upload below. hdiutil/codesign/xcrun/stapler all live in /usr/bin.
+          export PATH="/opt/homebrew/bin:$PATH"
+          bundle_dir="packages/desktop/src-tauri/target/${RUST_TARGET}/release/bundle"
+          app="$(/usr/bin/find "$bundle_dir/macos" -maxdepth 1 -name '*.app' | head -1)"
+          [ -n "$app" ] || { echo "::error::no .app found under $bundle_dir/macos"; exit 1; }
+          app_name="$(basename "$app" .app)"
+          case "$RUST_TARGET" in aarch64*) arch=aarch64 ;; *) arch=x64 ;; esac
+          dmg="$bundle_dir/dmg/${app_name}_${VERSION}_${arch}.dmg"
+          mkdir -p "$(dirname "$dmg")"
+
+          # Clean DMG layout — no Finder: the .app + an Applications symlink.
+          staging="$(mktemp -d)"
+          cp -R "$app" "$staging/"
+          ln -s /Applications "$staging/Applications"
+          rm -f "$dmg"
+          hdiutil create -volname "$app_name" -srcfolder "$staging" -fs HFS+ -format UDZO -ov "$dmg"
+          rm -rf "$staging"
+
+          # Sign + notarize + staple the DMG (free wall-clock on the mini).
+          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
+          xcrun notarytool submit "$dmg" \
+            --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" --wait
+          xcrun stapler staple "$dmg"
+
+          gh release upload "$TAG" "$dmg" --repo "$GITHUB_REPOSITORY" --clobber
+          echo "Uploaded $(basename "$dmg")"
 
   # ── 3. Publish the release once all platforms succeed ───────────────────
   publish:

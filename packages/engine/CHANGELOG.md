@@ -1,5 +1,85 @@
 # @gtmgrid/engine
 
+## 0.9.13
+
+## 0.9.12
+
+## 0.9.11
+
+## 0.9.10
+
+## 0.9.9
+
+## 0.9.8
+
+## 0.9.7
+
+## 0.9.6
+
+## 0.9.5
+
+## 0.9.4
+
+## 0.9.3
+
+## 0.9.2
+
+## 0.9.1
+
+## 0.9.0
+
+## 0.8.0
+
+## 0.7.8
+
+### Patch Changes
+
+- 6ab6cf9: Simplify integration credential scopes to **Local** and **Cloud**. The connector
+  and AI-provider panels previously showed up to four confusing tabs (Workspace,
+  Personal, Team, Local) where three of them all saved to the same machine. They now
+  show just two:
+
+  - **Local** — the key is stored on this machine only.
+  - **Cloud** — the key is encrypted server-side and **shared with the whole team**
+    (everyone in the workspace uses it). Shown only when signed into a cloud workspace.
+
+  Pushing a local table to the cloud no longer fails when an integration is connected
+  only locally: credentials are never synced, so a cloud run resolves the team's
+  shared Cloud key (or surfaces a connect-integration error at run time if none is
+  set). This also fixes the case where having both a local and a Cloud key wrongly
+  blocked the push.
+
+## 0.7.7
+
+### Patch Changes
+
+- c64cbf5: Fix two desktop bugs:
+
+  - **In-app updater / notification popover was unclickable.** The transparent
+    full-viewport `.popover-scrim` (z-index 100) sat _above_ the bell notification
+    popover (z-index 61), so clicking "Update & restart" (or any action) hit the
+    scrim and just closed the popover instead of firing the button. Raised the
+    notification popover — and the dedupe popover, which had the same z-index 50 <
+    scrim bug — above the scrim.
+
+  - **Pushing a local table to the cloud dropped function-column config.** The
+    local→cloud push only sent each column's name/type (and the sidecar hardcoded
+    `kind: "manual"`), so a function/formula/code column landed in the cloud as a
+    plain manual column and its cells could no longer be run/enriched. The push now
+    carries the full config (kind/provider/method/code/params/condition); the
+    `grid.addColumn` tRPC mutation also accepts `condition` so the "only run if"
+    rule survives the push.
+
+## 0.7.6
+
+## 0.7.5
+
+## 0.7.4
+
+## 0.7.3
+
+## 0.7.2
+
 ## 0.7.1
 
 ## 0.7.0

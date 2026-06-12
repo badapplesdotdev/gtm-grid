@@ -64,7 +64,9 @@ describe("client construction (offline)", () => {
     expect(a).toBeInstanceOf(QueryClient);
     expect(b).toBeInstanceOf(QueryClient);
     expect(a).not.toBe(b);
-    // Desktop defaults: no window-focus refetch.
-    expect(a.getDefaultOptions().queries?.refetchOnWindowFocus).toBe(false);
+    // Desktop defaults: refetch on window focus (gated by staleTime) so cloud
+    // changes made elsewhere appear when you return to the app.
+    expect(a.getDefaultOptions().queries?.refetchOnWindowFocus).toBe(true);
+    expect(a.getDefaultOptions().queries?.staleTime).toBe(30_000);
   });
 });

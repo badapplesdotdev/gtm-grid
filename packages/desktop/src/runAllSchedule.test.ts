@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { buildColumnDeps, runColumnsWithDeps } from "./App";
+import { buildColumnDeps, isFreeColumn, runColumnsWithDeps } from "./App";
 import type { Column } from "./api";
 
 function col(id: string, name: string, params: Record<string, unknown> = {}): Column {
@@ -122,5 +122,27 @@ describe("runColumnsWithDeps", () => {
       ran.push(c.id);
     });
     expect(ran.sort()).toEqual(["a", "b"]);
+  });
+});
+
+describe("isFreeColumn", () => {
+  // Free = cascades even with Auto-run off (no credit cost). Drives whether a
+  // mapped column auto-populates when an enrichment finishes.
+  it("treats a code/mapped column (no provider) as free", () => {
+    expect(isFreeColumn({ kind: "function", provider: null })).toBe(true);
+  });
+
+  it("treats a formula column as free", () => {
+    expect(isFreeColumn({ kind: "function", provider: "formula" })).toBe(true);
+  });
+
+  it("treats a connector enrichment as NOT free", () => {
+    expect(isFreeColumn({ kind: "function", provider: "leadmagic" })).toBe(false);
+    expect(isFreeColumn({ kind: "function", provider: "ai" })).toBe(false);
+    expect(isFreeColumn({ kind: "function", provider: "http" })).toBe(false);
+  });
+
+  it("treats a manual column as NOT free (nothing to run)", () => {
+    expect(isFreeColumn({ kind: "manual", provider: null })).toBe(false);
   });
 });

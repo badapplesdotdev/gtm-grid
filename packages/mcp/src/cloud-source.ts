@@ -26,8 +26,10 @@ import {
   CloudSchemaMapping,
   Engine,
   cloudGridStoreShape,
+  connectorFromManifest,
   defaultRegistry,
   fetchWithRetry,
+  parseManifest,
   type CloudClientLike,
   type CloudFunctionRefs,
   type EngineConfig,
@@ -76,21 +78,16 @@ export class CloudToolUnsupportedError extends Error {
   }
 }
 
-/** Resolve the shared worker bearer secret, failing closed when unset. */
-function workerSecret(): string {
-  const secret = process.env.WEBHOOK_WORKER_SECRET;
-  if (secret === undefined || secret === "") {
-    throw new Error("WEBHOOK_WORKER_SECRET is not configured");
-  }
-  return secret;
-}
-
 /**
  * Build the HTTP {@link CloudClientLike} the cloud store injects: each ref is an
  * `/api/worker/*` route path, and query/mutation/action POST the JSON args to
- * `${apiUrl}<route>` with the shared worker bearer (the spawned MCP runs on the
- * trusted localhost boundary, same as the sidecar). The member `token` is
- * forwarded so the worker attributes the run to the signed-in member. Mirrors
+ * `${apiUrl}<route>`.
+ *
+ * AUTH: the spawned MCP authenticates as the SIGNED-IN MEMBER via the
+ * `X-Gtmgrid-Member` session token — NOT the shared `WEBHOOK_WORKER_SECRET`. The
+ * worker secret is a server-only secret the desktop (and therefore the MCP it
+ * spawns) never has, so the dual-auth worker routes take their member path and
+ * enforce workspace membership server-side. Mirrors
  * `packages/server/src/cloud-run.ts` `makeWorkerClient`.
  */
 export function makeWorkerClient(
@@ -109,7 +106,6 @@ export function makeWorkerClient(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${workerSecret()}`,
         "X-Gtmgrid-Member": token,
       },
       body: JSON.stringify(args),
@@ -223,11 +219,15 @@ export interface CloudGridSource {
     tableRef: string,
     rows: Record<string, unknown>[],
   ) => Promise<{ added: number }>;
-  /** Run a function column on the active cloud table by column name/id. */
+  /**
+   * Run a function column on the active cloud table by column name/id. `limit`
+   * scopes the run to the next N rows in grid order whose cell isn't yet `done`
+   * (with `offset` to skip the first matches); omitting it runs every pending row.
+   */
   readonly runColumn: (
     tableRef: string,
     columnRef: string,
-    opts: { force?: boolean; concurrency?: number },
+    opts: { force?: boolean; concurrency?: number; limit?: number; offset?: number },
   ) => Promise<{ column: string; ran: number; errors: number }>;
 }
 
@@ -245,6 +245,34 @@ export interface CloudSourceDeps {
     client: CloudClientLike,
     tableId: string,
   ) => Promise<string>;
+}
+
+/**
+ * Build a registry with the user's JSON-manifest extensions loaded on top of the
+ * built-in connectors — the SAME set the engine's `openProject` loads for a LOCAL
+ * project (`registry.add(connectorFromManifest(parseManifest(m)))` per stored
+ * manifest). The cloud agent MUST use this so `list_functions` / `run_column` see
+ * the enrichment/social connectors (Trigify, Apollo, …) exactly as local does —
+ * otherwise cloud only exposes the built-ins (ai/formatting/formula/github/http)
+ * and the agent reports those connectors as "not available", diverging from local.
+ *
+ * `manifests` are raw manifests — objects (e.g. `globalDb.listExtensions()`) or
+ * JSON strings; `parseManifest` accepts either. Decoupled from any Db so it is
+ * unit-testable. Best-effort per manifest: a single malformed entry is skipped,
+ * never failing the whole registry.
+ */
+export function registryWithExtensions(
+  manifests: Iterable<unknown>,
+  base: Registry = defaultRegistry(),
+): Registry {
+  for (const manifest of manifests) {
+    try {
+      base.add(connectorFromManifest(parseManifest(manifest)));
+    } catch {
+      /* skip a single malformed manifest — keep the rest */
+    }
+  }
+  return base;
 }
 
 /** Default deps: an HTTP worker client + the metadata workspace resolver. */
@@ -510,6 +538,22 @@ export function makeCloudSource(
       const grid = await fetchGrid();
       const col = resolveColumn(grid, columnRef);
       if (!col) throw new Error(`No column "${columnRef}" in the cloud table.`);
+      // Scope to the next N rows in grid order when `limit` is set, mirroring the
+      // local source: candidates are rows whose cell for this column isn't `done`
+      // (or every row under `force`), in `grid.rows` order, then sliced by
+      // offset/limit. So "run 10 rows" fills the first 10 unfilled cells in the
+      // order the grid displays — not a random subset.
+      const cellStatus = new Map<string, string>();
+      for (const cell of grid.cells) {
+        if (cell.columnId === col._id) cellStatus.set(cell.rowId, cell.status);
+      }
+      const candidates = opts.force
+        ? grid.rows
+        : grid.rows.filter((r) => (cellStatus.get(r._id) ?? "empty") !== "done");
+      const scoped =
+        opts.limit != null
+          ? candidates.slice(opts.offset ?? 0, (opts.offset ?? 0) + opts.limit)
+          : candidates;
       const workspaceId = await deps.resolveWorkspaceId(
         client,
         context.tableId,
@@ -522,6 +566,8 @@ export function makeCloudSource(
       const res = await engine.runColumn(col._id, {
         force: opts.force,
         concurrency: opts.concurrency ?? 5,
+        // Only pass an explicit scope when asked; otherwise run every row.
+        rowIds: opts.limit != null ? scoped.map((r) => r._id) : undefined,
       });
       return { column: col.name, ...res };
     },

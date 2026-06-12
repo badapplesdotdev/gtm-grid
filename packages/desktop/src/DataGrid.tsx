@@ -20,13 +20,18 @@
  * by each parent and opened via controller intents.
  */
 
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { CellContent, Icon } from "./App";
 import type { Cell, Column, FullTable } from "./api";
 import { VirtualGridBody } from "./VirtualGridBody";
 import { useColumnWindow } from "./useColumnWindow";
 import { GridColSpacer } from "./GridColSpacer";
 import { csvFilename, downloadCsv, tableToCsv } from "./csvExport";
+import { BotGlyph, PresenceAvatars } from "./PresenceAvatars";
+import { type GridPresenceView, presenceCellKey } from "./gridPresence";
+
+/** A `<td>` style that also carries the per-cell presence-ring color variable. */
+type PresenceTdStyle = CSSProperties & { "--presence-color"?: string };
 
 /** Row-number gutter width (px) — matches `.col-row-num` in styles.css. */
 const GUTTER_W = 48;
@@ -104,6 +109,14 @@ export interface GridController {
   }) => void;
   /** Called when the viewport nears the bottom (cloud lazy paging); omit = no-op. */
   readonly onScrollNearBottom?: () => void;
+
+  // ── Multiplayer presence (cloud only; omit for the local grid) ─────────
+  /** Remote members' cursors/editing, resolved for rendering; omit to disable. */
+  readonly presence?: GridPresenceView;
+  /** The local user selected a cell (publishes their presence cursor). */
+  readonly onActiveCellChange?: (cell: { rowId: string; colId: string } | null) => void;
+  /** The local user started/stopped editing a cell (stronger presence indicator). */
+  readonly onEditingCellChange?: (cell: { rowId: string; colId: string } | null) => void;
 }
 
 /**
@@ -124,6 +137,9 @@ export function DataGrid({
   const { table } = c;
   const gridScrollRef = useRef<HTMLDivElement>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; items: CtxItem[] } | null>(null);
+  // The cell briefly flashed after a follow-jump, keyed `${rowId}:${colId}`.
+  const [flashCell, setFlashCell] = useState<string | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const openCtx = useCallback((e: React.MouseEvent, items: CtxItem[]) => {
     e.preventDefault();
@@ -217,6 +233,29 @@ export function DataGrid({
       return items;
     },
     [c, selectedRows, selectedCount, selectedIds, clearSelection],
+  // Follow a member: scroll their cell into view and flash it. Rows are
+  // fixed-height so the vertical offset is exact; the horizontal offset sums the
+  // widths of the columns before the target. No-op if the row/column isn't loaded.
+  const scrollToCell = useCallback(
+    (rowId: string, colId: string) => {
+      const el = gridScrollRef.current;
+      if (el === null) return;
+      const rowIdx = table.rows.findIndex((r) => r.id === rowId);
+      const colIdx = table.columns.findIndex((col) => col.id === colId);
+      if (rowIdx < 0 || colIdx < 0) return;
+      let left = GUTTER_W;
+      for (let i = 0; i < colIdx; i++) left += c.columnWidth(table.columns[i].id);
+      el.scrollTo({
+        top: Math.max(0, rowIdx * c.rowHeight - (el.clientHeight - c.rowHeight) / 2),
+        left: Math.max(0, left - el.clientWidth / 3),
+        behavior: "smooth",
+      });
+      const key = presenceCellKey(rowId, colId);
+      setFlashCell(key);
+      if (flashTimer.current !== null) clearTimeout(flashTimer.current);
+      flashTimer.current = setTimeout(() => setFlashCell(null), 1200);
+    },
+    [table, c],
   );
 
   // Column virtualization (TRI-3286): window the DATA columns horizontally so a
@@ -305,6 +344,15 @@ export function DataGrid({
           </span>
         )}
 
+        {c.presence && (
+          <PresenceAvatars
+            users={c.presence.users}
+            onJump={(u) => {
+              if (u.cursor) scrollToCell(u.cursor.rowId, u.cursor.columnId);
+            }}
+          />
+        )}
+
         {c.toolbarExtras}
 
         <button
@@ -380,11 +428,21 @@ export function DataGrid({
                 <GridColSpacer side="left" width={columnWindow.spacers.left} as="th" />
                 {columnWindow.virtualColumns.map((vc) => {
                   const col = table.columns[vc.index];
+                  // Column-header ring: a participant (the agent) is working
+                  // over this whole column (run_column etc.).
+                  const colHere = c.presence?.byColumn.get(col.id);
+                  const thStyle: PresenceTdStyle = {
+                    width: c.columnWidth(col.id),
+                    minWidth: c.minColWidth,
+                    maxWidth: c.maxColWidth,
+                    ...(colHere ? { "--presence-color": colHere[0].color } : {}),
+                  };
                   return (
                     <th
                       key={col.id}
-                      className="grid-th"
-                      style={{ width: c.columnWidth(col.id), minWidth: c.minColWidth, maxWidth: c.maxColWidth }}
+                      className={`grid-th${colHere ? " col-presence" : ""}`}
+                      title={colHere ? colHere.map((u) => `${u.name ?? u.userId}${u.activity ? ` — ${u.activity}` : ""}`).join(", ") : undefined}
+                      style={thStyle}
                       onContextMenu={(e) =>
                         openCtx(e, [
                           { label: `Edit column “${col.name}”`, onClick: () => c.editColumn(col) },
@@ -486,20 +544,55 @@ export function DataGrid({
                     {cw.virtualColumns.map((vc) => {
                       const col = table.columns[vc.index];
                       const cell: Cell | undefined = row.cells[col.id];
+                      const key = presenceCellKey(row.id, col.id);
+                      const here = c.presence?.byCell.get(key);
+                      const isEditingHere = here?.some((u) => u.editing) ?? false;
+                      const tdStyle: PresenceTdStyle | undefined = here
+                        ? { "--presence-color": here[0].color }
+                        : undefined;
                       return (
                         <td
                           key={col.id}
-                          className="grid-td"
+                          className={`grid-td${here ? " cell-presence" : ""}${isEditingHere ? " presence-editing" : ""}${flashCell === key ? " presence-flash" : ""}`}
+                          style={tdStyle}
+                          onClick={
+                            c.onActiveCellChange
+                              ? () => c.onActiveCellChange!({ rowId: row.id, colId: col.id })
+                              : undefined
+                          }
                           onContextMenu={(e) =>
                             openCtx(e, rowCtxItems(row.id, [
                               { label: "Clear cell", onClick: () => c.clearCell(row.id, col.id) },
                             ]))
                           }
                         >
+                          {here && (
+                            <span
+                              className="presence-cell-chip"
+                              style={{ background: here[0].color }}
+                              title={here
+                                .map((u) => `${u.name ?? u.userId}${u.isAgent && u.activity ? ` — ${u.activity}` : ""}`)
+                                .join(", ")}
+                            >
+                              {here[0].isAgent ? (
+                                <BotGlyph size={9} color="#fff" />
+                              ) : here[0].image ? (
+                                <img src={here[0].image} alt="" referrerPolicy="no-referrer" />
+                              ) : (
+                                (here[0].name ?? "?").slice(0, 1).toUpperCase()
+                              )}
+                            </span>
+                          )}
                           <CellContent
                             cell={cell}
                             col={col}
                             onEdit={(v) => c.setCell(row.id, col.id, v)}
+                            onEditingChange={
+                              c.onEditingCellChange
+                                ? (ed) =>
+                                    c.onEditingCellChange!(ed ? { rowId: row.id, colId: col.id } : null)
+                                : undefined
+                            }
                             onOpenDetails={
                               c.openCellDetails ? () => c.openCellDetails!(col, cell) : undefined
                             }

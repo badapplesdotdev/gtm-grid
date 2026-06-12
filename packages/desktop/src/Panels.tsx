@@ -33,6 +33,14 @@ export interface WorkspaceCredContext {
    * server-side). Throws on failure so the form can surface the message.
    */
   readonly onSaveWorkspace: (apiKey: string) => Promise<void>;
+  /**
+   * Copy this connector's LOCAL key up to the shared Cloud key in one click. The
+   * sidecar reveals the local plaintext in-process and saves it server-side — the
+   * plaintext never enters the renderer. Present only when a cloud session is
+   * available; the panel shows the affordance only when a local key also exists.
+   * Throws on failure so the form can surface the message.
+   */
+  readonly copyLocalKey?: () => Promise<void>;
 }
 
 /**
@@ -53,6 +61,12 @@ export interface WorkspaceCredSource {
     name: string,
     apiKey: string,
   ) => Promise<void>;
+  /**
+   * Copy a connector's LOCAL key (its full secret map) to the shared Cloud key,
+   * via the sidecar (plaintext never enters the renderer). Present only when a
+   * signed-in cloud session exists; `undefined` otherwise.
+   */
+  readonly copyLocalKey?: (extensionId: string, name: string) => Promise<void>;
 }
 
 /** Narrow an app-level {@link WorkspaceCredSource} to one connector's context. */
@@ -65,6 +79,9 @@ function workspaceCtxFor(
   return {
     connected: source.connectedExtensionIds.has(extensionId),
     onSaveWorkspace: (apiKey) => source.save(extensionId, name, apiKey),
+    copyLocalKey: source.copyLocalKey
+      ? () => source.copyLocalKey!(extensionId, name)
+      : undefined,
   };
 }
 
@@ -133,21 +150,32 @@ const I = {
   ),
 };
 
-const SCOPES: { id: CredentialScope; label: string; icon: ReactNode }[] = [
-  { id: "personal", label: "Personal", icon: <I.Lock /> },
-  { id: "team", label: "Team", icon: <I.Globe /> },
-  { id: "local", label: "Local", icon: <I.Home /> },
-];
+// Two credential scopes the panels expose:
+//  • LOCAL  — the key is stored on THIS machine only (sidecar SQLite, engine
+//    scope "local"), for local runs.
+//  • CLOUD  — the key is stored encrypted server-side and SHARED with the whole
+//    workspace/team (everyone uses it). This is the cloud `workspace` scope; the
+//    tab only appears when signed into a cloud workspace.
+// (The old Personal/Team local sub-scopes are collapsed into a single Local tab;
+//  existing personal/team rows still read back as "connected" under Local.)
+const LOCAL_SCOPE: { id: CredentialScope; label: string; icon: ReactNode } = {
+  id: "local",
+  label: "Local",
+  icon: <I.Home />,
+};
 
 /**
- * The shared (cloud) workspace scope tab, prepended to {@link SCOPES} only when a
- * workspace is active. Saving under it routes to Convex `saveCredential`.
+ * The shared (cloud) scope tab, shown only when a workspace is active. Saving
+ * under it routes to the encrypted cloud save path and is shared with the team.
  */
-const WORKSPACE_SCOPE: { id: "workspace"; label: string; icon: ReactNode } = {
+const CLOUD_SCOPE: { id: "workspace"; label: string; icon: ReactNode } = {
   id: "workspace",
-  label: "Workspace",
+  label: "Cloud",
   icon: <I.Users />,
 };
+
+/** Friendly label for a scope id (the underlying cloud id stays "workspace"). */
+const scopeLabel = (s: PanelScope): string => (s === "workspace" ? "Cloud" : "Local");
 
 // BrandIcon (and its `initials` helper) live in ./BrandIcon so they can be
 // eagerly imported into the initial bundle while the rest of Panels is
@@ -180,9 +208,11 @@ function ScopeTabs({
   /** When true, prepend the shared "Workspace" (cloud) scope tab. */
   showWorkspace: boolean;
 }) {
+  // Cloud first (it's the headline) when signed into a workspace; otherwise the
+  // Local tab is the only option.
   const tabs: { id: PanelScope; label: string; icon: ReactNode }[] = showWorkspace
-    ? [WORKSPACE_SCOPE, ...SCOPES]
-    : SCOPES;
+    ? [CLOUD_SCOPE, LOCAL_SCOPE]
+    : [LOCAL_SCOPE];
   return (
     <div className="scope-tabs">
       {tabs.map((s) => (
@@ -229,18 +259,24 @@ function ConnectionsSection({
   workspace?: WorkspaceCredContext;
 }) {
   const showWorkspace = workspace !== undefined;
-  // Default to the shared workspace tab when available (cloud sharing is the
-  // headline of T11); otherwise the existing local default.
-  const [scope, setScope] = useState<PanelScope>(showWorkspace ? "workspace" : "personal");
+  // Default to the shared Cloud tab when available (team sharing is the headline);
+  // otherwise the machine-local tab.
+  const [scope, setScope] = useState<PanelScope>(showWorkspace ? "workspace" : "local");
   const [adding, setAdding] = useState(false);
   const [keyDraft, setKeyDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
+  const [copying, setCopying] = useState(false);
 
   const isWorkspace = scope === "workspace";
+  // A LOCAL key exists for this connector (any machine-local scope, incl. legacy
+  // personal/team) — the prerequisite for offering the one-click copy-to-cloud.
+  const hasLocalKey = connectedScopes.length > 0;
+  // The single Local tab represents ALL machine-local scopes, so it's "connected"
+  // when any local credential exists (incl. legacy personal/team rows).
   const connectedHere = isWorkspace
     ? (workspace?.connected ?? false)
-    : connectedScopes.includes(scope);
+    : connectedScopes.length > 0;
 
   const reset = () => { setAdding(false); setKeyDraft(""); setErr(""); };
 
@@ -263,6 +299,22 @@ function ConnectionsSection({
     }
   };
 
+  // One-click copy of the local key up to the shared Cloud key (the sidecar does
+  // the reveal+save; the plaintext never reaches here).
+  const copyLocal = async () => {
+    if (!workspace?.copyLocalKey) return;
+    setCopying(true);
+    setErr("");
+    try {
+      await workspace.copyLocalKey();
+      reset();
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to copy your local key");
+    } finally {
+      setCopying(false);
+    }
+  };
+
   return (
     <div className="detail-section">
       <ScopeTabs scope={scope} showWorkspace={showWorkspace} onScope={(s) => { setScope(s); reset(); }} />
@@ -271,7 +323,7 @@ function ConnectionsSection({
       <div className={`conn-card${adding ? " editing" : ""}`}>
         {adding ? (
           <div className="conn-add-form">
-            <label className="form-label">{name} API key · {scope}</label>
+            <label className="form-label">{name} API key · {scopeLabel(scope)}</label>
             <input
               className="form-input"
               type="password"
@@ -296,9 +348,9 @@ function ConnectionsSection({
               <strong>{name} connected</strong>
               <span>
                 {isWorkspace ? (
-                  <>Shared with the <b>workspace</b> · encrypted server-side.</>
+                  <>Shared with your <b>team</b> · encrypted in the cloud.</>
                 ) : (
-                  <>Key stored under <b>{scope}</b> · encrypted on this device.</>
+                  <>Stored on <b>this device</b> only · encrypted at rest.</>
                 )}
               </span>
             </div>
@@ -312,6 +364,19 @@ function ConnectionsSection({
             <button className="btn btn-primary btn-sm conn-add-btn" onClick={() => setAdding(true)}>
               <I.Plus /> Add connection
             </button>
+            {/* Offer the one-click copy only in the Cloud tab, when a local key
+                exists and the cloud session can save it. */}
+            {isWorkspace && hasLocalKey && workspace?.copyLocalKey && (
+              <button
+                className="btn btn-outline btn-sm conn-add-btn"
+                onClick={copyLocal}
+                disabled={copying}
+                title={`Copy your local ${name} key to the shared Cloud key`}
+              >
+                {copying ? "Copying…" : "Use my local key"}
+              </button>
+            )}
+            {err && <div className="conn-err">{err}</div>}
           </div>
         )}
       </div>

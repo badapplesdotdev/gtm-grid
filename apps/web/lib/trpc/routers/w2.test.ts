@@ -33,7 +33,7 @@ const callerFor = (fixtures: TestLayerFixtures) =>
   );
 
 const users: readonly WorkspaceUser[] = [
-  { id: "user_owner", name: "Olive", email: "olive@example.com" },
+  { id: "user_owner", name: "Olive", email: "olive@example.com", image: null },
 ];
 const workspaces: readonly Workspace[] = [
   {
@@ -54,6 +54,7 @@ const members: readonly MemberWithUser[] = [
     createdAt: 1,
     name: "Olive",
     email: "olive@example.com",
+    image: null,
   },
 ];
 const ownerMembership: readonly Membership[] = [
@@ -75,6 +76,7 @@ describe("workspaces.me", () => {
         _id: "user_owner",
         name: "Olive",
         email: "olive@example.com",
+        image: null,
       },
       workspaces: [
         {
@@ -174,6 +176,7 @@ describe("billing.checkout", () => {
           createdAt: 1,
           name: null,
           email: null,
+          image: null,
         },
       ],
       memberships: [

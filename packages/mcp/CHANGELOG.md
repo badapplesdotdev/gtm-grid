@@ -1,5 +1,146 @@
 # @gtmgrid/mcp
 
+## 0.9.13
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.13
+
+## 0.9.12
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.12
+
+## 0.9.11
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.11
+
+## 0.9.10
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.10
+
+## 0.9.9
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.9
+
+## 0.9.8
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.8
+
+## 0.9.7
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.7
+
+## 0.9.6
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.6
+
+## 0.9.5
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.5
+
+## 0.9.4
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.4
+
+## 0.9.3
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.3
+
+## 0.9.2
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.2
+
+## 0.9.1
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.1
+
+## 0.9.0
+
+### Patch Changes
+
+- @gtmgrid/engine@0.9.0
+
+## 0.8.0
+
+### Patch Changes
+
+- @gtmgrid/engine@0.8.0
+
+## 0.7.8
+
+### Patch Changes
+
+- Updated dependencies [6ab6cf9]
+  - @gtmgrid/engine@0.7.8
+
+## 0.7.7
+
+### Patch Changes
+
+- Updated dependencies [c64cbf5]
+  - @gtmgrid/engine@0.7.7
+
+## 0.7.6
+
+### Patch Changes
+
+- 25938ea: Agent column runs now enrich rows in grid order. The `run_column` MCP tool gains
+  optional `limit`/`offset` params that scope a run to the next N **unfilled** rows
+  in the order the grid displays them (threaded into the engine's existing ordered
+  `rowIds` scope). Previously the tool could only run _all_ pending rows, so when a
+  user asked an agent to "run this column for 10 rows" the agent improvised and
+  enriched a scattered, seemingly-random subset. The agent operating manual now
+  directs the model to use `limit` for "run N rows" / "do the next N" requests.
+  - @gtmgrid/engine@0.7.6
+
+## 0.7.5
+
+### Patch Changes
+
+- @gtmgrid/engine@0.7.5
+
+## 0.7.4
+
+### Patch Changes
+
+- @gtmgrid/engine@0.7.4
+
+## 0.7.3
+
+### Patch Changes
+
+- @gtmgrid/engine@0.7.3
+
+## 0.7.2
+
+### Patch Changes
+
+- @gtmgrid/engine@0.7.2
+
 ## 0.7.1
 
 ### Patch Changes

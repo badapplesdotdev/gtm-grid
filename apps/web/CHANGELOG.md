@@ -1,5 +1,279 @@
 # @gtmgrid/web
 
+## 0.9.13
+
+### Patch Changes
+
+- Updated dependencies [891e3b8]
+  - @gtmgrid/services@0.9.13
+  - @gtmgrid/auth@0.9.13
+  - @gtmgrid/cloud@0.9.13
+  - @gtmgrid/db@0.9.13
+  - @gtmgrid/email@0.9.13
+  - @gtmgrid/engine@0.9.13
+
+## 0.9.12
+
+### Patch Changes
+
+- Updated dependencies [9bf183f]
+  - @gtmgrid/services@0.9.12
+  - @gtmgrid/auth@0.9.12
+  - @gtmgrid/cloud@0.9.12
+  - @gtmgrid/db@0.9.12
+  - @gtmgrid/email@0.9.12
+  - @gtmgrid/engine@0.9.12
+
+## 0.9.11
+
+### Patch Changes
+
+- Updated dependencies [2ddf117]
+  - @gtmgrid/services@0.9.11
+  - @gtmgrid/auth@0.9.11
+  - @gtmgrid/cloud@0.9.11
+  - @gtmgrid/db@0.9.11
+  - @gtmgrid/email@0.9.11
+  - @gtmgrid/engine@0.9.11
+
+## 0.9.10
+
+### Patch Changes
+
+- e63ab22: Fix `process-webhook-record` (and any worker self-call) failing with
+  "SITE_URL is not configured" on deployments without the manual env var: the
+  worker base URL now falls back to the Vercel-injected deployment host
+  (`VERCEL_PROJECT_PRODUCTION_URL`, then `VERCEL_URL`) when `SITE_URL` is
+  unset. An explicit `SITE_URL` still wins; off-Vercel with nothing set still
+  fails closed.
+  - @gtmgrid/auth@0.9.10
+  - @gtmgrid/cloud@0.9.10
+  - @gtmgrid/db@0.9.10
+  - @gtmgrid/email@0.9.10
+  - @gtmgrid/engine@0.9.10
+  - @gtmgrid/services@0.9.10
+
+## 0.9.9
+
+### Patch Changes
+
+- Updated dependencies [67f3d44]
+  - @gtmgrid/services@0.9.9
+  - @gtmgrid/auth@0.9.9
+  - @gtmgrid/cloud@0.9.9
+  - @gtmgrid/db@0.9.9
+  - @gtmgrid/email@0.9.9
+  - @gtmgrid/engine@0.9.9
+
+## 0.9.8
+
+### Patch Changes
+
+- Updated dependencies [3cbb8b2]
+  - @gtmgrid/services@0.9.8
+  - @gtmgrid/auth@0.9.8
+  - @gtmgrid/cloud@0.9.8
+  - @gtmgrid/db@0.9.8
+  - @gtmgrid/email@0.9.8
+  - @gtmgrid/engine@0.9.8
+
+## 0.9.7
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.7
+- @gtmgrid/cloud@0.9.7
+- @gtmgrid/db@0.9.7
+- @gtmgrid/email@0.9.7
+- @gtmgrid/engine@0.9.7
+- @gtmgrid/services@0.9.7
+
+## 0.9.6
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.6
+- @gtmgrid/cloud@0.9.6
+- @gtmgrid/db@0.9.6
+- @gtmgrid/email@0.9.6
+- @gtmgrid/engine@0.9.6
+- @gtmgrid/services@0.9.6
+
+## 0.9.5
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.5
+- @gtmgrid/cloud@0.9.5
+- @gtmgrid/db@0.9.5
+- @gtmgrid/email@0.9.5
+- @gtmgrid/engine@0.9.5
+- @gtmgrid/services@0.9.5
+
+## 0.9.4
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.4
+- @gtmgrid/cloud@0.9.4
+- @gtmgrid/db@0.9.4
+- @gtmgrid/email@0.9.4
+- @gtmgrid/engine@0.9.4
+- @gtmgrid/services@0.9.4
+
+## 0.9.3
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.3
+- @gtmgrid/cloud@0.9.3
+- @gtmgrid/db@0.9.3
+- @gtmgrid/email@0.9.3
+- @gtmgrid/engine@0.9.3
+- @gtmgrid/services@0.9.3
+
+## 0.9.2
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.2
+- @gtmgrid/cloud@0.9.2
+- @gtmgrid/db@0.9.2
+- @gtmgrid/email@0.9.2
+- @gtmgrid/engine@0.9.2
+- @gtmgrid/services@0.9.2
+
+## 0.9.1
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.1
+- @gtmgrid/cloud@0.9.1
+- @gtmgrid/db@0.9.1
+- @gtmgrid/email@0.9.1
+- @gtmgrid/engine@0.9.1
+- @gtmgrid/services@0.9.1
+
+## 0.9.0
+
+### Patch Changes
+
+- Updated dependencies [a6d488d]
+  - @gtmgrid/services@0.9.0
+  - @gtmgrid/db@0.9.0
+  - @gtmgrid/auth@0.9.0
+  - @gtmgrid/cloud@0.9.0
+  - @gtmgrid/email@0.9.0
+  - @gtmgrid/engine@0.9.0
+
+## 0.8.0
+
+### Patch Changes
+
+- Updated dependencies [c3eb12d]
+  - @gtmgrid/services@0.8.0
+  - @gtmgrid/auth@0.8.0
+  - @gtmgrid/cloud@0.8.0
+  - @gtmgrid/db@0.8.0
+  - @gtmgrid/email@0.8.0
+  - @gtmgrid/engine@0.8.0
+
+## 0.7.8
+
+### Patch Changes
+
+- Updated dependencies [6ab6cf9]
+  - @gtmgrid/engine@0.7.8
+  - @gtmgrid/auth@0.7.8
+  - @gtmgrid/cloud@0.7.8
+  - @gtmgrid/db@0.7.8
+  - @gtmgrid/email@0.7.8
+  - @gtmgrid/services@0.7.8
+
+## 0.7.7
+
+### Patch Changes
+
+- c64cbf5: Fix two desktop bugs:
+
+  - **In-app updater / notification popover was unclickable.** The transparent
+    full-viewport `.popover-scrim` (z-index 100) sat _above_ the bell notification
+    popover (z-index 61), so clicking "Update & restart" (or any action) hit the
+    scrim and just closed the popover instead of firing the button. Raised the
+    notification popover — and the dedupe popover, which had the same z-index 50 <
+    scrim bug — above the scrim.
+
+  - **Pushing a local table to the cloud dropped function-column config.** The
+    local→cloud push only sent each column's name/type (and the sidecar hardcoded
+    `kind: "manual"`), so a function/formula/code column landed in the cloud as a
+    plain manual column and its cells could no longer be run/enriched. The push now
+    carries the full config (kind/provider/method/code/params/condition); the
+    `grid.addColumn` tRPC mutation also accepts `condition` so the "only run if"
+    rule survives the push.
+
+- Updated dependencies [c64cbf5]
+  - @gtmgrid/engine@0.7.7
+  - @gtmgrid/auth@0.7.7
+  - @gtmgrid/cloud@0.7.7
+  - @gtmgrid/db@0.7.7
+  - @gtmgrid/email@0.7.7
+  - @gtmgrid/services@0.7.7
+
+## 0.7.6
+
+### Patch Changes
+
+- @gtmgrid/auth@0.7.6
+- @gtmgrid/cloud@0.7.6
+- @gtmgrid/db@0.7.6
+- @gtmgrid/email@0.7.6
+- @gtmgrid/engine@0.7.6
+- @gtmgrid/services@0.7.6
+
+## 0.7.5
+
+### Patch Changes
+
+- @gtmgrid/auth@0.7.5
+- @gtmgrid/cloud@0.7.5
+- @gtmgrid/db@0.7.5
+- @gtmgrid/email@0.7.5
+- @gtmgrid/engine@0.7.5
+- @gtmgrid/services@0.7.5
+
+## 0.7.4
+
+### Patch Changes
+
+- @gtmgrid/auth@0.7.4
+- @gtmgrid/cloud@0.7.4
+- @gtmgrid/db@0.7.4
+- @gtmgrid/email@0.7.4
+- @gtmgrid/engine@0.7.4
+- @gtmgrid/services@0.7.4
+
+## 0.7.3
+
+### Patch Changes
+
+- @gtmgrid/auth@0.7.3
+- @gtmgrid/cloud@0.7.3
+- @gtmgrid/db@0.7.3
+- @gtmgrid/email@0.7.3
+- @gtmgrid/engine@0.7.3
+- @gtmgrid/services@0.7.3
+
+## 0.7.2
+
+### Patch Changes
+
+- @gtmgrid/auth@0.7.2
+- @gtmgrid/cloud@0.7.2
+- @gtmgrid/db@0.7.2
+- @gtmgrid/email@0.7.2
+- @gtmgrid/engine@0.7.2
+- @gtmgrid/services@0.7.2
+
 ## 0.7.1
 
 ### Patch Changes

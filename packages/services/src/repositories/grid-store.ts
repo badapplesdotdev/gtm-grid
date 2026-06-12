@@ -31,6 +31,20 @@ export interface StoreTable {
   name: string;
   position: number;
   createdAt: number;
+  dedupeColumn: string | null;
+  dedupeKeep: string | null;
+  /** Sidebar folder the table is filed under (null = root). */
+  folderId: string | null;
+}
+
+/** An in-memory folder row (a sidebar table group). */
+export interface StoreFolder {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  name: string;
+  position: number;
+  createdAt: number;
 }
 
 /** An in-memory column row (the full projection getTable returns). */
@@ -76,6 +90,7 @@ export interface StoreCell {
 export interface GridStore {
   readonly projects: StoreProject[];
   readonly tables: StoreTable[];
+  readonly folders: StoreFolder[];
   readonly columns: StoreColumn[];
   readonly rows: StoreRow[];
   readonly cells: StoreCell[];
@@ -87,6 +102,7 @@ export interface GridStore {
 export const makeGridStore = (seed: {
   projects?: StoreProject[];
   tables?: StoreTable[];
+  folders?: StoreFolder[];
   columns?: StoreColumn[];
   rows?: StoreRow[];
   cells?: StoreCell[];
@@ -95,6 +111,7 @@ export const makeGridStore = (seed: {
   return {
     projects: seed.projects ?? [],
     tables: seed.tables ?? [],
+    folders: seed.folders ?? [],
     columns: seed.columns ?? [],
     rows: seed.rows ?? [],
     cells: seed.cells ?? [],

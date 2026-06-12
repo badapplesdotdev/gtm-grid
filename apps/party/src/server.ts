@@ -92,7 +92,10 @@ export default class GridServer implements Party.Server {
     if (parsed.kind !== "presence" || typeof parsed.state !== "object") return;
     const prev = sender.state;
     if (prev) {
-      sender.setState({ ...prev, presence: parsed.state as GridPresenceState });
+      // Stamp the authoritative userId from the verified token — never trust the
+      // client-sent userId, so a member can't spoof another's presence/cursor.
+      const state = { ...(parsed.state as GridPresenceState), userId: prev.userId };
+      sender.setState({ ...prev, presence: state });
     }
     this.broadcastPresence();
   }
@@ -125,12 +128,18 @@ export default class GridServer implements Party.Server {
     return new Response("ok", { status: 200 });
   }
 
-  /** Broadcast the current presence roster (the non-empty states) to everyone. */
+  /**
+   * Broadcast the current presence roster to everyone. Includes EVERY authorized
+   * connection (not just those that published a cursor) so joined-but-idle members
+   * still appear in the avatar stack; the published cursor/editing state (if any)
+   * is merged with the connection's authoritative identity + id.
+   */
   private broadcastPresence(): void {
     const states: GridPresenceState[] = [];
     for (const conn of this.room.getConnections<ConnState>()) {
-      const presence = conn.state?.presence;
-      if (presence) states.push(presence);
+      const s = conn.state;
+      if (!s) continue;
+      states.push({ ...(s.presence ?? {}), userId: s.userId, connectionId: conn.id });
     }
     this.room.broadcast(JSON.stringify({ kind: "presence", states }));
   }

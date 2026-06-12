@@ -108,12 +108,28 @@ describe("workerClient", () => {
     ).rejects.toThrow(/WEBHOOK_WORKER_SECRET is not configured/);
   });
 
-  it("throws when SITE_URL is unset", async () => {
+  it("throws when SITE_URL is unset and no Vercel fallback exists", async () => {
     process.env.SITE_URL = "";
+    delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
+    delete process.env.VERCEL_URL;
     vi.stubGlobal("fetch", fetchReturning(200, "{}"));
     await expect(
       workerClient.query(WORKER_REFS.getTable, { tableId: "t" }),
     ).rejects.toThrow(/SITE_URL is not configured/);
+  });
+
+  it("falls back to the Vercel deployment URL when SITE_URL is unset", async () => {
+    process.env.SITE_URL = "";
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "app.gtmgrid.io";
+    try {
+      const fetchMock = fetchReturning(200, "{}");
+      vi.stubGlobal("fetch", fetchMock);
+      await workerClient.query(WORKER_REFS.getTable, { tableId: "t" });
+      const [url] = fetchMock.mock.calls[0];
+      expect(url).toBe("https://app.gtmgrid.io/api/worker/getTable");
+    } finally {
+      delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
+    }
   });
 });
 

@@ -76,6 +76,7 @@ import {
   makeGridStore,
   type StoreCell,
   type StoreColumn,
+  type StoreFolder,
   type StoreProject,
   type StoreRow,
   type StoreTable,
@@ -95,6 +96,11 @@ import {
   TableRepoLive,
   tableRepoLayer,
 } from "./repositories/table-repo.js";
+import {
+  FolderRepo,
+  FolderRepoLive,
+  folderRepoLayer,
+} from "./repositories/folder-repo.js";
 import {
   type WebhookDelivery,
   WebhookDeliveryRepo,
@@ -204,6 +210,7 @@ export const appLayer = (params: {
   const extensionRepo = ExtensionRepoLive.pipe(Layer.provide(dbLayer));
   const projectRepo = ProjectRepoLive.pipe(Layer.provide(dbLayer));
   const tableRepo = TableRepoLive.pipe(Layer.provide(dbLayer));
+  const folderRepo = FolderRepoLive.pipe(Layer.provide(dbLayer));
   const columnRepo = ColumnRepoLive.pipe(Layer.provide(dbLayer));
   const rowRepo = RowRepoLive.pipe(Layer.provide(dbLayer));
   const cellRepo = CellRepoLive.pipe(Layer.provide(dbLayer));
@@ -270,6 +277,8 @@ export const appLayer = (params: {
     Layer.provide(CellMerge.Default),
     Layer.provide(credentialCryptoLive),
     Layer.provide(entitlementService),
+    Layer.provide(columnRepo),
+    Layer.provide(realtimePublisher),
   );
   const extensionService = ExtensionService.Default.pipe(
     Layer.provide(extensionRepo),
@@ -287,6 +296,7 @@ export const appLayer = (params: {
   const gridService = GridService.Default.pipe(
     Layer.provide(projectRepo),
     Layer.provide(tableRepo),
+    Layer.provide(folderRepo),
     Layer.provide(columnRepo),
     Layer.provide(rowRepo),
     Layer.provide(cellRepo),
@@ -317,6 +327,7 @@ export const appLayer = (params: {
     extensionRepo,
     projectRepo,
     tableRepo,
+    folderRepo,
     columnRepo,
     rowRepo,
     cellRepo,
@@ -359,6 +370,7 @@ export interface TestLayerFixtures {
     readonly id: string;
     readonly name?: string | null;
     readonly email?: string | null;
+    readonly image?: string | null;
   }[];
   /**
    * Configures the fake Autumn port (@gtmgrid/cloud `fakeAutumnLayer`) backing
@@ -415,6 +427,8 @@ export interface TestLayerFixtures {
   readonly gridProjects?: StoreProject[];
   /** Tables visible to {@link TableRepo} (MUTATED by create/deleteTable). */
   readonly gridTables?: StoreTable[];
+  /** Sidebar folders visible to {@link FolderRepo} (MUTATED by folder CRUD). */
+  readonly gridFolders?: StoreFolder[];
   /** Columns visible to {@link ColumnRepo} (MUTATED by addColumn/delete). */
   readonly gridColumns?: StoreColumn[];
   /** Rows visible to {@link RowRepo} (MUTATED by addRow(s)/delete). */
@@ -451,6 +465,7 @@ const membershipsToMemberRows = (
     createdAt: i,
     name: null,
     email: null,
+    image: null,
   }));
 
 /**
@@ -472,6 +487,7 @@ export const TestLayer = (
       id: u.id,
       name: u.name ?? null,
       email: u.email ?? null,
+      image: u.image ?? null,
     })),
   );
   const webhookRepo = webhookRepoLayer({
@@ -493,12 +509,14 @@ export const TestLayer = (
   const gridStore: GridStore = makeGridStore({
     projects: fixtures.gridProjects,
     tables: fixtures.gridTables,
+    folders: fixtures.gridFolders,
     columns: fixtures.gridColumns,
     rows: fixtures.gridRows,
     cells: fixtures.gridCells,
   });
   const projectRepo = projectRepoLayer(gridStore);
   const tableRepo = tableRepoLayer(gridStore);
+  const folderRepo = folderRepoLayer(gridStore);
   const columnRepo = columnRepoLayer(gridStore);
   const rowRepo = rowRepoLayer(gridStore);
   const cellRepo = cellRepoLayer(gridStore);
@@ -582,6 +600,8 @@ export const TestLayer = (
     Layer.provide(CellMerge.Default),
     Layer.provide(fixtures.crypto ?? credentialCryptoTest()),
     Layer.provide(entitlementService),
+    Layer.provide(columnRepo),
+    Layer.provide(realtimePublisher),
   );
   const extensionService = ExtensionService.Default.pipe(
     Layer.provide(extensionRepo),
@@ -599,6 +619,7 @@ export const TestLayer = (
   const gridService = GridService.Default.pipe(
     Layer.provide(projectRepo),
     Layer.provide(tableRepo),
+    Layer.provide(folderRepo),
     Layer.provide(columnRepo),
     Layer.provide(rowRepo),
     Layer.provide(cellRepo),
@@ -628,6 +649,7 @@ export const TestLayer = (
     extensionRepo,
     projectRepo,
     tableRepo,
+    folderRepo,
     columnRepo,
     rowRepo,
     cellRepo,
@@ -665,6 +687,7 @@ export type AppServices =
   | EntitlementService
   | ProjectRepo
   | TableRepo
+  | FolderRepo
   | ColumnRepo
   | RowRepo
   | CellRepo
