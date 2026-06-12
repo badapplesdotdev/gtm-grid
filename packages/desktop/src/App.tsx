@@ -524,12 +524,12 @@ function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCel
 
   if (!cell || cell.status === "empty" || cell.status === "pending") {
     // A row gated off by the column's run condition carries a note on an empty
-    // cell — render the Clay-style neutral "Skipped" pill (full note on hover).
+    // cell — render the note itself ("Run condition not met") as a neutral pill.
     if (cell?.status === "empty" && cell.error) {
       return (
         <div className="cell-wrap" title={cell.error}>
           {runBtn}
-          <span className="cell-skipped">⊘ Skipped</span>
+          <span className="cell-skipped">⊘ {cell.error}</span>
         </div>
       );
     }
@@ -2891,21 +2891,6 @@ export default function App() {
 
   // ── Column added (from Add-column / Functions) ──
   // A newly added mapped/formula column whose inputs already have values should
-  // populate immediately — it's free. A new billed enrichment auto-runs only when
-  // Auto-run is on; otherwise it waits for the user to hit play. Manual columns
-  // (and any non-eligible column) just refresh the grid.
-  const onColumnAdded = async (tableId: string, newColId?: string) => {
-    await loadTable(tableId);
-    if (!newColId) return;
-    const col = (await api.table(tableId).catch(() => null))?.columns.find((c) => c.id === newColId);
-    if (!col || !cascadeEligible(col)) return;
-    setRunningColId(newColId);
-    try {
-      await api.runColumnStream(newColId, (e) => patchCell(tableId, e));
-      await cascadeDependents(tableId, [newColId]);
-    } catch { /* ignore */ }
-    setRunningColId(null);
-  };
 
   // ── Add row ────────────────────────────────
 
@@ -3053,6 +3038,38 @@ export default function App() {
   // "provider.method" → presentation metadata (logo, labels, credits) for the
   // grid headers; rebuilt only when the connector catalog changes.
   const fnColumnMeta = useMemo(() => buildColumnMetaMap(connectors), [connectors]);
+
+  // model id → AI provider identity (Anthropic, OpenAI, Hermes, OpenRouter…),
+  // so an ai.generate column wears the logo of the model it actually calls.
+  const aiModelMeta = useMemo(() => {
+    const m = new Map<string, { providerName: string; logo: string | null }>();
+    for (const p of aiProviders) {
+      for (const model of p.models) if (!m.has(model)) m.set(model, { providerName: p.name, logo: p.logo });
+    }
+    return m;
+  }, [aiProviders]);
+
+  const columnMeta = useCallback(
+    (col: Column) => {
+      const base = col.fn ? fnColumnMeta.get(col.fn) ?? null : null;
+      if (col.provider === "ai") {
+        const model = typeof col.params?.model === "string" ? col.params.model : "";
+        const mp = model ? aiModelMeta.get(model) : undefined;
+        if (mp) {
+          return {
+            providerName: mp.providerName,
+            logo: mp.logo,
+            methodLabel: model,
+            category: "AI",
+            credits: base?.credits,
+            requiredInputs: base?.requiredInputs,
+          };
+        }
+      }
+      return base;
+    },
+    [fnColumnMeta, aiModelMeta],
+  );
 
   // ── Cloud sign-in welcome (dismissable to local) ─────────────
   // When cloud is configured, first launch shows the sign-in/onboarding screen —
@@ -3716,7 +3733,7 @@ export default function App() {
                     {tableData.dedupe && <span className="dedupe-on-dot" title="Auto-dedupe is on" />}
                   </button>
                 ),
-                columnMeta: (col) => (col.fn ? fnColumnMeta.get(col.fn) ?? null : null),
+                columnMeta,
                 addRow,
                 runAll,
                 runRows,
@@ -3902,9 +3919,18 @@ export default function App() {
           <FunctionsModal
             tableId={tableData.id}
             connectors={connectors}
-            columns={tableData.columns.map((c) => c.name)}
             onClose={() => setShowFunctions(false)}
-            onAdded={(newColId) => onColumnAdded(tableData.id, newColId)}
+            onAdded={(col) => {
+              void loadTable(tableData.id);
+              // Clay flow: the column was just added — configure it in the rail.
+              // (Columns are created with EMPTY params here, so the auto-run-
+              // free-column behaviour doesn't apply — the run happens via the
+              // panel's Save & run once inputs are mapped.)
+              if (col) {
+                setDetail(null);
+                setEditCol(col);
+              }
+            }}
             onOpenAiSettings={() => {
               setShowFunctions(false);
               const target = aiProviders[0]?.id ?? "anthropic";

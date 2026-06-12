@@ -14,7 +14,7 @@
 // environments via the injected ColumnAuthoringApi (local sidecar or cloud).
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, type Column, type ConnectorInfo, type ExtensionInfo } from "./api";
+import { api, type AiProviderInfo, type Column, type ConnectorInfo, type ExtensionInfo } from "./api";
 import {
   useColumnApi,
   SlashTextarea,
@@ -300,7 +300,7 @@ export function ColumnEditPanel({
     }
     return out;
   });
-  const [models, setModels] = useState<string[]>([]);
+  const [aiProviderList, setAiProviderList] = useState<AiProviderInfo[]>([]);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
@@ -317,8 +317,12 @@ export function ColumnEditPanel({
 
   useEffect(() => {
     if (!isAi) return;
-    gridApi.aiProviders().then((ps) => setModels(ps.filter((x) => x.connected).flatMap((x) => x.models))).catch(() => {});
+    gridApi.aiProviders().then(setAiProviderList).catch(() => {});
   }, [isAi, gridApi]);
+  const models = aiProviderList.filter((p) => p.connected).flatMap((p) => p.models);
+  // The AI provider whose catalog contains the column's CURRENT model — its
+  // identity (Anthropic, OpenAI, Hermes, OpenRouter…) brands the column.
+  const aiModelProvider = isAi && model ? aiProviderList.find((p) => p.models.includes(model)) ?? null : null;
 
   // A column should never reference itself in an expression/condition/mapping.
   const otherColumns = columns.filter((c) => c.id !== column.id);
@@ -395,9 +399,16 @@ export function ColumnEditPanel({
       {/* ── Identity: what this column executes ── */}
       <header className="cep-head">
         <span className="cep-head-icon">
-          {isAi || isFormula || isCode ? (
+          {isAi ? (
+            // AI columns wear the MODEL's provider identity (Anthropic, OpenAI,
+            // Hermes, OpenRouter…); brain glyph until a model is picked.
+            <FnIcon
+              fn={{ logo: aiModelProvider?.logo ?? null, providerName: aiModelProvider?.name ?? "AI", category: "AI" }}
+              size={26}
+            />
+          ) : isFormula || isCode ? (
             <span className="fn-cat-icon" style={{ width: 26, height: 26 }}>
-              {CATEGORY_ICON[isAi ? "AI" : isFormula ? "Formula" : "Code"]}
+              {CATEGORY_ICON[isFormula ? "Formula" : "Code"]}
             </span>
           ) : (
             <FnIcon fn={{ logo: identity.logo, providerName: identity.providerName, category: identity.category }} size={26} />
@@ -405,7 +416,11 @@ export function ColumnEditPanel({
         </span>
         <div className="cep-head-text">
           <div className="cep-head-title">
-            {isFunction ? `${identity.providerName} · ${identity.methodLabel}` : "Edit column"}
+            {isAi
+              ? `${aiModelProvider?.name ?? "AI"} · ${model || "Generate"}`
+              : isFunction
+                ? `${identity.providerName} · ${identity.methodLabel}`
+                : "Edit column"}
           </div>
           <div className="cep-head-sub">
             {methodInfo?.description ?? (isAi ? "Generate text using any connected LLM" : isFormula ? "Compute a value per row with JavaScript" : isHttp ? "Call any API endpoint" : isCode ? "Custom code — runs the function below per row" : "Manual column")}

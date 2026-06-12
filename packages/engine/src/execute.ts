@@ -21,8 +21,8 @@ import {
 import type { AiConfig, Column, ConnectorMethod } from "./types.js";
 
 /** Stored on a cell's `error` (with status "empty") when a run condition gates the
- *  row off, so the grid can show a muted "Condition not met" note instead of a dash. */
-export const CONDITION_SKIP_NOTE = "Condition not met";
+ *  row off, so the grid can show a muted "Run condition not met" note instead of a dash. */
+export const CONDITION_SKIP_NOTE = "Run condition not met";
 
 export interface EngineConfig {
   ai?: AiConfig;
@@ -38,12 +38,14 @@ export interface EngineConfig {
   guardSsrf?: boolean;
 }
 
-/** A cell's state as observed during a run, for per-cell progress streaming. */
+/** A cell's state as observed during a run, for per-cell progress streaming.
+ *  Status "empty" streams a condition-gated skip (error = CONDITION_SKIP_NOTE)
+ *  so live grids show WHY a cell stayed blank instead of doing nothing. */
 export interface CellProgress {
   readonly rowId: string;
   readonly columnId: string;
   readonly value: unknown;
-  readonly status: "running" | "done" | "error";
+  readonly status: "running" | "done" | "error" | "empty";
   readonly error: string | null;
 }
 
@@ -390,14 +392,15 @@ export class Engine {
             if (!pass) {
               // Mark the cell so the user can SEE why it's blank — gated off by the run
               // condition. We reuse the `error` text with status "empty" (not "error"), so
-              // the grid shows a muted "Condition not met" note instead of a bare dash.
-              // Skip the write when it already shows that note. (No progress event —
-              // CellProgress streams running/done/error transitions only.)
+              // the grid shows a muted "Run condition not met" note instead of a bare dash.
+              // Skip the write when it already shows that note, but ALWAYS stream the
+              // progress event so a live grid updates immediately instead of doing nothing.
               if (existing?.status !== "empty" || existing?.error !== CONDITION_SKIP_NOTE) {
                 await Effect.runPromise(
                   this.store.setCell(rowId, columnId, { value: null, status: "empty", error: CONDITION_SKIP_NOTE }),
                 );
               }
+              emit({ rowId, columnId, value: null, status: "empty", error: CONDITION_SKIP_NOTE });
               return;
             }
           } catch (e) {

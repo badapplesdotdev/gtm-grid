@@ -3,7 +3,7 @@
 // column detail) for function columns.
 
 import { useState, useMemo, useEffect, useRef, createContext, useContext, ReactNode, CSSProperties } from "react";
-import { api, ConnectorInfo, AiProviderInfo } from "./api";
+import { api, ConnectorInfo, type Column } from "./api";
 
 /**
  * The subset of the data API the column-authoring modals need. Injected so the
@@ -47,9 +47,6 @@ const Chevron = (
 );
 const SearchIcon = (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
-);
-const Check = (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
 );
 const FnGlyph = (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>
@@ -230,18 +227,51 @@ const NAV_CLUSTERS: string[][] = [
 export function FunctionsModal({
   tableId,
   connectors,
-  columns,
   onClose,
   onAdded,
   onOpenAiSettings,
 }: {
   tableId: string;
   connectors: ConnectorInfo[];
-  columns: string[];
   onClose: () => void;
-  onAdded: (columnId?: string) => void;
+  /** Fired after the column is created. Carries the new column (desktop shape)
+   *  so the parent can open the edit panel on it — the Clay flow: picking a
+   *  function ADDS the column immediately, configuration happens in the rail. */
+  onAdded: (col?: Column) => void;
   onOpenAiSettings?: () => void;
 }) {
+  const gridApi = useColumnApi();
+  const [adding, setAdding] = useState(false);
+  const [addErr, setAddErr] = useState("");
+
+  // Add the chosen function as a column with default config, then hand the new
+  // column to the parent so the ColumnEditPanel opens for mapping/settings.
+  const useFn = async (f: Fn) => {
+    if (adding) return;
+    setAdding(true);
+    setAddErr("");
+    try {
+      const name = f.label;
+      const type = f.provider === "http" ? "json" : "text";
+      const res = await gridApi.addColumn(tableId, { name, type, fn: f.fnKey, params: {} });
+      onAdded({
+        id: res.id,
+        name,
+        type,
+        kind: "function",
+        provider: f.provider,
+        method: f.fnKey.split(".")[1] ?? null,
+        fn: f.fnKey,
+        code: null,
+        params: {},
+        condition: null,
+      });
+      onClose();
+    } catch (e) {
+      setAddErr((e as Error)?.message ?? "Failed to add column");
+      setAdding(false);
+    }
+  };
   const fns: Fn[] = useMemo(
     () =>
       connectors.flatMap((c) =>
@@ -360,29 +390,22 @@ export function FunctionsModal({
             )}
           </div>
 
-          {/* right detail */}
+          {/* right detail — read-only info; "Add to table" creates the column
+              immediately and configuration continues in the edit panel */}
           <div className="fnx-detail">
             {selected ? (
-              selected.provider === "ai" ? (
-                <AiGenerateDetail
-                  key={selected.fnKey}
-                  fn={selected}
-                  tableId={tableId}
-                  columns={columns}
-                  onAdded={(id) => { onAdded(id); onClose(); }}
-                  onOpenAiSettings={onOpenAiSettings}
-                />
-              ) : selected.provider === "formula" ? (
-                <FormulaDetail key={selected.fnKey} tableId={tableId} columns={columns} onAdded={(id) => { onAdded(id); onClose(); }} />
-              ) : selected.provider === "http" ? (
-                <HttpRequestDetail key={selected.fnKey} fn={selected} tableId={tableId} columns={columns} onAdded={(id) => { onAdded(id); onClose(); }} />
-              ) : (
-                <FunctionDetail key={selected.fnKey} fn={selected} tableId={tableId} columns={columns} onAdded={(id) => { onAdded(id); onClose(); }} />
-              )
+              <FunctionDetail
+                key={selected.fnKey}
+                fn={selected}
+                busy={adding}
+                err={addErr}
+                onUse={() => void useFn(selected)}
+                onOpenAiSettings={onOpenAiSettings}
+              />
             ) : (
               <div className="fnx-detail-empty">
                 <div className="fnx-detail-empty-title">Select a function</div>
-                <div className="fnx-detail-empty-sub">Choose from the list to see its parameters and configure it as a column</div>
+                <div className="fnx-detail-empty-sub">Choose from the list to see its inputs, then add it as a column and map it in the editor</div>
               </div>
             )}
           </div>
@@ -394,46 +417,25 @@ export function FunctionsModal({
   );
 }
 
+/** Read-only function preview (inputs / output / source). The Clay flow: there
+ *  is no inline configure step — "Add to table" creates the column with default
+ *  config and the parent opens the ColumnEditPanel for mapping + run settings. */
 function FunctionDetail({
   fn,
-  tableId,
-  columns,
-  onAdded,
+  busy,
+  err,
+  onUse,
+  onOpenAiSettings,
 }: {
   fn: Fn;
-  tableId: string;
-  columns: string[];
-  onAdded: (columnId?: string) => void;
+  busy: boolean;
+  err: string;
+  onUse: () => void;
+  onOpenAiSettings?: () => void;
 }) {
-  const gridApi = useColumnApi();
   const props = (fn.input?.properties ?? {}) as Record<string, { description?: string; type?: string }>;
   const required = new Set((fn.input?.required as string[] | undefined) ?? []);
   const paramKeys = Object.keys(props);
-
-  const [tab, setTab] = useState<"details" | "configure">("details");
-  const [colName, setColName] = useState(fn.label);
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [condition, setCondition] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState("");
-
-  const setVal = (k: string, v: string) => setValues((p) => ({ ...p, [k]: v }));
-
-  const add = async () => {
-    if (!colName.trim()) { setErr("Column name is required"); return; }
-    setSaving(true);
-    setErr("");
-    try {
-      const params: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(values)) if (v.trim()) params[k] = v.trim();
-      const { id } = await gridApi.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, params, condition: condition.trim() || null });
-      onAdded(id);
-    } catch (e: any) {
-      setErr(e?.message ?? "Failed to add column");
-      setSaving(false);
-    }
-  };
-
   const inputCount = paramKeys.length;
 
   return (
@@ -450,316 +452,53 @@ function FunctionDetail({
       </div>
       {fn.description && <p className="fnx-cfg-desc">{fn.description}</p>}
 
-      <div className="fnx-tabs">
-        <button className={`fnx-tab${tab === "details" ? " active" : ""}`} onClick={() => setTab("details")}>Details</button>
-        <button className={`fnx-tab${tab === "configure" ? " active" : ""}`} onClick={() => setTab("configure")}>Configure</button>
-      </div>
-
-      {tab === "details" ? (
-        <div className="fnx-tabpane">
-          <div className="fnx-cfg-section">Input</div>
-          {inputCount === 0 ? (
-            <div className="fnx-io-box"><span className="fnx-io-muted">No inputs</span></div>
-          ) : (
-            <div className="fnx-io-box">
-              {paramKeys.map((k) => (
-                <div key={k} className="fnx-io-row">
-                  <div className="fnx-io-top">
-                    <span className="fnx-io-name">{k}</span>
-                    {required.has(k) && <span className="fnx-io-req">required</span>}
-                    <span className="fnx-io-type">{props[k]?.type ?? "text"}</span>
-                  </div>
-                  {props[k]?.description && <div className="fnx-io-desc">{props[k].description}</div>}
+      <div className="fnx-tabpane">
+        <div className="fnx-cfg-section">Input</div>
+        {inputCount === 0 ? (
+          <div className="fnx-io-box"><span className="fnx-io-muted">No inputs</span></div>
+        ) : (
+          <div className="fnx-io-box">
+            {paramKeys.map((k) => (
+              <div key={k} className="fnx-io-row">
+                <div className="fnx-io-top">
+                  <span className="fnx-io-name">{k}</span>
+                  {required.has(k) && <span className="fnx-io-req">required</span>}
+                  <span className="fnx-io-type">{props[k]?.type ?? "text"}</span>
                 </div>
-              ))}
-            </div>
-          )}
-
-          <div className="fnx-cfg-section">Output</div>
-          <div className="fnx-io-box fnx-io-inline">
-            <span className="fnx-io-name">Returns</span>
-            <span className="fnx-io-type">{fn.output}</span>
-            <span className="fnx-io-batch">batch size {fn.batchSize}</span>
-          </div>
-
-          {fn.source && (
-            <>
-              <div className="fnx-cfg-section">Source code</div>
-              <pre className="fnx-source"><code>{fn.source}</code></pre>
-            </>
-          )}
-        </div>
-      ) : (
-        <div className="fnx-tabpane">
-          <label className="form-label">Column name</label>
-          <input className="form-input" value={colName} onChange={(e) => setColName(e.target.value)} placeholder="Column name" />
-
-          {inputCount > 0 && (
-            <>
-              <div className="fnx-cfg-section">Inputs</div>
-              {paramKeys.map((k) => (
-                <div key={k} className="fnx-param">
-                  <label className="fnx-param-label">
-                    {k}{required.has(k) && <span className="fnx-param-req">*</span>}
-                  </label>
-                  <input
-                    className="form-input"
-                    list="fnx-columns"
-                    placeholder={props[k]?.description ? props[k].description : `value or {{Column}}`}
-                    value={values[k] ?? ""}
-                    onChange={(e) => setVal(k, e.target.value)}
-                  />
-                </div>
-              ))}
-              <datalist id="fnx-columns">
-                {columns.map((c) => <option key={c} value={`{{${c}}}`} />)}
-              </datalist>
-              <p className="params-hint">Map each input to a value, or reference a column with <code>{"{{Column name}}"}</code>.</p>
-            </>
-          )}
-          <RunSettings condition={condition} setCondition={setCondition} columns={columns} />
-          {err && <div className="conn-err">{err}</div>}
-        </div>
-      )}
-
-      <button
-        className="btn btn-primary fnx-cfg-add"
-        onClick={() => (tab === "details" ? setTab("configure") : add())}
-        disabled={saving}
-      >
-        {tab === "details" ? "Use this function" : saving ? "Adding…" : "Add column"}
-      </button>
-    </div>
-  );
-}
-
-// ─── AI Generate (dedicated rich form) ───────────────────
-// Column name + model picker (from connected providers) + optional system
-// prompt + a prompt box with "/" column-chip insertion + advanced (max tokens).
-
-const BrainIcon = (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z" />
-    <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z" />
-  </svg>
-);
-
-function AiGenerateDetail({
-  fn,
-  tableId,
-  columns,
-  onAdded,
-  onOpenAiSettings,
-}: {
-  fn: Fn;
-  tableId: string;
-  columns: string[];
-  onAdded: (columnId?: string) => void;
-  onOpenAiSettings?: () => void;
-}) {
-  const gridApi = useColumnApi();
-  const [providers, setProviders] = useState<AiProviderInfo[] | null>(null);
-  const [colName, setColName] = useState("AI Generated");
-  const [model, setModel] = useState("");
-  const [system, setSystem] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [maxTokens, setMaxTokens] = useState("512");
-  const [advOpen, setAdvOpen] = useState(false);
-  const [condition, setCondition] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState("");
-
-  const promptRef = useRef<HTMLTextAreaElement>(null);
-  // "/" column-insertion menu: index of the slash + the typed query after it.
-  const [slash, setSlash] = useState<{ index: number; query: string } | null>(null);
-
-  // Custom in-app model dropdown (replaces the native <select> popup).
-  const [modelOpen, setModelOpen] = useState(false);
-  const modelRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!modelOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (modelRef.current && !modelRef.current.contains(e.target as Node)) setModelOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [modelOpen]);
-
-  useEffect(() => {
-    gridApi.aiProviders().then(setProviders).catch(() => setProviders([]));
-  }, [gridApi]);
-
-  const connected = (providers ?? []).filter((p) => p.connected);
-  const modelOptions = connected.flatMap((p) => p.models.map((m) => ({ provider: p.name, value: m })));
-  // Default the model to the first available option once providers load.
-  useEffect(() => {
-    if (!model && modelOptions.length) setModel(modelOptions[0].value);
-  }, [providers]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const hasProvider = connected.length > 0;
-
-  function onPromptChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    const v = e.target.value;
-    setPrompt(v);
-    const caret = e.target.selectionStart ?? v.length;
-    const m = v.slice(0, caret).match(/\/([\w .-]*)$/);
-    setSlash(m ? { index: caret - m[0].length, query: m[1] } : null);
-  }
-
-  function insertColumn(col: string) {
-    if (!slash) return;
-    const before = prompt.slice(0, slash.index);
-    const after = prompt.slice(slash.index + 1 + slash.query.length);
-    const token = `{{${col}}}`;
-    const next = before + token + after;
-    setPrompt(next);
-    setSlash(null);
-    requestAnimationFrame(() => {
-      const pos = (before + token).length;
-      promptRef.current?.focus();
-      promptRef.current?.setSelectionRange(pos, pos);
-    });
-  }
-
-  const slashMatches = slash
-    ? columns.filter((c) => c.toLowerCase().includes(slash.query.toLowerCase())).slice(0, 8)
-    : [];
-
-  const add = async () => {
-    if (!colName.trim()) { setErr("Column name is required"); return; }
-    if (!prompt.trim()) { setErr("Prompt is required"); return; }
-    if (!hasProvider) { setErr("Connect an AI provider first"); return; }
-    setSaving(true);
-    setErr("");
-    try {
-      const params: Record<string, unknown> = { prompt: prompt.trim() };
-      if (system.trim()) params.system = system.trim();
-      if (model) params.model = model;
-      const mt = parseInt(maxTokens, 10);
-      if (!Number.isNaN(mt) && mt > 0) params.maxTokens = mt;
-      const { id } = await gridApi.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, params, condition: condition.trim() || null });
-      onAdded(id);
-    } catch (e: any) {
-      setErr(e?.message ?? "Failed to add column");
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="fnx-cfg ai-cfg">
-      <div className="fnx-cfg-head">
-        <div className="fnx-cfg-icon ai-cfg-icon">{BrainIcon}</div>
-        <div>
-          <div className="fnx-cfg-title">AI Generate</div>
-          <div className="fnx-cfg-sub">Generate text using any connected LLM</div>
-        </div>
-      </div>
-
-      <label className="form-label">Column name</label>
-      <input className="form-input" value={colName} onChange={(e) => setColName(e.target.value)} placeholder="Column name" />
-
-      <label className="form-label">Model</label>
-      <div className="ai-select" ref={modelRef}>
-        <button
-          type="button"
-          className="form-input ai-select-btn"
-          onClick={() => hasProvider && setModelOpen((o) => !o)}
-          disabled={!hasProvider}
-        >
-          <span className={model ? "" : "ai-select-placeholder"}>{model || "Select model…"}</span>
-          <span className={`ai-select-caret${modelOpen ? " open" : ""}`}>{Chevron}</span>
-        </button>
-        {modelOpen && hasProvider && (
-          <div className="ai-select-menu">
-            {connected.map((p) => (
-              <div key={p.id} className="ai-select-group">
-                <div className="ai-select-group-label">{p.name}</div>
-                {p.models.map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    className={`ai-select-item${model === m ? " active" : ""}`}
-                    onClick={() => { setModel(m); setModelOpen(false); }}
-                  >
-                    <span className="ai-select-check">{model === m ? Check : null}</span>
-                    <span className="ai-select-item-label">{m}</span>
-                  </button>
-                ))}
+                {props[k]?.description && <div className="fnx-io-desc">{props[k].description}</div>}
               </div>
             ))}
           </div>
         )}
-      </div>
-      {!hasProvider && (
-        <div className="ai-no-provider">
-          No AI providers connected.{" "}
-          {onOpenAiSettings ? (
-            <button className="ai-link" onClick={onOpenAiSettings}>Configure providers in AI Providers settings.</button>
-          ) : (
-            <span>Configure providers in AI Providers settings.</span>
-          )}
+
+        <div className="fnx-cfg-section">Output</div>
+        <div className="fnx-io-box fnx-io-inline">
+          <span className="fnx-io-name">Returns</span>
+          <span className="fnx-io-type">{fn.output}</span>
+          <span className="fnx-io-batch">batch size {fn.batchSize}</span>
         </div>
-      )}
 
-      <label className="form-label">System prompt <span className="form-label-opt">(optional)</span></label>
-      <textarea
-        className="form-input ai-textarea"
-        rows={2}
-        placeholder="You are a helpful assistant…"
-        value={system}
-        onChange={(e) => setSystem(e.target.value)}
-      />
+        {fn.source && (
+          <>
+            <div className="fnx-cfg-section">Source code</div>
+            <pre className="fnx-source"><code>{fn.source}</code></pre>
+          </>
+        )}
 
-      <label className="form-label">Prompt</label>
-      <div className="ai-prompt-wrap">
-        <textarea
-          ref={promptRef}
-          className="form-input ai-textarea ai-prompt"
-          rows={5}
-          placeholder="Write a personalized message for /First Name who works at /Company…"
-          value={prompt}
-          onChange={onPromptChange}
-          onBlur={() => setTimeout(() => setSlash(null), 120)}
-        />
-        {slash && slashMatches.length > 0 && (
-          <div className="ai-slash-menu">
-            {slashMatches.map((c) => (
-              <button key={c} className="ai-slash-item" onMouseDown={(e) => { e.preventDefault(); insertColumn(c); }}>
-                <span className="ai-slash-chip">{c}</span>
-              </button>
-            ))}
-          </div>
+        {fn.provider === "ai" && onOpenAiSettings && (
+          <p className="params-hint">
+            Models come from your connected AI providers.{" "}
+            <button className="ai-link" onClick={onOpenAiSettings}>Manage providers</button>
+          </p>
         )}
       </div>
-      <p className="params-hint">Type <code>/</code> to insert a column value as a chip.</p>
-
-      <button className="ai-adv-toggle" onClick={() => setAdvOpen((o) => !o)}>
-        <span className={`ai-adv-caret${advOpen ? " open" : ""}`}>{Chevron}</span> Advanced
-      </button>
-      {advOpen && (
-        <div className="ai-adv">
-          <label className="form-label">Max tokens</label>
-          <input
-            className="form-input"
-            type="number"
-            min={1}
-            value={maxTokens}
-            onChange={(e) => setMaxTokens(e.target.value)}
-            placeholder="512"
-          />
-        </div>
-      )}
-
-      <RunSettings condition={condition} setCondition={setCondition} columns={columns} />
 
       {err && <div className="conn-err">{err}</div>}
 
-      <div className="ai-cfg-foot">
-        {!hasProvider && <span className="ai-cfg-foot-note">Connect an AI provider to continue</span>}
-        <button className="btn btn-primary fnx-cfg-add" onClick={add} disabled={saving || !hasProvider}>
-          {saving ? "Adding…" : "Add column"}
-        </button>
-      </div>
+      <button className="btn btn-primary fnx-cfg-add" onClick={onUse} disabled={busy}>
+        {busy ? "Adding…" : "Add to table"}
+      </button>
+      <p className="params-hint fnx-cfg-addhint">Adds the column right away — map inputs and run settings in the editor that opens.</p>
     </div>
   );
 }
@@ -769,7 +508,6 @@ function AiGenerateDetail({
 const SparkleIcon = (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8" /></svg>
 );
-const FxGlyph = <span style={{ fontFamily: "var(--font-mono)", fontStyle: "italic", fontWeight: 700 }}>fx</span>;
 
 /** A textarea with the shared "/" column-insertion menu (mirrors AiGenerateDetail).
  *  Pass `footer` to render an in-box footer bar (a hint + e.g. a Generate button),
@@ -998,90 +736,6 @@ export const FX_TYPES: Array<[string, string]> = [
   ["date", "Date"],
   ["json", "JSON"],
 ];
-
-// ─── Formula (dedicated rich form) ───────────────────────
-// Column name + a monospace expression editor (with "/" column chips and AI
-// generation) + an output-type picker + optional "only run if" run settings.
-
-function FormulaDetail({
-  tableId, columns, onAdded,
-}: {
-  tableId: string;
-  columns: string[];
-  onAdded: (columnId?: string) => void;
-}) {
-  const gridApi = useColumnApi();
-  const [colName, setColName] = useState("Formula");
-  const [expression, setExpression] = useState("");
-  const [type, setType] = useState("text");
-  const [condition, setCondition] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState("");
-
-  const add = async () => {
-    if (!colName.trim()) { setErr("Column name is required"); return; }
-    if (!expression.trim()) { setErr("A formula is required"); return; }
-    setSaving(true);
-    setErr("");
-    try {
-      const { id } = await gridApi.addColumn(tableId, {
-        name: colName.trim(),
-        type,
-        fn: "formula.eval",
-        params: { expression: expression.trim() },
-        condition: condition.trim() || null,
-      });
-      onAdded(id);
-    } catch (e: any) {
-      setErr(e?.message ?? "Failed to add column");
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="fnx-cfg ai-cfg">
-      <div className="fnx-cfg-head">
-        <div className="fnx-cfg-icon ai-cfg-icon">{FxGlyph}</div>
-        <div>
-          <div className="fnx-cfg-title">Formula</div>
-          <div className="fnx-cfg-sub">Compute a value per row with JavaScript</div>
-        </div>
-      </div>
-
-      <label className="form-label">Column name</label>
-      <input className="form-input" value={colName} onChange={(e) => setColName(e.target.value)} placeholder="Column name" />
-
-      <label className="form-label">Formula</label>
-      <FormulaInput value={expression} setValue={setExpression} columns={columns} mode="formula" placeholder={'{{Email}}.split("@")[1]'} />
-      <p className="params-hint">
-        Reference a column with <code>{"{{Column}}"}</code> or type <code>/</code>. Lodash <code>_</code>, <code>moment</code>, and Excel functions (<code>VLOOKUP</code>, <code>SUM</code>…) are available.
-      </p>
-
-      <label className="form-label">Output type</label>
-      <div className="fx-types">
-        {FX_TYPES.map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            className={`fx-type${type === id ? " active" : ""}`}
-            onClick={() => setType(id)}
-          >
-            <span className="fx-type-icon">{TYPE_ICONS[id]}</span>
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <RunSettings condition={condition} setCondition={setCondition} columns={columns} />
-
-      {err && <div className="conn-err">{err}</div>}
-
-      <button className="btn btn-primary fnx-cfg-add" onClick={add} disabled={saving}>
-        {saving ? "Adding…" : "Add column"}
-      </button>
-    </div>
-  );
-}
 
 // ─── HTTP request (dedicated rich form) ──────────────────
 // A full request builder — Method, Endpoint (with "/" column chips), Query and
@@ -1356,64 +1010,6 @@ export function TryRowsButton({
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-/** Add-column detail for the HTTP connector: name + the request form + run settings. */
-function HttpRequestDetail({
-  fn, tableId, columns, onAdded,
-}: {
-  fn: Fn;
-  tableId: string;
-  columns: string[];
-  onAdded: (columnId?: string) => void;
-}) {
-  const gridApi = useColumnApi();
-  const [colName, setColName] = useState("HTTP API");
-  const [params, setParams] = useState<Record<string, unknown>>({});
-  const [condition, setCondition] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState("");
-
-  const add = async () => {
-    if (!colName.trim()) { setErr("Column name is required"); return; }
-    if (!String(params.url ?? "").trim()) { setErr("Endpoint is required"); return; }
-    setSaving(true);
-    setErr("");
-    try {
-      const { id } = await gridApi.addColumn(tableId, { name: colName.trim(), fn: fn.fnKey, type: "json", params, condition: condition.trim() || null });
-      onAdded(id);
-    } catch (e) {
-      setErr((e as Error)?.message ?? "Failed to add column");
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="fnx-cfg">
-      <div className="fnx-cfg-head">
-        <div className="fnx-cfg-icon"><FnIcon fn={fn} size={26} /></div>
-        <div style={{ minWidth: 0 }}>
-          <div className="fnx-cfg-title">{fn.label}</div>
-          <div className="fnx-cfg-sub">Call any API endpoint · outputs json</div>
-        </div>
-      </div>
-
-      <label className="form-label">Column name</label>
-      <input className="form-input" value={colName} onChange={(e) => setColName(e.target.value)} placeholder="Column name" />
-
-      <HttpRequestForm columns={columns} onChange={setParams} />
-
-      <RunSettings condition={condition} setCondition={setCondition} columns={columns} />
-
-      <TryRowsButton tableId={tableId} provider={fn.provider} method={fn.fnKey.split(".")[1] ?? "request"} params={params} />
-
-      {err && <div className="conn-err">{err}</div>}
-
-      <button className="btn btn-primary fnx-cfg-add" onClick={add} disabled={saving}>
-        {saving ? "Adding…" : "Add column"}
-      </button>
     </div>
   );
 }

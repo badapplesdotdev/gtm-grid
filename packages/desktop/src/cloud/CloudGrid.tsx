@@ -29,7 +29,7 @@ import { Icon, ExpandedEditor } from "../App";
 import CellDetails, { extractCode } from "../CellDetails";
 import { setAgentPresenceTable } from "./agentPresence";
 import { api } from "../api";
-import type { ConnectorInfo, Column, FullTable } from "../api";
+import type { AiProviderInfo, ConnectorInfo, Column, FullTable } from "../api";
 import {
   AddColumnPopover,
   FunctionsModal,
@@ -231,6 +231,43 @@ export function CloudGrid({
   // "provider.method" → presentation metadata (logo, labels, credits) for the
   // grid headers; rebuilt only when the connector catalog changes.
   const fnColumnMeta = useMemo(() => buildColumnMetaMap(connectors), [connectors]);
+
+  // model id → AI provider identity, so ai.generate columns wear the logo of
+  // the model they call. The LOCAL sidecar's provider catalog is correct here
+  // too — it's the engine that executes cloud AI columns.
+  const [aiProviders, setAiProviders] = useState<AiProviderInfo[]>([]);
+  useEffect(() => {
+    api.aiProviders().then(setAiProviders).catch(() => {});
+  }, []);
+  const aiModelMeta = useMemo(() => {
+    const m = new Map<string, { providerName: string; logo: string | null }>();
+    for (const p of aiProviders) {
+      for (const model of p.models) if (!m.has(model)) m.set(model, { providerName: p.name, logo: p.logo });
+    }
+    return m;
+  }, [aiProviders]);
+
+  const columnMeta = useCallback(
+    (col: Column) => {
+      const base = col.fn ? fnColumnMeta.get(col.fn) ?? null : null;
+      if (col.provider === "ai") {
+        const model = typeof col.params?.model === "string" ? col.params.model : "";
+        const mp = model ? aiModelMeta.get(model) : undefined;
+        if (mp) {
+          return {
+            providerName: mp.providerName,
+            logo: mp.logo,
+            methodLabel: model,
+            category: "AI",
+            credits: base?.credits,
+            requiredInputs: base?.requiredInputs,
+          };
+        }
+      }
+      return base;
+    },
+    [fnColumnMeta, aiModelMeta],
+  );
   // Seed our identity (name/image) so cursor publishes carry it; re-seed when the
   // open table changes (a fresh subscription registers a new publisher).
   useEffect(() => {
@@ -443,7 +480,6 @@ export function CloudGrid({
 
   const table: FullTable = data;
   const fnColCount = table.columns.filter((c) => c.kind === "function").length;
-  const columnNames = table.columns.map((c) => c.name);
 
   // ── Promote a JSON field to a column (from the Cell details drawer) ──
   // Mirrors the local grid's promoteCreate/promoteMap: a FUNCTION column whose
@@ -532,7 +568,7 @@ export function CloudGrid({
         </button>
       </>
     ),
-    columnMeta: (col) => (col.fn ? fnColumnMeta.get(col.fn) ?? null : null),
+    columnMeta,
     addRow: () => void guard(() => addRow(tableId), "add row"),
     runAll: async () => {
       for (const col of table.columns.filter((c) => c.kind === "function")) {
@@ -650,9 +686,15 @@ export function CloudGrid({
         <FunctionsModal
           tableId={table.id}
           connectors={connectors}
-          columns={columnNames}
           onClose={() => setShowFunctions(false)}
-          onAdded={() => setShowFunctions(false)}
+          onAdded={(col) => {
+            setShowFunctions(false);
+            // Clay flow: the column was just added — configure it in the rail.
+            if (col) {
+              setDetail(null);
+              setEditCol(col);
+            }
+          }}
           onOpenAiSettings={onOpenAiSettings}
         />
       )}
