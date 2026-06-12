@@ -1,6 +1,6 @@
 {
   "name": "gtmgrid",
-  "version": "0.9.7",
+  "version": "0.9.8",
   "private": true,
   "type": "module",
   "description": "Local-first programmable GTM spreadsheet. Columns are functions.",
