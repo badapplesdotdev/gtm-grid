@@ -13,10 +13,12 @@
  * DECOUPLING: the engine package never imports a backend client. The cloud store
  * is fed an injected {@link CloudClientLike} whose "function refs" are just the
  * `/api/worker/*` route paths (see {@link CLOUD_REFS}); `query`/`mutation`/
- * `action` all POST the args as JSON to the matching route. The sidecar runs on
- * trusted localhost and authenticates to the worker endpoints with the shared
- * `WEBHOOK_WORKER_SECRET` bearer (the same `isAuthorizedWorker` boundary the
- * Inngest webhook worker uses).
+ * `action` all POST the args as JSON to the matching route. The sidecar
+ * authenticates to the worker endpoints as the SIGNED-IN MEMBER via the
+ * `X-Gtmgrid-Member` session token (the dual-auth `runWorkerSecretOrMember`
+ * boundary's member path) — never the server-only `WEBHOOK_WORKER_SECRET`, which
+ * a packaged desktop build does not have. The secret remains the boundary for the
+ * headless Inngest webhook worker only.
  */
 
 import { Effect } from "effect";
@@ -123,8 +125,9 @@ export interface CloudRunRequest {
 export interface CloudRunDeps {
   /**
    * Build a cloud-store client for an apps/web base URL + the member token. The
-   * default returns an HTTP client POSTing to `${apiUrl}/api/worker/*` with the
-   * shared worker secret; tests inject a fake.
+   * default returns an HTTP client POSTing to `${apiUrl}/api/worker/*`
+   * authenticated as the signed-in member (`X-Gtmgrid-Member`); tests inject a
+   * fake.
    */
   readonly makeClient: (apiUrl: string, token: string) => CloudClientLike;
   /** The connector/AI registry the engine runs functions against. */
@@ -133,21 +136,18 @@ export interface CloudRunDeps {
   readonly config: EngineConfig;
 }
 
-/** Resolve the shared worker bearer secret, failing closed when unset. */
-function workerSecret(): string {
-  const secret = process.env.WEBHOOK_WORKER_SECRET;
-  if (secret === undefined || secret === "") {
-    throw new Error("WEBHOOK_WORKER_SECRET is not configured");
-  }
-  return secret;
-}
-
 /**
  * Build the HTTP {@link CloudClientLike} the cloud store injects: every ref is an
  * `/api/worker/*` route path, and query/mutation/action POST the args as JSON to
- * `${apiUrl}<route>` with the worker bearer. A non-2xx response throws so the
- * engine maps it to a typed `GridStoreError`. The member `token` is forwarded so
- * the worker routes can attribute the run to the signed-in member.
+ * `${apiUrl}<route>`. A non-2xx response throws so the engine maps it to a typed
+ * `GridStoreError`.
+ *
+ * AUTH: the run authenticates as the SIGNED-IN MEMBER via the `X-Gtmgrid-Member`
+ * session token — NOT the shared `WEBHOOK_WORKER_SECRET`. The worker secret is a
+ * server-only secret the desktop never has (and must not ship), so the dual-auth
+ * worker routes (`runWorkerSecretOrMember`) take their member path and enforce
+ * workspace membership server-side. This is why a packaged prod build can run
+ * cloud columns at all — it has no secret to present.
  */
 export function makeWorkerClient(
   apiUrl: string,
@@ -171,7 +171,6 @@ export function makeWorkerClient(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${workerSecret()}`,
         "X-Gtmgrid-Member": token,
       },
       body: JSON.stringify(args),

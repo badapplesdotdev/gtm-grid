@@ -46,6 +46,17 @@ import {
   WebhookRepo,
   type WebhookRepoError,
 } from "../repositories/webhook-repo.js";
+import { ColumnRepo } from "../repositories/column-repo.js";
+import type { GridChangeEvent, GridEventCell } from "../realtime/events.js";
+import { RealtimePublisher } from "./realtime-publisher.js";
+
+/** Name of the Clay-style raw-payload column every webhook lands records in. */
+export const WEBHOOK_COLUMN_NAME = "Webhook";
+
+/** The mapping path that means "the whole request body" — the receiver writes
+ *  `{ receivedAt, payload }` into the mapped column for this entry, so every
+ *  record is visible in the grid even before any field mapping exists. */
+export const WEBHOOK_PAYLOAD_PATH = "$";
 
 /** Max delivery-log rows retained PER WEBHOOK (convex/webhooks.ts:676). */
 export const DELIVERY_RETENTION = 50;
@@ -137,6 +148,70 @@ export class WebhookService extends Effect.Service<WebhookService>()(
       const membership = yield* MembershipService;
       const crypto = yield* CredentialCryptoService;
       const entitlement = yield* EntitlementService;
+      const columnRepo = yield* ColumnRepo;
+      const realtime = yield* RealtimePublisher;
+
+      /**
+       * Broadcast a grid change on the table's party room so open grids patch
+       * live — the worker analogue of GridService's publish. Best-effort by
+       * construction: the live publisher swallows transport errors, so realtime
+       * never fails a write that already succeeded.
+       */
+      const publish = (
+        workspaceId: string,
+        tableId: string,
+        event: GridChangeEvent,
+      ) => realtime.publish({ workspaceId, tableId, event });
+
+      /** The cells {@link writeCells} will actually persist, as realtime event
+       *  payloads (same skip rules: blank values and foreign columns dropped). */
+      const eventCells = (
+        rowId: string,
+        cells: CellMap,
+        validColumnIds: ReadonlySet<string>,
+      ): GridEventCell[] =>
+        Object.entries(cells)
+          .filter(
+            ([columnId, value]) =>
+              value !== "" &&
+              value !== null &&
+              value !== undefined &&
+              validColumnIds.has(columnId),
+          )
+          .map(([columnId, value]) => ({
+            rowId,
+            columnId,
+            value,
+            status: "done",
+            error: null,
+          }));
+
+      /** Find-or-create the table's "Webhook" raw-payload column (json, manual).
+       *  Records land here via the `$` mapping entry, so a webhook table always
+       *  shows its received data — even with zero user-configured mappings. */
+      const ensureWebhookColumn = (tableId: string, workspaceId: string) =>
+        Effect.gen(function* () {
+          const cols = yield* columnRepo.listByTable(tableId);
+          const existing = cols.find(
+            (c) => c.name === WEBHOOK_COLUMN_NAME && c.type === "json",
+          );
+          if (existing !== undefined) return existing.id;
+          const position = yield* columnRepo.nextPosition(tableId);
+          return yield* columnRepo.insert({
+            workspaceId,
+            tableId,
+            name: WEBHOOK_COLUMN_NAME,
+            type: "json",
+            kind: "manual",
+            provider: null,
+            method: null,
+            code: null,
+            params: {},
+            condition: null,
+            position,
+            createdAt: Date.now(),
+          });
+        });
 
       /** Load a webhook or fail typed. */
       const requireWebhook = (
@@ -180,6 +255,10 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         readonly tableId: string;
         readonly name?: string | null;
         readonly mapping?: readonly WebhookMappingEntry[];
+        /** OPT-IN signature auth: mint a signing secret only when true. The
+         *  default is an unauthenticated endpoint (the unguessable token URL is
+         *  the credential), so senders that can't compute an HMAC still work. */
+        readonly auth?: boolean;
       }) =>
         Effect.gen(function* () {
           const table = yield* repo.findTable(args.tableId);
@@ -205,13 +284,23 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             }
           }
 
+          // Clay-style raw-payload column: every record lands here via the `$`
+          // entry, so the table shows received data with zero configuration.
+          const webhookColumnId = yield* ensureWebhookColumn(
+            args.tableId,
+            table.value.workspaceId,
+          );
+
           return yield* repo.insert({
             workspaceId: table.value.workspaceId,
             tableId: args.tableId,
             name: args.name ?? null,
             token: mintToken(),
-            signingSecret: mintSigningSecret(),
-            mapping,
+            signingSecret: args.auth === true ? mintSigningSecret() : null,
+            mapping: [
+              { path: WEBHOOK_PAYLOAD_PATH, columnId: webhookColumnId },
+              ...mapping.filter((m) => m.path !== WEBHOOK_PAYLOAD_PATH),
+            ],
             enabled: true,
             autoRun: true,
             mode: "create",
@@ -288,10 +377,22 @@ export class WebhookService extends Effect.Service<WebhookService>()(
               );
             }
           }
-          yield* repo.patch(args.webhookId, { mapping: args.mapping });
+          // A mapping replace must never drop the `$` raw-payload entry — it is
+          // what keeps every record visible in the Webhook column.
+          const payloadEntry = webhook.mapping.find(
+            (m) => m.path === WEBHOOK_PAYLOAD_PATH,
+          );
+          yield* repo.patch(args.webhookId, {
+            mapping: [
+              ...(payloadEntry === undefined ? [] : [payloadEntry]),
+              ...args.mapping.filter((m) => m.path !== WEBHOOK_PAYLOAD_PATH),
+            ],
+          });
         });
 
-      /** Enable/disable a webhook. */
+      /** Enable/disable a webhook. Enabling also HEALS a legacy webhook that
+       *  predates the raw-payload column: it gains the "Webhook" column + `$`
+       *  mapping entry, so records become visible without recreating it. */
       const toggleEnabled = (args: {
         readonly webhookId: string;
         readonly enabled: boolean;
@@ -299,18 +400,49 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         Effect.gen(function* () {
           const webhook = yield* requireWebhook(args.webhookId);
           yield* membership.requireMember(webhook.workspaceId);
+          if (
+            args.enabled &&
+            !webhook.mapping.some((m) => m.path === WEBHOOK_PAYLOAD_PATH)
+          ) {
+            const webhookColumnId = yield* ensureWebhookColumn(
+              webhook.tableId,
+              webhook.workspaceId,
+            );
+            yield* repo.patch(args.webhookId, {
+              mapping: [
+                { path: WEBHOOK_PAYLOAD_PATH, columnId: webhookColumnId },
+                ...webhook.mapping,
+              ],
+            });
+          }
           yield* repo.patch(args.webhookId, { enabled: args.enabled });
         });
 
-      /** Rotate a webhook's token + signing secret (revokes the old pair). */
+      /** Rotate a webhook's token (+ signing secret when auth is enabled —
+       *  rotation preserves the opt-in/opt-out state, it never enables auth). */
       const rotateSecret = (webhookId: string) =>
         Effect.gen(function* () {
           const webhook = yield* requireWebhook(webhookId);
           yield* membership.requireMember(webhook.workspaceId);
           const token = mintToken();
-          const signingSecret = mintSigningSecret();
+          const signingSecret = webhook.signingSecret === null ? null : mintSigningSecret();
           yield* repo.patch(webhookId, { token, signingSecret });
           return { token, signingSecret };
+        });
+
+      /** Opt a webhook in to (or out of) signature auth. Opting in mints a
+       *  fresh signing secret and returns it; opting out clears it so the
+       *  receiver accepts unsigned posts again. */
+      const setAuth = (args: {
+        readonly webhookId: string;
+        readonly enabled: boolean;
+      }) =>
+        Effect.gen(function* () {
+          const webhook = yield* requireWebhook(args.webhookId);
+          yield* membership.requireMember(webhook.workspaceId);
+          const signingSecret = args.enabled ? mintSigningSecret() : null;
+          yield* repo.patch(args.webhookId, { signingSecret });
+          return { signingSecret };
         });
 
       /** A KEYSET page of a webhook's deliveries (newest first). */
@@ -346,7 +478,32 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           yield* repo.remove(webhookId);
         });
 
-      // ── WORKER PATHS (secret-gated upstream, NOT member-gated) ────────────
+      // ── WORKER PATHS (dual-auth upstream: secret OR member) ───────────────
+
+      /**
+       * Membership gate for the dual-auth worker routes (the desktop sidecar +
+       * spawned MCP reach these via `runWorkerSecretOrMember`). Two cases:
+       *
+       *  - MEMBER path: the request carried a member SESSION token, so the route
+       *    runs with that member's identity — assert they belong to `workspaceId`
+       *    (else `NotAMemberError` → 403). This is what lets the prod desktop, which
+       *    ships no worker secret, authenticate cloud reads/runs as the signed-in
+       *    member instead of a shared client secret.
+       *  - HEADLESS path: the request was authorized by the `WEBHOOK_WORKER_SECRET`
+       *    bearer (the inngest webhook worker), so there is NO current user;
+       *    `requireMember` fails `UnauthenticatedError`, which we SWALLOW — the
+       *    secret is the trust boundary, exactly as before.
+       *
+       * Safe because the route wrapper guarantees a null identity reaches here ONLY
+       * on the secret path: a member request whose token does not resolve is
+       * rejected 401 at the route, never reaching the service. So swallowing
+       * `UnauthenticatedError` cannot bypass the member-path membership check.
+       */
+      const assertMemberIfIdentified = (workspaceId: string) =>
+        membership.requireMember(workspaceId).pipe(
+          Effect.asVoid,
+          Effect.catchTag("UnauthenticatedError", () => Effect.void),
+        );
 
       /** Resolve a token to its (enabled) webhook, or `null`. */
       const resolveToken = (token: string) =>
@@ -520,6 +677,12 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           });
           // Exactly ONE billable cloud action per received record.
           yield* repo.meterActions(table.value.workspaceId, 1);
+          // Open grids see the record land live (row + its mapped cells).
+          yield* publish(table.value.workspaceId, webhook.tableId, {
+            type: "row.insert",
+            row: { _id: rowId },
+            cells: eventCells(rowId, args.cells, validColumnIds),
+          });
           return { rowId };
         });
 
@@ -600,6 +763,23 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             receivedAt: now,
           });
           yield* repo.meterActions(table.value.workspaceId, 1);
+          // Open grids see the upsert live: a fresh row inserts whole; a matched
+          // row patches each written cell in place.
+          const written = eventCells(rowId, args.cells, validColumnIds);
+          if (matchedRowId === null) {
+            yield* publish(table.value.workspaceId, webhook.tableId, {
+              type: "row.insert",
+              row: { _id: rowId },
+              cells: written,
+            });
+          } else {
+            for (const cell of written) {
+              yield* publish(table.value.workspaceId, webhook.tableId, {
+                type: "cell.upsert",
+                cell,
+              });
+            }
+          }
           return { rowId };
         });
 
@@ -612,6 +792,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
               new WebhookNotFoundError({ message: `Table ${tableId} not found.` }),
             );
           }
+          yield* assertMemberIfIdentified(table.value.workspaceId);
           const [columns, rows, cells] = [
             yield* repo.listColumns(tableId),
             yield* repo.listRows(tableId),
@@ -640,6 +821,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
               new WebhookNotFoundError({ message: `Table ${tableId} not found.` }),
             );
           }
+          yield* assertMemberIfIdentified(table.value.workspaceId);
           return {
             table: { id: table.value.id, workspaceId: table.value.workspaceId },
           } satisfies WorkerTableMeta;
@@ -678,6 +860,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             );
           }
           const workspaceId = table.value.workspaceId;
+          yield* assertMemberIfIdentified(workspaceId);
 
           const candidateRowIds =
             args.rowIds ??
@@ -741,6 +924,33 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         });
 
       /**
+       * Broadcast a cell's POST-MERGE state (one point read-back after the
+       * COALESCE upsert, so the event carries the kept value/status, not just
+       * the partial patch). This is what makes engine column runs over cloud
+       * tables paint live — their cell writes land through this worker path.
+       */
+      const publishMergedCell = (
+        workspaceId: string,
+        tableId: string,
+        rowId: string,
+        columnId: string,
+      ) =>
+        Effect.gen(function* () {
+          const merged = yield* repo.findCell(rowId, columnId);
+          if (merged._tag === "None") return;
+          yield* publish(workspaceId, tableId, {
+            type: "cell.upsert",
+            cell: {
+              rowId,
+              columnId,
+              value: merged.value.value,
+              status: merged.value.status,
+              error: merged.value.error,
+            },
+          });
+        });
+
+      /**
        * Worker cell upsert (COALESCE merge; meters only terminal). Two queries:
        * resolveCell (validate + workspace) then a single
        * INSERT…ON CONFLICT DO UPDATE that merges value/status/error and folds the
@@ -759,7 +969,8 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             args.rowId,
             args.columnId,
           );
-          return yield* repo.upsertCell({
+          yield* assertMemberIfIdentified(workspaceId);
+          const id = yield* repo.upsertCell({
             workspaceId,
             tableId,
             rowId: args.rowId,
@@ -773,6 +984,8 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             meter: true,
             updatedAt: Date.now(),
           });
+          yield* publishMergedCell(workspaceId, tableId, args.rowId, args.columnId);
+          return id;
         });
 
       /** Worker status-only cell write (meters only terminal). */
@@ -787,7 +1000,8 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             args.rowId,
             args.columnId,
           );
-          return yield* repo.upsertCell({
+          yield* assertMemberIfIdentified(workspaceId);
+          const id = yield* repo.upsertCell({
             workspaceId,
             tableId,
             rowId: args.rowId,
@@ -800,6 +1014,8 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             meter: true,
             updatedAt: Date.now(),
           });
+          yield* publishMergedCell(workspaceId, tableId, args.rowId, args.columnId);
+          return id;
         });
 
       /**
@@ -838,9 +1054,17 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         readonly extensionId: string;
       }): Effect.Effect<
         { readonly secrets: SecretMap } | null,
-        WebhookRepoError | import("@gtmgrid/cloud").DecryptError
+        | WebhookRepoError
+        | import("@gtmgrid/cloud").DecryptError
+        | import("@gtmgrid/cloud").NotAMemberError
+        | import("@gtmgrid/cloud").MemberRepoError
       > =>
         Effect.gen(function* () {
+          // Decrypting a workspace's SHARED credential is member-gated on the
+          // member path (a non-member gets 403); on the headless secret path the
+          // assertion is skipped. Especially important here — this returns
+          // plaintext connector secrets for a run.
+          yield* assertMemberIfIdentified(args.workspaceId);
           const enc = yield* repo.findSharedCredentialEnc(
             args.workspaceId,
             args.extensionId,
@@ -857,6 +1081,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         updateWebhookMapping,
         toggleEnabled,
         rotateSecret,
+        setAuth,
         listDeliveriesPaged,
         deleteWebhook,
         resolveToken,

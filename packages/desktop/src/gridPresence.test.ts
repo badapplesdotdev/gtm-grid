@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import type { GridPresenceState } from "@gtmgrid/services/realtime";
 import {
+  AGENT_PRESENCE_COLOR,
   PRESENCE_COLORS,
   buildPresenceView,
   presenceCellKey,
@@ -114,7 +115,65 @@ describe("buildPresenceView", () => {
       image: null,
       cursor: null,
       editing: false,
+      isAgent: false,
+      activity: null,
+      column: null,
     });
     expect(view.byCell.size).toBe(0);
+  });
+});
+
+describe("buildPresenceView — agent participants", () => {
+  it("keeps a member and THEIR agent (same userId) as two participants", () => {
+    const view = buildPresenceView(
+      [
+        state({ userId: "u1", name: "Morgan" }),
+        state({ userId: "u1", agent: true, name: "Morgan's Agent" }),
+      ],
+      "u1",
+    );
+    expect(view.users).toHaveLength(2);
+    const keys = view.users.map((u) => u.key).sort();
+    expect(keys).toEqual(["u1", "u1:agent"]);
+  });
+
+  it("paints agents with the fixed accent color, not the hashed hue", () => {
+    const view = buildPresenceView([state({ userId: "u1", agent: true })], null);
+    expect(view.users[0].color).toBe(AGENT_PRESENCE_COLOR);
+    expect(view.users[0].isAgent).toBe(true);
+  });
+
+  it("your own agent is never self — its cursor rings YOUR grid too", () => {
+    const cell = { rowId: "r1", columnId: "c1" };
+    const view = buildPresenceView(
+      [state({ userId: "u1", agent: true, editing: cell })],
+      "u1",
+    );
+    expect(view.users[0].isSelf).toBe(false);
+    expect(view.byCell.get(presenceCellKey("r1", "c1"))).toHaveLength(1);
+  });
+
+  it("indexes a column-scoped agent into byColumn with its activity", () => {
+    const view = buildPresenceView(
+      [state({ userId: "u1", agent: true, column: "col-9", activity: "running Email" })],
+      "u1",
+    );
+    expect(view.byColumn.get("col-9")?.[0]).toMatchObject({
+      isAgent: true,
+      activity: "running Email",
+    });
+    expect(view.byCell.size).toBe(0);
+  });
+
+  it("sorts self first, then agents, then other members", () => {
+    const view = buildPresenceView(
+      [
+        state({ userId: "u2", name: "Teammate" }),
+        state({ userId: "u1", agent: true }),
+        state({ userId: "u1", name: "Morgan" }),
+      ],
+      "u1",
+    );
+    expect(view.users.map((u) => u.key)).toEqual(["u1", "u1:agent", "u2"]);
   });
 });

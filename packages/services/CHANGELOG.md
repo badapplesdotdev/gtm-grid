@@ -1,5 +1,125 @@
 # @gtmgrid/services
 
+## 0.9.13
+
+### Patch Changes
+
+- 891e3b8: Agent presence (Co-Pilot cursor): the in-app AI agent now appears in cloud
+  tables like a teammate. As it reads or writes — get_table, run_column,
+  update_cells, add_rows — the grid shows "<Your name>'s Agent" in the avatar
+  stack (bot glyph, brand-accent ring), rings the cell or column it's working
+  on, and labels the activity ("reading the table", "updating 2 cells",
+  "running Email"). Visible to everyone in the table's room, clears when the
+  turn ends. Works against the already-deployed realtime party.
+  - @gtmgrid/cloud@0.9.13
+  - @gtmgrid/db@0.9.13
+  - @gtmgrid/email@0.9.13
+
+## 0.9.12
+
+### Patch Changes
+
+- 9bf183f: Webhook rows and column-run results now appear in the grid in real time.
+  Worker-path writes (webhook insertRow/upsertRow and the engine's cell
+  writes during cloud column runs) previously hit Postgres without
+  broadcasting, so open grids stayed stale until a refetch. They now publish
+  the same realtime events member edits do — `row.insert` with the mapped
+  cells when a record lands, `cell.upsert` with the post-merge state on
+  every worker cell write.
+  - @gtmgrid/cloud@0.9.12
+  - @gtmgrid/db@0.9.12
+  - @gtmgrid/email@0.9.12
+
+## 0.9.11
+
+### Patch Changes
+
+- 2ddf117: Clay-style webhook tables: every webhook now lands records in a dedicated
+  "Webhook" column, so received data is always visible — even on a table with
+  no other columns and no field mappings. Cells render as "Received <date>";
+  clicking opens the payload in the cell-details panel, where each field has
+  an "Add to column" action that promotes it to a real column applied to all
+  existing and future rows. Re-enabling an existing webhook heals it with the
+  new column. Mapping replaces never drop the raw-payload entry.
+  - @gtmgrid/cloud@0.9.11
+  - @gtmgrid/db@0.9.11
+  - @gtmgrid/email@0.9.11
+
+## 0.9.10
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.10
+- @gtmgrid/db@0.9.10
+- @gtmgrid/email@0.9.10
+
+## 0.9.9
+
+### Patch Changes
+
+- 67f3d44: Agent sessions can now use your saved provider keys, and webhook signature
+  auth is opt-in:
+
+  - Provider CLIs and skills the agent runs (trigify-cli, gh, …) authenticate
+    automatically: saved credentials are injected as conventional env vars
+    (`TRIGIFY_API_KEY`, `GITHUB_TOKEN`, …) at agent spawn — cloud workspace
+    credentials in cloud mode, the local credential store in local mode. An
+    explicitly exported env var still wins, and values never appear in args
+    or logs.
+  - Inbound webhooks no longer force HMAC signing: new webhooks accept
+    unsigned posts (the unguessable token URL is the credential), with a
+    "Require signed requests" toggle to opt in to `X-GTMGrid-Signature`
+    verification. Existing webhooks keep their secrets and behave as before.
+  - @gtmgrid/cloud@0.9.9
+  - @gtmgrid/db@0.9.9
+  - @gtmgrid/email@0.9.9
+
+## 0.9.8
+
+### Patch Changes
+
+- 3cbb8b2: Fix every poll-trigify-signals run failing at the due-bindings query. The
+  SQL due-filter bound `-Infinity` as the CASE fallback threshold, but
+  `last_synced_at` is a bigint column and Postgres rejects `-Infinity` for
+  integer types — so the query errored on every execution and no scheduled
+  signal binding was ever polled. The fallback is now `NULL` (never due),
+  matching the intended semantics.
+  - @gtmgrid/cloud@0.9.8
+  - @gtmgrid/db@0.9.8
+  - @gtmgrid/email@0.9.8
+
+## 0.9.7
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.7
+- @gtmgrid/db@0.9.7
+- @gtmgrid/email@0.9.7
+
+## 0.9.6
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.6
+- @gtmgrid/db@0.9.6
+- @gtmgrid/email@0.9.6
+
+## 0.9.5
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.5
+- @gtmgrid/db@0.9.5
+- @gtmgrid/email@0.9.5
+
+## 0.9.4
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.4
+- @gtmgrid/db@0.9.4
+- @gtmgrid/email@0.9.4
+
 ## 0.9.3
 
 ### Patch Changes

@@ -126,6 +126,18 @@ export interface TableDeleteEvent {
 }
 
 /**
+ * A project's sidebar folders changed (folder created/renamed/deleted, or a
+ * table moved between folders). Broadcast on the WORKSPACE room only — it does
+ * not mutate any `getTable` snapshot (folders are list-organization metadata),
+ * so the reducer passes it through; the sidebar refetches its folder/table
+ * lists instead.
+ */
+export interface FoldersChangedEvent {
+  readonly type: "folders.changed";
+  readonly projectId: string;
+}
+
+/**
  * The discriminated union of every grid change the publisher emits and the
  * reducer applies. Discriminated on `type` so a `switch` is exhaustive.
  */
@@ -137,7 +149,8 @@ export type GridChangeEvent =
   | ColumnUpdateEvent
   | ColumnDeleteEvent
   | TableInsertEvent
-  | TableDeleteEvent;
+  | TableDeleteEvent
+  | FoldersChangedEvent;
 
 /**
  * The `getTable`-shaped client cache the reducer patches. Identical in shape to

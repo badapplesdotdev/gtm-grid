@@ -187,5 +187,10 @@ export const applyGridEvent = (
     case "table.delete":
       // The viewed table is gone — collapse to the "no longer exists" sentinel.
       return event.tableId === snapshot.table._id ? null : snapshot;
+
+    case "folders.changed":
+      // Sidebar folder organization changed — a `getTable` snapshot holds no
+      // folder data, so the grid is unaffected (the list view refetches).
+      return snapshot;
   }
 };

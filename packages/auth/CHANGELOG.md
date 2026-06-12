@@ -1,5 +1,75 @@
 # @gtmgrid/auth
 
+## 0.9.13
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.13
+- @gtmgrid/email@0.9.13
+
+## 0.9.12
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.12
+- @gtmgrid/email@0.9.12
+
+## 0.9.11
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.11
+- @gtmgrid/email@0.9.11
+
+## 0.9.10
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.10
+- @gtmgrid/email@0.9.10
+
+## 0.9.9
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.9
+- @gtmgrid/email@0.9.9
+
+## 0.9.8
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.8
+- @gtmgrid/email@0.9.8
+
+## 0.9.7
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.7
+- @gtmgrid/email@0.9.7
+
+## 0.9.6
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.6
+- @gtmgrid/email@0.9.6
+
+## 0.9.5
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.5
+- @gtmgrid/email@0.9.5
+
+## 0.9.4
+
+### Patch Changes
+
+- @gtmgrid/db@0.9.4
+- @gtmgrid/email@0.9.4
+
 ## 0.9.3
 
 ### Patch Changes

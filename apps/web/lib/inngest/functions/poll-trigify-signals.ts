@@ -88,7 +88,11 @@ export const processSignalBinding = inngest.createFunction(
   {
     id: "process-signal-binding",
     concurrency: [
-      { scope: "account", limit: 50 },
+      // Account-scoped limits REQUIRE a key (Inngest rejects the whole app sync
+      // without one — "A concurrency key must be specified for Account scoped
+      // limits", which left prod functions unregistered). A constant key makes
+      // one shared account-wide pool for this function's runs.
+      { scope: "account", key: '"signals-sync"', limit: 50 },
       { key: "event.data.workspaceId", limit: 2 },
     ],
     retries: 2,
@@ -120,5 +124,67 @@ export const processSignalBinding = inngest.createFunction(
       ),
     );
     return { bindingId, ...result };
+  },
+);
+
+/**
+ * Backoff (seconds) between warm-up attempts — front-loaded because Trigify
+ * searches usually start returning within ~15-60s of creation, with a longer
+ * tail for slow scrapes. Total window ≈ 8 minutes across 10 attempts.
+ */
+const WARM_UP_BACKOFF_S = [15, 15, 30, 30, 60, 60, 60, 60, 60, 60] as const;
+
+/**
+ * Post-create warm-up: a fresh Trigify search returns 0 results for the first
+ * ~10-30s (it's still scraping), so the create-time pull almost always seeds
+ * nothing. This durable function — triggered by the `signals/binding.created`
+ * event the tRPC `createSignalBinding` mutation emits — retries the pull on a
+ * front-loaded backoff until the FIRST data lands, mirroring the local
+ * sidecar's `warmUpBinding` (30 × 12s in-process retries). Without it a cloud
+ * binding waited for the hourly cron at best (and a full schedule interval at
+ * worst) before showing any rows.
+ *
+ * Stops on: first `added > 0`, or exhausting the backoff — at which point the
+ * cron's always-due-while-empty predicate takes over. A failed attempt (bad
+ * credential, Trigify 5xx, deleted binding) logs and keeps trying; the sync
+ * already records `binding.lastError` for the UI.
+ */
+export const warmUpSignalBinding = inngest.createFunction(
+  {
+    id: "warm-up-signal-binding",
+    concurrency: [{ key: "event.data.workspaceId", limit: 2 }],
+    retries: 1,
+    triggers: [{ event: "signals/binding.created" }],
+  },
+  async ({ event, step }) => {
+    const bindingId = (event.data as { bindingId?: string }).bindingId ?? "";
+    if (!bindingId) return { bindingId, added: 0, attempts: 0 };
+
+    for (let attempt = 0; attempt < WARM_UP_BACKOFF_S.length; attempt += 1) {
+      await step.sleep(`backoff-${attempt}`, `${WARM_UP_BACKOFF_S[attempt]}s`);
+      const result = await step.run(`warm-up:${bindingId}:${attempt}`, () =>
+        withRuntime((exec) =>
+          exec(
+            Effect.gen(function* () {
+              const svc = yield* SignalService;
+              const added = yield* svc.syncForWorker(bindingId);
+              return { added, error: null as string | null };
+            }).pipe(
+              Effect.catchAll((e) => {
+                const tag = (e as { _tag?: string })?._tag ?? "Error";
+                const message = (e as { message?: string })?.message ?? String(e);
+                console.error(`[signals] warm-up ${bindingId} attempt ${attempt} failed: ${tag}: ${message}`);
+                return Effect.succeed({ added: 0, error: `${tag}: ${message}` });
+              }),
+            ),
+          ),
+        ),
+      );
+      if (result.added > 0) {
+        return { bindingId, added: result.added, attempts: attempt + 1 };
+      }
+    }
+    // Exhausted: leave it to the hourly cron (still-empty bindings stay due).
+    return { bindingId, added: 0, attempts: WARM_UP_BACKOFF_S.length };
   },
 );

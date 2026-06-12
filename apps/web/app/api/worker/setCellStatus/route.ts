@@ -5,7 +5,7 @@
 
 import { type CloudCellStatus, WebhookService } from "@gtmgrid/services";
 import { Effect } from "effect";
-import { runWorker } from "../_lib";
+import { runWorkerSecretOrMember } from "../_lib";
 
 export const runtime = "nodejs";
 
@@ -17,7 +17,7 @@ interface SetCellStatusBody {
 }
 
 export function POST(req: Request): Promise<Response> {
-  return runWorker(req, (body: SetCellStatusBody) =>
+  return runWorkerSecretOrMember(req, (body: SetCellStatusBody) =>
     Effect.gen(function* () {
       const svc = yield* WebhookService;
       return yield* svc.setCellStatus({

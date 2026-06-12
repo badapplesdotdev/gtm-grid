@@ -37,6 +37,10 @@ describe("global Inngest concurrency caps (TRI-3265)", () => {
     const account = entries.find((e) => e.scope === "account");
     expect(account, "missing account-scoped global cap").toBeDefined();
     expect(account?.limit).toBe(50);
+    // Account-scoped entries MUST carry a key: Inngest rejects the whole app
+    // sync without one ("A concurrency key must be specified for Account scoped
+    // limits"), which left prod functions unregistered — tables never filled.
+    expect(account?.key, "account-scoped cap must specify a key").toBeTruthy();
 
     const perWorkspace = entries.find(
       (e) => e.key === "event.data.workspaceId",
@@ -51,6 +55,7 @@ describe("global Inngest concurrency caps (TRI-3265)", () => {
     const account = entries.find((e) => e.scope === "account");
     expect(account, "missing account-scoped global cap").toBeDefined();
     expect(account?.limit).toBe(50);
+    expect(account?.key, "account-scoped cap must specify a key").toBeTruthy();
 
     const perWorkspace = entries.find(
       (e) => e.key === "event.data.workspaceId",
