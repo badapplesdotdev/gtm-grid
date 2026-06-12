@@ -271,6 +271,7 @@ export const appLayer = (params: {
     Layer.provide(credentialCryptoLive),
     Layer.provide(entitlementService),
     Layer.provide(columnRepo),
+    Layer.provide(realtimePublisher),
   );
   const extensionService = ExtensionService.Default.pipe(
     Layer.provide(extensionRepo),
@@ -587,6 +588,7 @@ export const TestLayer = (
     Layer.provide(fixtures.crypto ?? credentialCryptoTest()),
     Layer.provide(entitlementService),
     Layer.provide(columnRepo),
+    Layer.provide(realtimePublisher),
   );
   const extensionService = ExtensionService.Default.pipe(
     Layer.provide(extensionRepo),

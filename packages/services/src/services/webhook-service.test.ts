@@ -35,6 +35,10 @@ import { webhookRepoLayer } from "../repositories/webhook-repo.js";
 import { workspaceRepoLayer } from "../repositories/workspace-repo.js";
 import { columnRepoLayer } from "../repositories/column-repo.js";
 import { makeGridStore, type StoreColumn } from "../repositories/grid-store.js";
+import {
+  recordingRealtimePublisherLayer,
+  type RecordedGridEvent,
+} from "./realtime-publisher.js";
 import { EntitlementService } from "./entitlement-service.js";
 import { WebhookService } from "./webhook-service.js";
 
@@ -130,6 +134,8 @@ function harness(opts: {
   // ColumnRepo backs ensureWebhookColumn (the Clay-style raw-payload column).
   const gridColumns = opts.gridColumns ?? [];
   const columnRepo = columnRepoLayer(makeGridStore({ columns: gridColumns }));
+  // Recording publisher: tests read back the realtime events worker writes emit.
+  const published: RecordedGridEvent[] = [];
   const layer = WebhookService.Default.pipe(
     Layer.provide(webhookRepo),
     Layer.provide(deliveryRepo),
@@ -138,10 +144,11 @@ function harness(opts: {
     Layer.provide(opts.crypto ?? credentialCryptoTest()),
     Layer.provide(entitlement),
     Layer.provide(columnRepo),
+    Layer.provide(recordingRealtimePublisherLayer(published)),
   );
   const run = <A, E>(program: Effect.Effect<A, E, WebhookService>) =>
     Effect.runPromiseExit(program.pipe(Effect.provide(layer)));
-  return { run, gridColumns };
+  return { run, gridColumns, published };
 }
 
 const svc = Effect.gen(function* () {
@@ -208,6 +215,32 @@ describe("WebhookService.insertRow", () => {
     expect(rows).toHaveLength(1);
     expect(cells).toHaveLength(2);
     expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
+  });
+
+  it("broadcasts row.insert (with the written cells) so open grids patch live", async () => {
+    const rows: GridRow[] = [];
+    const { run, published } = harness({ rows, cells: [] });
+    await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.insertRow({
+            webhookId: "wh-1",
+            cells: { [COL_EMAIL]: "a@b.com", "col-foreign": "dropped", [COL_NAME]: "" },
+          }),
+        ),
+      ),
+    );
+    expect(published).toHaveLength(1);
+    expect(published[0].workspaceId).toBe(WS);
+    expect(published[0].tableId).toBe(TABLE);
+    expect(published[0].event).toEqual({
+      type: "row.insert",
+      row: { _id: rows[0].id },
+      // Mirrors writeCells: blank + foreign cells are NOT in the event either.
+      cells: [
+        { rowId: rows[0].id, columnId: COL_EMAIL, value: "a@b.com", status: "done", error: null },
+      ],
+    });
   });
 
   it("skips empty/foreign cells", async () => {
@@ -416,6 +449,30 @@ describe("WebhookService.upsertRow", () => {
     expect(cells.find((c) => c.columnId === COL_NAME)?.value).toBe("Updated");
   });
 
+  it("broadcasts cell.upsert per written cell on a MATCHED upsert (no row.insert)", async () => {
+    const rows: GridRow[] = [{ id: "row-1", tableId: TABLE, position: 0 }];
+    const cells: GridCell[] = [
+      { id: "cell-1", rowId: "row-1", columnId: COL_EMAIL, value: "a@b.com", status: "done", error: null, updatedAt: 1 },
+    ];
+    const { run, published } = harness({ rows, cells });
+    await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.upsertRow({
+            webhookId: "wh-1",
+            upsertKey: COL_EMAIL,
+            cells: { [COL_EMAIL]: "a@b.com", [COL_NAME]: "Updated" },
+          }),
+        ),
+      ),
+    );
+    expect(published.map((p) => p.event.type)).toEqual(["cell.upsert", "cell.upsert"]);
+    expect(published[1].event).toEqual({
+      type: "cell.upsert",
+      cell: { rowId: "row-1", columnId: COL_NAME, value: "Updated", status: "done", error: null },
+    });
+  });
+
   it("INSERTS a fresh row when no upsert key matches", async () => {
     const rows: GridRow[] = [{ id: "row-1", tableId: TABLE, position: 0 }];
     const cells: GridCell[] = [
@@ -537,6 +594,7 @@ describe("WebhookService.upsertRow — TRI-3270 indexed point lookup", () => {
       Layer.provide(credentialCryptoTest()),
       Layer.provide(entitlement),
       Layer.provide(columnRepoLayer(makeGridStore())),
+      Layer.provide(recordingRealtimePublisherLayer()),
     );
     const run = <A, E>(program: Effect.Effect<A, E, WebhookService>) =>
       Effect.runPromiseExit(program.pipe(Effect.provide(layer)));
@@ -658,6 +716,28 @@ describe("WebhookService.setCell metering", () => {
       ),
     );
     expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
+  });
+
+  it("broadcasts the POST-MERGE cell so engine column runs paint live", async () => {
+    const { run, published } = harness({ rows: [...rows], cells: [] });
+    await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.setCell({
+            rowId: "row-1",
+            columnId: COL_EMAIL,
+            hasValue: true,
+            value: "x",
+            status: "done",
+          }),
+        ),
+      ),
+    );
+    expect(published).toHaveLength(1);
+    expect(published[0].event).toEqual({
+      type: "cell.upsert",
+      cell: { rowId: "row-1", columnId: COL_EMAIL, value: "x", status: "done", error: null },
+    });
   });
 });
 
