@@ -26,6 +26,14 @@ import {
 import { capCellValue } from "./cell.js";
 import { describeGridEnv, selectGridEnv } from "./cloud-context.js";
 import {
+  decide,
+  hashArgs,
+  parseApprovedAction,
+  parsePermissionMode,
+  permissionConfigured,
+  riskClass,
+} from "./permission.js";
+import {
   CloudToolUnsupportedError,
   defaultCloudSourceDeps,
   makeCloudSource,
@@ -98,6 +106,112 @@ const needsConfirm = (action: string, willAffect: number, target: string, extra?
 
 /** Above this many affected rows/cells, a destructive or compute-heavy op asks first. */
 const CONFIRM_THRESHOLD = 50;
+
+// ── Permission mode + HITL approval (Phase 2) ──────────────────────────────
+// The composer's permission mode + any human approval are threaded in via env by
+// the sidecar (mcpEnv). The gate below is the ONE enforcement point all three
+// providers share, so the 4 modes behave identically regardless of provider. A
+// confirm can ONLY be unlocked by a human approval delivered through the env
+// (GTMGRID_APPROVED_*), a channel the model can't reach — so a model setting
+// `confirm:true` itself never bypasses a gate.
+const permMode = parsePermissionMode(process.env);
+const permActive = permissionConfigured(process.env);
+const approvedAction = parseApprovedAction(process.env);
+/** Approvals are single-use within this MCP process (a resumed turn) so an OK to
+ *  delete/spend once can't be replayed for a second identical call. */
+const consumedApprovals = new Set<string>();
+
+/** A plan-mode no-op result for a mutating tool that must not execute. */
+const planBlocked = (tool: string, action: string, target: string) =>
+  ok({
+    planMode: true,
+    blocked: true,
+    tool,
+    action,
+    target,
+    note: `Plan mode is active — "${action}" was NOT executed. Add it to your plan and let the user click Approve to run it.`,
+  });
+
+/** Plan-mode guard for the pure-edit tools (which have no confirm gate of their
+ *  own): blocks them in plan mode, no-op otherwise. Returns a result or null. */
+function planGuard(tool: string, action: string, target: string) {
+  return permActive && permMode === "plan" && riskClass(tool) !== "read"
+    ? planBlocked(tool, action, target)
+    : null;
+}
+
+type GateResult = { ok: true } | { ok: false; result: ReturnType<typeof ok> };
+
+/**
+ * Mode-aware permission gate for a destructive / credit-spending / large-edit op.
+ * Returns `{ok:true}` to proceed, or `{ok:false, result}` — a confirmationRequired
+ * payload (HITL) or a plan-mode block — to return instead of executing. Only a
+ * human approval (env-passed) unlocks a confirm; the model's own `confirm:true`
+ * does NOT (except in the legacy no-permission-env path, for back-compat).
+ */
+function gate(
+  tool: string,
+  args: Record<string, unknown>,
+  info: {
+    affected: number;
+    perRowCredits?: number;
+    estimatedCredits?: number;
+    action: string;
+    target: string;
+    extra?: Record<string, unknown>;
+  },
+): GateResult {
+  const display: Record<string, unknown> = {
+    ...(info.estimatedCredits ? { estimatedCredits: info.estimatedCredits } : {}),
+    ...info.extra,
+  };
+  // Back-compat: an old launcher set no permission mode → keep the legacy soft
+  // confirm:true behavior (the caller already decided this op warrants a gate).
+  if (!permActive) {
+    return args.confirm === true
+      ? { ok: true }
+      : { ok: false, result: needsConfirm(info.action, info.affected, info.target, Object.keys(display).length ? display : undefined) };
+  }
+  const decision = decide(permMode, riskClass(tool), {
+    affected: info.affected,
+    credits: info.perRowCredits ?? 0,
+    threshold: CONFIRM_THRESHOLD,
+  });
+  if (decision === "execute") return { ok: true };
+  if (decision === "block") return { ok: false, result: planBlocked(tool, info.action, info.target) };
+  // confirm: only a matching, unconsumed HUMAN approval (from the env) unlocks it.
+  const argsHash = hashArgs(args);
+  if (
+    approvedAction &&
+    approvedAction.tool === tool &&
+    approvedAction.argsHash === argsHash &&
+    !consumedApprovals.has(argsHash)
+  ) {
+    consumedApprovals.add(argsHash);
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    result: ok({
+      confirmationRequired: true,
+      action: info.action,
+      willAffect: info.affected,
+      target: info.target,
+      ...display,
+      message: `${info.action} would affect ${info.affected} item(s) in "${info.target}". STOP and ask the user — they Approve in the chat. Do NOT set confirm:true yourself; it will not run the tool.`,
+      approvalRequest: {
+        pendingId: `pr_${argsHash.slice(0, 12)}`,
+        tool,
+        argsHash,
+        mode: permMode,
+        action: info.action,
+        willAffect: info.affected,
+        target: info.target,
+        ...(info.estimatedCredits ? { estimatedCredits: info.estimatedCredits } : {}),
+      },
+    }),
+  };
+}
 
 /** LOCAL-only helper: resolve a table by id/name on the SQLite project. */
 const localTableOr = (ref: string) => {
@@ -195,6 +309,8 @@ server.tool("list_tables", "List all tables in the project with their column and
 });
 
 server.tool("create_table", "Create a new table.", { name: z.string() }, async ({ name }) => {
+  const blocked = planGuard("create_table", "Create table", name);
+  if (blocked) return blocked;
   if (cloudSource) return ok(await cloudSource.createTable(name));
   const t = local!.db.createTable(name);
   return ok({ id: t.id, name: t.name });
@@ -220,6 +336,8 @@ server.tool(
       .describe("'Only run if' JS boolean expression with {{Column}} refs, e.g. 'Boolean({{Email}})'. Falsy rows are skipped (no credits)."),
   },
   async ({ table, name, formula, fn, code, type, params, condition }) => {
+    const blocked = planGuard("add_column", "Add column", `${table} › ${name}`);
+    if (blocked) return blocked;
     if (cloudSource) {
       return ok(
         await cloudSource.addColumn(table, {
@@ -270,6 +388,8 @@ server.tool(
   "Add one or more rows DIRECTLY into the table — this is how you POPULATE a table with sourced/enriched data; never stage rows to a file. Each row is an object of { ColumnName: value } for manual columns, e.g. [{ Username: 'torvalds' }]. When loading many rows, send them in batches of ~25-50 per call (keeps each call within size/quota limits and lets you show progress). If the table has dedup ON (see set_dedupe), incoming rows whose key already exists are skipped automatically — so you can stream paginated search results straight in without deduping yourself. Returns { added, skipped, replaced }.",
   { table: z.string(), rows: z.array(z.record(z.string(), z.any())) },
   async ({ table, rows }) => {
+    const blocked = planGuard("add_rows", "Add rows", table);
+    if (blocked) return blocked;
     if (cloudSource) return ok(await cloudSource.addRows(table, rows));
     const t = localTableOr(table);
     // Resolve { ColumnName: value } -> { columnId: value }, validating names up front.
@@ -292,6 +412,8 @@ server.tool(
   "Turn deduplication on/off for a table. With it ON, the table stays unique on one column — add_rows skips incoming duplicates automatically (ideal for sourcing N unique rows across paginated searches). Pass column:null to turn it off. keep:'oldest' keeps the first row seen; keep:'newest' replaces it with the new one. Enabling also sweeps existing duplicates once. Match is EXACT (no URL/email normalization), and a blank or over-200-char key cell is never merged.",
   { table: z.string(), column: z.string().nullable().describe("Column NAME to dedupe on, or null to disable"), keep: z.enum(["oldest", "newest"]).optional() },
   async ({ table, column, keep }) => {
+    const blocked = planGuard("set_dedupe", "Set dedupe", table);
+    if (blocked) return blocked;
     if (cloudSource) return ok(await cloudSource.setDedupe(table, column, keep ?? "oldest"));
     const t = localTableOr(table);
     if (column === null || column === "") {
@@ -311,7 +433,20 @@ server.tool(
   "Run a function column over its rows (enriching cells), in grid order (top-down — the same order the user sees). Pass `limit` to enrich only the next N rows that still need filling — use this for requests like 'run this for 10 rows' or 'do the next 20': it fills the first N unfilled cells in display order, NEVER a random subset. Add `offset` to skip the first matches (e.g. limit:10, offset:10 = rows 11–20). Omit `limit` to run every pending row. A large run (more than ~50 pending rows) asks first: it returns the pending-row count + estimated credits — surface that and only re-call with confirm:true once the user approves. A confirmed large run is then started in the BACKGROUND on the sidecar (it outlasts this turn — a synchronous run of hundreds of rows would hit the 5-min turn limit and be killed), and returns immediately with {started:true}; poll get_column/get_table to watch the done count rise and tell the user when it's complete. A small run (≤50 rows) runs synchronously and returns {ran, errors}.",
   { table: z.string(), column: z.string(), force: z.boolean().optional(), concurrency: z.number().optional(), limit: z.number().optional(), offset: z.number().optional(), confirm: z.boolean().optional() },
   async ({ table, column, force, concurrency, limit, offset, confirm }) => {
-    if (cloudSource) return ok(await cloudSource.runColumn(table, column, { force, concurrency, limit, offset }));
+    const args = { table, column, force, concurrency, limit, offset, confirm };
+    if (cloudSource) {
+      // Cloud lacks a cheap pending-count, so gate conservatively: a small
+      // limit-scoped run auto-approves (matches local), an unbounded run asks. The
+      // precise count + credit estimate aren't available without running.
+      const g = gate("run_column", args, {
+        affected: limit ?? CONFIRM_THRESHOLD + 1,
+        perRowCredits: 1,
+        action: "Run column",
+        target: `${table} › ${column}`,
+      });
+      if (!g.ok) return g.result;
+      return ok(await cloudSource.runColumn(table, column, { force, concurrency, limit, offset }));
+    }
     const t = localTableOr(table);
     const col = local!.db.resolveColumn(t.id, column);
     if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
@@ -324,21 +459,27 @@ server.tool(
       ? ordered
       : ordered.filter((r) => (local!.db.getCell(r.id, col.id)?.status ?? "empty") !== "done");
     const scoped = limit != null ? candidates.slice(offset ?? 0, (offset ?? 0) + limit) : candidates;
-    // Cost/scale gate — a massive run needs the user's OK first. Counts the SCOPED
-    // set, so a deliberately small `limit` run never trips the confirm threshold.
     const pending = scoped.length;
     const method = col.provider && col.method ? local!.engine.registry.method(col.provider, col.method) : undefined;
-    if (pending > CONFIRM_THRESHOLD && !confirm) {
-      return needsConfirm("Run column", pending, `${t.name} › ${col.name}`, {
-        estimatedCredits: (method?.credits ?? 0) * pending,
+    // Permission/cost gate — mode-aware: a paid or large run asks (and only a human
+    // approval, not the model's own confirm, unlocks it). Counts the SCOPED set, so
+    // a deliberately small `limit` run never trips the threshold.
+    const g = gate("run_column", args, {
+      affected: pending,
+      perRowCredits: method?.credits ?? 0,
+      estimatedCredits: (method?.credits ?? 0) * pending,
+      action: "Run column",
+      target: `${t.name} › ${col.name}`,
+      extra: {
         // Surface the "only run if" rule so a ran:0 (every row skipped by the
         // condition) is explainable up front, not a mystery after the fact.
         condition: col.condition ?? undefined,
         hint: col.condition
           ? "rows that fail the column's run-condition are skipped (may run fewer than shown)"
           : "enriches every pending row",
-      });
-    }
+      },
+    });
+    if (!g.ok) return g.result;
     if (pending > CONFIRM_THRESHOLD) {
       // Large (confirmed) run → delegate to the PERSISTENT sidecar so the work
       // outlives the 5-min agent turn. A synchronous run here would block the turn
@@ -504,13 +645,15 @@ server.tool(
     confirm: z.boolean().optional(),
   },
   async ({ table, updates, confirm }) => {
+    const gargs = { table, updates, confirm };
     if (cloudSource) {
-      if (updates.length > CONFIRM_THRESHOLD && !confirm)
-        return needsConfirm("Update cells", updates.length, table);
+      const g = gate("update_cells", gargs, { affected: updates.length, action: "Update cells", target: table });
+      if (!g.ok) return g.result;
       return ok(await cloudSource.updateCells(table, updates));
     }
     const t = localTableOr(table);
-    if (updates.length > CONFIRM_THRESHOLD && !confirm) return needsConfirm("Update cells", updates.length, t.name);
+    const g = gate("update_cells", gargs, { affected: updates.length, action: "Update cells", target: t.name });
+    if (!g.ok) return g.result;
     // Scope row ids to THIS table — never write a cell against a row id that
     // belongs to another table (a stray/hallucinated id).
     const tableRows = new Set(local!.db.listRows(t.id).map((r) => r.id));
@@ -537,14 +680,14 @@ server.tool(
     confirm: z.boolean().optional(),
   },
   async ({ table, ids, where, confirm }) => {
+    const gargs = { table, ids, where, confirm };
     if (cloudSource) {
-      // Preview the target count WITHOUT deleting, so a destructive run asks the
-      // user first (mirrors the local preview), then deletes on confirm:true.
-      if (!confirm) {
-        const preview = await cloudSource.deleteRows(table, { ids, where, dryRun: true });
-        if (preview.deleted === 0) return ok({ deleted: 0, note: "no matching rows" });
-        return needsConfirm("Delete rows", preview.deleted, table);
-      }
+      // Preview the target count WITHOUT deleting (drives the approval card and
+      // short-circuits an empty match), then gate the destructive op.
+      const preview = await cloudSource.deleteRows(table, { ids, where, dryRun: true });
+      if (preview.deleted === 0) return ok({ deleted: 0, note: "no matching rows" });
+      const g = gate("delete_rows", gargs, { affected: preview.deleted, action: "Delete rows", target: table });
+      if (!g.ok) return g.result;
       return ok(await cloudSource.deleteRows(table, { ids, where }));
     }
     const t = localTableOr(table);
@@ -568,7 +711,8 @@ server.tool(
       for (const r of local!.db.findRows(t.id, match, 1_000_000)) targets.add(r.id);
     }
     if (targets.size === 0) return ok({ deleted: 0, note: "no matching rows" });
-    if (!confirm) return needsConfirm("Delete rows", targets.size, t.name);
+    const g = gate("delete_rows", gargs, { affected: targets.size, action: "Delete rows", target: t.name });
+    if (!g.ok) return g.result;
     for (const id of targets) local!.db.deleteRow(id);
     return ok({ deleted: targets.size });
   },
@@ -579,17 +723,19 @@ server.tool(
   "Delete a column and its values from every row. DESTRUCTIVE: needs confirm:true after the user approves.",
   { table: z.string(), column: z.string(), confirm: z.boolean().optional() },
   async ({ table, column, confirm }) => {
+    const gargs = { table, column, confirm };
+    const hint = { hint: "removes the column and its cells from every row" };
     if (cloudSource) {
-      if (!confirm) {
-        const { rows } = await cloudSource.tableStats(table);
-        return needsConfirm("Delete column", rows, `${table} › ${column}`, { hint: "removes the column and its cells from every row" });
-      }
+      const { rows } = await cloudSource.tableStats(table);
+      const g = gate("delete_column", gargs, { affected: rows, action: "Delete column", target: `${table} › ${column}`, extra: hint });
+      if (!g.ok) return g.result;
       return ok(await cloudSource.deleteColumn(table, column));
     }
     const t = localTableOr(table);
     const col = local!.db.resolveColumn(t.id, column);
     if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
-    if (!confirm) return needsConfirm("Delete column", local!.db.countRows(t.id), `${t.name} › ${col.name}`, { hint: "removes the column and its cells from every row" });
+    const g = gate("delete_column", gargs, { affected: local!.db.countRows(t.id), action: "Delete column", target: `${t.name} › ${col.name}`, extra: hint });
+    if (!g.ok) return g.result;
     local!.db.deleteColumn(col.id);
     return ok({ deleted: col.name });
   },
@@ -600,15 +746,17 @@ server.tool(
   "Delete an entire table — all of its columns and rows. DESTRUCTIVE: needs confirm:true after the user approves.",
   { table: z.string(), confirm: z.boolean().optional() },
   async ({ table, confirm }) => {
+    const gargs = { table, confirm };
+    const hint = { hint: "permanently removes the whole table" };
     if (cloudSource) {
-      if (!confirm) {
-        const { rows } = await cloudSource.tableStats(table);
-        return needsConfirm("Delete table", rows, table, { hint: "permanently removes the whole table" });
-      }
+      const { rows } = await cloudSource.tableStats(table);
+      const g = gate("delete_table", gargs, { affected: rows, action: "Delete table", target: table, extra: hint });
+      if (!g.ok) return g.result;
       return ok(await cloudSource.deleteTable(table));
     }
     const t = localTableOr(table);
-    if (!confirm) return needsConfirm("Delete table", local!.db.countRows(t.id), t.name, { hint: "permanently removes the whole table" });
+    const g = gate("delete_table", gargs, { affected: local!.db.countRows(t.id), action: "Delete table", target: t.name, extra: hint });
+    if (!g.ok) return g.result;
     local!.db.deleteTable(t.id);
     return ok({ deleted: t.name });
   },
@@ -631,6 +779,8 @@ server.tool(
     }),
   },
   async ({ table, column, patch }) => {
+    const blocked = planGuard("update_column", "Update column", `${table} › ${column}`);
+    if (blocked) return blocked;
     if (cloudSource) return ok(await cloudSource.updateColumn(table, column, patch));
     const t = localTableOr(table);
     const col = local!.db.resolveColumn(t.id, column);
@@ -647,6 +797,8 @@ server.tool(
   "Rename a table.",
   { table: z.string(), name: z.string() },
   async ({ table, name }) => {
+    const blocked = planGuard("rename_table", "Rename table", table);
+    if (blocked) return blocked;
     if (cloudSource) return ok(await cloudSource.renameTable(table, name));
     const t = localTableOr(table);
     local!.db.renameTable(t.id, name.trim() || t.name);
@@ -659,6 +811,8 @@ server.tool(
   "Move a column to a new 0-based display position within its table (0 = first/leftmost; out-of-range clamps to the ends). Non-destructive — only the column order changes, no cells are touched. Returns the new column-id order.",
   { table: z.string(), column: z.string(), toIndex: z.number().describe("0-based target position (0 = leftmost)") },
   async ({ table, column, toIndex }) => {
+    const blocked = planGuard("reorder_columns", "Reorder columns", table);
+    if (blocked) return blocked;
     if (cloudSource) return ok(await cloudSource.reorderColumn(table, column, toIndex));
     const t = localTableOr(table);
     const col = local!.db.resolveColumn(t.id, column);
@@ -672,6 +826,8 @@ server.tool(
   "Move a row (by its _id from get_table/find_rows) to a new 0-based display position within its table (0 = first/top; out-of-range clamps). Non-destructive — only the row order changes. Returns the new row-id order.",
   { table: z.string(), row: z.string().describe("The row _id from get_table/find_rows"), toIndex: z.number().describe("0-based target position (0 = top)") },
   async ({ table, row, toIndex }) => {
+    const blocked = planGuard("reorder_rows", "Reorder rows", table);
+    if (blocked) return blocked;
     if (cloudSource) return ok(await cloudSource.reorderRow(table, row, toIndex));
     const t = localTableOr(table);
     if (!local!.db.listRows(t.id).some((r) => r.id === row)) throw new Error(`Row "${row}" is not in "${t.name}"`);
@@ -684,6 +840,7 @@ server.tool(
   "Run EVERY function column over all its pending rows, LEFT-TO-RIGHT (grid order — the natural dependency order, since a later column can reference an earlier column's output). Without `force` each column only fills cells that aren't already `done`; with `force` it recomputes every cell. A large run (more than ~50 pending cells in total) asks first: it returns the pending count + the function-column count — surface that and only re-call with confirm:true once the user approves. Returns a per-column ran/errors breakdown plus the totals.",
   { table: z.string(), force: z.boolean().optional(), concurrency: z.number().optional(), confirm: z.boolean().optional() },
   async ({ table, force, concurrency, confirm }) => {
+    const gargs = { table, force, concurrency, confirm };
     const totals = (cols: { ran: number; errors: number }[]) => ({
       ran: cols.reduce((n, c) => n + c.ran, 0),
       errors: cols.reduce((n, c) => n + c.errors, 0),
@@ -693,8 +850,9 @@ server.tool(
       const pending = force
         ? (await cloudSource.tableStats(table)).rows * fns.length
         : fns.reduce((n, c) => n + c.pending, 0);
-      if (pending > CONFIRM_THRESHOLD && !confirm)
-        return needsConfirm("Run table", pending, table, { functionColumns: fns.length });
+      // Treat a full-table run as paid (it runs function columns) — gate accordingly.
+      const g = gate("run_table", gargs, { affected: pending, perRowCredits: 1, action: "Run table", target: table, extra: { functionColumns: fns.length } });
+      if (!g.ok) return g.result;
       const targets = force ? fns : fns.filter((c) => c.pending > 0);
       const results: { column: string; ran: number; errors: number }[] = [];
       for (const c of targets) results.push(await cloudSource.runColumn(table, c.name, { force, concurrency }));
@@ -708,8 +866,10 @@ server.tool(
       pending: force ? rows.length : rows.filter((r) => (local!.db.getCell(r.id, col.id)?.status ?? "empty") !== "done").length,
     }));
     const pending = perCol.reduce((n, c) => n + c.pending, 0);
-    if (pending > CONFIRM_THRESHOLD && !confirm)
-      return needsConfirm("Run table", pending, t.name, { functionColumns: fnCols.length });
+    // Paid if any function column charges credits — that drives the spend gate.
+    const anyPaid = fnCols.some((c) => (c.provider && c.method ? (local!.engine.registry.method(c.provider, c.method)?.credits ?? 0) : 0) > 0);
+    const g = gate("run_table", gargs, { affected: pending, perRowCredits: anyPaid ? 1 : 0, action: "Run table", target: t.name, extra: { functionColumns: fnCols.length } });
+    if (!g.ok) return g.result;
     const results: { column: string; ran: number; errors: number }[] = [];
     for (const { col, pending: p } of perCol) {
       if (!force && p === 0) continue; // nothing to do for this column
@@ -725,6 +885,8 @@ server.tool(
   "Upload a JSON-manifest extension (a connector defined as data: baseUrl, auth, and HTTP methods). Its methods become callable via sdk.<id>.<method> and appear in list_functions. Pass the manifest JSON as a string.",
   { manifestJson: z.string().describe("The extension manifest as a JSON string.") },
   async ({ manifestJson }) => {
+    const blocked = planGuard("upload_extension", "Upload extension", "project");
+    if (blocked) return blocked;
     if (cloudSource) return cloudUnsupported("upload_extension");
     const manifest = parseManifest(manifestJson);
     local!.db.saveExtension({ ...manifest });
@@ -742,7 +904,18 @@ server.tool(
     input: z.record(z.string(), z.any()).optional().describe("Method inputs object"),
   },
   async ({ provider, method, input }) => {
-    if (!registry.method(provider, method)) throw new Error(`Unknown function ${provider}.${method}. Use list_functions.`);
+    const m = registry.method(provider, method);
+    if (!m) throw new Error(`Unknown function ${provider}.${method}. Use list_functions.`);
+    // Spend gate: a paid direct dispatch (search/enrich) asks in acceptEdits, and
+    // only a human approval unlocks it — the model can't self-confirm a credit spend.
+    const g = gate("run_function", { provider, method, input }, {
+      affected: 1,
+      perRowCredits: m.credits ?? 0,
+      estimatedCredits: m.credits ?? 0,
+      action: `Run ${provider}.${method}`,
+      target: provider,
+    });
+    if (!g.ok) return g.result;
     // Cloud resolves the workspace's shared credentials through the worker and
     // dispatches in-process (cloud-source.runFunction); local hits the SQLite
     // credential store directly. Same registry validation either way (index.ts:76).

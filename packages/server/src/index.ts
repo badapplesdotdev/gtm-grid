@@ -1186,6 +1186,17 @@ const server = createServer(async (req, res) => {
       // claude bridge then applies its bypass default).
       const ALLOWED_MODES = new Set(["bypassPermissions", "auto", "acceptEdits", "plan"]);
       const mode = typeof body?.mode === "string" && ALLOWED_MODES.has(body.mode) ? body.mode : undefined;
+      // HITL approval: on a resumed-after-Approve turn the desktop sends the
+      // human-approved { tool, argsHash }. It's threaded into the MCP env
+      // (agent.ts → mcpEnv), a channel the model can't reach, so the gated tool
+      // runs only for the exact action the user approved. Validated shape only.
+      const approval =
+        body?.approval &&
+        typeof body.approval === "object" &&
+        typeof body.approval.tool === "string" &&
+        typeof body.approval.argsHash === "string"
+          ? { tool: body.approval.tool as string, argsHash: body.approval.argsHash as string }
+          : undefined;
       // CLOUD context (TRI-3296): when the desktop is operating a CLOUD project
       // it forwards apiUrl/token/workspace/project/table so the spawned MCP's
       // table tools read/write Supabase. A partial/absent block ⇒ undefined,
@@ -1206,9 +1217,9 @@ const server = createServer(async (req, res) => {
       // Hermes is LOCAL-only by design — it drives the local SQLite project via
       // ACP and is never threaded the cloud context.
       const newChat = body?.newChat === true;
-      if (agent === "hermes") streamHermes(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model, mode });
-      else if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, newChat, context, origin, model, mode, cloud, providerEnv });
-      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, newChat, context, origin, model, mode, cloud, providerEnv });
+      if (agent === "hermes") streamHermes(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model, mode, approval });
+      else if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, newChat, context, origin, model, mode, cloud, providerEnv, approval });
+      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, newChat, context, origin, model, mode, cloud, providerEnv, approval });
     } catch (e) {
       send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
     }

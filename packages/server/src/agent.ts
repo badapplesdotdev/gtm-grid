@@ -266,6 +266,31 @@ export function claudePermissionMode(mode?: string): string {
   return "bypassPermissions"; // plan + absent + anything unexpected
 }
 
+/**
+ * If a tool_result is a gtmgrid `confirmationRequired` payload carrying an
+ * `approvalRequest` (the MCP gate paused on a destructive/credit-spending op),
+ * build the `permission_request` SSE event the desktop renders as an approval
+ * card. Returns null for ordinary results. Shared by all three provider bridges
+ * so the HITL surface is identical regardless of provider.
+ */
+export function permissionEventFromToolResult(raw: string): Record<string, unknown> | null {
+  try {
+    const p = JSON.parse(raw.trim());
+    if (
+      p &&
+      typeof p === "object" &&
+      p.confirmationRequired === true &&
+      p.approvalRequest &&
+      typeof p.approvalRequest === "object"
+    ) {
+      return { type: "permission_request", ...(p.approvalRequest as Record<string, unknown>) };
+    }
+  } catch {
+    /* not JSON — no permission request */
+  }
+  return null;
+}
+
 export type AgentKind = "claude" | "codex" | "hermes";
 
 // ── Locating the user's CLIs ──────────────────────────────────────────────
@@ -593,11 +618,31 @@ export function parseAgentCloud(raw: unknown): AgentCloud | undefined {
  * cloud data source. The token rides the ENV, not the config string, so it
  * never appears in a logged command line.
  */
-export function mcpEnv(project: string, cloud?: AgentCloud): Record<string, string> {
+/** A human-approved action, threaded into the resumed turn's MCP env (Phase 2). */
+export interface AgentApproval {
+  readonly tool: string;
+  readonly argsHash: string;
+}
+
+export function mcpEnv(
+  project: string,
+  cloud?: AgentCloud,
+  mode?: string,
+  approval?: AgentApproval,
+): Record<string, string> {
   // The sidecar's own HTTP port — lets the MCP delegate a large run to the
   // PERSISTENT server (which outlives the 5-min agent turn) instead of blocking.
   const port = process.env.GTMGRID_PORT ?? "8787";
-  if (!cloud) return { GTMGRID_PROJECT: project, GTMGRID_PORT: port };
+  // Permission mode + (on a resumed-after-approval turn) the human's approval.
+  // Setting GTMGRID_PERMISSION_MODE is what activates the MCP's mode gate; the
+  // approval vars are the model-inaccessible channel that unlocks a confirm.
+  const perm: Record<string, string> = {};
+  if (mode) perm.GTMGRID_PERMISSION_MODE = mode;
+  if (approval) {
+    perm.GTMGRID_APPROVED_TOOL = approval.tool;
+    perm.GTMGRID_APPROVED_ARGS_HASH = approval.argsHash;
+  }
+  if (!cloud) return { GTMGRID_PROJECT: project, GTMGRID_PORT: port, ...perm };
   return {
     GTMGRID_PROJECT: project,
     GTMGRID_PORT: port,
@@ -607,6 +652,7 @@ export function mcpEnv(project: string, cloud?: AgentCloud): Record<string, stri
     GTMGRID_WORKSPACE_ID: cloud.workspaceId,
     GTMGRID_CLOUD_PROJECT: cloud.projectId,
     GTMGRID_CLOUD_TABLE: cloud.tableId,
+    ...perm,
   };
 }
 
@@ -621,10 +667,12 @@ export function mcpConfig(
   project: string,
   extra?: Record<string, ExtraMcpServer>,
   cloud?: AgentCloud,
+  mode?: string,
+  approval?: AgentApproval,
 ): string {
   return JSON.stringify({
     mcpServers: {
-      gtmgrid: { command: mcpLauncher(repoRoot), env: mcpEnv(project, cloud) },
+      gtmgrid: { command: mcpLauncher(repoRoot), env: mcpEnv(project, cloud, mode, approval) },
       ...extra,
     },
   });
@@ -633,7 +681,7 @@ export function mcpConfig(
 /** Stream a Claude Code turn over SSE, driving gtmgrid via MCP. */
 export function streamClaude(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; sessionId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; mode?: string; cloud?: AgentCloud; providerEnv?: Record<string, string> },
+  opts: { message: string; project: string; repoRoot: string; sessionId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; mode?: string; cloud?: AgentCloud; providerEnv?: Record<string, string>; approval?: AgentApproval },
 ): void {
   const sse = sseClient(res, opts.origin);
   // Optionally also expose the user's Hermes agent as an MCP tool (off unless
@@ -646,7 +694,7 @@ export function streamClaude(
     "stream-json",
     "--verbose",
     "--mcp-config",
-    mcpConfig(opts.repoRoot, opts.project, hermesTool ? { hermes: hermesTool } : undefined, opts.cloud),
+    mcpConfig(opts.repoRoot, opts.project, hermesTool ? { hermes: hermesTool } : undefined, opts.cloud, opts.mode, opts.approval),
     // Use ONLY gtmgrid's MCP server (+ Hermes when enabled) — ignore the user's
     // other Claude Code MCP servers (Trigify/Clay/etc.) so the agent drives
     // gtmgrid's own tools instead of reaching for an external MCP (auth walls).
@@ -736,6 +784,8 @@ export function streamClaude(
                 ? block.content
                 : "";
             if (text) sse.write({ type: "tool_result", result: text.slice(0, 600) });
+            const pe = text ? permissionEventFromToolResult(text) : null;
+            if (pe) sse.write(pe);
           }
         }
       } else if (e.type === "result") {
@@ -810,7 +860,7 @@ export function codexSandboxFlags(_mode?: string): string[] {
 
 export function streamCodex(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; threadId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; mode?: string; cloud?: AgentCloud; providerEnv?: Record<string, string> },
+  opts: { message: string; project: string; repoRoot: string; threadId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; mode?: string; cloud?: AgentCloud; providerEnv?: Record<string, string>; approval?: AgentApproval },
 ): void {
   const sse = sseClient(res, opts.origin);
   const launcher = mcpLauncher(opts.repoRoot);
@@ -831,7 +881,7 @@ export function streamCodex(
     // drives gtmgrid. The gtmgrid env (incl. cloud context in cloud mode) is
     // rendered as TOML with every value safely quoted — see `codexEnvToml`.
     "-c",
-    `mcp_servers={ gtmgrid = { command = "${launcher}", env = ${codexEnvToml(mcpEnv(opts.project, opts.cloud))} }${hermesToml} }`,
+    `mcp_servers={ gtmgrid = { command = "${launcher}", env = ${codexEnvToml(mcpEnv(opts.project, opts.cloud, opts.mode, opts.approval))} }${hermesToml} }`,
     ...(opts.model ? ["-m", opts.model] : []),
   ];
   // Same binding as Claude: an explicit threadId (History pick) wins, else resume
@@ -883,7 +933,12 @@ export function streamCodex(
         if (item.type === "mcp_tool_call") {
           const short = String(item.tool ?? "");
           sse.write({ type: "tool", name: short, raw: `mcp__${item.server}__${short}`, input: item.arguments ?? {} });
-          if (!item.error && item.result) sse.write({ type: "tool_result", name: short, result: resultText(item.result).slice(0, 600) });
+          if (!item.error && item.result) {
+            const rtext = resultText(item.result);
+            sse.write({ type: "tool_result", name: short, result: rtext.slice(0, 600) });
+            const pe = permissionEventFromToolResult(rtext);
+            if (pe) sse.write(pe);
+          }
           if (MUTATING.has(short)) sse.write({ type: "grid" });
         } else if (item.type === "agent_message" && item.text) {
           sse.write({ type: "text", text: item.text });
@@ -1032,12 +1087,22 @@ export interface HermesTransport {
 
 /** Resolve how to launch the local Hermes (ACP) and how its session reaches the
  *  gtmgrid MCP server. Returns null if there's no local `hermes` binary. */
-function resolveHermesTransport(repoRoot: string, project: string): HermesTransport | null {
+function resolveHermesTransport(
+  repoRoot: string,
+  project: string,
+  mode?: string,
+  approval?: AgentApproval,
+): HermesTransport | null {
   const bin = resolveAgentPath("hermes");
   if (!bin) return null;
+  // Hermes is local-only (no cloud), but it gets the SAME permission-mode +
+  // approval env as Claude/Codex so the MCP gate enforces the mode identically.
+  const env = Object.entries(mcpEnv(project, undefined, mode, approval)).map(
+    ([name, value]) => ({ name, value }),
+  );
   return {
     argv: [bin, "acp"],
-    gtmgridMcp: { name: "gtmgrid", command: mcpLauncher(repoRoot), args: [], env: [{ name: "GTMGRID_PROJECT", value: project }] },
+    gtmgridMcp: { name: "gtmgrid", command: mcpLauncher(repoRoot), args: [], env },
     label: "local",
   };
 }
@@ -1079,7 +1144,10 @@ export function mapAcpUpdate(update: Record<string, any> | undefined | null): Ar
       break;
     case "tool_call_update":
       if (update?.status === "completed" || update?.status === "failed") {
-        out.push({ type: "tool_result", result: acpToolResultText(update) });
+        const rtext = acpToolResultText(update);
+        out.push({ type: "tool_result", result: rtext });
+        const pe = permissionEventFromToolResult(rtext);
+        if (pe) out.push(pe);
         out.push({ type: "grid" }); // a tool finished — nudge the UI to refetch
       }
       break;
@@ -1125,15 +1193,15 @@ const defaultSpawnHermes: SpawnHermes = (cmd, args, cwd) =>
 /** Stream a Hermes turn over SSE via the Agent Client Protocol. */
 export function streamHermes(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext; origin?: string; model?: string; mode?: string },
+  opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext; origin?: string; model?: string; mode?: string; approval?: AgentApproval },
   deps: {
     spawn?: SpawnHermes;
     control?: ProcessControl;
-    resolveTransport?: (repoRoot: string, project: string) => HermesTransport | null;
+    resolveTransport?: (repoRoot: string, project: string, mode?: string, approval?: AgentApproval) => HermesTransport | null;
   } = {},
 ): void {
   const sse = sseClient(res, opts.origin);
-  const transport = (deps.resolveTransport ?? resolveHermesTransport)(opts.repoRoot, opts.project);
+  const transport = (deps.resolveTransport ?? resolveHermesTransport)(opts.repoRoot, opts.project, opts.mode, opts.approval);
   if (!transport) {
     sse.write({
       type: "error",
