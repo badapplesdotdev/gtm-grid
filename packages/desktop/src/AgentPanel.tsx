@@ -30,6 +30,19 @@ interface ToolCallT {
  *  in place without disturbing the sequence. */
 type Part = { kind: "text"; text: string } | { kind: "tool"; ref: number };
 
+/** A pending human-in-the-loop approval — the MCP gate paused on a destructive /
+ *  credit-spending op and is waiting for the user to Approve/Deny in the chat. */
+interface PermissionRequest {
+  pendingId: string;
+  tool: string;
+  argsHash: string;
+  mode?: string;
+  action?: string;
+  target?: string;
+  willAffect?: number;
+  estimatedCredits?: number;
+}
+
 interface Message {
   role: "user" | "assistant";
   /** Full concatenated text of the turn (drives planBody, thinking label,
@@ -41,6 +54,8 @@ interface Message {
   error?: boolean;
   /** This assistant turn was produced in PLAN MODE — render the plan affordances. */
   plan?: boolean;
+  /** A tool paused for human approval (HITL) — drives the Approve/Deny card. */
+  permission?: PermissionRequest;
 }
 
 /** Append streamed text to the open text segment, or start a new one — so text
@@ -117,7 +132,9 @@ function loadMode(): PermMode {
   } catch {
     /* storage disabled — fall through */
   }
-  return "bypassPermissions";
+  // Default to "auto" (not bypass): destructive ops and credit spends ask for a
+  // one-click approval, which is the safe default now that modes are enforced.
+  return "auto";
 }
 
 function relativeTime(ts: number): string {
@@ -628,7 +645,7 @@ export default function AgentPanel({
     return () => abortAllRuns(refs);
   }, [tableKey]);
 
-  async function send(preset?: string, modeOverride?: PermMode) {
+  async function send(preset?: string, modeOverride?: PermMode, approval?: { tool: string; argsHash: string }) {
     // Bind this turn to the agent it was started on. Everything below uses `a`,
     // not the live `agent` state, so the run keeps writing to ITS OWN thread and
     // toggling ITS OWN busy flag even after the user switches tabs mid-stream.
@@ -673,6 +690,9 @@ export default function AgentPanel({
           message: text,
           model: models[a] || undefined,
           mode: effMode,
+          // HITL: carry the human-approved action so the gated tool runs this turn
+          // (the server threads it into the model-inaccessible MCP env).
+          approval: approval || undefined,
           sessionId: sessionRef.current[a],
           newChat: fresh || undefined,
           context: activeTable ? { tableName: activeTable.name, columns: activeTable.columns } : undefined,
@@ -720,6 +740,20 @@ export default function AgentPanel({
                 }
               return { ...m, tools };
             });
+          else if (e.type === "permission_request")
+            updateLast((m) => ({
+              ...m,
+              permission: {
+                pendingId: e.pendingId,
+                tool: e.tool,
+                argsHash: e.argsHash,
+                mode: e.mode,
+                action: e.action,
+                target: e.target,
+                willAffect: e.willAffect,
+                estimatedCredits: e.estimatedCredits,
+              },
+            }));
           else if (e.type === "grid") onGridChange();
           else if (e.type === "session") sessionRef.current[a] = e.sessionId;
           else if (e.type === "done") {
@@ -917,22 +951,36 @@ export default function AgentPanel({
                     </div>
                   )}
                   {isLast && m.role === "assistant" && !busy && (() => {
-                    const c = pendingConfirm(m);
+                    // Prefer the ENFORCED permission_request (carries an approval
+                    // the server unlocks); fall back to the legacy in-band confirm
+                    // payload (old server with no permission_request event).
+                    const p = m.permission;
+                    const c = p
+                      ? { action: p.action, willAffect: p.willAffect, target: p.target, estimatedCredits: p.estimatedCredits }
+                      : pendingConfirm(m);
                     if (!c) return null;
                     const detail = [
                       typeof c.willAffect === "number" ? `${c.willAffect} item${c.willAffect !== 1 ? "s" : ""}` : null,
                       c.target,
                       typeof c.estimatedCredits === "number" && c.estimatedCredits > 0 ? `~${c.estimatedCredits} credits` : null,
                     ].filter(Boolean).join(" · ");
+                    const modeLabel = p?.mode ? MODE_OPTIONS.find((o) => o.value === p.mode)?.label : undefined;
+                    const onApprove = p
+                      ? () => send("Approved — proceed.", undefined, { tool: p.tool, argsHash: p.argsHash })
+                      : () => send("Approved — proceed, calling the same tool with confirm: true.");
+                    const onDeny = p
+                      ? () => send("Denied — do not perform that action; continue or stop.")
+                      : () => send("Cancel — do NOT perform that action.");
                     return (
                       <div className="agent-confirm">
                         <div className="agent-confirm-head">
                           <strong>{c.action ?? "Confirm action"}</strong>
                           {detail && <span className="agent-confirm-detail">{detail}</span>}
                         </div>
+                        {modeLabel && <div className="agent-confirm-mode">{modeLabel} mode — your approval is required</div>}
                         <div className="agent-confirm-actions">
-                          <button className="agent-confirm-deny" onClick={() => send("Cancel — do NOT perform that action.")}>Deny</button>
-                          <button className="agent-confirm-approve" onClick={() => send("Approved — proceed, calling the same tool with confirm: true.")}>Approve</button>
+                          <button className="agent-confirm-deny" onClick={onDeny}>Deny</button>
+                          <button className="agent-confirm-approve" onClick={onApprove}>Approve</button>
                         </div>
                       </div>
                     );

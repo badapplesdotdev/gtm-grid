@@ -1556,6 +1556,7 @@ html, body, #root {
 }
 .agent-confirm-head { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; color: var(--text); }
 .agent-confirm-detail { font-size: 11.5px; color: var(--text-3); }
+.agent-confirm-mode { font-size: 10.5px; color: var(--accent); font-weight: 500; }
 .agent-confirm-actions { display: flex; gap: 6px; }
 .agent-confirm-deny, .agent-confirm-approve {
   all: unset; cursor: pointer; padding: 5px 14px; border-radius: var(--r-sm);

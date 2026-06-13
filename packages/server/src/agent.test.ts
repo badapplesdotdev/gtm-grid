@@ -9,6 +9,7 @@ import {
   manageChildLifecycle,
   mcpEnv,
   parseAgentCloud,
+  permissionEventFromToolResult,
   streamHermes,
   STDERR_CAP,
   type AgentCloud,
@@ -68,6 +69,45 @@ describe("mcpEnv — the env the spawned MCP receives (data-source selection)", 
       GTMGRID_CLOUD_PROJECT: "proj_1",
       GTMGRID_CLOUD_TABLE: "tbl_1",
     });
+  });
+
+  it("adds GTMGRID_PERMISSION_MODE when a mode is given, omits approval vars when absent", () => {
+    const env = mcpEnv("p", undefined, "auto");
+    expect(env.GTMGRID_PERMISSION_MODE).toBe("auto");
+    expect(env.GTMGRID_APPROVED_TOOL).toBeUndefined();
+  });
+
+  it("threads a human approval into GTMGRID_APPROVED_* (the model-inaccessible unlock)", () => {
+    const env = mcpEnv("p", undefined, "acceptEdits", { tool: "delete_rows", argsHash: "abc123" });
+    expect(env).toMatchObject({
+      GTMGRID_PERMISSION_MODE: "acceptEdits",
+      GTMGRID_APPROVED_TOOL: "delete_rows",
+      GTMGRID_APPROVED_ARGS_HASH: "abc123",
+    });
+  });
+});
+
+describe("permissionEventFromToolResult — confirmationRequired → permission_request SSE", () => {
+  it("builds a permission_request event from a gate's approvalRequest payload", () => {
+    const raw = JSON.stringify({
+      confirmationRequired: true,
+      approvalRequest: { pendingId: "pr_x", tool: "delete_rows", argsHash: "h", mode: "auto", action: "Delete rows", willAffect: 4200, target: "Leads" },
+    });
+    expect(permissionEventFromToolResult(raw)).toEqual({
+      type: "permission_request",
+      pendingId: "pr_x",
+      tool: "delete_rows",
+      argsHash: "h",
+      mode: "auto",
+      action: "Delete rows",
+      willAffect: 4200,
+      target: "Leads",
+    });
+  });
+  it("returns null for an ordinary tool result or non-JSON", () => {
+    expect(permissionEventFromToolResult(JSON.stringify({ added: 5 }))).toBeNull();
+    expect(permissionEventFromToolResult("not json")).toBeNull();
+    expect(permissionEventFromToolResult(JSON.stringify({ confirmationRequired: true }))).toBeNull();
   });
 });
 
