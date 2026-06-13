@@ -248,15 +248,22 @@ ${renderSkillsSection(ctx?.skills)}
 }
 
 /**
- * The Claude `--permission-mode` value for the composer mode. PLAN mode maps to
- * `bypassPermissions` (full tool access) on purpose: the native `plan` permission
- * mode denies research/read tools in headless `-p` and the agent loops on the
- * denials — the {@link PLAN_MODE_NOTE} preamble is what enforces plan-only here,
- * not the permission mode. Every other mode passes through; absent ⇒ bypass.
+ * The Claude `--permission-mode` value for the composer mode. Valid CLI values are
+ * `default | acceptEdits | bypassPermissions | plan`.
+ * - `auto` is the COMPOSER's label, not a CLI value — map it to `default` so the
+ *   CLI doesn't error on an unknown flag (selecting "Auto" previously sent an
+ *   invalid `--permission-mode auto`).
+ * - `plan` maps to `bypassPermissions` on purpose: native `plan` denies
+ *   research/read tools in headless `-p` and the agent loops on the denials — the
+ *   {@link PLAN_MODE_NOTE} preamble enforces plan-only instead.
+ *
+ * This flag only governs Claude's OWN (non-grid) tools; the gtmgrid grid tools are
+ * pre-approved via `--allowedTools`, so grid-tool gating is the MCP layer's job.
  */
 export function claudePermissionMode(mode?: string): string {
-  if (mode === "plan") return "bypassPermissions";
-  return mode ?? "bypassPermissions";
+  if (mode === "auto") return "default";
+  if (mode === "acceptEdits" || mode === "bypassPermissions") return mode;
+  return "bypassPermissions"; // plan + absent + anything unexpected
 }
 
 export type AgentKind = "claude" | "codex" | "hermes";
