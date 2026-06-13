@@ -86,6 +86,12 @@ export interface CloudTableSummary {
   readonly createdAt: number;
   /** Sidebar folder this table is filed under (null = root). */
   readonly folderId: string | null;
+  /**
+   * The table's row count, surfaced by `grid.listTables` so the sidebar / Tables
+   * page shows a real count for cloud tables (not "—"). `null` when the server
+   * did not report a count (older API), so the UI falls back to the dash.
+   */
+  readonly rows: number | null;
 }
 
 /** A cloud sidebar folder (the `listFolders` query shape). */
@@ -212,6 +218,7 @@ export function useCloudTables(
         position: t.position,
         createdAt: t.createdAt,
         folderId: t.folderId ?? null,
+        rows: t.rows ?? null,
       })),
     [q.data],
   );

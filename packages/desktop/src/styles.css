@@ -2457,13 +2457,6 @@ html, body, #root {
 .tp-card-meta { font: 400 12px var(--font-mono); color: var(--text-3); margin-top: -6px; }
 .tp-card-foot { display: flex; }
 
-/* ── Sidebar "Recent" tables shortcut ───────────────────── */
-.sidebar-recent { margin-bottom: 4px; }
-.sidebar-subgroup-label {
-  padding: 4px 16px 2px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em;
-  text-transform: uppercase; color: var(--text-3);
-}
-
 /* featured extension cards in the gallery */
 .browse-card.featured {
   border-color: var(--accent-200, #FF8083);

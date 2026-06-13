@@ -667,6 +667,30 @@ describe("cloud-access gate (lapsed trial / Free workspace)", () => {
     const exit = await run(Effect.flatMap(GridService, (s) => s.listTables("p1")));
     expect(Exit.isSuccess(exit)).toBe(true);
   });
+
+  it("attaches each table's row count (one grouped query, 0 when empty)", async () => {
+    const store = makeGridStore({
+      projects: [{ id: "p1", workspaceId: WS, name: "P", createdAt: 1 }],
+      tables: [
+        table({ id: "t1", name: "T1", position: 0 }),
+        table({ id: "t2", name: "T2", position: 1 }),
+      ],
+      rows: [
+        row({ id: "r1", tableId: "t1", position: 0 }),
+        row({ id: "r2", tableId: "t1", position: 1 }),
+        row({ id: "r3", tableId: "t1", position: 2 }),
+      ],
+    });
+    const { run } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.listTables("p1")));
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.map((t) => ({ id: t.id, rows: t.rows }))).toEqual([
+        { id: "t1", rows: 3 },
+        { id: "t2", rows: 0 },
+      ]);
+    }
+  });
 });
 
 describe("GridService.listTablesWithCounts (project-wide list for the agent — TRI-3299)", () => {

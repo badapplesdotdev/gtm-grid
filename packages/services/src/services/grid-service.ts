@@ -356,12 +356,19 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
 
     // ── tables ────────────────────────────────────────────────────────────
 
-    /** A project's tables (position order). Members-only. */
+    /**
+     * A project's tables (position order) WITH each table's row count, so the
+     * desktop sidebar / Tables page show a real count for cloud tables instead of
+     * "—". Counts come from ONE grouped `countByTableIds` query (not an N+1 per
+     * table). Members-only.
+     */
     const listTables = (projectId: string) =>
       Effect.gen(function* () {
         const project = yield* requireProject(projectId);
         yield* membership.requireMember(project.workspaceId);
-        return yield* tables.listByProject(projectId);
+        const projectTables = yield* tables.listByProject(projectId);
+        const counts = yield* rows.countByTableIds(projectTables.map((t) => t.id));
+        return projectTables.map((t) => ({ ...t, rows: counts[t.id] ?? 0 }));
       });
 
     /**

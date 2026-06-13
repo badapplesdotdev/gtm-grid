@@ -179,12 +179,73 @@ export interface CloudTableInput {
 }
 
 /**
+ * Normalize a table name for NAME-based de-dup: lowercase + trim, so a local
+ * table and an unlinked cloud copy whose names differ only in case / surrounding
+ * whitespace are treated as the SAME table. Pure + testable.
+ */
+export function normalizeTableName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+/**
+ * Decide which of two same-name rows is the RICHER representation to keep when
+ * de-duping by name. The "richest" row is the one carrying real signal: a row
+ * with a non-zero `rows` count (a real local/synced row) beats a bare cloud row
+ * (count 0); a `local`-kind row beats a `cloud`-kind row (it owns the data + the
+ * favorite/folder context); otherwise the FIRST row seen wins (the input order
+ * already encodes recency for cloud rows). Returns `true` when `candidate` should
+ * REPLACE the `incumbent` already kept for that name. Pure + testable.
+ */
+function candidateIsRicher(incumbent: TableListRow, candidate: TableListRow): boolean {
+  // A real row count is the strongest signal of the richer representation.
+  if (candidate.rows > 0 && incumbent.rows === 0) return true;
+  if (incumbent.rows > 0) return false;
+  // Neither carries a count: prefer the local row (owns data + favorite/folder).
+  if (candidate.kind === "local" && incumbent.kind === "cloud") return true;
+  // Same richness — keep the incumbent (first by recency / input order).
+  return false;
+}
+
+/**
+ * Remove GENUINE duplicates from a unified Tables list by NORMALIZED name,
+ * keeping the RICHEST representation of each name (see {@link candidateIsRicher}).
+ * Two rows that share a name — e.g. a plain local table and an unlinked cloud copy
+ * of the same name (one plain icon + one cloud icon) — collapse to ONE row.
+ * Genuinely different names are never collapsed. The kept rows preserve the input
+ * order (first-seen position) so favorites-first / position ordering still holds.
+ * Pure + testable: NO React.
+ */
+export function dedupeTableRowsByName(rows: readonly TableListRow[]): TableListRow[] {
+  // Map normalized name → index of the kept row in `out`, so a later, richer
+  // same-name row can replace the one already kept without reordering.
+  const keptIndexByName = new Map<string, number>();
+  const out: TableListRow[] = [];
+  for (const row of rows) {
+    const key = normalizeTableName(row.name);
+    const existingIndex = keptIndexByName.get(key);
+    if (existingIndex === undefined) {
+      keptIndexByName.set(key, out.length);
+      out.push(row);
+      continue;
+    }
+    const incumbent = out[existingIndex] as TableListRow;
+    if (candidateIsRicher(incumbent, row)) out[existingIndex] = row;
+  }
+  return out;
+}
+
+/**
  * Build the ONE merged, de-duplicated Tables list (TRI-3313-C). Local tables come
  * first (favorites sorted to the top, matching the old local list), each tagged
  * `synced` when a `syncLinks[id]` entry exists. Cloud tables are appended ONLY
  * when they are not already the link target of a local table (so a synced local
- * table and its cloud copy never both appear). Pure + testable: merge / dedup /
- * synced-tagging are verifiable offline with no React.
+ * table and its cloud copy never both appear) AND only when their NORMALIZED name
+ * does not already match a local row — an UNLINKED cloud copy of a local table
+ * (no sync link, so `linkedCloudIds` misses it) would otherwise render a second,
+ * cloud-icon dupe of the same table (the reported bug). The richest local row is
+ * always kept; a final {@link dedupeTableRowsByName} pass collapses any remaining
+ * same-name dupes (e.g. two unlinked cloud copies sharing a name). Pure +
+ * testable: merge / dedup / synced-tagging are verifiable offline with no React.
  */
 export function buildTableList(args: {
   readonly localTables: readonly LocalTableInput[];
@@ -210,8 +271,14 @@ export function buildTableList(args: {
       folderId: t.folderId ?? null,
       position: t.position ?? 0,
     }));
+  // Normalized names already represented by a local row — an UNLINKED cloud copy
+  // of one of these is a genuine duplicate and must be skipped here.
+  const localNames = new Set<string>(
+    localRows.map((r) => normalizeTableName(r.name)),
+  );
   const cloudRows: TableListRow[] = cloudTables
     .filter((t) => !linkedCloudIds.has(t._id))
+    .filter((t) => !localNames.has(normalizeTableName(t.name)))
     .map((t) => ({
       kind: "cloud" as const,
       id: t._id,
@@ -222,7 +289,10 @@ export function buildTableList(args: {
       folderId: null,
       position: 0,
     }));
-  return [...localRows, ...cloudRows];
+  // Final safety net: collapse any remaining same-name dupes (e.g. two unlinked
+  // cloud copies sharing a name), keeping the richest. Local rows already de-dup
+  // cloud copies above, so this only ever removes genuine cloud↔cloud dupes here.
+  return dedupeTableRowsByName([...localRows, ...cloudRows]);
 }
 
 // ── Sidebar folder grouping ─────────────────────────────────────────────────
