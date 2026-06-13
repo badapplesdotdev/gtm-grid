@@ -1,5 +1,12 @@
 # @gtmgrid/desktop
 
+## 0.9.19
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.19
+- @gtmgrid/services@0.9.19
+
 ## 0.9.18
 
 ### Patch Changes
