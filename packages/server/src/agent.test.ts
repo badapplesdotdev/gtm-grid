@@ -422,9 +422,12 @@ describe("claudePermissionMode — composer mode → claude --permission-mode", 
   it("plan maps to bypassPermissions (research tools must not be denied)", () => {
     expect(claudePermissionMode("plan")).toBe("bypassPermissions");
   });
-  it("other modes pass through; absent → bypass", () => {
+  it("auto maps to the valid CLI 'default' (NOT the invalid 'auto' flag)", () => {
+    expect(claudePermissionMode("auto")).toBe("default");
+  });
+  it("acceptEdits/bypassPermissions pass through; absent → bypass", () => {
     expect(claudePermissionMode("acceptEdits")).toBe("acceptEdits");
-    expect(claudePermissionMode("auto")).toBe("auto");
+    expect(claudePermissionMode("bypassPermissions")).toBe("bypassPermissions");
     expect(claudePermissionMode(undefined)).toBe("bypassPermissions");
   });
 });
