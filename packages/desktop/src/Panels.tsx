@@ -148,6 +148,26 @@ const I = {
       <rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
     </svg>
   ),
+  Table: ({ s = 22 }: { s?: number }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M3 15h18M9 3v18" />
+    </svg>
+  ),
+  Trash: ({ s = 14 }: { s?: number }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    </svg>
+  ),
+  Pencil: ({ s = 14 }: { s?: number }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+    </svg>
+  ),
+  Star: ({ s = 14, filled = false }: { s?: number; filled?: boolean }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+    </svg>
+  ),
 };
 
 // Two credential scopes the panels expose:
@@ -846,6 +866,144 @@ export function SkillsBrowse({
         <div className="browse-grid">
           {customSkills.map((s) => <SkillCard key={s.id} s={s} onOpen={onOpen} />)}
         </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Tables gallery ──────────────────────────────────────
+//
+// The search-and-manage page for a workspace's tables, mirroring the connector
+// gallery. Owns only its search + inline-rename state; open/delete/rename/favorite/
+// create are delegated to App (which holds the table state + confirm modals).
+
+/** One table as the gallery renders it; `null` counts mean "unknown" (cloud). */
+export interface TableCard {
+  key: string;
+  kind: "local" | "cloud";
+  id: string;
+  name: string;
+  rows: number | null;
+  columns: number | null;
+  favorite: boolean;
+  synced: boolean;
+  active: boolean;
+}
+
+function tableMeta(c: TableCard): string {
+  if (c.kind === "cloud") return "Cloud table";
+  const parts: string[] = [];
+  if (c.columns != null) parts.push(`${c.columns} column${c.columns !== 1 ? "s" : ""}`);
+  if (c.rows != null) parts.push(`${c.rows} row${c.rows !== 1 ? "s" : ""}`);
+  return parts.join(" · ") || "Empty table";
+}
+
+export function TablesBrowse({
+  cards,
+  onOpen,
+  onDelete,
+  onFavorite,
+  onRename,
+  onNew,
+}: {
+  cards: TableCard[];
+  onOpen: (c: TableCard) => void;
+  onDelete: (c: TableCard) => void;
+  onFavorite: (c: TableCard) => void;
+  onRename: (c: TableCard, name: string) => void;
+  onNew: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [renamingKey, setRenamingKey] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const q = query.trim().toLowerCase();
+  const filtered = q ? cards.filter((c) => c.name.toLowerCase().includes(q)) : cards;
+
+  const commitRename = (c: TableCard) => {
+    setRenamingKey(null);
+    if (draft.trim() && draft.trim() !== c.name) onRename(c, draft.trim());
+  };
+
+  return (
+    <div className="browse">
+      <h1 className="browse-title">Your tables</h1>
+
+      <div className="browse-search">
+        <I.Search />
+        <input
+          className="browse-search-input"
+          placeholder="Search tables"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          autoFocus
+        />
+        <button className="skill-new-btn" onClick={onNew}>
+          <I.Plus /> New table
+        </button>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="browse-empty">
+          {q ? `No tables match “${query}”.` : "No tables yet. Click “New table” to create one."}
+        </div>
+      ) : (
+        <>
+          <div className="browse-section-label">
+            {filtered.length} table{filtered.length !== 1 ? "s" : ""}
+          </div>
+          <div className="browse-grid">
+            {filtered.map((c) => {
+              const renaming = renamingKey === c.key;
+              return (
+                <div
+                  key={c.key}
+                  className={`browse-card table-card${c.active ? " active" : ""}`}
+                  onClick={() => (renaming ? undefined : onOpen(c))}
+                >
+                  <div className="browse-card-icon"><I.Table /></div>
+                  <div className="browse-card-body">
+                    <div className="browse-card-top">
+                      {renaming ? (
+                        <input
+                          className="table-card-rename"
+                          value={draft}
+                          autoFocus
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => setDraft(e.target.value)}
+                          onBlur={() => commitRename(c)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") commitRename(c);
+                            if (e.key === "Escape") setRenamingKey(null);
+                          }}
+                        />
+                      ) : (
+                        <span className="browse-card-name">{c.name}</span>
+                      )}
+                      {c.favorite && <span className="table-card-star"><I.Star s={12} filled /></span>}
+                      {c.synced && <span className="ext-badge connected">cloud</span>}
+                    </div>
+                    <div className="browse-card-desc">{tableMeta(c)}</div>
+                  </div>
+                  <div className="table-card-actions" onClick={(e) => e.stopPropagation()}>
+                    {c.kind === "local" && (
+                      <button title={c.favorite ? "Unpin" : "Pin to favorites"} onClick={() => onFavorite(c)}>
+                        <I.Star s={14} filled={c.favorite} />
+                      </button>
+                    )}
+                    {c.kind === "local" && (
+                      <button title="Rename" onClick={() => { setDraft(c.name); setRenamingKey(c.key); }}>
+                        <I.Pencil s={14} />
+                      </button>
+                    )}
+                    <button className="table-card-del" title="Delete table" onClick={() => onDelete(c)}>
+                      <I.Trash s={14} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
     </div>
   );
