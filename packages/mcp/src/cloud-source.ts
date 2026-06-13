@@ -246,6 +246,18 @@ export interface CloudGridSource {
     opts: { force?: boolean; concurrency?: number; limit?: number; offset?: number },
   ) => Promise<{ column: string; ran: number; errors: number }>;
   /**
+   * Call a connector function DIRECTLY (no table) on the cloud project — the
+   * cloud twin of the local `engine.dispatch`. Resolves the workspace's shared
+   * connector credentials through the worker `getCredential` route (the same
+   * machinery cloud {@link runColumn} uses), so the `run_function` tool can
+   * SOURCE data (searches, enrichment) on cloud exactly as it does locally.
+   */
+  readonly runFunction: (
+    provider: string,
+    method: string,
+    input: Record<string, unknown>,
+  ) => Promise<unknown>;
+  /**
    * The function columns of the active cloud table in grid (left-to-right) order,
    * each with whether it still has pending (not-`done`) cells. The `run_table`
    * tool drives a full-table run off this, calling {@link runColumn} per column.
@@ -724,6 +736,22 @@ export function makeCloudSource(
         rowIds: opts.limit != null ? scoped.map((r) => r._id) : undefined,
       });
       return { column: col.name, ...res };
+    },
+
+    runFunction: async (provider, method, input) => {
+      // `dispatch` only needs the credential resolver, not a table (see
+      // Engine.dispatch → creds.getCredential). Reuse the active table's id to
+      // build the same workspace-scoped cloud store cloud `runColumn` uses; the
+      // connector call then runs in-process here (the MCP sidecar), resolving the
+      // workspace's shared credentials through the worker — no dedicated dispatch
+      // route required.
+      const workspaceId = await deps.resolveWorkspaceId(client, context.tableId);
+      const store = await buildCloudStore(client, context.tableId, workspaceId);
+      const engine = new Engine(undefined, deps.config, deps.registry, undefined, {
+        store,
+        creds: store,
+      });
+      return engine.dispatch(provider, method, input);
     },
 
     functionColumns: async () => {

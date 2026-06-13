@@ -481,6 +481,25 @@ describe("makeCloudSource.runColumn — runs through the reused cloud GridStore 
   });
 });
 
+describe("makeCloudSource.runFunction — direct connector dispatch over cloud creds", () => {
+  it("dispatches provider.method through the Db-free engine and returns the raw result", async () => {
+    // No table needed — dispatch only resolves creds (here the fake action
+    // returns null → empty secrets, fine for the no-auth `test.upper`).
+    const grid: FakeGrid = { columns: [], rows: [], cells: [] };
+    const { deps } = depsFor(grid);
+    const out = await makeCloudSource(CTX, deps).runFunction("test", "upper", { value: "hello" });
+    expect(out).toEqual({ text: "HELLO" });
+  });
+
+  it("surfaces the engine's 'Unknown function' for an unregistered provider.method", async () => {
+    const grid: FakeGrid = { columns: [], rows: [], cells: [] };
+    const { deps } = depsFor(grid);
+    await expect(
+      makeCloudSource(CTX, deps).runFunction("nope", "gone", {}),
+    ).rejects.toThrow(/Unknown function/);
+  });
+});
+
 describe("CloudToolUnsupportedError — create/list-all mutators on cloud", () => {
   it("carries a tag + a message naming the tool and pointing to the UI", () => {
     const err = new CloudToolUnsupportedError("create_table");
