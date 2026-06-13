@@ -67,13 +67,42 @@ function cloudRegistry(): Registry {
   }
 }
 
+/**
+ * `ai.generate` fallback when the user has no AI provider key connected: route the
+ * prompt to the persistent sidecar's `/api/ai/generate`, which runs it through the
+ * user's already-authenticated coding agent (Claude Code / Codex) — so AI columns
+ * work off the model they're already using, no separate key. One agent call per
+ * row, so it's slower than a batched API key (acceptable as a no-key fallback).
+ */
+const mcpAiFallback = async (req: { prompt: string; system?: string; model?: string }): Promise<string> => {
+  const port = process.env.GTMGRID_PORT ?? "8787";
+  const res = await fetch(`http://127.0.0.1:${port}/api/ai/generate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ prompt: req.prompt, system: req.system }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      "No AI provider connected, and the agent fallback is unavailable. Tell the user to connect an AI key (Anthropic/OpenAI/OpenRouter) in the Extensions panel.",
+    );
+  }
+  const data = (await res.json()) as { text?: string; error?: string };
+  if (data.error) throw new Error(data.error);
+  if (typeof data.text !== "string") throw new Error("AI agent fallback returned no text.");
+  return data.text;
+};
+
 // LOCAL mode opens the SQLite project (and exposes its registry of connectors).
 // CLOUD mode opens NO SQLite file (the engine is Db-free, backed by the cloud
 // store); it still needs a registry for connector discovery + cloud runs, so we
 // build one with the SAME extensions loaded so cloud == local (skip `openProject`).
 const local = gridEnv.mode === "local" ? openProject(gridEnv.project) : undefined;
+// AI columns fall back to the user's coding-agent model when no key is set (both modes).
+if (local) local.engine.config.aiFallback = mcpAiFallback;
 const cloudDeps =
-  gridEnv.mode === "cloud" ? defaultCloudSourceDeps(cloudRegistry()) : undefined;
+  gridEnv.mode === "cloud"
+    ? defaultCloudSourceDeps(cloudRegistry(), { aiFallback: mcpAiFallback })
+    : undefined;
 const cloudSource =
   gridEnv.mode === "cloud" && cloudDeps
     ? makeCloudSource(gridEnv.context, cloudDeps)
@@ -224,6 +253,32 @@ const localTableOr = (ref: string) => {
 const cloudUnsupported = (tool: string): never => {
   throw new CloudToolUnsupportedError(tool);
 };
+
+/**
+ * Turn a connector / AI error message into an ACTIONABLE note the agent surfaces
+ * to the user — so a missing AI key, a 401, or a quota cap explains itself (and
+ * which panel fixes it) instead of the agent having to dig the message out of a
+ * follow-up get_table.
+ */
+function errorHint(message: string): string {
+  const m = message.toLowerCase();
+  if (m.includes("no ai provider connected"))
+    return "No AI provider is connected. Tell the user to connect an AI key (Anthropic, OpenAI, or OpenRouter) in the Extensions panel so AI columns can run — or, with no key, AI columns fall back to the user's own connected Claude/Codex agent model (slower, one call per row).";
+  if (m.includes("401") || m.includes("403") || m.includes("unauthor") || m.includes("authentication required") || m.includes("invalid api key") || m.includes("missing api key"))
+    return "This connector's API key is missing or invalid. Tell the user to connect it in the Extensions panel; do NOT retry blindly.";
+  if (m.includes("[quota]") || m.includes("402") || m.includes("exceed your plan"))
+    return "The workspace hit its plan's cloud-action limit. Tell the user to upgrade or run fewer rows; nothing was charged for the failed cells.";
+  return message;
+}
+
+/** Attach an actionable error hint to a run result when some cells errored. */
+function withRunHint<T extends { errors: number; firstError?: string }>(
+  res: T,
+): T & { errorHint?: string } {
+  return res.errors > 0 && res.firstError
+    ? { ...res, errorHint: errorHint(res.firstError) }
+    : res;
+}
 
 // --- Discovery: what enrichments/functions exist ---
 // Three tiers: list_providers (lightweight catalog), search_functions (intent
@@ -445,7 +500,7 @@ server.tool(
         target: `${table} › ${column}`,
       });
       if (!g.ok) return g.result;
-      return ok(await cloudSource.runColumn(table, column, { force, concurrency, limit, offset }));
+      return ok(withRunHint(await cloudSource.runColumn(table, column, { force, concurrency, limit, offset })));
     }
     const t = localTableOr(table);
     const col = local!.db.resolveColumn(t.id, column);
@@ -516,7 +571,7 @@ server.tool(
       // leave it undefined so the engine runs every row exactly as before.
       rowIds: limit != null ? scoped.map((r) => r.id) : undefined,
     });
-    return ok({ column: col.name, ...res });
+    return ok(withRunHint({ column: col.name, ...res }));
   },
 );
 
@@ -854,9 +909,9 @@ server.tool(
       const g = gate("run_table", gargs, { affected: pending, perRowCredits: 1, action: "Run table", target: table, extra: { functionColumns: fns.length } });
       if (!g.ok) return g.result;
       const targets = force ? fns : fns.filter((c) => c.pending > 0);
-      const results: { column: string; ran: number; errors: number }[] = [];
+      const results: { column: string; ran: number; errors: number; firstError?: string }[] = [];
       for (const c of targets) results.push(await cloudSource.runColumn(table, c.name, { force, concurrency }));
-      return ok({ columns: results, ...totals(results) });
+      return ok(withRunHint({ columns: results, ...totals(results), firstError: results.find((r) => r.firstError)?.firstError }));
     }
     const t = localTableOr(table);
     const rows = local!.db.listRows(t.id);
@@ -870,7 +925,7 @@ server.tool(
     const anyPaid = fnCols.some((c) => (c.provider && c.method ? (local!.engine.registry.method(c.provider, c.method)?.credits ?? 0) : 0) > 0);
     const g = gate("run_table", gargs, { affected: pending, perRowCredits: anyPaid ? 1 : 0, action: "Run table", target: t.name, extra: { functionColumns: fnCols.length } });
     if (!g.ok) return g.result;
-    const results: { column: string; ran: number; errors: number }[] = [];
+    const results: { column: string; ran: number; errors: number; firstError?: string }[] = [];
     for (const { col, pending: p } of perCol) {
       if (!force && p === 0) continue; // nothing to do for this column
       const res = await local!.engine.runColumn(col.id, { force, concurrency: concurrency ?? 5 });
@@ -919,9 +974,18 @@ server.tool(
     // Cloud resolves the workspace's shared credentials through the worker and
     // dispatches in-process (cloud-source.runFunction); local hits the SQLite
     // credential store directly. Same registry validation either way (index.ts:76).
-    if (cloudSource) return ok(await cloudSource.runFunction(provider, method, input ?? {}));
-    const result = await local!.engine.dispatch(provider, method, input ?? {});
-    return ok(result);
+    // A connector auth error (missing/invalid key, 401) is re-thrown with an
+    // actionable hint so the agent tells the user which key to connect.
+    try {
+      const result = cloudSource
+        ? await cloudSource.runFunction(provider, method, input ?? {})
+        : await local!.engine.dispatch(provider, method, input ?? {});
+      return ok(result);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const hint = errorHint(msg);
+      throw new Error(hint === msg ? msg : `${msg}\n\n${hint}`);
+    }
   },
 );
 

@@ -286,7 +286,7 @@ describe("runCloudColumn", () => {
       depsFor(client, upperRegistry()),
     );
 
-    expect(res).toEqual({ ran: 0, errors: 1 });
+    expect(res).toMatchObject({ ran: 0, errors: 1 });
     const cell = grid.cells.find((c) => c.rowId === "r1" && c.columnId === "c_bad");
     expect(cell?.status).toBe("error");
     expect(cell?.error).toContain("boom");

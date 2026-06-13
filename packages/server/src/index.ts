@@ -140,9 +140,26 @@ for (const manifest of globalDb.listExtensions()) {
   }
 }
 
-// AI config resolved from the global db (env wins for the active provider).
+/**
+ * `ai.generate` fallback when no AI provider key is connected — route the prompt
+ * through the user's already-authenticated coding agent (Claude Code / Codex), so
+ * AI columns work off the model they're already using. Throws (→ the cell errors
+ * with this message) when no agent is connected either.
+ */
+async function aiAgentFallback(req: { prompt: string; system?: string }): Promise<string> {
+  const r = await generateWithAgent(req.prompt, req.system ?? "");
+  if ("error" in r) throw new Error(r.error);
+  return r.text;
+}
+
+// AI config resolved from the global db (env wins for the active provider); the
+// agent fallback covers the no-key case in-process.
 function aiConfig() {
-  return { ai: aiConfigFromEnv() ?? storedAiConfig(globalDb), aiProviders: storedAiProviders(globalDb) };
+  return {
+    ai: aiConfigFromEnv() ?? storedAiConfig(globalDb),
+    aiProviders: storedAiProviders(globalDb),
+    aiFallback: aiAgentFallback,
+  };
 }
 
 // ── Current project (swappable in-process, no sidecar restart).
@@ -1043,6 +1060,16 @@ route("POST", "/api/columns/:id/update", (p, body) => {
 // connected coding agent (Claude Code or Codex) — the model the user has already
 // authenticated, NOT a separate API AI key. Returns a "connect an agent" error when
 // neither CLI is available.
+// Generic one-shot AI generation via the user's connected coding agent (no API
+// key) — the MCP's `ai.generate` fallback POSTs here when no AI provider is set.
+route("POST", "/api/ai/generate", async (_p, body) => {
+  const prompt = String(body?.prompt ?? "").trim();
+  if (!prompt) return { error: "prompt is required" };
+  const r = await generateWithAgent(prompt, String(body?.system ?? ""));
+  if ("error" in r) return { error: r.error };
+  return { text: r.text };
+});
+
 route("POST", "/api/ai/generate-formula", async (_p, body) => {
   const description = String(body?.description ?? "").trim();
   if (!description) return { error: "description is required" };

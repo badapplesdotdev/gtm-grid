@@ -119,6 +119,22 @@ export interface MethodContext {
    * user's own machine/network, so a self-hosted localhost/LAN connector is fine.
    */
   guardSsrf?: boolean;
+  /**
+   * Fallback text generator used by `ai.generate` when NO AI provider key is
+   * connected — routes the prompt through the user's already-authenticated coding
+   * agent (Claude Code / Codex), so AI columns work off the model they're already
+   * using without a separate key. Resolves to the generated text; rejects if no
+   * agent is available either.
+   */
+  aiFallback?: (req: AiFallbackRequest) => Promise<string>;
+}
+
+/** A one-shot generation request for {@link MethodContext.aiFallback}. */
+export interface AiFallbackRequest {
+  readonly prompt: string;
+  readonly system?: string;
+  /** The model the user's agent is using, when known (passed through to the CLI). */
+  readonly model?: string;
 }
 
 export interface AiConfig {

@@ -130,7 +130,10 @@ describe("SqliteGridStore parity (runColumn over a real temp DB)", () => {
     const engine = new Engine(db, {}, echoRegistry());
     const res = await engine.runColumn(bad.id);
 
-    expect(res).toEqual({ ran: 0, errors: 1 });
+    expect(res).toMatchObject({ ran: 0, errors: 1 });
+    // The first error message is RETURNED (so the MCP run_column tool can tell the
+    // user why a run failed without a follow-up get_table read).
+    expect(res.firstError).toContain("boom");
     const cell = db.getCell(row.id, bad.id);
     expect(cell?.status).toBe("error");
     expect(cell?.error).toContain("boom");
@@ -224,7 +227,7 @@ describe("SqliteGridStore parity (runColumn over a real temp DB)", () => {
     });
     const res = await engine.runColumn(col.id);
 
-    expect(res).toEqual({ ran: 0, errors: 1 });
+    expect(res).toMatchObject({ ran: 0, errors: 1 });
     const cell = db.getCell(row.id, col.id);
     expect(cell?.status).toBe("error");
     expect(cell?.error).toContain("read blew up");

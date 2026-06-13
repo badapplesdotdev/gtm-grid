@@ -90,7 +90,7 @@ describe("runColumn onCell progress stream", () => {
     const engine = new Engine(db, {}, echoRegistry());
     const res = await engine.runColumn(col.id, { force: true, onCell: (c) => events.push(c) });
 
-    expect(res).toEqual({ ran: 0, errors: 1 });
+    expect(res).toMatchObject({ ran: 0, errors: 1 });
     expect(events.map((e) => e.status)).toEqual(["running", "error"]);
     const terminal = events[1];
     expect(terminal.rowId).toBe(row.id);
