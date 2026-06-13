@@ -18,6 +18,10 @@
 @import "tailwindcss/utilities.css";
 @import "tw-animate-css";
 
+/* Streamdown renders agent markdown with Tailwind utility classes. node_modules
+   isn't scanned by default, so point the scanner at its dist to generate them. */
+@source "../node_modules/streamdown/dist";
+
 /* The app toggles dark mode via `data-theme="dark"` on <html>, not a `.dark`
    class — point shadcn's `dark:` variant at it. */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
