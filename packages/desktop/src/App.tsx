@@ -32,6 +32,7 @@ import {
   resolveStaleCloudTableFallback,
   resolveTargetCloudProject,
   buildTableList,
+  dedupeTableRowsByName,
   groupTableList,
   positionForMove,
   type MoveTarget,
@@ -2327,16 +2328,18 @@ export default function App() {
   const tableList = useMemo(
     () =>
       inCloud
-        ? (cloudTables ?? []).map<TableListRow>((t) => ({
-            kind: "cloud" as const,
-            id: t._id,
-            name: t.name,
-            synced: true,
-            favorite: false,
-            rows: 0,
-            folderId: t.folderId,
-            position: t.position,
-          }))
+        ? dedupeTableRowsByName(
+            (cloudTables ?? []).map<TableListRow>((t) => ({
+              kind: "cloud" as const,
+              id: t._id,
+              name: t.name,
+              synced: true,
+              favorite: false,
+              rows: t.rows ?? 0,
+              folderId: t.folderId,
+              position: t.position,
+            })),
+          )
         : buildTableList({
             localTables: tables.map((t) => ({
               id: t.id,
@@ -2405,9 +2408,9 @@ export default function App() {
     [inCloud, cloudById],
   );
 
-  // Recency-sorted table cards for the Tables page + the sidebar "Recent" group.
-  // Cloud rows sort by their createdAt; local rows by sidebar position (a new
-  // table is appended, so the highest position is the most recent).
+  // Recency-sorted table cards for the Tables page. Cloud rows sort by their
+  // createdAt; local rows by sidebar position (a new table is appended, so the
+  // highest position is the most recent).
   const tableCards = useMemo<TableCard[]>(() => {
     const ranked = tableList.map((row) => {
       const local = row.kind === "local" ? localById.get(row.id) : undefined;
@@ -2418,7 +2421,10 @@ export default function App() {
         kind: row.kind,
         id: row.id,
         name: row.name,
-        rows: row.kind === "local" ? (local?.rows ?? row.rows) : null,
+        rows:
+          row.kind === "local"
+            ? (local?.rows ?? row.rows)
+            : (cloud?.rows ?? (row.rows > 0 ? row.rows : null)),
         columns: row.kind === "local" ? (local?.columns ?? null) : null,
         favorite: row.favorite,
         synced: row.synced,
@@ -2514,6 +2520,7 @@ export default function App() {
         </span>
         <span className="sidebar-item-name">{row.name}</span>
         {row.favorite && <span className="sidebar-item-star"><Icon.Star filled /></span>}
+        {row.rows > 0 && <span className="sidebar-item-count">{row.rows.toLocaleString()}</span>}
         {local && (
           <>
             <button
@@ -3253,24 +3260,6 @@ export default function App() {
               <div style={{ padding: "4px 16px", fontSize: 12, color: "var(--text-3)" }}>No tables yet</div>
             ) : (
               <>
-                {/* Quick "Recent" shortcut to the 5 most-recent tables — only when
-                    there are enough to make scanning the full list below tedious. */}
-                {tableCards.length > 5 && (
-                  <div className="sidebar-recent">
-                    <div className="sidebar-subgroup-label">Recent</div>
-                    {tableCards.slice(0, 5).map((c) => (
-                      <div
-                        key={`recent:${c.key}`}
-                        className={`sidebar-item${c.active && view.kind === "table" ? " active" : ""}`}
-                        onClick={() => onOpenCard(c)}
-                      >
-                        <span className="sidebar-item-icon"><Icon.Table /></span>
-                        <span className="sidebar-item-name">{c.name}</span>
-                        {c.favorite && <span className="sidebar-item-star"><Icon.Star filled /></span>}
-                      </div>
-                    ))}
-                  </div>
-                )}
                 {groupedTables.folders.map(({ folder, rows: folderRows }) => {
                   const isOpen = !!openFolders[folder.id];
                   const into = dropTarget?.kind === "folder" && dropTarget.id === folder.id;

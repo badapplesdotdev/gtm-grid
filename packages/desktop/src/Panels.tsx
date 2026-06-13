@@ -941,10 +941,14 @@ const TABLE_SORTS: { id: TableSort; label: string }[] = [
 ];
 
 function cardMeta(c: TableCard): string {
-  if (c.kind === "cloud") return "Cloud table";
+  // Show real counts whenever we have them. Cloud tables only carry a row count
+  // (no column count from the worker list), so they read "124 rows"; a cloud table
+  // whose count the server didn't report (older API) falls back to "Cloud table".
   const cols = c.columns != null ? `${c.columns} column${c.columns !== 1 ? "s" : ""}` : "";
   const rows = c.rows != null ? `${c.rows} row${c.rows !== 1 ? "s" : ""}` : "";
-  return [cols, rows].filter(Boolean).join(" · ") || "Empty table";
+  const meta = [cols, rows].filter(Boolean).join(" · ");
+  if (meta) return meta;
+  return c.kind === "cloud" ? "Cloud table" : "Empty table";
 }
 
 export function TablesBrowse({

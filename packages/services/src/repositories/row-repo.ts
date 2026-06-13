@@ -8,7 +8,7 @@
  */
 
 import { schema } from "@gtmgrid/db";
-import { and, asc, eq, gt, max, or } from "drizzle-orm";
+import { and, asc, count, eq, gt, inArray, max, or } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
 import { chunk } from "./_chunk.js";
@@ -119,6 +119,16 @@ export class RowRepo extends Context.Tag("RowRepo")<
       tableId: string,
     ) => Effect.Effect<readonly Row[], RowRepoError>;
     /**
+     * Row COUNTS for many tables in ONE grouped query (`COUNT(*) GROUP BY
+     * tableId`), returned as `{ [tableId]: count }`. Used by the sidebar's
+     * `listTables` to show a real per-table row count WITHOUT loading every row
+     * of every table (the N+1 of calling `listByTable` per table). A table with
+     * zero rows is omitted from the map; the caller defaults missing ids to 0.
+     */
+    readonly countByTableIds: (
+      tableIds: readonly string[],
+    ) => Effect.Effect<Record<string, number>, RowRepoError>;
+    /**
      * The position for the NEXT appended row: `MAX(position) + 1`, or `0` when
      * the table has no rows. Computed server-side (one `MAX` aggregate) so adding
      * a row never loads the whole table just to find the tail — the previous
@@ -206,6 +216,23 @@ export const RowRepoLive: Layer.Layer<RowRepo, never, DbClient> = Layer.effect(
               catch: fail("row list"),
             })
           : Effect.succeed([] as readonly Row[]),
+      countByTableIds: (tableIds) => {
+        const ids = tableIds.filter((id) => UUID_RE.test(id));
+        if (ids.length === 0) return Effect.succeed({} as Record<string, number>);
+        return Effect.tryPromise({
+          try: async () => {
+            const grouped = await db
+              .select({ tableId: schema.rows.tableId, n: count() })
+              .from(schema.rows)
+              .where(inArray(schema.rows.tableId, ids))
+              .groupBy(schema.rows.tableId);
+            const out: Record<string, number> = {};
+            for (const g of grouped) out[g.tableId] = Number(g.n);
+            return out;
+          },
+          catch: fail("row count by table"),
+        });
+      },
       nextPosition: (tableId) =>
         !UUID_RE.test(tableId)
           ? Effect.succeed(0)
@@ -403,6 +430,13 @@ export const rowRepoLayer = (
           .sort(
             (a, b) => a.position - b.position || a.createdAt - b.createdAt,
           ),
+      ),
+    countByTableIds: (tableIds) =>
+      Effect.succeed(
+        store.rows.reduce<Record<string, number>>((acc, r) => {
+          if (tableIds.includes(r.tableId)) acc[r.tableId] = (acc[r.tableId] ?? 0) + 1;
+          return acc;
+        }, {}),
       ),
     nextPosition: (tableId) =>
       Effect.succeed(
