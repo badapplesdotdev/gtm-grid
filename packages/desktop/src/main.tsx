@@ -7,6 +7,8 @@ import { ErrorBoundary } from "./ErrorBoundary";
 // utilities must win over that reset — see the layering note in tailwind.css.
 import "./styles.css";
 import "./tailwind.css";
+// Streamdown's streaming fade/blur keyframes (agent markdown output).
+import "streamdown/styles.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
