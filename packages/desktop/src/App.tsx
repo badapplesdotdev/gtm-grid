@@ -2423,6 +2423,7 @@ export default function App() {
         favorite: row.favorite,
         synced: row.synced,
         active: String(row.id) === String(activeRowId),
+        recency,
       };
       return { recency, card };
     });
@@ -2455,6 +2456,19 @@ export default function App() {
   };
   const onFavoriteCard = (c: TableCard) => { if (c.kind === "local") void toggleFavorite(c.id, !c.favorite); };
   const onRenameCard = (c: TableCard, name: string) => { if (c.kind === "local") void commitRename(c.id, name); };
+  // Bulk delete from the Tables hub — the page confirms once before calling this,
+  // so it deletes each directly (no per-item modal), then refreshes.
+  const onBulkDeleteCards = async (cs: TableCard[]) => {
+    for (const c of cs) {
+      if (c.kind === "cloud") {
+        const ct = cloudById.get(c.id);
+        if (ct) await deleteCloudTable(ct._id).catch(() => {});
+      } else {
+        await api.deleteTable(c.id).catch(() => {});
+      }
+    }
+    await reloadTables();
+  };
 
   // One unified sidebar table row (root or inside a folder). Not memoized — it
   // closes over the drag/drop + rename state and renders a handful of rows.
@@ -3653,11 +3667,15 @@ export default function App() {
           <Suspense fallback={<PanelFallback />}>
             <TablesBrowse
               cards={tableCards}
+              workspaceName={inCloud ? (cloudProject?.name ?? undefined) : undefined}
+              syncing={pushingTableIds.size > 0}
               onOpen={onOpenCard}
               onDelete={onDeleteCard}
               onFavorite={onFavoriteCard}
               onRename={onRenameCard}
               onNew={() => { setNewTableFolderId(null); setShowNewTableChooser(true); }}
+              onBulkDelete={onBulkDeleteCards}
+              onSyncAll={showSyncUi ? onSyncAll : undefined}
             />
           </Suspense>
         )}

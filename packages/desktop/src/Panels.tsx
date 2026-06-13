@@ -2,7 +2,7 @@
 // is selected. Layout mirrors the connections design: a header, Personal/Team/
 // Local scope tabs, a "CONNECTIONS" add-card, and collapsible info sections.
 
-import { useState, useEffect, useCallback, ReactNode } from "react";
+import { useState, useEffect, useCallback, ReactNode, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { api, ExtensionDetail, ExtensionInfo, AiProviderInfo, CredentialScope, SkillInfo, SkillDetail } from "./api";
 import { aiProviderCredId } from "./cloud/credentials";
@@ -123,8 +123,8 @@ const I = {
       <line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" />
     </svg>
   ),
-  Search: () => (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+  Search: ({ s = 14 }: { s?: number }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
     </svg>
   ),
@@ -166,6 +166,36 @@ const I = {
   Star: ({ s = 14, filled = false }: { s?: number; filled?: boolean }) => (
     <svg width={s} height={s} viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+    </svg>
+  ),
+  More: ({ s = 15 }: { s?: number }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="currentColor" stroke="none">
+      <circle cx="12" cy="5" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="12" cy="19" r="1.6" />
+    </svg>
+  ),
+  Sort: ({ s = 13 }: { s?: number }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 6h12M3 12h9M3 18h6M17 8V20M17 20l-3-3M17 20l3-3" />
+    </svg>
+  ),
+  ChevronDown: ({ s = 11 }: { s?: number }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  ),
+  ListView: ({ s = 14 }: { s?: number }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" /><line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
+    </svg>
+  ),
+  GridView: ({ s = 14 }: { s?: number }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" />
+    </svg>
+  ),
+  CloudUp: ({ s = 13 }: { s?: number }) => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M16 16a4 4 0 0 0 0-8 5 5 0 0 0-9.6-1.5A3.5 3.5 0 0 0 6 16" /><polyline points="12 12 12 21" /><polyline points="9 15 12 12 15 15" />
     </svg>
   ),
 };
@@ -871,13 +901,16 @@ export function SkillsBrowse({
   );
 }
 
-// ─── Tables gallery ──────────────────────────────────────
+// ─── Tables management hub ───────────────────────────────
 //
-// The search-and-manage page for a workspace's tables, mirroring the connector
-// gallery. Owns only its search + inline-rename state; open/delete/rename/favorite/
-// create are delegated to App (which holds the table state + confirm modals).
+// A connector-page-style hub for every table (from the GTM Grid Tables design):
+// title + subtitle, search, status-filter chips with counts, sort dropdown,
+// list/grid views, bulk-select, per-row favorite + actions menu. Owns its
+// view/search/sort/select/rename state; open/delete/rename/favorite/create/
+// bulk-delete are delegated to App. Owner/size/edited/function-stack columns from
+// the design are omitted — that data isn't in the live table model.
 
-/** One table as the gallery renders it; `null` counts mean "unknown" (cloud). */
+/** One table as the hub renders it; `null` counts mean "unknown" (cloud). */
 export interface TableCard {
   key: string;
   kind: "local" | "cloud";
@@ -888,120 +921,271 @@ export interface TableCard {
   favorite: boolean;
   synced: boolean;
   active: boolean;
+  /** Sort key for "Recently added" — cloud createdAt / local sidebar position. */
+  recency: number;
 }
 
-function tableMeta(c: TableCard): string {
+type TableFilter = "all" | "favorites" | "synced" | "local";
+type TableSort = "recent" | "name" | "rows";
+
+const TABLE_FILTERS: { id: TableFilter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "favorites", label: "Favorites" },
+  { id: "synced", label: "Synced" },
+  { id: "local", label: "Local only" },
+];
+const TABLE_SORTS: { id: TableSort; label: string }[] = [
+  { id: "recent", label: "Recently added" },
+  { id: "name", label: "Name" },
+  { id: "rows", label: "Row count" },
+];
+
+function cardMeta(c: TableCard): string {
   if (c.kind === "cloud") return "Cloud table";
-  const parts: string[] = [];
-  if (c.columns != null) parts.push(`${c.columns} column${c.columns !== 1 ? "s" : ""}`);
-  if (c.rows != null) parts.push(`${c.rows} row${c.rows !== 1 ? "s" : ""}`);
-  return parts.join(" · ") || "Empty table";
+  const cols = c.columns != null ? `${c.columns} column${c.columns !== 1 ? "s" : ""}` : "";
+  const rows = c.rows != null ? `${c.rows} row${c.rows !== 1 ? "s" : ""}` : "";
+  return [cols, rows].filter(Boolean).join(" · ") || "Empty table";
 }
 
 export function TablesBrowse({
   cards,
+  workspaceName,
+  syncing,
   onOpen,
   onDelete,
   onFavorite,
   onRename,
   onNew,
+  onBulkDelete,
+  onSyncAll,
 }: {
   cards: TableCard[];
+  workspaceName?: string;
+  syncing?: boolean;
   onOpen: (c: TableCard) => void;
   onDelete: (c: TableCard) => void;
   onFavorite: (c: TableCard) => void;
   onRename: (c: TableCard, name: string) => void;
   onNew: () => void;
+  onBulkDelete: (cs: TableCard[]) => void;
+  onSyncAll?: () => void;
 }) {
-  const [query, setQuery] = useState("");
-  const [renamingKey, setRenamingKey] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
-  const q = query.trim().toLowerCase();
-  const filtered = q ? cards.filter((c) => c.name.toLowerCase().includes(q)) : cards;
+  const [q, setQ] = useState("");
+  const [filter, setFilter] = useState<TableFilter>("all");
+  const [sort, setSort] = useState<TableSort>("recent");
+  const [sortOpen, setSortOpen] = useState(false);
+  const [view, setView] = useState<"list" | "grid">("list");
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [menu, setMenu] = useState<{ key: string; x: number; y: number } | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [confirmBulk, setConfirmBulk] = useState(false);
 
-  const commitRename = (c: TableCard) => {
-    setRenamingKey(null);
-    if (draft.trim() && draft.trim() !== c.name) onRename(c, draft.trim());
+  const query = q.trim().toLowerCase();
+  const counts: Record<TableFilter, number> = {
+    all: cards.length,
+    favorites: cards.filter((c) => c.favorite).length,
+    synced: cards.filter((c) => c.synced).length,
+    local: cards.filter((c) => !c.synced).length,
+  };
+  let visible = cards.filter((c) => c.name.toLowerCase().includes(query));
+  if (filter === "favorites") visible = visible.filter((c) => c.favorite);
+  else if (filter === "synced") visible = visible.filter((c) => c.synced);
+  else if (filter === "local") visible = visible.filter((c) => !c.synced);
+  visible = [...visible].sort((a, b) =>
+    sort === "name" ? a.name.localeCompare(b.name)
+    : sort === "rows" ? (b.rows ?? -1) - (a.rows ?? -1)
+    : b.recency - a.recency,
+  );
+
+  const selectedCards = cards.filter((c) => selected.has(c.key));
+  const allVisibleSelected = visible.length > 0 && visible.every((c) => selected.has(c.key));
+  const toggleSel = (key: string) =>
+    setSelected((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; });
+  const toggleAll = () =>
+    setSelected(() => (allVisibleSelected ? new Set<string>() : new Set(visible.map((c) => c.key))));
+  const clearSel = () => { setSelected(new Set()); setConfirmBulk(false); };
+
+  const openMenu = (e: MouseEvent<HTMLElement>, key: string) => {
+    e.stopPropagation();
+    const r = e.currentTarget.getBoundingClientRect();
+    setMenu({ key, x: Math.min(r.right - 204, window.innerWidth - 216), y: r.bottom + 4 });
+  };
+  const commitRename = (c: TableCard, value: string) => {
+    const v = value.trim();
+    if (v && v !== c.name) onRename(c, v);
+    setRenaming(null);
   };
 
-  return (
-    <div className="browse">
-      <h1 className="browse-title">Your tables</h1>
+  const Star = I.Star;
+  const menuCard = menu ? cards.find((c) => c.key === menu.key) : null;
 
-      <div className="browse-search">
-        <I.Search />
-        <input
-          className="browse-search-input"
-          placeholder="Search tables"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          autoFocus
-        />
-        <button className="skill-new-btn" onClick={onNew}>
-          <I.Plus /> New table
-        </button>
+  return (
+    <div className="tables-page">
+      {/* Header */}
+      <div className="tp-head">
+        <div className="tp-head-left">
+          <h1 className="tp-title">Tables</h1>
+          <p className="tp-sub">
+            {workspaceName != null
+              ? <><strong>{cards.length}</strong> table{cards.length !== 1 ? "s" : ""} in <strong>{workspaceName}</strong></>
+              : <><strong>{cards.length}</strong> local table{cards.length !== 1 ? "s" : ""}</>}
+          </p>
+        </div>
+        <div className="tp-head-actions">
+          {onSyncAll && (
+            <button className={`tp-btn tp-btn-outline${syncing ? " busy" : ""}`} onClick={onSyncAll}>
+              <I.CloudUp s={13} /> Sync all
+            </button>
+          )}
+          <button className="tp-btn tp-btn-primary" onClick={onNew}><I.Plus /> New table</button>
+        </div>
       </div>
 
-      {filtered.length === 0 ? (
-        <div className="browse-empty">
-          {q ? `No tables match “${query}”.` : "No tables yet. Click “New table” to create one."}
+      {/* Controls */}
+      <div className="tp-controls">
+        <div className="tp-search">
+          <I.Search s={14} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tables…" autoFocus />
+          {q && <button className="tp-search-x" onClick={() => setQ("")}><I.X s={12} /></button>}
+        </div>
+        <div className="tp-chips">
+          {TABLE_FILTERS.map((f) => (
+            <button key={f.id} className={`tp-chip${filter === f.id ? " active" : ""}`} onClick={() => setFilter(f.id)}>
+              {f.label}<span className="tp-chip-n">{counts[f.id]}</span>
+            </button>
+          ))}
+        </div>
+        <span className="tp-controls-spacer" />
+        <div className="tp-sortwrap">
+          <button className="tp-sort" onClick={() => setSortOpen((v) => !v)}>
+            <I.Sort s={13} /> {TABLE_SORTS.find((s) => s.id === sort)!.label}<I.ChevronDown s={11} />
+          </button>
+          {sortOpen && (
+            <>
+              <div className="popover-scrim" onMouseDown={() => setSortOpen(false)} />
+              <div className="tp-sortmenu" onMouseDown={(e) => e.stopPropagation()}>
+                {TABLE_SORTS.map((s) => (
+                  <button key={s.id} className={`tp-menu-item${sort === s.id ? " active" : ""}`}
+                    onClick={() => { setSort(s.id); setSortOpen(false); }}>
+                    {s.label}{sort === s.id && <I.Check s={13} />}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+        <div className="tp-viewtoggle">
+          <button className={view === "list" ? "active" : ""} onClick={() => setView("list")} title="List view"><I.ListView s={14} /></button>
+          <button className={view === "grid" ? "active" : ""} onClick={() => setView("grid")} title="Card view"><I.GridView s={14} /></button>
+        </div>
+      </div>
+
+      {/* Bulk action bar */}
+      {selected.size > 0 && (
+        <div className="tp-bulk">
+          <span className="tp-bulk-count"><strong>{selected.size}</strong> selected</span>
+          {confirmBulk ? (
+            <>
+              <span className="tp-bulk-confirm">Delete {selected.size} table{selected.size !== 1 ? "s" : ""}? This can’t be undone.</span>
+              <button className="tp-bulk-btn danger" onClick={() => { onBulkDelete(selectedCards); clearSel(); }}>Confirm delete</button>
+              <button className="tp-bulk-btn" onClick={() => setConfirmBulk(false)}>Cancel</button>
+            </>
+          ) : (
+            <button className="tp-bulk-btn danger" onClick={() => setConfirmBulk(true)}><I.Trash s={13} /> Delete</button>
+          )}
+          <span className="tp-controls-spacer" />
+          <button className="tp-bulk-x" onClick={clearSel}><I.X s={13} /></button>
+        </div>
+      )}
+
+      {/* Body */}
+      {visible.length === 0 ? (
+        <div className="tp-empty">
+          <span className="tp-empty-ic"><I.Search s={22} /></span>
+          <div className="tp-empty-t">{cards.length === 0 ? "No tables yet" : "No tables match"}</div>
+          <div className="tp-empty-s">{cards.length === 0 ? "Click “New table” to create one." : "Try a different search or filter."}</div>
+        </div>
+      ) : view === "list" ? (
+        <div className="tp-listwrap">
+          <div className="tp-list-head tp-grid">
+            <span className="tp-cell-sel">
+              <button className={`tp-check${allVisibleSelected ? " on" : ""}`} onClick={toggleAll}>{allVisibleSelected && <I.Check s={11} />}</button>
+            </span>
+            <span>Name</span>
+            <span className="tp-r">Rows</span>
+            <span>Sync</span>
+            <span />
+          </div>
+          {visible.map((c) => {
+            const sel = selected.has(c.key);
+            const ren = renaming === c.key;
+            return (
+              <div key={c.key} className={`tp-row tp-grid${sel ? " selected" : ""}${c.active ? " active" : ""}`} onClick={() => (ren ? undefined : onOpen(c))}>
+                <span className="tp-cell-sel" onClick={(e) => e.stopPropagation()}>
+                  <button className={`tp-check${sel ? " on" : ""}`} onClick={() => toggleSel(c.key)}>{sel && <I.Check s={11} />}</button>
+                </span>
+                <span className="tp-name">
+                  <span className="tp-name-ic"><I.Table s={15} /></span>
+                  <span className="tp-name-text">
+                    {ren ? (
+                      <input className="tp-rename" autoFocus defaultValue={c.name}
+                        onClick={(e) => e.stopPropagation()}
+                        onBlur={(e) => commitRename(c, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") commitRename(c, (e.target as HTMLInputElement).value);
+                          if (e.key === "Escape") setRenaming(null);
+                        }} />
+                    ) : (
+                      <span className="tp-name-row">
+                        <span className="tp-name-label">{c.name}</span>
+                        {c.favorite && <span className="tp-name-star"><Star s={11} filled /></span>}
+                      </span>
+                    )}
+                    <span className="tp-name-meta">{cardMeta(c)}</span>
+                  </span>
+                </span>
+                <span className="tp-r tp-rows">{c.rows != null ? c.rows.toLocaleString() : "—"}</span>
+                <span className="tp-cell-sync">
+                  <span className={`tp-sync ${c.synced ? "is-synced" : "is-local"}`}>{c.synced ? "Synced" : "Local"}</span>
+                </span>
+                <span className="tp-cell-actions" onClick={(e) => e.stopPropagation()}>
+                  {c.kind === "local" && (
+                    <button className={`tp-star${c.favorite ? " on" : ""}`} onClick={() => onFavorite(c)} title="Favorite"><Star s={13} filled={c.favorite} /></button>
+                  )}
+                  <button className="tp-more" onClick={(e) => openMenu(e, c.key)} title="Actions"><I.More s={15} /></button>
+                </span>
+              </div>
+            );
+          })}
         </div>
       ) : (
+        <div className="tp-cards">
+          {visible.map((c) => (
+            <div key={c.key} className={`tp-card${selected.has(c.key) ? " selected" : ""}${c.active ? " active" : ""}`} onClick={() => onOpen(c)}>
+              <div className="tp-card-top">
+                <span className="tp-card-ic"><I.Table s={16} /></span>
+                {c.kind === "local" && <button className={`tp-star${c.favorite ? " on" : ""}`} onClick={(e) => { e.stopPropagation(); onFavorite(c); }}><I.Star s={13} filled={c.favorite} /></button>}
+                <button className="tp-more" onClick={(e) => openMenu(e, c.key)}><I.More s={15} /></button>
+              </div>
+              <div className="tp-card-name">{c.name}</div>
+              <div className="tp-card-meta">{cardMeta(c)}</div>
+              <div className="tp-card-foot">
+                <span className={`tp-sync ${c.synced ? "is-synced" : "is-local"}`}>{c.synced ? "Synced" : "Local"}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Row actions menu */}
+      {menu && menuCard && (
         <>
-          <div className="browse-section-label">
-            {filtered.length} table{filtered.length !== 1 ? "s" : ""}
-          </div>
-          <div className="browse-grid">
-            {filtered.map((c) => {
-              const renaming = renamingKey === c.key;
-              return (
-                <div
-                  key={c.key}
-                  className={`browse-card table-card${c.active ? " active" : ""}`}
-                  onClick={() => (renaming ? undefined : onOpen(c))}
-                >
-                  <div className="browse-card-icon"><I.Table /></div>
-                  <div className="browse-card-body">
-                    <div className="browse-card-top">
-                      {renaming ? (
-                        <input
-                          className="table-card-rename"
-                          value={draft}
-                          autoFocus
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={(e) => setDraft(e.target.value)}
-                          onBlur={() => commitRename(c)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") commitRename(c);
-                            if (e.key === "Escape") setRenamingKey(null);
-                          }}
-                        />
-                      ) : (
-                        <span className="browse-card-name">{c.name}</span>
-                      )}
-                      {c.favorite && <span className="table-card-star"><I.Star s={12} filled /></span>}
-                      {c.synced && <span className="ext-badge connected">cloud</span>}
-                    </div>
-                    <div className="browse-card-desc">{tableMeta(c)}</div>
-                  </div>
-                  <div className="table-card-actions" onClick={(e) => e.stopPropagation()}>
-                    {c.kind === "local" && (
-                      <button title={c.favorite ? "Unpin" : "Pin to favorites"} onClick={() => onFavorite(c)}>
-                        <I.Star s={14} filled={c.favorite} />
-                      </button>
-                    )}
-                    {c.kind === "local" && (
-                      <button title="Rename" onClick={() => { setDraft(c.name); setRenamingKey(c.key); }}>
-                        <I.Pencil s={14} />
-                      </button>
-                    )}
-                    <button className="table-card-del" title="Delete table" onClick={() => onDelete(c)}>
-                      <I.Trash s={14} />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+          <div className="popover-scrim" onMouseDown={() => setMenu(null)} />
+          <div className="tp-menu" style={{ top: Math.min(menu.y, window.innerHeight - 180), left: menu.x }} onMouseDown={(e) => e.stopPropagation()}>
+            <button className="tp-menu-item" onClick={() => { setMenu(null); onOpen(menuCard); }}><I.Table s={14} /> Open table</button>
+            {menuCard.kind === "local" && <button className="tp-menu-item" onClick={() => { setMenu(null); setRenaming(menuCard.key); }}><I.Pencil s={14} /> Rename</button>}
+            <div className="tp-menu-sep" />
+            <button className="tp-menu-item danger" onClick={() => { setMenu(null); onDelete(menuCard); }}><I.Trash s={14} /> Delete table</button>
           </div>
         </>
       )}
