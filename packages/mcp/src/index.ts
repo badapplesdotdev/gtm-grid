@@ -759,8 +759,11 @@ server.tool(
     input: z.record(z.string(), z.any()).optional().describe("Method inputs object"),
   },
   async ({ provider, method, input }) => {
-    if (cloudSource) return cloudUnsupported("run_function");
     if (!registry.method(provider, method)) throw new Error(`Unknown function ${provider}.${method}. Use list_functions.`);
+    // Cloud resolves the workspace's shared credentials through the worker and
+    // dispatches in-process (cloud-source.runFunction); local hits the SQLite
+    // credential store directly. Same registry validation either way (index.ts:76).
+    if (cloudSource) return ok(await cloudSource.runFunction(provider, method, input ?? {}));
     const result = await local!.engine.dispatch(provider, method, input ?? {});
     return ok(result);
   },
