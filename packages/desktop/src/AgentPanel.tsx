@@ -5,8 +5,13 @@
 // supports stop + multi-turn, collapses to a slim logo rail, and refreshes the
 // grid live as the agent calls mutating tools.
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Streamdown } from "streamdown";
+import { useEffect, useRef, useState, type FC, type ReactNode } from "react";
+import { Streamdown as StreamdownImpl } from "streamdown";
+
+// Streamdown ships its own bundled React types; under this app's @types/react 18
+// their JSX element types don't line up with ours (TS2786 "cannot be used as a
+// JSX component"). Retype it to the props we actually pass.
+const Streamdown = StreamdownImpl as unknown as FC<{ className?: string; children?: ReactNode }>;
 import { api, API_BASE, type AgentSession, type AgentStatus } from "./api";
 import { abortAllRuns, abortRun, tableAbortKey, type AbortControllers } from "./agentAbort";
 
