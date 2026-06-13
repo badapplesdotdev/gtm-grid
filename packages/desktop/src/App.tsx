@@ -81,6 +81,7 @@ import { useAgentPresence } from "./cloud/agentPresence";
 import { type SignalsCloud } from "./SignalsModal";
 // Type-only import (erased at build) so the AgentPanel lazy chunk stays split.
 import type { AgentCloudContext } from "./AgentPanel";
+import type { TableCard } from "./Panels";
 import type { ImportWriter } from "./csvImport";
 import type { Id } from "./cloud/ids";
 import { DataGrid } from "./DataGrid";
@@ -113,6 +114,9 @@ const AiProviderPanel = lazy(() =>
 const SkillsBrowse = lazy(() =>
   import("./Panels").then((m) => ({ default: m.SkillsBrowse })),
 );
+const TablesBrowse = lazy(() =>
+  import("./Panels").then((m) => ({ default: m.TablesBrowse })),
+);
 const SkillPanel = lazy(() =>
   import("./Panels").then((m) => ({ default: m.SkillPanel })),
 );
@@ -144,6 +148,7 @@ function PanelFallback() {
 // What the main area is showing.
 type View =
   | { kind: "table" }
+  | { kind: "tables" }
   | { kind: "extensions" }
   | { kind: "extension"; id: string }
   | { kind: "skills" }
@@ -2400,6 +2405,57 @@ export default function App() {
     [inCloud, cloudById],
   );
 
+  // Recency-sorted table cards for the Tables page + the sidebar "Recent" group.
+  // Cloud rows sort by their createdAt; local rows by sidebar position (a new
+  // table is appended, so the highest position is the most recent).
+  const tableCards = useMemo<TableCard[]>(() => {
+    const ranked = tableList.map((row) => {
+      const local = row.kind === "local" ? localById.get(row.id) : undefined;
+      const cloud = row.kind === "cloud" ? cloudById.get(row.id) : undefined;
+      const recency = row.kind === "cloud" ? Number(cloud?.createdAt ?? 0) : (local?.position ?? row.position);
+      const card: TableCard = {
+        key: `${row.kind}:${row.id}`,
+        kind: row.kind,
+        id: row.id,
+        name: row.name,
+        rows: row.kind === "local" ? (local?.rows ?? row.rows) : null,
+        columns: row.kind === "local" ? (local?.columns ?? null) : null,
+        favorite: row.favorite,
+        synced: row.synced,
+        active: String(row.id) === String(activeRowId),
+      };
+      return { recency, card };
+    });
+    ranked.sort((a, b) => b.recency - a.recency);
+    return ranked.map((r) => r.card);
+  }, [tableList, localById, cloudById, activeRowId]);
+
+  // Tables-page actions, reusing the existing open/delete/favorite/rename machinery
+  // (cloud rename isn't exposed by the worker API, so it's gated to local rows in
+  // the gallery). Plain functions — they close over the latest state at click time.
+  const onOpenCard = (c: TableCard) => {
+    if (c.kind === "cloud") {
+      const ct = cloudById.get(c.id);
+      if (ct) setCloudTableId(ct._id);
+      setView({ kind: "table" });
+      return;
+    }
+    if (inCloud) { setCloudProject(null); setCloudTableId(null); }
+    setSelectedTableId(c.id);
+    setView({ kind: "table" });
+  };
+  const onDeleteCard = (c: TableCard) => {
+    if (c.kind === "cloud") {
+      const ct = cloudById.get(c.id);
+      if (ct) setConfirmDeleteCloudTable({ _id: ct._id, name: ct.name });
+      return;
+    }
+    const local = localById.get(c.id);
+    if (local) setConfirmDeleteTable(local);
+  };
+  const onFavoriteCard = (c: TableCard) => { if (c.kind === "local") void toggleFavorite(c.id, !c.favorite); };
+  const onRenameCard = (c: TableCard, name: string) => { if (c.kind === "local") void commitRename(c.id, name); };
+
   // One unified sidebar table row (root or inside a folder). Not memoized — it
   // closes over the drag/drop + rename state and renders a handful of rows.
   const renderTableRow = (row: TableListRow, inFolder: boolean) => {
@@ -3120,6 +3176,13 @@ export default function App() {
             <div className="sidebar-section-label">
               <span className="sidebar-label-text">Tables{cloudLocked && inCloud ? " 🔒" : ""}</span>
               <span className="sidebar-label-actions">
+                <button
+                  className={`section-link${view.kind === "tables" ? " active" : ""}`}
+                  title="Search and manage all tables"
+                  onClick={(e) => { e.stopPropagation(); setView({ kind: "tables" }); }}
+                >
+                  Browse all
+                </button>
                 {showSyncUi && (
                   <button
                     className={`sync-all-btn${syncPending ? " has-pending" : ""}`}
@@ -3176,6 +3239,24 @@ export default function App() {
               <div style={{ padding: "4px 16px", fontSize: 12, color: "var(--text-3)" }}>No tables yet</div>
             ) : (
               <>
+                {/* Quick "Recent" shortcut to the 5 most-recent tables — only when
+                    there are enough to make scanning the full list below tedious. */}
+                {tableCards.length > 5 && (
+                  <div className="sidebar-recent">
+                    <div className="sidebar-subgroup-label">Recent</div>
+                    {tableCards.slice(0, 5).map((c) => (
+                      <div
+                        key={`recent:${c.key}`}
+                        className={`sidebar-item${c.active && view.kind === "table" ? " active" : ""}`}
+                        onClick={() => onOpenCard(c)}
+                      >
+                        <span className="sidebar-item-icon"><Icon.Table /></span>
+                        <span className="sidebar-item-name">{c.name}</span>
+                        {c.favorite && <span className="sidebar-item-star"><Icon.Star filled /></span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {groupedTables.folders.map(({ folder, rows: folderRows }) => {
                   const isOpen = !!openFolders[folder.id];
                   const into = dropTarget?.kind === "folder" && dropTarget.id === folder.id;
@@ -3568,6 +3649,18 @@ export default function App() {
             cloud workspaces — in cloud they own the shared "Workspace" credential
             scope, so they must take precedence over the CloudGrid (which only
             renders for the "table" view). */}
+        {!importMode && view.kind === "tables" && (
+          <Suspense fallback={<PanelFallback />}>
+            <TablesBrowse
+              cards={tableCards}
+              onOpen={onOpenCard}
+              onDelete={onDeleteCard}
+              onFavorite={onFavoriteCard}
+              onRename={onRenameCard}
+              onNew={() => { setNewTableFolderId(null); setShowNewTableChooser(true); }}
+            />
+          </Suspense>
+        )}
         {!importMode && view.kind === "extensions" && (
           <Suspense fallback={<PanelFallback />}>
             <ExtensionsBrowse

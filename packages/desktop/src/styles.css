@@ -2323,6 +2323,33 @@ html, body, #root {
 }
 .browse-card:hover .browse-card-add { color: var(--accent); border-color: var(--accent); }
 
+/* ── Tables gallery cards ───────────────────────────────── */
+.table-card { position: relative; }
+.table-card .browse-card-icon { color: var(--text-2); }
+.table-card.active { border-color: var(--accent); background: var(--accent-soft); }
+.table-card .browse-card-top { display: flex; align-items: center; gap: 7px; }
+.table-card-star { color: var(--accent); display: inline-flex; }
+.table-card-rename {
+  flex: 1; min-width: 0; font: 600 14px var(--font-sans); color: var(--text);
+  border: 1px solid var(--accent); border-radius: var(--r-xs); padding: 1px 6px; background: var(--surface);
+}
+/* Hover actions — hidden until the card is hovered (keeps the grid clean). */
+.table-card-actions { display: flex; gap: 2px; flex-shrink: 0; opacity: 0; transition: opacity 0.12s; }
+.table-card:hover .table-card-actions, .table-card:focus-within .table-card-actions { opacity: 1; }
+.table-card-actions button {
+  width: 26px; height: 26px; border-radius: var(--r-xs); border: none; background: transparent;
+  color: var(--text-3); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.12s, color 0.12s;
+}
+.table-card-actions button:hover { background: var(--surface-2); color: var(--text); }
+.table-card-actions .table-card-del:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+
+/* ── Sidebar "Recent" tables shortcut ───────────────────── */
+.sidebar-recent { margin-bottom: 4px; }
+.sidebar-subgroup-label {
+  padding: 4px 16px 2px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-3);
+}
+
 /* featured extension cards in the gallery */
 .browse-card.featured {
   border-color: var(--accent-200, #FF8083);
