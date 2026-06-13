@@ -92,3 +92,24 @@ describe("ai.generate — Hermes routing", () => {
     expect(openaiCtor).toHaveBeenCalledWith(expect.objectContaining({ apiKey: "hermes" }));
   });
 });
+
+describe("ai.generate — no-key agent fallback", () => {
+  it("routes through aiFallback (the user's agent model) when no provider is connected", async () => {
+    const aiFallback = vi.fn().mockResolvedValue("agent says hi");
+    const out = await generate.run(
+      { prompt: "hi", system: "be terse" },
+      { secrets: {}, aiProviders: [], aiFallback },
+    );
+    expect(aiFallback).toHaveBeenCalledWith({ prompt: "hi", system: "be terse", model: undefined });
+    expect(out).toEqual({ text: "agent says hi" });
+    // It must NOT have touched a real provider client.
+    expect(openaiCtor).not.toHaveBeenCalled();
+    expect(anthropicCreate).not.toHaveBeenCalled();
+  });
+
+  it("throws the connect-a-key error when there is neither a provider nor a fallback", async () => {
+    await expect(generate.run({ prompt: "hi" }, { secrets: {}, aiProviders: [] })).rejects.toThrow(
+      /No AI provider connected/,
+    );
+  });
+});

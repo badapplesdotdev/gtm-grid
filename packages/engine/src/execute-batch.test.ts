@@ -177,7 +177,7 @@ describe("runColumn honors batchSize", () => {
     const engine = new Engine(db, {}, new Registry([connector]));
     const res = await engine.runColumn(colId);
 
-    expect(res).toEqual({ ran: 0, errors: 3 });
+    expect(res).toMatchObject({ ran: 0, errors: 3 });
     for (const rowId of rowIds) {
       expect(db.getCell(rowId, colId)?.status).toBe("error");
       expect(db.getCell(rowId, colId)?.error).toMatch(/bulk kaboom/);

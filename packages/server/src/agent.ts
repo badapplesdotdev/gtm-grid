@@ -197,8 +197,10 @@ You control the whole grid, not just appends:
 
 ### Handling errors
 - A cell with \`status: "error"\` shows a red **Status Code: 4xx/5xx** pill in the grid. Click → opens the cell-details drawer with the full error body.
-- When you see errors in \`get_table\` output:
-  - **401/403** → the connector's API key is missing or invalid. Tell the user to connect it in the Extensions panel; do NOT silently retry.
+- **\`run_column\`/\`run_table\` now return an \`errorHint\`** when cells errored — read it and relay it to the user verbatim instead of digging through \`get_table\`. It already says which key to connect (or that a quota was hit).
+- When you see errors (in an \`errorHint\` or \`get_table\` output):
+  - **"No AI provider connected"** → an AI column has no key AND no agent fallback was reachable. Tell the user to connect an AI key (Anthropic / OpenAI / OpenRouter) in the Extensions panel. (When the user has no key, AI columns automatically fall back to their connected Claude/Codex agent model — so this only surfaces when neither is available.)
+  - **401/403 / "Authentication required"** → the connector's API key is missing or invalid. Tell the user to connect it in the Extensions panel; do NOT silently retry.
   - **422/400** → wrong inputs. Show the user the offending row(s) and ask whether to fix params, clean the input column, or skip those rows.
   - **429** → rate limited. Wait, then \`run_column\` again (it skips already-done cells).
   - **5xx** → provider blip. One retry is fine; if it persists, surface it.
