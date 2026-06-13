@@ -1,5 +1,18 @@
 # @gtmgrid/desktop
 
+## 0.9.17
+
+### Patch Changes
+
+- 8b29845: Render the agent chat with Streamdown so assistant replies get proper markdown
+  — GFM tables, lists, code fences and inline formatting — streamed safely as
+  incomplete tokens arrive (replacing the hand-rolled renderer). Typography is
+  scoped to the copilot panel so headings stay small and bold rather than
+  prose-sized. Tool calls now interleave with text in the order the agent emits
+  them, instead of bunching every tool call above the reply.
+  - @gtmgrid/cloud@0.9.17
+  - @gtmgrid/services@0.9.17
+
 ## 0.9.16
 
 ### Patch Changes
