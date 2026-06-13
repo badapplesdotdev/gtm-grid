@@ -23,6 +23,7 @@ import {
   parseManifest,
   type Registry,
 } from "@gtmgrid/engine";
+import { capCellValue } from "./cell.js";
 import { describeGridEnv, selectGridEnv } from "./cloud-context.js";
 import {
   CloudToolUnsupportedError,
@@ -78,24 +79,6 @@ const registry = local ? local.engine.registry : cloudDeps!.registry;
 const server = new McpServer({ name: "gtmgrid", version: "0.0.1" });
 
 const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] });
-
-/**
- * Cap a cell value for `get_table` so one fat column (e.g. a raw enrichment JSON
- * blob) can't blow the whole response budget and truncate the table after row 1.
- * Small/compiled values pass through untouched; large strings/objects are sliced
- * with a '…[+N chars]' marker so the agent knows it was cut (and can extract the
- * fields it needs via a code/formula column). The full value stays in the cell.
- */
-const CELL_CAP = 500;
-function capCellValue(v: unknown): unknown {
-  if (v == null || typeof v === "number" || typeof v === "boolean") return v;
-  if (typeof v === "string") {
-    return v.length > CELL_CAP ? `${v.slice(0, CELL_CAP)}…[+${v.length - CELL_CAP} chars]` : v;
-  }
-  const s = JSON.stringify(v);
-  if (s.length <= CELL_CAP) return v; // small object/array — keep structured
-  return `${s.slice(0, CELL_CAP)}…[+${s.length - CELL_CAP} chars, full value in the cell]`;
-}
 
 /**
  * Standard "this is destructive or large — get the user's OK first" response.
@@ -284,7 +267,7 @@ server.tool(
 
 server.tool(
   "add_rows",
-  "Add one or more rows. Each row is an object of { ColumnName: value } for manual columns, e.g. [{ Username: 'torvalds' }]. If the table has dedup ON (see set_dedupe), incoming rows whose key already exists are skipped automatically — so you can stream paginated search results straight in without deduping yourself. Returns { added, skipped, replaced }.",
+  "Add one or more rows DIRECTLY into the table — this is how you POPULATE a table with sourced/enriched data; never stage rows to a file. Each row is an object of { ColumnName: value } for manual columns, e.g. [{ Username: 'torvalds' }]. When loading many rows, send them in batches of ~25-50 per call (keeps each call within size/quota limits and lets you show progress). If the table has dedup ON (see set_dedupe), incoming rows whose key already exists are skipped automatically — so you can stream paginated search results straight in without deduping yourself. Returns { added, skipped, replaced }.",
   { table: z.string(), rows: z.array(z.record(z.string(), z.any())) },
   async ({ table, rows }) => {
     if (cloudSource) return ok(await cloudSource.addRows(table, rows));
@@ -401,7 +384,7 @@ server.tool(
   "Get a table's columns + rows (each row carries its _id for update_cells/delete_rows). Bounded: returns up to `limit` rows (default 200) from `offset`, plus totalRows — for a big table, paginate or use find_rows/get_column instead of pulling it all. Large cell values are truncated with a '…[+N chars]' marker (full value stays in the cell; extract fields via a code/formula column); small/compiled columns come through whole.",
   { table: z.string(), limit: z.number().optional(), offset: z.number().optional() },
   async ({ table, limit, offset }) => {
-    if (cloudSource) return ok(await cloudSource.getTable(table));
+    if (cloudSource) return ok(await cloudSource.getTable(table, { limit, offset }));
     const t = localTableOr(table);
     const cols = local!.db.listColumns(t.id);
     const total = local!.db.countRows(t.id);

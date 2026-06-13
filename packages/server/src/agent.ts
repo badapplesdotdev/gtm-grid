@@ -114,10 +114,29 @@ The user turned on **Plan mode** — they want a PLAN to review, not execution.
 - **Then STOP.** Do NOT execute the plan, create/modify columns, run columns, write files, or change any data. Do NOT call \`ExitPlanMode\` (it does nothing here). After the plan, end your turn and wait — the user will click **Approve** to run it.
 - **Never loop.** If a tool is blocked or you're unsure, fold that into the plan as a note or open question — do NOT retry it, and do NOT repeat yourself or narrate "standing by". One plan, then stop.`;
 
-export function contextPreamble(ctx?: AgentContext, mode?: string): string {
+/**
+ * Cloud-mode guidance, injected when the agent operates on a shared cloud project
+ * (not the local SQLite file). The big behavioural fix: cloud agents must POPULATE
+ * tables via `add_rows` (there is no filesystem to stage to) and can address ANY
+ * table by name (the cloud source now resolves the `table` arg, not just the
+ * active one). Quota errors are surfaced so the agent stops instead of looping.
+ */
+const CLOUD_NOTE = `
+
+## Cloud project (active)
+You're on a **CLOUD** project — shared, multi-user, backed by the team's database (there is **no local filesystem**).
+- **Address ANY table by name.** Every table tool takes a \`table\` argument; pass the table's name (or its id from \`list_tables\`). It defaults to the table the user is viewing, but you can read/write any table in the project by naming it — \`get_table(table:"Accounts")\`, \`add_rows(table:"Accounts", …)\`, etc.
+- **POPULATE tables with \`add_rows\` — there are NO scratch files.** To put sourced/enriched data into a table, call \`add_rows\` DIRECTLY with the rows. Never write JSON to \`/tmp\` or stage it in a file — there's no filesystem here, so staged data never reaches the grid. If \`add_rows\` reports an unknown column, \`get_table\` that table to read its exact column names, then retry.
+- **Batch large inserts.** Send rows in batches of ~25–50 per \`add_rows\` call — keeps each call within size/quota limits and lets you show progress.
+- **Quota.** Each row insert and cell write spends a cloud action from the team's plan. If a tool returns a \`[quota]\` / HTTP 402 error ("exceed your plan's remaining cloud actions"), STOP and tell the user they've hit their plan limit (the rejected import wrote nothing) — do not silently retry.`;
+
+export function contextPreamble(ctx?: AgentContext, mode?: string, isCloud?: boolean): string {
+  const where = isCloud
+    ? "Tables live in your team's **cloud project** (shared, multi-user) — every change writes to the cloud and shows up live for all members."
+    : "Tables live in a local SQLite project.";
   const base = `# GTM Grid — operating manual
 
-You are operating **GTM Grid**, a Clay-style local spreadsheet where every column is a function. Tables live in a local SQLite project. The user runs you to build GTM pipelines: source prospects, enrich them, score/personalize, push to outreach tools.
+You are operating **GTM Grid**, a Clay-style ${isCloud ? "cloud" : "local"} spreadsheet where every column is a function. ${where} The user runs you to build GTM pipelines: source prospects, enrich them, score/personalize, push to outreach tools.
 
 ## Core model
 - **Tables** = sheets. **Rows** = records. **Columns** = either MANUAL (user types values) or FUNCTION (runs an enrichment / AI / HTTP call per row).
@@ -216,11 +235,13 @@ ${renderSkillsSection(ctx?.skills)}
 - When the user says "this table", "this row", "this column" — they mean the one they're viewing (passed in context below).
 - If a step fails, surface the error (status code + message) and ASK before retrying with different inputs.`;
 
+  const cloud = isCloud ? CLOUD_NOTE : "";
   const plan = mode === "plan" ? PLAN_MODE_NOTE : "";
-  if (!ctx?.tableName) return base + plan;
+  if (!ctx?.tableName) return base + cloud + plan;
   const cols = ctx.columns?.length ? ` Its columns are: ${ctx.columns.join(", ")}.` : "";
   return (
     base +
+    cloud +
     plan +
     `\n\n## Active table\nThe user is viewing **"${ctx.tableName}"**.${cols} When they say "this table" or don't name one, operate on this one.`
   );
@@ -628,7 +649,7 @@ export function streamClaude(
     ...GTM_TOOLS.map((t) => `mcp__gtmgrid__${t}`),
     ...(hermesTool ? ["mcp__hermes"] : []),
   ];
-  const preamble = contextPreamble(opts.context, opts.mode);
+  const preamble = contextPreamble(opts.context, opts.mode, !!opts.cloud);
   if (preamble) args.push("--append-system-prompt", preamble);
   if (opts.model) args.push("--model", opts.model);
   // Permission posture (the composer's mode picker). Default to bypass — it
@@ -786,7 +807,7 @@ export function streamCodex(
 ): void {
   const sse = sseClient(res, opts.origin);
   const launcher = mcpLauncher(opts.repoRoot);
-  const preamble = contextPreamble(opts.context, opts.mode);
+  const preamble = contextPreamble(opts.context, opts.mode, !!opts.cloud);
   const message = preamble ? `${preamble}\n\n${opts.message}` : opts.message;
   // Optionally also expose the user's Hermes agent as an MCP tool (off unless
   // `hermesAsTool` is set in ~/.gtmgrid/agents.json).

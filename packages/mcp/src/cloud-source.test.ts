@@ -204,17 +204,93 @@ describe("makeCloudSource.getTable — reads the active cloud table from Supabas
       ],
     };
     const { deps } = depsFor(grid);
-    const out = await makeCloudSource(CTX, deps).getTable("anything");
+    // Empty ref → the active table (no list fetch on the hot path).
+    const out = await makeCloudSource(CTX, deps).getTable("");
     expect(out.columns).toEqual([
-      { name: "Username", kind: "manual", fn: null },
-      { name: "Upper", kind: "function", fn: "test.upper" },
+      { name: "Username", kind: "manual", fn: null, condition: null, params: {}, code: null },
+      { name: "Upper", kind: "function", fn: "test.upper", condition: null, params: { value: "{{Username}}" }, code: null },
     ]);
+    expect(out.totalRows).toBe(2);
+    expect(out.returned).toBe(2);
+    expect(out.truncated).toBe(false);
     // Each row carries its _id (matching the LOCAL get_table) so the agent can
     // feed it into update_cells / delete_rows / reorder_rows.
     expect(out.rows).toEqual([
       { _id: "r1", Username: "torvalds", Upper: "TORVALDS" },
       { _id: "r2", Username: "ada", Upper: { error: "boom" } },
     ]);
+  });
+});
+
+describe("makeCloudSource — multi-table addressing (honors the table arg, not just the active table)", () => {
+  // A one-column active table; the fake's listTables advertises t1/Leads + t2/Accounts.
+  const simpleGrid = (): FakeGrid => ({
+    columns: [
+      { _id: "c1", tableId: "t1", name: "Username", type: "text", kind: "manual", provider: null, method: null, code: null, params: {}, position: 0, createdAt: 0 },
+    ],
+    rows: [{ _id: "r1", tableId: "t1", position: 0, createdAt: 0 }],
+    cells: [],
+  });
+  const getTableCalls = (c: ReturnType<typeof depsFor>["client"]) =>
+    c.queries.filter((q) => q.name === "/api/worker/getTable");
+  const listCalls = (c: ReturnType<typeof depsFor>["client"]) =>
+    c.queries.filter((q) => q.name === "/api/worker/listTables");
+
+  it("resolves a table NAME to its id and reads THAT table", async () => {
+    const { deps, client } = depsFor(simpleGrid());
+    await makeCloudSource(CTX, deps).getTable("Accounts");
+    expect(listCalls(client).length).toBe(1);
+    expect(getTableCalls(client).at(-1)?.args.tableId).toBe("t2");
+  });
+
+  it("resolves a table by id passthrough", async () => {
+    const { deps, client } = depsFor(simpleGrid());
+    await makeCloudSource(CTX, deps).getTable("t2");
+    expect(getTableCalls(client).at(-1)?.args.tableId).toBe("t2");
+  });
+
+  it("empty or active-id ref takes the hot path — no listTables fetch, reads the active table", async () => {
+    const { deps, client } = depsFor(simpleGrid());
+    const src = makeCloudSource(CTX, deps);
+    await src.getTable("");
+    await src.getTable("t1");
+    expect(listCalls(client).length).toBe(0);
+    expect(getTableCalls(client).every((q) => q.args.tableId === "t1")).toBe(true);
+  });
+
+  it("routes a column create to the resolved non-active table", async () => {
+    const { deps, client } = depsFor(simpleGrid());
+    await makeCloudSource(CTX, deps).addColumn("Accounts", { name: "Domain" });
+    expect(client.mutations.find((m) => m.name === "/api/worker/createColumn")?.args.tableId).toBe("t2");
+  });
+
+  it("routes add_rows to the resolved table id", async () => {
+    const { deps, client } = depsFor(simpleGrid());
+    await makeCloudSource(CTX, deps).addRows("Accounts", [{ Username: "x" }]);
+    expect(client.mutations.find((m) => m.name === "/api/worker/addRows")?.args.tableId).toBe("t2");
+  });
+
+  it("caches the table list — repeated name resolves issue ONE listTables query", async () => {
+    const { deps, client } = depsFor(simpleGrid());
+    const src = makeCloudSource(CTX, deps);
+    await src.getTable("Accounts");
+    await src.getTable("Accounts");
+    expect(listCalls(client).length).toBe(1);
+  });
+
+  it("throws listing the available tables for an unknown name (no read fired)", async () => {
+    const { deps, client } = depsFor(simpleGrid());
+    await expect(makeCloudSource(CTX, deps).getTable("Nope")).rejects.toThrow(
+      /No table "Nope".*Leads \(t1\).*Accounts \(t2\)/s,
+    );
+    expect(getTableCalls(client).length).toBe(0);
+  });
+
+  it("add_rows to an unknown column lists the valid column names", async () => {
+    const { deps } = depsFor(simpleGrid());
+    await expect(makeCloudSource(CTX, deps).addRows("", [{ Nope: "x" }])).rejects.toThrow(
+      /Valid columns: Username/,
+    );
   });
 });
 
@@ -595,7 +671,7 @@ describe("makeCloudSource — write tools mirror the local SQLite mutators", () 
     const src = makeCloudSource(CTX, deps);
     await expect(
       src.updateCells("t1", [{ row: "nope", column: "Upper", value: "x" }]),
-    ).rejects.toThrow(/not in the cloud table/);
+    ).rejects.toThrow(/not in this table/);
   });
 
   it("deleteRows by ids posts one deleteRow per target", async () => {
@@ -730,6 +806,6 @@ describe("makeCloudSource — reorder tools return the new id order", () => {
 
   it("reorderRow rejects a row id not in the table", async () => {
     const { deps } = depsFor(gapGrid());
-    await expect(makeCloudSource(CTX, deps).reorderRow("t1", "nope", 0)).rejects.toThrow(/not in the cloud table/);
+    await expect(makeCloudSource(CTX, deps).reorderRow("t1", "nope", 0)).rejects.toThrow(/not in this table/);
   });
 });
