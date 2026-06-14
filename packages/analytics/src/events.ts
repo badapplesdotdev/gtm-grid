@@ -48,6 +48,16 @@ export interface AnalyticsEventMap {
 
   // ── Realtime (PartyKit) ──────────────────────────────────────────────────────
   realtime_connected: { workspace_id: string; table_id: string };
+
+  // ── Revenue (emitted server-side from the billing webhook → Revenue Analytics) ─
+  // `revenue` is the recurring amount in MAJOR currency units (e.g. dollars).
+  subscription_started: { workspace_id: string; plan_id: string; revenue?: number; currency?: string };
+  subscription_changed: { workspace_id: string; plan_id: string; revenue?: number; currency?: string };
+  subscription_canceled: { workspace_id: string; plan_id: string };
+  subscription_payment_failed: { workspace_id: string; plan_id: string };
+
+  // ── Support / feedback (Surveys + in-app feedback) ───────────────────────────
+  feedback_submitted: { surface: string; rating?: number };
 }
 
 /** Every valid analytics event name. */
