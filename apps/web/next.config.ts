@@ -41,16 +41,33 @@ const nextConfig: NextConfig = {
       },
     ];
   },
-  // Baseline security headers on every response. These are CSP-free on purpose —
-  // a Content-Security-Policy needs per-surface testing (PostHog, Supabase,
-  // PartyKit, OAuth) to avoid breakage and is tracked as a follow-up; the headers
-  // below are safe defaults with no functional risk. HSTS is honored only over
-  // HTTPS (ignored on localhost), so it's safe in all environments.
+  // Baseline security headers on every response.
   async headers() {
+    // Content-Security-Policy. Pragmatic but real: it blocks injected object/base
+    // tags and cross-origin framing/exfiltration while allowing what the app
+    // actually uses. `'unsafe-inline'`/`'unsafe-eval'` on script-src are kept
+    // because Next's inline bootstrap isn't nonce-based here — tightening to a
+    // nonce CSP is a follow-up. PostHog ingestion is same-origin via the `/ingest`
+    // proxy; the absolute hosts are allowlisted in connect-src as a belt-and-braces
+    // for direct calls. `data:`/`blob:` images cover avatars + canvas exports.
+    const csp = [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob: https:",
+      "font-src 'self' data:",
+      "connect-src 'self' https://eu.i.posthog.com https://eu-assets.i.posthog.com https://*.posthog.com https://*.ingest.vercel.com https://vitals.vercel-insights.com",
+      "worker-src 'self' blob:",
+      "frame-ancestors 'self'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "object-src 'none'",
+    ].join("; ");
     return [
       {
         source: "/:path*",
         headers: [
+          { key: "Content-Security-Policy", value: csp },
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "X-Frame-Options", value: "SAMEORIGIN" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
