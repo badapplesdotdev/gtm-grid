@@ -4,21 +4,14 @@
  * Replaces `convex/http.ts` `/webhook/upsertRow`. Secret-gated bearer.
  */
 
-import { type CellMap, WebhookService } from "@gtmgrid/services";
+import { WebhookService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { runWorker } from "../_lib";
+import { UpsertRowSchema } from "../_schemas";
 
 export const runtime = "nodejs";
-
-interface UpsertRowBody {
-  webhookId: string;
-  upsertKey: string;
-  cells: CellMap;
-  recordId?: string;
-}
-
 export function POST(req: Request): Promise<Response> {
-  return runWorker(req, (body: UpsertRowBody) =>
+  return runWorker(req, UpsertRowSchema, (body) =>
     Effect.gen(function* () {
       const svc = yield* WebhookService;
       return yield* svc.upsertRow({

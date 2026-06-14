@@ -16,16 +16,11 @@
 import { GridService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { runWorkerAsMember } from "../_lib";
+import { AddRowsSchema } from "../_schemas";
 
 export const runtime = "nodejs";
-
-interface AddRowsBody {
-  tableId: string;
-  rows: ReadonlyArray<Readonly<Record<string, unknown>>>;
-}
-
 export function POST(req: Request): Promise<Response> {
-  return runWorkerAsMember(req, (body: AddRowsBody) =>
+  return runWorkerAsMember(req, AddRowsSchema, (body) =>
     Effect.gen(function* () {
       const svc = yield* GridService;
       return yield* svc.addRowsWithCells({

@@ -12,11 +12,12 @@
 import { GridService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { runWorkerAsMember } from "../_lib";
+import { ListTablesSchema } from "../_schemas";
 
 export const runtime = "nodejs";
 
 export function POST(req: Request): Promise<Response> {
-  return runWorkerAsMember(req, (body: { projectId: string }) =>
+  return runWorkerAsMember(req, ListTablesSchema, (body) =>
     Effect.gen(function* () {
       const svc = yield* GridService;
       return yield* svc.listTablesWithCounts(body.projectId);
