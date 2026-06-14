@@ -16,6 +16,7 @@
 import { BillingService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { z } from "zod";
+import { captureServer } from "../../posthog-server";
 import { protectedProcedure, router, runEffect } from "../trpc";
 
 export const billingRouter = router({
@@ -32,15 +33,23 @@ export const billingRouter = router({
         planId: z.string().min(1).optional(),
       }),
     )
-    .mutation(({ ctx, input }) =>
-      runEffect(
+    .mutation(async ({ ctx, input }) => {
+      captureServer("billing_checkout_initiated", {
+        distinctId: ctx.userId,
+        properties: {
+          workspace_id: input.workspaceId,
+          plan_id: input.planId ?? "",
+        },
+        groups: { workspace: input.workspaceId },
+      });
+      return runEffect(
         ctx.runtime,
         Effect.gen(function* () {
           const svc = yield* BillingService;
           return yield* svc.checkout(input.workspaceId, input.planId);
         }),
-      ),
-    ),
+      );
+    }),
 
   /**
    * Reconcile a workspace's cached plan with its live Autumn subscription and

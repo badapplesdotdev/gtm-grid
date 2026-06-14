@@ -20,6 +20,7 @@
 import { getAuth, getSessionUserId } from "@gtmgrid/auth";
 import { type AppServices, appLayer, isAuthorizedWorker } from "@gtmgrid/services";
 import { Cause, type Effect, Exit, ManagedRuntime } from "effect";
+import { captureServerException } from "../../../lib/posthog-server";
 
 /** The member-attribution header the spawned MCP forwards (the agent's bearer). */
 const MEMBER_HEADER = "X-Gtmgrid-Member";
@@ -147,8 +148,12 @@ function exitToResponse<A, E>(exit: Exit.Exit<A, E>): Response {
       },
     );
   }
+  // A defect (non-typed crash) is a genuine 500 — report it to PostHog Error
+  // Tracking before returning (typed failures above are expected control flow).
+  const detail = Cause.pretty(exit.cause);
+  captureServerException(new Error(detail), { properties: { source: "worker" } });
   return new Response(
-    JSON.stringify({ error: Cause.pretty(exit.cause) }),
+    JSON.stringify({ error: detail }),
     { status: 500, headers: { "Content-Type": "application/json" } },
   );
 }

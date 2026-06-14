@@ -211,6 +211,10 @@ jobs:
           VITE_API_URL: ${{ vars.VITE_API_URL || 'https://www.gtmgrid.dev' }}
           VITE_PARTY_URL: ${{ vars.VITE_PARTY_URL || 'https://gtmgrid-party.iammorganparry.partykit.dev' }}
           VITE_INNGEST_URL: ${{ vars.VITE_INNGEST_URL || 'https://www.gtmgrid.dev' }}
+          # PostHog (public client token) baked into the desktop build so the
+          # shipped app reports analytics + errors. Unset → analytics off.
+          VITE_POSTHOG_KEY: ${{ vars.VITE_POSTHOG_KEY }}
+          VITE_POSTHOG_HOST: ${{ vars.VITE_POSTHOG_HOST || 'https://eu.i.posthog.com' }}
           # Auto-updater signing: with the updater configured + createUpdaterArtifacts
           # on, tauri-action signs each bundle's update archive with this key and
           # publishes `latest.json` to the release. The matching PUBLIC key is in

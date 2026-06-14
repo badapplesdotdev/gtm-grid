@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@gtmgrid/analytics": "workspace:*",
     "@gtmgrid/auth": "workspace:*",
     "@gtmgrid/cloud": "workspace:*",
     "@gtmgrid/db": "workspace:*",
@@ -26,6 +27,8 @@
     "effect": "^3.21.3",
     "inngest": "^4.5.0",
     "next": "^15.5.4",
+    "posthog-js": "^1.386.6",
+    "posthog-node": "^5.37.0",
     "quickjs-emscripten": "^0.31.0",
     "quickjs-emscripten-core": "^0.31.0",
     "react": "^19.1.0",

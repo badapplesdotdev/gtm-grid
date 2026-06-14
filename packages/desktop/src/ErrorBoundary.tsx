@@ -6,6 +6,7 @@
  * reported instead of looking like a frozen/empty app.
  */
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { captureException } from "./analytics";
 
 interface Props {
   readonly children: ReactNode;
@@ -24,6 +25,9 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, info: ErrorInfo): void {
     // Keep the detail in the console for bug reports / dev tools.
     console.error("Unhandled render error:", error, info.componentStack);
+    // React error boundaries swallow the error before it reaches window.onerror,
+    // so PostHog's autocapture never sees it — report it explicitly.
+    captureException(error);
   }
 
   render(): ReactNode {

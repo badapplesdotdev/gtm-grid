@@ -23,6 +23,43 @@ const monorepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", ".."
  */
 const nextConfig: NextConfig = {
   outputFileTracingRoot: monorepoRoot,
+  // Required to support PostHog trailing slash API requests.
+  skipTrailingSlashRedirect: true,
+  async rewrites() {
+    return [
+      {
+        source: "/ingest/static/:path*",
+        destination: "https://eu-assets.i.posthog.com/static/:path*",
+      },
+      {
+        source: "/ingest/array/:path*",
+        destination: "https://eu-assets.i.posthog.com/array/:path*",
+      },
+      {
+        source: "/ingest/:path*",
+        destination: "https://eu.i.posthog.com/:path*",
+      },
+    ];
+  },
+  // Baseline security headers on every response. These are CSP-free on purpose —
+  // a Content-Security-Policy needs per-surface testing (PostHog, Supabase,
+  // PartyKit, OAuth) to avoid breakage and is tracked as a follow-up; the headers
+  // below are safe defaults with no functional risk. HSTS is honored only over
+  // HTTPS (ignored on localhost), so it's safe in all environments.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+          { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" },
+        ],
+      },
+    ];
+  },
   // The QuickJS WASM variant is loaded by quickjs-emscripten-core via a DYNAMIC
   // import, so Next's static file tracer never sees it and it (plus its .wasm) is
   // missing from the deployed function. Force-include the variant + ffi-types for
@@ -36,7 +73,7 @@ const nextConfig: NextConfig = {
       "../../node_modules/.pnpm/quickjs-emscripten@*/node_modules/quickjs-emscripten/**",
     ],
   },
-  transpilePackages: ["@gtmgrid/engine", "@gtmgrid/cloud"],
+  transpilePackages: ["@gtmgrid/engine", "@gtmgrid/cloud", "@gtmgrid/analytics"],
   // quickjs-emscripten loads a WASM *variant* at runtime (quickjs-emscripten-core
   // + @jitl/quickjs-wasmfile-release-asyncify) whose Emscripten-generated glue
   // breaks when webpack bundles it ("a is not a function"). Every quickjs package

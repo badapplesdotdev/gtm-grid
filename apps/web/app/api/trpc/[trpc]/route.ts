@@ -10,6 +10,7 @@
 
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { createContext } from "../../../../lib/trpc/context";
+import { captureServerException } from "../../../../lib/posthog-server";
 import { appRouter } from "../../../../lib/trpc/root";
 
 export const runtime = "nodejs";
@@ -20,6 +21,16 @@ function handler(req: Request): Promise<Response> {
     req,
     router: appRouter,
     createContext: () => createContext({ req }),
+    // Server-side error tracking → PostHog. Only report genuine defects
+    // (INTERNAL_SERVER_ERROR); expected client failures (UNAUTHORIZED, NOT_FOUND,
+    // FORBIDDEN, BAD_REQUEST, …) are normal control flow, not incidents.
+    onError({ error, path, type, ctx }) {
+      if (error.code !== "INTERNAL_SERVER_ERROR") return;
+      captureServerException(error.cause ?? error, {
+        distinctId: ctx?.userId ?? undefined,
+        properties: { source: "trpc", trpc_path: path, trpc_type: type, code: error.code },
+      });
+    },
   });
 }
 
