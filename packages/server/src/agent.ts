@@ -35,6 +35,7 @@ const GTM_TOOLS = [
   "get_table",
   "run_function",
   "upload_extension",
+  "ask_user_question",
 ];
 const MUTATING = new Set([
   "create_table", "rename_table", "delete_table",
@@ -213,6 +214,7 @@ You control the whole grid, not just appends:
 ### When to ASK vs just do
 - ASK before: dumping many columns, spending more than ~50 credits, deleting/clearing data, picking which AI model/system prompt to use, choosing the cohort size for a source query.
 - Just do (no ask): obvious normalizations, single-row test runs, reading via \`get_table\`, retrying a transient failure once.
+- **HOW to ask a choice:** when the decision is a pick between options (which model, which cohort size, which of several columns to add, disambiguating an unclear request), call \`ask_user_question\` instead of writing the options out in prose. Pass 1–4 \`questions\`, each with a short \`header\`, the \`question\`, and 2–4 \`options\` (\`{label, description}\`); set \`multiSelect:true\` when several can apply. The user picks via answer cards (or types their own answer). After calling it, STOP and end your turn — do NOT answer for them; their reply comes back as the next message. (The destructive/credit confirm protocol above still uses \`confirm:true\` on the SAME tool, not \`ask_user_question\`.)
 
 ### Stay scoped to the active table
 - The user is operating ONE table at a time (passed in the "Active table" section below). When they say "this table", "this row", "this column", "here" — that's the one. Don't create new tables unless asked.
@@ -289,6 +291,24 @@ export function permissionEventFromToolResult(raw: string): Record<string, unkno
     }
   } catch {
     /* not JSON — no permission request */
+  }
+  return null;
+}
+
+/**
+ * If a tool_result is a gtmgrid `ask_user_question` payload, build the `ask_user`
+ * SSE event the desktop renders as answer cards (replacing the composer). Returns
+ * null for ordinary results. Shared by all three provider bridges so the
+ * AskUserQuestion surface is identical regardless of provider.
+ */
+export function questionEventFromToolResult(raw: string): Record<string, unknown> | null {
+  try {
+    const p = JSON.parse(raw.trim());
+    if (p && typeof p === "object" && p.askUserQuestion === true && Array.isArray(p.questions)) {
+      return { type: "ask_user", questions: p.questions };
+    }
+  } catch {
+    /* not JSON — no question request */
   }
   return null;
 }
@@ -773,6 +793,15 @@ export function streamClaude(
           else if (block.type === "tool_use") {
             const short = String(block.name).replace(/^mcp__gtmgrid__/, "");
             sse.write({ type: "tool", name: short, raw: block.name, input: block.input ?? {} });
+            // Claude's NATIVE AskUserQuestion: in headless `-p` the CLI stubs the
+            // tool_result ("Answer questions?") and ends the turn, so we intercept
+            // the tool_use itself and surface the questions as answer cards. The
+            // native input shape ({questions:[{header,question,multiSelect,options}]})
+            // matches the desktop's AskRequest exactly. (Codex/Hermes have no native
+            // tool and instead call mcp__gtmgrid__ask_user_question — caught below.)
+            if (block.name === "AskUserQuestion" && Array.isArray(block.input?.questions)) {
+              sse.write({ type: "ask_user", questions: block.input.questions });
+            }
             if (block.name?.startsWith("mcp__gtmgrid__") && MUTATING.has(short)) gridDirty = true;
           }
         }
@@ -788,6 +817,8 @@ export function streamClaude(
             if (text) sse.write({ type: "tool_result", result: text.slice(0, 600) });
             const pe = text ? permissionEventFromToolResult(text) : null;
             if (pe) sse.write(pe);
+            const qe = text ? questionEventFromToolResult(text) : null;
+            if (qe) sse.write(qe);
           }
         }
       } else if (e.type === "result") {
@@ -940,6 +971,8 @@ export function streamCodex(
             sse.write({ type: "tool_result", name: short, result: rtext.slice(0, 600) });
             const pe = permissionEventFromToolResult(rtext);
             if (pe) sse.write(pe);
+            const qe = questionEventFromToolResult(rtext);
+            if (qe) sse.write(qe);
           }
           if (MUTATING.has(short)) sse.write({ type: "grid" });
         } else if (item.type === "agent_message" && item.text) {
@@ -1123,13 +1156,16 @@ function acpToolName(u: Record<string, any>): string {
   // Hermes titles MCP tools "mcp_<server>_<tool>" (and sometimes "gtmgrid: <tool>").
   return t.replace(/^mcp_[a-z0-9-]+_/i, "").replace(/^gtmgrid[:_\s]*/i, "").trim() || "tool";
 }
-function acpToolResultText(u: Record<string, any>): string {
-  if (typeof u?.rawOutput === "string" && u.rawOutput) return u.rawOutput.slice(0, 600);
+/** Full tool-result text (UNtruncated) — used for HITL payload detection, where a
+ *  600-char clip could break JSON.parse of a larger ask_user_question payload. */
+function acpToolResultTextFull(u: Record<string, any>): string {
+  if (typeof u?.rawOutput === "string" && u.rawOutput) return u.rawOutput;
   const blocks = Array.isArray(u?.content) ? u.content : [];
-  const txt = blocks
-    .map((b: any) => (typeof b?.content?.text === "string" ? b.content.text : typeof b?.text === "string" ? b.text : ""))
-    .join("");
-  return String(txt).slice(0, 600);
+  return String(
+    blocks
+      .map((b: any) => (typeof b?.content?.text === "string" ? b.content.text : typeof b?.text === "string" ? b.text : ""))
+      .join(""),
+  );
 }
 
 /** Map one ACP `session/update` payload onto SSE events. Pure; exported for tests. */
@@ -1146,10 +1182,12 @@ export function mapAcpUpdate(update: Record<string, any> | undefined | null): Ar
       break;
     case "tool_call_update":
       if (update?.status === "completed" || update?.status === "failed") {
-        const rtext = acpToolResultText(update);
-        out.push({ type: "tool_result", result: rtext });
-        const pe = permissionEventFromToolResult(rtext);
+        const full = acpToolResultTextFull(update);
+        out.push({ type: "tool_result", result: full.slice(0, 600) });
+        const pe = permissionEventFromToolResult(full);
         if (pe) out.push(pe);
+        const qe = questionEventFromToolResult(full);
+        if (qe) out.push(qe);
         out.push({ type: "grid" }); // a tool finished — nudge the UI to refetch
       }
       break;

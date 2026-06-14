@@ -351,6 +351,44 @@ server.tool(
     ),
 );
 
+// --- Human-in-the-loop: ask the user a structured multiple-choice question ---
+// Returns IMMEDIATELY with the questions payload (non-blocking). The desktop
+// renders selectable answer cards and the user's reply arrives as the next
+// message. Works for every provider because all three CLIs mount this MCP
+// server — no provider-specific code, mirroring the permission-gate pattern.
+server.tool(
+  "ask_user_question",
+  "Ask the user a structured multiple-choice question and STOP. Use this whenever you need the user to choose between options — which AI model/system prompt to use, how big a cohort to source, or to disambiguate an ambiguous request — instead of asking in prose. Provide 1–4 questions, each with a short `header`, the `question` text, and 2–4 `options` ({label, description}). After calling this, end your turn: do NOT answer for the user. Their selection (or a typed 'Other' answer) arrives as the next message.",
+  {
+    questions: z
+      .array(
+        z.object({
+          header: z.string().describe("Short chip label (≤ ~12 chars), e.g. 'AI model'"),
+          question: z.string().describe("The full question text shown to the user"),
+          multiSelect: z.boolean().optional().describe("Allow the user to pick multiple options"),
+          options: z
+            .array(
+              z.object({
+                label: z.string().describe("Concise option label the user selects"),
+                description: z.string().optional().describe("What this option means / its trade-off"),
+              }),
+            )
+            .min(2)
+            .max(4),
+        }),
+      )
+      .min(1)
+      .max(4),
+  },
+  async ({ questions }) =>
+    ok({
+      askUserQuestion: true,
+      questions,
+      message:
+        "STOP. Present these options to the user in the chat and WAIT for their reply — do NOT answer for them. End your turn now; their selection arrives as the next message.",
+    }),
+);
+
 server.tool("list_tables", "List all tables in the project with their column and row counts.", {}, async () => {
   if (cloudSource) return ok(await cloudSource.listTables());
   return ok(
