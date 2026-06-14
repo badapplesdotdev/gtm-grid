@@ -1566,6 +1566,60 @@ html, body, #root {
 .agent-confirm-deny:hover { background: var(--surface); color: var(--text); }
 .agent-confirm-approve { background: var(--accent); color: #fff; }
 .agent-confirm-approve:hover { filter: brightness(1.06); }
+/* AskUserQuestion answer cards — replace the composer while a question is pending. */
+.agent-ask {
+  margin: 8px; padding: 11px 12px;
+  border: 1px solid var(--border-2); border-radius: var(--r-md);
+  background: var(--surface-2);
+  display: flex; flex-direction: column; gap: 9px;
+}
+.agent-ask-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.agent-ask-chip {
+  font: 600 10.5px var(--font-sans); letter-spacing: .02em; text-transform: uppercase;
+  color: var(--accent-2); padding: 2px 7px; border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-2) 14%, transparent);
+}
+.agent-ask-step { font-size: 11px; color: var(--text-3); }
+.agent-ask-q { font: 500 13px var(--font-sans); color: var(--text); line-height: 1.4; }
+.agent-ask-options { display: flex; flex-direction: column; gap: 6px; }
+.agent-ask-option {
+  all: unset; box-sizing: border-box; cursor: pointer;
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px; width: 100%;
+  border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface);
+}
+.agent-ask-option:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.agent-ask-option.sel { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--surface)); }
+.agent-ask-option-other { border-style: dashed; }
+.agent-ask-key {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 4px;
+  font: 600 11px var(--font-mono, var(--font-sans)); color: var(--text-2);
+  border: 1px solid var(--border-2); border-radius: 4px; background: var(--surface-2);
+}
+.agent-ask-option-body { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.agent-ask-option-label { font: 600 12.5px var(--font-sans); color: var(--text); }
+.agent-ask-option-desc { font-size: 11px; color: var(--text-3); line-height: 1.35; }
+.agent-ask-check { flex: none; color: var(--accent); font-size: 12px; width: 12px; text-align: center; }
+.agent-ask-other { display: flex; align-items: center; gap: 8px; }
+.agent-ask-other-input {
+  all: unset; box-sizing: border-box; flex: 1; min-width: 0; padding: 7px 10px;
+  border: 1px solid var(--accent); border-radius: var(--r-sm); background: var(--surface);
+  font: 400 12.5px var(--font-sans); color: var(--text);
+}
+.agent-ask-other-send {
+  all: unset; cursor: pointer; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: var(--r-sm); background: var(--accent); color: #fff;
+}
+.agent-ask-other-send:hover { filter: brightness(1.06); }
+.agent-ask-other-send:disabled { opacity: .5; cursor: default; }
+.agent-ask-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.agent-ask-hint { font-size: 11px; color: var(--text-3); }
+.agent-ask-confirm {
+  all: unset; cursor: pointer; padding: 6px 16px; border-radius: var(--r-sm);
+  font: 600 12px var(--font-sans); background: var(--accent); color: #fff;
+}
+.agent-ask-confirm:hover { filter: brightness(1.06); }
+.agent-ask-confirm:disabled { opacity: .5; cursor: default; }
 /* Plan-mode affordances: a "Plan" bar under the message + a slide-out drawer. */
 .agent-plan-bar {
   margin-top: 8px; padding: 7px 10px;

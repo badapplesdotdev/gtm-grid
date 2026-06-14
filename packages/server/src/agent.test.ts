@@ -10,6 +10,7 @@ import {
   mcpEnv,
   parseAgentCloud,
   permissionEventFromToolResult,
+  questionEventFromToolResult,
   streamHermes,
   STDERR_CAP,
   type AgentCloud,
@@ -108,6 +109,21 @@ describe("permissionEventFromToolResult — confirmationRequired → permission_
     expect(permissionEventFromToolResult(JSON.stringify({ added: 5 }))).toBeNull();
     expect(permissionEventFromToolResult("not json")).toBeNull();
     expect(permissionEventFromToolResult(JSON.stringify({ confirmationRequired: true }))).toBeNull();
+  });
+});
+
+describe("questionEventFromToolResult — ask_user_question → ask_user SSE", () => {
+  it("builds an ask_user event from an askUserQuestion payload", () => {
+    const questions = [
+      { header: "AI model", question: "Which model?", options: [{ label: "Haiku" }, { label: "Sonnet" }] },
+    ];
+    const raw = JSON.stringify({ askUserQuestion: true, questions, message: "STOP." });
+    expect(questionEventFromToolResult(raw)).toEqual({ type: "ask_user", questions });
+  });
+  it("returns null for an ordinary tool result, non-JSON, or a malformed payload", () => {
+    expect(questionEventFromToolResult(JSON.stringify({ added: 5 }))).toBeNull();
+    expect(questionEventFromToolResult("not json")).toBeNull();
+    expect(questionEventFromToolResult(JSON.stringify({ askUserQuestion: true }))).toBeNull();
   });
 });
 

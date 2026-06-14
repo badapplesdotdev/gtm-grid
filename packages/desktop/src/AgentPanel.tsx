@@ -43,6 +43,25 @@ interface PermissionRequest {
   estimatedCredits?: number;
 }
 
+/** One selectable option in an AskUserQuestion question. */
+interface AskOption {
+  label: string;
+  description?: string;
+}
+/** A single structured question the agent posed via `ask_user_question`. */
+interface AskQuestion {
+  header: string;
+  question: string;
+  multiSelect?: boolean;
+  options: AskOption[];
+}
+/** A pending AskUserQuestion — the agent called `ask_user_question` and is
+ *  waiting for the user to pick (or type) answers in the chat. Drives the answer
+ *  cards that replace the composer at the bottom of the stream. */
+interface AskRequest {
+  questions: AskQuestion[];
+}
+
 interface Message {
   role: "user" | "assistant";
   /** Full concatenated text of the turn (drives planBody, thinking label,
@@ -56,6 +75,9 @@ interface Message {
   plan?: boolean;
   /** A tool paused for human approval (HITL) — drives the Approve/Deny card. */
   permission?: PermissionRequest;
+  /** The agent asked a structured multiple-choice question — drives the answer
+   *  cards that replace the composer. */
+  ask?: AskRequest;
 }
 
 /** Append streamed text to the open text segment, or start a new one — so text
@@ -493,6 +515,177 @@ export type AgentActivityEvent =
   | { readonly type: "tool"; readonly name: string; readonly input: Record<string, unknown> }
   | { readonly type: "turn-end" };
 
+/** Build the reply text sent back to the agent. A single question sends the bare
+ *  answer (the session already has context); multiple questions are mapped by
+ *  header so the model can tell which answer goes with which question. */
+function buildAskAnswer(questions: AskQuestion[], answers: string[]): string {
+  if (questions.length === 1) return answers[0] ?? "";
+  return questions.map((q, i) => `${q.header}: ${answers[i] ?? ""}`).join("\n");
+}
+
+/** AskUserQuestion answer cards — render at the bottom of the chat IN PLACE OF the
+ *  composer. Steps through the agent's questions one at a time; the user picks an
+ *  option (click or hotkey 1–9) or chooses "Other" to type a custom answer. On the
+ *  last question the combined answer resumes the conversation via `onSubmit`. */
+function AskCards({ request, onSubmit }: { request: AskRequest; onSubmit: (answer: string) => void }) {
+  const questions = request.questions;
+  const [qi, setQi] = useState(0);
+  const [answers, setAnswers] = useState<string[]>([]);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [otherOpen, setOtherOpen] = useState(false);
+  const [other, setOther] = useState("");
+  const otherRef = useRef<HTMLInputElement>(null);
+
+  const q = questions[qi];
+  const isLast = qi === questions.length - 1;
+  const otherNum = q.options.length + 1; // hotkey number for the "Other" card
+
+  function advance(answer: string) {
+    const next = [...answers];
+    next[qi] = answer;
+    if (isLast) {
+      onSubmit(buildAskAnswer(questions, next));
+    } else {
+      setAnswers(next);
+      setQi(qi + 1);
+      setSelected(new Set());
+      setOther("");
+      setOtherOpen(false);
+    }
+  }
+
+  function pickOption(i: number) {
+    // Single-select commits immediately; multi-select toggles and waits for Enter.
+    if (q.multiSelect) {
+      setSelected((s) => {
+        const n = new Set(s);
+        if (n.has(i)) n.delete(i);
+        else n.add(i);
+        return n;
+      });
+    } else {
+      advance(q.options[i].label);
+    }
+  }
+
+  function openOther() {
+    setOtherOpen(true);
+    setTimeout(() => otherRef.current?.focus(), 0);
+  }
+
+  function confirmMulti() {
+    const labels = [...selected].sort((a, b) => a - b).map((i) => q.options[i].label);
+    if (other.trim()) labels.push(other.trim());
+    if (labels.length === 0) return;
+    advance(labels.join(", "));
+  }
+
+  function submitOther() {
+    if (q.multiSelect) confirmMulti();
+    else if (other.trim()) advance(other.trim());
+  }
+
+  // Global hotkeys 1–9 / Enter, active only while the cards are mounted. Skipped
+  // when focus is in any text field (incl. our own Other input + grid cells) so we
+  // never hijack typing.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const el = document.activeElement as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) {
+        if (e.key === "Enter" && q.multiSelect && el === otherRef.current) {
+          // handled by the Other input's own onKeyDown
+        }
+        return;
+      }
+      if (e.key >= "1" && e.key <= "9") {
+        const num = Number(e.key);
+        if (num <= q.options.length) {
+          e.preventDefault();
+          pickOption(num - 1);
+        } else if (num === otherNum) {
+          e.preventDefault();
+          openOther();
+        }
+      } else if (e.key === "Enter" && q.multiSelect) {
+        e.preventDefault();
+        confirmMulti();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [qi, q, otherNum, selected, other, answers]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div className="agent-ask">
+      <div className="agent-ask-head">
+        <span className="agent-ask-chip">{q.header}</span>
+        {questions.length > 1 && (
+          <span className="agent-ask-step">
+            Question {qi + 1} of {questions.length}
+          </span>
+        )}
+      </div>
+      <div className="agent-ask-q">{q.question}</div>
+      <div className="agent-ask-options">
+        {q.options.map((o, i) => {
+          const sel = !!q.multiSelect && selected.has(i);
+          return (
+            <button key={i} className={`agent-ask-option${sel ? " sel" : ""}`} onClick={() => pickOption(i)}>
+              <kbd className="agent-ask-key">{i + 1}</kbd>
+              <span className="agent-ask-option-body">
+                <span className="agent-ask-option-label">{o.label}</span>
+                {o.description && <span className="agent-ask-option-desc">{o.description}</span>}
+              </span>
+              {q.multiSelect && <span className="agent-ask-check">{sel ? "✓" : ""}</span>}
+            </button>
+          );
+        })}
+        {otherOpen ? (
+          <div className="agent-ask-other">
+            <kbd className="agent-ask-key">{otherNum}</kbd>
+            <input
+              ref={otherRef}
+              className="agent-ask-other-input"
+              value={other}
+              placeholder="Type your answer…"
+              onChange={(e) => setOther(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  submitOther();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setOtherOpen(false);
+                  setOther("");
+                }
+              }}
+            />
+            <button className="agent-ask-other-send" onClick={submitOther} disabled={!q.multiSelect && !other.trim()}>
+              <IconArrow s={14} />
+            </button>
+          </div>
+        ) : (
+          <button className="agent-ask-option agent-ask-option-other" onClick={openOther}>
+            <kbd className="agent-ask-key">{otherNum}</kbd>
+            <span className="agent-ask-option-body">
+              <span className="agent-ask-option-label">Other…</span>
+              <span className="agent-ask-option-desc">Type a custom answer</span>
+            </span>
+          </button>
+        )}
+      </div>
+      {q.multiSelect && (
+        <div className="agent-ask-foot">
+          <span className="agent-ask-hint">Pick one or more, then Enter</span>
+          <button className="agent-ask-confirm" onClick={confirmMulti} disabled={selected.size === 0 && !other.trim()}>
+            {isLast ? "Submit" : "Next"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AgentPanel({
   onGridChange,
   activeTable,
@@ -545,6 +738,14 @@ export default function AgentPanel({
   const historyRef = useRef<HTMLDivElement>(null);
 
   const messages = threads[agent];
+
+  // The agent asked a structured question on its last turn — surface answer cards
+  // in place of the composer until the user replies (which appends a new message).
+  const lastMessage = messages[messages.length - 1];
+  const pendingAsk =
+    !busy && lastMessage?.role === "assistant" && lastMessage.ask && lastMessage.ask.questions.length > 0
+      ? lastMessage.ask
+      : null;
 
   // Persist the model selection per agent (survives relaunch).
   useEffect(() => {
@@ -754,6 +955,8 @@ export default function AgentPanel({
                 estimatedCredits: e.estimatedCredits,
               },
             }));
+          else if (e.type === "ask_user")
+            updateLast((m) => ({ ...m, ask: { questions: e.questions ?? [] } }));
           else if (e.type === "grid") onGridChange();
           else if (e.type === "session") sessionRef.current[a] = e.sessionId;
           else if (e.type === "done") {
@@ -1025,6 +1228,9 @@ export default function AgentPanel({
               <span className="agent-context-dot" /> on <strong>{activeTable.name}</strong>
             </div>
           )}
+          {pendingAsk ? (
+            <AskCards request={pendingAsk} onSubmit={(answer) => send(answer)} />
+          ) : (
           <div className="agent-input">
             {slash && slashMatches.length > 0 && (
               <div className="agent-slash-menu">
@@ -1096,6 +1302,7 @@ export default function AgentPanel({
               </button>
             )}
           </div>
+          )}
           {/* Composer footer: chat history + model picker, both open upward. History
               is read from the agent's OWN native transcript store (sidecar). */}
           <div className="agent-composer-foot">
