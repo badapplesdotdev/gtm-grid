@@ -28,7 +28,7 @@ export interface AnalyticsEventMap {
   };
 
   // ── Desktop product surface (new) ────────────────────────────────────────────
-  app_opened: { version: string };
+  app_opened: { version?: string };
   table_created: { table_id: string; source: "manual" | "csv" | "agent" };
   column_added: {
     table_id: string;

@@ -13,6 +13,7 @@ import { Streamdown as StreamdownImpl } from "streamdown";
 // JSX component"). Retype it to the props we actually pass.
 const Streamdown = StreamdownImpl as unknown as FC<{ className?: string; children?: ReactNode }>;
 import { api, API_BASE, type AgentSession, type AgentStatus } from "./api";
+import { capture } from "./analytics";
 import { abortAllRuns, abortRun, tableAbortKey, type AbortControllers } from "./agentAbort";
 
 type AgentKind = "claude" | "codex" | "hermes";
@@ -962,6 +963,7 @@ export default function AgentPanel({
           else if (e.type === "done") {
             if (e.sessionId) sessionRef.current[a] = e.sessionId;
             if (e.isError) updateLast((m) => ({ ...m, error: true }));
+            capture("agent_turn_completed", { agent: a, mode: effMode, outcome: e.isError ? "error" : "completed" });
           } else if (e.type === "error") updateLast((m) => ({ ...ensureText(m, e.message), error: true }));
         }
       }
@@ -1229,7 +1231,13 @@ export default function AgentPanel({
             </div>
           )}
           {pendingAsk ? (
-            <AskCards request={pendingAsk} onSubmit={(answer) => send(answer)} />
+            <AskCards
+              request={pendingAsk}
+              onSubmit={(answer) => {
+                capture("ask_user_question_answered", { agent, questions: pendingAsk.questions.length });
+                send(answer);
+              }}
+            />
           ) : (
           <div className="agent-input">
             {slash && slashMatches.length > 0 && (
