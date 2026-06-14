@@ -1,5 +1,7 @@
 # @gtmgrid/engine
 
+## 0.9.24
+
 ## 0.9.23
 
 ### Patch Changes
