@@ -20,6 +20,7 @@
 import { getAuth, getSessionUserId } from "@gtmgrid/auth";
 import { type AppServices, appLayer, isAuthorizedWorker } from "@gtmgrid/services";
 import { Cause, type Effect, Exit, ManagedRuntime } from "effect";
+import { z } from "zod";
 import { captureServerException } from "../../../lib/posthog-server";
 
 /** The member-attribution header the spawned MCP forwards (the agent's bearer). */
@@ -47,8 +48,9 @@ let sharedRuntimePromise:
   | Promise<ManagedRuntime.ManagedRuntime<AppServices, never>>
   | undefined;
 
-/** Build (once) and reuse the worker's shared {@link ManagedRuntime}. */
-function workerRuntime(): Promise<
+/** Build (once) and reuse the worker's shared {@link ManagedRuntime}. Exported so
+ *  the billing webhook route can run a secret-trusted Effect on the same pool. */
+export function workerRuntime(): Promise<
   ManagedRuntime.ManagedRuntime<AppServices, never>
 > {
   if (sharedRuntimePromise === undefined) {
@@ -80,34 +82,53 @@ const badRequest = (message: string): Response =>
     headers: { "Content-Type": "application/json" },
   });
 
-/** Parse a worker request's JSON body, or `null` when unreadable. */
-export async function readJson<T>(req: Request): Promise<T | null> {
+/**
+ * Read + VALIDATE a worker request body against a zod schema. Returns the typed,
+ * parsed data, or a 400 Response (malformed JSON OR schema mismatch). This is the
+ * worker boundary's input-validation gate — it replaced an unchecked `as T` cast,
+ * so a wrong-shaped body is now rejected with a precise message before any service
+ * runs, instead of failing deep in the domain (or silently coercing).
+ */
+async function parseBody<T>(
+  req: Request,
+  schema: z.ZodType<T>,
+): Promise<{ readonly ok: true; readonly data: T } | { readonly ok: false; readonly response: Response }> {
+  let raw: unknown;
   try {
-    return (await req.json()) as T;
+    raw = await req.json();
   } catch {
-    return null;
+    return { ok: false, response: badRequest("Invalid JSON body") };
   }
+  const parsed = schema.safeParse(raw);
+  if (!parsed.success) {
+    const detail = parsed.error.issues
+      .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+      .join("; ");
+    return { ok: false, response: badRequest(`Invalid request body: ${detail}`) };
+  }
+  return { ok: true, data: parsed.data };
 }
 
 /**
- * Guard + run a worker handler: reject unauthorized callers with 401, parse the
- * JSON body (400 on failure), build a `WebhookService` runtime (no member
- * identity) and run the supplied Effect, returning its result as 200 JSON. A
- * typed service failure becomes a 4xx/500 with the message; a defect is a 500.
+ * Guard + run a worker handler: reject unauthorized callers with 401, VALIDATE the
+ * JSON body against `schema` (400 on malformed/invalid), build a runtime (no member
+ * identity) and run the supplied Effect, returning its result as 200 JSON. A typed
+ * service failure becomes a 4xx/500 with the message; a defect is a 500.
  */
 export async function runWorker<T, A, E>(
   req: Request,
+  schema: z.ZodType<T>,
   build: (body: T) => Effect.Effect<A, E, AppServices>,
 ): Promise<Response> {
   if (!isAuthorizedWorker(req)) return unauthorized();
-  const body = await readJson<T>(req);
-  if (body === null) return badRequest("Invalid JSON body");
+  const parsed = await parseBody(req, schema);
+  if (!parsed.ok) return parsed.response;
 
   // Reuse the module-scoped runtime (built once) instead of constructing +
   // disposing a fresh one per POST (M5). The pool it wraps is already shared, so
   // this removes the per-request runtime build/dispose overhead.
   const runtime = await workerRuntime();
-  const exit = await runtime.runPromiseExit(build(body));
+  const exit = await runtime.runPromiseExit(build(parsed.data));
   return exitToResponse(exit);
 }
 
@@ -133,8 +154,9 @@ function readTaggedError(value: unknown): {
   return { tag, message };
 }
 
-/** Render an Effect {@link Exit} as the worker boundary's JSON response. */
-function exitToResponse<A, E>(exit: Exit.Exit<A, E>): Response {
+/** Render an Effect {@link Exit} as the worker boundary's JSON response. Exported
+ *  so the billing webhook route can share the same typed-error → HTTP mapping. */
+export function exitToResponse<A, E>(exit: Exit.Exit<A, E>): Response {
   if (Exit.isSuccess(exit)) return ok(exit.value);
 
   const failure = Cause.failureOption(exit.cause);
@@ -192,16 +214,17 @@ async function resolveMemberUserId(req: Request): Promise<string | null> {
  */
 export async function runWorkerAsMember<T, A, E>(
   req: Request,
+  schema: z.ZodType<T>,
   build: (body: T) => Effect.Effect<A, E, AppServices>,
 ): Promise<Response> {
-  const body = await readJson<T>(req);
-  if (body === null) return badRequest("Invalid JSON body");
+  const parsed = await parseBody(req, schema);
+  if (!parsed.ok) return parsed.response;
 
   const userId = await resolveMemberUserId(req);
   const { db } = await import("@gtmgrid/db/client");
   const runtime = ManagedRuntime.make(appLayer({ db, userId }));
   try {
-    const exit = await runtime.runPromiseExit(build(body));
+    const exit = await runtime.runPromiseExit(build(parsed.data));
     return exitToResponse(exit);
   } finally {
     await runtime.dispose();
@@ -236,15 +259,16 @@ export async function runWorkerAsMember<T, A, E>(
  */
 export async function runWorkerSecretOrMember<T, A, E>(
   req: Request,
+  schema: z.ZodType<T>,
   build: (body: T) => Effect.Effect<A, E, AppServices>,
 ): Promise<Response> {
-  const body = await readJson<T>(req);
-  if (body === null) return badRequest("Invalid JSON body");
+  const parsed = await parseBody(req, schema);
+  if (!parsed.ok) return parsed.response;
 
   // Path 1 — headless worker secret: full trust, shared runtime (userId: null).
   if (isAuthorizedWorker(req)) {
     const runtime = await workerRuntime();
-    const exit = await runtime.runPromiseExit(build(body));
+    const exit = await runtime.runPromiseExit(build(parsed.data));
     return exitToResponse(exit);
   }
 
@@ -255,7 +279,7 @@ export async function runWorkerSecretOrMember<T, A, E>(
   const { db } = await import("@gtmgrid/db/client");
   const runtime = ManagedRuntime.make(appLayer({ db, userId }));
   try {
-    const exit = await runtime.runPromiseExit(build(body));
+    const exit = await runtime.runPromiseExit(build(parsed.data));
     return exitToResponse(exit);
   } finally {
     await runtime.dispose();

@@ -12,11 +12,12 @@
 import { GridService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { runWorkerAsMember } from "../_lib";
+import { DeleteRowSchema } from "../_schemas";
 
 export const runtime = "nodejs";
 
 export function POST(req: Request): Promise<Response> {
-  return runWorkerAsMember(req, (body: { rowId: string }) =>
+  return runWorkerAsMember(req, DeleteRowSchema, (body) =>
     Effect.gen(function* () {
       const svc = yield* GridService;
       yield* svc.deleteRow(body.rowId);

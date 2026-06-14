@@ -12,11 +12,12 @@
 import { GridService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { runWorkerAsMember } from "../_lib";
+import { ReorderRowSchema } from "../_schemas";
 
 export const runtime = "nodejs";
 
 export function POST(req: Request): Promise<Response> {
-  return runWorkerAsMember(req, (body: { rowId: string; toIndex: number }) =>
+  return runWorkerAsMember(req, ReorderRowSchema, (body) =>
     Effect.gen(function* () {
       const svc = yield* GridService;
       return yield* svc.reorderRow(body.rowId, body.toIndex);

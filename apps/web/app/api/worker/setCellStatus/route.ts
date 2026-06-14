@@ -3,21 +3,14 @@
  * Replaces `convex/http.ts` `/webhook/setCellStatus`. Secret-gated bearer.
  */
 
-import { type CloudCellStatus, WebhookService } from "@gtmgrid/services";
+import { WebhookService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { runWorkerSecretOrMember } from "../_lib";
+import { SetCellStatusSchema } from "../_schemas";
 
 export const runtime = "nodejs";
-
-interface SetCellStatusBody {
-  rowId: string;
-  columnId: string;
-  status: CloudCellStatus;
-  error?: string | null;
-}
-
 export function POST(req: Request): Promise<Response> {
-  return runWorkerSecretOrMember(req, (body: SetCellStatusBody) =>
+  return runWorkerSecretOrMember(req, SetCellStatusSchema, (body) =>
     Effect.gen(function* () {
       const svc = yield* WebhookService;
       return yield* svc.setCellStatus({

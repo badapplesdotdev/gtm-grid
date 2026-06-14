@@ -11,18 +11,12 @@
 import { WebhookService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { runWorkerSecretOrMember } from "../_lib";
+import { AssertColumnRunQuotaSchema } from "../_schemas";
 
 export const runtime = "nodejs";
 
 export function POST(req: Request): Promise<Response> {
-  return runWorkerSecretOrMember(
-    req,
-    (body: {
-      tableId: string;
-      columnId: string;
-      rowIds?: string[];
-      force?: boolean;
-    }) =>
+  return runWorkerSecretOrMember(req, AssertColumnRunQuotaSchema, (body) =>
       Effect.gen(function* () {
         const svc = yield* WebhookService;
         return yield* svc.assertColumnRunQuota({

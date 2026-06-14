@@ -11,26 +11,14 @@
  * meters ONE cloud action server-side. Returns the new column id.
  */
 
-import { type ColumnKind, GridService } from "@gtmgrid/services";
+import { GridService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { runWorkerAsMember } from "../_lib";
+import { CreateColumnSchema } from "../_schemas";
 
 export const runtime = "nodejs";
-
-interface CreateColumnBody {
-  tableId: string;
-  name: string;
-  type: string;
-  kind: ColumnKind;
-  provider?: string | null;
-  method?: string | null;
-  code?: string | null;
-  params?: unknown;
-  condition?: string | null;
-}
-
 export function POST(req: Request): Promise<Response> {
-  return runWorkerAsMember(req, (body: CreateColumnBody) =>
+  return runWorkerAsMember(req, CreateColumnSchema, (body) =>
     Effect.gen(function* () {
       const svc = yield* GridService;
       const id = yield* svc.addColumn({

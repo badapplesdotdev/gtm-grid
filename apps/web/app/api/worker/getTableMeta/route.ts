@@ -8,11 +8,12 @@
 import { WebhookService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { runWorkerSecretOrMember } from "../_lib";
+import { GetTableSchema } from "../_schemas";
 
 export const runtime = "nodejs";
 
 export function POST(req: Request): Promise<Response> {
-  return runWorkerSecretOrMember(req, (body: { tableId: string }) =>
+  return runWorkerSecretOrMember(req, GetTableSchema, (body) =>
     Effect.gen(function* () {
       const svc = yield* WebhookService;
       return yield* svc.getTableMeta(body.tableId);
