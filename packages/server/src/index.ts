@@ -42,6 +42,10 @@ import {
   type SignalDeps,
   type SignalSchedule,
 } from "./signals.js";
+import { captureException, flushObservability, installProcessHandlers, log } from "./observability.js";
+
+// Install last-gasp crash handlers ASAP so an error during boot/init is reported.
+installProcessHandlers();
 
 const PORT = Number(process.env.GTMGRID_PORT ?? 8787);
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
@@ -997,7 +1001,7 @@ route("POST", "/api/columns/:id/run/async", (p, body) => {
     : undefined;
   void runLimiter
     .run(() => current.engine.runColumn(p.id, { force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds }))
-    .catch((e) => console.error(`async run of column ${p.id} failed:`, e instanceof Error ? e.message : e));
+    .catch((e) => log.error(`async run of column ${p.id} failed`, e, { columnId: p.id }));
   return { started: true, columnId: p.id };
 });
 
@@ -1360,6 +1364,7 @@ const server = createServer(async (req, res) => {
       const result = await r.handler(params, body);
       return send(res, 200, result, origin);
     } catch (e) {
+      captureException(e, { source: "sidecar-route", path: url.pathname, method: req.method });
       return send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
     }
   }
@@ -1378,8 +1383,8 @@ const PARENT_PID = process.ppid;
 if (PARENT_PID > 1) {
   setInterval(() => {
     if (process.ppid !== PARENT_PID || process.ppid <= 1) {
-      console.error("gtmgrid server: parent app exited — shutting down sidecar.");
-      process.exit(0);
+      log.info("parent app exited — shutting down sidecar");
+      void flushObservability().finally(() => process.exit(0));
     }
   }, 1500).unref();
 }

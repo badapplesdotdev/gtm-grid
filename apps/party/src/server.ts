@@ -23,6 +23,7 @@
  */
 
 import type * as Party from "partykit/server";
+import { capturePartyEvent } from "./analytics";
 import {
   authorizeGridConnection,
   isAuthorizedPublish,
@@ -79,6 +80,15 @@ export default class GridServer implements Party.Server {
     const userId = ctx.request.headers.get("x-gtmgrid-user") ?? "";
     conn.setState({ userId });
     this.broadcastPresence();
+    // Realtime adoption telemetry (best-effort). Room id = `${workspaceId}:${tableId}`.
+    const [workspaceId, tableId] = this.room.id.split(":");
+    capturePartyEvent(
+      this.room.env as Record<string, unknown>,
+      "realtime_connected",
+      userId,
+      { workspace_id: workspaceId ?? "", table_id: tableId ?? "" },
+      workspaceId,
+    );
   }
 
   /** A presence update from a client → store it and re-broadcast the roster. */
