@@ -42,3 +42,12 @@ jobs:
       # Unit/integration tests (vitest across all packages; in-memory, no DB).
       - name: Test
         run: pnpm test
+
+      # Build the web app so a broken `next build` (bad route, server-component
+      # error, missing env reference) is caught in CI instead of at release time.
+      # Dummy public env vars satisfy build-time reads without contacting PostHog.
+      - name: Build web
+        run: pnpm --filter @gtmgrid/web build
+        env:
+          NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN: phc_ci_placeholder
+          NEXT_PUBLIC_POSTHOG_HOST: https://eu.i.posthog.com

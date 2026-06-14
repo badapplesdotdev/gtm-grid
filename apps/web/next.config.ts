@@ -41,6 +41,25 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  // Baseline security headers on every response. These are CSP-free on purpose —
+  // a Content-Security-Policy needs per-surface testing (PostHog, Supabase,
+  // PartyKit, OAuth) to avoid breakage and is tracked as a follow-up; the headers
+  // below are safe defaults with no functional risk. HSTS is honored only over
+  // HTTPS (ignored on localhost), so it's safe in all environments.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+          { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" },
+        ],
+      },
+    ];
+  },
   // The QuickJS WASM variant is loaded by quickjs-emscripten-core via a DYNAMIC
   // import, so Next's static file tracer never sees it and it (plus its .wasm) is
   // missing from the deployed function. Force-include the variant + ffi-types for
