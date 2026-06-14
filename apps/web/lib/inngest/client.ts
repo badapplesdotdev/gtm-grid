@@ -9,5 +9,9 @@ import { Inngest } from "inngest";
  * In production Inngest reads `INNGEST_EVENT_KEY` (to send) and
  * `INNGEST_SIGNING_KEY` (to verify the serve endpoint) from the environment; in
  * local dev the Inngest dev server supplies them, so no keys are needed here.
+ *
+ * Durable-function error tracking is wired per-function via the shared
+ * `onFailure` handler in `./on-failure.ts` (fires once after retries are
+ * exhausted) → PostHog Error Tracking.
  */
 export const inngest = new Inngest({ id: "gtmgrid" });

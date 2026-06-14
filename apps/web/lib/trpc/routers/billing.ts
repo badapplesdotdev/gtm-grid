@@ -16,7 +16,7 @@
 import { BillingService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { z } from "zod";
-import { getPostHogClient } from "../../posthog-server";
+import { captureServer } from "../../posthog-server";
 import { protectedProcedure, router, runEffect } from "../trpc";
 
 export const billingRouter = router({
@@ -34,13 +34,13 @@ export const billingRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      getPostHogClient()?.capture({
+      captureServer("billing_checkout_initiated", {
         distinctId: ctx.userId,
-        event: "billing_checkout_initiated",
         properties: {
           workspace_id: input.workspaceId,
-          plan_id: input.planId ?? null,
+          plan_id: input.planId ?? "",
         },
+        groups: { workspace: input.workspaceId },
       });
       return runEffect(
         ctx.runtime,

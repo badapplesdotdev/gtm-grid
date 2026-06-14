@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@gtmgrid/analytics": "workspace:*",
     "@gtmgrid/auth": "workspace:*",
     "@gtmgrid/cloud": "workspace:*",
     "@gtmgrid/db": "workspace:*",

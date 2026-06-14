@@ -10,6 +10,7 @@ import {
 } from "@gtmgrid/engine";
 import { Effect } from "effect";
 import { inngest } from "../client";
+import { onFailure } from "../on-failure";
 import { workerClient, WORKER_REFS } from "../worker-client";
 
 /**
@@ -312,6 +313,7 @@ export const processWebhookRecord = inngest.createFunction(
       { key: "event.data.workspaceId", limit: 5 },
     ],
     retries: 3,
+    onFailure,
     triggers: [{ event: "webhook/record.received" }],
   },
   async ({ event, step }) => {

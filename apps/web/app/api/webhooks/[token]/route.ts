@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { inngest } from "../../../../lib/inngest/client";
-import { getPostHogClient } from "../../../../lib/posthog-server";
+import { captureServer } from "../../../../lib/posthog-server";
 import { resolveSiteUrl } from "../../../../lib/site-url";
 import { applyMapping, type MappingEntry } from "../../../../lib/webhook-mapping";
 import { signatureCheckPasses } from "../../../../lib/webhook-signature";
@@ -170,9 +170,8 @@ export async function POST(
     },
   });
 
-  getPostHogClient()?.capture({
+  captureServer("webhook_received", {
     distinctId: webhook.workspaceId,
-    event: "webhook_received",
     properties: {
       webhook_id: webhook.webhookId,
       workspace_id: webhook.workspaceId,
@@ -180,6 +179,7 @@ export async function POST(
       auto_run: webhook.autoRun,
       mode: webhook.mode,
     },
+    groups: { workspace: webhook.workspaceId },
   });
 
   return json({ accepted: true, recordId }, 202);

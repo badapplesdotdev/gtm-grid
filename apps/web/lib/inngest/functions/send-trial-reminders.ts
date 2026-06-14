@@ -16,6 +16,7 @@ import { emailEnabled, sendEmail, trialEndingEmail } from "@gtmgrid/email";
 import { appLayer, WorkspaceRepo } from "@gtmgrid/services";
 import { Effect, ManagedRuntime } from "effect";
 import { inngest } from "../client";
+import { onFailure } from "../on-failure";
 
 // NB: `@gtmgrid/db/client` is imported LAZILY inside the handler (not at module
 // top). It throws "DATABASE_URL is not set" on import, which would crash Next's
@@ -34,7 +35,7 @@ interface DueReminder {
 
 export const sendTrialReminders = inngest.createFunction(
   // Daily at 14:00 UTC.
-  { id: "send-trial-reminders", triggers: [{ cron: "0 14 * * *" }] },
+  { id: "send-trial-reminders", triggers: [{ cron: "0 14 * * *" }], onFailure },
   async ({ step }) => {
     if (!emailEnabled()) return { sent: 0, skipped: "email disabled" };
 
