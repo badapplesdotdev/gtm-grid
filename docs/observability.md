@@ -57,16 +57,25 @@ keys are the same public PostHog project token (`phc_...`).
   distributed guarantee.
 - CI builds the web app (`next build`) so broken builds fail before release.
 
-## PostHog-app config to create (Phase 6 — via PostHog MCP or UI)
+## PostHog-app config (Phase 6 — via PostHog MCP or UI)
 
-These are dashboards/objects authored in PostHog, not code:
+Project `201747` (EU). Done so far:
 
-1. **Activation funnel** dashboard: `app_opened` → `table_created` → `column_run` →
-   `cloud_sync_completed`.
-2. **Error-tracking alert**: notify on an exception-volume spike.
-3. **Revenue** dashboard from the `subscription_*` events (or the Stripe connector).
-4. **Agent usage** insight: `agent_turn_completed` by `agent` + outcome.
-5. **Surveys**: a post-onboarding / NPS survey targeted by cohort.
+- ✅ **Product-feedback survey** (draft, popover): a 1–5 rating + open follow-up.
+  [Survey](https://eu.posthog.com/project/201747/surveys/019ec687-846f-0000-03bc-942af11fe693)
+  — launch it when ready (it was created as a draft, not started).
+
+**Still to create — but they need event DATA first.** As of this writing PostHog has
+received **none** of the app's product events (`app_opened`, `table_created`,
+`column_run`, `agent_turn_completed`, `subscription_*`, …) — they only start flowing
+once an instrumented build is deployed with the PostHog keys set. Building these on
+not-yet-seen events would just produce empty charts, so create them **after first
+events land** (re-run via the PostHog MCP, which can build them in minutes):
+
+1. **Activation funnel**: `app_opened` → `table_created` → `column_run` → `cloud_sync_completed`.
+2. **Error-tracking alert**: notify on an `$exception` volume spike.
+3. **Revenue** dashboard from the `subscription_*` events (or PostHog's Stripe connector).
+4. **Agent usage** insight: `agent_turn_completed` broken down by `agent` + `outcome`.
 
 ## Deferred / follow-ups
 
