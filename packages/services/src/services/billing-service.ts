@@ -72,6 +72,10 @@ export interface SyncedPlan {
   readonly trialEndsAt: number | null;
 }
 
+/** The error channel of {@link BillingService.syncPlanFromWebhook} — no authz
+ *  tags, since a secret-gated webhook has no member identity. */
+export type SyncPlanFromWebhookError = WorkspaceRepoError | AutumnError;
+
 /** The error channel of {@link BillingService.previewSeatChange}. */
 export type PreviewSeatChangeError =
   | UnauthenticatedError
@@ -160,6 +164,30 @@ export class BillingService extends Effect.Service<BillingService>()(
         });
 
       /**
+       * Webhook variant of {@link syncPlan}: reconcile the cached plan with the
+       * live Autumn subscription WITHOUT a member-identity check. The caller (the
+       * billing webhook route) is gated by a shared secret, so there is no session
+       * to run `requireMember` against — exactly like the secret-trusted worker
+       * routes that run with `userId: null`. This is what revokes cloud access when
+       * a subscription is cancelled / lapses OUTSIDE the app (no active paid sub →
+       * `updatePlan(workspaceId, null, null)`).
+       */
+      const syncPlanFromWebhook = (
+        workspaceId: string,
+      ): Effect.Effect<SyncedPlan, SyncPlanFromWebhookError> =>
+        Effect.gen(function* () {
+          const subs = yield* autumn.getActiveSubscriptions({
+            customerId: workspaceId,
+          });
+          const paidPlanIds: readonly string[] = ALL_PAID_PLAN_IDS;
+          const paid = subs.find((s) => paidPlanIds.includes(s.planId)) ?? null;
+          const planId = paid?.planId ?? null;
+          const trialEndsAt = paid?.trialEndsAt ?? null;
+          yield* repo.updatePlan(workspaceId, planId, trialEndsAt);
+          return { id: planId, name: planName(planId), trialEndsAt };
+        });
+
+      /**
        * Preview the recurring bill AFTER adding `addSeats` seat(s) to the
        * workspace, so the UI can confirm the new price before an invite that
        * raises the subscription. Members-only (read-only preview). Seats =
@@ -191,7 +219,7 @@ export class BillingService extends Effect.Service<BillingService>()(
           };
         });
 
-      return { checkout, syncPlan, previewSeatChange } as const;
+      return { checkout, syncPlan, syncPlanFromWebhook, previewSeatChange } as const;
     }),
     dependencies: [],
   },
