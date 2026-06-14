@@ -1,26 +1,75 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { AnalyticsEventName } from "@gtmgrid/analytics";
 
 /**
- * Constant-time bearer check for the Autumn/Stripe billing webhook. The shared
- * `AUTUMN_WEBHOOK_SECRET` is the trust boundary (the webhook has no session), so
- * the upstream must present `Authorization: Bearer <AUTUMN_WEBHOOK_SECRET>`.
+ * Verify an Autumn billing webhook signature (Svix / "Standard Webhooks" scheme —
+ * the `whsec_…` signing secret + `webhook-id`/`-timestamp`/`-signature` headers).
  *
- * Fail-closed: an UNSET secret rejects everything (a missing secret must never
- * accidentally accept unauthenticated callers). Pure + exported for unit testing.
+ * Autumn does NOT send a bearer token; it HMAC-signs each delivery. We recompute
+ * `base64(HMAC-SHA256(key, "<id>.<timestamp>.<rawBody>"))` over the EXACT raw bytes
+ * and constant-time compare against any `v1,<sig>` in the signature header, and we
+ * reject deliveries outside a ±5-min window (replay protection).
+ *
+ * Fail-closed: an UNSET secret, missing headers, a bad timestamp, or no matching
+ * signature all return false. Pure (now injectable) → unit-testable.
  */
-export function isAuthorizedBillingWebhook(req: Request): boolean {
-  const secret = process.env.AUTUMN_WEBHOOK_SECRET;
+export function verifyWebhookSignature(
+  rawBody: string,
+  headers: Headers,
+  secret: string | undefined,
+  nowMs: number = Date.now(),
+): boolean {
   if (!secret) return false;
-  const header = req.headers.get("authorization") ?? "";
-  const prefix = "Bearer ";
-  if (!header.startsWith(prefix)) return false;
-  const provided = Buffer.from(header.slice(prefix.length));
-  const expected = Buffer.from(secret);
-  // timingSafeEqual throws on length mismatch — compare lengths first (the length
-  // itself isn't secret).
-  if (provided.length !== expected.length) return false;
-  return timingSafeEqual(provided, expected);
+  const id = headers.get("webhook-id") ?? headers.get("svix-id");
+  const timestamp = headers.get("webhook-timestamp") ?? headers.get("svix-timestamp");
+  const sigHeader = headers.get("webhook-signature") ?? headers.get("svix-signature");
+  if (!id || !timestamp || !sigHeader) return false;
+
+  const ts = Number(timestamp);
+  if (!Number.isFinite(ts) || Math.abs(nowMs / 1000 - ts) > 300) return false;
+
+  // `whsec_<base64>`: the key is the base64-decoded remainder.
+  const keyB64 = secret.startsWith("whsec_") ? secret.slice("whsec_".length) : secret;
+  const key = Buffer.from(keyB64, "base64");
+  if (key.length === 0) return false;
+
+  const expected = Buffer.from(
+    createHmac("sha256", key).update(`${id}.${timestamp}.${rawBody}`).digest("base64"),
+  );
+
+  // The header is a space-separated list of `v<n>,<sig>` tokens.
+  for (const part of sigHeader.split(" ")) {
+    const comma = part.indexOf(",");
+    if (comma < 0) continue;
+    if (part.slice(0, comma) !== "v1") continue;
+    const sig = Buffer.from(part.slice(comma + 1));
+    if (sig.length === expected.length && timingSafeEqual(sig, expected)) return true;
+  }
+  return false;
+}
+
+/**
+ * Extract the Autumn customer id (== the gtm-grid workspace id) from a webhook
+ * payload, tolerant of where Autumn nests it. Returns null when none is found.
+ */
+export function extractCustomerId(payload: unknown): string | null {
+  const candidates = [
+    (p: Record<string, unknown>) => p.customerId,
+    (p: Record<string, unknown>) => p.customer_id,
+    (p: Record<string, unknown>) => p.workspaceId,
+    (p: Record<string, unknown>) => (p.data as Record<string, unknown> | undefined)?.customerId,
+    (p: Record<string, unknown>) => (p.data as Record<string, unknown> | undefined)?.customer_id,
+    (p: Record<string, unknown>) =>
+      ((p.data as Record<string, unknown> | undefined)?.customer as Record<string, unknown> | undefined)?.id,
+    (p: Record<string, unknown>) => (p.customer as Record<string, unknown> | undefined)?.id,
+  ];
+  if (typeof payload !== "object" || payload === null) return null;
+  const p = payload as Record<string, unknown>;
+  for (const get of candidates) {
+    const v = get(p);
+    if (typeof v === "string" && v.length > 0) return v;
+  }
+  return null;
 }
 
 /**

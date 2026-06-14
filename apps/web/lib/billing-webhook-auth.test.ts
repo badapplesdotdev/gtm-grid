@@ -1,45 +1,96 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { isAuthorizedBillingWebhook, revenueEventForPlan } from "./billing-webhook-auth";
+import { createHmac } from "node:crypto";
+import { describe, expect, it } from "vitest";
+import {
+  extractCustomerId,
+  revenueEventForPlan,
+  verifyWebhookSignature,
+} from "./billing-webhook-auth";
 
-const SECRET = "awh_secret_value";
+// A real Svix `whsec_` secret is `whsec_<base64key>`. Use a fixed test key.
+const SECRET = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw";
+const MSG_ID = "msg_test_1";
+const NOW_S = 1_750_000_000;
+const NOW_MS = NOW_S * 1000;
 
-function req(auth?: string | null): Request {
-  const headers: Record<string, string> = {};
-  if (auth != null) headers.Authorization = auth;
-  return new Request("https://app.gtmgrid.test/api/billing/webhook", { method: "POST", headers });
+/** Sign exactly as Svix / Standard Webhooks does, for the happy-path tests. */
+function sign(secret: string, id: string, ts: number, body: string): string {
+  const key = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
+  const sig = createHmac("sha256", key).update(`${id}.${ts}.${body}`).digest("base64");
+  return `v1,${sig}`;
 }
 
-describe("isAuthorizedBillingWebhook", () => {
-  beforeEach(() => {
-    process.env.AUTUMN_WEBHOOK_SECRET = SECRET;
+function svixHeaders(id: string, ts: number, signature: string): Headers {
+  return new Headers({
+    "svix-id": id,
+    "svix-timestamp": String(ts),
+    "svix-signature": signature,
   });
-  afterEach(() => {
-    delete process.env.AUTUMN_WEBHOOK_SECRET;
+}
+
+describe("verifyWebhookSignature (Svix / Standard Webhooks)", () => {
+  const body = JSON.stringify({ object: "event", customer_id: "ws_1" });
+
+  it("accepts a correctly-signed delivery", () => {
+    const headers = svixHeaders(MSG_ID, NOW_S, sign(SECRET, MSG_ID, NOW_S, body));
+    expect(verifyWebhookSignature(body, headers, SECRET, NOW_MS)).toBe(true);
   });
 
-  it("accepts the correct bearer", () => {
-    expect(isAuthorizedBillingWebhook(req(`Bearer ${SECRET}`))).toBe(true);
+  it("accepts the `webhook-` header prefix too (enterprise)", () => {
+    const headers = new Headers({
+      "webhook-id": MSG_ID,
+      "webhook-timestamp": String(NOW_S),
+      "webhook-signature": sign(SECRET, MSG_ID, NOW_S, body),
+    });
+    expect(verifyWebhookSignature(body, headers, SECRET, NOW_MS)).toBe(true);
   });
 
-  it("rejects a missing Authorization header", () => {
-    expect(isAuthorizedBillingWebhook(req(null))).toBe(false);
+  it("rejects a tampered body", () => {
+    const headers = svixHeaders(MSG_ID, NOW_S, sign(SECRET, MSG_ID, NOW_S, body));
+    expect(verifyWebhookSignature(body + " ", headers, SECRET, NOW_MS)).toBe(false);
   });
 
-  it("rejects a wrong secret", () => {
-    expect(isAuthorizedBillingWebhook(req("Bearer not-the-secret"))).toBe(false);
+  it("rejects a wrong signing secret", () => {
+    const headers = svixHeaders(MSG_ID, NOW_S, sign(SECRET, MSG_ID, NOW_S, body));
+    expect(
+      verifyWebhookSignature(body, headers, "whsec_AAAAAAAAAAAAAAAAAAAAAAAAAAAA", NOW_MS),
+    ).toBe(false);
   });
 
-  it("rejects a non-Bearer scheme", () => {
-    expect(isAuthorizedBillingWebhook(req(`Basic ${SECRET}`))).toBe(false);
+  it("rejects a stale timestamp (replay protection, > 5 min)", () => {
+    const oldTs = NOW_S - 1000;
+    const headers = svixHeaders(MSG_ID, oldTs, sign(SECRET, MSG_ID, oldTs, body));
+    expect(verifyWebhookSignature(body, headers, SECRET, NOW_MS)).toBe(false);
   });
 
-  it("fails closed when AUTUMN_WEBHOOK_SECRET is UNSET (rejects even a bearer)", () => {
-    delete process.env.AUTUMN_WEBHOOK_SECRET;
-    expect(isAuthorizedBillingWebhook(req(`Bearer ${SECRET}`))).toBe(false);
+  it("rejects missing signature headers", () => {
+    expect(verifyWebhookSignature(body, new Headers(), SECRET, NOW_MS)).toBe(false);
   });
 
-  it("rejects a bearer that is a prefix of the secret (length-checked)", () => {
-    expect(isAuthorizedBillingWebhook(req(`Bearer ${SECRET.slice(0, -1)}`))).toBe(false);
+  it("fails closed when the secret is UNSET", () => {
+    const headers = svixHeaders(MSG_ID, NOW_S, sign(SECRET, MSG_ID, NOW_S, body));
+    expect(verifyWebhookSignature(body, headers, undefined, NOW_MS)).toBe(false);
+  });
+
+  it("rejects a non-v1 signature token", () => {
+    const sig = sign(SECRET, MSG_ID, NOW_S, body).replace("v1,", "v0,");
+    expect(verifyWebhookSignature(body, svixHeaders(MSG_ID, NOW_S, sig), SECRET, NOW_MS)).toBe(false);
+  });
+});
+
+describe("extractCustomerId", () => {
+  it("reads top-level customer_id (the real billing.updated shape)", () => {
+    expect(extractCustomerId({ object: "event", customer_id: "ws_42" })).toBe("ws_42");
+  });
+  it("reads alternate locations (customerId / workspaceId / nested / customer.id)", () => {
+    expect(extractCustomerId({ customerId: "a" })).toBe("a");
+    expect(extractCustomerId({ workspaceId: "b" })).toBe("b");
+    expect(extractCustomerId({ data: { customer_id: "c" } })).toBe("c");
+    expect(extractCustomerId({ customer: { id: "d" } })).toBe("d");
+  });
+  it("returns null when no customer id is present or payload is not an object", () => {
+    expect(extractCustomerId({ object: "event" })).toBeNull();
+    expect(extractCustomerId(null)).toBeNull();
+    expect(extractCustomerId("nope")).toBeNull();
   });
 });
 
