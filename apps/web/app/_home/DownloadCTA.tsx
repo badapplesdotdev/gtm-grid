@@ -7,6 +7,7 @@
 // the globals `.btn--primary`) so it lives inside the scoped `.gtm-home` styles.
 
 import { useEffect, useState } from "react";
+import posthog from "posthog-js";
 
 type Detected = { readonly key: string; readonly os: string } | null;
 
@@ -52,11 +53,19 @@ export function DownloadCTA({
       ? `Download for ${detected.os}`
       : "Download the app";
 
+  function handleClick() {
+    posthog.capture("download_initiated", {
+      platform: detected?.key ?? "unknown",
+      os: detected?.os ?? "unknown",
+    });
+  }
+
   return (
     <a
       className={`btn btn-primary${size === "lg" ? " btn-lg" : ""}${className ? ` ${className}` : ""}`}
       href={href}
       data-detected={detected?.key ?? "none"}
+      onClick={handleClick}
     >
       <DownloadIcon />
       {label ?? computed}

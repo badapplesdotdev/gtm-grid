@@ -23,6 +23,24 @@ const monorepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", ".."
  */
 const nextConfig: NextConfig = {
   outputFileTracingRoot: monorepoRoot,
+  // Required to support PostHog trailing slash API requests.
+  skipTrailingSlashRedirect: true,
+  async rewrites() {
+    return [
+      {
+        source: "/ingest/static/:path*",
+        destination: "https://eu-assets.i.posthog.com/static/:path*",
+      },
+      {
+        source: "/ingest/array/:path*",
+        destination: "https://eu-assets.i.posthog.com/array/:path*",
+      },
+      {
+        source: "/ingest/:path*",
+        destination: "https://eu.i.posthog.com/:path*",
+      },
+    ];
+  },
   // The QuickJS WASM variant is loaded by quickjs-emscripten-core via a DYNAMIC
   // import, so Next's static file tracer never sees it and it (plus its .wasm) is
   // missing from the deployed function. Force-include the variant + ffi-types for

@@ -30,3 +30,4 @@ packages/desktop/src-tauri/gen/
 
 # Playwright MCP scratch artifacts
 .playwright-mcp/
+.env.local
