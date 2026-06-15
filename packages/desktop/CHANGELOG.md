@@ -1,5 +1,14 @@
 # @gtmgrid/desktop
 
+## 0.11.1
+
+### Patch Changes
+
+- 2fdb753: Make the column edit panel keyboard-accessible: convert it from an inline side rail to a shadcn Sheet, so it closes on Escape and traps focus while open (matching the cell-details drawer).
+  - @gtmgrid/analytics@0.11.1
+  - @gtmgrid/cloud@0.11.1
+  - @gtmgrid/services@0.11.1
+
 ## 0.11.0
 
 ### Minor Changes
