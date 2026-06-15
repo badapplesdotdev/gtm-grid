@@ -5,6 +5,7 @@
 import { useState, useMemo, useEffect, useRef, createContext, useContext, ReactNode, CSSProperties } from "react";
 import { api, ConnectorInfo, AiProviderInfo } from "./api";
 import { BrandIcon } from "./Panels";
+import { Dialog, DialogContent } from "./components/ui/dialog";
 
 /**
  * The subset of the data API the column-authoring modals need. Injected so the
@@ -160,8 +161,8 @@ export function AddColumnPopover({
     : { position: "fixed", top: "14vh", left: "50%", transform: "translateX(-50%)" };
 
   return (
-    <div className="popover-scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="addcol acx" style={style} onMouseDown={(e) => e.stopPropagation()}>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="addcol acx" style={style} overlayClassName="bare-scrim" srTitle="Add column">
         <input
           className="acx-name"
           placeholder="Column name…"
@@ -211,8 +212,8 @@ export function AddColumnPopover({
             </button>
           ))}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -365,8 +366,8 @@ export function FunctionsModal({
   }, [matched, nav, presentCats]);
 
   return (
-    <div className="overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="fnx">
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="fnx" srTitle="Functions">
         <div className="fnx-header">
           <span className="fnx-title">Functions</span>
           <button className="modal-close" onClick={onClose}>{X}</button>
@@ -457,8 +458,8 @@ export function FunctionsModal({
         </div>
 
         <div className="fnx-footer">{fns.length} functions</div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1591,8 +1592,8 @@ export function ColumnSettingsModal({
   );
 
   return (
-    <div className="popover-scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="col-settings" onMouseDown={(e) => e.stopPropagation()}>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="col-settings" overlayClassName="bare-scrim" srTitle="Edit column">
         <div className="col-settings-head">
           <div className="col-settings-title">Edit column{column.fn ? ` · ${column.fn}` : ""}</div>
           <button className="fnx-x" onClick={onClose}>{X}</button>
@@ -1664,7 +1665,7 @@ export function ColumnSettingsModal({
           <button className="btn" onClick={onClose}>Cancel</button>
           <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

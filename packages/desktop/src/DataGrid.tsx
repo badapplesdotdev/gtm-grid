@@ -29,6 +29,7 @@ import { GridColSpacer } from "./GridColSpacer";
 import { csvFilename, downloadCsv, tableToCsv } from "./csvExport";
 import { BotGlyph, PresenceAvatars } from "./PresenceAvatars";
 import { type GridPresenceView, presenceCellKey } from "./gridPresence";
+import { useGridKeyboardNav, cellDomId } from "./useGridKeyboardNav";
 
 /** A `<td>` style that also carries the per-cell presence-ring color variable. */
 type PresenceTdStyle = CSSProperties & { "--presence-color"?: string };
@@ -260,6 +261,65 @@ export function DataGrid({
     [table, c],
   );
 
+  // Scroll a cell (by index) just far enough to be visible — used by keyboard
+  // navigation. Unlike scrollToCell this is instant and minimal (no centering,
+  // no flash), accounts for the sticky row-number gutter, and is a no-op when
+  // the cell is already in view.
+  const scrollCellIntoView = useCallback(
+    (rowIdx: number, colIdx: number) => {
+      const el = gridScrollRef.current;
+      if (el === null) return;
+      const top = rowIdx * c.rowHeight;
+      if (top < el.scrollTop) el.scrollTop = top;
+      else if (top + c.rowHeight > el.scrollTop + el.clientHeight)
+        el.scrollTop = top + c.rowHeight - el.clientHeight;
+
+      let left = GUTTER_W;
+      for (let i = 0; i < colIdx; i++) left += c.columnWidth(table.columns[i].id);
+      const w = table.columns[colIdx] ? c.columnWidth(table.columns[colIdx].id) : 0;
+      // Keep the cell clear of the sticky gutter on the left edge.
+      if (left - GUTTER_W < el.scrollLeft) el.scrollLeft = Math.max(0, left - GUTTER_W);
+      else if (left + w > el.scrollLeft + el.clientWidth)
+        el.scrollLeft = left + w - el.clientWidth;
+    },
+    [c, table.columns],
+  );
+
+  // Spreadsheet keyboard navigation (arrows / Home / End / PageUp-Down / type-to-
+  // edit). Shared by both envs via this component. Selection callbacks reuse the
+  // grid's existing row-selection state.
+  const kbd = useGridKeyboardNav({
+    rowCount: table.rows.length,
+    colCount: table.columns.length,
+    rowHeight: c.rowHeight,
+    scrollRef: gridScrollRef,
+    scrollToIndex: scrollCellIntoView,
+    onExtendSelection: (rowIdx) => {
+      const id = table.rows[rowIdx]?.id;
+      if (id) {
+        setSelectedRows((prev) => new Set(prev).add(id));
+        lastClickedRef.current = id;
+      }
+    },
+    onToggleSelection: (rowIdx) => {
+      const id = table.rows[rowIdx]?.id;
+      if (id) toggleRow(id, false);
+    },
+    onSelectAll: () => setSelectedRows(new Set(table.rows.map((r) => r.id))),
+    onClearSelection: clearSelection,
+  });
+
+  /** Roving tabindex: one cell is the tab stop — the active cell, or (0,0)
+   *  before any cell has been focused — so Tab reaches the grid exactly once. */
+  const cellTabIndex = useCallback(
+    (rowIdx: number, colIdx: number): 0 | -1 => {
+      const a = kbd.active;
+      if (a) return a.row === rowIdx && a.col === colIdx ? 0 : -1;
+      return rowIdx === 0 && colIdx === 0 ? 0 : -1;
+    },
+    [kbd.active],
+  );
+
   // Column virtualization (TRI-3286): window the DATA columns horizontally so a
   // table with hundreds of columns mounts only the visible columns × visible
   // rows. The gutter is the always-present sticky cell rendered once, excluded
@@ -407,10 +467,16 @@ export function DataGrid({
           </button>
         </div>
       ) : (
-        <div className="grid-wrap" ref={gridScrollRef} onScroll={onScroll}>
-          <table className="grid-table" style={{ width: totalWidth }}>
+        <div className="grid-wrap" ref={gridScrollRef} onScroll={onScroll} onKeyDown={kbd.onKeyDown}>
+          <table
+            className="grid-table"
+            style={{ width: totalWidth }}
+            role="grid"
+            aria-rowcount={table.rows.length}
+            aria-colcount={table.columns.length}
+          >
             <thead>
-              <tr>
+              <tr role="row">
                 {/* Row-number gutter — the ONLY gutter cell (reserved once) */}
                 <th className="grid-th row-num-th col-row-num">
                   {table.rows.length > 0 && (
@@ -442,6 +508,8 @@ export function DataGrid({
                   return (
                     <th
                       key={col.id}
+                      role="columnheader"
+                      aria-colindex={vc.index + 1}
                       className={`grid-th${colHere ? " col-presence" : ""}`}
                       title={colHere ? colHere.map((u) => `${u.name ?? u.userId}${u.activity ? ` — ${u.activity}` : ""}`).join(", ") : undefined}
                       style={thStyle}
@@ -524,7 +592,7 @@ export function DataGrid({
                 renderRow={(row, idx, cw) => {
                   const selected = selectedRows.has(row.id);
                   return (
-                  <tr key={row.id} className={`grid-tr${selected ? " is-selected" : ""}`}>
+                  <tr key={row.id} role="row" aria-rowindex={idx + 1} aria-selected={selected} className={`grid-tr${selected ? " is-selected" : ""}`}>
                     <td
                       className="grid-td row-num-td"
                       onContextMenu={(e) => openCtx(e, rowCtxItems(row.id))}
@@ -552,11 +620,20 @@ export function DataGrid({
                       const tdStyle: PresenceTdStyle | undefined = here
                         ? { "--presence-color": here[0].color }
                         : undefined;
+                      const isActiveCell = kbd.active?.row === idx && kbd.active?.col === vc.index;
                       return (
                         <td
                           key={col.id}
+                          role="gridcell"
+                          aria-colindex={vc.index + 1}
+                          data-cell={cellDomId(idx, vc.index)}
+                          tabIndex={cellTabIndex(idx, vc.index)}
                           className={`grid-td${here ? " cell-presence" : ""}${isEditingHere ? " presence-editing" : ""}${flashCell === key ? " presence-flash" : ""}`}
                           style={tdStyle}
+                          onFocus={() => {
+                            kbd.onCellFocus(idx, vc.index);
+                            c.onActiveCellChange?.({ rowId: row.id, colId: col.id });
+                          }}
                           onClick={
                             c.onActiveCellChange
                               ? () => c.onActiveCellChange!({ rowId: row.id, colId: col.id })
@@ -613,6 +690,8 @@ export function DataGrid({
                             }
                             onRunCell={col.kind === "function" ? () => c.runCell(row.id, col.id) : undefined}
                             running={c.runningCells.has(`${row.id}:${col.id}`)}
+                            editSignal={isActiveCell ? kbd.editSignal : 0}
+                            editSeed={isActiveCell ? kbd.getEditSeed() : undefined}
                           />
                         </td>
                       );

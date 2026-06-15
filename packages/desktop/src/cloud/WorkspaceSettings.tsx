@@ -23,6 +23,7 @@
 
 import { useCallback, useState } from "react";
 import { type BillingCycle, resolvePlanId } from "@gtmgrid/cloud";
+import { Dialog, DialogContent } from "../components/ui/dialog";
 import { PlanGrid, BillingToggle } from "./onboarding/PlanGrid";
 import type { SelectablePlan } from "./onboarding/flow-logic";
 import type { Id } from "./ids";
@@ -220,8 +221,8 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
     used === null ? "…" : limit === null ? `${used}` : `${used} / ${limit}`;
 
   return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ width: 520 }}>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="modal" srTitle="Workspace members" style={{ width: 520 }}>
         <div className="modal-header">
           <span className="modal-title">
             {workspaceName ? `${workspaceName} · Members` : "Workspace members"}
@@ -343,7 +344,6 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
             Upgrade plan
           </button>
         </div>
-      </div>
 
       {/* Plan-selection upgrade modal (C27) — shown when an invite exceeds the
           seat limit OR via the explicit "Upgrade plan" button. Presents the paid
@@ -366,13 +366,8 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
       )}
 
       {pendingInvite && (
-        <div
-          className="overlay"
-          onMouseDown={(e) =>
-            e.target === e.currentTarget && setPendingInvite(null)
-          }
-        >
-          <div className="modal" style={{ width: 420 }}>
+        <Dialog open onOpenChange={(o) => { if (!o) setPendingInvite(null); }}>
+          <DialogContent className="modal" srTitle="Add a seat?" style={{ width: 420 }}>
             <div className="modal-header">
               <h3>Add a seat?</h3>
             </div>
@@ -408,10 +403,11 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
                 Confirm &amp; invite
               </button>
             </div>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
-    </div>
+    </DialogContent>
+    </Dialog>
   );
 }
 
@@ -459,8 +455,8 @@ function UpgradeModal(props: {
   } = props;
   const isFree = selectedPlan === "free";
   return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal gtm-onboarding-modal" style={{ width: 900, maxWidth: "94vw" }}>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="modal gtm-onboarding-modal" srTitle="Choose a plan" style={{ width: 900, maxWidth: "94vw" }}>
         <div className="modal-header">
           <span className="modal-title">Choose a plan</span>
           <BillingToggle billing={billing} onChange={onBilling} />
@@ -501,7 +497,7 @@ function UpgradeModal(props: {
                 : "Continue to checkout"}
           </button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -3,8 +3,8 @@
 // Local scope tabs, a "CONNECTIONS" add-card, and collapsible info sections.
 
 import { useState, useEffect, useCallback, ReactNode, type MouseEvent } from "react";
-import { createPortal } from "react-dom";
 import { api, ExtensionDetail, ExtensionInfo, AiProviderInfo, CredentialScope, SkillInfo, SkillDetail } from "./api";
+import { Dialog, DialogContent } from "./components/ui/dialog";
 import { aiProviderCredId } from "./cloud/credentials";
 import { Markdown } from "./AgentPanel";
 import { BrandIcon } from "./BrandIcon";
@@ -575,11 +575,9 @@ function PerksModal({ extensions, onClose }: { extensions: ExtensionInfo[]; onCl
     const ext = extensions.find((e) => e.id === id);
     return ext ? [{ ext, perk: PERKS[id] }] : [];
   });
-  // Portal to <body> so the overlay escapes the main-area stacking context
-  // (otherwise it's trapped below the sidebar — a partial dim + dead click-off).
-  return createPortal(
-    <div className="ppm-scrim" onMouseDown={(ev) => ev.target === ev.currentTarget && onClose()}>
-      <div className="ppm" role="dialog" aria-modal="true" aria-label="Partner perks" onMouseDown={(ev) => ev.stopPropagation()}>
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="ppm" overlayClassName="ppm-scrim" srTitle="Partner perks">
         <div className="ppm-head">
           <div className="ppm-head-text">
             <div className="ppm-title"><span className="tag-ic"><I.Tag s={17} /></span>Partner perks</div>
@@ -600,9 +598,8 @@ function PerksModal({ extensions, onClose }: { extensions: ExtensionInfo[]; onCl
           ))}
         </div>
         <div className="ppm-foot">Codes are redeemed on the partner's own billing page — GTM Grid doesn't process the discount.</div>
-      </div>
-    </div>,
-    document.body,
+      </DialogContent>
+    </Dialog>
   );
 }
 

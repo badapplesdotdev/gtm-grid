@@ -1083,6 +1083,16 @@ html, body, #root {
   z-index: 3;
 }
 
+/* Keyboard cell navigation: the active (roving-tabindex) cell. Inset ring so it
+   reads as a spreadsheet selection rather than a button focus ring. */
+.grid-td:focus,
+.grid-td:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 0;
+  z-index: 3;
+}
+
 /* add-col button inside header */
 .add-col-btn {
   all: unset;
@@ -1226,6 +1236,61 @@ html, body, #root {
   justify-content: flex-end;
   gap: 8px;
   flex-shrink: 0;
+}
+
+/* ── Keyboard focus visibility (TRI a11y) ──────────────────
+   A single global focus ring for keyboard users. `:focus-visible` only matches
+   keyboard/programmatic focus, so mouse clicks stay ring-free. Text controls
+   keep their own border-based focus styling, so they opt out here to avoid a
+   double ring. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-xs);
+}
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[contenteditable]:focus-visible {
+  outline: none;
+}
+
+/* Skip-to-content link: first focusable element in the shell, hidden until
+   focused via Tab. */
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 1000;
+  background: var(--accent);
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: var(--r-sm);
+  font: 600 13px var(--font-sans);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-160%);
+  transition: transform 0.15s ease;
+}
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+/* Transparent scrim for fixed-position popovers migrated to the Dialog
+   primitive (e.g. dedupe): keep the focus trap + Escape but no dim/blur. */
+.bare-scrim {
+  background: transparent;
+  backdrop-filter: none;
+}
+
+/* Command palette (Cmd/Ctrl+K): a top-anchored modal built on the Dialog
+   primitive (.modal) + cmdk. */
+.cmd-overlay {
+  align-items: flex-start;
+}
+.cmd-palette {
+  width: 560px;
+  max-width: 92vw;
+  margin-top: 12vh;
 }
 
 /* ── Form controls ────────────────────────── */

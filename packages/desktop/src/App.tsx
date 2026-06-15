@@ -4,6 +4,7 @@ import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import CellDetails, { extractCode } from "./CellDetails";
 import { DedupePopover } from "./DedupePopover";
+import { Dialog, DialogContent } from "./components/ui/dialog";
 import { BrandIcon } from "./BrandIcon";
 import { ProjectSwitcher, CloudIcon } from "./ProjectSwitcher";
 import { AccountBar, PlanBillingModal } from "./cloud/AccountBar";
@@ -447,26 +448,55 @@ type CellContentProps = {
   running?: boolean;
   /** Notifies the grid when this cell enters/leaves edit mode (presence). */
   onEditingChange?: (editing: boolean) => void;
+  /** Keyboard nav: bumped by the grid to request this (active) cell start
+   *  editing. `editSeed` carries the first typed character (type-to-edit). */
+  editSignal?: number;
+  editSeed?: string;
 };
 
-function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running, onEditingChange }: CellContentProps) {
+function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running, onEditingChange, editSignal, editSeed }: CellContentProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const startEdit = () => {
+  const startEdit = (seed?: string) => {
     if (col.kind === "function") return;
-    const current = cell?.value != null ? String(cell.value) : "";
-    setDraft(current);
+    if (seed !== undefined) {
+      // Type-to-edit: replace with the typed character, cursor at the end.
+      setDraft(seed);
+      setTimeout(() => {
+        const el = inputRef.current;
+        if (el) el.setSelectionRange(el.value.length, el.value.length);
+      }, 0);
+    } else {
+      const current = cell?.value != null ? String(cell.value) : "";
+      setDraft(current);
+      setTimeout(() => inputRef.current?.select(), 0);
+    }
     setEditing(true);
     onEditingChange?.(true);
-    setTimeout(() => inputRef.current?.select(), 0);
   };
+
+  // Enter edit when the grid bumps editSignal for the active cell.
+  const lastEditSignal = useRef(0);
+  useEffect(() => {
+    if (editSignal && editSignal !== lastEditSignal.current) {
+      lastEditSignal.current = editSignal;
+      startEdit(editSeed);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editSignal]);
 
   const commit = () => {
     setEditing(false);
     onEditingChange?.(false);
     onEdit(draft);
+  };
+
+  // End editing and return focus to the owning cell so arrow-key nav resumes.
+  const refocusCell = () => {
+    const td = inputRef.current?.closest("td");
+    requestAnimationFrame(() => (td as HTMLElement | null)?.focus());
   };
 
   // Per-cell run button (function cells only) — runs just this row × column.
@@ -504,10 +534,16 @@ function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCel
         onChange={e => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={e => {
-          if (e.key === "Enter") commit();
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+            refocusCell();
+          }
           if (e.key === "Escape") {
+            e.preventDefault();
             setEditing(false);
             onEditingChange?.(false);
+            refocusCell();
           }
         }}
         autoFocus
@@ -540,7 +576,7 @@ function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCel
     if (col.kind === "function") {
       return <div className="cell-wrap">{runBtn}<span className="cell-empty">—</span></div>;
     }
-    return <div className="cell-wrap cell-editable" onClick={startEdit}><span className="cell-empty">empty</span></div>;
+    return <div className="cell-wrap cell-editable" onClick={() => startEdit()}><span className="cell-empty">empty</span></div>;
   }
 
   if (cell.status === "error") {
@@ -606,7 +642,7 @@ function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCel
 
   const strVal = cell.value != null ? String(cell.value) : "";
   return (
-    <div className="cell-wrap" onClick={col.kind === "manual" ? startEdit : undefined}
+    <div className="cell-wrap" onClick={col.kind === "manual" ? () => startEdit() : undefined}
          style={col.kind === "manual" ? { cursor: "text" } : {}}>
       <span className="cell-value">{strVal}</span>
       <div className="cell-actions">{expandBtn}{runBtn}</div>
@@ -633,6 +669,9 @@ function cellPropsEqual(prev: CellContentProps, next: CellContentProps): boolean
     prev.cell?.value === next.cell?.value &&
     prev.cell?.status === next.cell?.status &&
     prev.cell?.error === next.cell?.error &&
+    // Edit requests from keyboard nav target only the active cell (others always
+    // get editSignal=0), so comparing it keeps non-active cells from re-rendering.
+    prev.editSignal === next.editSignal &&
     // Run/expand/details affordances are gated on whether the handler exists.
     !prev.onRunCell === !next.onRunCell &&
     !prev.onExpand === !next.onExpand &&
@@ -682,8 +721,8 @@ export function ExpandedEditor({
   const save = () => { if (editable) onSave(draft); onClose(); };
 
   return (
-    <div className="popover-scrim" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-      <div className="xcell" style={style} onMouseDown={e => e.stopPropagation()}>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="xcell" style={style} overlayClassName="bare-scrim" srTitle="Edit cell">
         <div className="xcell-head">
           <div className="xcell-head-text">
             <div className="xcell-title">{columnName}</div>
@@ -709,8 +748,8 @@ export function ExpandedEditor({
           <span>{editable ? "Cmd/Ctrl+Enter to save" : "Read only"}</span>
           <span>{words} word{words !== 1 ? "s" : ""}, {chars} chars</span>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -733,8 +772,8 @@ function NewTableModal({ onClose, onCreated, folderId = null }: { onClose: () =>
   };
 
   return (
-    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="modal" srTitle="New table">
         <div className="modal-header">
           <span className="modal-title">New table</span>
           <button className="modal-close" onClick={onClose}><Icon.X /></button>
@@ -752,8 +791,8 @@ function NewTableModal({ onClose, onCreated, folderId = null }: { onClose: () =>
             {saving ? "Creating…" : "Create table"}
           </button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -795,8 +834,8 @@ function NewTableChooser({
   );
 
   return (
-    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ width: 440 }}>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="modal" style={{ width: 440 }} srTitle="New table">
         <div className="modal-header">
           <span className="modal-title">New table</span>
           <button className="modal-close" onClick={onClose}><Icon.X /></button>
@@ -848,8 +887,8 @@ function NewTableChooser({
             )}
           </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -908,15 +947,13 @@ function SyncPopover({
     setTop(Math.max(8, Math.min(anchorTop, window.innerHeight - measured - 8)));
   }, [anchorTop, status, error]);
   return (
-    <>
-      <div className="popover-scrim" onMouseDown={onClose} />
-      <div
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent
         ref={popRef}
         className="sync-pop"
         style={{ top, left: sidebarWidth + 8 }}
-        onMouseDown={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-label={`Sync ${tableName}`}
+        overlayClassName="bare-scrim"
+        srTitle="Sync"
       >
         <div className="sync-pop-head">
           <span className="sync-pop-table">
@@ -991,8 +1028,8 @@ function SyncPopover({
             {error && <div className="account-menu-error" role="alert">{error}</div>}
           </div>
         )}
-      </div>
-    </>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1013,12 +1050,6 @@ function NotificationCenter({
   onClose: () => void;
   anchorRef: { readonly current: HTMLButtonElement | null };
 }) {
-  // Close on Escape for keyboard accessibility.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
   // Position as a viewport-FIXED popover anchored just under the bell and clamped
   // on-screen — as an absolute child of the sidebar header it gets clipped by the
   // sidebar's overflow, so we measure the bell rect and place it fixed instead.
@@ -1032,15 +1063,13 @@ function NotificationCenter({
     setPos({ top: a.bottom + 6, left });
   }, [anchorRef, notifications.length]);
   return (
-    <>
-      <div className="popover-scrim" onMouseDown={onClose} />
-      <div
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent
         ref={popRef}
         className="account-menu notif-pop"
         style={{ top: pos.top, left: pos.left }}
-        role="dialog"
-        aria-label="Notifications"
-        onMouseDown={(e) => e.stopPropagation()}
+        overlayClassName="bare-scrim"
+        srTitle="Notifications"
       >
         <div className="account-menu-head">
           <div className="account-menu-head-text">
@@ -1081,8 +1110,8 @@ function NotificationCenter({
             ))
           )}
         </div>
-      </div>
-    </>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -3880,13 +3909,8 @@ export default function App() {
 
       {/* Invite-accepted celebration: confetti fires on accept; this confirms it. */}
       {celebrateInvite && (
-        <div
-          className="overlay"
-          onMouseDown={(e) =>
-            e.target === e.currentTarget && setCelebrateInvite(null)
-          }
-        >
-          <div className="modal celebrate" style={{ width: 380 }}>
+        <Dialog open onOpenChange={(o) => { if (!o) setCelebrateInvite(null); }}>
+          <DialogContent className="modal celebrate" style={{ width: 380 }} srTitle="Invite accepted">
             <div className="celebrate__emoji">🎉</div>
             <h2 className="celebrate__title">
               You&apos;re in{celebrateInvite.workspaceName ? "!" : "!"}
@@ -3902,8 +3926,8 @@ export default function App() {
             >
               Let&apos;s go
             </button>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* Upgrade prompt for the cloud-locked / trial-expired state. Reuses the
@@ -4017,8 +4041,8 @@ export default function App() {
       )}
 
       {confirmDeleteTable && (
-        <div className="overlay" onMouseDown={e => e.target === e.currentTarget && setConfirmDeleteTable(null)}>
-          <div className="modal" style={{ width: 380 }}>
+        <Dialog open onOpenChange={(o) => { if (!o) setConfirmDeleteTable(null); }}>
+          <DialogContent className="modal" style={{ width: 380 }} srTitle="Delete table">
             <div className="modal-header">
               <span className="modal-title">Delete table</span>
               <button className="modal-close" onClick={() => setConfirmDeleteTable(null)}><Icon.X /></button>
@@ -4038,13 +4062,13 @@ export default function App() {
                 Delete table
               </button>
             </div>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       {confirmDeleteCloudTable && (
-        <div className="overlay" onMouseDown={e => e.target === e.currentTarget && setConfirmDeleteCloudTable(null)}>
-          <div className="modal">
+        <Dialog open onOpenChange={(o) => { if (!o) setConfirmDeleteCloudTable(null); }}>
+          <DialogContent className="modal" srTitle="Delete table">
             <div className="modal-header">
               <span className="modal-title">Delete table</span>
               <button className="modal-close" onClick={() => setConfirmDeleteCloudTable(null)}><Icon.X /></button>
@@ -4069,8 +4093,8 @@ export default function App() {
                 Delete table
               </button>
             </div>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* Per-table sync popover (TRI-3297). */}
@@ -4121,8 +4145,8 @@ export default function App() {
           overwrites cloud data, so name the table + row count before sending
           confirmOverwrite. A first push (unlinked → create) never reaches here. */}
       {overwriteConfirm && (
-        <div className="overlay" onMouseDown={e => e.target === e.currentTarget && setOverwriteConfirm(null)}>
-          <div className="modal" style={{ width: 400 }}>
+        <Dialog open onOpenChange={(o) => { if (!o) setOverwriteConfirm(null); }}>
+          <DialogContent className="modal" style={{ width: 400 }} srTitle="Overwrite cloud copy?">
             <div className="modal-header">
               <span className="modal-title">Overwrite cloud copy?</span>
               <button className="modal-close" onClick={() => setOverwriteConfirm(null)}><Icon.X /></button>
@@ -4138,16 +4162,16 @@ export default function App() {
                 Keep my version — overwrite the cloud copy
               </button>
             </div>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* Bulk destructive-overwrite confirm (TRI-3307): "Sync all" with linked
           tables pending shows ONE confirm naming the COUNT, then re-pushes ALL of
           them on accept. On cancel none of the linked tables push. */}
       {bulkOverwriteConfirm && (
-        <div className="overlay" onMouseDown={e => e.target === e.currentTarget && setBulkOverwriteConfirm(null)}>
-          <div className="modal" style={{ width: 400 }}>
+        <Dialog open onOpenChange={(o) => { if (!o) setBulkOverwriteConfirm(null); }}>
+          <DialogContent className="modal" style={{ width: 400 }} srTitle="Re-push linked tables?">
             <div className="modal-header">
               <span className="modal-title">Re-push linked tables?</span>
               <button className="modal-close" onClick={() => setBulkOverwriteConfirm(null)}><Icon.X /></button>
@@ -4163,16 +4187,16 @@ export default function App() {
                 Keep my versions — overwrite the cloud copies
               </button>
             </div>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* Auto-sync enable-time confirm (TRI-3298): turning the setting ON
           requires confirming the repeated-overwrite behaviour. Only enables on
           accept; cancelling leaves it OFF. */}
       {autoSyncEnableConfirm && (
-        <div className="overlay" onMouseDown={e => e.target === e.currentTarget && setAutoSyncEnableConfirm(false)}>
-          <div className="modal" style={{ width: 420 }}>
+        <Dialog open onOpenChange={(o) => { if (!o) setAutoSyncEnableConfirm(false); }}>
+          <DialogContent className="modal" style={{ width: 420 }} srTitle="Turn on auto-sync?">
             <div className="modal-header">
               <span className="modal-title">Turn on auto-sync?</span>
               <button className="modal-close" onClick={() => setAutoSyncEnableConfirm(false)}><Icon.X /></button>
@@ -4191,8 +4215,8 @@ export default function App() {
                 Turn on — overwrite cloud copies automatically
               </button>
             </div>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       {showProjects && (
