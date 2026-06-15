@@ -16,6 +16,7 @@
 import { type AppServices, appLayer, DUE_PAGE_SIZE, FANOUT_CHUNK, type SignalDueCursor, SignalService } from "@gtmgrid/services";
 import { Effect, ManagedRuntime } from "effect";
 import { inngest } from "../client";
+import { onFailure } from "../on-failure";
 
 /** Build a per-run Effect runtime (no member identity) and run one program. */
 async function withRuntime<A>(run: (exec: <X>(e: Effect.Effect<X, unknown, AppServices>) => Promise<X>) => Promise<A>): Promise<A> {
@@ -31,7 +32,7 @@ async function withRuntime<A>(run: (exec: <X>(e: Effect.Effect<X, unknown, AppSe
 /** Cron: enumerate due bindings and fan out one event each. Adjust cadence as needed. */
 export const pollTrigifySignals = inngest.createFunction(
   // hourly; the per-binding schedule (hourly/daily/weekly) gates actual pulls
-  { id: "poll-trigify-signals", retries: 1, triggers: [{ cron: "0 * * * *" }] },
+  { id: "poll-trigify-signals", retries: 1, triggers: [{ cron: "0 * * * *" }], onFailure },
   async ({ step }) => {
     // Collect DUE bindings via SQL keyset pagination — the due predicate runs in
     // the DB with a LIMIT per page, so we never load + JS-filter the whole
@@ -96,6 +97,7 @@ export const processSignalBinding = inngest.createFunction(
       { key: "event.data.workspaceId", limit: 2 },
     ],
     retries: 2,
+    onFailure,
     triggers: [{ event: "signals/binding.due" }],
   },
   async ({ event, step }) => {
@@ -154,6 +156,7 @@ export const warmUpSignalBinding = inngest.createFunction(
     id: "warm-up-signal-binding",
     concurrency: [{ key: "event.data.workspaceId", limit: 2 }],
     retries: 1,
+    onFailure,
     triggers: [{ event: "signals/binding.created" }],
   },
   async ({ event, step }) => {

@@ -18,7 +18,7 @@ import {
   type GridStoreError,
   type GridStoreShape,
 } from "./store.js";
-import type { AiConfig, Column, ConnectorMethod } from "./types.js";
+import type { AiConfig, AiFallbackRequest, Column, ConnectorMethod } from "./types.js";
 
 /** Stored on a cell's `error` (with status "empty") when a run condition gates the
  *  row off, so the grid can show a muted "Run condition not met" note instead of a dash. */
@@ -28,6 +28,13 @@ export interface EngineConfig {
   ai?: AiConfig;
   /** All connected AI providers (for model-based routing). */
   aiProviders?: AiConfig[];
+  /**
+   * Fallback for `ai.generate` when no AI provider key is connected — routes the
+   * prompt through the user's coding agent (Claude Code / Codex). Set by the
+   * sidecar (in-process {@link generateWithAgent}) and by the MCP (an HTTP POST to
+   * the sidecar). Absent ⇒ `ai.generate` throws "No AI provider connected".
+   */
+  aiFallback?: (req: AiFallbackRequest) => Promise<string>;
   /**
    * Enforce the SSRF guard on every connector HTTP call this engine makes. Set
    * true ONLY on server-side run paths (the Vercel webhook-enrichment worker),
@@ -149,6 +156,7 @@ export class Engine {
             ai: this.config.ai,
             aiProviders,
             guardSsrf: this.config.guardSsrf,
+          aiFallback: this.config.aiFallback,
           }),
         );
       }),
@@ -223,7 +231,10 @@ export class Engine {
     return `function(inputs, sdk){ return sdk[${JSON.stringify(col.provider)}][${JSON.stringify(col.method)}](inputs); }`;
   }
 
-  async runColumn(columnId: string, opts: RunColumnOptions = {}): Promise<{ ran: number; errors: number }> {
+  async runColumn(
+    columnId: string,
+    opts: RunColumnOptions = {},
+  ): Promise<{ ran: number; errors: number; firstError?: string }> {
     // Take one read snapshot for the whole run. For stores whose granular reads
     // are expensive to repeat (ConvexGridStore re-fetches the full grid on every
     // read), `snapshot()` fetches the grid ONCE and serves every per-row read
@@ -266,6 +277,10 @@ export class Engine {
     };
 
     const counters = { ran: 0, errors: 0 };
+    // The first cell error message — returned so a caller (the MCP run_column
+    // tool) can tell the user WHY a run failed (e.g. a missing AI/connector key)
+    // without a follow-up get_table read.
+    let firstError: string | undefined;
     // Stores that batch terminal writes (the cloud store) coalesce the interim
     // `running` write away so a cell is ONE write, not two HTTP POSTs. Cheap
     // synchronous stores leave the flag unset and keep streaming `running`.
@@ -327,6 +342,7 @@ export class Engine {
     };
     const markError = async (rowId: string, e: unknown): Promise<void> => {
       const message = e instanceof Error ? e.message : String(e);
+      if (firstError === undefined) firstError = message;
       const { ranAt, runMs } = runMeta(rowId);
       await Effect.runPromise(
         this.store.setCell(rowId, columnId, { status: "error", error: message, ranAt, runMs, raw: null }),
@@ -425,7 +441,7 @@ export class Engine {
     // Flush the final partial batch + await all in-flight writes (no-op for
     // synchronous stores).
     if (this.store.drain) await Effect.runPromise(this.store.drain());
-    return { ran: counters.ran, errors: counters.errors };
+    return { ran: counters.ran, errors: counters.errors, ...(firstError ? { firstError } : {}) };
   }
 
   /**
@@ -456,6 +472,7 @@ export class Engine {
       ai: this.config.ai,
       aiProviders,
       guardSsrf: this.config.guardSsrf,
+          aiFallback: this.config.aiFallback,
     });
   }
 

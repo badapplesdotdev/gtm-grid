@@ -1,5 +1,71 @@
 # @gtmgrid/party
 
+## 0.10.0
+
+### Patch Changes
+
+- @gtmgrid/auth@0.10.0
+
+## 0.9.24
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.24
+
+## 0.9.23
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.23
+
+## 0.9.22
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.22
+
+## 0.9.21
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.21
+
+## 0.9.20
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.20
+
+## 0.9.19
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.19
+
+## 0.9.18
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.18
+
+## 0.9.17
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.17
+
+## 0.9.16
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.16
+
+## 0.9.15
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.15
+
 ## 0.9.14
 
 ### Patch Changes

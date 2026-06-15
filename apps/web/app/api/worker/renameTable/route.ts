@@ -12,11 +12,12 @@
 import { GridService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { runWorkerAsMember } from "../_lib";
+import { RenameTableSchema } from "../_schemas";
 
 export const runtime = "nodejs";
 
 export function POST(req: Request): Promise<Response> {
-  return runWorkerAsMember(req, (body: { tableId: string; name: string }) =>
+  return runWorkerAsMember(req, RenameTableSchema, (body) =>
     Effect.gen(function* () {
       const svc = yield* GridService;
       return yield* svc.renameTable(body.tableId, body.name ?? "");

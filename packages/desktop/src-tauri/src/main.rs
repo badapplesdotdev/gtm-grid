@@ -104,11 +104,26 @@ fn spawn_sidecar(app: &tauri::App) -> Option<Child> {
     make_executable(&node);
     make_executable(&launcher);
 
+    // PostHog config for the sidecar's error tracking. Prefer a runtime override
+    // (dev / CI), else the value baked at build time (build.rs maps VITE_POSTHOG_*
+    // → GTMGRID_POSTHOG_* via cargo:rustc-env). Empty when unconfigured — the
+    // sidecar's observability module no-ops on a falsy key.
+    let posthog_key = std::env::var("GTMGRID_POSTHOG_KEY")
+        .ok()
+        .or_else(|| option_env!("GTMGRID_POSTHOG_KEY").map(str::to_string))
+        .unwrap_or_default();
+    let posthog_host = std::env::var("GTMGRID_POSTHOG_HOST")
+        .ok()
+        .or_else(|| option_env!("GTMGRID_POSTHOG_HOST").map(str::to_string))
+        .unwrap_or_else(|| "https://eu.i.posthog.com".into());
+
     Command::new(&node)
         .arg(&server)
         .env("GTMGRID_PROJECT", std::env::var("GTMGRID_PROJECT").unwrap_or_else(|_| "default".into()))
         .env("GTMGRID_MCP_LAUNCHER", &launcher)
         .env("GTMGRID_EXT_DIR", dir.join("extensions"))
+        .env("GTMGRID_POSTHOG_KEY", posthog_key)
+        .env("GTMGRID_POSTHOG_HOST", posthog_host)
         .env("PATH", sidecar_path())
         .spawn()
         .map_err(|e| eprintln!("gtmgrid: failed to spawn sidecar: {e}"))

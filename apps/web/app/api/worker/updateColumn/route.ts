@@ -11,28 +11,14 @@
  * updated column's id + name.
  */
 
-import { type ColumnKind, GridService } from "@gtmgrid/services";
+import { GridService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { runWorkerAsMember } from "../_lib";
+import { UpdateColumnSchema } from "../_schemas";
 
 export const runtime = "nodejs";
-
-interface UpdateColumnBody {
-  columnId: string;
-  patch: {
-    name?: string;
-    type?: string;
-    kind?: ColumnKind;
-    provider?: string | null;
-    method?: string | null;
-    code?: string | null;
-    params?: unknown;
-    condition?: string | null;
-  };
-}
-
 export function POST(req: Request): Promise<Response> {
-  return runWorkerAsMember(req, (body: UpdateColumnBody) =>
+  return runWorkerAsMember(req, UpdateColumnSchema, (body) =>
     Effect.gen(function* () {
       const svc = yield* GridService;
       const col = yield* svc.updateColumn(body.columnId, body.patch ?? {});

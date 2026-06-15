@@ -1,5 +1,119 @@
 # @gtmgrid/services
 
+## 0.10.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.10.0
+- @gtmgrid/db@0.10.0
+- @gtmgrid/email@0.10.0
+
+## 0.9.24
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.24
+- @gtmgrid/db@0.9.24
+- @gtmgrid/email@0.9.24
+
+## 0.9.23
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.23
+- @gtmgrid/db@0.9.23
+- @gtmgrid/email@0.9.23
+
+## 0.9.22
+
+### Patch Changes
+
+- d2a41c5: Fix the Tables page showing duplicate tables and no row counts for cloud tables.
+
+  - **Row counts**: `grid.listTables` now attaches each table's row count from a
+    single grouped `countByTableIds` query (the efficient primitive existed but was
+    never wired in; the in-memory repo was also missing it — a latent type error).
+    The Tables page and sidebar now show real cloud row counts ("124 rows") instead
+    of "Cloud table"/"—"; a table whose count an older server doesn't report falls
+    back gracefully.
+  - **Duplicates**: removed the sidebar "Recent" group, which repeated the 5 most-
+    recent tables already shown in the full list below it. The Tables page already
+    de-dupes by name.
+  - The sidebar table rows now show a row count (hidden on hover, like folders).
+  - @gtmgrid/cloud@0.9.22
+  - @gtmgrid/db@0.9.22
+  - @gtmgrid/email@0.9.22
+
+## 0.9.21
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.21
+- @gtmgrid/db@0.9.21
+- @gtmgrid/email@0.9.21
+
+## 0.9.20
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.20
+- @gtmgrid/db@0.9.20
+- @gtmgrid/email@0.9.20
+
+## 0.9.19
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.19
+- @gtmgrid/db@0.9.19
+- @gtmgrid/email@0.9.19
+
+## 0.9.18
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.18
+- @gtmgrid/db@0.9.18
+- @gtmgrid/email@0.9.18
+
+## 0.9.17
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.17
+- @gtmgrid/db@0.9.17
+- @gtmgrid/email@0.9.17
+
+## 0.9.16
+
+### Patch Changes
+
+- 9f01681: Fix "undefined is not an object (evaluating 'snapshot.columns')" when
+  deleting a column (or row) on a cloud table: the optimistic cache patch fed
+  react-query's `undefined` (no cached unpaged snapshot — the normal state
+  while the grid loads paged) into the grid reducer, which only guarded
+  `null`. The reducer now tolerates both, and the optimistic path skips absent
+  cache entries entirely.
+  - @gtmgrid/cloud@0.9.16
+  - @gtmgrid/db@0.9.16
+  - @gtmgrid/email@0.9.16
+
+## 0.9.15
+
+### Patch Changes
+
+- be203b9: Fix every cloud column run failing silently: the worker `getTable` payload
+  shipped columns as `{id}` only, but the engine's cloud store finds the run
+  column by `_id`, the agent's cloud tools resolve columns by `name`, and the
+  webhook enricher filters by `kind` — so GUI column runs, agent cloud
+  get_table/run_column, and webhook auto-run enrichment were all dead on the
+  Postgres tier (promoted mapping columns stayed "—" forever). The payload now
+  carries full Convex-doc-shaped columns/rows (`_id` + name/kind/code/params/
+  condition/position, with `id` kept for legacy readers).
+  - @gtmgrid/cloud@0.9.15
+  - @gtmgrid/db@0.9.15
+  - @gtmgrid/email@0.9.15
+
 ## 0.9.14
 
 ### Patch Changes

@@ -16,17 +16,9 @@
 import { CredentialService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { runWorkerAsMember } from "../_lib";
+import { SaveCredentialSchema } from "../_schemas";
 
 export const runtime = "nodejs";
-
-interface SaveCredentialBody {
-  workspaceId: string;
-  extensionId: string;
-  name: string;
-  /** PLAINTEXT secret map (e.g. `{ apiKey, baseUrl }`). Encrypted before storage. */
-  secrets: Record<string, string>;
-}
-
 /** Narrow an unknown body field to a non-empty plaintext string map. */
 function isStringMap(v: unknown): v is Record<string, string> {
   if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
@@ -37,7 +29,7 @@ function isStringMap(v: unknown): v is Record<string, string> {
 }
 
 export function POST(req: Request): Promise<Response> {
-  return runWorkerAsMember(req, (body: SaveCredentialBody) =>
+  return runWorkerAsMember(req, SaveCredentialSchema, (body) =>
     Effect.gen(function* () {
       if (!isStringMap(body.secrets)) {
         return yield* Effect.fail(

@@ -10,16 +10,21 @@
  * endpoints to every workspace member.
  *
  * SCOPE (worker boundary): the `/api/worker/*` endpoints are table-scoped and
- * expose getTable (full grid), setCell/setCellStatus/setCells and the credential
- * decrypt-for-run path. They do NOT expose listing every table in a project or
- * creating tables/columns/plain rows (those live behind the authenticated tRPC
- * API, not the worker-secret boundary the spawned MCP uses). So the cloud source
- * fully serves `get_table` and `run_column` on the ACTIVE cloud table, and the
- * read of that table for `list_tables`; the create/list-all/add-rows mutators
- * surface a clear typed {@link CloudToolUnsupportedError} rather than silently
- * writing to local SQLite (which would corrupt the "operate on the data I'm
- * looking at" contract). Wiring those needs new worker routes — tracked as a
- * follow-up.
+ * member-attributed (TRI-3299) — getTable, listTables (project-wide), create/
+ * rename/delete table, create/update/delete/reorder column, add/delete/reorder
+ * rows, setCell(s), setDedupe, and the credential decrypt-for-run path. Each
+ * route takes the target table/column/row id in its body and verifies the member
+ * belongs to that workspace server-side, so the cloud source can operate on ANY
+ * table in the project, not just the active one.
+ *
+ * TABLE ADDRESSING: the agent passes a `table` name or id to every tool. The
+ * source resolves it to a cloud table id via {@link resolveTableId} (project-wide
+ * `listTables`, cached), defaulting to the active table (`context.tableId` =
+ * GTMGRID_CLOUD_TABLE, the one the user is viewing) when the ref is empty or
+ * already the active id. So naming a different table reads/writes THAT table —
+ * full multi-table parity with the local source. Only `upload_extension` and a
+ * direct registry dispatch with no creds remain table-agnostic. (`run_function`
+ * uses the active table purely as a workspace-credential anchor.)
  */
 
 import {
@@ -37,6 +42,7 @@ import {
   type Registry,
 } from "@gtmgrid/engine";
 import { Effect } from "effect";
+import { capCellValue } from "./cell.js";
 import type { CloudContext } from "./cloud-context.js";
 
 /**
@@ -128,9 +134,20 @@ export function makeWorkerClient(
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(
-        `Worker route ${ref} failed: ${res.status} ${res.statusText} ${text}`.trim(),
-      );
+      // Surface the worker's own error message (its JSON `{ error }` body) so the
+      // agent sees something actionable — e.g. the quota message — instead of the
+      // raw "Worker route … failed: 402 Payment Required {…}". A 402 is prefixed
+      // [quota] so the cloud preamble's stop-and-tell-the-user guidance fires.
+      let message = `Worker route ${ref} failed: ${res.status} ${res.statusText} ${text}`.trim();
+      try {
+        const body = JSON.parse(text);
+        if (body && typeof body === "object" && typeof body.error === "string") {
+          message = res.status === 402 ? `[quota] ${body.error}` : body.error;
+        }
+      } catch {
+        /* not JSON — keep the raw message */
+      }
+      throw new Error(message);
     }
     const text = await res.text();
     return text === "" ? null : JSON.parse(text);
@@ -189,13 +206,29 @@ export async function buildCloudStore(
  * worker routes (TRI-3299), so the cloud source no longer rejects the mutators.
  */
 export interface CloudGridSource {
-  /** Columns of the active cloud table, mapped to MCP `get_table`'s shape. */
+  /**
+   * Columns + a bounded page of rows of the named table, mapped to MCP
+   * `get_table`'s shape (matching the LOCAL source: paging + capped cell values +
+   * totals + per-column logic for diagnosis).
+   */
   readonly getTable: (
     tableRef: string,
+    opts?: { limit?: number; offset?: number },
   ) => Promise<{
     table: string;
-    columns: { name: string; kind: string; fn: string | null }[];
+    columns: {
+      name: string;
+      kind: string;
+      fn: string | null;
+      condition: string | null;
+      params: unknown;
+      code: string | null;
+    }[];
     rows: Record<string, unknown>[];
+    totalRows: number;
+    returned: number;
+    offset: number;
+    truncated: boolean;
   }>;
   /**
    * List ALL of the cloud PROJECT's tables (not just the active one) with their
@@ -245,6 +278,18 @@ export interface CloudGridSource {
     columnRef: string,
     opts: { force?: boolean; concurrency?: number; limit?: number; offset?: number },
   ) => Promise<{ column: string; ran: number; errors: number }>;
+  /**
+   * Call a connector function DIRECTLY (no table) on the cloud project — the
+   * cloud twin of the local `engine.dispatch`. Resolves the workspace's shared
+   * connector credentials through the worker `getCredential` route (the same
+   * machinery cloud {@link runColumn} uses), so the `run_function` tool can
+   * SOURCE data (searches, enrichment) on cloud exactly as it does locally.
+   */
+  readonly runFunction: (
+    provider: string,
+    method: string,
+    input: Record<string, unknown>,
+  ) => Promise<unknown>;
   /**
    * The function columns of the active cloud table in grid (left-to-right) order,
    * each with whether it still has pending (not-`done`) cells. The `run_table`
@@ -541,14 +586,82 @@ export function makeCloudSource(
 ): CloudGridSource {
   const client = deps.makeClient(context.apiUrl, context.token);
 
-  const fetchGrid = async (): Promise<CloudGrid> => {
-    const payload = await client.query(CLOUD_REFS.getTable, {
-      tableId: context.tableId,
+  // Project-wide table list, cached for the MCP process lifetime so name→id
+  // resolution doesn't re-fetch per tool call. Invalidated on create/rename/delete.
+  let tableListCache: { id: string; name: string }[] | undefined;
+  const loadTableList = async (): Promise<{ id: string; name: string }[]> => {
+    if (tableListCache) return tableListCache;
+    const payload = await client.query(LIST_TABLES_REF, {
+      projectId: context.projectId,
     });
+    tableListCache = readTableList(payload).map((t) => ({ id: t.id, name: t.name }));
+    return tableListCache;
+  };
+  const invalidateTableList = () => {
+    tableListCache = undefined;
+  };
+
+  /**
+   * Resolve a table NAME or id to its cloud table id. Empty ref or the active id
+   * → the active table (`context.tableId`), the "operate on the table I'm viewing"
+   * hot path that skips the list fetch entirely. Otherwise match against the
+   * project-wide list: exact id, then exact name, then an unambiguous
+   * case-insensitive name. A duplicate name throws (naming both ids); an unknown
+   * name re-fetches the list once (self-heals a table another member just
+   * created), then throws listing the available tables so the agent self-corrects.
+   */
+  const resolveTableId = async (tableRef?: string): Promise<string> => {
+    const ref = (tableRef ?? "").trim();
+    if (ref === "" || ref === context.tableId) return context.tableId;
+    const match = (tables: { id: string; name: string }[]): string | undefined => {
+      if (tables.some((t) => t.id === ref)) return ref;
+      const exact = tables.filter((t) => t.name === ref);
+      if (exact.length === 1) return exact[0].id;
+      if (exact.length > 1) {
+        throw new Error(
+          `Multiple tables named "${ref}" in this project (ids: ${exact.map((t) => t.id).join(", ")}). Pass the table id instead.`,
+        );
+      }
+      const ci = tables.filter((t) => t.name.toLowerCase() === ref.toLowerCase());
+      return ci.length === 1 ? ci[0].id : undefined;
+    };
+    let tables = await loadTableList();
+    let id = match(tables);
+    if (id === undefined) {
+      invalidateTableList();
+      tables = await loadTableList();
+      id = match(tables);
+    }
+    if (id === undefined) {
+      throw new Error(
+        `No table "${ref}" in this cloud project. Available: ${tables.map((t) => `${t.name} (${t.id})`).join(", ")}. Use list_tables.`,
+      );
+    }
+    return id;
+  };
+
+  const fetchGrid = async (tableId: string): Promise<CloudGrid> => {
+    const payload = await client.query(CLOUD_REFS.getTable, { tableId });
     if (!isCloudGrid(payload)) {
       throw new Error("getTable payload was not a grid");
     }
     return payload;
+  };
+
+  /** Resolve a table ref to its id + grid in one step — the common method head. */
+  const resolveGrid = async (
+    tableRef?: string,
+  ): Promise<{ tableId: string; grid: CloudGrid }> => {
+    const tableId = await resolveTableId(tableRef);
+    return { tableId, grid: await fetchGrid(tableId) };
+  };
+
+  /** A resolved table id → its display name for agent-facing output (best-effort). */
+  const tableName = async (tableId: string): Promise<string> => {
+    const cached = tableListCache?.find((t) => t.id === tableId);
+    if (cached) return cached.name;
+    if (tableId === context.tableId) return tableId; // active table, list not loaded
+    return (await loadTableList()).find((t) => t.id === tableId)?.name ?? tableId;
   };
 
   const resolveColumn = (
@@ -557,14 +670,23 @@ export function makeCloudSource(
   ): CloudColumnDoc | undefined =>
     grid.columns.find((c) => c._id === columnRef || c.name === columnRef);
 
+  /** Unknown-column error that lists the table's valid column names. */
+  const unknownColumn = (name: string, grid: CloudGrid): Error =>
+    new Error(
+      `No column "${name}" in this table. Valid columns: ${grid.columns.map((c) => c.name).join(", ")}.`,
+    );
+
   return {
-    getTable: async () => {
-      const grid = await fetchGrid();
+    getTable: async (tableRef, opts) => {
+      const { tableId, grid } = await resolveGrid(tableRef);
       const byCell = new Map<string, CloudCellDoc>();
       for (const cell of grid.cells) {
         byCell.set(`${cell.rowId}:${cell.columnId}`, cell);
       }
-      const rows = grid.rows.map((r) => {
+      const total = grid.rows.length;
+      const start = Math.max(opts?.offset ?? 0, 0);
+      const cap = Math.min(Math.max(opts?.limit ?? 200, 1), 1000);
+      const rows = grid.rows.slice(start, start + cap).map((r) => {
         // Carry the row _id (matching the LOCAL get_table) so the agent can feed
         // it back into update_cells / delete_rows / reorder_rows.
         const obj: Record<string, unknown> = { _id: r._id };
@@ -572,20 +694,32 @@ export function makeCloudSource(
           const cell = byCell.get(`${r._id}:${c._id}`);
           obj[c.name] = cell
             ? cell.status === "error"
-              ? { error: cell.error }
-              : cell.value
+              ? { error: capCellValue(cell.error) }
+              : capCellValue(cell.value)
             : null;
         }
         return obj;
       });
       return {
-        table: context.tableId,
+        table: await tableName(tableId),
         columns: grid.columns.map((c) => ({
           name: c.name,
           kind: c.kind,
           fn: columnFn(c),
+          // Expose the column's logic so the agent can DIAGNOSE/FIX it in place
+          // (a wrong "only run if" condition skips every row → run_column ran:0).
+          condition: c.condition ?? null,
+          params: c.params ?? {},
+          code:
+            typeof c.code === "string" && c.code.length > 600
+              ? `${c.code.slice(0, 600)}…[+${c.code.length - 600} chars]`
+              : c.code ?? null,
         })),
         rows,
+        totalRows: total,
+        returned: rows.length,
+        offset: start,
+        truncated: start + rows.length < total,
       };
     },
 
@@ -604,10 +738,12 @@ export function makeCloudSource(
         projectId: context.projectId,
         name,
       });
+      invalidateTableList(); // the new table must be addressable by name next call
       return readCreated(payload);
     },
 
-    addColumn: async (_tableRef, spec) => {
+    addColumn: async (tableRef, spec) => {
+      const tableId = await resolveTableId(tableRef);
       // Resolve the function reference exactly as the LOCAL source does: a
       // `fn` must be 'provider.method' and exist in the registry; `code` (or a
       // resolved provider) makes it a function column, else manual.
@@ -636,7 +772,7 @@ export function makeCloudSource(
           : null;
       const created = readCreated(
         await client.mutation(CREATE_COLUMN_REF, {
-          tableId: context.tableId,
+          tableId,
           name: spec.name,
           type: spec.type ?? "text",
           kind,
@@ -655,27 +791,25 @@ export function makeCloudSource(
       };
     },
 
-    addRows: async (_tableRef, rows) => {
+    addRows: async (tableRef, rows) => {
       // The agent sends `{ ColumnName: value }`; resolve each name to its cloud
-      // column id against the active table's grid before the worker write (the
+      // column id against the target table's grid before the worker write (the
       // worker route speaks column ids, mirroring grid.addRowsWithCells). An
       // unknown column name is a hard error — the same contract as local.
-      const grid = await fetchGrid();
+      const { tableId, grid } = await resolveGrid(tableRef);
       const idByName = new Map<string, string>();
       for (const c of grid.columns) idByName.set(c.name, c._id);
       const mapped = rows.map((row) => {
         const out: Record<string, unknown> = {};
         for (const [colName, value] of Object.entries(row)) {
           const columnId = idByName.get(colName);
-          if (columnId === undefined) {
-            throw new Error(`No column "${colName}" in the cloud table.`);
-          }
+          if (columnId === undefined) throw unknownColumn(colName, grid);
           out[columnId] = value;
         }
         return out;
       });
       const payload = await client.mutation(ADD_ROWS_REF, {
-        tableId: context.tableId,
+        tableId,
         rows: mapped,
       });
       const rowIds =
@@ -688,10 +822,10 @@ export function makeCloudSource(
       return { added: rowIds.length };
     },
 
-    runColumn: async (_tableRef, columnRef, opts) => {
-      const grid = await fetchGrid();
+    runColumn: async (tableRef, columnRef, opts) => {
+      const { tableId, grid } = await resolveGrid(tableRef);
       const col = resolveColumn(grid, columnRef);
-      if (!col) throw new Error(`No column "${columnRef}" in the cloud table.`);
+      if (!col) throw unknownColumn(columnRef, grid);
       // Scope to the next N rows in grid order when `limit` is set, mirroring the
       // local source: candidates are rows whose cell for this column isn't `done`
       // (or every row under `force`), in `grid.rows` order, then sliced by
@@ -708,11 +842,8 @@ export function makeCloudSource(
         opts.limit != null
           ? candidates.slice(opts.offset ?? 0, (opts.offset ?? 0) + opts.limit)
           : candidates;
-      const workspaceId = await deps.resolveWorkspaceId(
-        client,
-        context.tableId,
-      );
-      const store = await buildCloudStore(client, context.tableId, workspaceId);
+      const workspaceId = await deps.resolveWorkspaceId(client, tableId);
+      const store = await buildCloudStore(client, tableId, workspaceId);
       const engine = new Engine(undefined, deps.config, deps.registry, undefined, {
         store,
         creds: store,
@@ -726,8 +857,24 @@ export function makeCloudSource(
       return { column: col.name, ...res };
     },
 
-    functionColumns: async () => {
-      const grid = await fetchGrid();
+    runFunction: async (provider, method, input) => {
+      // `dispatch` only needs the credential resolver, not a table (see
+      // Engine.dispatch → creds.getCredential). Reuse the active table's id to
+      // build the same workspace-scoped cloud store cloud `runColumn` uses; the
+      // connector call then runs in-process here (the MCP sidecar), resolving the
+      // workspace's shared credentials through the worker — no dedicated dispatch
+      // route required.
+      const workspaceId = await deps.resolveWorkspaceId(client, context.tableId);
+      const store = await buildCloudStore(client, context.tableId, workspaceId);
+      const engine = new Engine(undefined, deps.config, deps.registry, undefined, {
+        store,
+        creds: store,
+      });
+      return engine.dispatch(provider, method, input);
+    },
+
+    functionColumns: async (tableRef) => {
+      const { grid } = await resolveGrid(tableRef);
       const statusByCol = new Map<string, Map<string, string>>();
       for (const cell of grid.cells) {
         let m = statusByCol.get(cell.columnId);
@@ -745,19 +892,17 @@ export function makeCloudSource(
         });
     },
 
-    updateCells: async (_tableRef, updates) => {
-      const grid = await fetchGrid();
+    updateCells: async (tableRef, updates) => {
+      const { grid } = await resolveGrid(tableRef);
       const idByCol = new Map<string, string>();
       for (const c of grid.columns) idByCol.set(c.name, c._id);
       const rowIds = new Set(grid.rows.map((r) => r._id));
       const cells = updates.map((u) => {
         if (!rowIds.has(u.row)) {
-          throw new Error(`Row "${u.row}" is not in the cloud table.`);
+          throw new Error(`Row "${u.row}" is not in this table.`);
         }
         const columnId = idByCol.get(u.column);
-        if (columnId === undefined) {
-          throw new Error(`No column "${u.column}" in the cloud table.`);
-        }
+        if (columnId === undefined) throw unknownColumn(u.column, grid);
         const clear = u.value === null || u.value === undefined || u.value === "";
         return {
           rowId: u.row,
@@ -770,18 +915,18 @@ export function makeCloudSource(
       return { updated: cells.length };
     },
 
-    tableStats: async () => {
-      const grid = await fetchGrid();
+    tableStats: async (tableRef) => {
+      const { grid } = await resolveGrid(tableRef);
       return { rows: grid.rows.length, columns: grid.columns.length };
     },
 
-    deleteRows: async (_tableRef, opts) => {
-      const grid = await fetchGrid();
+    deleteRows: async (tableRef, opts) => {
+      const { grid } = await resolveGrid(tableRef);
       const rowIds = new Set(grid.rows.map((r) => r._id));
       const targets = new Set<string>();
       for (const id of opts.ids ?? []) {
         if (!rowIds.has(id)) {
-          throw new Error(`Row "${id}" is not in the cloud table.`);
+          throw new Error(`Row "${id}" is not in this table.`);
         }
         targets.add(id);
       }
@@ -791,9 +936,7 @@ export function makeCloudSource(
         const match: { columnId: string; value: unknown }[] = [];
         for (const [name, value] of Object.entries(opts.where)) {
           const columnId = idByCol.get(name);
-          if (columnId === undefined) {
-            throw new Error(`No column "${name}" in the cloud table.`);
-          }
+          if (columnId === undefined) throw unknownColumn(name, grid);
           match.push({ columnId, value });
         }
         const cellAt = new Map<string, unknown>();
@@ -815,34 +958,38 @@ export function makeCloudSource(
       return { deleted: targets.size };
     },
 
-    deleteColumn: async (_tableRef, columnRef) => {
-      const grid = await fetchGrid();
+    deleteColumn: async (tableRef, columnRef) => {
+      const { grid } = await resolveGrid(tableRef);
       const col = resolveColumn(grid, columnRef);
-      if (!col) throw new Error(`No column "${columnRef}" in the cloud table.`);
+      if (!col) throw unknownColumn(columnRef, grid);
       await client.mutation(DELETE_COLUMN_REF, { columnId: col._id });
       return { deleted: col.name };
     },
 
-    deleteTable: async () => {
-      await client.mutation(DELETE_TABLE_REF, { tableId: context.tableId });
-      return { deleted: context.tableId };
+    deleteTable: async (tableRef) => {
+      const tableId = await resolveTableId(tableRef);
+      await client.mutation(DELETE_TABLE_REF, { tableId });
+      invalidateTableList(); // the deleted table must drop out of name resolution
+      return { deleted: tableId };
     },
 
-    updateColumn: async (_tableRef, columnRef, patch) => {
-      const grid = await fetchGrid();
+    updateColumn: async (tableRef, columnRef, patch) => {
+      const { grid } = await resolveGrid(tableRef);
       const col = resolveColumn(grid, columnRef);
-      if (!col) throw new Error(`No column "${columnRef}" in the cloud table.`);
+      if (!col) throw unknownColumn(columnRef, grid);
       const updated = readCreated(
         await client.mutation(UPDATE_COLUMN_REF, { columnId: col._id, patch }),
       );
       return { column: updated.name };
     },
 
-    renameTable: async (_tableRef, name) => {
+    renameTable: async (tableRef, name) => {
+      const tableId = await resolveTableId(tableRef);
       const payload = await client.mutation(RENAME_TABLE_REF, {
-        tableId: context.tableId,
+        tableId,
         name,
       });
+      invalidateTableList(); // the new name must resolve next call
       const renamed =
         typeof payload === "object" &&
         payload !== null &&
@@ -853,16 +1000,16 @@ export function makeCloudSource(
       return { renamed };
     },
 
-    setDedupe: async (_tableRef, column, keep) => {
-      const grid = await fetchGrid();
+    setDedupe: async (tableRef, column, keep) => {
+      const { tableId, grid } = await resolveGrid(tableRef);
       let columnId: string | null = null;
       if (column !== null && column !== "") {
         const col = resolveColumn(grid, column);
-        if (!col) throw new Error(`No column "${column}" in the cloud table.`);
+        if (!col) throw unknownColumn(column, grid);
         columnId = col._id;
       }
       const payload = await client.mutation(SET_DEDUPE_REF, {
-        tableId: context.tableId,
+        tableId,
         column: columnId,
         keep,
       });
@@ -878,16 +1025,14 @@ export function makeCloudSource(
       };
     },
 
-    findRows: async (_tableRef, where, columns, limit) => {
-      const grid = await fetchGrid();
+    findRows: async (tableRef, where, columns, limit) => {
+      const { grid } = await resolveGrid(tableRef);
       const idByCol = new Map<string, string>();
       for (const c of grid.columns) idByCol.set(c.name, c._id);
       const match: { columnId: string; value: unknown }[] = [];
       for (const [name, value] of Object.entries(where ?? {})) {
         const columnId = idByCol.get(name);
-        if (columnId === undefined) {
-          throw new Error(`No column "${name}" in the cloud table.`);
-        }
+        if (columnId === undefined) throw unknownColumn(name, grid);
         match.push({ columnId, value });
       }
       const wantCols = (columns ?? grid.columns.map((c) => c.name))
@@ -915,10 +1060,10 @@ export function makeCloudSource(
       return { matched: out.length, rows: out };
     },
 
-    getColumn: async (_tableRef, columnRef, limit) => {
-      const grid = await fetchGrid();
+    getColumn: async (tableRef, columnRef, limit) => {
+      const { grid } = await resolveGrid(tableRef);
       const col = resolveColumn(grid, columnRef);
-      if (!col) throw new Error(`No column "${columnRef}" in the cloud table.`);
+      if (!col) throw unknownColumn(columnRef, grid);
       const valueAt = new Map<string, unknown>();
       for (const cell of grid.cells) {
         if (cell.columnId === col._id) valueAt.set(cell.rowId, cell.value);
@@ -936,10 +1081,10 @@ export function makeCloudSource(
       };
     },
 
-    describeColumn: async (_tableRef, columnRef) => {
-      const grid = await fetchGrid();
+    describeColumn: async (tableRef, columnRef) => {
+      const { grid } = await resolveGrid(tableRef);
       const col = resolveColumn(grid, columnRef);
-      if (!col) throw new Error(`No column "${columnRef}" in the cloud table.`);
+      if (!col) throw unknownColumn(columnRef, grid);
       return {
         name: col.name,
         kind: col.kind,
@@ -953,10 +1098,10 @@ export function makeCloudSource(
       };
     },
 
-    reorderColumn: async (_tableRef, columnRef, toIndex) => {
-      const grid = await fetchGrid();
+    reorderColumn: async (tableRef, columnRef, toIndex) => {
+      const { grid } = await resolveGrid(tableRef);
       const col = resolveColumn(grid, columnRef);
-      if (!col) throw new Error(`No column "${columnRef}" in the cloud table.`);
+      if (!col) throw unknownColumn(columnRef, grid);
       const payload = await client.mutation(REORDER_COLUMN_REF, {
         columnId: col._id,
         toIndex,
@@ -964,10 +1109,10 @@ export function makeCloudSource(
       return { columnIds: readIdOrder(payload, "columnIds") };
     },
 
-    reorderRow: async (_tableRef, rowId, toIndex) => {
-      const grid = await fetchGrid();
+    reorderRow: async (tableRef, rowId, toIndex) => {
+      const { grid } = await resolveGrid(tableRef);
       if (!grid.rows.some((r) => r._id === rowId)) {
-        throw new Error(`Row "${rowId}" is not in the cloud table.`);
+        throw new Error(`Row "${rowId}" is not in this table.`);
       }
       const payload = await client.mutation(REORDER_ROW_REF, { rowId, toIndex });
       return { rowIds: readIdOrder(payload, "rowIds") };

@@ -13,17 +13,11 @@
 import { GridService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { runWorkerAsMember } from "../_lib";
+import { SetDedupeSchema } from "../_schemas";
 
 export const runtime = "nodejs";
-
-interface SetDedupeBody {
-  tableId: string;
-  column: string | null;
-  keep?: "oldest" | "newest";
-}
-
 export function POST(req: Request): Promise<Response> {
-  return runWorkerAsMember(req, (body: SetDedupeBody) =>
+  return runWorkerAsMember(req, SetDedupeSchema, (body) =>
     Effect.gen(function* () {
       const svc = yield* GridService;
       return yield* svc.setDedupe({

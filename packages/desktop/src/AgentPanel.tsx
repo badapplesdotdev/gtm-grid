@@ -5,8 +5,16 @@
 // supports stop + multi-turn, collapses to a slim logo rail, and refreshes the
 // grid live as the agent calls mutating tools.
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FC, type ReactNode } from "react";
+import { Streamdown as StreamdownImpl } from "streamdown";
+
+// Streamdown ships its own bundled React types; under this app's @types/react 18
+// their JSX element types don't line up with ours (TS2786 "cannot be used as a
+// JSX component"). Retype it to the props we actually pass.
+const Streamdown = StreamdownImpl as unknown as FC<{ className?: string; children?: ReactNode }>;
 import { api, API_BASE, type AgentSession, type AgentStatus } from "./api";
+import { onActivateKey } from "./lib/utils";
+import { capture } from "./analytics";
 import { abortAllRuns, abortRun, tableAbortKey, type AbortControllers } from "./agentAbort";
 
 type AgentKind = "claude" | "codex" | "hermes";
@@ -16,13 +24,89 @@ interface ToolCallT {
   input: Record<string, unknown>;
   result?: string;
 }
+/** An ordered segment of an assistant turn. The agent streams text and tool
+ *  calls interleaved; recording them as a sequence (rather than one text blob +
+ *  a separate tools array) is what lets the UI render them in the order they
+ *  actually happened instead of bunching every tool call at the top. Tool parts
+ *  reference `Message.tools` by index so a later tool_result can patch the tool
+ *  in place without disturbing the sequence. */
+type Part = { kind: "text"; text: string } | { kind: "tool"; ref: number };
+
+/** A pending human-in-the-loop approval — the MCP gate paused on a destructive /
+ *  credit-spending op and is waiting for the user to Approve/Deny in the chat. */
+interface PermissionRequest {
+  pendingId: string;
+  tool: string;
+  argsHash: string;
+  mode?: string;
+  action?: string;
+  target?: string;
+  willAffect?: number;
+  estimatedCredits?: number;
+}
+
+/** One selectable option in an AskUserQuestion question. */
+interface AskOption {
+  label: string;
+  description?: string;
+}
+/** A single structured question the agent posed via `ask_user_question`. */
+interface AskQuestion {
+  header: string;
+  question: string;
+  multiSelect?: boolean;
+  options: AskOption[];
+}
+/** A pending AskUserQuestion — the agent called `ask_user_question` and is
+ *  waiting for the user to pick (or type) answers in the chat. Drives the answer
+ *  cards that replace the composer at the bottom of the stream. */
+interface AskRequest {
+  questions: AskQuestion[];
+}
+
 interface Message {
   role: "user" | "assistant";
+  /** Full concatenated text of the turn (drives planBody, thinking label,
+   *  fallbacks). Rendering uses `parts`; this stays in sync as a convenience. */
   text: string;
   tools: ToolCallT[];
+  /** Chronological interleave of text + tool segments — the render source. */
+  parts: Part[];
   error?: boolean;
   /** This assistant turn was produced in PLAN MODE — render the plan affordances. */
   plan?: boolean;
+  /** A tool paused for human approval (HITL) — drives the Approve/Deny card. */
+  permission?: PermissionRequest;
+  /** The agent asked a structured multiple-choice question — drives the answer
+   *  cards that replace the composer. */
+  ask?: AskRequest;
+}
+
+/** Append streamed text to the open text segment, or start a new one — so text
+ *  that arrives after a tool call lands below it instead of merging upward. */
+function appendText(m: Message, chunk: string): Message {
+  const parts = [...m.parts];
+  const last = parts[parts.length - 1];
+  if (last && last.kind === "text") parts[parts.length - 1] = { kind: "text", text: last.text + chunk };
+  else parts.push({ kind: "text", text: chunk });
+  return { ...m, parts, text: m.text + chunk };
+}
+
+/** Record a fallback notice (stop/error) only when the turn produced no text. */
+function ensureText(m: Message, chunk: string): Message {
+  if (m.text) return m;
+  return { ...m, parts: [...m.parts, { kind: "text", text: chunk }], text: chunk };
+}
+
+/** Back-fill `parts` for messages loaded from a native transcript, which only
+ *  carries flat text + tools. True order isn't recoverable there, so mirror the
+ *  prior render (tool calls first, then text) for historical conversations. */
+function withParts(m: Message): Message {
+  if (m.parts?.length) return m;
+  const tools = m.tools ?? [];
+  const parts: Part[] = tools.map((_, i) => ({ kind: "tool", ref: i }));
+  if (m.text) parts.push({ kind: "text", text: m.text });
+  return { ...m, tools, parts };
 }
 
 const AGENT_LABEL: Record<AgentKind, string> = { claude: "Claude Code", codex: "Codex", hermes: "Hermes" };
@@ -72,7 +156,9 @@ function loadMode(): PermMode {
   } catch {
     /* storage disabled — fall through */
   }
-  return "bypassPermissions";
+  // Default to "auto" (not bypass): destructive ops and credit spends ask for a
+  // one-click approval, which is the safe default now that modes are enforced.
+  return "auto";
 }
 
 function relativeTime(ts: number): string {
@@ -220,136 +306,16 @@ const AGENT_MARK: Record<AgentKind, ReactNode> = {
   ),
 };
 
-/* ── Minimal, dependency-free markdown renderer (safe React nodes) ── */
-function renderInline(text: string, keyBase: string): ReactNode[] {
-  const nodes: ReactNode[] = [];
-  const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(\[[^\]]+\]\([^)]+\))/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  let i = 0;
-  while ((m = re.exec(text))) {
-    if (m.index > last) nodes.push(text.slice(last, m.index));
-    const tok = m[0];
-    const k = `${keyBase}-${i++}`;
-    if (tok.startsWith("`")) nodes.push(<code key={k} className="md-code">{tok.slice(1, -1)}</code>);
-    else if (tok.startsWith("**")) nodes.push(<strong key={k}>{tok.slice(2, -2)}</strong>);
-    else if (tok.startsWith("*")) nodes.push(<em key={k}>{tok.slice(1, -1)}</em>);
-    else {
-      const mm = /\[([^\]]+)\]\(([^)]+)\)/.exec(tok)!;
-      nodes.push(<a key={k} href={mm[2]} target="_blank" rel="noreferrer">{mm[1]}</a>);
-    }
-    last = m.index + tok.length;
-  }
-  if (last < text.length) nodes.push(text.slice(last));
-  return nodes;
-}
-
-/** Split a GFM table row into trimmed cells, tolerating optional outer pipes. */
-function splitTableRow(line: string): string[] {
-  let s = line.trim();
-  if (s.startsWith("|")) s = s.slice(1);
-  if (s.endsWith("|")) s = s.slice(0, -1);
-  return s.split("|").map((c) => c.trim());
-}
-
-/** A GFM table separator row, e.g. `| --- | :--: | ---: |`. */
-const TABLE_SEP = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)+\|?\s*$/;
-
 /**
- * Parse a GFM table starting at `lines[start]` — a header row immediately
- * followed by a `---` separator, then zero or more body rows. Returns the
- * rendered `<table>` and the index past the table, or null if there isn't one.
- * Cells render through {@link renderInline} so inline bold/code/links work.
+ * Agent markdown renderer. Streamdown handles GFM (tables, lists, code fences,
+ * links) and — crucially for our SSE token stream — gracefully renders
+ * *incomplete* markdown as it arrives (unterminated bold, half-written fences),
+ * so the chat doesn't flicker through broken syntax. The `.agent-md` class scopes
+ * our typography overrides in styles.css. Used by the chat, plan drawer (both in
+ * AgentPanel) and the skill body (Panels.tsx).
  */
-function parseTable(
-  lines: string[],
-  start: number,
-  keyBase: string,
-): { node: ReactNode; next: number } | null {
-  const header = lines[start];
-  const sep = lines[start + 1];
-  if (!header || !header.includes("|") || !sep || !TABLE_SEP.test(sep)) return null;
-  const heads = splitTableRow(header);
-  const aligns = splitTableRow(sep).map((c) =>
-    c.startsWith(":") && c.endsWith(":") ? "center" : c.endsWith(":") ? "right" : c.startsWith(":") ? "left" : undefined,
-  );
-  const body: string[][] = [];
-  let i = start + 2;
-  for (; i < lines.length; i++) {
-    if (!lines[i].includes("|") || !lines[i].trim()) break;
-    body.push(splitTableRow(lines[i]));
-  }
-  const node = (
-    <table key={`tbl-${keyBase}`} className="md-table">
-      <thead>
-        <tr>
-          {heads.map((h, c) => (
-            <th key={c} style={aligns[c] ? { textAlign: aligns[c] } : undefined}>{renderInline(h, `${keyBase}-h${c}`)}</th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {body.map((row, r) => (
-          <tr key={r}>
-            {heads.map((_, c) => (
-              <td key={c} style={aligns[c] ? { textAlign: aligns[c] } : undefined}>{renderInline(row[c] ?? "", `${keyBase}-r${r}c${c}`)}</td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-  return { node, next: i };
-}
-
 export function Markdown({ text }: { text: string }): ReactNode {
-  const out: ReactNode[] = [];
-  const parts = text.split(/```/);
-  parts.forEach((part, pi) => {
-    if (pi % 2 === 1) {
-      const body = part.replace(/^[a-zA-Z]*\n/, "");
-      out.push(<pre key={`pre-${pi}`} className="md-pre"><code>{body}</code></pre>);
-      return;
-    }
-    const lines = part.split("\n");
-    let list: ReactNode[] | null = null;
-    const flush = () => {
-      if (list) {
-        out.push(<ul key={`ul-${pi}-${out.length}`} className="md-ul">{list}</ul>);
-        list = null;
-      }
-    };
-    // Index loop (not forEach) so a GFM table can look ahead at the separator row
-    // and consume its body rows.
-    let li = 0;
-    while (li < lines.length) {
-      const line = lines[li];
-      const key = `${pi}-${li}`;
-      const table = parseTable(lines, li, key);
-      if (table) {
-        flush();
-        out.push(table.node);
-        li = table.next;
-        continue;
-      }
-      const h = /^(#{1,3})\s+(.*)/.exec(line);
-      const bullet = /^\s*[-*]\s+(.*)/.exec(line);
-      if (bullet) {
-        (list ??= []).push(<li key={key}>{renderInline(bullet[1], key)}</li>);
-      } else if (h) {
-        flush();
-        out.push(<div key={key} className={`md-h md-h${h[1].length}`}>{renderInline(h[2], key)}</div>);
-      } else if (line.trim()) {
-        flush();
-        out.push(<p key={key} className="md-p">{renderInline(line, key)}</p>);
-      } else {
-        flush();
-      }
-      li++;
-    }
-    flush();
-  });
-  return <>{out}</>;
+  return <Streamdown className="agent-md">{text}</Streamdown>;
 }
 
 /* ── Tool-call helpers ── */
@@ -551,6 +517,177 @@ export type AgentActivityEvent =
   | { readonly type: "tool"; readonly name: string; readonly input: Record<string, unknown> }
   | { readonly type: "turn-end" };
 
+/** Build the reply text sent back to the agent. A single question sends the bare
+ *  answer (the session already has context); multiple questions are mapped by
+ *  header so the model can tell which answer goes with which question. */
+function buildAskAnswer(questions: AskQuestion[], answers: string[]): string {
+  if (questions.length === 1) return answers[0] ?? "";
+  return questions.map((q, i) => `${q.header}: ${answers[i] ?? ""}`).join("\n");
+}
+
+/** AskUserQuestion answer cards — render at the bottom of the chat IN PLACE OF the
+ *  composer. Steps through the agent's questions one at a time; the user picks an
+ *  option (click or hotkey 1–9) or chooses "Other" to type a custom answer. On the
+ *  last question the combined answer resumes the conversation via `onSubmit`. */
+function AskCards({ request, onSubmit }: { request: AskRequest; onSubmit: (answer: string) => void }) {
+  const questions = request.questions;
+  const [qi, setQi] = useState(0);
+  const [answers, setAnswers] = useState<string[]>([]);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [otherOpen, setOtherOpen] = useState(false);
+  const [other, setOther] = useState("");
+  const otherRef = useRef<HTMLInputElement>(null);
+
+  const q = questions[qi];
+  const isLast = qi === questions.length - 1;
+  const otherNum = q.options.length + 1; // hotkey number for the "Other" card
+
+  function advance(answer: string) {
+    const next = [...answers];
+    next[qi] = answer;
+    if (isLast) {
+      onSubmit(buildAskAnswer(questions, next));
+    } else {
+      setAnswers(next);
+      setQi(qi + 1);
+      setSelected(new Set());
+      setOther("");
+      setOtherOpen(false);
+    }
+  }
+
+  function pickOption(i: number) {
+    // Single-select commits immediately; multi-select toggles and waits for Enter.
+    if (q.multiSelect) {
+      setSelected((s) => {
+        const n = new Set(s);
+        if (n.has(i)) n.delete(i);
+        else n.add(i);
+        return n;
+      });
+    } else {
+      advance(q.options[i].label);
+    }
+  }
+
+  function openOther() {
+    setOtherOpen(true);
+    setTimeout(() => otherRef.current?.focus(), 0);
+  }
+
+  function confirmMulti() {
+    const labels = [...selected].sort((a, b) => a - b).map((i) => q.options[i].label);
+    if (other.trim()) labels.push(other.trim());
+    if (labels.length === 0) return;
+    advance(labels.join(", "));
+  }
+
+  function submitOther() {
+    if (q.multiSelect) confirmMulti();
+    else if (other.trim()) advance(other.trim());
+  }
+
+  // Global hotkeys 1–9 / Enter, active only while the cards are mounted. Skipped
+  // when focus is in any text field (incl. our own Other input + grid cells) so we
+  // never hijack typing.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const el = document.activeElement as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) {
+        if (e.key === "Enter" && q.multiSelect && el === otherRef.current) {
+          // handled by the Other input's own onKeyDown
+        }
+        return;
+      }
+      if (e.key >= "1" && e.key <= "9") {
+        const num = Number(e.key);
+        if (num <= q.options.length) {
+          e.preventDefault();
+          pickOption(num - 1);
+        } else if (num === otherNum) {
+          e.preventDefault();
+          openOther();
+        }
+      } else if (e.key === "Enter" && q.multiSelect) {
+        e.preventDefault();
+        confirmMulti();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [qi, q, otherNum, selected, other, answers]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div className="agent-ask">
+      <div className="agent-ask-head">
+        <span className="agent-ask-chip">{q.header}</span>
+        {questions.length > 1 && (
+          <span className="agent-ask-step">
+            Question {qi + 1} of {questions.length}
+          </span>
+        )}
+      </div>
+      <div className="agent-ask-q">{q.question}</div>
+      <div className="agent-ask-options">
+        {q.options.map((o, i) => {
+          const sel = !!q.multiSelect && selected.has(i);
+          return (
+            <button key={i} className={`agent-ask-option${sel ? " sel" : ""}`} onClick={() => pickOption(i)}>
+              <kbd className="agent-ask-key">{i + 1}</kbd>
+              <span className="agent-ask-option-body">
+                <span className="agent-ask-option-label">{o.label}</span>
+                {o.description && <span className="agent-ask-option-desc">{o.description}</span>}
+              </span>
+              {q.multiSelect && <span className="agent-ask-check">{sel ? "✓" : ""}</span>}
+            </button>
+          );
+        })}
+        {otherOpen ? (
+          <div className="agent-ask-other">
+            <kbd className="agent-ask-key">{otherNum}</kbd>
+            <input
+              ref={otherRef}
+              className="agent-ask-other-input"
+              value={other}
+              placeholder="Type your answer…"
+              onChange={(e) => setOther(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  submitOther();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setOtherOpen(false);
+                  setOther("");
+                }
+              }}
+            />
+            <button className="agent-ask-other-send" onClick={submitOther} disabled={!q.multiSelect && !other.trim()}>
+              <IconArrow s={14} />
+            </button>
+          </div>
+        ) : (
+          <button className="agent-ask-option agent-ask-option-other" onClick={openOther}>
+            <kbd className="agent-ask-key">{otherNum}</kbd>
+            <span className="agent-ask-option-body">
+              <span className="agent-ask-option-label">Other…</span>
+              <span className="agent-ask-option-desc">Type a custom answer</span>
+            </span>
+          </button>
+        )}
+      </div>
+      {q.multiSelect && (
+        <div className="agent-ask-foot">
+          <span className="agent-ask-hint">Pick one or more, then Enter</span>
+          <button className="agent-ask-confirm" onClick={confirmMulti} disabled={selected.size === 0 && !other.trim()}>
+            {isLast ? "Submit" : "Next"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AgentPanel({
   onGridChange,
   activeTable,
@@ -604,6 +741,14 @@ export default function AgentPanel({
 
   const messages = threads[agent];
 
+  // The agent asked a structured question on its last turn — surface answer cards
+  // in place of the composer until the user replies (which appends a new message).
+  const lastMessage = messages[messages.length - 1];
+  const pendingAsk =
+    !busy && lastMessage?.role === "assistant" && lastMessage.ask && lastMessage.ask.questions.length > 0
+      ? lastMessage.ask
+      : null;
+
   // Persist the model selection per agent (survives relaunch).
   useEffect(() => {
     try {
@@ -652,7 +797,7 @@ export default function AgentPanel({
     if (agent === "hermes") return; // Hermes has no native CLI transcript to reopen
     try {
       const { messages: msgs } = await api.agentSession(agent, s.id);
-      setThreads((t) => ({ ...t, [agent]: msgs as Message[] }));
+      setThreads((t) => ({ ...t, [agent]: (msgs as Message[]).map(withParts) }));
       sessionRef.current[agent] = s.id;
       newChatRef.current[agent] = false; // resuming a specific thread, not starting fresh
     } catch {
@@ -703,7 +848,7 @@ export default function AgentPanel({
     return () => abortAllRuns(refs);
   }, [tableKey]);
 
-  async function send(preset?: string, modeOverride?: PermMode) {
+  async function send(preset?: string, modeOverride?: PermMode, approval?: { tool: string; argsHash: string }) {
     // Bind this turn to the agent it was started on. Everything below uses `a`,
     // not the live `agent` state, so the run keeps writing to ITS OWN thread and
     // toggling ITS OWN busy flag even after the user switches tabs mid-stream.
@@ -721,7 +866,11 @@ export default function AgentPanel({
     // a backgrounded tab lands in the right conversation.
     const setMsgs = (fn: (m: Message[]) => Message[]) =>
       setThreads((t) => ({ ...t, [a]: fn(t[a]) }));
-    setMsgs((m) => [...m, { role: "user", text, tools: [] }, { role: "assistant", text: "", tools: [], plan: effMode === "plan" }]);
+    setMsgs((m) => [
+      ...m,
+      { role: "user", text, tools: [], parts: text ? [{ kind: "text", text }] : [] },
+      { role: "assistant", text: "", tools: [], parts: [], plan: effMode === "plan" },
+    ]);
     setBusyByAgent((b) => ({ ...b, [a]: true }));
     const controller = new AbortController();
     abortRefs.current[a] = controller;
@@ -744,6 +893,9 @@ export default function AgentPanel({
           message: text,
           model: models[a] || undefined,
           mode: effMode,
+          // HITL: carry the human-approved action so the gated tool runs this turn
+          // (the server threads it into the model-inaccessible MCP env).
+          approval: approval || undefined,
           sessionId: sessionRef.current[a],
           newChat: fresh || undefined,
           context: activeTable ? { tableName: activeTable.name, columns: activeTable.columns } : undefined,
@@ -773,9 +925,12 @@ export default function AgentPanel({
           } catch {
             continue;
           }
-          if (e.type === "text") updateLast((m) => ({ ...m, text: m.text + e.text }));
+          if (e.type === "text") updateLast((m) => appendText(m, e.text));
           else if (e.type === "tool") {
-            updateLast((m) => ({ ...m, tools: [...m.tools, { name: e.name, input: e.input ?? {} }] }));
+            updateLast((m) => {
+              const tools = [...m.tools, { name: e.name, input: e.input ?? {} }];
+              return { ...m, tools, parts: [...m.parts, { kind: "tool", ref: tools.length - 1 }] };
+            });
             onAgentEvent?.({ type: "tool", name: e.name, input: e.input ?? {} });
           }
           else if (e.type === "tool_result")
@@ -788,17 +943,34 @@ export default function AgentPanel({
                 }
               return { ...m, tools };
             });
+          else if (e.type === "permission_request")
+            updateLast((m) => ({
+              ...m,
+              permission: {
+                pendingId: e.pendingId,
+                tool: e.tool,
+                argsHash: e.argsHash,
+                mode: e.mode,
+                action: e.action,
+                target: e.target,
+                willAffect: e.willAffect,
+                estimatedCredits: e.estimatedCredits,
+              },
+            }));
+          else if (e.type === "ask_user")
+            updateLast((m) => ({ ...m, ask: { questions: e.questions ?? [] } }));
           else if (e.type === "grid") onGridChange();
           else if (e.type === "session") sessionRef.current[a] = e.sessionId;
           else if (e.type === "done") {
             if (e.sessionId) sessionRef.current[a] = e.sessionId;
             if (e.isError) updateLast((m) => ({ ...m, error: true }));
-          } else if (e.type === "error") updateLast((m) => ({ ...m, text: m.text || e.message, error: true }));
+            capture("agent_turn_completed", { agent: a, mode: effMode, outcome: e.isError ? "error" : "completed" });
+          } else if (e.type === "error") updateLast((m) => ({ ...ensureText(m, e.message), error: true }));
         }
       }
     } catch (err) {
-      if ((err as any)?.name === "AbortError") updateLast((m) => ({ ...m, text: m.text || "⏹ stopped" }));
-      else updateLast((m) => ({ ...m, text: m.text || (err instanceof Error ? err.message : "stream failed"), error: true }));
+      if ((err as any)?.name === "AbortError") updateLast((m) => ensureText(m, "⏹ stopped"));
+      else updateLast((m) => ({ ...ensureText(m, err instanceof Error ? err.message : "stream failed"), error: true }));
     } finally {
       setBusyByAgent((b) => ({ ...b, [a]: false }));
       // Only clear our own slot — a fresh turn for this agent may have already
@@ -960,12 +1132,16 @@ export default function AgentPanel({
                       {AGENT_SHORT[agent]}
                     </span>
                   )}
-                  {m.tools.map((t, j) => (
-                    <ToolCall key={j} tool={t} running={t.result === undefined && busy && isLast} />
-                  ))}
-                  {m.text && (m.role === "assistant"
-                    ? <div className="agent-text"><Markdown text={m.text} /></div>
-                    : <div className="agent-text">{m.text}</div>)}
+                  {m.parts.map((part, pi) => {
+                    if (part.kind === "tool") {
+                      const t = m.tools[part.ref];
+                      return t ? <ToolCall key={`t${pi}`} tool={t} running={t.result === undefined && busy && isLast} /> : null;
+                    }
+                    if (!part.text) return null;
+                    return m.role === "assistant"
+                      ? <div key={`x${pi}`} className="agent-text"><Markdown text={part.text} /></div>
+                      : <div key={`x${pi}`} className="agent-text">{part.text}</div>;
+                  })}
                   {m.role === "assistant" && m.plan && planBody(m).trim() !== "" && (
                     <div className="agent-plan-bar">
                       <span className="agent-plan-label">
@@ -981,22 +1157,36 @@ export default function AgentPanel({
                     </div>
                   )}
                   {isLast && m.role === "assistant" && !busy && (() => {
-                    const c = pendingConfirm(m);
+                    // Prefer the ENFORCED permission_request (carries an approval
+                    // the server unlocks); fall back to the legacy in-band confirm
+                    // payload (old server with no permission_request event).
+                    const p = m.permission;
+                    const c = p
+                      ? { action: p.action, willAffect: p.willAffect, target: p.target, estimatedCredits: p.estimatedCredits }
+                      : pendingConfirm(m);
                     if (!c) return null;
                     const detail = [
                       typeof c.willAffect === "number" ? `${c.willAffect} item${c.willAffect !== 1 ? "s" : ""}` : null,
                       c.target,
                       typeof c.estimatedCredits === "number" && c.estimatedCredits > 0 ? `~${c.estimatedCredits} credits` : null,
                     ].filter(Boolean).join(" · ");
+                    const modeLabel = p?.mode ? MODE_OPTIONS.find((o) => o.value === p.mode)?.label : undefined;
+                    const onApprove = p
+                      ? () => send("Approved — proceed.", undefined, { tool: p.tool, argsHash: p.argsHash })
+                      : () => send("Approved — proceed, calling the same tool with confirm: true.");
+                    const onDeny = p
+                      ? () => send("Denied — do not perform that action; continue or stop.")
+                      : () => send("Cancel — do NOT perform that action.");
                     return (
                       <div className="agent-confirm">
                         <div className="agent-confirm-head">
                           <strong>{c.action ?? "Confirm action"}</strong>
                           {detail && <span className="agent-confirm-detail">{detail}</span>}
                         </div>
+                        {modeLabel && <div className="agent-confirm-mode">{modeLabel} mode — your approval is required</div>}
                         <div className="agent-confirm-actions">
-                          <button className="agent-confirm-deny" onClick={() => send("Cancel — do NOT perform that action.")}>Deny</button>
-                          <button className="agent-confirm-approve" onClick={() => send("Approved — proceed, calling the same tool with confirm: true.")}>Approve</button>
+                          <button className="agent-confirm-deny" onClick={onDeny}>Deny</button>
+                          <button className="agent-confirm-approve" onClick={onApprove}>Approve</button>
                         </div>
                       </div>
                     );
@@ -1041,6 +1231,15 @@ export default function AgentPanel({
               <span className="agent-context-dot" /> on <strong>{activeTable.name}</strong>
             </div>
           )}
+          {pendingAsk ? (
+            <AskCards
+              request={pendingAsk}
+              onSubmit={(answer) => {
+                capture("ask_user_question_answered", { agent, questions: pendingAsk.questions.length });
+                send(answer);
+              }}
+            />
+          ) : (
           <div className="agent-input">
             {slash && slashMatches.length > 0 && (
               <div className="agent-slash-menu">
@@ -1112,6 +1311,7 @@ export default function AgentPanel({
               </button>
             )}
           </div>
+          )}
           {/* Composer footer: chat history + model picker, both open upward. History
               is read from the agent's OWN native transcript store (sidecar). */}
           <div className="agent-composer-foot">
@@ -1125,7 +1325,7 @@ export default function AgentPanel({
                     <div className="agent-history-empty">No past conversations for this project yet.</div>
                   ) : (
                     sessions.map((s) => (
-                      <div key={s.id} className="agent-history-row" onClick={() => openSession(s)}>
+                      <div key={s.id} className="agent-history-row" onClick={() => openSession(s)} onKeyDown={onActivateKey(() => openSession(s))} role="button" tabIndex={0}>
                         <span className="agent-history-logo">{AGENT_LOGO[agent]}</span>
                         <span className="agent-history-title" title={s.title}>{s.title}</span>
                         <span className="agent-history-time">{relativeTime(s.updatedAt)}</span>

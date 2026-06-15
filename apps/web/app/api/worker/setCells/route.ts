@@ -10,26 +10,14 @@
  * `hasValue`.
  */
 
-import { type CloudCellStatus, WebhookService } from "@gtmgrid/services";
+import { WebhookService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { runWorkerSecretOrMember } from "../_lib";
+import { SetCellsSchema } from "../_schemas";
 
 export const runtime = "nodejs";
-
-interface SetCellEntry {
-  rowId: string;
-  columnId: string;
-  value?: unknown;
-  status?: CloudCellStatus;
-  error?: string | null;
-}
-
-interface SetCellsBody {
-  cells: SetCellEntry[];
-}
-
 export function POST(req: Request): Promise<Response> {
-  return runWorkerSecretOrMember(req, (body: SetCellsBody) =>
+  return runWorkerSecretOrMember(req, SetCellsSchema, (body) =>
     Effect.gen(function* () {
       const svc = yield* WebhookService;
       return yield* svc.setCells({

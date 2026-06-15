@@ -1,5 +1,177 @@
 # @gtmgrid/desktop
 
+## 0.10.0
+
+### Minor Changes
+
+- 898ab3e: Full keyboard accessibility for the desktop app
+
+  - Spreadsheet-style grid navigation: arrow keys, Home/End, Cmd/Ctrl+Arrow, PageUp/PageDown, roving tabindex, `role="grid"` + ARIA indices, with scroll-into-view that survives row/column virtualization.
+  - Type-to-edit (any character), Enter/F2 to edit, Escape to cancel, with focus returning to the cell; Space / Shift+Arrow / Cmd+A for row selection.
+  - Migrated every overlay to shadcn/Radix Dialog/Popover/Sheet primitives, so dialogs, popovers and drawers all close on Escape, trap focus, and restore focus to their trigger.
+  - Command palette (Cmd/Ctrl+K) for jumping to tables and common actions.
+  - Skip-to-content link and keyboard-focusable sidebar navigation (table rows, section/folder headers, provider/tool rows) with a global focus-visible ring.
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.10.0
+- @gtmgrid/cloud@0.10.0
+- @gtmgrid/services@0.10.0
+
+## 0.9.24
+
+### Patch Changes
+
+- 5e85887: Add AskUserQuestion answer cards to the Agent panel for all providers.
+
+  When an agent needs the user to choose between options (which AI model, cohort
+  size, ambiguous intent), it can now pose a structured multiple-choice question
+  and the bottom of the chat replaces the composer with selectable answer cards —
+  pick with a click or hotkeys `1,2,3,4`, or choose "Other" to type a custom
+  answer. Works across all three CLI providers (Claude / Codex / Hermes), reusing
+  the existing permission-gate pattern.
+
+  - **mcp**: new `ask_user_question` tool returning a non-blocking questions payload.
+  - **server**: `questionEventFromToolResult` converts the payload into an `ask_user`
+    SSE event, wired into the Claude, Codex, and Hermes bridges. Claude's _native_
+    `AskUserQuestion` tool_use is intercepted directly (headless `-p` stubs the result
+    and ends the turn), and HITL payloads are detected against the untruncated Hermes
+    tool-result text so a larger question payload can't be clipped.
+  - **desktop**: an `AskCards` component (step-through, hotkeys, multiSelect, "Other"
+    free-text) replaces the composer while a question is pending; the answer resumes
+    the session.
+  - @gtmgrid/cloud@0.9.24
+  - @gtmgrid/services@0.9.24
+
+## 0.9.23
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.23
+- @gtmgrid/services@0.9.23
+
+## 0.9.22
+
+### Patch Changes
+
+- d2a41c5: Fix the Tables page showing duplicate tables and no row counts for cloud tables.
+
+  - **Row counts**: `grid.listTables` now attaches each table's row count from a
+    single grouped `countByTableIds` query (the efficient primitive existed but was
+    never wired in; the in-memory repo was also missing it — a latent type error).
+    The Tables page and sidebar now show real cloud row counts ("124 rows") instead
+    of "Cloud table"/"—"; a table whose count an older server doesn't report falls
+    back gracefully.
+  - **Duplicates**: removed the sidebar "Recent" group, which repeated the 5 most-
+    recent tables already shown in the full list below it. The Tables page already
+    de-dupes by name.
+  - The sidebar table rows now show a row count (hidden on hover, like folders).
+
+- Updated dependencies [d2a41c5]
+  - @gtmgrid/services@0.9.22
+  - @gtmgrid/cloud@0.9.22
+
+## 0.9.21
+
+### Patch Changes
+
+- 8e16910: Rebuild the Tables page as a full management hub matching the GTM Grid Tables
+  design: a header with title + table-count subtitle, a controls row with search,
+  status-filter chips (All / Favorites / Synced / Local only, each with a count), a
+  sort dropdown (recently added / name / row count), and a list/grid view toggle.
+  The list view shows each table with a checkbox, accent table icon, name + favorite
+  star + column/row meta, row count, and a sync pill; the card view mirrors it.
+  Multi-select reveals a bulk-action bar with an inline-confirm delete, and each row
+  has a favorite toggle and an actions menu (open / rename / delete). Styled with the
+  app's tokens (the design's green accent), reusing the existing open/rename/delete/
+  favorite handlers.
+- 2e48ab4: Add a Tables page for searching and managing tables, mirroring the connectors
+  gallery. Reachable via "Browse all" in the sidebar's Tables section, it shows
+  every table as a card (column/row counts for local tables, a cloud badge for
+  cloud ones), with search and inline actions — open, favorite, rename (local), and
+  delete (local + cloud) — reusing the existing table handlers and confirm dialogs.
+  The sidebar also gains a compact "Recent" group of the 5 most-recent tables (shown
+  once there are more than 5) for quick access.
+  - @gtmgrid/cloud@0.9.21
+  - @gtmgrid/services@0.9.21
+
+## 0.9.20
+
+### Patch Changes
+
+- f464186: Make the 4 agent permission modes real and add enforced human-in-the-loop (HITL)
+  approval, uniformly across all three providers (claude/codex/hermes).
+
+  - **Modes are enforced at the MCP tool gate** (the one layer all providers share),
+    driven by a per-tool risk class: `bypass` runs everything; `auto` asks for
+    destructive ops and large/expensive runs; `acceptEdits` asks for every delete
+    and every credit spend; `plan` blocks all mutations (reads still run). The
+    composer mode is threaded to the MCP via env (`GTMGRID_PERMISSION_MODE`).
+  - **Enforced approval (no model self-confirm):** a gated tool returns
+    `confirmationRequired` and does NOT execute; it can only be unlocked by a HUMAN
+    approval delivered through the MCP env (`GTMGRID_APPROVED_TOOL`/`_ARGS_HASH`) — a
+    channel the model can't reach. The approval is hash-bound to the exact action
+    the user saw and single-use, so the model setting `confirm:true` itself never
+    bypasses a gate.
+  - **HITL chat UX:** a new `permission_request` SSE event (emitted by all three
+    bridges) drives an Approve/Deny card showing the action, affected count, credit
+    estimate, and mode; Approve resends the turn carrying the approval. Plan mode is
+    now actually enforced, not just suggested.
+  - Default mode is now **Auto** (was bypass) so destructive ops and spends ask for a
+    one-click approval out of the box. Claude's invalid `auto` flag is mapped to
+    `default`.
+  - @gtmgrid/cloud@0.9.20
+  - @gtmgrid/services@0.9.20
+
+## 0.9.19
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.19
+- @gtmgrid/services@0.9.19
+
+## 0.9.18
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.18
+- @gtmgrid/services@0.9.18
+
+## 0.9.17
+
+### Patch Changes
+
+- 8b29845: Render the agent chat with Streamdown so assistant replies get proper markdown
+  — GFM tables, lists, code fences and inline formatting — streamed safely as
+  incomplete tokens arrive (replacing the hand-rolled renderer). Typography is
+  scoped to the copilot panel so headings stay small and bold rather than
+  prose-sized. Tool calls now interleave with text in the order the agent emits
+  them, instead of bunching every tool call above the reply.
+  - @gtmgrid/cloud@0.9.17
+  - @gtmgrid/services@0.9.17
+
+## 0.9.16
+
+### Patch Changes
+
+- 9f01681: Fix "undefined is not an object (evaluating 'snapshot.columns')" when
+  deleting a column (or row) on a cloud table: the optimistic cache patch fed
+  react-query's `undefined` (no cached unpaged snapshot — the normal state
+  while the grid loads paged) into the grid reducer, which only guarded
+  `null`. The reducer now tolerates both, and the optimistic path skips absent
+  cache entries entirely.
+- Updated dependencies [9f01681]
+  - @gtmgrid/services@0.9.16
+  - @gtmgrid/cloud@0.9.16
+
+## 0.9.15
+
+### Patch Changes
+
+- Updated dependencies [be203b9]
+  - @gtmgrid/services@0.9.15
+  - @gtmgrid/cloud@0.9.15
+
 ## 0.9.14
 
 ### Patch Changes

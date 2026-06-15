@@ -9,6 +9,8 @@ import {
   manageChildLifecycle,
   mcpEnv,
   parseAgentCloud,
+  permissionEventFromToolResult,
+  questionEventFromToolResult,
   streamHermes,
   STDERR_CAP,
   type AgentCloud,
@@ -68,6 +70,60 @@ describe("mcpEnv — the env the spawned MCP receives (data-source selection)", 
       GTMGRID_CLOUD_PROJECT: "proj_1",
       GTMGRID_CLOUD_TABLE: "tbl_1",
     });
+  });
+
+  it("adds GTMGRID_PERMISSION_MODE when a mode is given, omits approval vars when absent", () => {
+    const env = mcpEnv("p", undefined, "auto");
+    expect(env.GTMGRID_PERMISSION_MODE).toBe("auto");
+    expect(env.GTMGRID_APPROVED_TOOL).toBeUndefined();
+  });
+
+  it("threads a human approval into GTMGRID_APPROVED_* (the model-inaccessible unlock)", () => {
+    const env = mcpEnv("p", undefined, "acceptEdits", { tool: "delete_rows", argsHash: "abc123" });
+    expect(env).toMatchObject({
+      GTMGRID_PERMISSION_MODE: "acceptEdits",
+      GTMGRID_APPROVED_TOOL: "delete_rows",
+      GTMGRID_APPROVED_ARGS_HASH: "abc123",
+    });
+  });
+});
+
+describe("permissionEventFromToolResult — confirmationRequired → permission_request SSE", () => {
+  it("builds a permission_request event from a gate's approvalRequest payload", () => {
+    const raw = JSON.stringify({
+      confirmationRequired: true,
+      approvalRequest: { pendingId: "pr_x", tool: "delete_rows", argsHash: "h", mode: "auto", action: "Delete rows", willAffect: 4200, target: "Leads" },
+    });
+    expect(permissionEventFromToolResult(raw)).toEqual({
+      type: "permission_request",
+      pendingId: "pr_x",
+      tool: "delete_rows",
+      argsHash: "h",
+      mode: "auto",
+      action: "Delete rows",
+      willAffect: 4200,
+      target: "Leads",
+    });
+  });
+  it("returns null for an ordinary tool result or non-JSON", () => {
+    expect(permissionEventFromToolResult(JSON.stringify({ added: 5 }))).toBeNull();
+    expect(permissionEventFromToolResult("not json")).toBeNull();
+    expect(permissionEventFromToolResult(JSON.stringify({ confirmationRequired: true }))).toBeNull();
+  });
+});
+
+describe("questionEventFromToolResult — ask_user_question → ask_user SSE", () => {
+  it("builds an ask_user event from an askUserQuestion payload", () => {
+    const questions = [
+      { header: "AI model", question: "Which model?", options: [{ label: "Haiku" }, { label: "Sonnet" }] },
+    ];
+    const raw = JSON.stringify({ askUserQuestion: true, questions, message: "STOP." });
+    expect(questionEventFromToolResult(raw)).toEqual({ type: "ask_user", questions });
+  });
+  it("returns null for an ordinary tool result, non-JSON, or a malformed payload", () => {
+    expect(questionEventFromToolResult(JSON.stringify({ added: 5 }))).toBeNull();
+    expect(questionEventFromToolResult("not json")).toBeNull();
+    expect(questionEventFromToolResult(JSON.stringify({ askUserQuestion: true }))).toBeNull();
   });
 });
 
@@ -422,9 +478,12 @@ describe("claudePermissionMode — composer mode → claude --permission-mode", 
   it("plan maps to bypassPermissions (research tools must not be denied)", () => {
     expect(claudePermissionMode("plan")).toBe("bypassPermissions");
   });
-  it("other modes pass through; absent → bypass", () => {
+  it("auto maps to the valid CLI 'default' (NOT the invalid 'auto' flag)", () => {
+    expect(claudePermissionMode("auto")).toBe("default");
+  });
+  it("acceptEdits/bypassPermissions pass through; absent → bypass", () => {
     expect(claudePermissionMode("acceptEdits")).toBe("acceptEdits");
-    expect(claudePermissionMode("auto")).toBe("auto");
+    expect(claudePermissionMode("bypassPermissions")).toBe("bypassPermissions");
     expect(claudePermissionMode(undefined)).toBe("bypassPermissions");
   });
 });

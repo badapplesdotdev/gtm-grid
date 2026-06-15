@@ -35,6 +35,7 @@ const GTM_TOOLS = [
   "get_table",
   "run_function",
   "upload_extension",
+  "ask_user_question",
 ];
 const MUTATING = new Set([
   "create_table", "rename_table", "delete_table",
@@ -114,10 +115,29 @@ The user turned on **Plan mode** — they want a PLAN to review, not execution.
 - **Then STOP.** Do NOT execute the plan, create/modify columns, run columns, write files, or change any data. Do NOT call \`ExitPlanMode\` (it does nothing here). After the plan, end your turn and wait — the user will click **Approve** to run it.
 - **Never loop.** If a tool is blocked or you're unsure, fold that into the plan as a note or open question — do NOT retry it, and do NOT repeat yourself or narrate "standing by". One plan, then stop.`;
 
-export function contextPreamble(ctx?: AgentContext, mode?: string): string {
+/**
+ * Cloud-mode guidance, injected when the agent operates on a shared cloud project
+ * (not the local SQLite file). The big behavioural fix: cloud agents must POPULATE
+ * tables via `add_rows` (there is no filesystem to stage to) and can address ANY
+ * table by name (the cloud source now resolves the `table` arg, not just the
+ * active one). Quota errors are surfaced so the agent stops instead of looping.
+ */
+const CLOUD_NOTE = `
+
+## Cloud project (active)
+You're on a **CLOUD** project — shared, multi-user, backed by the team's database (there is **no local filesystem**).
+- **Address ANY table by name.** Every table tool takes a \`table\` argument; pass the table's name (or its id from \`list_tables\`). It defaults to the table the user is viewing, but you can read/write any table in the project by naming it — \`get_table(table:"Accounts")\`, \`add_rows(table:"Accounts", …)\`, etc.
+- **POPULATE tables with \`add_rows\` — there are NO scratch files.** To put sourced/enriched data into a table, call \`add_rows\` DIRECTLY with the rows. Never write JSON to \`/tmp\` or stage it in a file — there's no filesystem here, so staged data never reaches the grid. If \`add_rows\` reports an unknown column, \`get_table\` that table to read its exact column names, then retry.
+- **Batch large inserts.** Send rows in batches of ~25–50 per \`add_rows\` call — keeps each call within size/quota limits and lets you show progress.
+- **Quota.** Each row insert and cell write spends a cloud action from the team's plan. If a tool returns a \`[quota]\` / HTTP 402 error ("exceed your plan's remaining cloud actions"), STOP and tell the user they've hit their plan limit (the rejected import wrote nothing) — do not silently retry.`;
+
+export function contextPreamble(ctx?: AgentContext, mode?: string, isCloud?: boolean): string {
+  const where = isCloud
+    ? "Tables live in your team's **cloud project** (shared, multi-user) — every change writes to the cloud and shows up live for all members."
+    : "Tables live in a local SQLite project.";
   const base = `# GTM Grid — operating manual
 
-You are operating **GTM Grid**, a Clay-style local spreadsheet where every column is a function. Tables live in a local SQLite project. The user runs you to build GTM pipelines: source prospects, enrich them, score/personalize, push to outreach tools.
+You are operating **GTM Grid**, a Clay-style ${isCloud ? "cloud" : "local"} spreadsheet where every column is a function. ${where} The user runs you to build GTM pipelines: source prospects, enrich them, score/personalize, push to outreach tools.
 
 ## Core model
 - **Tables** = sheets. **Rows** = records. **Columns** = either MANUAL (user types values) or FUNCTION (runs an enrichment / AI / HTTP call per row).
@@ -178,8 +198,10 @@ You control the whole grid, not just appends:
 
 ### Handling errors
 - A cell with \`status: "error"\` shows a red **Status Code: 4xx/5xx** pill in the grid. Click → opens the cell-details drawer with the full error body.
-- When you see errors in \`get_table\` output:
-  - **401/403** → the connector's API key is missing or invalid. Tell the user to connect it in the Extensions panel; do NOT silently retry.
+- **\`run_column\`/\`run_table\` now return an \`errorHint\`** when cells errored — read it and relay it to the user verbatim instead of digging through \`get_table\`. It already says which key to connect (or that a quota was hit).
+- When you see errors (in an \`errorHint\` or \`get_table\` output):
+  - **"No AI provider connected"** → an AI column has no key AND no agent fallback was reachable. Tell the user to connect an AI key (Anthropic / OpenAI / OpenRouter) in the Extensions panel. (When the user has no key, AI columns automatically fall back to their connected Claude/Codex agent model — so this only surfaces when neither is available.)
+  - **401/403 / "Authentication required"** → the connector's API key is missing or invalid. Tell the user to connect it in the Extensions panel; do NOT silently retry.
   - **422/400** → wrong inputs. Show the user the offending row(s) and ask whether to fix params, clean the input column, or skip those rows.
   - **429** → rate limited. Wait, then \`run_column\` again (it skips already-done cells).
   - **5xx** → provider blip. One retry is fine; if it persists, surface it.
@@ -192,6 +214,7 @@ You control the whole grid, not just appends:
 ### When to ASK vs just do
 - ASK before: dumping many columns, spending more than ~50 credits, deleting/clearing data, picking which AI model/system prompt to use, choosing the cohort size for a source query.
 - Just do (no ask): obvious normalizations, single-row test runs, reading via \`get_table\`, retrying a transient failure once.
+- **HOW to ask a choice:** when the decision is a pick between options (which model, which cohort size, which of several columns to add, disambiguating an unclear request), call \`ask_user_question\` instead of writing the options out in prose. Pass 1–4 \`questions\`, each with a short \`header\`, the \`question\`, and 2–4 \`options\` (\`{label, description}\`); set \`multiSelect:true\` when several can apply. The user picks via answer cards (or types their own answer). After calling it, STOP and end your turn — do NOT answer for them; their reply comes back as the next message. (The destructive/credit confirm protocol above still uses \`confirm:true\` on the SAME tool, not \`ask_user_question\`.)
 
 ### Stay scoped to the active table
 - The user is operating ONE table at a time (passed in the "Active table" section below). When they say "this table", "this row", "this column", "here" — that's the one. Don't create new tables unless asked.
@@ -216,26 +239,78 @@ ${renderSkillsSection(ctx?.skills)}
 - When the user says "this table", "this row", "this column" — they mean the one they're viewing (passed in context below).
 - If a step fails, surface the error (status code + message) and ASK before retrying with different inputs.`;
 
+  const cloud = isCloud ? CLOUD_NOTE : "";
   const plan = mode === "plan" ? PLAN_MODE_NOTE : "";
-  if (!ctx?.tableName) return base + plan;
+  if (!ctx?.tableName) return base + cloud + plan;
   const cols = ctx.columns?.length ? ` Its columns are: ${ctx.columns.join(", ")}.` : "";
   return (
     base +
+    cloud +
     plan +
     `\n\n## Active table\nThe user is viewing **"${ctx.tableName}"**.${cols} When they say "this table" or don't name one, operate on this one.`
   );
 }
 
 /**
- * The Claude `--permission-mode` value for the composer mode. PLAN mode maps to
- * `bypassPermissions` (full tool access) on purpose: the native `plan` permission
- * mode denies research/read tools in headless `-p` and the agent loops on the
- * denials — the {@link PLAN_MODE_NOTE} preamble is what enforces plan-only here,
- * not the permission mode. Every other mode passes through; absent ⇒ bypass.
+ * The Claude `--permission-mode` value for the composer mode. Valid CLI values are
+ * `default | acceptEdits | bypassPermissions | plan`.
+ * - `auto` is the COMPOSER's label, not a CLI value — map it to `default` so the
+ *   CLI doesn't error on an unknown flag (selecting "Auto" previously sent an
+ *   invalid `--permission-mode auto`).
+ * - `plan` maps to `bypassPermissions` on purpose: native `plan` denies
+ *   research/read tools in headless `-p` and the agent loops on the denials — the
+ *   {@link PLAN_MODE_NOTE} preamble enforces plan-only instead.
+ *
+ * This flag only governs Claude's OWN (non-grid) tools; the gtmgrid grid tools are
+ * pre-approved via `--allowedTools`, so grid-tool gating is the MCP layer's job.
  */
 export function claudePermissionMode(mode?: string): string {
-  if (mode === "plan") return "bypassPermissions";
-  return mode ?? "bypassPermissions";
+  if (mode === "auto") return "default";
+  if (mode === "acceptEdits" || mode === "bypassPermissions") return mode;
+  return "bypassPermissions"; // plan + absent + anything unexpected
+}
+
+/**
+ * If a tool_result is a gtmgrid `confirmationRequired` payload carrying an
+ * `approvalRequest` (the MCP gate paused on a destructive/credit-spending op),
+ * build the `permission_request` SSE event the desktop renders as an approval
+ * card. Returns null for ordinary results. Shared by all three provider bridges
+ * so the HITL surface is identical regardless of provider.
+ */
+export function permissionEventFromToolResult(raw: string): Record<string, unknown> | null {
+  try {
+    const p = JSON.parse(raw.trim());
+    if (
+      p &&
+      typeof p === "object" &&
+      p.confirmationRequired === true &&
+      p.approvalRequest &&
+      typeof p.approvalRequest === "object"
+    ) {
+      return { type: "permission_request", ...(p.approvalRequest as Record<string, unknown>) };
+    }
+  } catch {
+    /* not JSON — no permission request */
+  }
+  return null;
+}
+
+/**
+ * If a tool_result is a gtmgrid `ask_user_question` payload, build the `ask_user`
+ * SSE event the desktop renders as answer cards (replacing the composer). Returns
+ * null for ordinary results. Shared by all three provider bridges so the
+ * AskUserQuestion surface is identical regardless of provider.
+ */
+export function questionEventFromToolResult(raw: string): Record<string, unknown> | null {
+  try {
+    const p = JSON.parse(raw.trim());
+    if (p && typeof p === "object" && p.askUserQuestion === true && Array.isArray(p.questions)) {
+      return { type: "ask_user", questions: p.questions };
+    }
+  } catch {
+    /* not JSON — no question request */
+  }
+  return null;
 }
 
 export type AgentKind = "claude" | "codex" | "hermes";
@@ -565,11 +640,31 @@ export function parseAgentCloud(raw: unknown): AgentCloud | undefined {
  * cloud data source. The token rides the ENV, not the config string, so it
  * never appears in a logged command line.
  */
-export function mcpEnv(project: string, cloud?: AgentCloud): Record<string, string> {
+/** A human-approved action, threaded into the resumed turn's MCP env (Phase 2). */
+export interface AgentApproval {
+  readonly tool: string;
+  readonly argsHash: string;
+}
+
+export function mcpEnv(
+  project: string,
+  cloud?: AgentCloud,
+  mode?: string,
+  approval?: AgentApproval,
+): Record<string, string> {
   // The sidecar's own HTTP port — lets the MCP delegate a large run to the
   // PERSISTENT server (which outlives the 5-min agent turn) instead of blocking.
   const port = process.env.GTMGRID_PORT ?? "8787";
-  if (!cloud) return { GTMGRID_PROJECT: project, GTMGRID_PORT: port };
+  // Permission mode + (on a resumed-after-approval turn) the human's approval.
+  // Setting GTMGRID_PERMISSION_MODE is what activates the MCP's mode gate; the
+  // approval vars are the model-inaccessible channel that unlocks a confirm.
+  const perm: Record<string, string> = {};
+  if (mode) perm.GTMGRID_PERMISSION_MODE = mode;
+  if (approval) {
+    perm.GTMGRID_APPROVED_TOOL = approval.tool;
+    perm.GTMGRID_APPROVED_ARGS_HASH = approval.argsHash;
+  }
+  if (!cloud) return { GTMGRID_PROJECT: project, GTMGRID_PORT: port, ...perm };
   return {
     GTMGRID_PROJECT: project,
     GTMGRID_PORT: port,
@@ -579,6 +674,7 @@ export function mcpEnv(project: string, cloud?: AgentCloud): Record<string, stri
     GTMGRID_WORKSPACE_ID: cloud.workspaceId,
     GTMGRID_CLOUD_PROJECT: cloud.projectId,
     GTMGRID_CLOUD_TABLE: cloud.tableId,
+    ...perm,
   };
 }
 
@@ -593,10 +689,12 @@ export function mcpConfig(
   project: string,
   extra?: Record<string, ExtraMcpServer>,
   cloud?: AgentCloud,
+  mode?: string,
+  approval?: AgentApproval,
 ): string {
   return JSON.stringify({
     mcpServers: {
-      gtmgrid: { command: mcpLauncher(repoRoot), env: mcpEnv(project, cloud) },
+      gtmgrid: { command: mcpLauncher(repoRoot), env: mcpEnv(project, cloud, mode, approval) },
       ...extra,
     },
   });
@@ -605,7 +703,7 @@ export function mcpConfig(
 /** Stream a Claude Code turn over SSE, driving gtmgrid via MCP. */
 export function streamClaude(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; sessionId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; mode?: string; cloud?: AgentCloud; providerEnv?: Record<string, string> },
+  opts: { message: string; project: string; repoRoot: string; sessionId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; mode?: string; cloud?: AgentCloud; providerEnv?: Record<string, string>; approval?: AgentApproval },
 ): void {
   const sse = sseClient(res, opts.origin);
   // Optionally also expose the user's Hermes agent as an MCP tool (off unless
@@ -618,7 +716,7 @@ export function streamClaude(
     "stream-json",
     "--verbose",
     "--mcp-config",
-    mcpConfig(opts.repoRoot, opts.project, hermesTool ? { hermes: hermesTool } : undefined, opts.cloud),
+    mcpConfig(opts.repoRoot, opts.project, hermesTool ? { hermes: hermesTool } : undefined, opts.cloud, opts.mode, opts.approval),
     // Use ONLY gtmgrid's MCP server (+ Hermes when enabled) — ignore the user's
     // other Claude Code MCP servers (Trigify/Clay/etc.) so the agent drives
     // gtmgrid's own tools instead of reaching for an external MCP (auth walls).
@@ -628,7 +726,7 @@ export function streamClaude(
     ...GTM_TOOLS.map((t) => `mcp__gtmgrid__${t}`),
     ...(hermesTool ? ["mcp__hermes"] : []),
   ];
-  const preamble = contextPreamble(opts.context, opts.mode);
+  const preamble = contextPreamble(opts.context, opts.mode, !!opts.cloud);
   if (preamble) args.push("--append-system-prompt", preamble);
   if (opts.model) args.push("--model", opts.model);
   // Permission posture (the composer's mode picker). Default to bypass — it
@@ -695,6 +793,15 @@ export function streamClaude(
           else if (block.type === "tool_use") {
             const short = String(block.name).replace(/^mcp__gtmgrid__/, "");
             sse.write({ type: "tool", name: short, raw: block.name, input: block.input ?? {} });
+            // Claude's NATIVE AskUserQuestion: in headless `-p` the CLI stubs the
+            // tool_result ("Answer questions?") and ends the turn, so we intercept
+            // the tool_use itself and surface the questions as answer cards. The
+            // native input shape ({questions:[{header,question,multiSelect,options}]})
+            // matches the desktop's AskRequest exactly. (Codex/Hermes have no native
+            // tool and instead call mcp__gtmgrid__ask_user_question — caught below.)
+            if (block.name === "AskUserQuestion" && Array.isArray(block.input?.questions)) {
+              sse.write({ type: "ask_user", questions: block.input.questions });
+            }
             if (block.name?.startsWith("mcp__gtmgrid__") && MUTATING.has(short)) gridDirty = true;
           }
         }
@@ -708,6 +815,10 @@ export function streamClaude(
                 ? block.content
                 : "";
             if (text) sse.write({ type: "tool_result", result: text.slice(0, 600) });
+            const pe = text ? permissionEventFromToolResult(text) : null;
+            if (pe) sse.write(pe);
+            const qe = text ? questionEventFromToolResult(text) : null;
+            if (qe) sse.write(qe);
           }
         }
       } else if (e.type === "result") {
@@ -782,11 +893,11 @@ export function codexSandboxFlags(_mode?: string): string[] {
 
 export function streamCodex(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; threadId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; mode?: string; cloud?: AgentCloud; providerEnv?: Record<string, string> },
+  opts: { message: string; project: string; repoRoot: string; threadId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; mode?: string; cloud?: AgentCloud; providerEnv?: Record<string, string>; approval?: AgentApproval },
 ): void {
   const sse = sseClient(res, opts.origin);
   const launcher = mcpLauncher(opts.repoRoot);
-  const preamble = contextPreamble(opts.context, opts.mode);
+  const preamble = contextPreamble(opts.context, opts.mode, !!opts.cloud);
   const message = preamble ? `${preamble}\n\n${opts.message}` : opts.message;
   // Optionally also expose the user's Hermes agent as an MCP tool (off unless
   // `hermesAsTool` is set in ~/.gtmgrid/agents.json).
@@ -803,7 +914,7 @@ export function streamCodex(
     // drives gtmgrid. The gtmgrid env (incl. cloud context in cloud mode) is
     // rendered as TOML with every value safely quoted — see `codexEnvToml`.
     "-c",
-    `mcp_servers={ gtmgrid = { command = "${launcher}", env = ${codexEnvToml(mcpEnv(opts.project, opts.cloud))} }${hermesToml} }`,
+    `mcp_servers={ gtmgrid = { command = "${launcher}", env = ${codexEnvToml(mcpEnv(opts.project, opts.cloud, opts.mode, opts.approval))} }${hermesToml} }`,
     ...(opts.model ? ["-m", opts.model] : []),
   ];
   // Same binding as Claude: an explicit threadId (History pick) wins, else resume
@@ -855,7 +966,14 @@ export function streamCodex(
         if (item.type === "mcp_tool_call") {
           const short = String(item.tool ?? "");
           sse.write({ type: "tool", name: short, raw: `mcp__${item.server}__${short}`, input: item.arguments ?? {} });
-          if (!item.error && item.result) sse.write({ type: "tool_result", name: short, result: resultText(item.result).slice(0, 600) });
+          if (!item.error && item.result) {
+            const rtext = resultText(item.result);
+            sse.write({ type: "tool_result", name: short, result: rtext.slice(0, 600) });
+            const pe = permissionEventFromToolResult(rtext);
+            if (pe) sse.write(pe);
+            const qe = questionEventFromToolResult(rtext);
+            if (qe) sse.write(qe);
+          }
           if (MUTATING.has(short)) sse.write({ type: "grid" });
         } else if (item.type === "agent_message" && item.text) {
           sse.write({ type: "text", text: item.text });
@@ -1004,12 +1122,22 @@ export interface HermesTransport {
 
 /** Resolve how to launch the local Hermes (ACP) and how its session reaches the
  *  gtmgrid MCP server. Returns null if there's no local `hermes` binary. */
-function resolveHermesTransport(repoRoot: string, project: string): HermesTransport | null {
+function resolveHermesTransport(
+  repoRoot: string,
+  project: string,
+  mode?: string,
+  approval?: AgentApproval,
+): HermesTransport | null {
   const bin = resolveAgentPath("hermes");
   if (!bin) return null;
+  // Hermes is local-only (no cloud), but it gets the SAME permission-mode +
+  // approval env as Claude/Codex so the MCP gate enforces the mode identically.
+  const env = Object.entries(mcpEnv(project, undefined, mode, approval)).map(
+    ([name, value]) => ({ name, value }),
+  );
   return {
     argv: [bin, "acp"],
-    gtmgridMcp: { name: "gtmgrid", command: mcpLauncher(repoRoot), args: [], env: [{ name: "GTMGRID_PROJECT", value: project }] },
+    gtmgridMcp: { name: "gtmgrid", command: mcpLauncher(repoRoot), args: [], env },
     label: "local",
   };
 }
@@ -1028,13 +1156,16 @@ function acpToolName(u: Record<string, any>): string {
   // Hermes titles MCP tools "mcp_<server>_<tool>" (and sometimes "gtmgrid: <tool>").
   return t.replace(/^mcp_[a-z0-9-]+_/i, "").replace(/^gtmgrid[:_\s]*/i, "").trim() || "tool";
 }
-function acpToolResultText(u: Record<string, any>): string {
-  if (typeof u?.rawOutput === "string" && u.rawOutput) return u.rawOutput.slice(0, 600);
+/** Full tool-result text (UNtruncated) — used for HITL payload detection, where a
+ *  600-char clip could break JSON.parse of a larger ask_user_question payload. */
+function acpToolResultTextFull(u: Record<string, any>): string {
+  if (typeof u?.rawOutput === "string" && u.rawOutput) return u.rawOutput;
   const blocks = Array.isArray(u?.content) ? u.content : [];
-  const txt = blocks
-    .map((b: any) => (typeof b?.content?.text === "string" ? b.content.text : typeof b?.text === "string" ? b.text : ""))
-    .join("");
-  return String(txt).slice(0, 600);
+  return String(
+    blocks
+      .map((b: any) => (typeof b?.content?.text === "string" ? b.content.text : typeof b?.text === "string" ? b.text : ""))
+      .join(""),
+  );
 }
 
 /** Map one ACP `session/update` payload onto SSE events. Pure; exported for tests. */
@@ -1051,7 +1182,12 @@ export function mapAcpUpdate(update: Record<string, any> | undefined | null): Ar
       break;
     case "tool_call_update":
       if (update?.status === "completed" || update?.status === "failed") {
-        out.push({ type: "tool_result", result: acpToolResultText(update) });
+        const full = acpToolResultTextFull(update);
+        out.push({ type: "tool_result", result: full.slice(0, 600) });
+        const pe = permissionEventFromToolResult(full);
+        if (pe) out.push(pe);
+        const qe = questionEventFromToolResult(full);
+        if (qe) out.push(qe);
         out.push({ type: "grid" }); // a tool finished — nudge the UI to refetch
       }
       break;
@@ -1097,15 +1233,15 @@ const defaultSpawnHermes: SpawnHermes = (cmd, args, cwd) =>
 /** Stream a Hermes turn over SSE via the Agent Client Protocol. */
 export function streamHermes(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext; origin?: string; model?: string; mode?: string },
+  opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext; origin?: string; model?: string; mode?: string; approval?: AgentApproval },
   deps: {
     spawn?: SpawnHermes;
     control?: ProcessControl;
-    resolveTransport?: (repoRoot: string, project: string) => HermesTransport | null;
+    resolveTransport?: (repoRoot: string, project: string, mode?: string, approval?: AgentApproval) => HermesTransport | null;
   } = {},
 ): void {
   const sse = sseClient(res, opts.origin);
-  const transport = (deps.resolveTransport ?? resolveHermesTransport)(opts.repoRoot, opts.project);
+  const transport = (deps.resolveTransport ?? resolveHermesTransport)(opts.repoRoot, opts.project, opts.mode, opts.approval);
   if (!transport) {
     sse.write({
       type: "error",

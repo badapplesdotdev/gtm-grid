@@ -249,6 +249,57 @@ describe("BillingService.syncPlan", () => {
   });
 });
 
+describe("BillingService.syncPlanFromWebhook", () => {
+  const runWebhookSync = (fixtures: TestLayerFixtures) =>
+    Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const svc = yield* BillingService;
+        return yield* svc.syncPlanFromWebhook(WS_ID);
+      }).pipe(Effect.provide(TestLayer(fixtures))),
+    );
+
+  it("reflects the active paid plan WITHOUT any member identity (secret-trusted webhook)", async () => {
+    // No memberships, no current user — the webhook has no session. syncPlan would
+    // reject (NotAMemberError / UnauthenticatedError); syncPlanFromWebhook must NOT.
+    const exit = await runWebhookSync({
+      workspaces,
+      users,
+      memberships: [],
+      currentUserId: null,
+      autumn: { activePlanIds: ["business"] },
+    });
+    if (!Exit.isSuccess(exit)) throw new Error("expected success");
+    expect(exit.value).toEqual({
+      id: "business",
+      name: planName("business"),
+      trialEndsAt: null,
+    });
+  });
+
+  it("REVOKES to Free (id null) when Autumn reports no active paid plan — the out-of-app cancellation path", async () => {
+    const exit = await runWebhookSync({
+      workspaces,
+      users,
+      memberships: [],
+      currentUserId: null,
+      autumn: { activePlanIds: ["free"] },
+    });
+    if (!Exit.isSuccess(exit)) throw new Error("expected success");
+    expect(exit.value).toEqual({ id: null, name: "Free", trialEndsAt: null });
+  });
+
+  it("does NOT fail with NotAMemberError for a non-member workspace id (no authz on this path)", async () => {
+    const exit = await runWebhookSync({
+      workspaces,
+      users,
+      memberships: [],
+      currentUserId: "user_stranger",
+      autumn: { activePlanIds: ["team"] },
+    });
+    expect(failureTag(exit)).toBeUndefined();
+  });
+});
+
 describe("BillingService.previewSeatChange", () => {
   const ownerMembership: readonly Membership[] = [
     { workspaceId: WS_ID, userId: "user_owner", role: "owner" },

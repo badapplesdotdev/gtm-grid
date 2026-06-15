@@ -1,5 +1,131 @@
 # @gtmgrid/web
 
+## 0.10.0
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.10.0
+- @gtmgrid/auth@0.10.0
+- @gtmgrid/cloud@0.10.0
+- @gtmgrid/db@0.10.0
+- @gtmgrid/email@0.10.0
+- @gtmgrid/engine@0.10.0
+- @gtmgrid/services@0.10.0
+
+## 0.9.24
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.24
+- @gtmgrid/cloud@0.9.24
+- @gtmgrid/db@0.9.24
+- @gtmgrid/email@0.9.24
+- @gtmgrid/engine@0.9.24
+- @gtmgrid/services@0.9.24
+
+## 0.9.23
+
+### Patch Changes
+
+- Updated dependencies [7c050a2]
+  - @gtmgrid/engine@0.9.23
+  - @gtmgrid/auth@0.9.23
+  - @gtmgrid/cloud@0.9.23
+  - @gtmgrid/db@0.9.23
+  - @gtmgrid/email@0.9.23
+  - @gtmgrid/services@0.9.23
+
+## 0.9.22
+
+### Patch Changes
+
+- Updated dependencies [d2a41c5]
+  - @gtmgrid/services@0.9.22
+  - @gtmgrid/auth@0.9.22
+  - @gtmgrid/cloud@0.9.22
+  - @gtmgrid/db@0.9.22
+  - @gtmgrid/email@0.9.22
+  - @gtmgrid/engine@0.9.22
+
+## 0.9.21
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.21
+- @gtmgrid/cloud@0.9.21
+- @gtmgrid/db@0.9.21
+- @gtmgrid/email@0.9.21
+- @gtmgrid/engine@0.9.21
+- @gtmgrid/services@0.9.21
+
+## 0.9.20
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.20
+- @gtmgrid/cloud@0.9.20
+- @gtmgrid/db@0.9.20
+- @gtmgrid/email@0.9.20
+- @gtmgrid/engine@0.9.20
+- @gtmgrid/services@0.9.20
+
+## 0.9.19
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.19
+- @gtmgrid/cloud@0.9.19
+- @gtmgrid/db@0.9.19
+- @gtmgrid/email@0.9.19
+- @gtmgrid/engine@0.9.19
+- @gtmgrid/services@0.9.19
+
+## 0.9.18
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.18
+- @gtmgrid/cloud@0.9.18
+- @gtmgrid/db@0.9.18
+- @gtmgrid/email@0.9.18
+- @gtmgrid/engine@0.9.18
+- @gtmgrid/services@0.9.18
+
+## 0.9.17
+
+### Patch Changes
+
+- @gtmgrid/auth@0.9.17
+- @gtmgrid/cloud@0.9.17
+- @gtmgrid/db@0.9.17
+- @gtmgrid/email@0.9.17
+- @gtmgrid/engine@0.9.17
+- @gtmgrid/services@0.9.17
+
+## 0.9.16
+
+### Patch Changes
+
+- Updated dependencies [9f01681]
+  - @gtmgrid/services@0.9.16
+  - @gtmgrid/auth@0.9.16
+  - @gtmgrid/cloud@0.9.16
+  - @gtmgrid/db@0.9.16
+  - @gtmgrid/email@0.9.16
+  - @gtmgrid/engine@0.9.16
+
+## 0.9.15
+
+### Patch Changes
+
+- Updated dependencies [be203b9]
+  - @gtmgrid/services@0.9.15
+  - @gtmgrid/auth@0.9.15
+  - @gtmgrid/cloud@0.9.15
+  - @gtmgrid/db@0.9.15
+  - @gtmgrid/email@0.9.15
+  - @gtmgrid/engine@0.9.15
+
 ## 0.9.14
 
 ### Patch Changes

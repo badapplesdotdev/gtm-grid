@@ -86,6 +86,12 @@ export interface CloudTableSummary {
   readonly createdAt: number;
   /** Sidebar folder this table is filed under (null = root). */
   readonly folderId: string | null;
+  /**
+   * The table's row count, surfaced by `grid.listTables` so the sidebar / Tables
+   * page shows a real count for cloud tables (not "—"). `null` when the server
+   * did not report a count (older API), so the UI falls back to the dash.
+   */
+  readonly rows: number | null;
 }
 
 /** A cloud sidebar folder (the `listFolders` query shape). */
@@ -212,6 +218,7 @@ export function useCloudTables(
         position: t.position,
         createdAt: t.createdAt,
         folderId: t.folderId ?? null,
+        rows: t.rows ?? null,
       })),
     [q.data],
   );
@@ -1150,8 +1157,13 @@ export function useCloudGridMutations() {
   // with server truth. Reuses the same pure reducers the realtime path uses.
   const applyOptimistic = useCallback(
     (tableId: string, event: Parameters<typeof patchGridCache>[1]) => {
+      // The unpaged snapshot is usually ABSENT (the grid loads paged) — an
+      // undefined cache entry must stay undefined, not be patched into being
+      // (and the reducer must never see undefined.columns).
       qc.setQueryData(gridQueryKeys.table(tableId), (prev) =>
-        patchGridCache(prev as Parameters<typeof patchGridCache>[0], event),
+        prev == null
+          ? prev
+          : patchGridCache(prev as Parameters<typeof patchGridCache>[0], event),
       );
       qc.setQueryData<{ pages: GridPage[]; pageParams: unknown[] }>(
         gridQueryKeys.tablePaged(tableId),

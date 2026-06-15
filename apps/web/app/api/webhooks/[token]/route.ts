@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { inngest } from "../../../../lib/inngest/client";
+import { captureServer } from "../../../../lib/posthog-server";
+import { clientIp, rateLimit } from "../../../../lib/rate-limit";
 import { resolveSiteUrl } from "../../../../lib/site-url";
 import { applyMapping, type MappingEntry } from "../../../../lib/webhook-mapping";
 import { signatureCheckPasses } from "../../../../lib/webhook-signature";
@@ -43,10 +45,10 @@ interface ResolvedWebhook {
   readonly upsertKey: string | null;
 }
 
-const json = (body: unknown, status: number): Response =>
+const json = (body: unknown, status: number, extraHeaders?: Record<string, string>): Response =>
   new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...extraHeaders },
   });
 
 /** Resolve the base URL of the apps/web deployment serving the worker endpoints
@@ -125,6 +127,14 @@ export async function POST(
 ): Promise<Response> {
   const { token } = await params;
 
+  // Rate limit the public ingress per token+IP BEFORE any work (token resolve,
+  // body read, enqueue) so abuse/floods are cheap to reject. 120 posts / 60s is
+  // generous for legitimate webhook senders.
+  const limit = rateLimit(`webhook:${token}:${clientIp(req)}`, 120, 60_000);
+  if (!limit.ok) {
+    return json({ error: "Too many requests" }, 429, { "Retry-After": String(limit.retryAfter) });
+  }
+
   // Read the RAW body once — HMAC is computed over the exact bytes received.
   const rawBody = await req.text();
 
@@ -167,6 +177,18 @@ export async function POST(
       upsertKey: webhook.upsertKey,
       recordId,
     },
+  });
+
+  captureServer("webhook_received", {
+    distinctId: webhook.workspaceId,
+    properties: {
+      webhook_id: webhook.webhookId,
+      workspace_id: webhook.workspaceId,
+      table_id: webhook.tableId,
+      auto_run: webhook.autoRun,
+      mode: webhook.mode,
+    },
+    groups: { workspace: webhook.workspaceId },
   });
 
   return json({ accepted: true, recordId }, 202);

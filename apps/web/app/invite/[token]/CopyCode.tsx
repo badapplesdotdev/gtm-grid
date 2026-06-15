@@ -15,6 +15,7 @@
  */
 
 import { useState } from "react";
+import posthog from "posthog-js";
 
 export function CopyCode({ code }: { code: string }) {
   const [copied, setCopied] = useState(false);
@@ -24,6 +25,7 @@ export function CopyCode({ code }: { code: string }) {
       await navigator.clipboard.writeText(code);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1800);
+      posthog.capture("invite_code_copied");
     } catch {
       // Clipboard API blocked (insecure context / permissions): leave the code
       // visible so it can still be selected and copied by hand.

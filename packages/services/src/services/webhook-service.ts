@@ -122,9 +122,40 @@ export interface WorkerTableMeta {
 
 /** The grid payload `getTable` returns to the worker. */
 export interface WorkerGrid {
-  readonly table: { readonly id: string; readonly workspaceId: string };
-  readonly columns: readonly { readonly id: string }[];
-  readonly rows: readonly { readonly id: string; readonly position: number }[];
+  readonly table: {
+    readonly _id: string;
+    readonly id: string;
+    readonly workspaceId: string;
+  };
+  /**
+   * FULL Convex-doc-shaped column projection. The engine's cloud store
+   * (packages/engine/src/store-cloud.ts `ConvexColumnDoc`), the MCP cloud
+   * source, and the Inngest enricher all key on `_id` and read
+   * name/kind/code/params — a narrower projection silently breaks every cloud
+   * column run. `id` is carried alongside for legacy worker-grid readers.
+   */
+  readonly columns: readonly {
+    readonly _id: string;
+    readonly id: string;
+    readonly tableId: string;
+    readonly name: string;
+    readonly type: string;
+    readonly kind: string;
+    readonly provider: string | null;
+    readonly method: string | null;
+    readonly code: string | null;
+    readonly params: Record<string, unknown>;
+    readonly condition: string | null;
+    readonly position: number;
+    readonly createdAt: number;
+  }[];
+  readonly rows: readonly {
+    readonly _id: string;
+    readonly id: string;
+    readonly tableId: string;
+    readonly position: number;
+    readonly createdAt: number;
+  }[];
   readonly cells: readonly {
     readonly id: string;
     readonly rowId: string;
@@ -794,14 +825,46 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           }
           yield* assertMemberIfIdentified(table.value.workspaceId);
           const [columns, rows, cells] = [
-            yield* repo.listColumns(tableId),
+            // FULL column projection via ColumnRepo: the engine's cloud store,
+            // the MCP cloud source, and the Inngest enricher all consume this
+            // payload as Convex-shaped docs (`_id`, name, kind, code, params…).
+            // The previous {id}-only projection made every cloud column run
+            // fail closed (column lookup by `_id` never matched) and left the
+            // enricher seeing zero function columns.
+            yield* columnRepo.listByTable(tableId),
             yield* repo.listRows(tableId),
             yield* repo.listCellsByTable(tableId),
           ];
           return {
-            table: { id: table.value.id, workspaceId: table.value.workspaceId },
-            columns: columns.map((c) => ({ id: c.id })),
-            rows: rows.map((r) => ({ id: r.id, position: r.position })),
+            table: {
+              _id: table.value.id,
+              id: table.value.id,
+              workspaceId: table.value.workspaceId,
+            },
+            // Both `_id` (engine/MCP/Inngest doc shape) and `id` (legacy
+            // worker-grid consumers) — additive, never breaking either reader.
+            columns: columns.map((c) => ({
+              _id: c.id,
+              id: c.id,
+              tableId: c.tableId,
+              name: c.name,
+              type: c.type,
+              kind: c.kind,
+              provider: c.provider,
+              method: c.method,
+              code: c.code,
+              params: (c.params ?? {}) as Record<string, unknown>,
+              condition: c.condition,
+              position: c.position,
+              createdAt: c.createdAt,
+            })),
+            rows: rows.map((r) => ({
+              _id: r.id,
+              id: r.id,
+              tableId: r.tableId,
+              position: r.position,
+              createdAt: r.createdAt ?? 0,
+            })),
             cells,
           } satisfies WorkerGrid;
         });

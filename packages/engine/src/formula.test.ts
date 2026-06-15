@@ -211,7 +211,7 @@ describe("Engine.runColumn — formula + conditional gate (temp SQLite DB)", () 
     const engine = new Engine(db, {}, spyRegistry());
     const res = await engine.runColumn(out.id);
 
-    expect(res).toEqual({ ran: 0, errors: 1 });
+    expect(res).toMatchObject({ ran: 0, errors: 1 });
     expect(dispatched).toHaveLength(0);
     const cell = db.getCell(row.id, out.id);
     expect(cell?.status).toBe("error");

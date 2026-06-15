@@ -1,6 +1,7 @@
 {
   "files": [],
   "references": [
+    { "path": "./packages/analytics" },
     { "path": "./packages/cloud" },
     { "path": "./packages/db" },
     { "path": "./packages/services" },

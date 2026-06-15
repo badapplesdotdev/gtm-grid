@@ -828,6 +828,41 @@ describe("WebhookService.getCredential", () => {
 // and `assertMemberIfIdentified` rejects a non-member (→ 403); on the HEADLESS
 // worker-secret path there is no identity, so the assertion is skipped (the
 // inngest worker keeps working). `currentUserId: null` models the headless caller.
+describe("WebhookService.getTable — the engine/MCP/Inngest grid payload", () => {
+  it("ships FULL Convex-doc-shaped columns (_id + name/kind/code/params) and rows", async () => {
+    // REGRESSION (cloud runs dead on the Postgres tier): the engine cloud
+    // store finds the run column via `grid.columns.find(c => c._id === id)`,
+    // the MCP resolves columns by `name`, and the Inngest enricher filters
+    // `kind === "function"`. A {id}-only projection silently broke ALL three.
+    const extractCol: StoreColumn = {
+      id: "col-extract", workspaceId: WS, tableId: TABLE, name: "Author URL",
+      type: "text", kind: "function", provider: null, method: null,
+      code: "function(inputs){ return inputs.src; }",
+      params: { src: "{{Webhook}}" }, position: 1, createdAt: 5,
+    };
+    const rows: GridRow[] = [{ id: "row-1", tableId: TABLE, position: 0, createdAt: 7 }];
+    const { run } = harness({ rows, cells: [], gridColumns: [extractCol] });
+    const exit = await run(svc.pipe(Effect.flatMap((s) => s.getTable(TABLE))));
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.table).toEqual({ _id: TABLE, id: TABLE, workspaceId: WS });
+      expect(exit.value.columns[0]).toMatchObject({
+        _id: "col-extract",
+        id: "col-extract",
+        name: "Author URL",
+        kind: "function",
+        code: "function(inputs){ return inputs.src; }",
+        params: { src: "{{Webhook}}" },
+        position: 1,
+        createdAt: 5,
+      });
+      expect(exit.value.rows[0]).toEqual({
+        _id: "row-1", id: "row-1", tableId: TABLE, position: 0, createdAt: 7,
+      });
+    }
+  });
+});
+
 describe("WebhookService worker paths — member-auth gate", () => {
   it("getTable rejects a non-member of the table's workspace", async () => {
     const { run } = harness({ rows: [], cells: [], currentUserId: "stranger" });

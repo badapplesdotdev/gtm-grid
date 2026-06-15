@@ -4,6 +4,7 @@
 // and newly-created columns are immediately on screen.
 
 import { useMemo, useState } from "react";
+import { Sheet, SheetContent } from "./components/ui/sheet";
 
 /** Compact relative timestamp, e.g. "2m ago". */
 function agoLabel(ts: number): string {
@@ -133,7 +134,8 @@ export default function CellDetails({
   };
 
   return (
-    <aside className="cell-details">
+    <Sheet open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <SheetContent className="cell-details" srTitle="Cell details">
       <div className="cd-header">
         <span className="cd-title">⚡ Cell details</span>
         <div className="cd-header-actions">
@@ -224,7 +226,8 @@ export default function CellDetails({
       <div className="cd-footer">
         from <strong>{source.columnName}</strong> · {fields.length} fields
       </div>
-    </aside>
+      </SheetContent>
+    </Sheet>
   );
 }
 

@@ -40,10 +40,23 @@ export const aiConnector: Connector = {
       run: async (raw: Record<string, unknown>, ctx: MethodContext) => {
         const input = generateInput.parse(raw);
         const all = ctx.aiProviders?.length ? ctx.aiProviders : ctx.ai ? [ctx.ai] : [];
-        if (all.length === 0)
+        if (all.length === 0) {
+          // No BYO key — fall back to the user's already-authenticated coding
+          // agent (Claude Code / Codex) so AI columns work off the model they're
+          // already using. If no agent is available either, the original error
+          // tells them to connect a key.
+          if (ctx.aiFallback) {
+            const text = await ctx.aiFallback({
+              prompt: input.prompt,
+              system: input.system,
+              model: input.model,
+            });
+            return { text };
+          }
           throw new Error(
             "No AI provider connected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY.",
           );
+        }
         const wantModel = input.model?.trim();
         // Route to the provider that owns the requested model. An explicit
         // `provider` wins; otherwise infer from the model id. Order preserves the
