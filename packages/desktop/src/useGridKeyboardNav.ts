@@ -122,6 +122,17 @@ export function useGridKeyboardNav({
         return;
       }
       if (rowCount === 0 || colCount === 0) return;
+      const NAV_KEYS = new Set([
+        "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+        "Home", "End", "PageUp", "PageDown", "Enter", "F2",
+      ]);
+      // First nav/edit key with nothing selected lands on the top-left cell
+      // (spreadsheet convention) rather than jumping past it.
+      if (active === null && NAV_KEYS.has(e.key)) {
+        e.preventDefault();
+        moveTo(0, 0);
+        return;
+      }
       const cur: ActiveCell = active ?? { row: 0, col: 0 };
       const pageRows = Math.max(
         1,
