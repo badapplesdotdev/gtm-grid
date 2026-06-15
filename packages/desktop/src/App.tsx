@@ -90,6 +90,7 @@ import type { TableCard } from "./Panels";
 import type { ImportWriter } from "./csvImport";
 import type { Id } from "./cloud/ids";
 import { DataGrid } from "./DataGrid";
+import { buildColumnMetaMap } from "./FnIcon";
 import { resolveRowHeight } from "./gridVirtual";
 import "./styles.css";
 
@@ -131,9 +132,7 @@ const AddColumnPopover = lazy(() =>
 const FunctionsModal = lazy(() =>
   import("./AddColumn").then((m) => ({ default: m.FunctionsModal })),
 );
-const ColumnSettingsModal = lazy(() =>
-  import("./AddColumn").then((m) => ({ default: m.ColumnSettingsModal })),
-);
+const ColumnEditPanel = lazy(() => import("./ColumnEditPanel"));
 const SignalsModal = lazy(() =>
   import("./SignalsModal").then((m) => ({ default: m.SignalsModal })),
 );
@@ -449,6 +448,9 @@ type CellContentProps = {
   onExpand?: (anchor: { left: number; top: number; width: number }) => void;
   onRunCell?: () => void;
   running?: boolean;
+  /** The column has unmet required inputs / broken {{Refs}} — empty cells
+   *  render "waiting for inputs" instead of a dash. */
+  waiting?: boolean;
   /** Notifies the grid when this cell enters/leaves edit mode (presence). */
   onEditingChange?: (editing: boolean) => void;
   /** Keyboard nav: whether this is the grid's active (roving-tabindex) cell. */
@@ -459,7 +461,7 @@ type CellContentProps = {
   editSeed?: string;
 };
 
-function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running, onEditingChange, isActive, editSignal, editSeed }: CellContentProps) {
+function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running, waiting, onEditingChange, isActive, editSignal, editSeed }: CellContentProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -575,17 +577,31 @@ function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCel
   }
 
   if (!cell || cell.status === "empty" || cell.status === "pending") {
-    // A row gated off by the column's run condition carries a note on an empty cell —
-    // surface it ("Condition not met") so it's clear why the cell is blank.
+    // A row gated off by the column's run condition carries a note on an empty
+    // cell — render the note itself ("Run condition not met") as a neutral pill.
     if (cell?.status === "empty" && cell.error) {
       return (
         <div className="cell-wrap" title={cell.error}>
           {runBtn}
-          <span className="cell-skipped">{cell.error}</span>
+          <span className="cell-skipped">⊘ {cell.error}</span>
         </div>
       );
     }
+    // Queued: the run has claimed this cell but hasn't reached it yet.
+    if (cell?.status === "pending") {
+      return <div className="cell-wrap">{runBtn}<span className="cell-queued">queued</span></div>;
+    }
     if (col.kind === "function") {
+      // Column-level "waiting for inputs": a required mapping is unset or
+      // points at a deleted column — running now would fail, so say why.
+      if (waiting) {
+        return (
+          <div className="cell-wrap" title="A required input is unmapped or references a missing column — edit the column to fix its mapping">
+            {runBtn}
+            <span className="cell-waiting">waiting for inputs</span>
+          </div>
+        );
+      }
       return <div className="cell-wrap">{runBtn}<span className="cell-empty">—</span></div>;
     }
     return <div className="cell-wrap cell-editable" onClick={() => startEdit()}><span className="cell-empty">empty</span></div>;
@@ -678,6 +694,7 @@ function cellPropsEqual(prev: CellContentProps, next: CellContentProps): boolean
   return (
     prev.col === next.col &&
     prev.running === next.running &&
+    prev.waiting === next.waiting &&
     prev.cell?.value === next.cell?.value &&
     prev.cell?.status === next.cell?.status &&
     prev.cell?.error === next.cell?.error &&
@@ -1688,7 +1705,12 @@ export default function App() {
   }, []);
 
   // Cell details drawer + column widths (resize)
-  const [detail, setDetail] = useState<{ columnName: string; value: unknown } | null>(null);
+  const [detail, setDetail] = useState<{
+    columnName: string;
+    value: unknown;
+    /** Run metadata + ids for the raw-response fetch (function cells only). */
+    meta?: { rowId: string; colId: string; fn: string | null; ranAt?: number | null; runMs?: number | null } | null;
+  } | null>(null);
   const [expandCell, setExpandCell] = useState<
     { rowId: string; colId: string; columnName: string; value: string; editable: boolean; anchor: { left: number; top: number; width: number } } | null
   >(null);
@@ -2973,18 +2995,56 @@ export default function App() {
 
   // ── Run single column ──────────────────────
 
-  const runColumn = async (colId: string) => {
+  const runColumn = async (colId: string, opts?: { force?: boolean; rowIds?: string[] }) => {
     const tableId = selectedTableId;
     if (!tableId) return;
     setRunningColId(colId);
     // Patch cells in place as the sidecar streams per-cell progress (SSE),
     // instead of refetching+replacing the whole grid after the run.
     try {
-      await api.runColumnStream(colId, (e) => patchCell(tableId, e));
-      await cascadeDependents(tableId, [colId]);
+      await api.runColumnStream(colId, (e) => patchCell(tableId, e), opts);
+      // Cascade keeps the triggering run's ROW scope but never its force —
+      // dependents fill empty cells only, so done cells are never re-billed.
+      await cascadeDependents(tableId, [colId], opts?.rowIds ? { rowIds: opts.rowIds } : {});
     } catch { /* ignore */ }
     setRunningColId(null);
   };
+
+  // ── Run an explicit set of function cells (range selection's "Run N cells") ──
+  // Grouped per column into ONE scoped run each (force + the selected rowIds),
+  // honouring inter-column {{dependencies}} like Run all / Run row do.
+  const runCells = async (cells: Array<{ rowId: string; colId: string }>) => {
+    if (!tableData) return;
+    const tableId = tableData.id;
+    const byCol = new Map<string, string[]>();
+    for (const { rowId, colId } of cells) {
+      const list = byCol.get(colId) ?? [];
+      list.push(rowId);
+      byCol.set(colId, list);
+    }
+    const fnCols = tableData.columns.filter((c) => c.kind === "function" && byCol.has(c.id));
+    if (!fnCols.length) return;
+    const keys = cells.map(({ rowId, colId }) => `${rowId}:${colId}`);
+    setRunningCells((s) => { const n = new Set(s); for (const k of keys) n.add(k); return n; });
+    try {
+      const deps = buildColumnDeps(fnCols);
+      await runColumnsWithDeps(fnCols, deps, RUN_ALL_CONCURRENCY, async (col) => {
+        const rowIds = byCol.get(col.id)!;
+        try {
+          await api.runColumnStream(col.id, (e) => patchCell(tableId, e), { force: true, rowIds });
+        } finally {
+          setRunningCells((s) => {
+            const n = new Set(s);
+            for (const rowId of rowIds) n.delete(`${rowId}:${col.id}`);
+            return n;
+          });
+        }
+      });
+    } finally {
+      setRunningCells((s) => { const n = new Set(s); for (const k of keys) n.delete(k); return n; });
+    }
+  };
+
 
   // ── Run a single cell (this row × this function column) ──
   const runCell = async (rowId: string, colId: string) => {
@@ -3000,24 +3060,6 @@ export default function App() {
       await cascadeDependents(tableId, [colId], { force: true, rowIds: [rowId] });
     } catch { /* ignore */ }
     setRunningCells(s => { const n = new Set(s); n.delete(key); return n; });
-  };
-
-  // ── Column added (from Add-column / Functions) ──
-  // A newly added mapped/formula column whose inputs already have values should
-  // populate immediately — it's free. A new billed enrichment auto-runs only when
-  // Auto-run is on; otherwise it waits for the user to hit play. Manual columns
-  // (and any non-eligible column) just refresh the grid.
-  const onColumnAdded = async (tableId: string, newColId?: string) => {
-    await loadTable(tableId);
-    if (!newColId) return;
-    const col = (await api.table(tableId).catch(() => null))?.columns.find((c) => c.id === newColId);
-    if (!col || !cascadeEligible(col)) return;
-    setRunningColId(newColId);
-    try {
-      await api.runColumnStream(newColId, (e) => patchCell(tableId, e));
-      await cascadeDependents(tableId, [newColId]);
-    } catch { /* ignore */ }
-    setRunningColId(null);
   };
 
   // ── Add row ────────────────────────────────
@@ -3062,6 +3104,30 @@ export default function App() {
     });
     await api.runColumn(targetId).catch(() => {});
     await loadTable(selectedTableId);
+  };
+
+  // ── Rename / duplicate a column (header context menu) ──
+
+  const renameColumn = async (colId: string, name: string) => {
+    await api.updateColumn(colId, { name }).catch(() => {});
+    reloadCurrent();
+    if (selectedTableId) scheduleAutoPush(selectedTableId);
+  };
+
+  const duplicateColumn = async (col: Column) => {
+    if (!selectedTableId) return;
+    const body: Parameters<typeof api.addColumn>[1] = {
+      name: uniqueColName(`${col.name} copy`),
+      type: col.type,
+      params: col.params,
+      condition: col.condition ?? null,
+    };
+    // The server synthesizes fn === "code" for custom-code columns — those
+    // round-trip via `code`, everything else via the real `provider.method`.
+    if (col.fn === "code") body.code = col.code ?? undefined;
+    else if (col.fn) body.fn = col.fn;
+    await api.addColumn(selectedTableId, body).catch(() => {});
+    reloadCurrent();
   };
 
   // ── Column resize (drag the header edge) ──
@@ -3138,6 +3204,42 @@ export default function App() {
   // ─────────────────────────────────────────
 
   const fnColCount = tableData?.columns.filter(c => c.kind === "function").length ?? 0;
+
+  // "provider.method" → presentation metadata (logo, labels, credits) for the
+  // grid headers; rebuilt only when the connector catalog changes.
+  const fnColumnMeta = useMemo(() => buildColumnMetaMap(connectors), [connectors]);
+
+  // model id → AI provider identity (Anthropic, OpenAI, Hermes, OpenRouter…),
+  // so an ai.generate column wears the logo of the model it actually calls.
+  const aiModelMeta = useMemo(() => {
+    const m = new Map<string, { providerName: string; logo: string | null }>();
+    for (const p of aiProviders) {
+      for (const model of p.models) if (!m.has(model)) m.set(model, { providerName: p.name, logo: p.logo });
+    }
+    return m;
+  }, [aiProviders]);
+
+  const columnMeta = useCallback(
+    (col: Column) => {
+      const base = col.fn ? fnColumnMeta.get(col.fn) ?? null : null;
+      if (col.provider === "ai") {
+        const model = typeof col.params?.model === "string" ? col.params.model : "";
+        const mp = model ? aiModelMeta.get(model) : undefined;
+        if (mp) {
+          return {
+            providerName: mp.providerName,
+            logo: mp.logo,
+            methodLabel: model,
+            category: "AI",
+            credits: base?.credits,
+            requiredInputs: base?.requiredInputs,
+          };
+        }
+      }
+      return base;
+    },
+    [fnColumnMeta, aiModelMeta],
+  );
 
   // ── Cloud sign-in welcome (dismissable to local) ─────────────
   // When cloud is configured, first launch shows the sign-in/onboarding screen —
@@ -3877,23 +3979,35 @@ export default function App() {
                     {tableData.dedupe && <span className="dedupe-on-dot" title="Auto-dedupe is on" />}
                   </button>
                 ),
+                columnMeta,
                 addRow,
                 runAll,
                 runRows,
                 runColumn,
                 runCell,
+                runCells,
                 setCell,
                 deleteRow,
                 deleteColumn,
                 clearCell,
-                editColumn: (col) => setEditCol(col),
+                // One right rail at a time: the edit panel and the cell-details
+                // drawer overlap, so opening one closes the other.
+                editColumn: (col) => { setDetail(null); setEditCol(col); },
+                renameColumn,
+                duplicateColumn,
                 openAddColumn: (anchor) => { setAddColAnchor(anchor); setShowAddCol(true); },
                 resizeColumn: startResize,
-                openCellDetails: (col, cell) =>
+                openCellDetails: (col, cell, rowId) => {
+                  setEditCol(null);
                   setDetail({
                     columnName: col.name,
                     value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
-                  }),
+                    meta:
+                      col.kind === "function" && rowId
+                        ? { rowId, colId: col.id, fn: col.fn, ranAt: cell?.ranAt, runMs: cell?.runMs }
+                        : null,
+                  });
+                },
                 expandCell: (a) => setExpandCell(a),
               }}
               bodyOverride={
@@ -3928,6 +4042,12 @@ export default function App() {
           onClose={() => setDetail(null)}
           onCreate={promoteCreate}
           onMapTo={promoteMap}
+          meta={detail.meta}
+          fetchRaw={
+            detail.meta
+              ? () => api.cell(detail.meta!.rowId, detail.meta!.colId).then((c) => c.raw)
+              : undefined
+          }
         />
       )}
 
@@ -4041,9 +4161,18 @@ export default function App() {
           <FunctionsModal
             tableId={tableData.id}
             connectors={connectors}
-            columns={tableData.columns.map((c) => c.name)}
             onClose={() => setShowFunctions(false)}
-            onAdded={(newColId) => onColumnAdded(tableData.id, newColId)}
+            onAdded={(col) => {
+              void loadTable(tableData.id);
+              // Clay flow: the column was just added — configure it in the rail.
+              // (Columns are created with EMPTY params here, so the auto-run-
+              // free-column behaviour doesn't apply — the run happens via the
+              // panel's Save & run once inputs are mapped.)
+              if (col) {
+                setDetail(null);
+                setEditCol(col);
+              }
+            }}
             onOpenAiSettings={() => {
               setShowFunctions(false);
               const target = aiProviders[0]?.id ?? "anthropic";
@@ -4055,12 +4184,18 @@ export default function App() {
 
       {editCol && tableData && (
         <Suspense fallback={<PanelFallback />}>
-          <ColumnSettingsModal
+          <ColumnEditPanel
             column={editCol}
-            columns={tableData.columns.map((c) => c.name)}
+            columns={tableData.columns.map((c) => ({ id: c.id, name: c.name, type: c.type }))}
+            connectors={connectors}
             tableId={tableData.id}
+            rows={tableData.rows}
             onClose={() => setEditCol(null)}
-            onSaved={() => loadTable(tableData.id)}
+            onSaved={(run) => {
+              void loadTable(tableData.id);
+              if (run) void runColumn(editCol.id, run);
+            }}
+            onOpenExtension={(id) => setView({ kind: "extension", id })}
           />
         </Suspense>
       )}

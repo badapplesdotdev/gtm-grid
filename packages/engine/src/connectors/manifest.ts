@@ -9,6 +9,11 @@ const methodSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9_]+$/, "method id must be alphanumeric/underscore"),
   label: z.string().optional(),
   description: z.string(),
+  /** Functions-gallery category for THIS method (e.g. "Enrich people",
+   *  "Find email", "Signals"). A connector's methods span many use cases, so
+   *  the category is per-method, not per-connector. Omitted/unknown → the
+   *  method is listed under "All" only. */
+  category: z.string().optional(),
   verb: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
   path: z.string(),
   /** JSON Schema for inputs (object). Surfaced to agents + UI as-is. */
@@ -229,6 +234,7 @@ export function connectorFromManifest(man: ExtensionManifest): Connector {
     id: m.id,
     label: m.label ?? m.id,
     description: m.description,
+    category: m.category,
     inputSchema: m.input ?? { type: "object", properties: {} },
     batchSize: m.batchSize ?? 1,
     credits: m.credits ?? 1,

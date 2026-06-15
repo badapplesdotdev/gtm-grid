@@ -6,7 +6,11 @@
   "description": "Find verified work emails and phone numbers from names, domains or LinkedIn URLs.",
   "baseUrl": "https://app.findymail.com/api",
   "logo": "https://www.google.com/s2/favicons?domain=findymail.com&sz=128",
-  "auth": { "type": "apiKey", "header": "Authorization", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "Authorization",
+    "secretKey": "apiKey"
+  },
   "methods": [
     {
       "id": "findFromName",
@@ -17,12 +21,22 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["name", "domain"],
+        "required": [
+          "name",
+          "domain"
+        ],
         "properties": {
-          "name": { "type": "string", "description": "Full name, e.g. 'Jane Doe'" },
-          "domain": { "type": "string", "description": "Company domain, e.g. 'acme.com'" }
+          "name": {
+            "type": "string",
+            "description": "Full name, e.g. 'Jane Doe'"
+          },
+          "domain": {
+            "type": "string",
+            "description": "Company domain, e.g. 'acme.com'"
+          }
         }
-      }
+      },
+      "category": "Find email"
     },
     {
       "id": "findFromLinkedin",
@@ -33,11 +47,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["linkedin_url"],
+        "required": [
+          "linkedin_url"
+        ],
         "properties": {
-          "linkedin_url": { "type": "string", "description": "Full LinkedIn profile URL" }
+          "linkedin_url": {
+            "type": "string",
+            "description": "Full LinkedIn profile URL"
+          }
         }
-      }
+      },
+      "category": "Find email"
     },
     {
       "id": "findPhone",
@@ -48,11 +68,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["linkedin_url"],
+        "required": [
+          "linkedin_url"
+        ],
         "properties": {
-          "linkedin_url": { "type": "string", "description": "Full LinkedIn profile URL" }
+          "linkedin_url": {
+            "type": "string",
+            "description": "Full LinkedIn profile URL"
+          }
         }
-      }
+      },
+      "category": "Find phone"
     },
     {
       "id": "reverseEmail",
@@ -63,9 +89,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["email"],
-        "properties": { "email": { "type": "string", "description": "Email to look up" } }
-      }
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email to look up"
+          }
+        }
+      },
+      "category": "Enrich people"
     },
     {
       "id": "verify",
@@ -76,9 +110,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["email"],
-        "properties": { "email": { "type": "string", "description": "Email to verify" } }
-      }
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email to verify"
+          }
+        }
+      },
+      "category": "Verify email"
     },
     {
       "id": "credits",
@@ -87,7 +129,10 @@
       "verb": "GET",
       "path": "/credits",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     }
   ]
 }

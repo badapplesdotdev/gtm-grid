@@ -16,6 +16,7 @@ export const githubConnector = defineHttpConnector({
     {
       id: "getUser",
       label: "Get GitHub User",
+      category: "Enrich people",
       description:
         "Fetch a public GitHub user profile by username. Returns login, name, company, bio, blog, location, followers, and public_repos.",
       verb: "GET",

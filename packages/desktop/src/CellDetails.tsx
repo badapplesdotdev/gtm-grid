@@ -4,8 +4,19 @@
 // and newly-created columns are immediately on screen.
 
 import { useMemo, useState } from "react";
-
 import { Sheet, SheetContent } from "./components/ui/sheet";
+
+/** Compact relative timestamp, e.g. "2m ago". */
+function agoLabel(ts: number): string {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+function durationLabel(ms: number): string {
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
 
 interface FlatField {
   path: string[];
@@ -46,6 +57,8 @@ export default function CellDetails({
   onClose,
   onCreate,
   onMapTo,
+  meta,
+  fetchRaw,
 }: {
   source: { columnName: string; value: unknown };
   columns: { id: string; name: string }[];
@@ -57,12 +70,33 @@ export default function CellDetails({
    */
   onCreate?: (path: string[], label: string) => Promise<void> | void;
   onMapTo?: (path: string[], targetId: string) => Promise<void> | void;
+  /** Run metadata for the cell ("what happened, when") — local function cells. */
+  meta?: { fn?: string | null; ranAt?: number | null; runMs?: number | null } | null;
+  /** Lazily fetch the archived raw pre-simplify response (local only). */
+  fetchRaw?: () => Promise<unknown>;
 }) {
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<number | null>(null);
   const [draftName, setDraftName] = useState("");
   const [busy, setBusy] = useState(false);
   const [doneMsg, setDoneMsg] = useState<string | null>(null);
+  // Raw tab: undefined = not fetched, null = fetched-and-absent, else the archive.
+  const [tab, setTab] = useState<"fields" | "raw">("fields");
+  const [raw, setRaw] = useState<unknown>(undefined);
+  const [rawBusy, setRawBusy] = useState(false);
+
+  const openRaw = async () => {
+    setTab("raw");
+    if (raw !== undefined || !fetchRaw) return;
+    setRawBusy(true);
+    try {
+      setRaw((await fetchRaw()) ?? null);
+    } catch {
+      setRaw(null);
+    } finally {
+      setRawBusy(false);
+    }
+  };
 
   const fields = useMemo(() => flatten(source.value), [source.value]);
   const visible = fields
@@ -110,6 +144,35 @@ export default function CellDetails({
         </div>
       </div>
 
+      {/* Run metadata strip — when, how long, which tool produced this cell. */}
+      {meta?.ranAt != null && (
+        <div className="cd-meta" title={new Date(meta.ranAt).toLocaleString()}>
+          Ran {agoLabel(meta.ranAt)}
+          {meta.runMs != null && <> · {durationLabel(meta.runMs)}</>}
+          {meta.fn && <> · <code>{meta.fn}</code></>}
+        </div>
+      )}
+
+      {fetchRaw && (
+        <div className="cd-tabs">
+          <button className={`cd-tab${tab === "fields" ? " active" : ""}`} onClick={() => setTab("fields")}>Fields</button>
+          <button className={`cd-tab${tab === "raw" ? " active" : ""}`} onClick={() => void openRaw()}>Raw response</button>
+        </div>
+      )}
+
+      {tab === "raw" ? (
+        <div className="cd-body">
+          {rawBusy ? (
+            <div className="cd-raw-empty">Loading…</div>
+          ) : raw == null ? (
+            <div className="cd-raw-empty">
+              No separate raw response archived — the stored value IS the full response.
+            </div>
+          ) : (
+            <pre className="cd-raw"><code>{typeof raw === "string" ? raw : JSON.stringify(raw, null, 2)}</code></pre>
+          )}
+        </div>
+      ) : (
       <div className="cd-body">
         <div className="cd-search">
           <input placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false} />
@@ -158,6 +221,7 @@ export default function CellDetails({
           ))}
         </div>
       </div>
+      )}
 
       <div className="cd-footer">
         from <strong>{source.columnName}</strong> · {fields.length} fields

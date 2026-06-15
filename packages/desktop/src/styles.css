@@ -754,6 +754,32 @@ html, body, #root {
   min-width: 0;
 }
 
+/* Provider identity (brand favicon / category glyph) before the column name. */
+.th-provider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.th-provider .fn-cat-icon { color: var(--accent); }
+
+/* Inline header rename input (Clay-style rename without opening the editor). */
+.th-rename-input {
+  flex: 1;
+  min-width: 0;
+  font: 600 12px var(--font-sans);
+  color: var(--text-1);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-xs);
+  padding: 2px 5px;
+  outline: none;
+}
+
 .th-fn-badge {
   font-size: 10px;
   font-weight: 600;
@@ -790,6 +816,50 @@ html, body, #root {
 
 .th-run-btn:hover {
   background: var(--accent-bg);
+}
+
+/* Per-column run telemetry: a 2px health bar along the header's bottom edge
+   (green = done fraction, red = errored fraction) while a run is in flight or
+   the column is partially run. */
+.th-progress {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 2px;
+  display: flex;
+  background: var(--border);
+  z-index: 1;
+}
+.th-progress-done { background: var(--success); height: 100%; transition: width 0.15s; }
+.th-progress-err { background: var(--danger); height: 100%; transition: width 0.15s; }
+
+/* Errored-rows chip — always visible when a column has failures. */
+.th-err-chip {
+  all: unset;
+  cursor: pointer;
+  font: 600 10px var(--font-mono);
+  color: var(--danger);
+  background: var(--danger-bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.th-err-chip:hover { box-shadow: inset 0 0 0 1px var(--danger); }
+.th-err-chip:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
+
+/* "Waiting for inputs" — a required mapping is unset or references a deleted
+   column; shown in place of the method badge. */
+.th-wait-badge {
+  font: 600 10px var(--font-sans);
+  color: #92400e;
+  background: #fef3c7;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 110px;
+  flex-shrink: 0;
 }
 
 /* ── Body rows ────────────────────────────── */
@@ -2023,6 +2093,30 @@ select:focus-visible,
 }
 .cd-icon-btn:hover { color: var(--text); }
 .cd-body { flex: 1; overflow-y: auto; padding: 4px 12px 12px; }
+
+/* Run-metadata strip: when / how long / which tool produced this cell. */
+.cd-meta {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  font: 500 11.5px var(--font-sans);
+  color: var(--text-3);
+  border-bottom: 1px solid rgba(0,0,0,.05);
+}
+.cd-meta code { font: 600 10.5px var(--font-mono); color: var(--accent); }
+
+/* Fields / Raw response tabs */
+.cd-tabs { flex-shrink: 0; display: flex; gap: 2px; padding: 8px 12px 0; }
+.cd-tab {
+  border: none; background: transparent; padding: 5px 10px; border-radius: var(--r-sm);
+  font: 600 11.5px var(--font-sans); color: var(--text-3); cursor: pointer;
+}
+.cd-tab.active { background: var(--surface); color: var(--text-1); box-shadow: var(--shadow-sm); }
+.cd-raw {
+  margin: 0; padding: 10px; background: var(--surface); border-radius: var(--r-sm);
+  font: 11px var(--font-mono); color: var(--text-2); overflow: auto; max-height: 100%;
+  white-space: pre-wrap; word-break: break-word;
+}
+.cd-raw-empty { padding: 16px 4px; font: 400 12px var(--font-sans); color: var(--text-3); }
 .cd-search { margin-bottom: 8px; }
 .cd-search input {
   width: 100%; height: 36px; padding: 0 12px; border: none; border-radius: var(--r-md);
@@ -2080,6 +2174,100 @@ select:focus-visible,
 /* Brighten the fixed type-glyph hues for contrast on dark pills. */
 [data-theme="dark"] .cd-type-number { color: #82adff; }
 [data-theme="dark"] .cd-type-boolean { color: var(--success-ink); }
+
+/* ─── Column edit panel (Clay-style right rail) ───────────── */
+.col-panel {
+  position: fixed; top: 0; right: 0; bottom: 0; width: 420px;
+  background: var(--surface); border-left: 1px solid var(--border);
+  z-index: 60; display: flex; flex-direction: column;
+  animation: cdSlide .16s ease;
+  box-shadow: var(--shadow-lg);
+}
+.cep-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.cep-head-icon {
+  width: 32px; height: 32px; flex-shrink: 0; border-radius: var(--r-sm);
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg);
+}
+.cep-head-icon .fn-cat-icon { color: var(--accent); }
+.cep-head-text { min-width: 0; flex: 1; }
+.cep-head-title {
+  font: 600 13.5px var(--font-sans); color: var(--text-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cep-head-sub {
+  font: 400 11.5px var(--font-sans); color: var(--text-3); margin-top: 1px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.cep-credits {
+  flex-shrink: 0; font: 600 10.5px var(--font-mono); color: var(--accent);
+  background: var(--accent-bg); padding: 2px 7px; border-radius: 99px;
+}
+.cep-body { flex: 1; overflow-y: auto; padding: 14px; }
+.cep-foot {
+  flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+  padding: 12px 14px; border-top: 1px solid var(--border);
+}
+
+/* Account / credential status strip */
+.cep-account {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; margin-bottom: 12px;
+  background: var(--bg); border-radius: var(--r-sm);
+  font: 500 12px var(--font-sans); color: var(--text-2);
+}
+.cep-account-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); flex-shrink: 0; }
+.cep-account-dot.on { background: var(--success); }
+.cep-account-text { flex: 1; min-width: 0; }
+
+/* Column mapping rows */
+.cep-map { margin-bottom: 12px; }
+.cep-map-label-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.cep-map-mode {
+  border: none; background: none; padding: 0; cursor: pointer;
+  font: 500 11px var(--font-sans); color: var(--text-3);
+}
+.cep-map-mode:hover { color: var(--accent); }
+.cep-map-desc { font: 400 11.5px var(--font-sans); color: var(--text-3); margin: 1px 0 5px; }
+.cep-map-sel { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+.cep-type-icon {
+  width: 16px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10px; color: var(--text-3);
+}
+.cep-map-none { color: var(--text-3); font-style: italic; }
+.cep-map-missing .ai-select-btn { border-color: var(--danger); }
+
+/* Read-only code body */
+.cep-code { max-height: 280px; overflow: auto; }
+
+/* Save split-button */
+.cep-save { position: relative; display: inline-flex; }
+.cep-save-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.cep-save-caret {
+  border-top-left-radius: 0; border-bottom-left-radius: 0;
+  border-left: 1px solid rgba(255,255,255,.28); padding: 0 8px;
+  display: inline-flex; align-items: center;
+}
+.cep-save-menu {
+  position: absolute; right: 0; bottom: calc(100% + 6px); min-width: 200px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg); padding: 4px; z-index: 5;
+}
+
+/* ─── Cell range selection (Clay-style) ───────────────────── */
+/* Grid cells behave like a spreadsheet: drag selects a range, never text.
+   Inline editors stay text-selectable. */
+.grid-tr .grid-td { user-select: none; }
+.grid-td input, .grid-td textarea { user-select: text; }
+.grid-td.cell-selected {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+.grid-td.cell-sel-anchor {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
 
 /* column resize handle */
 .grid-th { position: relative; }
@@ -2215,6 +2403,14 @@ select:focus-visible,
 .ctx-item.danger:hover { background: var(--danger-bg); }
 .ctx-item:disabled { opacity: 0.45; cursor: default; }
 .ctx-item:disabled:hover { background: transparent; }
+.ctx-sep { height: 1px; background: var(--border); margin: 4px 6px; }
+.ctx-header {
+  padding: 5px 10px 2px;
+  font: 600 10px var(--font-sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
 
 /* ── Selection toolbar pill (shown when ≥1 row is selected) ─── */
 .sel-bar {
@@ -3932,11 +4128,31 @@ button.import-type:hover { background: var(--surface-3); }
   flex-shrink: 0;
 }
 
-/* A cell whose row was gated off by the column's run condition ("Condition not met"). */
+/* A cell whose row was gated off by the column's run condition ("⊘ Skipped"). */
 .cell-skipped {
+  font-size: 11.5px;
+  color: var(--text-3);
+  background: var(--bg);
+  padding: 2px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A cell claimed by a run but not yet executed. */
+.cell-queued {
   font-size: 11.5px;
   font-style: italic;
   color: var(--text-3);
+  white-space: nowrap;
+}
+
+/* A function cell whose column has unmet required inputs / broken {{Refs}}. */
+.cell-waiting {
+  font-size: 11.5px;
+  font-style: italic;
+  color: #92400e;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

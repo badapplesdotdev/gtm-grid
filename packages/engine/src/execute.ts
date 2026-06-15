@@ -21,8 +21,8 @@ import {
 import type { AiConfig, AiFallbackRequest, Column, ConnectorMethod } from "./types.js";
 
 /** Stored on a cell's `error` (with status "empty") when a run condition gates the
- *  row off, so the grid can show a muted "Condition not met" note instead of a dash. */
-export const CONDITION_SKIP_NOTE = "Condition not met";
+ *  row off, so the grid can show a muted "Run condition not met" note instead of a dash. */
+export const CONDITION_SKIP_NOTE = "Run condition not met";
 
 export interface EngineConfig {
   ai?: AiConfig;
@@ -45,12 +45,14 @@ export interface EngineConfig {
   guardSsrf?: boolean;
 }
 
-/** A cell's state as observed during a run, for per-cell progress streaming. */
+/** A cell's state as observed during a run, for per-cell progress streaming.
+ *  Status "empty" streams a condition-gated skip (error = CONDITION_SKIP_NOTE)
+ *  so live grids show WHY a cell stayed blank instead of doing nothing. */
 export interface CellProgress {
   readonly rowId: string;
   readonly columnId: string;
   readonly value: unknown;
-  readonly status: "running" | "done" | "error";
+  readonly status: "running" | "done" | "error" | "empty";
   readonly error: string | null;
 }
 
@@ -294,21 +296,57 @@ export class Engine {
     // Formula columns have no runBatch and are already excluded by batchableMethod.
     const batchMethod = condition ? null : this.batchableMethod(col);
 
+    // Per-row run start times, for the run-duration metadata on terminal writes.
+    const startedAt = new Map<string, number>();
+    // Archive the raw pre-`simplify` response only when it carries MORE than the
+    // stored value (different serialization) and fits the size cap — otherwise
+    // null, which also clears a stale archive from a previous run.
+    const RAW_CAP = 64_000;
+    const rawToArchive = (value: unknown, raw: unknown): unknown => {
+      if (raw === undefined || raw === null) return null;
+      try {
+        const rawJson = JSON.stringify(raw);
+        if (rawJson == null || rawJson.length > RAW_CAP) return null;
+        return rawJson === JSON.stringify(value) ? null : raw;
+      } catch {
+        return null; // unserializable response — skip the archive, never the run
+      }
+    };
+    const runMeta = (rowId: string): { ranAt: number; runMs: number | null } => {
+      const start = startedAt.get(rowId);
+      const ranAt = Date.now();
+      return { ranAt, runMs: start != null ? ranAt - start : null };
+    };
+
     // Mark a cell `running` (unless the store coalesces it) and stream progress.
     const markRunning = async (rowId: string): Promise<void> => {
+      startedAt.set(rowId, Date.now());
       if (skipRunning) return;
       await Effect.runPromise(this.store.setCell(rowId, columnId, { status: "running", error: null }));
       emit({ rowId, columnId, value: null, status: "running", error: null });
     };
-    const markDone = async (rowId: string, value: unknown): Promise<void> => {
-      await Effect.runPromise(this.store.setCell(rowId, columnId, { value, status: "done", error: null }));
+    const markDone = async (rowId: string, value: unknown, raw?: unknown): Promise<void> => {
+      const { ranAt, runMs } = runMeta(rowId);
+      await Effect.runPromise(
+        this.store.setCell(rowId, columnId, {
+          value,
+          status: "done",
+          error: null,
+          ranAt,
+          runMs,
+          raw: rawToArchive(value, raw),
+        }),
+      );
       emit({ rowId, columnId, value, status: "done", error: null });
       counters.ran++;
     };
     const markError = async (rowId: string, e: unknown): Promise<void> => {
       const message = e instanceof Error ? e.message : String(e);
       if (firstError === undefined) firstError = message;
-      await Effect.runPromise(this.store.setCell(rowId, columnId, { status: "error", error: message }));
+      const { ranAt, runMs } = runMeta(rowId);
+      await Effect.runPromise(
+        this.store.setCell(rowId, columnId, { status: "error", error: message, ranAt, runMs, raw: null }),
+      );
       emit({ rowId, columnId, value: null, status: "error", error: message });
       counters.errors++;
     };
@@ -339,7 +377,7 @@ export class Engine {
         try {
           const results = await this.runBatch(col, inputs);
           // Fan each ordered result back to its row's cell (order preserved).
-          for (let i = 0; i < rows.length; i++) await markDone(rows[i], simplify(results[i]));
+          for (let i = 0; i < rows.length; i++) await markDone(rows[i], simplify(results[i]), results[i]);
         } catch (e) {
           // A failed batch call fails every cell in that batch — never a silent done.
           for (const rowId of rows) await markError(rowId, e);
@@ -370,14 +408,15 @@ export class Engine {
             if (!pass) {
               // Mark the cell so the user can SEE why it's blank — gated off by the run
               // condition. We reuse the `error` text with status "empty" (not "error"), so
-              // the grid shows a muted "Condition not met" note instead of a bare dash.
-              // Skip the write when it already shows that note. (No progress event —
-              // CellProgress streams running/done/error transitions only.)
+              // the grid shows a muted "Run condition not met" note instead of a bare dash.
+              // Skip the write when it already shows that note, but ALWAYS stream the
+              // progress event so a live grid updates immediately instead of doing nothing.
               if (existing?.status !== "empty" || existing?.error !== CONDITION_SKIP_NOTE) {
                 await Effect.runPromise(
                   this.store.setCell(rowId, columnId, { value: null, status: "empty", error: CONDITION_SKIP_NOTE }),
                 );
               }
+              emit({ rowId, columnId, value: null, status: "empty", error: CONDITION_SKIP_NOTE });
               return;
             }
           } catch (e) {
@@ -393,7 +432,7 @@ export class Engine {
             ? await Effect.runPromise(this.resolveCells(col, rowId, reads))
             : await Effect.runPromise(this.resolveParams(col, rowId, reads));
           const result = await runFunction({ code, inputs, providers, dispatch: this.dispatch, prelude: formulaPrelude });
-          await markDone(rowId, simplify(result));
+          await markDone(rowId, simplify(result), result);
         } catch (e) {
           await markError(rowId, e);
         }

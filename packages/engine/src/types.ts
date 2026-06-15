@@ -64,6 +64,14 @@ export interface Cell {
   status: CellStatus;
   error: string | null;
   updated_at: number | null;
+  /** When a RUN last wrote this cell (ms epoch); null for manual edits.
+   *  Optional so non-SQLite stores (cloud) need not supply it. */
+  ran_at?: number | null;
+  /** Wall-clock duration of that run for this cell (ms). */
+  run_ms?: number | null;
+  /** The raw pre-`simplify` response of that run, when it differs from
+   *  `value` (size-capped). Audit trail for "what did the tool return". */
+  raw?: unknown;
 }
 
 export interface Credential {
@@ -81,6 +89,9 @@ export interface ConnectorMethod {
   id: string; // e.g. "generate"
   label: string; // e.g. "AI Generate"
   description: string; // agent-readable
+  /** Functions-gallery category for THIS method (per-method because one
+   *  connector's methods span use cases). Absent/unknown → listed under "All" only. */
+  category?: string;
   /** JSON Schema for inputs (derived from zod via zod-to-json-schema). */
   inputSchema: Record<string, unknown>;
   batchSize: number;

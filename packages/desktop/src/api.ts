@@ -175,6 +175,8 @@ export interface Column {
   provider: string | null;
   method: string | null;
   fn: string | null;
+  /** Custom QuickJS body for code columns (fn === "code"); null otherwise. */
+  code?: string | null;
   params: Record<string, unknown>;
   /** Optional "only run if" expression gating per-row execution. */
   condition?: string | null;
@@ -183,6 +185,15 @@ export interface Cell {
   value: unknown;
   status: CellStatus;
   error: string | null;
+  /** When a run last wrote this cell (ms epoch); absent for cloud/manual cells. */
+  ranAt?: number | null;
+  /** Wall-clock duration of that run (ms). */
+  runMs?: number | null;
+}
+/** Full single-cell read (GET /api/cells/:rowId/:columnId) incl. the archived
+ *  raw pre-simplify response the grid payload omits. */
+export interface CellDetail extends Cell {
+  raw: unknown;
 }
 export interface Row {
   id: string;
@@ -199,6 +210,8 @@ export interface FunctionMethod {
   method: string;
   label: string;
   description: string;
+  /** Explicit gallery category for this method (null → listed under "All" only). */
+  category?: string | null;
   credits: number;
   input?: Record<string, unknown> | null;
   source?: string | null;
@@ -399,6 +412,8 @@ export const api = {
     http<{ rowIds: string[] }>(`/api/tables/${tableId}/rows/bulk`, { method: "POST", body: JSON.stringify({ rows }) }),
   setCell: (rowId: string, columnId: string, value: unknown) =>
     http<{ ok: boolean }>("/api/cells", { method: "POST", body: JSON.stringify({ rowId, columnId, value }) }),
+  // Full single-cell read incl. run metadata + the archived raw response.
+  cell: (rowId: string, columnId: string) => http<CellDetail>(`/api/cells/${rowId}/${columnId}`),
   runColumn: (columnId: string, opts: { force?: boolean; rowIds?: string[] } = {}) =>
     http<{ ran: number; errors: number }>(`/api/columns/${columnId}/run`, {
       method: "POST",

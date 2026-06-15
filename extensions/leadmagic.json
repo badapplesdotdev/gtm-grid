@@ -5,7 +5,11 @@
   "category": "enrichment",
   "description": "B2B data enrichment — email finder, mobile finder, and profile & company search.",
   "baseUrl": "https://api.leadmagic.io",
-  "auth": { "type": "apiKey", "header": "X-API-Key", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "X-API-Key",
+    "secretKey": "apiKey"
+  },
   "methods": [
     {
       "id": "emailFinder",
@@ -17,13 +21,29 @@
       "input": {
         "type": "object",
         "properties": {
-          "first_name": { "type": "string", "description": "First name" },
-          "last_name": { "type": "string", "description": "Last name" },
-          "full_name": { "type": "string", "description": "Full name (alternative to first+last)" },
-          "domain": { "type": "string", "description": "Company website domain, e.g. 'stripe.com'" },
-          "company_name": { "type": "string", "description": "Company name (alternative to domain)" }
+          "first_name": {
+            "type": "string",
+            "description": "First name"
+          },
+          "last_name": {
+            "type": "string",
+            "description": "Last name"
+          },
+          "full_name": {
+            "type": "string",
+            "description": "Full name (alternative to first+last)"
+          },
+          "domain": {
+            "type": "string",
+            "description": "Company website domain, e.g. 'stripe.com'"
+          },
+          "company_name": {
+            "type": "string",
+            "description": "Company name (alternative to domain)"
+          }
         }
-      }
+      },
+      "category": "Find email"
     },
     {
       "id": "emailValidation",
@@ -34,9 +54,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["email"],
-        "properties": { "email": { "type": "string", "description": "Email address to validate" } }
-      }
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email address to validate"
+          }
+        }
+      },
+      "category": "Verify email"
     },
     {
       "id": "mobileFinder",
@@ -48,11 +76,21 @@
       "input": {
         "type": "object",
         "properties": {
-          "profile_url": { "type": "string", "description": "LinkedIn profile URL" },
-          "work_email": { "type": "string", "description": "Work email" },
-          "personal_email": { "type": "string", "description": "Personal email" }
+          "profile_url": {
+            "type": "string",
+            "description": "LinkedIn profile URL"
+          },
+          "work_email": {
+            "type": "string",
+            "description": "Work email"
+          },
+          "personal_email": {
+            "type": "string",
+            "description": "Personal email"
+          }
         }
-      }
+      },
+      "category": "Find phone"
     },
     {
       "id": "profileSearch",
@@ -63,12 +101,21 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["profile_url"],
+        "required": [
+          "profile_url"
+        ],
         "properties": {
-          "profile_url": { "type": "string", "description": "LinkedIn profile URL or username" },
-          "extended_response": { "type": "boolean", "description": "Return extended fields (default false)" }
+          "profile_url": {
+            "type": "string",
+            "description": "LinkedIn profile URL or username"
+          },
+          "extended_response": {
+            "type": "boolean",
+            "description": "Return extended fields (default false)"
+          }
         }
-      }
+      },
+      "category": "Enrich people"
     },
     {
       "id": "b2bProfile",
@@ -80,10 +127,17 @@
       "input": {
         "type": "object",
         "properties": {
-          "work_email": { "type": "string", "description": "Work email (preferred)" },
-          "personal_email": { "type": "string", "description": "Personal email" }
+          "work_email": {
+            "type": "string",
+            "description": "Work email (preferred)"
+          },
+          "personal_email": {
+            "type": "string",
+            "description": "Personal email"
+          }
         }
-      }
+      },
+      "category": "Enrich people"
     },
     {
       "id": "socialToWorkEmail",
@@ -94,11 +148,17 @@
       "credits": 5,
       "input": {
         "type": "object",
-        "required": ["profile_url"],
+        "required": [
+          "profile_url"
+        ],
         "properties": {
-          "profile_url": { "type": "string", "description": "LinkedIn/B2B profile URL or username, e.g. 'linkedin.com/in/johndoe'" }
+          "profile_url": {
+            "type": "string",
+            "description": "LinkedIn/B2B profile URL or username, e.g. 'linkedin.com/in/johndoe'"
+          }
         }
-      }
+      },
+      "category": "Find email"
     },
     {
       "id": "personalEmailFinder",
@@ -109,11 +169,17 @@
       "credits": 2,
       "input": {
         "type": "object",
-        "required": ["profile_url"],
+        "required": [
+          "profile_url"
+        ],
         "properties": {
-          "profile_url": { "type": "string", "description": "Professional/LinkedIn profile URL or username" }
+          "profile_url": {
+            "type": "string",
+            "description": "Professional/LinkedIn profile URL or username"
+          }
         }
-      }
+      },
+      "category": "Find email"
     },
     {
       "id": "companySearch",
@@ -125,11 +191,21 @@
       "input": {
         "type": "object",
         "properties": {
-          "company_domain": { "type": "string", "description": "Company website domain" },
-          "company_name": { "type": "string", "description": "Company name" },
-          "profile_url": { "type": "string", "description": "Company LinkedIn URL" }
+          "company_domain": {
+            "type": "string",
+            "description": "Company website domain"
+          },
+          "company_name": {
+            "type": "string",
+            "description": "Company name"
+          },
+          "profile_url": {
+            "type": "string",
+            "description": "Company LinkedIn URL"
+          }
         }
-      }
+      },
+      "category": "Enrich company"
     },
     {
       "id": "companyFunding",
@@ -141,10 +217,17 @@
       "input": {
         "type": "object",
         "properties": {
-          "company_domain": { "type": "string", "description": "Company website domain (preferred)" },
-          "company_name": { "type": "string", "description": "Company name (alternative to domain)" }
+          "company_domain": {
+            "type": "string",
+            "description": "Company website domain (preferred)"
+          },
+          "company_name": {
+            "type": "string",
+            "description": "Company name (alternative to domain)"
+          }
         }
-      }
+      },
+      "category": "Enrich company"
     },
     {
       "id": "roleFinder",
@@ -156,11 +239,21 @@
       "input": {
         "type": "object",
         "properties": {
-          "company_domain": { "type": "string", "description": "Company website domain" },
-          "company_name": { "type": "string", "description": "Company name" },
-          "job_title": { "type": "string", "description": "Target job title (partial match), e.g. 'VP of Sales'" }
+          "company_domain": {
+            "type": "string",
+            "description": "Company website domain"
+          },
+          "company_name": {
+            "type": "string",
+            "description": "Company name"
+          },
+          "job_title": {
+            "type": "string",
+            "description": "Target job title (partial match), e.g. 'VP of Sales'"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "employeeFinder",
@@ -172,11 +265,21 @@
       "input": {
         "type": "object",
         "properties": {
-          "company_domain": { "type": "string", "description": "Company website domain" },
-          "company_name": { "type": "string", "description": "Company name" },
-          "limit": { "type": "integer", "description": "Max employees to return (default 10)" }
+          "company_domain": {
+            "type": "string",
+            "description": "Company website domain"
+          },
+          "company_name": {
+            "type": "string",
+            "description": "Company name"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max employees to return (default 10)"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "jobChangeDetector",
@@ -187,13 +290,25 @@
       "credits": 3,
       "input": {
         "type": "object",
-        "required": ["profile_url"],
+        "required": [
+          "profile_url"
+        ],
         "properties": {
-          "profile_url": { "type": "string", "description": "LinkedIn profile URL" },
-          "company_domain": { "type": "string", "description": "Expected (known) company domain" },
-          "company_name": { "type": "string", "description": "Expected (known) company name" }
+          "profile_url": {
+            "type": "string",
+            "description": "LinkedIn profile URL"
+          },
+          "company_domain": {
+            "type": "string",
+            "description": "Expected (known) company domain"
+          },
+          "company_name": {
+            "type": "string",
+            "description": "Expected (known) company name"
+          }
         }
-      }
+      },
+      "category": "Signals"
     },
     {
       "id": "jobsFinder",
@@ -205,28 +320,89 @@
       "input": {
         "type": "object",
         "properties": {
-          "company_name": { "type": "string", "description": "Filter by company name" },
-          "company_website": { "type": "string", "description": "Filter by company website/domain" },
-          "company_type_id": { "type": "integer", "description": "Company type filter ID" },
-          "company_industry_id": { "type": "integer", "description": "Company industry filter ID" },
-          "min_employees": { "type": "integer", "description": "Minimum company headcount" },
-          "max_employees": { "type": "integer", "description": "Maximum company headcount" },
-          "job_title": { "type": "string", "description": "Filter by job title" },
-          "job_description": { "type": "string", "description": "Filter by text in job description" },
-          "experience_level": { "type": "string", "description": "One of: entry, mid, senior, executive" },
-          "job_type_id": { "type": "integer", "description": "Job type filter ID (see jobTypes)" },
-          "has_remote": { "type": "boolean", "description": "Only remote jobs" },
-          "location": { "type": "string", "description": "Free-text location" },
-          "city_name": { "type": "string", "description": "City name" },
-          "country_id": { "type": "string", "description": "Country filter ID (see jobCountries)" },
-          "region_id": { "type": "integer", "description": "Region/state filter ID" },
-          "posted_within": { "type": "integer", "description": "Jobs posted within the last N days" },
-          "posted_after": { "type": "string", "description": "Jobs posted on/after date (YYYY-MM-DD)" },
-          "posted_before": { "type": "string", "description": "Jobs posted on/before date (YYYY-MM-DD)" },
-          "page": { "type": "integer", "description": "Page number (default 1)" },
-          "per_page": { "type": "integer", "description": "Results per page (default 20, max 50)" }
+          "company_name": {
+            "type": "string",
+            "description": "Filter by company name"
+          },
+          "company_website": {
+            "type": "string",
+            "description": "Filter by company website/domain"
+          },
+          "company_type_id": {
+            "type": "integer",
+            "description": "Company type filter ID"
+          },
+          "company_industry_id": {
+            "type": "integer",
+            "description": "Company industry filter ID"
+          },
+          "min_employees": {
+            "type": "integer",
+            "description": "Minimum company headcount"
+          },
+          "max_employees": {
+            "type": "integer",
+            "description": "Maximum company headcount"
+          },
+          "job_title": {
+            "type": "string",
+            "description": "Filter by job title"
+          },
+          "job_description": {
+            "type": "string",
+            "description": "Filter by text in job description"
+          },
+          "experience_level": {
+            "type": "string",
+            "description": "One of: entry, mid, senior, executive"
+          },
+          "job_type_id": {
+            "type": "integer",
+            "description": "Job type filter ID (see jobTypes)"
+          },
+          "has_remote": {
+            "type": "boolean",
+            "description": "Only remote jobs"
+          },
+          "location": {
+            "type": "string",
+            "description": "Free-text location"
+          },
+          "city_name": {
+            "type": "string",
+            "description": "City name"
+          },
+          "country_id": {
+            "type": "string",
+            "description": "Country filter ID (see jobCountries)"
+          },
+          "region_id": {
+            "type": "integer",
+            "description": "Region/state filter ID"
+          },
+          "posted_within": {
+            "type": "integer",
+            "description": "Jobs posted within the last N days"
+          },
+          "posted_after": {
+            "type": "string",
+            "description": "Jobs posted on/after date (YYYY-MM-DD)"
+          },
+          "posted_before": {
+            "type": "string",
+            "description": "Jobs posted on/before date (YYYY-MM-DD)"
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number (default 1)"
+          },
+          "per_page": {
+            "type": "integer",
+            "description": "Results per page (default 20, max 50)"
+          }
         }
-      }
+      },
+      "category": "Jobs"
     },
     {
       "id": "jobCountries",
@@ -235,7 +411,11 @@
       "verb": "GET",
       "path": "/v1/jobs/countries",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      },
+      "category": "Jobs"
     },
     {
       "id": "jobTypes",
@@ -244,7 +424,11 @@
       "verb": "GET",
       "path": "/v1/jobs/job-types",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      },
+      "category": "Jobs"
     },
     {
       "id": "googleAdsSearch",
@@ -256,10 +440,17 @@
       "input": {
         "type": "object",
         "properties": {
-          "company_domain": { "type": "string", "description": "Company website domain (preferred), e.g. 'gong.io'" },
-          "company_name": { "type": "string", "description": "Company name (alternative to domain)" }
+          "company_domain": {
+            "type": "string",
+            "description": "Company website domain (preferred), e.g. 'gong.io'"
+          },
+          "company_name": {
+            "type": "string",
+            "description": "Company name (alternative to domain)"
+          }
         }
-      }
+      },
+      "category": "Ads"
     },
     {
       "id": "metaAdsSearch",
@@ -271,10 +462,17 @@
       "input": {
         "type": "object",
         "properties": {
-          "company_domain": { "type": "string", "description": "Company website domain" },
-          "company_name": { "type": "string", "description": "Company name" }
+          "company_domain": {
+            "type": "string",
+            "description": "Company website domain"
+          },
+          "company_name": {
+            "type": "string",
+            "description": "Company name"
+          }
         }
-      }
+      },
+      "category": "Ads"
     },
     {
       "id": "b2bAdsSearch",
@@ -286,10 +484,17 @@
       "input": {
         "type": "object",
         "properties": {
-          "company_domain": { "type": "string", "description": "Company website domain" },
-          "company_name": { "type": "string", "description": "Company name" }
+          "company_domain": {
+            "type": "string",
+            "description": "Company website domain"
+          },
+          "company_name": {
+            "type": "string",
+            "description": "Company name"
+          }
         }
-      }
+      },
+      "category": "Ads"
     },
     {
       "id": "b2bAdDetails",
@@ -300,11 +505,17 @@
       "credits": 2,
       "input": {
         "type": "object",
-        "required": ["ad_url"],
+        "required": [
+          "ad_url"
+        ],
         "properties": {
-          "ad_url": { "type": "string", "description": "Ad Library URL or ID (from b2bAdsSearch results)" }
+          "ad_url": {
+            "type": "string",
+            "description": "Ad Library URL or ID (from b2bAdsSearch results)"
+          }
         }
-      }
+      },
+      "category": "Ads"
     },
     {
       "id": "checkCredits",
@@ -313,7 +524,10 @@
       "verb": "GET",
       "path": "/v1/credits",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     },
     {
       "id": "analytics",
@@ -374,7 +588,8 @@
             "description": "Pagination offset"
           }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "companySearchV3",
@@ -419,7 +634,8 @@
             "description": "If true, returns match counts without spending credits"
           }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "competitorsSearch",
@@ -444,7 +660,8 @@
             "description": "Company name (alternative to company_domain)"
           }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "technographics",
@@ -464,7 +681,8 @@
             "description": "Company website domain to analyze, e.g. 'stripe.com'"
           }
         }
-      }
+      },
+      "category": "Enrich company"
     },
     {
       "id": "peopleSearch",
@@ -549,7 +767,8 @@
             "description": "Field set per person: 'summary' or 'full'."
           }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "jobCompanyTypes",
@@ -561,7 +780,8 @@
       "input": {
         "type": "object",
         "properties": {}
-      }
+      },
+      "category": "Jobs"
     },
     {
       "id": "jobIndustries",
@@ -573,7 +793,8 @@
       "input": {
         "type": "object",
         "properties": {}
-      }
+      },
+      "category": "Jobs"
     },
     {
       "id": "jobRegions",
@@ -585,7 +806,8 @@
       "input": {
         "type": "object",
         "properties": {}
-      }
+      },
+      "category": "Jobs"
     },
     {
       "id": "jobSearch",
@@ -714,7 +936,8 @@
             "description": "Internal query budget hint in milliseconds"
           }
         }
-      }
+      },
+      "category": "Jobs"
     },
     {
       "id": "jobSearchCatalogs",
@@ -726,7 +949,8 @@
       "input": {
         "type": "object",
         "properties": {}
-      }
+      },
+      "category": "Jobs"
     },
     {
       "id": "jobSearchCompanies",
@@ -751,7 +975,8 @@
             "description": "Max number of company candidates to return"
           }
         }
-      }
+      },
+      "category": "Jobs"
     },
     {
       "id": "jobSearchHelpers",
@@ -784,7 +1009,8 @@
             "description": "Job title filters to resolve: { include, exclude }"
           }
         }
-      }
+      },
+      "category": "Jobs"
     },
     {
       "id": "jobSearchLocations",
@@ -813,7 +1039,8 @@
             "description": "Max number of location candidates to return (optional)"
           }
         }
-      }
+      },
+      "category": "Jobs"
     },
     {
       "id": "jobSearchOccupations",
@@ -841,7 +1068,8 @@
             "description": "Optional. Number of results to return"
           }
         }
-      }
+      },
+      "category": "Jobs"
     },
     {
       "id": "jobSearchTags",
@@ -869,7 +1097,8 @@
             "description": "Number of tag candidates to return"
           }
         }
-      }
+      },
+      "category": "Jobs"
     },
     {
       "id": "jobSearchTitles",
@@ -893,7 +1122,8 @@
             "description": "Max number of title candidates to return (optional)"
           }
         }
-      }
+      },
+      "category": "Jobs"
     },
     {
       "id": "searchStats",

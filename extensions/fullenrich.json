@@ -6,7 +6,11 @@
   "description": "Waterfall email & phone enrichment across 15+ vendors. Async: submit a bulk, then poll for the result.",
   "baseUrl": "https://app.fullenrich.com/api/v1",
   "logo": "https://www.google.com/s2/favicons?domain=fullenrich.com&sz=128",
-  "auth": { "type": "apiKey", "header": "Authorization", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "Authorization",
+    "secretKey": "apiKey"
+  },
   "methods": [
     {
       "id": "enrichBulk",
@@ -17,17 +21,29 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["name", "datas"],
+        "required": [
+          "name",
+          "datas"
+        ],
         "properties": {
-          "name": { "type": "string", "description": "Label for this bulk, e.g. 'Sales Ops London'" },
-          "webhook_url": { "type": "string", "description": "Optional webhook POSTed when finished" },
+          "name": {
+            "type": "string",
+            "description": "Label for this bulk, e.g. 'Sales Ops London'"
+          },
+          "webhook_url": {
+            "type": "string",
+            "description": "Optional webhook POSTed when finished"
+          },
           "datas": {
             "type": "array",
             "description": "Array of contacts (1-100). Each: { firstname, lastname, domain, company_name, linkedin_url, enrich_fields: [\"contact.emails\",\"contact.phones\"] }",
-            "items": { "type": "object" }
+            "items": {
+              "type": "object"
+            }
           }
         }
-      }
+      },
+      "category": "Find email"
     },
     {
       "id": "getResult",
@@ -38,9 +54,17 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["enrichment_id"],
-        "properties": { "enrichment_id": { "type": "string", "description": "The id returned by Enrich Bulk" } }
-      }
+        "required": [
+          "enrichment_id"
+        ],
+        "properties": {
+          "enrichment_id": {
+            "type": "string",
+            "description": "The id returned by Enrich Bulk"
+          }
+        }
+      },
+      "category": "Find email"
     },
     {
       "id": "credits",
@@ -49,7 +73,10 @@
       "verb": "GET",
       "path": "/account/credits",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     }
   ]
 }

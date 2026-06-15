@@ -6,7 +6,12 @@
   "description": "Cold email outreach — push leads into campaigns, verify emails, read analytics.",
   "baseUrl": "https://api.instantly.ai/api/v2",
   "logo": "https://www.google.com/s2/favicons?domain=instantly.ai&sz=128",
-  "auth": { "type": "apiKey", "header": "Authorization", "scheme": "Bearer ", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "Authorization",
+    "scheme": "Bearer ",
+    "secretKey": "apiKey"
+  },
   "methods": [
     {
       "id": "listCampaigns",
@@ -18,9 +23,18 @@
       "input": {
         "type": "object",
         "properties": {
-          "limit": { "type": "integer", "description": "1-100 (default 100)" },
-          "starting_after": { "type": "string", "description": "Pagination cursor" },
-          "search": { "type": "string", "description": "Filter by campaign name" }
+          "limit": {
+            "type": "integer",
+            "description": "1-100 (default 100)"
+          },
+          "starting_after": {
+            "type": "string",
+            "description": "Pagination cursor"
+          },
+          "search": {
+            "type": "string",
+            "description": "Filter by campaign name"
+          }
         }
       }
     },
@@ -33,8 +47,15 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string", "description": "Campaign UUID" } }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Campaign UUID"
+          }
+        }
       }
     },
     {
@@ -46,13 +67,37 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["name", "campaign_schedule"],
+        "required": [
+          "name",
+          "campaign_schedule"
+        ],
         "properties": {
-          "name": { "type": "string", "description": "Campaign name" },
-          "campaign_schedule": { "type": "object", "description": "Schedule config: { schedules: [{ name, timing:{from,to}, days:{...}, timezone }] }" },
-          "email_list": { "type": "array", "description": "Sending account emails to attach", "items": { "type": "string" } },
-          "daily_limit": { "type": "integer", "description": "Max emails/day across the campaign" },
-          "sequences": { "type": "array", "description": "Email step sequences", "items": { "type": "object" } }
+          "name": {
+            "type": "string",
+            "description": "Campaign name"
+          },
+          "campaign_schedule": {
+            "type": "object",
+            "description": "Schedule config: { schedules: [{ name, timing:{from,to}, days:{...}, timezone }] }"
+          },
+          "email_list": {
+            "type": "array",
+            "description": "Sending account emails to attach",
+            "items": {
+              "type": "string"
+            }
+          },
+          "daily_limit": {
+            "type": "integer",
+            "description": "Max emails/day across the campaign"
+          },
+          "sequences": {
+            "type": "array",
+            "description": "Email step sequences",
+            "items": {
+              "type": "object"
+            }
+          }
         }
       }
     },
@@ -65,13 +110,29 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
-          "id": { "type": "string", "description": "Campaign UUID" },
-          "name": { "type": "string" },
-          "daily_limit": { "type": "integer" },
-          "campaign_schedule": { "type": "object" },
-          "sequences": { "type": "array", "items": { "type": "object" } }
+          "id": {
+            "type": "string",
+            "description": "Campaign UUID"
+          },
+          "name": {
+            "type": "string"
+          },
+          "daily_limit": {
+            "type": "integer"
+          },
+          "campaign_schedule": {
+            "type": "object"
+          },
+          "sequences": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
         }
       }
     },
@@ -84,8 +145,15 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string", "description": "Campaign UUID" } }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Campaign UUID"
+          }
+        }
       }
     },
     {
@@ -97,8 +165,15 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string", "description": "Campaign UUID" } }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Campaign UUID"
+          }
+        }
       }
     },
     {
@@ -110,8 +185,15 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string", "description": "Campaign UUID" } }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Campaign UUID"
+          }
+        }
       }
     },
     {
@@ -123,8 +205,15 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["email"],
-        "properties": { "email": { "type": "string", "description": "Contact email to search for" } }
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Contact email to search for"
+          }
+        }
       }
     },
     {
@@ -136,17 +225,41 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["email"],
+        "required": [
+          "email"
+        ],
         "properties": {
-          "email": { "type": "string", "description": "Contact email (required)" },
-          "campaign": { "type": "string", "description": "Campaign UUID to enroll into" },
-          "list_id": { "type": "string", "description": "Lead-list UUID (alternative target)" },
-          "first_name": { "type": "string" },
-          "last_name": { "type": "string" },
-          "company_name": { "type": "string" },
-          "phone": { "type": "string" },
-          "website": { "type": "string" },
-          "skip_if_in_campaign": { "type": "boolean", "description": "Skip if already in the campaign" }
+          "email": {
+            "type": "string",
+            "description": "Contact email (required)"
+          },
+          "campaign": {
+            "type": "string",
+            "description": "Campaign UUID to enroll into"
+          },
+          "list_id": {
+            "type": "string",
+            "description": "Lead-list UUID (alternative target)"
+          },
+          "first_name": {
+            "type": "string"
+          },
+          "last_name": {
+            "type": "string"
+          },
+          "company_name": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "website": {
+            "type": "string"
+          },
+          "skip_if_in_campaign": {
+            "type": "boolean",
+            "description": "Skip if already in the campaign"
+          }
         }
       }
     },
@@ -159,8 +272,15 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string", "description": "Lead UUID" } }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Lead UUID"
+          }
+        }
       }
     },
     {
@@ -172,15 +292,33 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
-          "id": { "type": "string", "description": "Lead UUID" },
-          "first_name": { "type": "string" },
-          "last_name": { "type": "string" },
-          "company_name": { "type": "string" },
-          "phone": { "type": "string" },
-          "website": { "type": "string" },
-          "custom_variables": { "type": "object", "description": "Arbitrary key/value metadata" }
+          "id": {
+            "type": "string",
+            "description": "Lead UUID"
+          },
+          "first_name": {
+            "type": "string"
+          },
+          "last_name": {
+            "type": "string"
+          },
+          "company_name": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "website": {
+            "type": "string"
+          },
+          "custom_variables": {
+            "type": "object",
+            "description": "Arbitrary key/value metadata"
+          }
         }
       }
     },
@@ -193,8 +331,15 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string", "description": "Lead UUID" } }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Lead UUID"
+          }
+        }
       }
     },
     {
@@ -207,11 +352,26 @@
       "input": {
         "type": "object",
         "properties": {
-          "campaign": { "type": "string", "description": "Filter to a campaign UUID" },
-          "list_id": { "type": "string", "description": "Filter to a lead-list UUID" },
-          "search": { "type": "string", "description": "Free-text match on email/name/company" },
-          "limit": { "type": "integer", "description": "1-100" },
-          "starting_after": { "type": "string", "description": "Pagination cursor" }
+          "campaign": {
+            "type": "string",
+            "description": "Filter to a campaign UUID"
+          },
+          "list_id": {
+            "type": "string",
+            "description": "Filter to a lead-list UUID"
+          },
+          "search": {
+            "type": "string",
+            "description": "Free-text match on email/name/company"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "1-100"
+          },
+          "starting_after": {
+            "type": "string",
+            "description": "Pagination cursor"
+          }
         }
       }
     },
@@ -224,12 +384,29 @@
       "credits": 2,
       "input": {
         "type": "object",
-        "required": ["leads"],
+        "required": [
+          "leads"
+        ],
         "properties": {
-          "leads": { "type": "array", "description": "Array of lead objects (each needs at least `email`)", "items": { "type": "object" } },
-          "campaign": { "type": "string", "description": "Target campaign UUID" },
-          "list_id": { "type": "string", "description": "Target lead-list UUID" },
-          "skip_if_in_campaign": { "type": "boolean", "description": "Dedupe against existing campaign members" }
+          "leads": {
+            "type": "array",
+            "description": "Array of lead objects (each needs at least `email`)",
+            "items": {
+              "type": "object"
+            }
+          },
+          "campaign": {
+            "type": "string",
+            "description": "Target campaign UUID"
+          },
+          "list_id": {
+            "type": "string",
+            "description": "Target lead-list UUID"
+          },
+          "skip_if_in_campaign": {
+            "type": "boolean",
+            "description": "Dedupe against existing campaign members"
+          }
         }
       }
     },
@@ -243,11 +420,29 @@
       "input": {
         "type": "object",
         "properties": {
-          "ids": { "type": "array", "description": "Specific lead UUIDs to move", "items": { "type": "string" } },
-          "campaign": { "type": "string", "description": "Source campaign UUID" },
-          "list_id": { "type": "string", "description": "Source list UUID" },
-          "to_campaign_id": { "type": "string", "description": "Destination campaign UUID" },
-          "to_list_id": { "type": "string", "description": "Destination list UUID" }
+          "ids": {
+            "type": "array",
+            "description": "Specific lead UUIDs to move",
+            "items": {
+              "type": "string"
+            }
+          },
+          "campaign": {
+            "type": "string",
+            "description": "Source campaign UUID"
+          },
+          "list_id": {
+            "type": "string",
+            "description": "Source list UUID"
+          },
+          "to_campaign_id": {
+            "type": "string",
+            "description": "Destination campaign UUID"
+          },
+          "to_list_id": {
+            "type": "string",
+            "description": "Destination list UUID"
+          }
         }
       }
     },
@@ -260,8 +455,15 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["name"],
-        "properties": { "name": { "type": "string", "description": "Lead-list name" } }
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Lead-list name"
+          }
+        }
       }
     },
     {
@@ -274,8 +476,14 @@
       "input": {
         "type": "object",
         "properties": {
-          "limit": { "type": "integer", "description": "1-100" },
-          "starting_after": { "type": "string", "description": "Pagination cursor" }
+          "limit": {
+            "type": "integer",
+            "description": "1-100"
+          },
+          "starting_after": {
+            "type": "string",
+            "description": "Pagination cursor"
+          }
         }
       }
     },
@@ -288,8 +496,15 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string", "description": "Lead-list UUID" } }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Lead-list UUID"
+          }
+        }
       }
     },
     {
@@ -301,10 +516,17 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
-          "id": { "type": "string", "description": "Lead-list UUID" },
-          "name": { "type": "string" }
+          "id": {
+            "type": "string",
+            "description": "Lead-list UUID"
+          },
+          "name": {
+            "type": "string"
+          }
         }
       }
     },
@@ -317,8 +539,15 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string", "description": "Lead-list UUID" } }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Lead-list UUID"
+          }
+        }
       }
     },
     {
@@ -330,9 +559,16 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["email"],
-        "properties": { "email": { "type": "string" } }
-      }
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        }
+      },
+      "category": "Verify email"
     },
     {
       "id": "getEmailVerificationStatus",
@@ -343,9 +579,17 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["email"],
-        "properties": { "email": { "type": "string", "description": "The email previously submitted to verifyEmail" } }
-      }
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The email previously submitted to verifyEmail"
+          }
+        }
+      },
+      "category": "Verify email"
     },
     {
       "id": "listAccounts",
@@ -357,9 +601,17 @@
       "input": {
         "type": "object",
         "properties": {
-          "limit": { "type": "integer", "description": "1-100" },
-          "starting_after": { "type": "string" },
-          "search": { "type": "string", "description": "Filter by email domain" }
+          "limit": {
+            "type": "integer",
+            "description": "1-100"
+          },
+          "starting_after": {
+            "type": "string"
+          },
+          "search": {
+            "type": "string",
+            "description": "Filter by email domain"
+          }
         }
       }
     },
@@ -372,8 +624,15 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["email"],
-        "properties": { "email": { "type": "string", "description": "Sending account email" } }
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Sending account email"
+          }
+        }
       }
     },
     {
@@ -385,20 +644,50 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["email", "first_name", "last_name", "provider_code"],
+        "required": [
+          "email",
+          "first_name",
+          "last_name",
+          "provider_code"
+        ],
         "properties": {
-          "email": { "type": "string" },
-          "first_name": { "type": "string" },
-          "last_name": { "type": "string" },
-          "provider_code": { "type": "integer", "description": "Email provider code (e.g. Google=1, custom IMAP)" },
-          "imap_username": { "type": "string" },
-          "imap_password": { "type": "string" },
-          "imap_host": { "type": "string" },
-          "imap_port": { "type": "integer" },
-          "smtp_username": { "type": "string" },
-          "smtp_password": { "type": "string" },
-          "smtp_host": { "type": "string" },
-          "smtp_port": { "type": "integer" }
+          "email": {
+            "type": "string"
+          },
+          "first_name": {
+            "type": "string"
+          },
+          "last_name": {
+            "type": "string"
+          },
+          "provider_code": {
+            "type": "integer",
+            "description": "Email provider code (e.g. Google=1, custom IMAP)"
+          },
+          "imap_username": {
+            "type": "string"
+          },
+          "imap_password": {
+            "type": "string"
+          },
+          "imap_host": {
+            "type": "string"
+          },
+          "imap_port": {
+            "type": "integer"
+          },
+          "smtp_username": {
+            "type": "string"
+          },
+          "smtp_password": {
+            "type": "string"
+          },
+          "smtp_host": {
+            "type": "string"
+          },
+          "smtp_port": {
+            "type": "integer"
+          }
         }
       }
     },
@@ -411,12 +700,23 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["email"],
+        "required": [
+          "email"
+        ],
         "properties": {
-          "email": { "type": "string", "description": "Sending account email (path)" },
-          "first_name": { "type": "string" },
-          "last_name": { "type": "string" },
-          "daily_limit": { "type": "integer" }
+          "email": {
+            "type": "string",
+            "description": "Sending account email (path)"
+          },
+          "first_name": {
+            "type": "string"
+          },
+          "last_name": {
+            "type": "string"
+          },
+          "daily_limit": {
+            "type": "integer"
+          }
         }
       }
     },
@@ -429,8 +729,15 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["email"],
-        "properties": { "email": { "type": "string", "description": "Sending account email" } }
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Sending account email"
+          }
+        }
       }
     },
     {
@@ -442,8 +749,15 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["email"],
-        "properties": { "email": { "type": "string", "description": "Sending account email" } }
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Sending account email"
+          }
+        }
       }
     },
     {
@@ -455,8 +769,15 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["email"],
-        "properties": { "email": { "type": "string", "description": "Sending account email" } }
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Sending account email"
+          }
+        }
       }
     },
     {
@@ -468,11 +789,25 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["emails"],
+        "required": [
+          "emails"
+        ],
         "properties": {
-          "emails": { "type": "array", "description": "Sending account emails to report on", "items": { "type": "string" } },
-          "start_date": { "type": "string", "description": "YYYY-MM-DD" },
-          "end_date": { "type": "string", "description": "YYYY-MM-DD" }
+          "emails": {
+            "type": "array",
+            "description": "Sending account emails to report on",
+            "items": {
+              "type": "string"
+            }
+          },
+          "start_date": {
+            "type": "string",
+            "description": "YYYY-MM-DD"
+          },
+          "end_date": {
+            "type": "string",
+            "description": "YYYY-MM-DD"
+          }
         }
       }
     },
@@ -486,9 +821,18 @@
       "input": {
         "type": "object",
         "properties": {
-          "id": { "type": "string", "description": "Campaign UUID (omit for all)" },
-          "start_date": { "type": "string", "description": "YYYY-MM-DD" },
-          "end_date": { "type": "string", "description": "YYYY-MM-DD" }
+          "id": {
+            "type": "string",
+            "description": "Campaign UUID (omit for all)"
+          },
+          "start_date": {
+            "type": "string",
+            "description": "YYYY-MM-DD"
+          },
+          "end_date": {
+            "type": "string",
+            "description": "YYYY-MM-DD"
+          }
         }
       }
     },
@@ -502,9 +846,18 @@
       "input": {
         "type": "object",
         "properties": {
-          "campaign_id": { "type": "string", "description": "Campaign UUID (omit for all)" },
-          "start_date": { "type": "string", "description": "YYYY-MM-DD" },
-          "end_date": { "type": "string", "description": "YYYY-MM-DD" }
+          "campaign_id": {
+            "type": "string",
+            "description": "Campaign UUID (omit for all)"
+          },
+          "start_date": {
+            "type": "string",
+            "description": "YYYY-MM-DD"
+          },
+          "end_date": {
+            "type": "string",
+            "description": "YYYY-MM-DD"
+          }
         }
       }
     },
@@ -518,10 +871,21 @@
       "input": {
         "type": "object",
         "properties": {
-          "campaign_id": { "type": "string", "description": "Campaign UUID" },
-          "start_date": { "type": "string", "description": "YYYY-MM-DD" },
-          "end_date": { "type": "string", "description": "YYYY-MM-DD" },
-          "include_opportunities_count": { "type": "boolean" }
+          "campaign_id": {
+            "type": "string",
+            "description": "Campaign UUID"
+          },
+          "start_date": {
+            "type": "string",
+            "description": "YYYY-MM-DD"
+          },
+          "end_date": {
+            "type": "string",
+            "description": "YYYY-MM-DD"
+          },
+          "include_opportunities_count": {
+            "type": "boolean"
+          }
         }
       }
     },
@@ -535,13 +899,33 @@
       "input": {
         "type": "object",
         "properties": {
-          "campaign_id": { "type": "string", "description": "Filter to a campaign UUID" },
-          "eaccount": { "type": "string", "description": "Filter to a sending account email" },
-          "lead": { "type": "string", "description": "Filter to a lead email" },
-          "is_unread": { "type": "boolean" },
-          "email_type": { "type": "string", "description": "e.g. 'received' | 'sent'" },
-          "limit": { "type": "integer", "description": "1-100" },
-          "starting_after": { "type": "string", "description": "Pagination cursor" }
+          "campaign_id": {
+            "type": "string",
+            "description": "Filter to a campaign UUID"
+          },
+          "eaccount": {
+            "type": "string",
+            "description": "Filter to a sending account email"
+          },
+          "lead": {
+            "type": "string",
+            "description": "Filter to a lead email"
+          },
+          "is_unread": {
+            "type": "boolean"
+          },
+          "email_type": {
+            "type": "string",
+            "description": "e.g. 'received' | 'sent'"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "1-100"
+          },
+          "starting_after": {
+            "type": "string",
+            "description": "Pagination cursor"
+          }
         }
       }
     },
@@ -554,8 +938,15 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string", "description": "Email UUID" } }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Email UUID"
+          }
+        }
       }
     },
     {
@@ -567,12 +958,27 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["reply_to_uuid", "eaccount", "body"],
+        "required": [
+          "reply_to_uuid",
+          "eaccount",
+          "body"
+        ],
         "properties": {
-          "reply_to_uuid": { "type": "string", "description": "id of the email to reply to" },
-          "eaccount": { "type": "string", "description": "Sending account email to send from" },
-          "subject": { "type": "string" },
-          "body": { "type": "object", "description": "{ html: '...', text: '...' }" }
+          "reply_to_uuid": {
+            "type": "string",
+            "description": "id of the email to reply to"
+          },
+          "eaccount": {
+            "type": "string",
+            "description": "Sending account email to send from"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "body": {
+            "type": "object",
+            "description": "{ html: '...', text: '...' }"
+          }
         }
       }
     },
@@ -583,7 +989,10 @@
       "verb": "GET",
       "path": "/emails/unread/count",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     },
     {
       "id": "markThreadAsRead",
@@ -594,8 +1003,15 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["thread_id"],
-        "properties": { "thread_id": { "type": "string", "description": "Email thread id" } }
+        "required": [
+          "thread_id"
+        ],
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "description": "Email thread id"
+          }
+        }
       }
     },
     {
@@ -608,10 +1024,19 @@
       "input": {
         "type": "object",
         "properties": {
-          "status": { "type": "string", "description": "e.g. 'pending' | 'success' | 'failed'" },
-          "type": { "type": "string" },
-          "limit": { "type": "integer" },
-          "starting_after": { "type": "string" }
+          "status": {
+            "type": "string",
+            "description": "e.g. 'pending' | 'success' | 'failed'"
+          },
+          "type": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "starting_after": {
+            "type": "string"
+          }
         }
       }
     },
@@ -624,8 +1049,15 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string", "description": "Background job UUID" } }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Background job UUID"
+          }
+        }
       }
     }
   ]

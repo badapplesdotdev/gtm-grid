@@ -6,7 +6,11 @@
   "description": "Firecrawl — turn any website into clean LLM-ready data: scrape a single page to markdown/html/json, crawl whole sites, map every URL, run web search, and extract structured data across pages with an LLM, via the Firecrawl v2 REST API.",
   "logo": "https://www.google.com/s2/favicons?domain=firecrawl.dev&sz=128",
   "baseUrl": "https://api.firecrawl.dev",
-  "auth": { "type": "apiKey", "header": "Authorization", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "Authorization",
+    "secretKey": "apiKey"
+  },
   "methods": [
     {
       "id": "scrape",
@@ -17,21 +21,67 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["url"],
+        "required": [
+          "url"
+        ],
         "properties": {
-          "url": { "type": "string", "description": "The URL to scrape" },
-          "formats": { "type": "array", "items": {}, "description": "Output formats, e.g. ['markdown','html','links','screenshot']; an item can be an object like { type:'json', prompt, schema }. Default ['markdown']." },
-          "onlyMainContent": { "type": "boolean", "description": "Strip headers/nav/footers and return only main content (default true)" },
-          "includeTags": { "type": "array", "items": { "type": "string" }, "description": "HTML tags/selectors to include" },
-          "excludeTags": { "type": "array", "items": { "type": "string" }, "description": "HTML tags/selectors to exclude" },
-          "waitFor": { "type": "integer", "description": "Delay in ms before grabbing content (default 0)" },
-          "timeout": { "type": "integer", "description": "Request timeout in ms, 1000-300000 (default 60000)" },
-          "headers": { "type": "object", "description": "Headers to send (cookies, user-agent, etc.)" },
-          "actions": { "type": "array", "items": { "type": "object" }, "description": "Browser actions to run before scraping, e.g. [{ type:'click', selector }, { type:'wait', milliseconds }, { type:'screenshot' }]" },
-          "mobile": { "type": "boolean", "description": "Emulate a mobile device" },
-          "location": { "type": "object", "description": "{ country, languages[] } geo-targeting for the request" }
+          "url": {
+            "type": "string",
+            "description": "The URL to scrape"
+          },
+          "formats": {
+            "type": "array",
+            "items": {},
+            "description": "Output formats, e.g. ['markdown','html','links','screenshot']; an item can be an object like { type:'json', prompt, schema }. Default ['markdown']."
+          },
+          "onlyMainContent": {
+            "type": "boolean",
+            "description": "Strip headers/nav/footers and return only main content (default true)"
+          },
+          "includeTags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "HTML tags/selectors to include"
+          },
+          "excludeTags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "HTML tags/selectors to exclude"
+          },
+          "waitFor": {
+            "type": "integer",
+            "description": "Delay in ms before grabbing content (default 0)"
+          },
+          "timeout": {
+            "type": "integer",
+            "description": "Request timeout in ms, 1000-300000 (default 60000)"
+          },
+          "headers": {
+            "type": "object",
+            "description": "Headers to send (cookies, user-agent, etc.)"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Browser actions to run before scraping, e.g. [{ type:'click', selector }, { type:'wait', milliseconds }, { type:'screenshot' }]"
+          },
+          "mobile": {
+            "type": "boolean",
+            "description": "Emulate a mobile device"
+          },
+          "location": {
+            "type": "object",
+            "description": "{ country, languages[] } geo-targeting for the request"
+          }
         }
-      }
+      },
+      "category": "Scraping"
     },
     {
       "id": "parse",
@@ -42,14 +92,25 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["url"],
+        "required": [
+          "url"
+        ],
         "properties": {
-          "url": { "type": "string", "description": "URL of the document to parse" },
-          "formats": { "type": "array", "items": { "type": "string" }, "description": "Output formats (default ['markdown'])" }
+          "url": {
+            "type": "string",
+            "description": "URL of the document to parse"
+          },
+          "formats": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Output formats (default ['markdown'])"
+          }
         }
-      }
+      },
+      "category": "Extraction"
     },
-
     {
       "id": "startCrawl",
       "label": "Start Crawl (Async Job)",
@@ -59,23 +120,71 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["url"],
+        "required": [
+          "url"
+        ],
         "properties": {
-          "url": { "type": "string", "description": "Base URL to start crawling from" },
-          "limit": { "type": "integer", "description": "Max pages to crawl (default 10000)" },
-          "maxDiscoveryDepth": { "type": "integer", "description": "Max link-discovery depth from the base URL" },
-          "includePaths": { "type": "array", "items": { "type": "string" }, "description": "URL pathname regex patterns to include" },
-          "excludePaths": { "type": "array", "items": { "type": "string" }, "description": "URL pathname regex patterns to exclude" },
-          "allowSubdomains": { "type": "boolean", "description": "Follow links into subdomains" },
-          "allowExternalLinks": { "type": "boolean", "description": "Follow links to external domains" },
-          "crawlEntireDomain": { "type": "boolean", "description": "Follow internal links to sibling/parent URLs, not just children" },
-          "sitemap": { "type": "string", "description": "'skip' | 'include' (default) | 'only'" },
-          "maxConcurrency": { "type": "integer", "description": "Concurrent scrape limit" },
-          "delay": { "type": "integer", "description": "Delay (s) between scrapes to respect rate limits" },
-          "scrapeOptions": { "type": "object", "description": "Per-page scrape config, e.g. { formats:['markdown'], onlyMainContent:true }" },
-          "webhook": { "type": "object", "description": "Webhook config for crawl event notifications" }
+          "url": {
+            "type": "string",
+            "description": "Base URL to start crawling from"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max pages to crawl (default 10000)"
+          },
+          "maxDiscoveryDepth": {
+            "type": "integer",
+            "description": "Max link-discovery depth from the base URL"
+          },
+          "includePaths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "URL pathname regex patterns to include"
+          },
+          "excludePaths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "URL pathname regex patterns to exclude"
+          },
+          "allowSubdomains": {
+            "type": "boolean",
+            "description": "Follow links into subdomains"
+          },
+          "allowExternalLinks": {
+            "type": "boolean",
+            "description": "Follow links to external domains"
+          },
+          "crawlEntireDomain": {
+            "type": "boolean",
+            "description": "Follow internal links to sibling/parent URLs, not just children"
+          },
+          "sitemap": {
+            "type": "string",
+            "description": "'skip' | 'include' (default) | 'only'"
+          },
+          "maxConcurrency": {
+            "type": "integer",
+            "description": "Concurrent scrape limit"
+          },
+          "delay": {
+            "type": "integer",
+            "description": "Delay (s) between scrapes to respect rate limits"
+          },
+          "scrapeOptions": {
+            "type": "object",
+            "description": "Per-page scrape config, e.g. { formats:['markdown'], onlyMainContent:true }"
+          },
+          "webhook": {
+            "type": "object",
+            "description": "Webhook config for crawl event notifications"
+          }
         }
-      }
+      },
+      "category": "Scraping"
     },
     {
       "id": "getCrawlStatus",
@@ -86,11 +195,17 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
-          "id": { "type": "string", "description": "Crawl job id returned by startCrawl" }
+          "id": {
+            "type": "string",
+            "description": "Crawl job id returned by startCrawl"
+          }
         }
-      }
+      },
+      "category": "Scraping"
     },
     {
       "id": "cancelCrawl",
@@ -101,11 +216,17 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
-          "id": { "type": "string", "description": "Crawl job id" }
+          "id": {
+            "type": "string",
+            "description": "Crawl job id"
+          }
         }
-      }
+      },
+      "category": "Scraping"
     },
     {
       "id": "getCrawlErrors",
@@ -116,11 +237,17 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
-          "id": { "type": "string", "description": "Crawl job id" }
+          "id": {
+            "type": "string",
+            "description": "Crawl job id"
+          }
         }
-      }
+      },
+      "category": "Scraping"
     },
     {
       "id": "crawlParamsPreview",
@@ -131,14 +258,22 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["url"],
+        "required": [
+          "url"
+        ],
         "properties": {
-          "url": { "type": "string", "description": "Base URL" },
-          "prompt": { "type": "string", "description": "Natural-language description of what to crawl" }
+          "url": {
+            "type": "string",
+            "description": "Base URL"
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Natural-language description of what to crawl"
+          }
         }
-      }
+      },
+      "category": "Scraping"
     },
-
     {
       "id": "map",
       "label": "Map Site URLs",
@@ -148,19 +283,42 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["url"],
+        "required": [
+          "url"
+        ],
         "properties": {
-          "url": { "type": "string", "description": "Base URL of the site to map" },
-          "search": { "type": "string", "description": "Order/filter results by relevance to this term, e.g. 'pricing'" },
-          "sitemap": { "type": "string", "description": "'skip' | 'include' (default) | 'only'" },
-          "includeSubdomains": { "type": "boolean", "description": "Include subdomain URLs (default true)" },
-          "ignoreQueryParameters": { "type": "boolean", "description": "Drop URLs that differ only by query params (default true)" },
-          "limit": { "type": "integer", "description": "Max links returned, up to 100000 (default 5000)" },
-          "timeout": { "type": "integer", "description": "Timeout in ms" }
+          "url": {
+            "type": "string",
+            "description": "Base URL of the site to map"
+          },
+          "search": {
+            "type": "string",
+            "description": "Order/filter results by relevance to this term, e.g. 'pricing'"
+          },
+          "sitemap": {
+            "type": "string",
+            "description": "'skip' | 'include' (default) | 'only'"
+          },
+          "includeSubdomains": {
+            "type": "boolean",
+            "description": "Include subdomain URLs (default true)"
+          },
+          "ignoreQueryParameters": {
+            "type": "boolean",
+            "description": "Drop URLs that differ only by query params (default true)"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max links returned, up to 100000 (default 5000)"
+          },
+          "timeout": {
+            "type": "integer",
+            "description": "Timeout in ms"
+          }
         }
-      }
+      },
+      "category": "Scraping"
     },
-
     {
       "id": "search",
       "label": "Web Search",
@@ -170,23 +328,70 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["query"],
+        "required": [
+          "query"
+        ],
         "properties": {
-          "query": { "type": "string", "description": "Search query (max 500 chars)" },
-          "limit": { "type": "integer", "description": "Results per source (default 10, max 100)" },
-          "sources": { "type": "array", "items": { "type": "string" }, "description": "['web'|'images'|'news'] (default ['web'])" },
-          "categories": { "type": "array", "items": { "type": "string" }, "description": "Filter by ['github'|'research'|'pdf']" },
-          "includeDomains": { "type": "array", "items": { "type": "string" }, "description": "Restrict to these hostnames" },
-          "excludeDomains": { "type": "array", "items": { "type": "string" }, "description": "Exclude these hostnames" },
-          "location": { "type": "string", "description": "Geo-targeting, e.g. 'Germany'" },
-          "country": { "type": "string", "description": "ISO country code (default 'US')" },
-          "tbs": { "type": "string", "description": "Time-based filter, e.g. 'qdr:w' (past week)" },
-          "timeout": { "type": "integer", "description": "Timeout in ms (default 60000)" },
-          "scrapeOptions": { "type": "object", "description": "If set, scrape each result, e.g. { formats:['markdown'] }" }
+          "query": {
+            "type": "string",
+            "description": "Search query (max 500 chars)"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Results per source (default 10, max 100)"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "['web'|'images'|'news'] (default ['web'])"
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Filter by ['github'|'research'|'pdf']"
+          },
+          "includeDomains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Restrict to these hostnames"
+          },
+          "excludeDomains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Exclude these hostnames"
+          },
+          "location": {
+            "type": "string",
+            "description": "Geo-targeting, e.g. 'Germany'"
+          },
+          "country": {
+            "type": "string",
+            "description": "ISO country code (default 'US')"
+          },
+          "tbs": {
+            "type": "string",
+            "description": "Time-based filter, e.g. 'qdr:w' (past week)"
+          },
+          "timeout": {
+            "type": "integer",
+            "description": "Timeout in ms (default 60000)"
+          },
+          "scrapeOptions": {
+            "type": "object",
+            "description": "If set, scrape each result, e.g. { formats:['markdown'] }"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
-
     {
       "id": "startExtract",
       "label": "Start Extract (Async LLM)",
@@ -196,18 +401,48 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["urls"],
+        "required": [
+          "urls"
+        ],
         "properties": {
-          "urls": { "type": "array", "items": { "type": "string" }, "description": "URLs to extract from; glob patterns allowed, e.g. 'https://site.com/*'" },
-          "prompt": { "type": "string", "description": "Guidance for what to extract" },
-          "schema": { "type": "object", "description": "JSON Schema defining the structure of the extracted data" },
-          "enableWebSearch": { "type": "boolean", "description": "Allow web search for supporting data (default false)" },
-          "includeSubdomains": { "type": "boolean", "description": "Include subdomains when expanding URLs (default true)" },
-          "showSources": { "type": "boolean", "description": "Return the source URLs for each field (default false)" },
-          "scrapeOptions": { "type": "object", "description": "Scrape config applied to source pages" },
-          "ignoreInvalidURLs": { "type": "boolean", "description": "Skip invalid URLs instead of failing (default true)" }
+          "urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "URLs to extract from; glob patterns allowed, e.g. 'https://site.com/*'"
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Guidance for what to extract"
+          },
+          "schema": {
+            "type": "object",
+            "description": "JSON Schema defining the structure of the extracted data"
+          },
+          "enableWebSearch": {
+            "type": "boolean",
+            "description": "Allow web search for supporting data (default false)"
+          },
+          "includeSubdomains": {
+            "type": "boolean",
+            "description": "Include subdomains when expanding URLs (default true)"
+          },
+          "showSources": {
+            "type": "boolean",
+            "description": "Return the source URLs for each field (default false)"
+          },
+          "scrapeOptions": {
+            "type": "object",
+            "description": "Scrape config applied to source pages"
+          },
+          "ignoreInvalidURLs": {
+            "type": "boolean",
+            "description": "Skip invalid URLs instead of failing (default true)"
+          }
         }
-      }
+      },
+      "category": "Extraction"
     },
     {
       "id": "getExtractStatus",
@@ -218,13 +453,18 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
-          "id": { "type": "string", "description": "Extract job id returned by startExtract" }
+          "id": {
+            "type": "string",
+            "description": "Extract job id returned by startExtract"
+          }
         }
-      }
+      },
+      "category": "Extraction"
     },
-
     {
       "id": "extract",
       "label": "Extract (LLM, waits for completion)",
@@ -268,17 +508,45 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["urls"],
+        "required": [
+          "urls"
+        ],
         "properties": {
-          "urls": { "type": "array", "items": { "type": "string" }, "description": "List of URLs to scrape" },
-          "formats": { "type": "array", "items": {}, "description": "Output formats applied to every URL, e.g. ['markdown','html']" },
-          "onlyMainContent": { "type": "boolean", "description": "Strip headers/nav/footers (default true)" },
-          "maxConcurrency": { "type": "integer", "description": "Concurrent scrape limit" },
-          "ignoreInvalidURLs": { "type": "boolean", "description": "Skip invalid URLs instead of failing the request (default true)" },
-          "scrapeOptions": { "type": "object", "description": "Advanced per-URL scrape config (waitFor, actions, location, etc.)" },
-          "webhook": { "type": "object", "description": "Webhook config for batch event notifications" }
+          "urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of URLs to scrape"
+          },
+          "formats": {
+            "type": "array",
+            "items": {},
+            "description": "Output formats applied to every URL, e.g. ['markdown','html']"
+          },
+          "onlyMainContent": {
+            "type": "boolean",
+            "description": "Strip headers/nav/footers (default true)"
+          },
+          "maxConcurrency": {
+            "type": "integer",
+            "description": "Concurrent scrape limit"
+          },
+          "ignoreInvalidURLs": {
+            "type": "boolean",
+            "description": "Skip invalid URLs instead of failing the request (default true)"
+          },
+          "scrapeOptions": {
+            "type": "object",
+            "description": "Advanced per-URL scrape config (waitFor, actions, location, etc.)"
+          },
+          "webhook": {
+            "type": "object",
+            "description": "Webhook config for batch event notifications"
+          }
         }
-      }
+      },
+      "category": "Scraping"
     },
     {
       "id": "getBatchScrapeStatus",
@@ -289,11 +557,17 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
-          "id": { "type": "string", "description": "Batch scrape job id returned by startBatchScrape" }
+          "id": {
+            "type": "string",
+            "description": "Batch scrape job id returned by startBatchScrape"
+          }
         }
-      }
+      },
+      "category": "Scraping"
     },
     {
       "id": "cancelBatchScrape",
@@ -304,11 +578,17 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
-          "id": { "type": "string", "description": "Batch scrape job id" }
+          "id": {
+            "type": "string",
+            "description": "Batch scrape job id"
+          }
         }
-      }
+      },
+      "category": "Scraping"
     },
     {
       "id": "getBatchScrapeErrors",
@@ -319,13 +599,18 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
-          "id": { "type": "string", "description": "Batch scrape job id" }
+          "id": {
+            "type": "string",
+            "description": "Batch scrape job id"
+          }
         }
-      }
+      },
+      "category": "Scraping"
     },
-
     {
       "id": "getCreditUsage",
       "label": "Get Credit Usage",
@@ -333,7 +618,10 @@
       "verb": "GET",
       "path": "/v2/team/credit-usage",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     },
     {
       "id": "getCreditUsageHistorical",
@@ -345,7 +633,10 @@
       "input": {
         "type": "object",
         "properties": {
-          "byApiKey": { "type": "boolean", "description": "Break usage down per API key" }
+          "byApiKey": {
+            "type": "boolean",
+            "description": "Break usage down per API key"
+          }
         }
       }
     },
@@ -356,7 +647,10 @@
       "verb": "GET",
       "path": "/v2/team/token-usage",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     }
   ]
 }

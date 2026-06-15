@@ -6,7 +6,12 @@
   "description": "Company enrichment and search by domain, name, or attributes.",
   "logo": "https://www.thecompaniesapi.com/images/favicons/apple-touch-icon.png",
   "baseUrl": "https://api.thecompaniesapi.com/v2",
-  "auth": { "type": "apiKey", "header": "Authorization", "scheme": "Basic ", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "Authorization",
+    "scheme": "Basic ",
+    "secretKey": "apiKey"
+  },
   "methods": [
     {
       "id": "enrichByDomain",
@@ -17,13 +22,25 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["domain"],
+        "required": [
+          "domain"
+        ],
         "properties": {
-          "domain": { "type": "string", "description": "Company website domain, e.g. 'stripe.com' (no http://)" },
-          "simplified": { "type": "boolean", "description": "Return a smaller payload (free, no extra credits)" },
-          "refresh": { "type": "boolean", "description": "Force a real-time recrawl (+10 credits)" }
+          "domain": {
+            "type": "string",
+            "description": "Company website domain, e.g. 'stripe.com' (no http://)"
+          },
+          "simplified": {
+            "type": "boolean",
+            "description": "Return a smaller payload (free, no extra credits)"
+          },
+          "refresh": {
+            "type": "boolean",
+            "description": "Force a real-time recrawl (+10 credits)"
+          }
         }
-      }
+      },
+      "category": "Enrich company"
     },
     {
       "id": "enrichByEmail",
@@ -34,13 +51,25 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["email"],
+        "required": [
+          "email"
+        ],
         "properties": {
-          "email": { "type": "string", "description": "Work email address, e.g. 'jane@stripe.com'" },
-          "simplified": { "type": "boolean", "description": "Smaller payload" },
-          "refresh": { "type": "boolean", "description": "Force recrawl (+10 credits)" }
+          "email": {
+            "type": "string",
+            "description": "Work email address, e.g. 'jane@stripe.com'"
+          },
+          "simplified": {
+            "type": "boolean",
+            "description": "Smaller payload"
+          },
+          "refresh": {
+            "type": "boolean",
+            "description": "Force recrawl (+10 credits)"
+          }
         }
-      }
+      },
+      "category": "Enrich company"
     },
     {
       "id": "searchByName",
@@ -51,16 +80,37 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["name"],
+        "required": [
+          "name"
+        ],
         "properties": {
-          "name": { "type": "string", "description": "Company name to search for" },
-          "exactWordsMatch": { "type": "boolean", "description": "Require all words to match exactly" },
-          "countries": { "type": "string", "description": "Comma-separated country codes to filter, e.g. 'us,gb'" },
-          "size": { "type": "integer", "description": "Max results 1-25 (default 1)" },
-          "page": { "type": "integer", "description": "Page number for pagination (default 1)" },
-          "simplified": { "type": "boolean", "description": "Smaller payload" }
+          "name": {
+            "type": "string",
+            "description": "Company name to search for"
+          },
+          "exactWordsMatch": {
+            "type": "boolean",
+            "description": "Require all words to match exactly"
+          },
+          "countries": {
+            "type": "string",
+            "description": "Comma-separated country codes to filter, e.g. 'us,gb'"
+          },
+          "size": {
+            "type": "integer",
+            "description": "Max results 1-25 (default 1)"
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number for pagination (default 1)"
+          },
+          "simplified": {
+            "type": "boolean",
+            "description": "Smaller payload"
+          }
         }
-      }
+      },
+      "category": "Enrich company"
     },
     {
       "id": "enrichBySocial",
@@ -72,18 +122,49 @@
       "input": {
         "type": "object",
         "properties": {
-          "linkedin": { "type": "string", "description": "LinkedIn company URL" },
-          "twitter": { "type": "string", "description": "Twitter/X profile URL" },
-          "facebook": { "type": "string", "description": "Facebook page URL" },
-          "github": { "type": "string", "description": "GitHub org URL" },
-          "instagram": { "type": "string", "description": "Instagram URL" },
-          "youtube": { "type": "string", "description": "YouTube channel URL" },
-          "tiktok": { "type": "string", "description": "TikTok URL" },
-          "pinterest": { "type": "string", "description": "Pinterest URL" },
-          "wellfound": { "type": "string", "description": "Wellfound/AngelList URL" },
-          "refresh": { "type": "boolean", "description": "Force recrawl (+10 credits)" }
+          "linkedin": {
+            "type": "string",
+            "description": "LinkedIn company URL"
+          },
+          "twitter": {
+            "type": "string",
+            "description": "Twitter/X profile URL"
+          },
+          "facebook": {
+            "type": "string",
+            "description": "Facebook page URL"
+          },
+          "github": {
+            "type": "string",
+            "description": "GitHub org URL"
+          },
+          "instagram": {
+            "type": "string",
+            "description": "Instagram URL"
+          },
+          "youtube": {
+            "type": "string",
+            "description": "YouTube channel URL"
+          },
+          "tiktok": {
+            "type": "string",
+            "description": "TikTok URL"
+          },
+          "pinterest": {
+            "type": "string",
+            "description": "Pinterest URL"
+          },
+          "wellfound": {
+            "type": "string",
+            "description": "Wellfound/AngelList URL"
+          },
+          "refresh": {
+            "type": "boolean",
+            "description": "Force recrawl (+10 credits)"
+          }
         }
-      }
+      },
+      "category": "Enrich company"
     },
     {
       "id": "searchCompanies",
@@ -95,18 +176,49 @@
       "input": {
         "type": "object",
         "properties": {
-          "query": { "type": "string", "description": "JSON-stringified+encoded array of condition objects (the segmentation filter). Build via promptToSegmentation if you have natural language." },
-          "search": { "type": "string", "description": "Free-text query on company name or domain" },
-          "searchFields": { "type": "string", "description": "Which fields the `search` term applies to" },
-          "size": { "type": "integer", "description": "Results per page, 1-100 (default 10)" },
-          "page": { "type": "integer", "description": "Page number (default 1)" },
-          "sortKey": { "type": "string", "description": "Single field to sort by" },
-          "sortOrder": { "type": "string", "description": "'asc' or 'desc'" },
-          "domainsToExclude": { "type": "string", "description": "Comma-separated domains to exclude" },
-          "linkedinToExclude": { "type": "string", "description": "Comma-separated LinkedIn URLs to exclude" },
-          "simplified": { "type": "boolean", "description": "Return preview data without full credit deduction" }
+          "query": {
+            "type": "string",
+            "description": "JSON-stringified+encoded array of condition objects (the segmentation filter). Build via promptToSegmentation if you have natural language."
+          },
+          "search": {
+            "type": "string",
+            "description": "Free-text query on company name or domain"
+          },
+          "searchFields": {
+            "type": "string",
+            "description": "Which fields the `search` term applies to"
+          },
+          "size": {
+            "type": "integer",
+            "description": "Results per page, 1-100 (default 10)"
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number (default 1)"
+          },
+          "sortKey": {
+            "type": "string",
+            "description": "Single field to sort by"
+          },
+          "sortOrder": {
+            "type": "string",
+            "description": "'asc' or 'desc'"
+          },
+          "domainsToExclude": {
+            "type": "string",
+            "description": "Comma-separated domains to exclude"
+          },
+          "linkedinToExclude": {
+            "type": "string",
+            "description": "Comma-separated LinkedIn URLs to exclude"
+          },
+          "simplified": {
+            "type": "boolean",
+            "description": "Return preview data without full credit deduction"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "searchByPrompt",
@@ -117,16 +229,37 @@
       "credits": 2,
       "input": {
         "type": "object",
-        "required": ["prompt"],
+        "required": [
+          "prompt"
+        ],
         "properties": {
-          "prompt": { "type": "string", "description": "Natural-language description of the companies to find" },
-          "similarity": { "type": "number", "description": "Minimum similarity threshold for matches" },
-          "size": { "type": "integer", "description": "Results per page, 1-100 (default 10)" },
-          "page": { "type": "integer", "description": "Page number (default 1)" },
-          "listsToExclude": { "type": "string", "description": "Comma-separated list IDs whose companies to exclude" },
-          "simplified": { "type": "boolean", "description": "Preview data without full credit deduction" }
+          "prompt": {
+            "type": "string",
+            "description": "Natural-language description of the companies to find"
+          },
+          "similarity": {
+            "type": "number",
+            "description": "Minimum similarity threshold for matches"
+          },
+          "size": {
+            "type": "integer",
+            "description": "Results per page, 1-100 (default 10)"
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number (default 1)"
+          },
+          "listsToExclude": {
+            "type": "string",
+            "description": "Comma-separated list IDs whose companies to exclude"
+          },
+          "simplified": {
+            "type": "boolean",
+            "description": "Preview data without full credit deduction"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "similarCompanies",
@@ -137,16 +270,37 @@
       "credits": 2,
       "input": {
         "type": "object",
-        "required": ["domains"],
+        "required": [
+          "domains"
+        ],
         "properties": {
-          "domains": { "type": "string", "description": "Comma-separated seed domains, e.g. 'stripe.com,adyen.com'" },
-          "size": { "type": "integer", "description": "Results per page, 1-100 (default 10)" },
-          "page": { "type": "integer", "description": "Page number (default 1)" },
-          "proximityExact": { "type": "number", "description": "Weight for exact-attribute proximity" },
-          "proximityTerm": { "type": "number", "description": "Weight for semantic/term proximity" },
-          "simplified": { "type": "boolean", "description": "Preview data without full credit deduction" }
+          "domains": {
+            "type": "string",
+            "description": "Comma-separated seed domains, e.g. 'stripe.com,adyen.com'"
+          },
+          "size": {
+            "type": "integer",
+            "description": "Results per page, 1-100 (default 10)"
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number (default 1)"
+          },
+          "proximityExact": {
+            "type": "number",
+            "description": "Weight for exact-attribute proximity"
+          },
+          "proximityTerm": {
+            "type": "number",
+            "description": "Weight for semantic/term proximity"
+          },
+          "simplified": {
+            "type": "boolean",
+            "description": "Preview data without full credit deduction"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "countCompanies",
@@ -158,11 +312,21 @@
       "input": {
         "type": "object",
         "properties": {
-          "query": { "type": "string", "description": "JSON-stringified+encoded array of condition objects" },
-          "search": { "type": "string", "description": "Free-text query on name/domain" },
-          "searchFields": { "type": "string", "description": "Which fields the `search` term applies to" }
+          "query": {
+            "type": "string",
+            "description": "JSON-stringified+encoded array of condition objects"
+          },
+          "search": {
+            "type": "string",
+            "description": "Free-text query on name/domain"
+          },
+          "searchFields": {
+            "type": "string",
+            "description": "Which fields the `search` term applies to"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "askCompany",
@@ -173,15 +337,37 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["domain", "question"],
+        "required": [
+          "domain",
+          "question"
+        ],
         "properties": {
-          "domain": { "type": "string", "description": "Company website domain, e.g. 'stripe.com'" },
-          "question": { "type": "string", "description": "The question to answer about the company" },
-          "fields": { "type": "array", "description": "Array of { key, type, description } objects defining the structured answer shape", "items": { "type": "object" } },
-          "model": { "type": "string", "description": "'large' (more detail) or 'small' (cheaper/faster)" },
-          "explain": { "type": "boolean", "description": "Include reasoning behind the answer" }
+          "domain": {
+            "type": "string",
+            "description": "Company website domain, e.g. 'stripe.com'"
+          },
+          "question": {
+            "type": "string",
+            "description": "The question to answer about the company"
+          },
+          "fields": {
+            "type": "array",
+            "description": "Array of { key, type, description } objects defining the structured answer shape",
+            "items": {
+              "type": "object"
+            }
+          },
+          "model": {
+            "type": "string",
+            "description": "'large' (more detail) or 'small' (cheaper/faster)"
+          },
+          "explain": {
+            "type": "boolean",
+            "description": "Include reasoning behind the answer"
+          }
         }
-      }
+      },
+      "category": "Enrich company"
     },
     {
       "id": "companyContext",
@@ -192,11 +378,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["domain"],
+        "required": [
+          "domain"
+        ],
         "properties": {
-          "domain": { "type": "string", "description": "Company website domain, e.g. 'stripe.com'" }
+          "domain": {
+            "type": "string",
+            "description": "Company website domain, e.g. 'stripe.com'"
+          }
         }
-      }
+      },
+      "category": "Enrich company"
     },
     {
       "id": "emailPatterns",
@@ -207,13 +399,25 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["domain"],
+        "required": [
+          "domain"
+        ],
         "properties": {
-          "domain": { "type": "string", "description": "Company website domain, e.g. 'stripe.com'" },
-          "emailsCount": { "type": "integer", "description": "Number of example emails to base patterns on" },
-          "precision": { "type": "string", "description": "Pattern precision level" }
+          "domain": {
+            "type": "string",
+            "description": "Company website domain, e.g. 'stripe.com'"
+          },
+          "emailsCount": {
+            "type": "integer",
+            "description": "Number of example emails to base patterns on"
+          },
+          "precision": {
+            "type": "string",
+            "description": "Pattern precision level"
+          }
         }
-      }
+      },
+      "category": "Find email"
     },
     {
       "id": "searchIndustries",
@@ -225,11 +429,21 @@
       "input": {
         "type": "object",
         "properties": {
-          "search": { "type": "string", "description": "Industry keyword to search" },
-          "size": { "type": "integer", "description": "Results per page" },
-          "page": { "type": "integer", "description": "Page number" }
+          "search": {
+            "type": "string",
+            "description": "Industry keyword to search"
+          },
+          "size": {
+            "type": "integer",
+            "description": "Results per page"
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "searchTechnologies",
@@ -241,11 +455,21 @@
       "input": {
         "type": "object",
         "properties": {
-          "search": { "type": "string", "description": "Technology keyword to search" },
-          "size": { "type": "integer", "description": "Results per page" },
-          "page": { "type": "integer", "description": "Page number" }
+          "search": {
+            "type": "string",
+            "description": "Technology keyword to search"
+          },
+          "size": {
+            "type": "integer",
+            "description": "Results per page"
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "searchCountries",
@@ -257,12 +481,25 @@
       "input": {
         "type": "object",
         "properties": {
-          "search": { "type": "string", "description": "Country name to search" },
-          "filters": { "type": "string", "description": "Additional filter conditions" },
-          "size": { "type": "integer", "description": "Results per page" },
-          "page": { "type": "integer", "description": "Page number" }
+          "search": {
+            "type": "string",
+            "description": "Country name to search"
+          },
+          "filters": {
+            "type": "string",
+            "description": "Additional filter conditions"
+          },
+          "size": {
+            "type": "integer",
+            "description": "Results per page"
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "searchCities",
@@ -274,12 +511,25 @@
       "input": {
         "type": "object",
         "properties": {
-          "search": { "type": "string", "description": "City name to search" },
-          "filters": { "type": "string", "description": "Additional filter conditions (e.g. restrict to a country)" },
-          "size": { "type": "integer", "description": "Results per page" },
-          "page": { "type": "integer", "description": "Page number" }
+          "search": {
+            "type": "string",
+            "description": "City name to search"
+          },
+          "filters": {
+            "type": "string",
+            "description": "Additional filter conditions (e.g. restrict to a country)"
+          },
+          "size": {
+            "type": "integer",
+            "description": "Results per page"
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "enrichJobTitles",
@@ -290,11 +540,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["name"],
+        "required": [
+          "name"
+        ],
         "properties": {
-          "name": { "type": "string", "description": "Raw job title to enrich, e.g. 'VP of Sales'" }
+          "name": {
+            "type": "string",
+            "description": "Raw job title to enrich, e.g. 'VP of Sales'"
+          }
         }
-      }
+      },
+      "category": "Formatting"
     },
     {
       "id": "promptToSegmentation",
@@ -305,15 +561,33 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["prompt"],
+        "required": [
+          "prompt"
+        ],
         "properties": {
-          "prompt": { "type": "string", "description": "Natural-language ICP / target description" },
-          "context": { "type": "string", "description": "Extra context to guide the conversion" },
-          "model": { "type": "string", "description": "Model to use ('large' or 'small')" },
-          "listId": { "type": "string", "description": "Optional list to scope against" },
-          "force": { "type": "boolean", "description": "Force regeneration instead of using a cached result" }
+          "prompt": {
+            "type": "string",
+            "description": "Natural-language ICP / target description"
+          },
+          "context": {
+            "type": "string",
+            "description": "Extra context to guide the conversion"
+          },
+          "model": {
+            "type": "string",
+            "description": "Model to use ('large' or 'small')"
+          },
+          "listId": {
+            "type": "string",
+            "description": "Optional list to scope against"
+          },
+          "force": {
+            "type": "boolean",
+            "description": "Force regeneration instead of using a cached result"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "checkUser",
@@ -322,7 +596,10 @@
       "verb": "GET",
       "path": "/user",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     }
   ]
 }

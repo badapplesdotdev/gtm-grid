@@ -6,7 +6,11 @@
   "description": "Neural web search & content retrieval — search, get page contents, find similar pages, and get cited answers.",
   "baseUrl": "https://api.exa.ai",
   "logo": "https://www.google.com/s2/favicons?domain=exa.ai&sz=128",
-  "auth": { "type": "apiKey", "header": "x-api-key", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "x-api-key",
+    "secretKey": "apiKey"
+  },
   "methods": [
     {
       "id": "search",
@@ -17,19 +21,53 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["query"],
+        "required": [
+          "query"
+        ],
         "properties": {
-          "query": { "type": "string", "description": "Search query" },
-          "type": { "type": "string", "description": "auto | keyword | neural | fast (default auto)" },
-          "category": { "type": "string", "description": "company | news | people | research paper | financial report | personal site" },
-          "numResults": { "type": "integer", "description": "1-100 (default 10)" },
-          "includeDomains": { "type": "array", "items": { "type": "string" } },
-          "excludeDomains": { "type": "array", "items": { "type": "string" } },
-          "startPublishedDate": { "type": "string", "description": "ISO 8601" },
-          "endPublishedDate": { "type": "string", "description": "ISO 8601" },
-          "contents": { "type": "object", "description": "e.g. { text: true, highlights: true, summary: { query: '...' } }" }
+          "query": {
+            "type": "string",
+            "description": "Search query"
+          },
+          "type": {
+            "type": "string",
+            "description": "auto | keyword | neural | fast (default auto)"
+          },
+          "category": {
+            "type": "string",
+            "description": "company | news | people | research paper | financial report | personal site"
+          },
+          "numResults": {
+            "type": "integer",
+            "description": "1-100 (default 10)"
+          },
+          "includeDomains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "excludeDomains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "startPublishedDate": {
+            "type": "string",
+            "description": "ISO 8601"
+          },
+          "endPublishedDate": {
+            "type": "string",
+            "description": "ISO 8601"
+          },
+          "contents": {
+            "type": "object",
+            "description": "e.g. { text: true, highlights: true, summary: { query: '...' } }"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "getContents",
@@ -41,13 +79,35 @@
       "input": {
         "type": "object",
         "properties": {
-          "urls": { "type": "array", "items": { "type": "string" }, "description": "1-100 URLs (or use ids)" },
-          "ids": { "type": "array", "items": { "type": "string" }, "description": "Exa result ids from /search" },
-          "text": { "type": "boolean", "description": "Return full page text" },
-          "highlights": { "type": "boolean", "description": "Return relevant highlights" },
-          "summary": { "type": "object", "description": "e.g. { query: 'What does this company do?' }" }
+          "urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "1-100 URLs (or use ids)"
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Exa result ids from /search"
+          },
+          "text": {
+            "type": "boolean",
+            "description": "Return full page text"
+          },
+          "highlights": {
+            "type": "boolean",
+            "description": "Return relevant highlights"
+          },
+          "summary": {
+            "type": "object",
+            "description": "e.g. { query: 'What does this company do?' }"
+          }
         }
-      }
+      },
+      "category": "Scraping"
     },
     {
       "id": "findSimilar",
@@ -58,16 +118,40 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["url"],
+        "required": [
+          "url"
+        ],
         "properties": {
-          "url": { "type": "string", "description": "Seed URL" },
-          "numResults": { "type": "integer", "description": "1-100" },
-          "excludeSourceDomain": { "type": "boolean" },
-          "includeDomains": { "type": "array", "items": { "type": "string" } },
-          "excludeDomains": { "type": "array", "items": { "type": "string" } },
-          "contents": { "type": "object", "description": "e.g. { text: true }" }
+          "url": {
+            "type": "string",
+            "description": "Seed URL"
+          },
+          "numResults": {
+            "type": "integer",
+            "description": "1-100"
+          },
+          "excludeSourceDomain": {
+            "type": "boolean"
+          },
+          "includeDomains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "excludeDomains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "contents": {
+            "type": "object",
+            "description": "e.g. { text: true }"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "answer",
@@ -78,12 +162,21 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["query"],
+        "required": [
+          "query"
+        ],
         "properties": {
-          "query": { "type": "string", "description": "The question to answer" },
-          "text": { "type": "boolean", "description": "Include full page text in citations" }
+          "query": {
+            "type": "string",
+            "description": "The question to answer"
+          },
+          "text": {
+            "type": "boolean",
+            "description": "Include full page text in citations"
+          }
         }
-      }
+      },
+      "category": "Search"
     }
   ]
 }

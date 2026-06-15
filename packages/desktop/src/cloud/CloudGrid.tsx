@@ -29,15 +29,16 @@ import { Icon, ExpandedEditor } from "../App";
 import CellDetails, { extractCode } from "../CellDetails";
 import { setAgentPresenceTable } from "./agentPresence";
 import { api } from "../api";
-import type { ConnectorInfo, Column, FullTable } from "../api";
+import type { AiProviderInfo, ConnectorInfo, Column, FullTable } from "../api";
 import {
   AddColumnPopover,
   FunctionsModal,
-  ColumnSettingsModal,
   ColumnAuthoringApiProvider,
   type ColumnAuthoringApi,
 } from "../AddColumn";
+import { ColumnEditPanel } from "../ColumnEditPanel";
 import { DataGrid, type GridController } from "../DataGrid";
+import { buildColumnMetaMap } from "../FnIcon";
 import { DedupePopover } from "../DedupePopover";
 import { resolveRowHeight } from "../gridVirtual";
 import { buildPresenceView } from "../gridPresence";
@@ -226,6 +227,47 @@ export function CloudGrid({
     () => buildPresenceView(roster, selfId),
     [roster, selfId],
   );
+
+  // "provider.method" → presentation metadata (logo, labels, credits) for the
+  // grid headers; rebuilt only when the connector catalog changes.
+  const fnColumnMeta = useMemo(() => buildColumnMetaMap(connectors), [connectors]);
+
+  // model id → AI provider identity, so ai.generate columns wear the logo of
+  // the model they call. The LOCAL sidecar's provider catalog is correct here
+  // too — it's the engine that executes cloud AI columns.
+  const [aiProviders, setAiProviders] = useState<AiProviderInfo[]>([]);
+  useEffect(() => {
+    api.aiProviders().then(setAiProviders).catch(() => {});
+  }, []);
+  const aiModelMeta = useMemo(() => {
+    const m = new Map<string, { providerName: string; logo: string | null }>();
+    for (const p of aiProviders) {
+      for (const model of p.models) if (!m.has(model)) m.set(model, { providerName: p.name, logo: p.logo });
+    }
+    return m;
+  }, [aiProviders]);
+
+  const columnMeta = useCallback(
+    (col: Column) => {
+      const base = col.fn ? fnColumnMeta.get(col.fn) ?? null : null;
+      if (col.provider === "ai") {
+        const model = typeof col.params?.model === "string" ? col.params.model : "";
+        const mp = model ? aiModelMeta.get(model) : undefined;
+        if (mp) {
+          return {
+            providerName: mp.providerName,
+            logo: mp.logo,
+            methodLabel: model,
+            category: "AI",
+            credits: base?.credits,
+            requiredInputs: base?.requiredInputs,
+          };
+        }
+      }
+      return base;
+    },
+    [fnColumnMeta, aiModelMeta],
+  );
   // Seed our identity (name/image) so cursor publishes carry it; re-seed when the
   // open table changes (a fresh subscription registers a new publisher).
   useEffect(() => {
@@ -276,16 +318,22 @@ export function CloudGrid({
   }, [tableId, data, onMissing]);
 
   const runColumn = useCallback(
-    async (columnId: string) => {
+    async (columnId: string, opts?: { force?: boolean; rowIds?: string[] }) => {
       if (tableId === null) return;
       setRunningColId(columnId);
       try {
-        // FORCE on an explicit column run. A synced-from-local table arrives with
-        // every cell "done", and a non-forced run skips "done" cells — so without
-        // this, hitting Run on a synced function/code column flips to "running" and
-        // instantly exits without recomputing anything. An explicit Run should
-        // (re)compute the column. (Per-cell run already forces.)
-        await runCloudColumn(session, { tableId, columnId, force: true });
+        // FORCE by default on an explicit column run. A synced-from-local table
+        // arrives with every cell "done", and a non-forced run skips "done"
+        // cells — so without this, hitting Run on a synced function/code column
+        // flips to "running" and instantly exits without recomputing anything.
+        // The header context menu's scoped variants pass `opts` explicitly
+        // (e.g. force:false for "Run unrun & errored rows").
+        await runCloudColumn(session, {
+          tableId,
+          columnId,
+          force: opts?.force ?? true,
+          rowIds: opts?.rowIds,
+        });
       } catch {
         /* surfaced live via the cell error status from Convex */
       } finally {
@@ -331,6 +379,32 @@ export function CloudGrid({
           n.delete(key);
           return n;
         });
+      }
+    },
+    [tableId, session],
+  );
+
+  // Run an explicit set of function cells (range selection's "Run N cells"):
+  // one scoped force+rowIds run per column, sequential like cloud runAll.
+  const runCells = useCallback(
+    async (cells: Array<{ rowId: string; colId: string }>) => {
+      if (tableId === null) return;
+      const byCol = new Map<string, string[]>();
+      for (const { rowId, colId } of cells) {
+        const list = byCol.get(colId) ?? [];
+        list.push(rowId);
+        byCol.set(colId, list);
+      }
+      for (const [columnId, rowIds] of byCol) {
+        const keys = rowIds.map((r) => `${r}:${columnId}`);
+        setRunningCells((s) => { const n = new Set(s); for (const k of keys) n.add(k); return n; });
+        try {
+          await runCloudColumn(session, { tableId, columnId, force: true, rowIds });
+        } catch {
+          /* surfaced live via the cell error status */
+        } finally {
+          setRunningCells((s) => { const n = new Set(s); for (const k of keys) n.delete(k); return n; });
+        }
       }
     },
     [tableId, session],
@@ -432,7 +506,6 @@ export function CloudGrid({
 
   const table: FullTable = data;
   const fnColCount = table.columns.filter((c) => c.kind === "function").length;
-  const columnNames = table.columns.map((c) => c.name);
 
   // ── Promote a JSON field to a column (from the Cell details drawer) ──
   // Mirrors the local grid's promoteCreate/promoteMap: a FUNCTION column whose
@@ -466,6 +539,24 @@ export function CloudGrid({
       params: { src: `{{${detail.columnName}}}` },
     });
     await runColumn(targetId).catch(() => {});
+  };
+
+  // Duplicate a column: copy the config (incl. custom code), then carry the run
+  // condition over via updateColumn (the cloud addColumn mutation has no
+  // condition field). Cells start empty — duplicating copies the recipe, not
+  // the results.
+  const duplicateColumn = async (col: Column) => {
+    const body: { name: string; type?: string; fn?: string; code?: string; params?: Record<string, unknown> } = {
+      name: uniqueColName(`${col.name} copy`),
+      type: col.type,
+      params: col.params,
+    };
+    if (col.fn === "code") body.code = col.code ?? undefined;
+    else if (col.fn) body.fn = col.fn;
+    const id = await addColumn(tableId, body);
+    if (col.condition) {
+      await updateColumn(tableId, id as Id<"columns">, { condition: col.condition });
+    }
   };
 
   const controller: GridController = {
@@ -503,6 +594,7 @@ export function CloudGrid({
         </button>
       </>
     ),
+    columnMeta,
     addRow: () => void guard(() => addRow(tableId), "add row"),
     runAll: async () => {
       for (const col of table.columns.filter((c) => c.kind === "function")) {
@@ -512,23 +604,30 @@ export function CloudGrid({
     runRows,
     runColumn,
     runCell,
+    runCells,
     setCell: (rowId, colId, value) =>
       void guard(() => setCell(rowId as Id<"rows">, colId as Id<"columns">, value), "set cell"),
     deleteRow: (rowId) => void guard(() => deleteRow(tableId, rowId as Id<"rows">), "delete row"),
     deleteColumn: (colId) => void guard(() => deleteColumn(tableId, colId as Id<"columns">), "delete column"),
     clearCell: (rowId, colId) =>
       void guard(() => setCell(rowId as Id<"rows">, colId as Id<"columns">, ""), "clear cell"),
-    editColumn: (col) => setEditCol(col),
+    // One right rail at a time: the edit panel overlaps the details drawer.
+    editColumn: (col) => { setDetail(null); setEditCol(col); },
+    renameColumn: (colId, name) =>
+      void guard(() => updateColumn(tableId, colId as Id<"columns">, { name }), "rename column"),
+    duplicateColumn: (col) => void guard(() => duplicateColumn(col), "duplicate column"),
     openAddColumn: (anchor) => { setAddColAnchor(anchor); setShowAddCol(true); },
     // Cloud columns are a fixed width (no resize) — omit `resizeColumn`.
     onScrollNearBottom: hasMore && !isLoadingMore ? loadMore : undefined,
     // Inspect a cell's full response (status-code/JSON) like the local grid;
     // the drawer supports promote-to-column (Clay-style field mapping).
-    openCellDetails: (col, cell) =>
+    openCellDetails: (col, cell) => {
+      setEditCol(null);
       setDetail({
         columnName: col.name,
         value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
-      }),
+      });
+    },
     expandCell: (a) => setCellExpand(a),
     // ── Multiplayer presence ──
     presence: presenceView,
@@ -614,19 +713,33 @@ export function CloudGrid({
         <FunctionsModal
           tableId={table.id}
           connectors={connectors}
-          columns={columnNames}
           onClose={() => setShowFunctions(false)}
-          onAdded={() => setShowFunctions(false)}
+          onAdded={(col) => {
+            setShowFunctions(false);
+            // Clay flow: the column was just added — configure it in the rail.
+            if (col) {
+              setDetail(null);
+              setEditCol(col);
+            }
+          }}
           onOpenAiSettings={onOpenAiSettings}
         />
       )}
 
       {editCol && (
-        <ColumnSettingsModal
+        <ColumnEditPanel
           column={editCol}
-          columns={columnNames}
+          columns={table.columns.map((c) => ({ id: c.id, name: c.name, type: c.type }))}
+          connectors={connectors}
+          // No tableId: the preview dry-run resolves rows via the LOCAL sidecar,
+          // which can't see cloud tables — the panel hides Try-on-rows without it.
+          rows={table.rows}
           onClose={() => setEditCol(null)}
-          onSaved={() => setEditCol(null)}
+          onSaved={(run) => {
+            const colId = editCol.id;
+            setEditCol(null);
+            if (run) void runColumn(colId, run);
+          }}
         />
       )}
     </ColumnAuthoringApiProvider>

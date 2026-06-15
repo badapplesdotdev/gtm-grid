@@ -20,8 +20,10 @@
  * by each parent and opened via controller intents.
  */
 
-import { useCallback, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { CellContent, Icon } from "./App";
+import { FnIcon, type ColumnMeta } from "./FnIcon";
+import { missingInputs } from "./columnInputs";
 import type { Cell, Column, FullTable } from "./api";
 import { VirtualGridBody } from "./VirtualGridBody";
 import { useColumnWindow } from "./useColumnWindow";
@@ -79,6 +81,12 @@ export interface GridController {
   /** Extra toolbar controls rendered in the right cluster (e.g. cloud Webhook). */
   readonly toolbarExtras?: ReactNode;
 
+  // ── Column presentation (provider identity) ────────────────────────────
+  /** Resolve presentation metadata for a function column (provider logo/name,
+   *  method label, credits) from the connector catalog. Omit to fall back to
+   *  the plain text method badge. */
+  readonly columnMeta?: (col: Column) => ColumnMeta | null;
+
   // ── Actions / intents (fire the correct local-vs-cloud function) ───────
   readonly addRow: () => void;
   readonly runAll: () => void;
@@ -86,19 +94,30 @@ export interface GridController {
    *  user's current selection). Lets the user process a custom batch at a time
    *  instead of the whole table. */
   readonly runRows: (rowIds: string[]) => void;
-  readonly runColumn: (colId: string) => void;
+  /** Run a function column. `opts` scopes the run: `force` re-runs cells that
+   *  are already done; `rowIds` restricts to specific rows. No opts = the
+   *  environment's default run (local: unrun + errored rows; cloud: force). */
+  readonly runColumn: (colId: string, opts?: { force?: boolean; rowIds?: string[] }) => void;
   readonly runCell: (rowId: string, colId: string) => void;
+  /** Run an explicit set of function cells (the range-selection "Run N cells");
+   *  grouped per column into force+rowIds runs. Omit to hide the menu item. */
+  readonly runCells?: (cells: Array<{ rowId: string; colId: string }>) => void;
   readonly setCell: (rowId: string, colId: string, value: string) => void;
   readonly deleteRow: (rowId: string) => void;
   readonly deleteColumn: (colId: string) => void;
   readonly clearCell: (rowId: string, colId: string) => void;
   readonly editColumn: (col: Column) => void;
+  /** Rename a column in place (header inline input); omit to hide Rename. */
+  readonly renameColumn?: (colId: string, name: string) => void;
+  /** Duplicate a column (config copied, cells empty); omit to hide Duplicate. */
+  readonly duplicateColumn?: (col: Column) => void;
   /** Open the add-column popover anchored at the clicked "+" button. */
   readonly openAddColumn: (anchor: { left: number; top: number }) => void;
   /** Drag-resize a column; omit to disable resizing (cloud columns are fixed). */
   readonly resizeColumn?: (colId: string, startX: number, startWidth: number) => void;
-  /** Open the cell-details drawer (object/error cells); omit to disable. */
-  readonly openCellDetails?: (col: Column, cell: Cell | undefined) => void;
+  /** Open the cell-details drawer (object/error cells); omit to disable.
+   *  `rowId` lets the drawer fetch run metadata / the raw response archive. */
+  readonly openCellDetails?: (col: Column, cell: Cell | undefined, rowId?: string) => void;
   /** Open the expanded cell editor; omit to disable. */
   readonly expandCell?: (args: {
     rowId: string;
@@ -126,7 +145,10 @@ export interface GridController {
  * warming state for a freshly-created, still-empty Trigify table).
  */
 
-type CtxItem = { label: string; danger?: boolean; disabled?: boolean; onClick: () => void };
+type CtxItem =
+  | { label: string; danger?: boolean; disabled?: boolean; onClick: () => void }
+  | { separator: true }
+  | { header: string };
 
 export function DataGrid({
   controller: c,
@@ -141,6 +163,19 @@ export function DataGrid({
   // The cell briefly flashed after a follow-jump, keyed `${rowId}:${colId}`.
   const [flashCell, setFlashCell] = useState<string | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Inline header rename (the Clay flow: rename without opening the editor).
+  const [renaming, setRenaming] = useState<{ colId: string; draft: string } | null>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (renaming) renameInputRef.current?.select();
+  }, [renaming?.colId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const commitRename = useCallback(() => {
+    setRenaming((r) => {
+      if (r && r.draft.trim() && c.renameColumn) c.renameColumn(r.colId, r.draft.trim());
+      return null;
+    });
+  }, [c]);
 
   const openCtx = useCallback((e: React.MouseEvent, items: CtxItem[]) => {
     e.preventDefault();
@@ -235,6 +270,116 @@ export function DataGrid({
     },
     [c, selectedRows, selectedCount, selectedIds, clearSelection],
   );
+
+  // ── Cell range selection (Clay-style) ──────────────────────────────────
+  // Click selects a cell, drag or shift+click extends a rectangular range over
+  // row/column INDICES; right-click inside it offers Run N cells / Copy /
+  // Clear / Delete rows. Selection is presentation-only local state.
+  const [sel, setSel] = useState<{ anchor: { r: number; c: number }; head: { r: number; c: number } } | null>(null);
+  const dragSelRef = useRef(false);
+  // True when a drag extended past its anchor — used to swallow the click that
+  // fires on mouseup so it doesn't open a manual cell's inline editor.
+  const dragMovedRef = useRef(false);
+
+  useEffect(() => {
+    const onUp = () => { dragSelRef.current = false; };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSel(null);
+    };
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, []);
+  // Selection indices are only meaningful within one table.
+  useEffect(() => setSel(null), [table.id]);
+
+  const selRect = useMemo(() => {
+    if (!sel) return null;
+    return {
+      r1: Math.min(sel.anchor.r, sel.head.r),
+      r2: Math.max(sel.anchor.r, sel.head.r),
+      c1: Math.min(sel.anchor.c, sel.head.c),
+      c2: Math.max(sel.anchor.c, sel.head.c),
+    };
+  }, [sel]);
+  const selCellCount = selRect ? (selRect.r2 - selRect.r1 + 1) * (selRect.c2 - selRect.c1 + 1) : 0;
+
+  /** Copy the selected range to the clipboard as TSV (Excel/Sheets-pasteable). */
+  const copySelection = useCallback(() => {
+    if (!selRect) return;
+    const cols = table.columns.slice(selRect.c1, selRect.c2 + 1);
+    const tsv = table.rows
+      .slice(selRect.r1, selRect.r2 + 1)
+      .map((row) =>
+        cols
+          .map((col) => {
+            const v = row.cells[col.id]?.value;
+            return v == null ? "" : typeof v === "string" ? v : JSON.stringify(v);
+          })
+          .join("\t"),
+      )
+      .join("\n");
+    void navigator.clipboard?.writeText(tsv).catch(() => {});
+  }, [selRect, table]);
+
+  // Cmd/Ctrl+C copies the selection — unless the user is typing in an input.
+  useEffect(() => {
+    if (!selRect) return;
+    const onCopy = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "c") return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (window.getSelection()?.toString()) return; // native text selection wins
+      e.preventDefault();
+      copySelection();
+    };
+    window.addEventListener("keydown", onCopy);
+    return () => window.removeEventListener("keydown", onCopy);
+  }, [selRect, copySelection]);
+
+  /** The context menu for a multi-cell selection (right-click inside the rect). */
+  const selectionMenuItems = (): CtxItem[] => {
+    if (!selRect) return [];
+    const rows = table.rows.slice(selRect.r1, selRect.r2 + 1);
+    const cols = table.columns.slice(selRect.c1, selRect.c2 + 1);
+    const fnCells: Array<{ rowId: string; colId: string }> = [];
+    for (const col of cols) {
+      if (col.kind !== "function") continue;
+      for (const row of rows) fnCells.push({ rowId: row.id, colId: col.id });
+    }
+    const items: CtxItem[] = [];
+    if (c.runCells && fnCells.length > 0) {
+      items.push({
+        label: `Run ${fnCells.length} cell${fnCells.length !== 1 ? "s" : ""}`,
+        disabled: runDisabled,
+        onClick: () => c.runCells!(fnCells),
+      });
+      items.push({ separator: true });
+    }
+    items.push({ label: "Copy", onClick: copySelection });
+    items.push(
+      { separator: true },
+      {
+        label: `Clear ${selCellCount} cell${selCellCount !== 1 ? "s" : ""}`,
+        onClick: () => {
+          for (const row of rows) for (const col of cols) c.clearCell(row.id, col.id);
+          setSel(null);
+        },
+      },
+      {
+        label: `Delete ${rows.length} row${rows.length !== 1 ? "s" : ""}`,
+        danger: true,
+        onClick: () => {
+          for (const row of rows) c.deleteRow(row.id);
+          setSel(null);
+        },
+      },
+    );
+    return items;
+  };
 
   // Follow a member: scroll their cell into view and flash it. Rows are
   // fixed-height so the vertical offset is exact; the horizontal offset sums the
@@ -349,6 +494,89 @@ export function DataGrid({
   const runDisabled = !c.canRun;
   const totalWidth =
     GUTTER_W + table.columns.reduce((s, col) => s + c.columnWidth(col.id), 0) + ADD_COL_W;
+
+  // ── Per-column run telemetry (Clay's header health bar) ────────────────
+  // One pass over the rows per table-state change; streaming runs patch cells
+  // in place, so the counts update live as a run progresses.
+  const fnStats = useMemo(() => {
+    const map = new Map<string, { done: number; error: number; running: number; queued: number; skipped: number }>();
+    const fnCols = table.columns.filter((col) => col.kind === "function");
+    if (!fnCols.length) return map;
+    for (const col of fnCols) map.set(col.id, { done: 0, error: 0, running: 0, queued: 0, skipped: 0 });
+    for (const row of table.rows) {
+      for (const col of fnCols) {
+        const s = map.get(col.id)!;
+        const cell = row.cells[col.id];
+        const status = cell?.status ?? "empty";
+        if (status === "done") s.done++;
+        else if (status === "error") s.error++;
+        else if (status === "running") s.running++;
+        else if (status === "pending") s.queued++;
+        else if (cell?.error) s.skipped++; // empty + note = condition-gated row
+      }
+    }
+    return map;
+  }, [table]);
+
+  // ── Waiting-for-inputs: required params unset, or {{Refs}} to deleted
+  // columns. Cheap (columns × params), recomputed when columns change.
+  const columnNameSet = useMemo(() => new Set(table.columns.map((col) => col.name)), [table.columns]);
+  const waitingByCol = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const col of table.columns) {
+      if (col.kind !== "function") continue;
+      const meta = c.columnMeta?.(col) ?? null;
+      const missing = missingInputs(col.params ?? {}, meta?.requiredInputs ?? [], columnNameSet);
+      if (missing.length) m.set(col.id, missing);
+    }
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [table.columns, columnNameSet, c.columnMeta]);
+
+  // Column-header right-click menu (Clay-style): edit/rename/duplicate, scoped
+  // run variants for function columns, then delete. Every run item maps onto
+  // the engine's existing `{ force, rowIds }` options — a run is always the
+  // stored column config executing, never anything AI-mediated.
+  const columnMenuItems = (col: Column): CtxItem[] => {
+    const items: CtxItem[] = [
+      { label: "Edit column", onClick: () => c.editColumn(col) },
+    ];
+    if (c.renameColumn) {
+      items.push({ label: "Rename", onClick: () => setRenaming({ colId: col.id, draft: col.name }) });
+    }
+    if (c.duplicateColumn) {
+      items.push({ label: "Duplicate", onClick: () => c.duplicateColumn!(col) });
+    }
+    if (col.kind === "function") {
+      items.push({ separator: true }, { header: "Run" });
+      const busy = runDisabled || c.runningColId === col.id;
+      items.push(
+        {
+          label: "Run unrun & errored rows",
+          disabled: busy,
+          // Explicit force:false — the non-forced run skips `done` cells, so
+          // exactly the unrun + errored rows execute (in both environments).
+          onClick: () => c.runColumn(col.id, { force: false }),
+        },
+        {
+          label: "Run first 10 rows",
+          disabled: busy || table.rows.length === 0,
+          onClick: () =>
+            c.runColumn(col.id, { force: true, rowIds: table.rows.slice(0, 10).map((r) => r.id) }),
+        },
+        {
+          label: "Force run all rows",
+          disabled: busy,
+          onClick: () => c.runColumn(col.id, { force: true }),
+        },
+      );
+    }
+    items.push(
+      { separator: true },
+      { label: `Delete column “${col.name}”`, danger: true, onClick: () => c.deleteColumn(col.id) },
+    );
+    return items;
+  };
 
   return (
     <>
@@ -505,6 +733,20 @@ export function DataGrid({
                     maxWidth: c.maxColWidth,
                     ...(colHere ? { "--presence-color": colHere[0].color } : {}),
                   };
+                  const meta = col.kind === "function" ? c.columnMeta?.(col) ?? null : null;
+                  const stats = fnStats.get(col.id);
+                  const totalRows = table.rows.length;
+                  const settled = stats ? stats.done + stats.error + stats.skipped : 0;
+                  const showBar =
+                    !!stats && totalRows > 0 &&
+                    (stats.running > 0 || stats.queued > 0 || (settled > 0 && settled < totalRows));
+                  const waiting = waitingByCol.get(col.id);
+                  const statsLine = stats && totalRows > 0
+                    ? ` — ✓ ${stats.done}${stats.error ? ` · ✕ ${stats.error}` : ""}${stats.skipped ? ` · ⊘ ${stats.skipped}` : ""} of ${totalRows}`
+                    : "";
+                  const headTitle = meta
+                    ? `${meta.providerName} · ${meta.methodLabel}${meta.credits ? ` · ${meta.credits} credit${meta.credits !== 1 ? "s" : ""}/row` : ""}${statsLine}`
+                    : col.fn ? `${col.fn}${statsLine}` : undefined;
                   return (
                     <th
                       key={col.id}
@@ -513,17 +755,53 @@ export function DataGrid({
                       className={`grid-th${colHere ? " col-presence" : ""}`}
                       title={colHere ? colHere.map((u) => `${u.name ?? u.userId}${u.activity ? ` — ${u.activity}` : ""}`).join(", ") : undefined}
                       style={thStyle}
-                      onContextMenu={(e) =>
-                        openCtx(e, [
-                          { label: `Edit column “${col.name}”`, onClick: () => c.editColumn(col) },
-                          { label: `Delete column “${col.name}”`, danger: true, onClick: () => c.deleteColumn(col.id) },
-                        ])
-                      }
+                      onContextMenu={(e) => openCtx(e, columnMenuItems(col))}
                     >
-                      <div className="th-inner">
-                        <span className="th-name">{col.name}</span>
-                        {col.kind === "function" && col.fn && (
-                          <span className="th-fn-badge" title={col.fn}>{col.fn.split(".").pop()}</span>
+                      <div className="th-inner" title={headTitle}>
+                        {meta && (
+                          <span className="th-provider">
+                            <FnIcon fn={{ logo: meta.logo, providerName: meta.providerName, category: meta.category }} size={16} />
+                          </span>
+                        )}
+                        {renaming?.colId === col.id ? (
+                          <input
+                            ref={renameInputRef}
+                            className="th-rename-input"
+                            value={renaming.draft}
+                            onChange={(e) => setRenaming({ colId: col.id, draft: e.target.value })}
+                            onBlur={commitRename}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") commitRename();
+                              if (e.key === "Escape") setRenaming(null);
+                            }}
+                            onContextMenu={(e) => e.stopPropagation()}
+                          />
+                        ) : (
+                          <span className="th-name">{col.name}</span>
+                        )}
+                        {waiting ? (
+                          <span
+                            className="th-wait-badge"
+                            title={`Waiting for inputs: ${waiting.join(", ")}`}
+                          >
+                            Waiting for inputs
+                          </span>
+                        ) : (
+                          col.kind === "function" && (meta || col.fn) && (
+                            <span className="th-fn-badge" title={headTitle}>
+                              {meta ? meta.methodLabel : col.fn!.split(".").pop()}
+                            </span>
+                          )
+                        )}
+                        {stats && stats.error > 0 && (
+                          <button
+                            className="th-err-chip"
+                            title={`${stats.error} row${stats.error !== 1 ? "s" : ""} errored — click to re-run errored & unrun rows`}
+                            onClick={() => c.runColumn(col.id, { force: false })}
+                            disabled={runDisabled || c.runningColId === col.id}
+                          >
+                            ✕ {stats.error}
+                          </button>
                         )}
                         {col.kind === "function" && (
                           <button
@@ -536,6 +814,12 @@ export function DataGrid({
                           </button>
                         )}
                       </div>
+                      {showBar && stats && (
+                        <div className="th-progress" aria-hidden>
+                          <span className="th-progress-done" style={{ width: `${(stats.done / totalRows) * 100}%` }} />
+                          <span className="th-progress-err" style={{ width: `${(stats.error / totalRows) * 100}%` }} />
+                        </div>
+                      )}
                       {c.resizeColumn && (
                         <div
                           className="col-resize"
@@ -620,30 +904,87 @@ export function DataGrid({
                       const tdStyle: PresenceTdStyle | undefined = here
                         ? { "--presence-color": here[0].color }
                         : undefined;
+                      const inSel =
+                        !!selRect &&
+                        idx >= selRect.r1 && idx <= selRect.r2 &&
+                        vc.index >= selRect.c1 && vc.index <= selRect.c2;
+                      const isAnchor = !!sel && sel.anchor.r === idx && sel.anchor.c === vc.index;
                       const isActiveCell = kbd.active?.row === idx && kbd.active?.col === vc.index;
                       return (
                         <td
                           key={col.id}
                           role="gridcell"
                           aria-colindex={vc.index + 1}
+                          aria-selected={inSel || undefined}
                           data-cell={cellDomId(idx, vc.index)}
                           tabIndex={cellTabIndex(idx, vc.index)}
-                          className={`grid-td${here ? " cell-presence" : ""}${isEditingHere ? " presence-editing" : ""}${flashCell === key ? " presence-flash" : ""}`}
+                          className={`grid-td${here ? " cell-presence" : ""}${isEditingHere ? " presence-editing" : ""}${flashCell === key ? " presence-flash" : ""}${inSel ? " cell-selected" : ""}${isAnchor ? " cell-sel-anchor" : ""}`}
                           style={tdStyle}
+                          onMouseDown={(e) => {
+                            if (e.button !== 0) return;
+                            // Never hijack interactions with an open inline editor.
+                            if ((e.target as HTMLElement).closest("input, textarea")) return;
+                            if (e.shiftKey && sel) {
+                              e.preventDefault(); // extend, don't start a text selection
+                              setSel({ anchor: sel.anchor, head: { r: idx, c: vc.index } });
+                            } else {
+                              setSel({ anchor: { r: idx, c: vc.index }, head: { r: idx, c: vc.index } });
+                            }
+                            dragSelRef.current = true;
+                            dragMovedRef.current = false;
+                          }}
+                          onMouseEnter={() => {
+                            if (!dragSelRef.current) return;
+                            dragMovedRef.current = true;
+                            setSel((s) => (s ? { anchor: s.anchor, head: { r: idx, c: vc.index } } : s));
+                          }}
                           onFocus={() => {
                             kbd.onCellFocus(idx, vc.index);
                             c.onActiveCellChange?.({ rowId: row.id, colId: col.id });
+                          }}
+                          onClickCapture={(e) => {
+                            // A drag that extended the range must not ALSO open the
+                            // inline editor of the cell it ended on.
+                            if (dragMovedRef.current) {
+                              dragMovedRef.current = false;
+                              e.preventDefault();
+                              e.stopPropagation();
+                            }
                           }}
                           onClick={
                             c.onActiveCellChange
                               ? () => c.onActiveCellChange!({ rowId: row.id, colId: col.id })
                               : undefined
                           }
-                          onContextMenu={(e) =>
+                          onContextMenu={(e) => {
+                            // Right-click inside a multi-cell range selection acts on the
+                            // range; otherwise the row-selection-aware menu applies.
+                            if (selRect && selCellCount > 1 &&
+                                idx >= selRect.r1 && idx <= selRect.r2 &&
+                                vc.index >= selRect.c1 && vc.index <= selRect.c2) {
+                              openCtx(e, selectionMenuItems());
+                              return;
+                            }
                             openCtx(e, rowCtxItems(row.id, [
+                              ...(col.kind === "function"
+                                ? ([
+                                    { label: "Run cell", disabled: runDisabled, onClick: () => c.runCell(row.id, col.id) },
+                                    ...(c.openCellDetails
+                                      ? [{ label: "View cell details", onClick: () => c.openCellDetails!(col, cell, row.id) }]
+                                      : []),
+                                  ] satisfies CtxItem[])
+                                : []),
+                              {
+                                label: "Copy value",
+                                onClick: () => {
+                                  const v = cell?.value;
+                                  const text = v == null ? "" : typeof v === "string" ? v : JSON.stringify(v);
+                                  void navigator.clipboard?.writeText(text).catch(() => {});
+                                },
+                              },
                               { label: "Clear cell", onClick: () => c.clearCell(row.id, col.id) },
-                            ]))
-                          }
+                            ]));
+                          }}
                         >
                           {here && (
                             <span
@@ -673,7 +1014,7 @@ export function DataGrid({
                                 : undefined
                             }
                             onOpenDetails={
-                              c.openCellDetails ? () => c.openCellDetails!(col, cell) : undefined
+                              c.openCellDetails ? () => c.openCellDetails!(col, cell, row.id) : undefined
                             }
                             onExpand={
                               c.expandCell
@@ -690,6 +1031,7 @@ export function DataGrid({
                             }
                             onRunCell={col.kind === "function" ? () => c.runCell(row.id, col.id) : undefined}
                             running={c.runningCells.has(`${row.id}:${col.id}`)}
+                            waiting={waitingByCol.has(col.id)}
                             isActive={isActiveCell}
                             editSignal={isActiveCell ? kbd.editSignal : 0}
                             editSeed={isActiveCell ? kbd.getEditSeed() : undefined}
@@ -717,16 +1059,20 @@ export function DataGrid({
             onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null); }}
           />
           <div className="ctx-menu" style={{ left: ctxMenu.x, top: ctxMenu.y }}>
-            {ctxMenu.items.map((it, i) => (
-              <button
-                key={i}
-                className={`ctx-item ${it.danger ? "danger" : ""}`}
-                disabled={it.disabled}
-                onClick={() => { setCtxMenu(null); it.onClick(); }}
-              >
-                {it.label}
-              </button>
-            ))}
+            {ctxMenu.items.map((it, i) => {
+              if ("separator" in it) return <div key={i} className="ctx-sep" />;
+              if ("header" in it) return <div key={i} className="ctx-header">{it.header}</div>;
+              return (
+                <button
+                  key={i}
+                  className={`ctx-item ${it.danger ? "danger" : ""}`}
+                  disabled={it.disabled}
+                  onClick={() => { setCtxMenu(null); it.onClick(); }}
+                >
+                  {it.label}
+                </button>
+              );
+            })}
           </div>
         </>
       )}

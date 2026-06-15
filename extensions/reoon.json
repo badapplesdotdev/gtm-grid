@@ -6,7 +6,11 @@
   "description": "Email verification — validate deliverability with quick or deep (power) checks.",
   "baseUrl": "https://emailverifier.reoon.com/api/v1",
   "logo": "https://www.google.com/s2/favicons?domain=reoon.com&sz=128",
-  "auth": { "type": "apiKey", "query": "key", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "query": "key",
+    "secretKey": "apiKey"
+  },
   "methods": [
     {
       "id": "verify",
@@ -17,12 +21,21 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["email"],
+        "required": [
+          "email"
+        ],
         "properties": {
-          "email": { "type": "string", "description": "Email address to verify" },
-          "mode": { "type": "string", "description": "quick | power (default quick). power = deep SMTP/inbox verification" }
+          "email": {
+            "type": "string",
+            "description": "Email address to verify"
+          },
+          "mode": {
+            "type": "string",
+            "description": "quick | power (default quick). power = deep SMTP/inbox verification"
+          }
         }
-      }
+      },
+      "category": "Verify email"
     },
     {
       "id": "createBulkTask",
@@ -33,12 +46,24 @@
       "credits": 3,
       "input": {
         "type": "object",
-        "required": ["emails"],
+        "required": [
+          "emails"
+        ],
         "properties": {
-          "emails": { "type": "array", "items": { "type": "string" }, "description": "Array of email addresses (max 50,000)" },
-          "name": { "type": "string", "description": "Optional task name, max 25 characters" }
+          "emails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Array of email addresses (max 50,000)"
+          },
+          "name": {
+            "type": "string",
+            "description": "Optional task name, max 25 characters"
+          }
         }
-      }
+      },
+      "category": "Verify email"
     },
     {
       "id": "getBulkResult",
@@ -49,11 +74,17 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["task_id"],
+        "required": [
+          "task_id"
+        ],
         "properties": {
-          "task_id": { "type": "string", "description": "Task ID returned by createBulkTask" }
+          "task_id": {
+            "type": "string",
+            "description": "Task ID returned by createBulkTask"
+          }
         }
-      }
+      },
+      "category": "Verify email"
     },
     {
       "id": "accountBalance",
@@ -62,7 +93,10 @@
       "verb": "GET",
       "path": "/check-account-balance/",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     }
   ]
 }

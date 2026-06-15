@@ -191,8 +191,8 @@ describe("Engine.runColumn — formula + conditional gate (temp SQLite DB)", () 
     expect(db.getCell(r1.id, enrich.id)?.status).toBe("done");
     expect(db.getCell(r2.id, enrich.id)?.status ?? "empty").toBe("empty");
     expect(db.getCell(r2.id, enrich.id)?.value ?? null).toBeNull();
-    // The gated-off cell carries a "Condition not met" note so the grid can explain the blank.
-    expect(db.getCell(r2.id, enrich.id)?.error).toBe("Condition not met");
+    // The gated-off cell carries a "Run condition not met" note so the grid can explain the blank.
+    expect(db.getCell(r2.id, enrich.id)?.error).toBe("Run condition not met");
   });
 
   it("marks a cell error (not a silent skip) when the condition throws", async () => {
