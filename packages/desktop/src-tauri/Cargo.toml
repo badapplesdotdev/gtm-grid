@@ -1,6 +1,6 @@
 [package]
 name = "gtmgrid"
-version = "0.9.24"
+version = "0.10.0"
 description = "gtmgrid desktop"
 edition = "2021"
 
