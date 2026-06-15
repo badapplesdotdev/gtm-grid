@@ -27,6 +27,7 @@ import {
   FX_TYPES,
 } from "./AddColumn";
 import { FnIcon, CATEGORY_ICON, categorize, buildColumnMetaMap } from "./FnIcon";
+import { Sheet, SheetContent } from "./components/ui/sheet";
 
 const X = (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
@@ -395,7 +396,8 @@ export function ColumnEditPanel({
   const previewMethod = column.fn === "code" ? null : column.method;
 
   return (
-    <aside className="col-panel">
+    <Sheet open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <SheetContent className="col-panel" srTitle="Edit column">
       {/* ── Identity: what this column executes ── */}
       <header className="cep-head">
         <span className="cep-head-icon">
@@ -572,7 +574,8 @@ export function ColumnEditPanel({
           </button>
         )}
       </footer>
-    </aside>
+      </SheetContent>
+    </Sheet>
   );
 }
 
