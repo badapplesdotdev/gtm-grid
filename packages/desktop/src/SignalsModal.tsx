@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, SignalSource } from "./api";
+import { Dialog, DialogContent } from "./components/ui/dialog";
 
 
 // Fields surfaced in the main form (beyond `required`); the rest go under Advanced.
@@ -344,8 +345,8 @@ export function SignalsModal({
   };
 
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal sig-modal" onClick={(e) => e.stopPropagation()}>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="modal sig-modal" srTitle="From Social Signals">
         <div className="sig-head">
           <div>
             <div className="sig-title">From Social Signals</div>
@@ -446,7 +447,7 @@ export function SignalsModal({
             </div>
           </div>
         )}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

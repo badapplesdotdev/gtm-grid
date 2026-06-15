@@ -4,7 +4,8 @@
 // `setDedupe`/`dedupeTable` (the local sidecar `api.*` or the cloud tRPC
 // mutations), so the SAME popover drives both local and cloud tables.
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
+import { Dialog, DialogContent } from "./components/ui/dialog";
 
 type Keep = "oldest" | "newest";
 
@@ -34,14 +35,6 @@ export function DedupePopover({
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
-  const ref = useRef<HTMLDivElement>(null);
-
-  // Close on Escape.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   // Persist a config change (and surface how many existing dupes were swept).
   const save = async (next: { on: boolean; column: string; keep: Keep }) => {
@@ -89,9 +82,8 @@ export function DedupePopover({
   };
 
   return (
-    <>
-      <div className="popover-scrim" onMouseDown={onClose} />
-      <div className="dedupe-pop" ref={ref} onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label="Deduplication">
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="dedupe-pop" overlayClassName="bare-scrim" aria-label="Deduplication" srTitle="Deduplication">
         <div className="dedupe-pop-head">Deduplication</div>
 
         <label className="dedupe-toggle-row">
@@ -139,7 +131,7 @@ export function DedupePopover({
 
         {msg && <div className="dedupe-msg">{msg}</div>}
         {err && <div className="conn-err dedupe-err">{err}</div>}
-      </div>
-    </>
+      </DialogContent>
+    </Dialog>
   );
 }

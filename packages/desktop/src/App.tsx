@@ -1,9 +1,13 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, memo, lazy, Suspense, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type FolderSummary, type SignalSource, type CellProgressEvent } from "./api";
+import { onActivateKey } from "./lib/utils";
 import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import CellDetails, { extractCode } from "./CellDetails";
 import { DedupePopover } from "./DedupePopover";
+import { CommandPalette, type PaletteAction } from "./CommandPalette";
+import { resolveEditTrigger } from "./useGridKeyboardNav";
+import { Dialog, DialogContent } from "./components/ui/dialog";
 import { BrandIcon } from "./BrandIcon";
 import { ProjectSwitcher, CloudIcon } from "./ProjectSwitcher";
 import { AccountBar, PlanBillingModal } from "./cloud/AccountBar";
@@ -447,26 +451,64 @@ type CellContentProps = {
   running?: boolean;
   /** Notifies the grid when this cell enters/leaves edit mode (presence). */
   onEditingChange?: (editing: boolean) => void;
+  /** Keyboard nav: whether this is the grid's active (roving-tabindex) cell. */
+  isActive?: boolean;
+  /** Keyboard nav: bumped by the grid to request this (active) cell start
+   *  editing. `editSeed` carries the first typed character (type-to-edit). */
+  editSignal?: number;
+  editSeed?: string;
 };
 
-function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running, onEditingChange }: CellContentProps) {
+function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running, onEditingChange, isActive, editSignal, editSeed }: CellContentProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const startEdit = () => {
+  const startEdit = (seed?: string) => {
     if (col.kind === "function") return;
-    const current = cell?.value != null ? String(cell.value) : "";
-    setDraft(current);
+    if (seed !== undefined) {
+      // Type-to-edit: replace with the typed character, cursor at the end.
+      setDraft(seed);
+      setTimeout(() => {
+        const el = inputRef.current;
+        if (el) el.setSelectionRange(el.value.length, el.value.length);
+      }, 0);
+    } else {
+      const current = cell?.value != null ? String(cell.value) : "";
+      setDraft(current);
+      setTimeout(() => inputRef.current?.select(), 0);
+    }
     setEditing(true);
     onEditingChange?.(true);
-    setTimeout(() => inputRef.current?.select(), 0);
   };
+
+  // Enter edit when the grid bumps editSignal — but ONLY for a real request made
+  // while this cell is already active (see resolveEditTrigger for the why).
+  const lastEditSignal = useRef(editSignal ?? 0);
+  const wasActive = useRef(false);
+  useEffect(() => {
+    const { edit, baseline } = resolveEditTrigger({
+      isActive: !!isActive,
+      wasActive: wasActive.current,
+      signal: editSignal ?? 0,
+      baseline: lastEditSignal.current,
+    });
+    lastEditSignal.current = baseline;
+    wasActive.current = !!isActive;
+    if (edit) startEdit(editSeed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive, editSignal]);
 
   const commit = () => {
     setEditing(false);
     onEditingChange?.(false);
     onEdit(draft);
+  };
+
+  // End editing and return focus to the owning cell so arrow-key nav resumes.
+  const refocusCell = () => {
+    const td = inputRef.current?.closest("td");
+    requestAnimationFrame(() => (td as HTMLElement | null)?.focus());
   };
 
   // Per-cell run button (function cells only) — runs just this row × column.
@@ -504,10 +546,16 @@ function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCel
         onChange={e => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={e => {
-          if (e.key === "Enter") commit();
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+            refocusCell();
+          }
           if (e.key === "Escape") {
+            e.preventDefault();
             setEditing(false);
             onEditingChange?.(false);
+            refocusCell();
           }
         }}
         autoFocus
@@ -540,7 +588,7 @@ function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCel
     if (col.kind === "function") {
       return <div className="cell-wrap">{runBtn}<span className="cell-empty">—</span></div>;
     }
-    return <div className="cell-wrap cell-editable" onClick={startEdit}><span className="cell-empty">empty</span></div>;
+    return <div className="cell-wrap cell-editable" onClick={() => startEdit()}><span className="cell-empty">empty</span></div>;
   }
 
   if (cell.status === "error") {
@@ -606,7 +654,7 @@ function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCel
 
   const strVal = cell.value != null ? String(cell.value) : "";
   return (
-    <div className="cell-wrap" onClick={col.kind === "manual" ? startEdit : undefined}
+    <div className="cell-wrap" onClick={col.kind === "manual" ? () => startEdit() : undefined}
          style={col.kind === "manual" ? { cursor: "text" } : {}}>
       <span className="cell-value">{strVal}</span>
       <div className="cell-actions">{expandBtn}{runBtn}</div>
@@ -633,6 +681,10 @@ function cellPropsEqual(prev: CellContentProps, next: CellContentProps): boolean
     prev.cell?.value === next.cell?.value &&
     prev.cell?.status === next.cell?.status &&
     prev.cell?.error === next.cell?.error &&
+    // Edit requests from keyboard nav target only the active cell (others always
+    // get editSignal=0), so comparing it keeps non-active cells from re-rendering.
+    prev.isActive === next.isActive &&
+    prev.editSignal === next.editSignal &&
     // Run/expand/details affordances are gated on whether the handler exists.
     !prev.onRunCell === !next.onRunCell &&
     !prev.onExpand === !next.onExpand &&
@@ -682,8 +734,8 @@ export function ExpandedEditor({
   const save = () => { if (editable) onSave(draft); onClose(); };
 
   return (
-    <div className="popover-scrim" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-      <div className="xcell" style={style} onMouseDown={e => e.stopPropagation()}>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="xcell" style={style} overlayClassName="bare-scrim" srTitle="Edit cell">
         <div className="xcell-head">
           <div className="xcell-head-text">
             <div className="xcell-title">{columnName}</div>
@@ -709,8 +761,8 @@ export function ExpandedEditor({
           <span>{editable ? "Cmd/Ctrl+Enter to save" : "Read only"}</span>
           <span>{words} word{words !== 1 ? "s" : ""}, {chars} chars</span>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -733,8 +785,8 @@ function NewTableModal({ onClose, onCreated, folderId = null }: { onClose: () =>
   };
 
   return (
-    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="modal" srTitle="New table">
         <div className="modal-header">
           <span className="modal-title">New table</span>
           <button className="modal-close" onClick={onClose}><Icon.X /></button>
@@ -752,8 +804,8 @@ function NewTableModal({ onClose, onCreated, folderId = null }: { onClose: () =>
             {saving ? "Creating…" : "Create table"}
           </button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -795,8 +847,8 @@ function NewTableChooser({
   );
 
   return (
-    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ width: 440 }}>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="modal" style={{ width: 440 }} srTitle="New table">
         <div className="modal-header">
           <span className="modal-title">New table</span>
           <button className="modal-close" onClick={onClose}><Icon.X /></button>
@@ -848,8 +900,8 @@ function NewTableChooser({
             )}
           </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -908,15 +960,13 @@ function SyncPopover({
     setTop(Math.max(8, Math.min(anchorTop, window.innerHeight - measured - 8)));
   }, [anchorTop, status, error]);
   return (
-    <>
-      <div className="popover-scrim" onMouseDown={onClose} />
-      <div
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent
         ref={popRef}
         className="sync-pop"
         style={{ top, left: sidebarWidth + 8 }}
-        onMouseDown={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-label={`Sync ${tableName}`}
+        overlayClassName="bare-scrim"
+        srTitle="Sync"
       >
         <div className="sync-pop-head">
           <span className="sync-pop-table">
@@ -991,8 +1041,8 @@ function SyncPopover({
             {error && <div className="account-menu-error" role="alert">{error}</div>}
           </div>
         )}
-      </div>
-    </>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1013,12 +1063,6 @@ function NotificationCenter({
   onClose: () => void;
   anchorRef: { readonly current: HTMLButtonElement | null };
 }) {
-  // Close on Escape for keyboard accessibility.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
   // Position as a viewport-FIXED popover anchored just under the bell and clamped
   // on-screen — as an absolute child of the sidebar header it gets clipped by the
   // sidebar's overflow, so we measure the bell rect and place it fixed instead.
@@ -1032,15 +1076,13 @@ function NotificationCenter({
     setPos({ top: a.bottom + 6, left });
   }, [anchorRef, notifications.length]);
   return (
-    <>
-      <div className="popover-scrim" onMouseDown={onClose} />
-      <div
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent
         ref={popRef}
         className="account-menu notif-pop"
         style={{ top: pos.top, left: pos.left }}
-        role="dialog"
-        aria-label="Notifications"
-        onMouseDown={(e) => e.stopPropagation()}
+        overlayClassName="bare-scrim"
+        srTitle="Notifications"
       >
         <div className="account-menu-head">
           <div className="account-menu-head-text">
@@ -1081,8 +1123,8 @@ function NotificationCenter({
             ))
           )}
         </div>
-      </div>
-    </>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1168,6 +1210,8 @@ export default function App() {
   const [openWebhookToken, setOpenWebhookToken] = useState(0);
   const [showProjects, setShowProjects] = useState(false);
   const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
+  // Cmd/Ctrl+K command palette (quick table nav + actions).
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [currentProjectPath, setCurrentProjectPath] = useState<string | null>(null);
   // Resizable sidebar — width persisted to localStorage, clamped to a sane range.
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -2408,6 +2452,19 @@ export default function App() {
     [inCloud, cloudById],
   );
 
+  // Cmd/Ctrl+K toggles the command palette. Registered once; safe to fire even
+  // while typing in an input (it's a deliberate global shortcut, like browsers').
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // Recency-sorted table cards for the Tables page. Cloud rows sort by their
   // createdAt; local rows by sidebar position (a new table is appended, so the
   // highest position is the most recent).
@@ -2513,6 +2570,9 @@ export default function App() {
         onDragOver={e => onRowDragOver(e, row)}
         onDrop={e => onRowDrop(e, row)}
         onClick={() => (cloudRowLocked ? setShowUpgrade(true) : onSelectTableRow(row))}
+        onKeyDown={onActivateKey(() => (cloudRowLocked ? setShowUpgrade(true) : onSelectTableRow(row)))}
+        role="button"
+        tabIndex={0}
         onContextMenu={local ? (e => openCtx(e, tableMenuItems(local))) : undefined}
       >
         <span className="sidebar-item-icon">
@@ -3138,6 +3198,32 @@ export default function App() {
           trial / auto-sync nudge / update alerts that used to stack here now live
           in the bell notification center (TRI-3308) in the sidebar header. */}
       <PendingInvites onAccepted={onInviteAccepted} />
+      <a
+        className="skip-link"
+        href="#main-content"
+        onClick={(e) => {
+          e.preventDefault();
+          document.getElementById("main-content")?.focus();
+        }}
+      >
+        Skip to content
+      </a>
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        tables={tableList.map((r) => ({ id: String(r.id), name: r.name, kind: r.kind }))}
+        onSelectTable={(id, kind) => {
+          const row = tableList.find((r) => String(r.id) === id && r.kind === kind);
+          if (row) onSelectTableRow(row);
+        }}
+        actions={[
+          { id: "new-table", label: "New table", keywords: "create add", run: () => { setNewTableFolderId(null); setShowNewTableChooser(true); } },
+          { id: "import-csv", label: "Import CSV", keywords: "upload file", run: () => setImportMode(inCloud ? "cloud" : "local") },
+          { id: "browse-tables", label: "Browse all tables", keywords: "search manage", run: () => setView({ kind: "tables" }) },
+          { id: "switch-project", label: "Switch project / workspace", keywords: "change", run: () => setShowProjects(true) },
+          ...(activeWorkspace ? [{ id: "workspace-settings", label: "Workspace settings", keywords: "members seats billing", run: () => setShowWorkspaceSettings(true) } as PaletteAction] : []),
+        ]}
+      />
       <div className="app">
       {/* ── Sidebar ─────────────────────── */}
       <aside className="sidebar">
@@ -3285,6 +3371,9 @@ export default function App() {
                         <div
                           className={`folder-head${into ? " drop-into" : ""}`}
                           onClick={() => toggleFolder(folder.id)}
+                          onKeyDown={onActivateKey(() => toggleFolder(folder.id))}
+                          role="button"
+                          tabIndex={0}
                           onContextMenu={e => openCtx(e, folderMenuItems(folder))}
                           onDragEnter={() => onFolderDragEnter(folder)}
                           onDragOver={e => onFolderDragOver(e, folder)}
@@ -3349,13 +3438,16 @@ export default function App() {
                   className="sidebar-item"
                   style={{ marginTop: 2, opacity: cloudCreating ? 0.6 : 1 }}
                   onClick={() => { setNewTableFolderId(null); setShowNewTableChooser(true); }}
+                  onKeyDown={onActivateKey(() => { setNewTableFolderId(null); setShowNewTableChooser(true); })}
+                  role="button"
+                  tabIndex={0}
                 >
                   <span className="sidebar-item-icon" style={{ color: "var(--accent)" }}><Icon.Plus /></span>
                   <span className="sidebar-item-name" style={{ color: "var(--accent)" }}>
                     {cloudCreating ? "Creating…" : "New table"}
                   </span>
                 </div>
-                <div className="sidebar-item" onClick={() => setImportMode(inCloud ? "cloud" : "local")}>
+                <div className="sidebar-item" onClick={() => setImportMode(inCloud ? "cloud" : "local")} onKeyDown={onActivateKey(() => setImportMode(inCloud ? "cloud" : "local"))} role="button" tabIndex={0}>
                   <span className="sidebar-item-icon"><Icon.Table /></span>
                   <span className="sidebar-item-name">Import CSV…</span>
                 </div>
@@ -3370,7 +3462,7 @@ export default function App() {
 
           {/* AI Providers section — collapsible */}
           <div className="sidebar-section">
-            <div className="sidebar-section-label clickable" onClick={() => setAiSectionOpen(o => !o)}>
+            <div className="sidebar-section-label clickable" onClick={() => setAiSectionOpen(o => !o)} onKeyDown={onActivateKey(() => setAiSectionOpen(o => !o))} role="button" tabIndex={0}>
               <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span className={`connector-group-toggle${aiSectionOpen ? " open" : ""}`}>
                   <Icon.ChevronRight />
@@ -3387,6 +3479,9 @@ export default function App() {
                 key={p.id}
                 className={`ext-item clickable${view.kind === "ai" && view.id === p.id ? " active" : ""}`}
                 onClick={() => setView({ kind: "ai", id: p.id })}
+                onKeyDown={onActivateKey(() => setView({ kind: "ai", id: p.id }))}
+                role="button"
+                tabIndex={0}
               >
                 <BrandIcon logo={p.logo} name={p.name} size={16} />
                 <span className="ext-item-name">{p.name}</span>
@@ -3397,7 +3492,7 @@ export default function App() {
 
           {/* Tools section — collapsible, with Browse all in the header */}
           <div className="sidebar-section">
-            <div className="sidebar-section-label clickable" onClick={() => setExtSectionOpen(o => !o)}>
+            <div className="sidebar-section-label clickable" onClick={() => setExtSectionOpen(o => !o)} onKeyDown={onActivateKey(() => setExtSectionOpen(o => !o))} role="button" tabIndex={0}>
               <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span className={`connector-group-toggle${extSectionOpen ? " open" : ""}`}>
                   <Icon.ChevronRight />
@@ -3421,6 +3516,9 @@ export default function App() {
                   key={e.id}
                   className={`ext-item clickable${view.kind === "extension" && view.id === e.id ? " active" : ""}`}
                   onClick={() => setView({ kind: "extension", id: e.id })}
+                  onKeyDown={onActivateKey(() => setView({ kind: "extension", id: e.id }))}
+                  role="button"
+                  tabIndex={0}
                 >
                   <BrandIcon logo={e.logo} name={e.name} size={16} />
                   <span className="ext-item-name">{e.name}</span>
@@ -3433,6 +3531,9 @@ export default function App() {
                 <div
                   className="ext-item clickable ext-item-more"
                   onClick={() => setView({ kind: "extensions" })}
+                  onKeyDown={onActivateKey(() => setView({ kind: "extensions" }))}
+                  role="button"
+                  tabIndex={0}
                   title="Browse all tools"
                 >
                   +{extensions.length - NAV_PREVIEW_LIMIT} more
@@ -3446,6 +3547,9 @@ export default function App() {
             <div
               className="sidebar-section-label clickable"
               onClick={() => setFnSectionOpen(o => !o)}
+              onKeyDown={onActivateKey(() => setFnSectionOpen(o => !o))}
+              role="button"
+              tabIndex={0}
             >
               <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span className={`connector-group-toggle${fnSectionOpen ? " open" : ""}`}>
@@ -3462,7 +3566,7 @@ export default function App() {
             ) : <>
               {(fnShowAll ? connectors : connectors.slice(0, NAV_PREVIEW_LIMIT)).map(c => (
                 <div key={c.provider} className="connector-group">
-                  <div className="connector-group-header" onClick={() => toggleProvider(c.provider)}>
+                  <div className="connector-group-header" onClick={() => toggleProvider(c.provider)} onKeyDown={onActivateKey(() => toggleProvider(c.provider))} role="button" tabIndex={0}>
                     <span className={`connector-group-toggle${expandedProviders[c.provider] ? " open" : ""}`}>
                       <Icon.ChevronRight />
                     </span>
@@ -3484,6 +3588,9 @@ export default function App() {
                 <div
                   className="ext-item clickable ext-item-more"
                   onClick={() => setFnShowAll(true)}
+                  onKeyDown={onActivateKey(() => setFnShowAll(true))}
+                  role="button"
+                  tabIndex={0}
                   title="Show all providers"
                 >
                   +{connectors.length - NAV_PREVIEW_LIMIT} more
@@ -3494,7 +3601,7 @@ export default function App() {
 
           {/* Skills section — per-tool agent playbooks + custom skills */}
           <div className="sidebar-section">
-            <div className="sidebar-section-label clickable" onClick={() => setSkillsSectionOpen(o => !o)}>
+            <div className="sidebar-section-label clickable" onClick={() => setSkillsSectionOpen(o => !o)} onKeyDown={onActivateKey(() => setSkillsSectionOpen(o => !o))} role="button" tabIndex={0}>
               <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span className={`connector-group-toggle${skillsSectionOpen ? " open" : ""}`}>
                   <Icon.ChevronRight />
@@ -3518,6 +3625,9 @@ export default function App() {
                   key={s.id}
                   className={`ext-item clickable${view.kind === "skill" && view.id === s.id ? " active" : ""}`}
                   onClick={() => setView({ kind: "skill", id: s.id })}
+                  onKeyDown={onActivateKey(() => setView({ kind: "skill", id: s.id }))}
+                  role="button"
+                  tabIndex={0}
                 >
                   <BrandIcon logo={s.logo} name={s.name} size={16} />
                   <span className="ext-item-name">{s.name}</span>
@@ -3529,6 +3639,9 @@ export default function App() {
                 <div
                   className="ext-item clickable ext-item-more"
                   onClick={() => setView({ kind: "skills" })}
+                  onKeyDown={onActivateKey(() => setView({ kind: "skills" }))}
+                  role="button"
+                  tabIndex={0}
                   title="Browse all skills"
                 >
                   +{skills.length - NAV_PREVIEW_LIMIT} more
@@ -3568,7 +3681,7 @@ export default function App() {
       </aside>
 
       {/* ── Main area ───────────────────── */}
-      <div className="main">
+      <div className="main" id="main-content" tabIndex={-1}>
 
         {healthStatus === "offline" && (
           <div className="offline-banner">
@@ -3880,13 +3993,8 @@ export default function App() {
 
       {/* Invite-accepted celebration: confetti fires on accept; this confirms it. */}
       {celebrateInvite && (
-        <div
-          className="overlay"
-          onMouseDown={(e) =>
-            e.target === e.currentTarget && setCelebrateInvite(null)
-          }
-        >
-          <div className="modal celebrate" style={{ width: 380 }}>
+        <Dialog open onOpenChange={(o) => { if (!o) setCelebrateInvite(null); }}>
+          <DialogContent className="modal celebrate" style={{ width: 380 }} srTitle="Invite accepted">
             <div className="celebrate__emoji">🎉</div>
             <h2 className="celebrate__title">
               You&apos;re in{celebrateInvite.workspaceName ? "!" : "!"}
@@ -3902,8 +4010,8 @@ export default function App() {
             >
               Let&apos;s go
             </button>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* Upgrade prompt for the cloud-locked / trial-expired state. Reuses the
@@ -4017,8 +4125,8 @@ export default function App() {
       )}
 
       {confirmDeleteTable && (
-        <div className="overlay" onMouseDown={e => e.target === e.currentTarget && setConfirmDeleteTable(null)}>
-          <div className="modal" style={{ width: 380 }}>
+        <Dialog open onOpenChange={(o) => { if (!o) setConfirmDeleteTable(null); }}>
+          <DialogContent className="modal" style={{ width: 380 }} srTitle="Delete table">
             <div className="modal-header">
               <span className="modal-title">Delete table</span>
               <button className="modal-close" onClick={() => setConfirmDeleteTable(null)}><Icon.X /></button>
@@ -4038,13 +4146,13 @@ export default function App() {
                 Delete table
               </button>
             </div>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       {confirmDeleteCloudTable && (
-        <div className="overlay" onMouseDown={e => e.target === e.currentTarget && setConfirmDeleteCloudTable(null)}>
-          <div className="modal">
+        <Dialog open onOpenChange={(o) => { if (!o) setConfirmDeleteCloudTable(null); }}>
+          <DialogContent className="modal" srTitle="Delete table">
             <div className="modal-header">
               <span className="modal-title">Delete table</span>
               <button className="modal-close" onClick={() => setConfirmDeleteCloudTable(null)}><Icon.X /></button>
@@ -4069,8 +4177,8 @@ export default function App() {
                 Delete table
               </button>
             </div>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* Per-table sync popover (TRI-3297). */}
@@ -4121,8 +4229,8 @@ export default function App() {
           overwrites cloud data, so name the table + row count before sending
           confirmOverwrite. A first push (unlinked → create) never reaches here. */}
       {overwriteConfirm && (
-        <div className="overlay" onMouseDown={e => e.target === e.currentTarget && setOverwriteConfirm(null)}>
-          <div className="modal" style={{ width: 400 }}>
+        <Dialog open onOpenChange={(o) => { if (!o) setOverwriteConfirm(null); }}>
+          <DialogContent className="modal" style={{ width: 400 }} srTitle="Overwrite cloud copy?">
             <div className="modal-header">
               <span className="modal-title">Overwrite cloud copy?</span>
               <button className="modal-close" onClick={() => setOverwriteConfirm(null)}><Icon.X /></button>
@@ -4138,16 +4246,16 @@ export default function App() {
                 Keep my version — overwrite the cloud copy
               </button>
             </div>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* Bulk destructive-overwrite confirm (TRI-3307): "Sync all" with linked
           tables pending shows ONE confirm naming the COUNT, then re-pushes ALL of
           them on accept. On cancel none of the linked tables push. */}
       {bulkOverwriteConfirm && (
-        <div className="overlay" onMouseDown={e => e.target === e.currentTarget && setBulkOverwriteConfirm(null)}>
-          <div className="modal" style={{ width: 400 }}>
+        <Dialog open onOpenChange={(o) => { if (!o) setBulkOverwriteConfirm(null); }}>
+          <DialogContent className="modal" style={{ width: 400 }} srTitle="Re-push linked tables?">
             <div className="modal-header">
               <span className="modal-title">Re-push linked tables?</span>
               <button className="modal-close" onClick={() => setBulkOverwriteConfirm(null)}><Icon.X /></button>
@@ -4163,16 +4271,16 @@ export default function App() {
                 Keep my versions — overwrite the cloud copies
               </button>
             </div>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* Auto-sync enable-time confirm (TRI-3298): turning the setting ON
           requires confirming the repeated-overwrite behaviour. Only enables on
           accept; cancelling leaves it OFF. */}
       {autoSyncEnableConfirm && (
-        <div className="overlay" onMouseDown={e => e.target === e.currentTarget && setAutoSyncEnableConfirm(false)}>
-          <div className="modal" style={{ width: 420 }}>
+        <Dialog open onOpenChange={(o) => { if (!o) setAutoSyncEnableConfirm(false); }}>
+          <DialogContent className="modal" style={{ width: 420 }} srTitle="Turn on auto-sync?">
             <div className="modal-header">
               <span className="modal-title">Turn on auto-sync?</span>
               <button className="modal-close" onClick={() => setAutoSyncEnableConfirm(false)}><Icon.X /></button>
@@ -4191,8 +4299,8 @@ export default function App() {
                 Turn on — overwrite cloud copies automatically
               </button>
             </div>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       {showProjects && (

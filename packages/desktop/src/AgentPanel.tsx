@@ -13,6 +13,7 @@ import { Streamdown as StreamdownImpl } from "streamdown";
 // JSX component"). Retype it to the props we actually pass.
 const Streamdown = StreamdownImpl as unknown as FC<{ className?: string; children?: ReactNode }>;
 import { api, API_BASE, type AgentSession, type AgentStatus } from "./api";
+import { onActivateKey } from "./lib/utils";
 import { capture } from "./analytics";
 import { abortAllRuns, abortRun, tableAbortKey, type AbortControllers } from "./agentAbort";
 
@@ -1324,7 +1325,7 @@ export default function AgentPanel({
                     <div className="agent-history-empty">No past conversations for this project yet.</div>
                   ) : (
                     sessions.map((s) => (
-                      <div key={s.id} className="agent-history-row" onClick={() => openSession(s)}>
+                      <div key={s.id} className="agent-history-row" onClick={() => openSession(s)} onKeyDown={onActivateKey(() => openSession(s))} role="button" tabIndex={0}>
                         <span className="agent-history-logo">{AGENT_LOGO[agent]}</span>
                         <span className="agent-history-title" title={s.title}>{s.title}</span>
                         <span className="agent-history-time">{relativeTime(s.updatedAt)}</span>

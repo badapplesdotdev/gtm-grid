@@ -20,6 +20,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { type BillingCycle, resolvePlanId } from "@gtmgrid/cloud";
+import { Dialog, DialogContent } from "../components/ui/dialog";
 import type { Id } from "./ids";
 import type { CloudProject } from "./useCloudGrid";
 import { cloudEnabled, syncWorkspacePlan } from "./client";
@@ -530,8 +531,8 @@ export function PlanBillingModal(props: {
   const isFree = selectedPlan === "free";
 
   return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ width: 460 }}>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="modal" srTitle="Plan & billing" style={{ width: 460 }}>
         <div className="modal-header">
           <span className="modal-title">Plan &amp; billing</span>
           <button className="modal-close" onClick={onClose} aria-label="Close">
@@ -577,17 +578,11 @@ export function PlanBillingModal(props: {
             Upgrade / change plan
           </button>
         </div>
-      </div>
 
       {/* Plan-selection modal — the SHARED PlanGrid + the existing checkout. */}
       {showUpgrade && (
-        <div
-          className="overlay"
-          onMouseDown={(e) =>
-            e.target === e.currentTarget && setShowUpgrade(false)
-          }
-        >
-          <div className="modal gtm-onboarding-modal" style={{ width: 900, maxWidth: "94vw" }}>
+        <Dialog open onOpenChange={(o) => { if (!o) setShowUpgrade(false); }}>
+          <DialogContent className="modal gtm-onboarding-modal" srTitle="Choose a plan" style={{ width: 900, maxWidth: "94vw" }}>
             <div className="modal-header">
               <span className="modal-title">Choose a plan</span>
               <BillingToggle billing={billing} onChange={setBilling} />
@@ -635,10 +630,11 @@ export function PlanBillingModal(props: {
                     : "Continue to checkout"}
               </button>
             </div>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
-    </div>
+    </DialogContent>
+    </Dialog>
   );
 }
 
