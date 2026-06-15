@@ -1,9 +1,11 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, memo, lazy, Suspense, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type FolderSummary, type SignalSource, type CellProgressEvent } from "./api";
+import { onActivateKey } from "./lib/utils";
 import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import CellDetails, { extractCode } from "./CellDetails";
 import { DedupePopover } from "./DedupePopover";
+import { CommandPalette, type PaletteAction } from "./CommandPalette";
 import { Dialog, DialogContent } from "./components/ui/dialog";
 import { BrandIcon } from "./BrandIcon";
 import { ProjectSwitcher, CloudIcon } from "./ProjectSwitcher";
@@ -1197,6 +1199,8 @@ export default function App() {
   const [openWebhookToken, setOpenWebhookToken] = useState(0);
   const [showProjects, setShowProjects] = useState(false);
   const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
+  // Cmd/Ctrl+K command palette (quick table nav + actions).
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [currentProjectPath, setCurrentProjectPath] = useState<string | null>(null);
   // Resizable sidebar — width persisted to localStorage, clamped to a sane range.
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -2437,6 +2441,19 @@ export default function App() {
     [inCloud, cloudById],
   );
 
+  // Cmd/Ctrl+K toggles the command palette. Registered once; safe to fire even
+  // while typing in an input (it's a deliberate global shortcut, like browsers').
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // Recency-sorted table cards for the Tables page. Cloud rows sort by their
   // createdAt; local rows by sidebar position (a new table is appended, so the
   // highest position is the most recent).
@@ -2542,6 +2559,9 @@ export default function App() {
         onDragOver={e => onRowDragOver(e, row)}
         onDrop={e => onRowDrop(e, row)}
         onClick={() => (cloudRowLocked ? setShowUpgrade(true) : onSelectTableRow(row))}
+        onKeyDown={onActivateKey(() => (cloudRowLocked ? setShowUpgrade(true) : onSelectTableRow(row)))}
+        role="button"
+        tabIndex={0}
         onContextMenu={local ? (e => openCtx(e, tableMenuItems(local))) : undefined}
       >
         <span className="sidebar-item-icon">
@@ -3167,6 +3187,32 @@ export default function App() {
           trial / auto-sync nudge / update alerts that used to stack here now live
           in the bell notification center (TRI-3308) in the sidebar header. */}
       <PendingInvites onAccepted={onInviteAccepted} />
+      <a
+        className="skip-link"
+        href="#main-content"
+        onClick={(e) => {
+          e.preventDefault();
+          document.getElementById("main-content")?.focus();
+        }}
+      >
+        Skip to content
+      </a>
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        tables={tableList.map((r) => ({ id: String(r.id), name: r.name, kind: r.kind }))}
+        onSelectTable={(id, kind) => {
+          const row = tableList.find((r) => String(r.id) === id && r.kind === kind);
+          if (row) onSelectTableRow(row);
+        }}
+        actions={[
+          { id: "new-table", label: "New table", keywords: "create add", run: () => { setNewTableFolderId(null); setShowNewTableChooser(true); } },
+          { id: "import-csv", label: "Import CSV", keywords: "upload file", run: () => setImportMode(inCloud ? "cloud" : "local") },
+          { id: "browse-tables", label: "Browse all tables", keywords: "search manage", run: () => setView({ kind: "tables" }) },
+          { id: "switch-project", label: "Switch project / workspace", keywords: "change", run: () => setShowProjects(true) },
+          ...(activeWorkspace ? [{ id: "workspace-settings", label: "Workspace settings", keywords: "members seats billing", run: () => setShowWorkspaceSettings(true) } as PaletteAction] : []),
+        ]}
+      />
       <div className="app">
       {/* ── Sidebar ─────────────────────── */}
       <aside className="sidebar">
@@ -3314,6 +3360,9 @@ export default function App() {
                         <div
                           className={`folder-head${into ? " drop-into" : ""}`}
                           onClick={() => toggleFolder(folder.id)}
+                          onKeyDown={onActivateKey(() => toggleFolder(folder.id))}
+                          role="button"
+                          tabIndex={0}
                           onContextMenu={e => openCtx(e, folderMenuItems(folder))}
                           onDragEnter={() => onFolderDragEnter(folder)}
                           onDragOver={e => onFolderDragOver(e, folder)}
@@ -3378,13 +3427,16 @@ export default function App() {
                   className="sidebar-item"
                   style={{ marginTop: 2, opacity: cloudCreating ? 0.6 : 1 }}
                   onClick={() => { setNewTableFolderId(null); setShowNewTableChooser(true); }}
+                  onKeyDown={onActivateKey(() => { setNewTableFolderId(null); setShowNewTableChooser(true); })}
+                  role="button"
+                  tabIndex={0}
                 >
                   <span className="sidebar-item-icon" style={{ color: "var(--accent)" }}><Icon.Plus /></span>
                   <span className="sidebar-item-name" style={{ color: "var(--accent)" }}>
                     {cloudCreating ? "Creating…" : "New table"}
                   </span>
                 </div>
-                <div className="sidebar-item" onClick={() => setImportMode(inCloud ? "cloud" : "local")}>
+                <div className="sidebar-item" onClick={() => setImportMode(inCloud ? "cloud" : "local")} onKeyDown={onActivateKey(() => setImportMode(inCloud ? "cloud" : "local"))} role="button" tabIndex={0}>
                   <span className="sidebar-item-icon"><Icon.Table /></span>
                   <span className="sidebar-item-name">Import CSV…</span>
                 </div>
@@ -3399,7 +3451,7 @@ export default function App() {
 
           {/* AI Providers section — collapsible */}
           <div className="sidebar-section">
-            <div className="sidebar-section-label clickable" onClick={() => setAiSectionOpen(o => !o)}>
+            <div className="sidebar-section-label clickable" onClick={() => setAiSectionOpen(o => !o)} onKeyDown={onActivateKey(() => setAiSectionOpen(o => !o))} role="button" tabIndex={0}>
               <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span className={`connector-group-toggle${aiSectionOpen ? " open" : ""}`}>
                   <Icon.ChevronRight />
@@ -3416,6 +3468,9 @@ export default function App() {
                 key={p.id}
                 className={`ext-item clickable${view.kind === "ai" && view.id === p.id ? " active" : ""}`}
                 onClick={() => setView({ kind: "ai", id: p.id })}
+                onKeyDown={onActivateKey(() => setView({ kind: "ai", id: p.id }))}
+                role="button"
+                tabIndex={0}
               >
                 <BrandIcon logo={p.logo} name={p.name} size={16} />
                 <span className="ext-item-name">{p.name}</span>
@@ -3426,7 +3481,7 @@ export default function App() {
 
           {/* Tools section — collapsible, with Browse all in the header */}
           <div className="sidebar-section">
-            <div className="sidebar-section-label clickable" onClick={() => setExtSectionOpen(o => !o)}>
+            <div className="sidebar-section-label clickable" onClick={() => setExtSectionOpen(o => !o)} onKeyDown={onActivateKey(() => setExtSectionOpen(o => !o))} role="button" tabIndex={0}>
               <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span className={`connector-group-toggle${extSectionOpen ? " open" : ""}`}>
                   <Icon.ChevronRight />
@@ -3450,6 +3505,9 @@ export default function App() {
                   key={e.id}
                   className={`ext-item clickable${view.kind === "extension" && view.id === e.id ? " active" : ""}`}
                   onClick={() => setView({ kind: "extension", id: e.id })}
+                  onKeyDown={onActivateKey(() => setView({ kind: "extension", id: e.id }))}
+                  role="button"
+                  tabIndex={0}
                 >
                   <BrandIcon logo={e.logo} name={e.name} size={16} />
                   <span className="ext-item-name">{e.name}</span>
@@ -3462,6 +3520,9 @@ export default function App() {
                 <div
                   className="ext-item clickable ext-item-more"
                   onClick={() => setView({ kind: "extensions" })}
+                  onKeyDown={onActivateKey(() => setView({ kind: "extensions" }))}
+                  role="button"
+                  tabIndex={0}
                   title="Browse all tools"
                 >
                   +{extensions.length - NAV_PREVIEW_LIMIT} more
@@ -3475,6 +3536,9 @@ export default function App() {
             <div
               className="sidebar-section-label clickable"
               onClick={() => setFnSectionOpen(o => !o)}
+              onKeyDown={onActivateKey(() => setFnSectionOpen(o => !o))}
+              role="button"
+              tabIndex={0}
             >
               <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span className={`connector-group-toggle${fnSectionOpen ? " open" : ""}`}>
@@ -3491,7 +3555,7 @@ export default function App() {
             ) : <>
               {(fnShowAll ? connectors : connectors.slice(0, NAV_PREVIEW_LIMIT)).map(c => (
                 <div key={c.provider} className="connector-group">
-                  <div className="connector-group-header" onClick={() => toggleProvider(c.provider)}>
+                  <div className="connector-group-header" onClick={() => toggleProvider(c.provider)} onKeyDown={onActivateKey(() => toggleProvider(c.provider))} role="button" tabIndex={0}>
                     <span className={`connector-group-toggle${expandedProviders[c.provider] ? " open" : ""}`}>
                       <Icon.ChevronRight />
                     </span>
@@ -3513,6 +3577,9 @@ export default function App() {
                 <div
                   className="ext-item clickable ext-item-more"
                   onClick={() => setFnShowAll(true)}
+                  onKeyDown={onActivateKey(() => setFnShowAll(true))}
+                  role="button"
+                  tabIndex={0}
                   title="Show all providers"
                 >
                   +{connectors.length - NAV_PREVIEW_LIMIT} more
@@ -3523,7 +3590,7 @@ export default function App() {
 
           {/* Skills section — per-tool agent playbooks + custom skills */}
           <div className="sidebar-section">
-            <div className="sidebar-section-label clickable" onClick={() => setSkillsSectionOpen(o => !o)}>
+            <div className="sidebar-section-label clickable" onClick={() => setSkillsSectionOpen(o => !o)} onKeyDown={onActivateKey(() => setSkillsSectionOpen(o => !o))} role="button" tabIndex={0}>
               <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span className={`connector-group-toggle${skillsSectionOpen ? " open" : ""}`}>
                   <Icon.ChevronRight />
@@ -3547,6 +3614,9 @@ export default function App() {
                   key={s.id}
                   className={`ext-item clickable${view.kind === "skill" && view.id === s.id ? " active" : ""}`}
                   onClick={() => setView({ kind: "skill", id: s.id })}
+                  onKeyDown={onActivateKey(() => setView({ kind: "skill", id: s.id }))}
+                  role="button"
+                  tabIndex={0}
                 >
                   <BrandIcon logo={s.logo} name={s.name} size={16} />
                   <span className="ext-item-name">{s.name}</span>
@@ -3558,6 +3628,9 @@ export default function App() {
                 <div
                   className="ext-item clickable ext-item-more"
                   onClick={() => setView({ kind: "skills" })}
+                  onKeyDown={onActivateKey(() => setView({ kind: "skills" }))}
+                  role="button"
+                  tabIndex={0}
                   title="Browse all skills"
                 >
                   +{skills.length - NAV_PREVIEW_LIMIT} more
@@ -3597,7 +3670,7 @@ export default function App() {
       </aside>
 
       {/* ── Main area ───────────────────── */}
-      <div className="main">
+      <div className="main" id="main-content" tabIndex={-1}>
 
         {healthStatus === "offline" && (
           <div className="offline-banner">

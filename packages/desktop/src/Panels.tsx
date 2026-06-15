@@ -4,6 +4,7 @@
 
 import { useState, useEffect, useCallback, ReactNode, type MouseEvent } from "react";
 import { api, ExtensionDetail, ExtensionInfo, AiProviderInfo, CredentialScope, SkillInfo, SkillDetail } from "./api";
+import { onActivateKey } from "./lib/utils";
 import { Dialog, DialogContent } from "./components/ui/dialog";
 import { aiProviderCredId } from "./cloud/credentials";
 import { Markdown } from "./AgentPanel";
@@ -1121,7 +1122,7 @@ export function TablesBrowse({
             const sel = selected.has(c.key);
             const ren = renaming === c.key;
             return (
-              <div key={c.key} className={`tp-row tp-grid${sel ? " selected" : ""}${c.active ? " active" : ""}`} onClick={() => (ren ? undefined : onOpen(c))}>
+              <div key={c.key} className={`tp-row tp-grid${sel ? " selected" : ""}${c.active ? " active" : ""}`} onClick={() => (ren ? undefined : onOpen(c))} onKeyDown={onActivateKey(() => (ren ? undefined : onOpen(c)))} role="button" tabIndex={0}>
                 <span className="tp-cell-sel" onClick={(e) => e.stopPropagation()}>
                   <button className={`tp-check${sel ? " on" : ""}`} onClick={() => toggleSel(c.key)}>{sel && <I.Check s={11} />}</button>
                 </span>
@@ -1162,7 +1163,7 @@ export function TablesBrowse({
       ) : (
         <div className="tp-cards">
           {visible.map((c) => (
-            <div key={c.key} className={`tp-card${selected.has(c.key) ? " selected" : ""}${c.active ? " active" : ""}`} onClick={() => onOpen(c)}>
+            <div key={c.key} className={`tp-card${selected.has(c.key) ? " selected" : ""}${c.active ? " active" : ""}`} onClick={() => onOpen(c)} onKeyDown={onActivateKey(() => onOpen(c))} role="button" tabIndex={0}>
               <div className="tp-card-top">
                 <span className="tp-card-ic"><I.Table s={16} /></span>
                 {c.kind === "local" && <button className={`tp-star${c.favorite ? " on" : ""}`} onClick={(e) => { e.stopPropagation(); onFavorite(c); }}><I.Star s={13} filled={c.favorite} /></button>}
