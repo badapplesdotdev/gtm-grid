@@ -6,6 +6,7 @@ import { AppLoader } from "./AppLoader";
 import CellDetails, { extractCode } from "./CellDetails";
 import { DedupePopover } from "./DedupePopover";
 import { CommandPalette, type PaletteAction } from "./CommandPalette";
+import { resolveEditTrigger } from "./useGridKeyboardNav";
 import { Dialog, DialogContent } from "./components/ui/dialog";
 import { BrandIcon } from "./BrandIcon";
 import { ProjectSwitcher, CloudIcon } from "./ProjectSwitcher";
@@ -450,13 +451,15 @@ type CellContentProps = {
   running?: boolean;
   /** Notifies the grid when this cell enters/leaves edit mode (presence). */
   onEditingChange?: (editing: boolean) => void;
+  /** Keyboard nav: whether this is the grid's active (roving-tabindex) cell. */
+  isActive?: boolean;
   /** Keyboard nav: bumped by the grid to request this (active) cell start
    *  editing. `editSeed` carries the first typed character (type-to-edit). */
   editSignal?: number;
   editSeed?: string;
 };
 
-function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running, onEditingChange, editSignal, editSeed }: CellContentProps) {
+function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCell, running, onEditingChange, isActive, editSignal, editSeed }: CellContentProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -479,15 +482,22 @@ function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCel
     onEditingChange?.(true);
   };
 
-  // Enter edit when the grid bumps editSignal for the active cell.
-  const lastEditSignal = useRef(0);
+  // Enter edit when the grid bumps editSignal — but ONLY for a real request made
+  // while this cell is already active (see resolveEditTrigger for the why).
+  const lastEditSignal = useRef(editSignal ?? 0);
+  const wasActive = useRef(false);
   useEffect(() => {
-    if (editSignal && editSignal !== lastEditSignal.current) {
-      lastEditSignal.current = editSignal;
-      startEdit(editSeed);
-    }
+    const { edit, baseline } = resolveEditTrigger({
+      isActive: !!isActive,
+      wasActive: wasActive.current,
+      signal: editSignal ?? 0,
+      baseline: lastEditSignal.current,
+    });
+    lastEditSignal.current = baseline;
+    wasActive.current = !!isActive;
+    if (edit) startEdit(editSeed);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editSignal]);
+  }, [isActive, editSignal]);
 
   const commit = () => {
     setEditing(false);
@@ -673,6 +683,7 @@ function cellPropsEqual(prev: CellContentProps, next: CellContentProps): boolean
     prev.cell?.error === next.cell?.error &&
     // Edit requests from keyboard nav target only the active cell (others always
     // get editSignal=0), so comparing it keeps non-active cells from re-rendering.
+    prev.isActive === next.isActive &&
     prev.editSignal === next.editSignal &&
     // Run/expand/details affordances are gated on whether the handler exists.
     !prev.onRunCell === !next.onRunCell &&

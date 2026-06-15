@@ -20,6 +20,26 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 export type ActiveCell = { row: number; col: number };
 
+/**
+ * Decide whether a cell should ENTER edit mode this render, given the keyboard
+ * nav edit signal. The subtlety: when a cell first becomes active it inherits
+ * the current (possibly non-zero) signal, which must NOT be mistaken for a fresh
+ * edit request — otherwise arrow-navigating onto a cell reopens the editor with
+ * a stale seed. So edits fire ONLY when the signal increments while the cell was
+ * ALREADY active. Returns the new baseline to store. Pure, so it's unit-tested.
+ */
+export function resolveEditTrigger(args: {
+  isActive: boolean;
+  wasActive: boolean;
+  signal: number;
+  baseline: number;
+}): { edit: boolean; baseline: number } {
+  const { isActive, wasActive, signal, baseline } = args;
+  if (isActive && !wasActive) return { edit: false, baseline: signal };
+  if (isActive && signal !== baseline) return { edit: true, baseline: signal };
+  return { edit: false, baseline };
+}
+
 export const cellDomId = (row: number, col: number): string => `${row}:${col}`;
 
 type Options = {

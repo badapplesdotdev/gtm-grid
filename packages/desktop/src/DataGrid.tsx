@@ -690,6 +690,7 @@ export function DataGrid({
                             }
                             onRunCell={col.kind === "function" ? () => c.runCell(row.id, col.id) : undefined}
                             running={c.runningCells.has(`${row.id}:${col.id}`)}
+                            isActive={isActiveCell}
                             editSignal={isActiveCell ? kbd.editSignal : 0}
                             editSeed={isActiveCell ? kbd.getEditSeed() : undefined}
                           />

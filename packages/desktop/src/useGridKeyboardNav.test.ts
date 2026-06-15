@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useGridKeyboardNav } from "./useGridKeyboardNav";
+import { useGridKeyboardNav, resolveEditTrigger } from "./useGridKeyboardNav";
 
 /** Minimal React.KeyboardEvent stand-in for the handler under test. */
 function keyEvent(key: string, mods: Partial<{ shiftKey: boolean; metaKey: boolean; ctrlKey: boolean; altKey: boolean }> = {}) {
@@ -25,8 +25,8 @@ const baseOpts = () => ({
   scrollToIndex: vi.fn(),
 });
 
-function setup(extra: Partial<ReturnType<typeof baseOpts>> = {}) {
-  return renderHook(() => useGridKeyboardNav({ ...baseOpts(), ...extra }));
+function setup(extra: Record<string, unknown> = {}) {
+  return renderHook(() => useGridKeyboardNav({ ...baseOpts(), ...extra } as Parameters<typeof useGridKeyboardNav>[0]));
 }
 
 describe("useGridKeyboardNav", () => {
@@ -113,5 +113,29 @@ describe("useGridKeyboardNav", () => {
     (ev as unknown as { target: { tagName: string } }).target = { tagName: "INPUT" };
     act(() => result.current.onKeyDown(ev));
     expect(result.current.active).toEqual({ row: 1, col: 1 });
+  });
+});
+
+describe("resolveEditTrigger", () => {
+  it("does NOT edit when a cell first becomes active (stale signal) — regression", () => {
+    // Cell becomes active inheriting a non-zero signal from a prior cell's edit.
+    // It must baseline, not reopen the editor. (Bug found in e2e.)
+    expect(resolveEditTrigger({ isActive: true, wasActive: false, signal: 3, baseline: 0 }))
+      .toEqual({ edit: false, baseline: 3 });
+  });
+
+  it("edits when the signal increments while already active", () => {
+    expect(resolveEditTrigger({ isActive: true, wasActive: true, signal: 4, baseline: 3 }))
+      .toEqual({ edit: true, baseline: 4 });
+  });
+
+  it("does not edit when active with an unchanged signal", () => {
+    expect(resolveEditTrigger({ isActive: true, wasActive: true, signal: 3, baseline: 3 }))
+      .toEqual({ edit: false, baseline: 3 });
+  });
+
+  it("does not edit when inactive (and preserves baseline)", () => {
+    expect(resolveEditTrigger({ isActive: false, wasActive: true, signal: 5, baseline: 3 }))
+      .toEqual({ edit: false, baseline: 3 });
   });
 });
