@@ -17,15 +17,15 @@
 
 import { autoSyncNudgeVisible } from "./cloudSync";
 
-/** The three notification kinds migrated from the stacked banners. Also the
- * stable item `id` (one of each is live at a time), so dismissed/seen sets key
- * on the kind. */
-export type NotificationKind = "trial" | "autoSyncNudge" | "update";
+/** The notification kinds migrated from the stacked banners. Also the stable
+ * item `id` (one of each is live at a time), so dismissed/seen sets key on the
+ * kind. App-update alerts are NOT here — they live in the dedicated download
+ * affordance next to the bell (UpdateDialog), not the notification center. */
+export type NotificationKind = "trial" | "autoSyncNudge";
 
-/** All kinds in newest-first display order. `update` is the most actionable
- * (a release is ready), then the auto-sync nudge, then the trial countdown. */
+/** All kinds in newest-first display order: the auto-sync nudge, then the trial
+ * countdown. */
 export const NOTIFICATION_ORDER: readonly NotificationKind[] = [
-  "update",
   "autoSyncNudge",
   "trial",
 ];
@@ -49,9 +49,7 @@ export interface NotificationAction {
 export type NotificationActionId =
   | "trial.upgrade"
   | "autoSync.enable"
-  | "autoSync.dismiss"
-  | "update.install"
-  | "update.dismiss";
+  | "autoSync.dismiss";
 
 /** A built notification item, newest-first in {@link buildNotifications}. */
 export interface AppNotification {
@@ -91,10 +89,6 @@ export interface NotificationInputs {
     readonly isAuthenticated: boolean;
     readonly autoSyncOn: boolean;
   };
-  /** The available newer release version, or null when none / dismissed upstream. */
-  readonly updateVersion: string | null;
-  /** Optional error text to append to the update item (e.g. a failed install). */
-  readonly updateError: string | null;
   /** Persisted dismissed/seen kinds. */
   readonly persist: NotificationPersistState;
 }
@@ -135,39 +129,20 @@ function autoSyncNudgeNotification(): AppNotification {
   };
 }
 
-/** The update-available item — mirrors the old `.update-banner`. */
-function updateNotification(version: string, error: string | null): AppNotification {
-  return {
-    id: "update",
-    kind: "update",
-    title: "Update ready",
-    body: `GTM Grid v${version} is available.${error ? ` ${error}` : ""}`,
-    severity: "info",
-    dismissible: true,
-    actions: [
-      { id: "update.install", label: "Update & restart", variant: "primary" },
-      { id: "update.dismiss", label: "Later", variant: "ghost" },
-    ],
-  };
-}
-
 /**
  * Derive the active notification list (newest-first) from app state. Each kind's
  * eligibility matches the banner it replaces:
- *   - update: a newer version exists and it hasn't been dismissed,
  *   - autoSyncNudge: {@link autoSyncNudgeVisible} (eligible cloud user, auto-sync
  *     OFF, not dismissed),
  *   - trial: a trial countdown is present (the trial banner is NOT dismissible).
  * Dismissed kinds are excluded so a dismissed item never reappears in-session or
- * across sessions (the caller backs `persist` with localStorage).
+ * across sessions (the caller backs `persist` with localStorage). App-update
+ * alerts are intentionally absent — they surface via the bell-adjacent download
+ * button + UpdateDialog instead.
  */
 export function buildNotifications(input: NotificationInputs): readonly AppNotification[] {
   const dismissed = new Set(input.persist.dismissed);
   const out: AppNotification[] = [];
-
-  if (input.updateVersion !== null && !dismissed.has("update")) {
-    out.push(updateNotification(input.updateVersion, input.updateError));
-  }
 
   const nudgeVisible = autoSyncNudgeVisible({
     cloudEnabled: input.autoSync.cloudEnabled,
@@ -250,7 +225,9 @@ export const LEGACY_AUTO_SYNC_NUDGE_KEY = "gtmgrid:autoSyncNudgeDismissed";
 
 /** Whether a parsed value is a NotificationKind (drops unknown/garbage kinds). */
 function isKind(v: unknown): v is NotificationKind {
-  return v === "trial" || v === "autoSyncNudge" || v === "update";
+  // "update" is intentionally excluded — legacy persisted update dismissals are
+  // dropped on parse now that updates live outside the notification center.
+  return v === "trial" || v === "autoSyncNudge";
 }
 
 /** Coerce an unknown JSON value into a deduped array of valid kinds. */
