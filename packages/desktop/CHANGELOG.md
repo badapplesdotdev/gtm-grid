@@ -1,5 +1,17 @@
 # @gtmgrid/desktop
 
+## 0.12.0
+
+### Minor Changes
+
+- 4f0cede: Add drag-to-resize to the agent panel, matching the app sidebar. Drag the panel's left edge to set its width (clamped 320–720px); the width persists across launches and keeps the plan drawer aligned.
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.12.0
+- @gtmgrid/cloud@0.12.0
+- @gtmgrid/services@0.12.0
+
 ## 0.11.1
 
 ### Patch Changes
