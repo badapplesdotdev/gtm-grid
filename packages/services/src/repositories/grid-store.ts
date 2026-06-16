@@ -35,6 +35,8 @@ export interface StoreTable {
   dedupeKeep: string | null;
   /** Sidebar folder the table is filed under (null = root). */
   folderId: string | null;
+  /** Workspace-shared favourite/pin flag. */
+  favorite: boolean;
 }
 
 /** An in-memory folder row (a sidebar table group). */

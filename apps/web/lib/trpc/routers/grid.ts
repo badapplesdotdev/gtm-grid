@@ -338,6 +338,41 @@ export const gridRouter = router({
     ),
 
   /**
+   * Rename a table. Members-only. Metered ONE. Broadcasts `table.rename` so open
+   * grids relabel their header and sidebars relabel live. A blank name is
+   * ignored (keeps the current name). Returns the effective name.
+   */
+  renameTable: protectedProcedure
+    .input(z.object({ tableId: z.string().min(1), name: z.string().min(1) }))
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* GridService;
+          return yield* svc.renameTable(input.tableId, input.name);
+        }),
+      ),
+    ),
+
+  /**
+   * Pin/unpin a table for the CURRENT user (the cloud mirror of the local
+   * engine's favourite tables). Members-only. Idempotent and NOT metered — a
+   * pin is a personal sidebar preference, never shared with teammates. Returns
+   * the effective `favorite` state.
+   */
+  setTableFavorite: protectedProcedure
+    .input(z.object({ tableId: z.string().min(1), favorite: z.boolean() }))
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* GridService;
+          return yield* svc.setTableFavorite(input.tableId, input.favorite);
+        }),
+      ),
+    ),
+
+  /**
    * Patch a column's definition (rename / type / function config). Members-only.
    * Metered. Only the provided fields change; broadcasts `column.update` so every
    * viewer's grid reflects the edit live. Returns the updated column.

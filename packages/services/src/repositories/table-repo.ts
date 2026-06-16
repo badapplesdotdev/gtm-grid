@@ -28,6 +28,8 @@ export interface Table {
   readonly dedupeKeep: string | null;
   /** Sidebar folder this table is filed under (null = root). */
   readonly folderId: string | null;
+  /** Workspace-shared favourite/pin flag (any member's pin shows for all). */
+  readonly favorite: boolean;
 }
 
 /** Fields a `createTable` insert supplies. */
@@ -85,6 +87,11 @@ export class TableRepo extends Context.Tag("TableRepo")<
       id: string,
       name: string,
     ) => Effect.Effect<void, TableRepoError>;
+    /** Pin/unpin a table (workspace-shared favourite flag). */
+    readonly setFavorite: (
+      id: string,
+      favorite: boolean,
+    ) => Effect.Effect<void, TableRepoError>;
     /** Delete a table (FK cascade drops its columns/rows/cells/webhooks). */
     readonly remove: (id: string) => Effect.Effect<void, TableRepoError>;
     /** Set (or clear) a table's dedupe config. `column: null` disables it. */
@@ -120,6 +127,7 @@ export const TableRepoLive: Layer.Layer<TableRepo, never, DbClient> =
         dedupeColumn: schema.tables.dedupeColumn,
         dedupeKeep: schema.tables.dedupeKeep,
         folderId: schema.tables.folderId,
+        favorite: schema.tables.favorite,
       } as const;
       return {
         findById: (id) =>
@@ -190,6 +198,16 @@ export const TableRepoLive: Layer.Layer<TableRepo, never, DbClient> =
             },
             catch: fail("table rename"),
           }),
+        setFavorite: (id, favorite) =>
+          Effect.tryPromise({
+            try: async () => {
+              await db
+                .update(schema.tables)
+                .set({ favorite })
+                .where(eq(schema.tables.id, id));
+            },
+            catch: fail("table set favorite"),
+          }),
         remove: (id) =>
           Effect.tryPromise({
             try: async () => {
@@ -255,6 +273,7 @@ export const tableRepoLayer = (store: GridStore): Layer.Layer<TableRepo> =>
           dedupeColumn: null,
           dedupeKeep: null,
           folderId: values.folderId ?? null,
+          favorite: false,
         });
         return id;
       }),
@@ -262,6 +281,11 @@ export const tableRepoLayer = (store: GridStore): Layer.Layer<TableRepo> =>
       Effect.sync(() => {
         const t = store.tables.find((x) => x.id === id);
         if (t) t.name = name;
+      }),
+    setFavorite: (id, favorite) =>
+      Effect.sync(() => {
+        const t = store.tables.find((x) => x.id === id);
+        if (t) t.favorite = favorite;
       }),
     remove: (id) => Effect.sync(() => cascadeDeleteTable(store, id)),
     setDedupe: (id, config) =>
