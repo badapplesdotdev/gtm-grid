@@ -5,7 +5,7 @@
 // supports stop + multi-turn, collapses to a slim logo rail, and refreshes the
 // grid live as the agent calls mutating tools.
 
-import { useEffect, useRef, useState, type FC, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FC, type ReactNode, type MouseEvent as ReactMouseEvent } from "react";
 import { Streamdown as StreamdownImpl } from "streamdown";
 
 // Streamdown ships its own bundled React types; under this app's @types/react 18
@@ -693,6 +693,7 @@ export default function AgentPanel({
   activeTable,
   cloud,
   onAgentEvent,
+  onResizeStart,
 }: {
   onGridChange: () => void;
   activeTable: { name: string; columns: string[] } | null;
@@ -700,6 +701,8 @@ export default function AgentPanel({
   cloud?: AgentCloudContext | null;
   /** Tool-call / turn-end notifications (drives the grid's agent presence). */
   onAgentEvent?: (e: AgentActivityEvent) => void;
+  /** Begin a drag-resize of the panel width (left-edge handle); omit to disable. */
+  onResizeStart?: (e: ReactMouseEvent) => void;
 }) {
   const [agent, setAgent] = useState<AgentKind>("claude");
   // Which model each agent's CLI runs with ("" = the plan's default). Persisted.
@@ -1039,6 +1042,9 @@ export default function AgentPanel({
 
   return (
     <aside className="agent-panel">
+      {onResizeStart && (
+        <div className="agent-resize" onMouseDown={onResizeStart} title="Drag to resize" />
+      )}
       <div className="agent-tabs">
         {(["claude", "codex", "hermes"] as AgentKind[]).map((k) => (
           <button key={k} className={`agent-tab ${agent === k ? "active" : ""}`} onClick={() => setAgent(k)}>

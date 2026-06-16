@@ -1255,6 +1255,36 @@ export default function App() {
     document.addEventListener("mouseup", onUp);
   };
 
+  // Resizable agent panel — same pattern as the sidebar but anchored to the RIGHT
+  // edge, so the panel grows as you drag its left-edge handle leftward. Persisted
+  // and clamped; `--agent-w` keeps the plan drawer (anchored right: var(--agent-w))
+  // aligned. `resizing-agent` on <body> kills the collapse width-transition mid-drag.
+  const [agentWidth, setAgentWidth] = useState<number>(() => {
+    const v = Number(localStorage.getItem("gtmgrid:agentW"));
+    return v >= 320 && v <= 720 ? v : 384;
+  });
+  const startAgentResize = (e: ReactMouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = agentWidth;
+    document.body.style.cursor = "col-resize";
+    document.body.classList.add("resizing-agent");
+    const onMove = (ev: MouseEvent) =>
+      setAgentWidth(Math.min(720, Math.max(320, startW + startX - ev.clientX)));
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.classList.remove("resizing-agent");
+      setAgentWidth((w) => {
+        try { localStorage.setItem("gtmgrid:agentW", String(w)); } catch { /* ignore */ }
+        return w;
+      });
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  };
+
   // ── Cloud project mode (multiplayer via Convex) ──────────────
   // A cloud project is selected from the switcher; while one is active the main
   // area renders the live CloudGrid instead of the local sidecar grid. Local
@@ -3294,7 +3324,7 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell" style={{ ["--sidebar-w"]: `${sidebarWidth}px` } as CSSProperties}>
+    <div className="app-shell" style={{ ["--sidebar-w"]: `${sidebarWidth}px`, ["--agent-w"]: `${agentWidth}px` } as CSSProperties}>
       {/* Workspace-invite accept banner (email-matched + ?invite= URL token).
           Self-gates: renders nothing when signed out / no pending invites. The
           trial / auto-sync nudge / update alerts that used to stack here now live
@@ -4031,6 +4061,7 @@ export default function App() {
           activeTable={activeTable}
           cloud={agentCloud}
           onAgentEvent={onAgentEvent}
+          onResizeStart={startAgentResize}
         />
       </Suspense>
 

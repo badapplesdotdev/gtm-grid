@@ -1515,6 +1515,7 @@ select:focus-visible,
 
 /* ─── Agent panel (Claude Code / Codex) ───────────────────── */
 .agent-panel {
+  position: relative;
   width: var(--agent-w);
   min-width: var(--agent-w);
   background: var(--surface);
@@ -1526,6 +1527,17 @@ select:focus-visible,
   transition: width .18s ease, min-width .18s ease;
 }
 .agent-panel.collapsed { width: 58px; min-width: 58px; }
+
+/* Drag-to-resize handle on the agent panel's LEFT edge (mirrors .sidebar-resize,
+   which sits on the sidebar's right edge). */
+.agent-resize {
+  position: absolute; top: 0; left: 0; bottom: 0; width: 5px;
+  cursor: col-resize; z-index: 20;
+}
+.agent-resize:hover { background: var(--accent); opacity: 0.5; }
+/* Kill the collapse width-transition while actively dragging so resize tracks
+   the cursor instead of easing toward each intermediate width. */
+body.resizing-agent .agent-panel { transition: none; }
 
 /* collapsed vertical rail */
 .agent-rail { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 9px 0; height: 100%; }
