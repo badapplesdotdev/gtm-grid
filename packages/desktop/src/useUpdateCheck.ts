@@ -39,9 +39,32 @@ export interface AvailableUpdate {
   readonly install: () => Promise<void>;
 }
 
+/** Vite dev flag, read defensively (import.meta.env isn't typed in this project). */
+const IS_DEV = Boolean((import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV);
+
 export function useUpdateCheck(): AvailableUpdate | null {
   const [update, setUpdate] = useState<AvailableUpdate | null>(null);
   useEffect(() => {
+    // DEV-only preview: outside Tauri the real updater is unavailable, so let a
+    // developer simulate an available update by setting
+    // localStorage["gtmgrid:mockUpdate"] to a version string (optionally
+    // "gtmgrid:mockUpdateNotes"). Never honored in production builds.
+    if (IS_DEV) {
+      try {
+        const mockVersion = localStorage.getItem("gtmgrid:mockUpdate");
+        if (mockVersion) {
+          setUpdate({
+            version: mockVersion,
+            notes: localStorage.getItem("gtmgrid:mockUpdateNotes"),
+            install: async () => {
+              // eslint-disable-next-line no-console
+              console.info("[mock-update] would download + install + relaunch");
+            },
+          });
+          return;
+        }
+      } catch { /* ignore */ }
+    }
     if (!isTauri()) return;
     let cancelled = false;
     let found = false;

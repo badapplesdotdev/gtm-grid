@@ -56,6 +56,8 @@ import {
 } from "./cloud/pendingInvite";
 import { fireConfetti } from "./cloud/confetti";
 import { useUpdateCheck } from "./useUpdateCheck";
+import { changelogNotes } from "./changelog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./components/ui/tooltip";
 import {
   buildNotifications,
   unreadCount as countUnread,
@@ -1145,6 +1147,84 @@ function NotificationCenter({
   );
 }
 
+// ─── Update + changelog dialogs ───────────────────────────
+
+/** The "update available" dialog: version + release notes + download/relaunch.
+ *  Opened automatically on first sight of an update and re-openable from the
+ *  download button next to the bell. */
+function UpdateDialog({
+  version,
+  notes,
+  updating,
+  error,
+  onDownload,
+  onLater,
+}: {
+  version: string;
+  notes: string | null;
+  updating: boolean;
+  error: string | null;
+  onDownload: () => void;
+  onLater: () => void;
+}) {
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onLater(); }}>
+      <DialogContent className="modal update-modal" style={{ width: 460 }} srTitle="Update available">
+        <div className="modal-header">
+          <span className="modal-title">Update available</span>
+          <button className="modal-close" onClick={onLater} aria-label="Close"><Icon.X /></button>
+        </div>
+        <div className="modal-body">
+          <p className="update-lead">
+            GTM Grid <strong>v{version}</strong> is ready to install.
+          </p>
+          {notes && <div className="update-notes">{notes}</div>}
+          {error && <div className="conn-err">{error}</div>}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-outline" onClick={onLater} disabled={updating}>Later</button>
+          <button className="btn btn-primary" onClick={onDownload} disabled={updating}>
+            {updating ? "Downloading…" : (<><Icon.Download size={13} /> Download &amp; restart</>)}
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** "What's new" dialog shown once on the first launch of a freshly-installed
+ *  version, listing that version's changelog notes. */
+function ChangelogDialog({
+  version,
+  items,
+  onClose,
+}: {
+  version: string;
+  items: readonly string[];
+  onClose: () => void;
+}) {
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="modal changelog-modal" style={{ width: 460 }} srTitle={`What's new in version ${version}`}>
+        <div className="modal-header">
+          <span className="modal-title">What&apos;s new in v{version}</span>
+          <button className="modal-close" onClick={onClose} aria-label="Close"><Icon.X /></button>
+        </div>
+        <div className="modal-body">
+          <ul className="changelog-list">
+            {items.map((it, i) => (
+              <li key={i}>{it}</li>
+            ))}
+          </ul>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-primary" onClick={onClose}>Got it</button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────
 
 export default function App() {
@@ -1295,10 +1375,10 @@ export default function App() {
   // When present + signed out it FORCES the auth flow even in local mode, so an
   // invitee is always guided to sign up / sign in and then auto-enrolled.
   const pendingInviteToken = usePendingInviteToken();
-  // In-app auto-update (Tauri only): a newer SIGNED release surfaces a top banner
-  // that downloads + installs it and relaunches, all in-app.
+  // In-app auto-update (Tauri only): a newer SIGNED release surfaces a download
+  // affordance next to the bell + an UpdateDialog that downloads/installs/relaunches.
   const update = useUpdateCheck();
-  const [updateDismissed, setUpdateDismissed] = useState(false);
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const runUpdate = useCallback(async () => {
@@ -1312,6 +1392,35 @@ export default function App() {
       setUpdating(false);
     }
   }, [update, updating]);
+  // On first sight of an available update, pop the dialog automatically — unless
+  // the user already chose "Later" for THIS version (then it waits behind the
+  // bell-adjacent download button).
+  useEffect(() => {
+    if (!update) return;
+    let skipped: string | null = null;
+    try { skipped = localStorage.getItem("gtmgrid:updateSkipped"); } catch { /* ignore */ }
+    if (skipped !== update.version) setUpdateDialogOpen(true);
+  }, [update]);
+  // "Later": close + remember the skip for this version so it doesn't re-pop on
+  // launch (the download button still holds it).
+  const skipUpdate = useCallback(() => {
+    setUpdateDialogOpen(false);
+    if (update) { try { localStorage.setItem("gtmgrid:updateSkipped", update.version); } catch { /* ignore */ } }
+  }, [update]);
+
+  // "What's new" on the FIRST launch of a newly-installed version: compare the
+  // running version against the last one we recorded. Show the changelog once,
+  // then record the current version so it won't show again until the next update.
+  const [changelogOpen, setChangelogOpen] = useState(false);
+  const changelogItems = useMemo(() => changelogNotes(__APP_VERSION__), []);
+  useEffect(() => {
+    let last: string | null = null;
+    try { last = localStorage.getItem("gtmgrid:lastVersion"); } catch { /* ignore */ }
+    if (last !== null && last !== __APP_VERSION__ && changelogItems.length > 0) {
+      setChangelogOpen(true);
+    }
+    try { localStorage.setItem("gtmgrid:lastVersion", __APP_VERSION__); } catch { /* ignore */ }
+  }, [changelogItems]);
   // Local-first: when cloud is configured but the user hasn't signed in, the
   // onboarding offers "Continue locally" — which sets this persisted flag so the
   // app boots straight into local mode (no cloud features) on future launches.
@@ -2134,11 +2243,9 @@ export default function App() {
       buildNotifications({
         trialDaysLeft: showTrialBanner ? trialDaysLeft : null,
         autoSync: { cloudEnabled, inCloud, isAuthenticated, autoSyncOn },
-        updateVersion: update && !updateDismissed ? update.version : null,
-        updateError,
         persist: notifPersist,
       }),
-    [showTrialBanner, trialDaysLeft, cloudEnabled, inCloud, isAuthenticated, autoSyncOn, update, updateDismissed, updateError, notifPersist],
+    [showTrialBanner, trialDaysLeft, cloudEnabled, inCloud, isAuthenticated, autoSyncOn, notifPersist],
   );
   // Bell badge = active notifications not yet seen.
   const unreadNotifs = countUnread(notifications, notifPersist);
@@ -2177,15 +2284,8 @@ export default function App() {
       case "autoSync.dismiss":
         dismissNotif("autoSyncNudge");
         break;
-      case "update.install":
-        void runUpdate();
-        break;
-      case "update.dismiss":
-        setUpdateDismissed(true);
-        dismissNotif("update");
-        break;
     }
-  }, [dismissNotif, runUpdate]);
+  }, [dismissNotif]);
 
   // Persist the flag to the sidecar. Toggling OFF is immediate; toggling ON must
   // go through `requestAutoSyncToggle` (which shows the enable-time confirm).
@@ -3356,6 +3456,23 @@ export default function App() {
           ...(activeWorkspace ? [{ id: "workspace-settings", label: "Workspace settings", keywords: "members seats billing", run: () => setShowWorkspaceSettings(true) } as PaletteAction] : []),
         ]}
       />
+      {update && updateDialogOpen && (
+        <UpdateDialog
+          version={update.version}
+          notes={update.notes}
+          updating={updating}
+          error={updateError}
+          onDownload={() => void runUpdate()}
+          onLater={skipUpdate}
+        />
+      )}
+      {changelogOpen && (
+        <ChangelogDialog
+          version={__APP_VERSION__}
+          items={changelogItems}
+          onClose={() => setChangelogOpen(false)}
+        />
+      )}
       <div className="app">
       {/* ── Sidebar ─────────────────────── */}
       <aside className="sidebar">
@@ -3372,6 +3489,21 @@ export default function App() {
             </span>
           </button>
           <span className="sidebar-head-spacer" />
+          {update && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  className="sidebar-members update-dl-btn"
+                  onClick={() => setUpdateDialogOpen(true)}
+                  aria-label={`Download GTM Grid v${update.version}`}
+                >
+                  <Icon.Download size={15} />
+                  <span className="update-dl-dot" aria-hidden="true" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>Download GTM Grid v{update.version}</TooltipContent>
+            </Tooltip>
+          )}
           <div className="notif-anchor">
             <button
               ref={bellRef}
