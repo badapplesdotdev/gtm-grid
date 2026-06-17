@@ -1,8 +1,12 @@
 # Observability & Production Readiness
 
-GTM Grid uses **PostHog** (EU, project `201747`) as the single backbone for product
-analytics, error tracking, web/revenue analytics, surveys, and support. This is the
-operator's runbook: what's instrumented, how to configure it, and how to triage.
+GTM Grid uses **PostHog** (**US** — `us.i.posthog.com`) as the single backbone for
+product analytics, error tracking, web/revenue analytics, surveys, and support. This is
+the operator's runbook: what's instrumented, how to configure it, and how to triage.
+
+> The project was migrated from EU (`201747`) to the US region; all telemetry — product
+> events AND errors — now lands in the US project. The old EU dashboards stopped
+> receiving data at the cutover.
 
 ## Configuration (env vars)
 
@@ -27,9 +31,19 @@ keys are the same public PostHog project token (`phc_...`).
   - Web client: `capture_exceptions` + `error.tsx` / `global-error.tsx` boundaries.
   - Web server: tRPC `onError`, `instrumentation.ts` `onRequestError`, worker 500s,
     Inngest `onFailure` on all durable functions.
-  - Desktop: `ErrorBoundary` + posthog-js autocapture.
-  - Sidecar: `captureException` on route 500s + `uncaughtException`/`unhandledRejection`
-    handlers (`packages/server/src/observability.ts`).
+  - Desktop renderer: `ErrorBoundary` + posthog-js autocapture.
+  - Desktop shell (Rust/Tauri): a `std::panic::set_hook` POSTs a best-effort `$exception`
+    (sidecar spawn / updater / window-setup panics) — `src-tauri/src/main.rs`.
+  - Sidecar / MCP / CLI: shared `@gtmgrid/observability` — `captureException` on route
+    500s + `uncaughtException`/`unhandledRejection` handlers, tagged per process.
+  - Engine run path: connector/AI/enrichment failures feed Error Tracking via the
+    injected, dependency-free `reportError` hook on `EngineConfig`, **deduped per run**
+    (≤3 distinct signatures), so a large run can't flood. Wired by the sidecar, the
+    cloud worker, and the MCP. Failure RATES also emit a `column_run_failed` event.
+  - Cloud signals cron: per-binding sync/warm-up failures captured (`source: "signals"`).
+  - Services-internal swallows (e.g. best-effort invite email) report via the injectable
+    `ErrorReporter` port (`packages/services/src/services/error-reporter.ts`).
+  - PartyKit: realtime handlers capture unexpected exceptions (`source: "partykit"`).
 - **Identify / groups** — desktop identifies the signed-in user and groups by
   `workspace` (`PostHogIdentityBridge`); server events carry `distinctId` + workspace
   group. (Web has no client auth UI, so client identify lives in the desktop app.)
@@ -42,8 +56,10 @@ keys are the same public PostHog project token (`phc_...`).
 ## Triage
 
 - **An error spiked** → PostHog → Error Tracking. Group by `source` property
-  (`trpc` / `next` / `worker` / `inngest` / `sidecar-route`) to locate the surface.
-  Server errors carry the user `distinctId` + path.
+  (`trpc` / `next` / `worker` / `inngest` / `sidecar-route` / `engine-run` / `signals` /
+  `invite-email` / `tauri-shell` / `partykit` / `mcp` / `cli`) to locate the surface.
+  Server errors carry the user `distinctId` (or workspace) + path. A noisy operational
+  failure (e.g. a connector "not found") can be suppressed per-issue in the UI.
 - **A user reports a bug** → identify them in PostHog by email, view their events /
   exceptions timeline.
 - **Is the web app healthy?** → `GET /healthz` (liveness), `GET /readyz` (DB-depth;
@@ -59,11 +75,11 @@ keys are the same public PostHog project token (`phc_...`).
 
 ## PostHog-app config (Phase 6 — via PostHog MCP or UI)
 
-Project `201747` (EU). Done so far:
+The **US** project. Note: the survey + dashboards below were built in the old EU
+project `201747` and must be **recreated in US** (they don't carry over):
 
-- ✅ **Product-feedback survey** (draft, popover): a 1–5 rating + open follow-up.
-  [Survey](https://eu.posthog.com/project/201747/surveys/019ec687-846f-0000-03bc-942af11fe693)
-  — launch it when ready (it was created as a draft, not started).
+- **Product-feedback survey** (was a draft popover in EU: 1–5 rating + open follow-up) —
+  recreate in the US project.
 
 **Still to create — but they need event DATA first.** As of this writing PostHog has
 received **none** of the app's product events (`app_opened`, `table_created`,

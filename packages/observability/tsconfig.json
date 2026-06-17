@@ -6,6 +6,5 @@
     "rootDir": "./src"
   },
   "include": ["src/**/*"],
-  "exclude": ["src/**/*.test.ts"],
-  "references": [{ "path": "../engine" }, { "path": "../observability" }]
+  "exclude": ["src/**/*.test.ts"]
 }

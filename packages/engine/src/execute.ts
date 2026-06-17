@@ -52,6 +52,27 @@ export interface EngineConfig {
    * (pure in-process transforms) are always exempt regardless of this value.
    */
   defaultRateLimit?: RateLimit;
+  /**
+   * Optional exception sink for run failures. The engine runs in several hosts
+   * (sidecar, cloud worker, MCP, CLI), so it never imports a telemetry client —
+   * the host injects a reporter that forwards to PostHog Error Tracking (mirrors
+   * {@link aiFallback}/{@link guardSsrf} injection). Called from a failing cell run
+   * with the ORIGINAL thrown error (full stack), but DEDUPED per run: at most a few
+   * distinct error signatures are reported, so a 1000-row run with one failure mode
+   * raises one exception, not a thousand. Per-cell errors are still recorded as cell
+   * status regardless; this is purely the systemic-bug signal. Absent ⇒ no reporting.
+   */
+  reportError?: (error: unknown, context: RunErrorContext) => void;
+}
+
+/** Context handed to {@link EngineConfig.reportError} for a failed cell run. */
+export interface RunErrorContext {
+  readonly columnId: string;
+  readonly provider: string | null;
+  readonly method: string | null;
+  readonly rowId: string;
+  /** How many cells have failed in this run so far (this error included). */
+  readonly errorCount: number;
 }
 
 /** A cell's state as observed during a run, for per-cell progress streaming.
@@ -341,6 +362,12 @@ export class Engine {
     // tool) can tell the user WHY a run failed (e.g. a missing AI/connector key)
     // without a follow-up get_table read.
     let firstError: string | undefined;
+    // Deduped systemic-error reporting (PostHog Error Tracking, via the injected
+    // `reportError`): emit at most MAX_REPORTED_ERRORS DISTINCT error signatures
+    // per run, so a 1000-row run with one failure mode raises a single exception,
+    // not a thousand. Per-cell status is recorded regardless (see markError).
+    const reportedSignatures = new Set<string>();
+    const MAX_REPORTED_ERRORS = 3;
     // Stores that batch terminal writes (the cloud store) coalesce the interim
     // `running` write away so a cell is ONE write, not two HTTP POSTs. Cheap
     // synchronous stores leave the flag unset and keep streaming `running`.
@@ -409,6 +436,27 @@ export class Engine {
       );
       emit({ rowId, columnId, value: null, status: "error", error: message });
       counters.errors++;
+      // Forward the ORIGINAL error (full stack) to the host's exception sink,
+      // deduped per run so noise stays bounded. Never let a telemetry failure
+      // abort the run.
+      const report = this.config.reportError;
+      if (report && reportedSignatures.size < MAX_REPORTED_ERRORS) {
+        const signature = `${col.provider}:${col.method}:${message}`;
+        if (!reportedSignatures.has(signature)) {
+          reportedSignatures.add(signature);
+          try {
+            report(e, {
+              columnId,
+              provider: col.provider,
+              method: col.method,
+              rowId,
+              errorCount: counters.errors,
+            });
+          } catch {
+            /* a telemetry sink failure must never fail the run */
+          }
+        }
+      }
     };
 
     if (batchMethod) {

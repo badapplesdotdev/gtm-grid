@@ -211,6 +211,11 @@ export {
   inviteEmailPortLayer,
 } from "./services/invite-email.js";
 export {
+  ErrorReporter,
+  errorReporterLayer,
+  errorReporterNoop,
+} from "./services/error-reporter.js";
+export {
   CryptoService,
   CryptoServiceLive,
   cryptoServiceLayer,
