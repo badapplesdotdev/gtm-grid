@@ -47,7 +47,8 @@ import {
 const WS = "ws-1";
 const memberships: readonly Membership[] = [
   { workspaceId: WS, userId: "member", role: "member" },
-  // A second member, used to prove favourites are PER-USER (not shared).
+  // A second member, used to prove favourites are WORKSPACE-SHARED (one member's
+  // pin is visible to the other).
   { workspaceId: WS, userId: "member2", role: "member" },
 ];
 

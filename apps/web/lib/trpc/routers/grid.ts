@@ -355,10 +355,10 @@ export const gridRouter = router({
     ),
 
   /**
-   * Pin/unpin a table for the CURRENT user (the cloud mirror of the local
-   * engine's favourite tables). Members-only. Idempotent and NOT metered — a
-   * pin is a personal sidebar preference, never shared with teammates. Returns
-   * the effective `favorite` state.
+   * Pin/unpin a table (the cloud mirror of the local engine's favourite tables).
+   * WORKSPACE-SHARED: the flag lives on the table row, so any member's pin is
+   * visible to every teammate. Members-only. Idempotent and NOT metered — a pin
+   * isn't a billable action. Returns the effective `favorite` state.
    */
   setTableFavorite: protectedProcedure
     .input(z.object({ tableId: z.string().min(1), favorite: z.boolean() }))
