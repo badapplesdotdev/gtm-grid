@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "category": "social-intelligence",
   "description": "LinkedIn outbound + engagement intelligence — search people/companies, find emails, and pull post engagers.",
-  "featured": true,
   "baseUrl": "https://smuggler.dev/api/v1",
   "logo": "https://www.google.com/s2/favicons?domain=smuggler.dev&sz=128",
   "auth": {

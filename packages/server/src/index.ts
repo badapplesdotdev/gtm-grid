@@ -70,6 +70,13 @@ migrateGlobals(globalDb, projectPath("default")); // one-time: pull legacy keys 
 // Registry of callable functions (built-ins + uploaded manifests in globalDb).
 const registry = defaultRegistry();
 
+// Curated "featured" tools for the Browse-all gallery. This is the single source
+// of truth — driven by code, NOT by the manifest/db — so the featured set is
+// identical everywhere and can't drift with stale local db rows left behind by
+// branch-switching (which previously made tools like Slack/Notion show as
+// featured locally but not on prod).
+const FEATURED_TOOLS = new Set(["trigify", "smuggler", "leadmagic", "avtrz"]);
+
 // Seed bundled connector manifests (extensions/*.json shipped next to the server
 // in the packaged app, or repo/extensions in dev) into the GLOBAL db + registry.
 // Directory the bundled connector manifests + their `<tool>.skill.md` files live in.
@@ -401,7 +408,7 @@ route("GET", "/api/extensions", () =>
     name: e.name,
     category: e.category,
     description: e.description ?? null,
-    featured: !!e.featured,
+    featured: FEATURED_TOOLS.has(e.id),
     methods: (e.methods ?? []).length,
     connected: !!globalDb.getCredential(e.id),
     logo: e.logo ?? logoFor(e.baseUrl),

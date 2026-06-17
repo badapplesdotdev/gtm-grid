@@ -4,7 +4,6 @@
   "version": "2.0.0",
   "category": "social",
   "description": "Social listening + engagement intelligence — monitor profiles, companies, posts and topics across LinkedIn, X/Twitter, Reddit, YouTube, Substack, Bluesky, GitHub, Hacker News, Daily.dev, Podcasts and News.",
-  "featured": true,
   "baseUrl": "https://api.trigify.io",
   "logo": "https://www.google.com/s2/favicons?domain=trigify.io&sz=128",
   "auth": {
