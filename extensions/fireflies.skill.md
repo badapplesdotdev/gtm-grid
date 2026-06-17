@@ -11,7 +11,11 @@
 - **Base URL:** `https://api.fireflies.ai` — every call is `POST /graphql`. There is ONE endpoint; you select behavior by the GraphQL `query` string, not by path.
 - **Auth:** `Authorization: Bearer <apiKey>` (manifest sets the `Authorization` header from the `apiKey` secret). Key from app.fireflies.ai/integrations/custom/fireflies.
 - **Manifest method:** `fireflies.graphql` — pass `{ query, variables }`. 1 credit per call.
-- **Rate limits:** Free 50 req/day · Pro 500 req/day · Business/Enterprise 60 req/min. Special: `addToLiveMeeting` 3 per 20 min; `deleteTranscript` 10/min; `shareMeeting` 10/hour. AskFred and `uploadAudio` transcription consume Fireflies AI credits separately.
+- **Rate limits:** Free 50 req/day · Pro 500 req/day · Business/Enterprise 60 req/min. Special: `addToLiveMeeting` 3 per 20 min; `shareMeeting` 10/hour (≤50 emails each). AskFred and `uploadAudio` transcription consume Fireflies AI credits separately.
+
+## Connector-level rateLimit & picker fields
+- **rateLimit (manifest):** `{ "rpm": 60, "concurrency": 2 }` — set to the documented Business/Enterprise sustained limit (60 req/min). This is the safe ceiling across plans; Free/Pro are daily caps (50/day, 500/day) which the engine can't model per-minute, so the per-minute Business limit is used and the daily cap is enforced by the API (watch for `too_many_requests` in `errors[]`). The per-operation specials (`addToLiveMeeting`, `shareMeeting`) live inside the GraphQL query, not as separate manifest methods, so they can't carry per-method overrides here.
+- **No picker fields.** This is a single-method GraphQL passthrough. The only inputs are `query` (free-form GraphQL string) and `variables` (free-form object). Selecting a transcript/channel/user/host id happens *inside* the GraphQL query the caller authors — there is no discrete manifest field that takes an enumerable id/email — so there is nothing to wire `options` to. To discover ids at author time, run the `transcripts`, `channels`, or `users` GraphQL operations first (see "List / find meetings" above) and paste the id into your `variables`.
 
 ## Endpoints by job
 There is one manifest method — `fireflies.graphql` — and you steer it with the GraphQL operation. Pick the operation below; pass it as `query` plus `variables`.

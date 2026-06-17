@@ -14,7 +14,7 @@
 // environments via the injected ColumnAuthoringApi (local sidecar or cloud).
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, type AiProviderInfo, type Column, type ConnectorInfo, type ExtensionInfo } from "./api";
+import { api, type AiProviderInfo, type Column, type ConnectorInfo, type ExtensionInfo, type FieldOption, type FieldOptionSource } from "./api";
 import {
   useColumnApi,
   SlashTextarea,
@@ -51,8 +51,11 @@ function pureColumnRef(value: string): string | null {
   return m ? m[1] : null;
 }
 
-/** One input param bound to a source column (typed dropdown) or a custom
- *  value/template (slash-aware text). Mirrors Clay's "Column mapping" rows. */
+type MapMode = "pick" | "column" | "custom";
+
+/** One input param bound to a source column (typed dropdown), a live connector
+ *  list ("pick" — e.g. a campaign chosen by NAME, resolving to its id), or a
+ *  custom value/template (slash-aware text). Mirrors Clay's "Column mapping". */
 function MappingField({
   paramKey,
   required,
@@ -60,6 +63,9 @@ function MappingField({
   value,
   onChange,
   columns,
+  provider,
+  method,
+  optionSource,
 }: {
   paramKey: string;
   required: boolean;
@@ -67,12 +73,26 @@ function MappingField({
   value: string;
   onChange: (v: string) => void;
   columns: PanelColumnRef[];
+  provider?: string | null;
+  method?: string | null;
+  /** When set, this field can be picked from a live connector list. */
+  optionSource?: FieldOptionSource | null;
 }) {
   const ref = pureColumnRef(value);
   const matched = ref ? columns.find((c) => c.name === ref) : undefined;
-  // Pure column ref (or empty) renders as a dropdown; anything else (literal,
-  // mixed template) as the custom text mode.
-  const [mode, setMode] = useState<"column" | "custom">(matched || value.trim() === "" ? "column" : "custom");
+  const canPick = !!optionSource && !!provider && !!method;
+  // Mode inference: a pure column ref → "column"; a pick-capable field whose
+  // value is a bare scalar (not a {{template}}) → "pick"; otherwise "custom".
+  const initialMode: MapMode = matched
+    ? "column"
+    : canPick && !value.includes("{{")
+      ? "pick"
+      : value.trim() === ""
+        ? canPick
+          ? "pick"
+          : "column"
+        : "custom";
+  const [mode, setMode] = useState<MapMode>(initialMode);
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -84,6 +104,46 @@ function MappingField({
     return () => document.removeEventListener("mousedown", onDown);
   }, [open]);
 
+  // Live options (pick mode): lazy-loaded on first open, re-fetched on search.
+  const [options, setOptions] = useState<FieldOption[] | null>(null);
+  const [optLoading, setOptLoading] = useState(false);
+  const [optErr, setOptErr] = useState("");
+  const [search, setSearch] = useState("");
+  const loadOptions = async (q: string) => {
+    if (!canPick) return;
+    setOptLoading(true);
+    setOptErr("");
+    try {
+      const r = await api.fieldOptions({ provider: provider!, method: method!, field: paramKey, search: q });
+      if (r.error) throw new Error(r.error);
+      setOptions(r.options ?? []);
+    } catch (e) {
+      setOptErr(e instanceof Error ? e.message : "Failed to load options");
+      setOptions([]);
+    } finally {
+      setOptLoading(false);
+    }
+  };
+  // Load when the pick dropdown opens for the first time.
+  useEffect(() => {
+    if (mode === "pick" && open && options === null && !optLoading) void loadOptions(search);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, open]);
+  const pickedLabel = options?.find((o) => o.value === value)?.label;
+
+  // Cycle modes: pick → column → custom → (pick if capable). On entering a
+  // mode we reset the value to that mode's empty state so a leftover id/template
+  // doesn't leak across mode shapes.
+  const nextMode = (m: MapMode): MapMode =>
+    m === "pick" ? "column" : m === "column" ? "custom" : canPick ? "pick" : "column";
+  const cycleMode = () => {
+    const m = nextMode(mode);
+    if (m !== "custom") onChange("");
+    setMode(m);
+    setOpen(false);
+  };
+  const modeLabel = mode === "pick" ? "Map a column" : mode === "column" ? "Use custom value" : canPick ? "Pick from list" : "Map a column";
+
   const missing = required && value.trim() === "";
 
   return (
@@ -93,21 +153,61 @@ function MappingField({
           {paramKey}
           {required && <span className="fnx-param-req">*</span>}
         </label>
-        <button
-          type="button"
-          className="cep-map-mode"
-          onClick={() => {
-            if (mode === "custom") onChange("");
-            setMode(mode === "column" ? "custom" : "column");
-            setOpen(false);
-          }}
-        >
-          {mode === "column" ? "Use custom value" : "Map a column"}
+        <button type="button" className="cep-map-mode" onClick={cycleMode}>
+          {modeLabel}
         </button>
       </div>
       {description && <div className="cep-map-desc">{description}</div>}
 
-      {mode === "column" ? (
+      {mode === "pick" ? (
+        <div className="ai-select" ref={wrapRef}>
+          <button type="button" className="form-input ai-select-btn" onClick={() => setOpen((o) => !o)}>
+            {value.trim() ? (
+              <span className="cep-map-sel">{pickedLabel ?? value}</span>
+            ) : (
+              <span className="ai-select-placeholder">{`Select ${paramKey}…`}</span>
+            )}
+            <span className={`ai-select-caret${open ? " open" : ""}`}>{Chevron}</span>
+          </button>
+          {open && (
+            <div className="ai-select-menu">
+              <input
+                className="form-input cep-pick-search"
+                placeholder="Search…"
+                value={search}
+                autoFocus
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void loadOptions(search);
+                  }
+                }}
+              />
+              {optLoading && <div className="ai-select-item cep-map-none">Loading…</div>}
+              {optErr && <div className="ai-select-item cep-map-none">{optErr}</div>}
+              {!optLoading && !optErr && options?.length === 0 && (
+                <div className="ai-select-item cep-map-none">No results</div>
+              )}
+              {!optLoading &&
+                options?.map((o) => (
+                  <button
+                    key={o.value}
+                    type="button"
+                    className={`ai-select-item${value === o.value ? " active" : ""}`}
+                    onClick={() => { onChange(o.value); setOpen(false); }}
+                  >
+                    <span className="ai-select-check">{value === o.value ? Check : null}</span>
+                    <span className="ai-select-item-label">
+                      {o.label}
+                      {o.sublabel && <span className="cep-pick-sub"> · {o.sublabel}</span>}
+                    </span>
+                  </button>
+                ))}
+            </div>
+          )}
+        </div>
+      ) : mode === "column" ? (
         <div className="ai-select" ref={wrapRef}>
           <button type="button" className="form-input ai-select-btn" onClick={() => setOpen((o) => !o)}>
             {matched ? (
@@ -466,6 +566,9 @@ export function ColumnEditPanel({
                 value={params[k] ?? ""}
                 onChange={(v) => setParams((prev) => ({ ...prev, [k]: v }))}
                 columns={otherColumns}
+                provider={column.provider}
+                method={column.method}
+                optionSource={methodInfo?.options?.[k] ?? null}
               />
             ))}
             {orderedSchemaKeys.some((k) => !requiredKeys.has(k)) && (
@@ -483,6 +586,9 @@ export function ColumnEditPanel({
                     value={params[k] ?? ""}
                     onChange={(v) => setParams((prev) => ({ ...prev, [k]: v }))}
                     columns={otherColumns}
+                    provider={column.provider}
+                    method={column.method}
+                    optionSource={methodInfo?.options?.[k] ?? null}
                   />
                 ))}
               </HttpField>

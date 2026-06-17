@@ -11,7 +11,7 @@
  */
 
 import { CredentialCryptoService, MembershipService } from "@gtmgrid/cloud";
-import { Data, Effect, Option } from "effect";
+import { Data, Effect, Option, Schedule } from "effect";
 import {
   getSignalSource,
   getPath,
@@ -35,7 +35,54 @@ import { WebhookRepo } from "../repositories/webhook-repo.js";
 export class SignalError extends Data.TaggedError("SignalError")<{
   readonly message: string;
   readonly cause?: unknown;
+  /**
+   * HTTP status of the underlying Trigify call, when the failure came from one
+   * (0 = network/connectivity error). Absent for non-HTTP failures (e.g. unknown
+   * source, missing search id). Drives {@link isTransientSignalError} so only
+   * retryable failures get re-attempted.
+   */
+  readonly status?: number;
 }> {}
+
+/**
+ * A Trigify HTTP failure that carries its status code, so the Effect retry policy
+ * can tell a transient 429/5xx (worth retrying) from a permanent 4xx (not). Status
+ * `0` is a network/connectivity failure (the `fetch` itself rejected) — transient.
+ */
+class TrigifyHttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "TrigifyHttpError";
+  }
+}
+
+/** A Trigify failure worth retrying: 429, 503, any 5xx, or a network error (status 0). */
+const isTransientSignalError = (e: SignalError): boolean =>
+  e.status !== undefined && (e.status === 0 || e.status === 429 || e.status >= 500);
+
+/**
+ * Retry transient Trigify failures with capped exponential backoff + jitter
+ * (mirrors the engine's resilience policy; Trigify documents no `Retry-After`, so
+ * jittered backoff is the right shape). This is in-process resilience under the
+ * cron's outer Inngest step-retries: it absorbs a brief 429/5xx blip without
+ * burning a whole step replay. Permanent failures (4xx, unknown source) fall
+ * through unretried.
+ */
+const trigifyRetry = Schedule.exponential("500 millis").pipe(
+  Schedule.jittered,
+  Schedule.intersect(Schedule.recurs(3)),
+);
+
+/** Map any error thrown by a Trigify fetch helper into a typed {@link SignalError}. */
+const toSignalError = (fallback: string) => (cause: unknown): SignalError =>
+  new SignalError({
+    message: cause instanceof Error ? cause.message : fallback,
+    cause,
+    status: cause instanceof TrigifyHttpError ? cause.status : undefined,
+  });
 
 interface CreateArgs {
   readonly tableId: string;
@@ -47,15 +94,22 @@ interface CreateArgs {
   readonly columns: readonly SignalBindingColumn[];
 }
 
+/** Issue a Trigify request, mapping a network rejection to a transient (status 0) error. */
+function trigifyFetch(url: string, init: RequestInit): Promise<Response> {
+  return fetch(url, init).catch((e) => {
+    throw new TrigifyHttpError(`Trigify network error: ${e instanceof Error ? e.message : String(e)}`, 0);
+  });
+}
+
 /** Trigify REST: create a search; returns its id. */
 function createTrigifySearch(apiKey: string, createPath: string, body: Record<string, unknown>): Promise<string> {
-  return fetch(`${TRIGIFY_BASE}${createPath}`, {
+  return trigifyFetch(`${TRIGIFY_BASE}${createPath}`, {
     method: "POST",
     headers: { "x-api-key": apiKey, "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify(body),
   }).then(async (res) => {
     const text = await res.text();
-    if (!res.ok) throw new Error(`Trigify create ${res.status}: ${text.slice(0, 200)}`);
+    if (!res.ok) throw new TrigifyHttpError(`Trigify create ${res.status}: ${text.slice(0, 200)}`, res.status);
     const data = text ? JSON.parse(text) : {};
     const id = data?.id ?? data?.search_id ?? data?.data?.id ?? data?.search?.id ?? null;
     if (!id) throw new Error("Trigify create returned no search id");
@@ -66,11 +120,11 @@ function createTrigifySearch(apiKey: string, createPath: string, body: Record<st
 /** Trigify REST: fetch results for a search. */
 function fetchTrigifyResults(apiKey: string, resultsPath: string, searchId: string): Promise<unknown> {
   const path = resultsPath.replace("{id}", encodeURIComponent(searchId));
-  return fetch(`${TRIGIFY_BASE}${path}?limit=100`, {
+  return trigifyFetch(`${TRIGIFY_BASE}${path}?limit=100`, {
     headers: { "x-api-key": apiKey, accept: "application/json" },
   }).then(async (res) => {
     const text = await res.text();
-    if (!res.ok) throw new Error(`Trigify results ${res.status}: ${text.slice(0, 200)}`);
+    if (!res.ok) throw new TrigifyHttpError(`Trigify results ${res.status}: ${text.slice(0, 200)}`, res.status);
     return text ? JSON.parse(text) : [];
   });
 }
@@ -139,8 +193,8 @@ export class SignalService extends Effect.Service<SignalService>()("SignalServic
 
         const resp = yield* Effect.tryPromise({
           try: () => fetchTrigifyResults(apiKey, source.resultsPath, binding.searchId ?? ""),
-          catch: (cause) => new SignalError({ message: cause instanceof Error ? cause.message : "Trigify results failed", cause }),
-        });
+          catch: toSignalError("Trigify results failed"),
+        }).pipe(Effect.retry({ schedule: trigifyRetry, while: isTransientSignalError }));
         // Cap the payload so one binding can't enqueue an unbounded insert burst
         // in a single step (a slow/large search would otherwise time the step out
         // and retry-replay the whole thing).
@@ -232,8 +286,8 @@ export class SignalService extends Effect.Service<SignalService>()("SignalServic
         const config = { name: args.name, ...args.config };
         const searchId = yield* Effect.tryPromise({
           try: () => createTrigifySearch(apiKey, source.createPath, config),
-          catch: (cause) => new SignalError({ message: cause instanceof Error ? cause.message : "Trigify create failed", cause }),
-        });
+          catch: toSignalError("Trigify create failed"),
+        }).pipe(Effect.retry({ schedule: trigifyRetry, while: isTransientSignalError }));
 
         const bindingId = yield* repo.insert({
           workspaceId,

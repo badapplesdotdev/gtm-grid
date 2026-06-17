@@ -11,6 +11,10 @@
     "header": "x-api-key",
     "secretKey": "apiKey"
   },
+  "rateLimit": {
+    "rpm": 120,
+    "concurrency": 3
+  },
   "methods": [
     {
       "id": "getAvatar",
@@ -19,6 +23,9 @@
       "verb": "GET",
       "path": "/avatar",
       "credits": 1,
+      "rateLimit": {
+        "rps": 2
+      },
       "input": {
         "type": "object",
         "properties": {

@@ -69,5 +69,12 @@
 - **Pagination cap.** Search endpoints expose at most 50,000 records (100/page × 500 pages) and job postings 10,000 — narrow filters rather than paging endlessly.
 - **Bulk = ≤10.** Both bulk enrich endpoints hard-cap at 10 items per call; chunk larger lists.
 
+## Connector mapping — pickers & rate limit
+- **Rate limit**: connector default `rateLimit.rpm: 200` (paid-plan ceiling), `concurrency: 3`. Free plan is 50/min, 600/day — lower the rpm if the key is free-tier. Per-method overrides: `searchPeople`/`searchOrganizations` `rpm:100` (search endpoints), `bulkEnrichPeople` `rps:2` (credit-heavy), `addContactsToSequence` `rps:1` (documented 600/hour).
+- **Selection (picker) fields** are backed by two list methods on this connector:
+  - `searchSequences` — POST `/emailer_campaigns/search` → `{ emailer_campaigns: [{ id, name, active, ... }] }`. Backs `addContactsToSequence.sequence_id` and `.emailer_campaign_id` (label `name`, value `id`).
+  - `listEmailAccounts` — GET `/email_accounts` → `{ email_accounts: [{ id, email, ... }] }`. Backs `addContactsToSequence.send_email_from_email_account_id` (label `email`, value `id`).
+- The enrichment/search methods take only free-text names, domains, titles, locations and seniorities (no enumerable-resource ids), so they carry no `options`.
+
 ## Official docs
 https://docs.apollo.io/reference (machine-readable index: https://docs.apollo.io/llms.txt)

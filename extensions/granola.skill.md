@@ -11,7 +11,10 @@
 - Auth: `Authorization: Bearer grn_...` (header `Authorization`, secret `apiKey`). Requires a Business-plan / personal API key created in Granola Settings → API.
 - Base URL: `https://public-api.granola.ai/v1`.
 - Credits: all calls are 0 credits (read-only against your own workspace).
-- Rate limits: ~5 req/sec sustained (300/min), burst 25 req per 5s window. Over-limit returns HTTP 429 — back off and retry.
+- Rate limits: ~5 req/sec sustained (300/min), burst 25 req per 5s window. Over-limit returns HTTP 429 — back off and retry. The manifest sets a connector-level `rateLimit` of `{ rpm: 300, rps: 5, concurrency: 3 }` to keep column fan-out under the documented ceiling.
+
+## Picker fields (manifest options)
+- `listNotes.folder_id` is a live picker backed by `listFolders` (`itemsPath: "folders"`, label `name`, value `id`) — choose a folder by name and the grid stores the `fol_...` id. This is the only selectable resource on the connector; everything else is a free-text note id (`not_...`) or ISO date.
 
 ## Endpoints by job
 

@@ -1,0 +1,2277 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`built-in connector rate-limit config > pins the built-in shapes and the safety default 1`] = `
+{
+  "ai": {
+    "concurrency": 5,
+    "rps": 3,
+  },
+  "default": {
+    "concurrency": 2,
+    "rps": 2,
+  },
+  "github": {
+    "concurrency": 2,
+    "rps": 1,
+  },
+}
+`;
+
+exports[`bundled extension rate-limit config > pins the rate-limit shape of every bundled connector 1`] = `
+{
+  "apify": {
+    "connector": {
+      "concurrency": 5,
+      "rps": 60,
+    },
+    "methods": {
+      "getDatasetItems": {
+        "concurrency": 5,
+        "rps": 60,
+      },
+      "listActors": {
+        "concurrency": 5,
+        "rps": 60,
+      },
+      "listDatasets": {
+        "concurrency": 5,
+        "rps": 60,
+      },
+      "me": {
+        "concurrency": 5,
+        "rps": 60,
+      },
+      "runActor": {
+        "rps": 3,
+      },
+      "runActorSync": {
+        "rps": 3,
+      },
+    },
+  },
+  "apollo": {
+    "connector": {
+      "concurrency": 3,
+      "rpm": 200,
+    },
+    "methods": {
+      "addContactsToSequence": {
+        "rps": 1,
+      },
+      "bulkEnrichPeople": {
+        "rps": 2,
+      },
+      "enrichOrganization": {
+        "concurrency": 3,
+        "rpm": 200,
+      },
+      "enrichPerson": {
+        "concurrency": 3,
+        "rpm": 200,
+      },
+      "listEmailAccounts": {
+        "concurrency": 3,
+        "rpm": 200,
+      },
+      "searchOrganizations": {
+        "rpm": 100,
+      },
+      "searchPeople": {
+        "rpm": 100,
+      },
+      "searchSequences": {
+        "concurrency": 3,
+        "rpm": 200,
+      },
+    },
+  },
+  "attio": {
+    "connector": {
+      "rps": 25,
+    },
+    "methods": {
+      "assertListEntryByParent": {
+        "rps": 25,
+      },
+      "assertRecord": {
+        "rps": 25,
+      },
+      "createAttribute": {
+        "rps": 25,
+      },
+      "createComment": {
+        "rps": 25,
+      },
+      "createList": {
+        "rps": 25,
+      },
+      "createListEntry": {
+        "rps": 25,
+      },
+      "createNote": {
+        "rps": 25,
+      },
+      "createObject": {
+        "rps": 25,
+      },
+      "createRecord": {
+        "rps": 25,
+      },
+      "createSelectOption": {
+        "rps": 25,
+      },
+      "createStatus": {
+        "rps": 25,
+      },
+      "createTask": {
+        "rps": 25,
+      },
+      "createWebhook": {
+        "rps": 25,
+      },
+      "deleteComment": {
+        "rps": 25,
+      },
+      "deleteListEntry": {
+        "rps": 25,
+      },
+      "deleteNote": {
+        "rps": 25,
+      },
+      "deleteRecord": {
+        "rps": 25,
+      },
+      "deleteTask": {
+        "rps": 25,
+      },
+      "deleteWebhook": {
+        "rps": 25,
+      },
+      "getAttribute": {
+        "rps": 25,
+      },
+      "getComment": {
+        "rps": 25,
+      },
+      "getList": {
+        "rps": 25,
+      },
+      "getListEntry": {
+        "rps": 25,
+      },
+      "getNote": {
+        "rps": 25,
+      },
+      "getObject": {
+        "rps": 25,
+      },
+      "getRecord": {
+        "rps": 25,
+      },
+      "getTask": {
+        "rps": 25,
+      },
+      "getThread": {
+        "rps": 25,
+      },
+      "getWebhook": {
+        "rps": 25,
+      },
+      "getWorkspaceMember": {
+        "rps": 25,
+      },
+      "identifySelf": {
+        "rps": 25,
+      },
+      "listAttributes": {
+        "rps": 25,
+      },
+      "listListEntryAttributeValues": {
+        "rps": 25,
+      },
+      "listLists": {
+        "rps": 25,
+      },
+      "listNotes": {
+        "rps": 25,
+      },
+      "listObjects": {
+        "rps": 25,
+      },
+      "listRecordAttributeValues": {
+        "rps": 25,
+      },
+      "listRecordEntries": {
+        "rps": 25,
+      },
+      "listSelectOptions": {
+        "rps": 25,
+      },
+      "listStatuses": {
+        "rps": 25,
+      },
+      "listTasks": {
+        "rps": 25,
+      },
+      "listThreads": {
+        "rps": 25,
+      },
+      "listWebhooks": {
+        "rps": 25,
+      },
+      "listWorkspaceMembers": {
+        "rps": 25,
+      },
+      "queryListEntries": {
+        "rps": 5,
+      },
+      "queryRecords": {
+        "rps": 5,
+      },
+      "searchRecords": {
+        "rps": 25,
+      },
+      "updateAttribute": {
+        "rps": 25,
+      },
+      "updateList": {
+        "rps": 25,
+      },
+      "updateListEntryAppend": {
+        "rps": 25,
+      },
+      "updateListEntryOverwrite": {
+        "rps": 25,
+      },
+      "updateObject": {
+        "rps": 25,
+      },
+      "updateRecordAppend": {
+        "rps": 25,
+      },
+      "updateRecordOverwrite": {
+        "rps": 25,
+      },
+      "updateSelectOption": {
+        "rps": 25,
+      },
+      "updateStatus": {
+        "rps": 25,
+      },
+      "updateTask": {
+        "rps": 25,
+      },
+      "updateWebhook": {
+        "rps": 25,
+      },
+    },
+  },
+  "avtrz": {
+    "connector": {
+      "concurrency": 3,
+      "rpm": 120,
+    },
+    "methods": {
+      "getAvatar": {
+        "rps": 2,
+      },
+    },
+  },
+  "bettercontact": {
+    "connector": {
+      "rpm": 60,
+    },
+    "methods": {
+      "checkCredits": {
+        "rpm": 60,
+      },
+      "enrich": {
+        "rpm": 60,
+      },
+      "findLeads": {
+        "rpm": 60,
+      },
+      "getFoundLeads": {
+        "rpm": 60,
+      },
+      "getResult": {
+        "rpm": 60,
+      },
+    },
+  },
+  "exa": {
+    "connector": {
+      "concurrency": 5,
+      "rps": 10,
+    },
+    "methods": {
+      "answer": {
+        "concurrency": 5,
+        "rps": 10,
+      },
+      "findSimilar": {
+        "concurrency": 5,
+        "rps": 10,
+      },
+      "getContents": {
+        "concurrency": 5,
+        "rps": 10,
+      },
+      "search": {
+        "concurrency": 5,
+        "rps": 10,
+      },
+    },
+  },
+  "findymail": {
+    "connector": {
+      "concurrency": 3,
+      "rpm": 300,
+    },
+    "methods": {
+      "createContactList": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "credits": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "findFromLinkedin": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "findFromName": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "findPhone": {
+        "concurrency": 2,
+        "rpm": 60,
+      },
+      "getContacts": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "listContactLists": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "reverseEmail": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "verify": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+    },
+  },
+  "firecrawl": {
+    "connector": {
+      "concurrency": 5,
+      "rpm": 500,
+    },
+    "methods": {
+      "cancelBatchScrape": {
+        "concurrency": 5,
+        "rpm": 500,
+      },
+      "cancelCrawl": {
+        "concurrency": 5,
+        "rpm": 500,
+      },
+      "crawlParamsPreview": {
+        "concurrency": 5,
+        "rpm": 500,
+      },
+      "extract": {
+        "rpm": 50,
+      },
+      "getBatchScrapeErrors": {
+        "concurrency": 5,
+        "rpm": 500,
+      },
+      "getBatchScrapeStatus": {
+        "concurrency": 5,
+        "rpm": 500,
+      },
+      "getCrawlErrors": {
+        "concurrency": 5,
+        "rpm": 500,
+      },
+      "getCrawlStatus": {
+        "concurrency": 5,
+        "rpm": 500,
+      },
+      "getCreditUsage": {
+        "concurrency": 5,
+        "rpm": 500,
+      },
+      "getCreditUsageHistorical": {
+        "concurrency": 5,
+        "rpm": 500,
+      },
+      "getExtractStatus": {
+        "concurrency": 5,
+        "rpm": 500,
+      },
+      "getTokenUsage": {
+        "concurrency": 5,
+        "rpm": 500,
+      },
+      "map": {
+        "concurrency": 5,
+        "rpm": 500,
+      },
+      "parse": {
+        "concurrency": 5,
+        "rpm": 500,
+      },
+      "scrape": {
+        "concurrency": 5,
+        "rpm": 500,
+      },
+      "search": {
+        "rpm": 250,
+      },
+      "startBatchScrape": {
+        "rpm": 50,
+      },
+      "startCrawl": {
+        "rpm": 50,
+      },
+      "startExtract": {
+        "rpm": 50,
+      },
+    },
+  },
+  "fireflies": {
+    "connector": {
+      "concurrency": 2,
+      "rpm": 60,
+    },
+    "methods": {
+      "graphql": {
+        "concurrency": 2,
+        "rpm": 60,
+      },
+    },
+  },
+  "fullenrich": {
+    "connector": {
+      "concurrency": 5,
+      "rpm": 60,
+    },
+    "methods": {
+      "credits": {
+        "concurrency": 5,
+        "rpm": 60,
+      },
+      "enrichBulk": {
+        "concurrency": 100,
+        "rps": 1,
+      },
+      "getResult": {
+        "concurrency": 5,
+        "rpm": 60,
+      },
+    },
+  },
+  "granola": {
+    "connector": {
+      "concurrency": 3,
+      "rpm": 300,
+      "rps": 5,
+    },
+    "methods": {
+      "getNote": {
+        "concurrency": 3,
+        "rpm": 300,
+        "rps": 5,
+      },
+      "listFolders": {
+        "concurrency": 3,
+        "rpm": 300,
+        "rps": 5,
+      },
+      "listNotes": {
+        "concurrency": 3,
+        "rpm": 300,
+        "rps": 5,
+      },
+    },
+  },
+  "heyreach": {
+    "connector": {
+      "concurrency": 3,
+      "rpm": 300,
+    },
+    "methods": {
+      "addLeadsToCampaign": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "addLeadsToList": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "checkApiKey": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "createList": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "createWebhook": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "deleteWebhook": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "getCampaign": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "getCampaignLeads": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "getConversations": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "getList": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "getListLeads": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "getMyNetwork": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "getOverallStats": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "getSender": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "listCampaigns": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "listLists": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "listSenders": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "listWebhooks": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "pauseCampaign": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "resumeCampaign": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "sendMessage": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "stopLeadInCampaign": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+    },
+  },
+  "hubspot": {
+    "connector": {
+      "concurrency": 3,
+      "rpm": 600,
+    },
+    "methods": {
+      "addListMemberships": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "archiveCompany": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "archiveContact": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "archiveDeal": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "archiveTicket": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "batchCreateCompanies": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "batchCreateContacts": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "batchCreateDeals": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "batchCreateTickets": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "batchReadCompanies": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "batchReadContacts": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "batchReadDeals": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "batchReadTickets": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "batchUpdateCompanies": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "batchUpdateContacts": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "batchUpdateDeals": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "batchUpdateTickets": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "createCall": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "createCompany": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "createContact": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "createDeal": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "createDefaultAssociation": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "createEmail": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "createLabeledAssociation": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "createLineItem": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "createList": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "createMeeting": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "createNote": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "createObject": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "createProduct": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "createProperty": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "createQuote": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "createTask": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "createTicket": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "deleteAssociation": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "getCompany": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "getContact": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "getDeal": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "getLineItem": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "getList": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "getListMemberships": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "getOwner": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "getPipeline": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "getProduct": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "getProperty": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "getQuote": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "getTicket": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listAssociationLabels": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listAssociations": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listCalls": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listCompanies": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listContacts": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listDeals": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listEmails": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listLineItems": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listMeetings": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listNotes": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listObjects": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listOwners": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listPipelineStages": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listPipelines": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listProducts": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listProperties": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listQuotes": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listSchemas": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listTasks": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "listTickets": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "removeListMemberships": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "searchCompanies": {
+        "rps": 4,
+      },
+      "searchContacts": {
+        "rps": 4,
+      },
+      "searchDeals": {
+        "rps": 4,
+      },
+      "searchLists": {
+        "rps": 4,
+      },
+      "searchObjects": {
+        "rps": 4,
+      },
+      "searchTickets": {
+        "rps": 4,
+      },
+      "updateCompany": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "updateContact": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "updateDeal": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+      "updateTicket": {
+        "concurrency": 3,
+        "rpm": 600,
+      },
+    },
+  },
+  "instantly": {
+    "connector": {
+      "concurrency": 5,
+      "rpm": 600,
+    },
+    "methods": {
+      "activateCampaign": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "bulkAddLeads": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "campaignAnalytics": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "campaignAnalyticsDaily": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "campaignAnalyticsSteps": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "countUnreadEmails": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "createAccount": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "createCampaign": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "createLead": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "createLeadList": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "deleteAccount": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "deleteCampaign": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "deleteLead": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "deleteLeadList": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "getAccount": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "getBackgroundJob": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "getCampaign": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "getEmail": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "getEmailVerificationStatus": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "getLead": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "getLeadList": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "listAccounts": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "listBackgroundJobs": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "listCampaigns": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "listEmails": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "listLeadLists": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "listLeads": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "markThreadAsRead": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "moveLeads": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "pauseAccount": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "pauseCampaign": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "replyToEmail": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "resumeAccount": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "searchCampaignsByContact": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "updateAccount": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "updateCampaign": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "updateLead": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "updateLeadList": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+      "verifyEmail": {
+        "rps": 2,
+      },
+      "warmupAnalytics": {
+        "concurrency": 5,
+        "rpm": 600,
+      },
+    },
+  },
+  "leadmagic": {
+    "connector": {
+      "concurrency": 3,
+      "rpm": 300,
+    },
+    "methods": {
+      "analytics": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "b2bAdDetails": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "b2bAdsSearch": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "b2bProfile": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "checkCredits": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "companyFunding": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "companyLookalike": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "companySearch": {
+        "rpm": 100,
+      },
+      "companySearchV3": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "competitorsSearch": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "emailFinder": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "emailValidation": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "employeeFinder": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "googleAdsSearch": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "jobChangeDetector": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "jobCompanyTypes": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "jobCountries": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "jobIndustries": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "jobRegions": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "jobSearch": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "jobSearchCatalogs": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "jobSearchCompanies": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "jobSearchHelpers": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "jobSearchLocations": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "jobSearchOccupations": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "jobSearchTags": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "jobSearchTitles": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "jobTypes": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "jobsFinder": {
+        "rpm": 100,
+      },
+      "metaAdsSearch": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "mobileFinder": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "peopleSearch": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "personalEmailFinder": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "profileSearch": {
+        "rpm": 100,
+      },
+      "roleFinder": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "searchStats": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "socialToWorkEmail": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+      "technographics": {
+        "concurrency": 3,
+        "rpm": 300,
+      },
+    },
+  },
+  "plusvibe": {
+    "connector": {
+      "concurrency": 3,
+      "rps": 5,
+    },
+    "methods": {
+      "activateCampaign": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "addBlocklist": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "addLeads": {
+        "rps": 2,
+      },
+      "addWebhook": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "allCampaignsStats": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "campaignStats": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "campaignSummary": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "checkAccountVitals": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "createCampaign": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "deleteLeads": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "getCampaignStatus": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "getLead": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "leadStatusCounts": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "listBlocklist": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "listCampaigns": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "listEmailAccounts": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "listTags": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "listWebhooks": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "listWorkspaces": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "pauseCampaign": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "replyEmail": {
+        "rps": 2,
+      },
+      "uniboxEmails": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "unreadCount": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "updateLeadData": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "updateLeadStatus": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "workspaceLeads": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+    },
+  },
+  "prospeo": {
+    "connector": {
+      "concurrency": 3,
+      "rpm": 300,
+      "rps": 5,
+    },
+    "methods": {
+      "accountInformation": {
+        "concurrency": 3,
+        "rpm": 300,
+        "rps": 5,
+      },
+      "bulkEnrichCompany": {
+        "concurrency": 3,
+        "rpm": 300,
+        "rps": 5,
+      },
+      "bulkEnrichPerson": {
+        "concurrency": 3,
+        "rpm": 300,
+        "rps": 5,
+      },
+      "enrichCompany": {
+        "concurrency": 3,
+        "rpm": 300,
+        "rps": 5,
+      },
+      "enrichPerson": {
+        "concurrency": 3,
+        "rpm": 300,
+        "rps": 5,
+      },
+      "searchCompany": {
+        "rpm": 30,
+        "rps": 1,
+      },
+      "searchPerson": {
+        "rpm": 30,
+        "rps": 1,
+      },
+      "searchSuggestions": {
+        "concurrency": 3,
+        "rpm": 300,
+        "rps": 5,
+      },
+    },
+  },
+  "reoon": {
+    "connector": {
+      "concurrency": 5,
+      "rpm": 120,
+    },
+    "methods": {
+      "accountBalance": {
+        "concurrency": 5,
+        "rpm": 120,
+      },
+      "createBulkTask": {
+        "rps": 1,
+      },
+      "getBulkResult": {
+        "concurrency": 5,
+        "rpm": 120,
+      },
+      "verify": {
+        "concurrency": 5,
+      },
+    },
+  },
+  "smartlead": {
+    "connector": {
+      "concurrency": 3,
+      "rpm": 60,
+    },
+    "methods": {
+      "addLeadsToCampaign": {
+        "rpm": 30,
+      },
+      "campaignStatistics": {
+        "concurrency": 3,
+        "rpm": 60,
+      },
+      "fetchLeadByEmail": {
+        "concurrency": 3,
+        "rpm": 60,
+      },
+      "getCampaign": {
+        "concurrency": 3,
+        "rpm": 60,
+      },
+      "listCampaigns": {
+        "concurrency": 3,
+        "rpm": 60,
+      },
+      "listEmailAccounts": {
+        "concurrency": 3,
+        "rpm": 60,
+      },
+    },
+  },
+  "smuggler": {
+    "connector": {
+      "concurrency": 3,
+      "rpm": 120,
+    },
+    "methods": {
+      "bulkFindEmail": {
+        "rps": 2,
+      },
+      "credits": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "findEmail": {
+        "rps": 2,
+      },
+      "getCompany": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "getPerson": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "listCampaigns": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "listLeads": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "listPosts": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "listProfiles": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "postEngagements": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "searchCompanies": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "searchPersons": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "topEngagers": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+    },
+  },
+  "supabase": {
+    "connector": {
+      "concurrency": 3,
+      "rpm": 120,
+    },
+    "methods": {
+      "applyMigration": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "availableRegions": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "createApiKey": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "createBranch": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "createFunction": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "createOrganization": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "createProject": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "createSecrets": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "deleteBranch": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "deleteFunction": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "deleteProject": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "deleteSecrets": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "enableWebhooks": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "getAuthConfig": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "getBranch": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "getDatabaseContext": {
+        "rpm": 10,
+        "rps": 1,
+      },
+      "getFunction": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "getFunctionBody": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "getOrganization": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "getPgbouncerConfig": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "getPoolerConfig": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "getPostgresConfig": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "getPostgrestConfig": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "getProfile": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "getProject": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "getProjectHealth": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "getSnippet": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "getStorageConfig": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "getTypescriptTypes": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "listApiKeys": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "listBranches": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "listBuckets": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "listFunctions": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "listMigrations": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "listOrganizationMembers": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "listOrganizationProjects": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "listOrganizations": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "listProjects": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "listSecrets": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "listSnippets": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "pauseProject": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "restoreProject": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "runQuery": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "runQueryReadOnly": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "updateFunction": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+      "upsertMigration": {
+        "concurrency": 3,
+        "rpm": 120,
+      },
+    },
+  },
+  "thecompaniesapi": {
+    "connector": {
+      "concurrency": 5,
+      "rps": 50,
+    },
+    "methods": {
+      "askCompany": {
+        "concurrency": 5,
+        "rps": 50,
+      },
+      "checkUser": {
+        "concurrency": 5,
+        "rps": 50,
+      },
+      "companyContext": {
+        "concurrency": 5,
+        "rps": 50,
+      },
+      "countCompanies": {
+        "concurrency": 5,
+        "rps": 50,
+      },
+      "emailPatterns": {
+        "concurrency": 5,
+        "rps": 50,
+      },
+      "enrichByDomain": {
+        "concurrency": 5,
+        "rps": 50,
+      },
+      "enrichByEmail": {
+        "concurrency": 5,
+        "rps": 50,
+      },
+      "enrichBySocial": {
+        "concurrency": 5,
+        "rps": 50,
+      },
+      "enrichJobTitles": {
+        "concurrency": 5,
+        "rps": 50,
+      },
+      "fetchLists": {
+        "concurrency": 5,
+        "rps": 50,
+      },
+      "promptToSegmentation": {
+        "concurrency": 5,
+        "rps": 50,
+      },
+      "searchByName": {
+        "concurrency": 5,
+        "rps": 50,
+      },
+      "searchByPrompt": {
+        "concurrency": 5,
+        "rps": 50,
+      },
+      "searchCities": {
+        "concurrency": 5,
+        "rps": 50,
+      },
+      "searchCompanies": {
+        "concurrency": 5,
+        "rps": 50,
+      },
+      "searchCountries": {
+        "concurrency": 5,
+        "rps": 50,
+      },
+      "searchIndustries": {
+        "concurrency": 5,
+        "rps": 50,
+      },
+      "searchTechnologies": {
+        "concurrency": 5,
+        "rps": 50,
+      },
+      "similarCompanies": {
+        "concurrency": 5,
+        "rps": 50,
+      },
+    },
+  },
+  "trigify": {
+    "connector": {
+      "concurrency": 3,
+      "rpm": 100,
+    },
+    "methods": {
+      "bulkStopSocialSignalSubscriptions": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "companyComments": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "companyPosts": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createBlueskyPostsSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createBlueskyProfileSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createDailyDevPostsSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createGitHubDiscussionsSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createGitHubIssuesSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createHackerNewsStoriesSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createLinkedInPostsSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createLinkedInProfileSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createNewsApiAiPostsSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createPodcastEpisodesSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createPodcastKeywordsSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createRedditPostsSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createSocialSignalSubscriptions": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createSubredditPostsSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createSubstackNotesSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createSubstackPostsSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createSubstackProfileSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createTopic": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createTwitterPostsSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createTwitterProfileSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createWorkflow": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createWorkflowTable": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createYouTubeChannelSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "createYouTubeVideosSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "creditsBalance": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "creditsBreakdown": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "creditsUsage": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "deleteSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "deleteTopic": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "deleteWorkflow": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "deleteWorkflowDraft": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "enrichCompany": {
+        "rps": 2,
+      },
+      "enrichProfile": {
+        "rps": 2,
+      },
+      "enrichXUser": {
+        "rps": 2,
+      },
+      "estimateSocialSignals": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getAirtableFields": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getCrmFieldOptions": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getCrmFields": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getGoogleSheetsColumns": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getNotionSchema": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getOrganisation": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getSocialSignalResult": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getSocialSignalSubscription": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getSocialSignalTargetProfile": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getTopic": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getTopicCreditsSummary": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getTopicEngagements": {
+        "rps": 2,
+      },
+      "getTopicPostEngagements": {
+        "rps": 2,
+      },
+      "getUsage": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getWorkflow": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getWorkflowDraft": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getWorkflowExecution": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getXConnect": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "integrationHealth": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listAirtableBases": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listAirtableTables": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listAudiences": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listCampaigns": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listGoogleSheetsDocuments": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listGoogleSheetsSheets": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listIntegrations": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listLinearStates": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listLinearTeams": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listLinearUsers": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listNotionDatabases": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listOrganisations": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listSearches": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listSlackChannels": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listSlackUsers": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listSocialSignalFeed": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listSocialSignalResults": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listSocialSignalSubscriptions": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listSocialSignalTargetCheckRuns": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listSocialSignalTargetInsights": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listSocialSignalTargets": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listTopics": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listWorkflowActions": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listWorkflowExamples": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listWorkflowExecutions": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listWorkflowTables": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listWorkflowTriggers": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listWorkflows": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "listXAccounts": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "lookupXUser": {
+        "rps": 2,
+      },
+      "postByUrl": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "postCommentReplies": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "postComments": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "postEngagements": {
+        "rps": 2,
+      },
+      "profileEngagementBulk": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "profileEngagementRemove": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "profileEngagementResults": {
+        "rps": 2,
+      },
+      "profilePostEngagementResults": {
+        "rps": 2,
+      },
+      "profilePosts": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "searchPodcasts": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "searchResults": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "socialMapping": {
+        "rps": 2,
+      },
+      "socialSignalsLimits": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "socialSignalsMetadata": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "socialSignalsStatus": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "stopSocialSignalSubscription": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "testWorkflow": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "updateSearch": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "updateSocialSignalSubscription": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "updateTopic": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "updateWorkflow": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "upsertWorkflowDraft": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "xCreatePost": {
+        "rps": 1,
+      },
+      "xDeletePost": {
+        "rps": 1,
+      },
+      "xFollow": {
+        "rps": 1,
+      },
+      "xLikePost": {
+        "rps": 1,
+      },
+      "xPostComments": {
+        "rps": 2,
+      },
+      "xPostEngagements": {
+        "rps": 2,
+      },
+      "xReply": {
+        "rps": 1,
+      },
+      "xRepost": {
+        "rps": 1,
+      },
+      "xSendDm": {
+        "rps": 1,
+      },
+    },
+  },
+}
+`;
+
+exports[`bundled extension rate-limit config > ships the expected set of extensions 1`] = `
+[
+  "apify",
+  "apollo",
+  "attio",
+  "avtrz",
+  "bettercontact",
+  "exa",
+  "findymail",
+  "firecrawl",
+  "fireflies",
+  "fullenrich",
+  "granola",
+  "heyreach",
+  "hubspot",
+  "instantly",
+  "leadmagic",
+  "plusvibe",
+  "prospeo",
+  "reoon",
+  "smartlead",
+  "smuggler",
+  "supabase",
+  "thecompaniesapi",
+  "trigify",
+]
+`;

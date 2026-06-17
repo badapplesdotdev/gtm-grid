@@ -11,7 +11,14 @@
 - **Base URL:** `https://api.attio.com`. All endpoints are under `/v2/...`.
 - **Auth:** `Authorization: Bearer <apiKey>` — the manifest sends the `apiKey` secret in the `Authorization` header (the `Bearer ` scheme is part of the header value). Generate an API key (or OAuth token) at Workspace Settings → Developers → API keys.
 - **Scopes:** access tokens carry granular scopes — typically `record_permission:read/read-write`, `object_configuration:read/read-write`, `list_entry:read-write`, `list_configuration:read-write`, `note:read-write`, `task:read-write`, `comment:read-write`, `webhook:read-write`, `user_management:read`. A `403` usually means the token is missing a scope, not a bad key. Call `attio.identifySelf` to see the token's `scope` string and workspace.
-- **Cost convention (grid credits, not Attio billing):** reads = 0, writes = 1. Attio's own API has no per-call charge; it is **rate limited** (roughly hundreds of requests/minute, returned via standard headers) — batch and back off on `429`.
+- **Cost convention (grid credits, not Attio billing):** reads = 0, writes = 1. Attio's own API has no per-call charge; it is **rate limited** (100 req/s reads, 25 req/s writes; the query endpoints add a score-based sliding-window limit) — batch and back off on `429` (honour `Retry-After`). See "Picker fields & rate limit" above for how the manifest enforces this.
+
+## Picker fields & rate limit (manifest annotations)
+- **Rate limit.** Attio documents **100 req/s for reads and 25 req/s for writes** (no concurrency cap). The connector-level default is set to the binding **`rps: 25`** so bulk write runs (assert/create/update) can't 429. The two score-based query endpoints — `queryRecords` and `queryListEntries` — carry a stricter per-method `rps: 5` override because their complexity-score sliding window 429s much sooner under load. On `429`, honour the `Retry-After` header.
+- **Object pickers** (the `object` field on every record endpoint): backed by `listObjects`, label = `plural_noun`, value = `api_slug`. The slug (`people`, `companies`, `deals`, custom) is the stable identifier and every path accepts it.
+- **List pickers** (the `list` field on every list-entry endpoint): backed by `listLists`, label = `name`, value = `api_slug`.
+- **Owner / assignee pickers** (`getWorkspaceMember.workspace_member_id`, `listTasks.assignee`): backed by `listWorkspaceMembers`, labelled by `email_address`. Note: task assignees in *write* bodies still need the member UUID (`id.workspace_member_id`) wrapped as `{ referenced_actor_type: "workspace-member", referenced_actor_id }` — the picker resolves *who*, you supply the typed actor object.
+- Not wired (deep child resources keyed by parent — no standalone list endpoint to enumerate them): `record_id`, `entry_id`, `note_id`, `task_id`, `webhook_id`, `comment_id`, `thread_id`, `attribute`, `option`, `status`. Discover these via their parent query/list call (e.g. `queryRecords` → `record_id`, `listAttributes` → `attribute`).
 
 ## Endpoints by job
 

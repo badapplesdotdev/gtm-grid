@@ -12,6 +12,10 @@
     "header": "x-api-key",
     "secretKey": "apiKey"
   },
+  "rateLimit": {
+    "rpm": 120,
+    "concurrency": 3
+  },
   "methods": [
     {
       "id": "searchPersons",
@@ -87,7 +91,10 @@
           }
         }
       },
-      "category": "Find email"
+      "category": "Find email",
+      "rateLimit": {
+        "rps": 2
+      }
     },
     {
       "id": "bulkFindEmail",
@@ -111,7 +118,10 @@
           }
         }
       },
-      "category": "Find email"
+      "category": "Find email",
+      "rateLimit": {
+        "rps": 2
+      }
     },
     {
       "id": "searchCompanies",
@@ -159,6 +169,87 @@
       "category": "Enrich company"
     },
     {
+      "id": "listCampaigns",
+      "label": "List Campaigns",
+      "description": "List engagement-monitoring campaigns. Returns data[] of { id, name, status, profileCount, leadCount }. Use a campaign id to filter listLeads.",
+      "verb": "GET",
+      "path": "/campaigns",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "search": {
+            "type": "string",
+            "description": "Filter by campaign name"
+          }
+        }
+      },
+      "category": "Signals"
+    },
+    {
+      "id": "listProfiles",
+      "label": "List Monitored Profiles",
+      "description": "List LinkedIn profiles being monitored for engagement. Returns data[] of { id, fullName, headline, linkedinUrl, status, lastSyncedAt }. Use a profile id with topEngagers or to filter listLeads.",
+      "verb": "GET",
+      "path": "/profiles",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "campaignId": {
+            "type": "string",
+            "description": "Filter by campaign"
+          },
+          "search": {
+            "type": "string"
+          }
+        }
+      },
+      "category": "Signals"
+    },
+    {
+      "id": "listPosts",
+      "label": "List Monitored Posts",
+      "description": "List LinkedIn posts being tracked for engagement. Returns data[] of { id, title, authorName, postUrl, engagementCount, postedAt }. Use a post id with postEngagements.",
+      "verb": "GET",
+      "path": "/posts",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "profileId": {
+            "type": "string",
+            "description": "Filter by monitored profile"
+          },
+          "search": {
+            "type": "string"
+          }
+        }
+      },
+      "category": "Signals"
+    },
+    {
       "id": "listLeads",
       "label": "List Leads",
       "description": "List captured leads (people who engaged with monitored profiles/posts) with engagement counts and enrichment status. Filter by campaignId, profileId, or search.",
@@ -186,7 +277,27 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "options": {
+        "campaignId": {
+          "method": "listCampaigns",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        },
+        "profileId": {
+          "method": "listProfiles",
+          "labelKey": "fullName",
+          "valueKey": "id",
+          "sublabelKey": "headline",
+          "args": {
+            "limit": 100
+          }
+        }
+      }
     },
     {
       "id": "postEngagements",
@@ -207,7 +318,18 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listPosts",
+          "labelKey": "title",
+          "valueKey": "id",
+          "sublabelKey": "authorName",
+          "args": {
+            "limit": 100
+          }
+        }
+      }
     },
     {
       "id": "topEngagers",
@@ -228,7 +350,18 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listProfiles",
+          "labelKey": "fullName",
+          "valueKey": "id",
+          "sublabelKey": "headline",
+          "args": {
+            "limit": 100
+          }
+        }
+      }
     },
     {
       "id": "credits",

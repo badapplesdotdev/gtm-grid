@@ -1,6 +1,16 @@
 # LeadMagic — Agent Skill
 > Real-time B2B data enrichment: turn a name, email, domain, or LinkedIn URL into verified emails, mobile numbers, profile/company data, hiring signals, and competitor ad intel.
 
+## Mapping notes (connector config)
+- **Rate limit (documented):** default **300 req/min** at the connector level (`rateLimit.rpm: 300`, `concurrency: 3`). Three endpoints are throttled tighter to **100 req/min** per the docs and carry a per-method override: `profileSearch` (`/v1/people/profile-search`), `companySearch` (`/v1/companies/company-search`), and `jobsFinder` (`/v1/jobs/jobs-finder`). Analytics/catalog endpoints are unlimited but ride the connector default. Source: LeadMagic API docs "Making API Calls" (RateLimit-Limit headers, per-minute window).
+- **Picker (selection) fields** — LeadMagic is a stateless enrichment API with no campaign/list/workspace/owner resources. The only enumerable-resource fields are the numeric catalog IDs on **`jobsFinder`**, each backed by a free `GET` catalog list method (returns a bare array of `{ id, name }`, so `labelKey:"name"` / `valueKey:"id"`, no `itemsPath`):
+  - `country_id` → `jobCountries`
+  - `job_type_id` → `jobTypes`
+  - `region_id` → `jobRegions`
+  - `company_industry_id` → `jobIndustries`
+  - `company_type_id` → `jobCompanyTypes`
+- The V3 `jobSearch` / `companySearchV3` / `peopleSearch` filters take canonical IDs too, but they're resolved via free autocomplete helpers (`q`-driven, not enumerable lists), so they are NOT wired as static pickers — use `autoResolve` or the `jobSearch*` helper methods instead.
+
 ## When to use
 - Use to **enrich a person**: find/validate work email, find personal email, find mobile, enrich a LinkedIn profile, or detect a job change.
 - Use to **enrich a company**: firmographics, funding/financials, technographics (tech stack), competitors, lookalikes, employee lists, or find a person by role.
@@ -11,7 +21,7 @@
 ## Auth & cost
 - Auth: header `X-API-Key: <apiKey>` (set the `apiKey` secret). Every call sends it automatically.
 - Base URL: `https://api.leadmagic.io`. **Each method carries its own version in its path** — most enrichment lives on `/v1/...`, while the newer search/discovery endpoints (`companySearchV3`, `peopleSearch`, `companyLookalike`, `jobSearch` and its `/v3/jobs/search/*` helpers, `searchStats`) live on `/v3/...`. Enrichment calls are `POST` with a JSON body; catalog/helper lookups are `GET`.
-- Credits are charged **per successful result** on most calls — a miss is usually free (see Gotchas for the exact numbers). Rate limit ~300 req/min.
+- Credits are charged **per successful result** on most calls — a miss is usually free (see Gotchas for the exact numbers). Rate limit: 300 req/min default, 100 req/min for `profileSearch`/`companySearch`/`jobsFinder` (see Mapping notes).
 - **Free helpers** (0 credits, cache locally): all job catalogs (`jobCountries`, `jobTypes`, `jobIndustries`, `jobRegions`, `jobCompanyTypes`), all V3 job-search helpers (`jobSearchCatalogs`/`Companies`/`Helpers`/`Locations`/`Occupations`/`Tags`/`Titles`), `searchStats`, `analytics`, and `checkCredits`.
 - Many discovery endpoints accept `preview: true` (count-only, no credits) and `limit`/`offset` (or cursor) pagination — preview before spending.
 

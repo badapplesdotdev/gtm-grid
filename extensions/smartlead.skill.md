@@ -11,7 +11,11 @@
 - **Base URL:** `https://server.smartlead.ai/api/v1`.
 - **Auth:** Smartlead authenticates with an `api_key` **query parameter**, NOT a header. Every request appends `?api_key=<apiKey>` (the manifest injects this from the `apiKey` secret). A missing/invalid key returns `401`. Grab the key from Smartlead → Settings → API.
 - **Credits:** API calls themselves are free (`credits: 0` on every method) — you pay for sending via your Smartlead plan/lead limits, not per API request.
-- **Rate limits:** ~60 requests per 60 seconds per API key, and no more than ~10 requests per 2 seconds. Heavy write endpoints (campaign create, lead upload) are throttled lower (~30/min). All endpoints share one bucket. Watch `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` response headers and back off on `429`.
+- **Rate limits:** documented **60 requests / 60 seconds per API key** (`rateLimit.rpm: 60`, `concurrency: 3` at the connector level; one shared bucket across all endpoints). The heavy lead-upload endpoint `addLeadsToCampaign` carries a stricter per-method override (`rateLimit.rpm: 30`). On `429`, back off using the `X-RateLimit-Reset` response header. Rate limits may vary by plan/client-level key — contact support for plan-specific limits.
+
+## Picker (selection) fields
+- The engine renders campaign-id inputs as live dropdowns: **pick a campaign by name, store its integer id.** Wired via `options` on every `campaign_id` field — `getCampaign`, `addLeadsToCampaign`, and `campaignStatistics` — all backed by `listCampaigns` (`GET /campaigns/`, a **bare array** of campaign objects; `labelKey: name`, `valueKey: id`, `sublabelKey: status`).
+- `listEmailAccounts` (`GET /email-accounts/`) enumerates sending inboxes but no input field on this connector takes a sending-account id/email, so it has no `options` wiring (it stays a plain list/audit method). `fetchLeadByEmail` takes a free-text email, not an enumerable picker.
 
 ## Endpoints by job
 

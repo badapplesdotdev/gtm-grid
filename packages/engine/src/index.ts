@@ -10,7 +10,7 @@ import { defaultRegistry, Registry } from "./registry.js";
 import { parseManifest, connectorFromManifest } from "./connectors/manifest.js";
 
 export { Db } from "./db.js";
-export { Engine, mapConcurrent, aiConfigFromEnv } from "./execute.js";
+export { Engine, mapConcurrent, RateLimiter, DEFAULT_RATE_LIMIT, aiConfigFromEnv } from "./execute.js";
 export type { EngineConfig, RunColumnOptions, EngineStores, CellProgress } from "./execute.js";
 export { Registry, defaultRegistry } from "./registry.js";
 export { runFunction, normalizeCode } from "./sandbox.js";
@@ -25,7 +25,7 @@ export {
   parseRetryAfter,
   type RetryOptions,
 } from "./http-retry.js";
-export { parseManifest, connectorFromManifest, manifestSchema, type ExtensionManifest } from "./connectors/manifest.js";
+export { parseManifest, connectorFromManifest, manifestSchema, extractOptions, type ExtensionManifest, type FieldOption } from "./connectors/manifest.js";
 export { assertPublicUrl, isBlockedIp, SsrfBlockedError, type SsrfOptions } from "./ssrf.js";
 export * from "./types.js";
 // Canonical Effect-TS service pattern (see docs/effect-conventions.md). Later

@@ -6,7 +6,14 @@
   "description": "Attio CRM — read and write people, companies, deals and custom-object records, manage lists, attributes, notes, tasks, comments and webhooks via the Attio v2 REST API.",
   "logo": "https://www.google.com/s2/favicons?domain=attio.com&sz=128",
   "baseUrl": "https://api.attio.com",
-  "auth": { "type": "apiKey", "header": "Authorization", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "Authorization",
+    "secretKey": "apiKey"
+  },
+  "rateLimit": {
+    "rps": 25
+  },
   "methods": [
     {
       "id": "identifySelf",
@@ -15,9 +22,11 @@
       "verb": "GET",
       "path": "/v2/self",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     },
-
     {
       "id": "listObjects",
       "label": "List Objects",
@@ -25,7 +34,10 @@
       "verb": "GET",
       "path": "/v2/objects",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     },
     {
       "id": "getObject",
@@ -34,9 +46,25 @@
       "verb": "GET",
       "path": "/v2/objects/{object}",
       "credits": 0,
-      "input": { "type": "object", "required": ["object"], "properties": {
-        "object": { "type": "string", "description": "Object id or api_slug, e.g. 'companies'" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "object"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "Object id or api_slug, e.g. 'companies'"
+          }
+        }
+      },
+      "options": {
+        "object": {
+          "method": "listObjects",
+          "labelKey": "plural_noun",
+          "valueKey": "api_slug"
+        }
+      }
     },
     {
       "id": "createObject",
@@ -45,9 +73,18 @@
       "verb": "POST",
       "path": "/v2/objects",
       "credits": 1,
-      "input": { "type": "object", "required": ["data"], "properties": {
-        "data": { "type": "object", "description": "{ api_slug, singular_noun, plural_noun }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "{ api_slug, singular_noun, plural_noun }"
+          }
+        }
+      }
     },
     {
       "id": "updateObject",
@@ -56,12 +93,31 @@
       "verb": "PATCH",
       "path": "/v2/objects/{object}",
       "credits": 1,
-      "input": { "type": "object", "required": ["object", "data"], "properties": {
-        "object": { "type": "string", "description": "Object id or api_slug" },
-        "data": { "type": "object", "description": "{ api_slug?, singular_noun?, plural_noun? }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "object",
+          "data"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "Object id or api_slug"
+          },
+          "data": {
+            "type": "object",
+            "description": "{ api_slug?, singular_noun?, plural_noun? }"
+          }
+        }
+      },
+      "options": {
+        "object": {
+          "method": "listObjects",
+          "labelKey": "plural_noun",
+          "valueKey": "api_slug"
+        }
+      }
     },
-
     {
       "id": "queryRecords",
       "label": "Query Records",
@@ -69,14 +125,51 @@
       "verb": "POST",
       "path": "/v2/objects/{object}/records/query",
       "credits": 0,
-      "input": { "type": "object", "required": ["object"], "properties": {
-        "object": { "type": "string", "description": "Object id or api_slug, e.g. 'companies'" },
-        "filter": { "type": "object", "description": "Attribute filter, e.g. { name: { '$contains': 'Stripe' } }" },
-        "filter_view_id": { "type": "string", "description": "Use a saved view's filter instead of an inline filter" },
-        "sorts": { "type": "array", "items": { "type": "object" }, "description": "[{ attribute, direction:'asc'|'desc', field? }]" },
-        "limit": { "type": "integer", "description": "Max records (default 500)" },
-        "offset": { "type": "integer", "description": "Pagination offset (default 0)" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "object"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "Object id or api_slug, e.g. 'companies'"
+          },
+          "filter": {
+            "type": "object",
+            "description": "Attribute filter, e.g. { name: { '$contains': 'Stripe' } }"
+          },
+          "filter_view_id": {
+            "type": "string",
+            "description": "Use a saved view's filter instead of an inline filter"
+          },
+          "sorts": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "[{ attribute, direction:'asc'|'desc', field? }]"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max records (default 500)"
+          },
+          "offset": {
+            "type": "integer",
+            "description": "Pagination offset (default 0)"
+          }
+        }
+      },
+      "options": {
+        "object": {
+          "method": "listObjects",
+          "labelKey": "plural_noun",
+          "valueKey": "api_slug"
+        }
+      },
+      "rateLimit": {
+        "rps": 5
+      }
     },
     {
       "id": "searchRecords",
@@ -85,11 +178,29 @@
       "verb": "POST",
       "path": "/v2/objects/records/search",
       "credits": 0,
-      "input": { "type": "object", "required": ["query"], "properties": {
-        "query": { "type": "string", "description": "Free-text search term" },
-        "objects": { "type": "array", "items": { "type": "string" }, "description": "Object slugs to search, e.g. ['people','companies']" },
-        "limit": { "type": "integer", "description": "Max results" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Free-text search term"
+          },
+          "objects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Object slugs to search, e.g. ['people','companies']"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max results"
+          }
+        }
+      }
     },
     {
       "id": "getRecord",
@@ -98,10 +209,30 @@
       "verb": "GET",
       "path": "/v2/objects/{object}/records/{record_id}",
       "credits": 0,
-      "input": { "type": "object", "required": ["object", "record_id"], "properties": {
-        "object": { "type": "string", "description": "Object id or api_slug" },
-        "record_id": { "type": "string", "description": "Record UUID" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "object",
+          "record_id"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "Object id or api_slug"
+          },
+          "record_id": {
+            "type": "string",
+            "description": "Record UUID"
+          }
+        }
+      },
+      "options": {
+        "object": {
+          "method": "listObjects",
+          "labelKey": "plural_noun",
+          "valueKey": "api_slug"
+        }
+      }
     },
     {
       "id": "createRecord",
@@ -110,10 +241,30 @@
       "verb": "POST",
       "path": "/v2/objects/{object}/records",
       "credits": 1,
-      "input": { "type": "object", "required": ["object", "data"], "properties": {
-        "object": { "type": "string", "description": "Object id or api_slug, e.g. 'companies'" },
-        "data": { "type": "object", "description": "{ values: { attribute_slug: value, ... } }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "object",
+          "data"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "Object id or api_slug, e.g. 'companies'"
+          },
+          "data": {
+            "type": "object",
+            "description": "{ values: { attribute_slug: value, ... } }"
+          }
+        }
+      },
+      "options": {
+        "object": {
+          "method": "listObjects",
+          "labelKey": "plural_noun",
+          "valueKey": "api_slug"
+        }
+      }
     },
     {
       "id": "assertRecord",
@@ -122,11 +273,34 @@
       "verb": "PUT",
       "path": "/v2/objects/{object}/records",
       "credits": 1,
-      "input": { "type": "object", "required": ["object", "data"], "properties": {
-        "object": { "type": "string", "description": "Object id or api_slug" },
-        "matching_attribute": { "type": "string", "description": "Query param — slug/id of the unique attribute used to match, e.g. 'domains'" },
-        "data": { "type": "object", "description": "{ values: { attribute_slug: value, ... } }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "object",
+          "data"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "Object id or api_slug"
+          },
+          "matching_attribute": {
+            "type": "string",
+            "description": "Query param — slug/id of the unique attribute used to match, e.g. 'domains'"
+          },
+          "data": {
+            "type": "object",
+            "description": "{ values: { attribute_slug: value, ... } }"
+          }
+        }
+      },
+      "options": {
+        "object": {
+          "method": "listObjects",
+          "labelKey": "plural_noun",
+          "valueKey": "api_slug"
+        }
+      }
     },
     {
       "id": "updateRecordAppend",
@@ -135,11 +309,35 @@
       "verb": "PATCH",
       "path": "/v2/objects/{object}/records/{record_id}",
       "credits": 1,
-      "input": { "type": "object", "required": ["object", "record_id", "data"], "properties": {
-        "object": { "type": "string", "description": "Object id or api_slug" },
-        "record_id": { "type": "string", "description": "Record UUID" },
-        "data": { "type": "object", "description": "{ values: { attribute_slug: value, ... } }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "object",
+          "record_id",
+          "data"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "Object id or api_slug"
+          },
+          "record_id": {
+            "type": "string",
+            "description": "Record UUID"
+          },
+          "data": {
+            "type": "object",
+            "description": "{ values: { attribute_slug: value, ... } }"
+          }
+        }
+      },
+      "options": {
+        "object": {
+          "method": "listObjects",
+          "labelKey": "plural_noun",
+          "valueKey": "api_slug"
+        }
+      }
     },
     {
       "id": "updateRecordOverwrite",
@@ -148,11 +346,35 @@
       "verb": "PUT",
       "path": "/v2/objects/{object}/records/{record_id}",
       "credits": 1,
-      "input": { "type": "object", "required": ["object", "record_id", "data"], "properties": {
-        "object": { "type": "string", "description": "Object id or api_slug" },
-        "record_id": { "type": "string", "description": "Record UUID" },
-        "data": { "type": "object", "description": "{ values: { attribute_slug: value, ... } }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "object",
+          "record_id",
+          "data"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "Object id or api_slug"
+          },
+          "record_id": {
+            "type": "string",
+            "description": "Record UUID"
+          },
+          "data": {
+            "type": "object",
+            "description": "{ values: { attribute_slug: value, ... } }"
+          }
+        }
+      },
+      "options": {
+        "object": {
+          "method": "listObjects",
+          "labelKey": "plural_noun",
+          "valueKey": "api_slug"
+        }
+      }
     },
     {
       "id": "deleteRecord",
@@ -161,10 +383,30 @@
       "verb": "DELETE",
       "path": "/v2/objects/{object}/records/{record_id}",
       "credits": 1,
-      "input": { "type": "object", "required": ["object", "record_id"], "properties": {
-        "object": { "type": "string", "description": "Object id or api_slug" },
-        "record_id": { "type": "string", "description": "Record UUID" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "object",
+          "record_id"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "Object id or api_slug"
+          },
+          "record_id": {
+            "type": "string",
+            "description": "Record UUID"
+          }
+        }
+      },
+      "options": {
+        "object": {
+          "method": "listObjects",
+          "labelKey": "plural_noun",
+          "valueKey": "api_slug"
+        }
+      }
     },
     {
       "id": "listRecordAttributeValues",
@@ -173,13 +415,41 @@
       "verb": "GET",
       "path": "/v2/objects/{object}/records/{record_id}/attributes/{attribute}/values",
       "credits": 0,
-      "input": { "type": "object", "required": ["object", "record_id", "attribute"], "properties": {
-        "object": { "type": "string", "description": "Object id or api_slug" },
-        "record_id": { "type": "string", "description": "Record UUID" },
-        "attribute": { "type": "string", "description": "Attribute id or slug" },
-        "limit": { "type": "integer" },
-        "offset": { "type": "integer" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "object",
+          "record_id",
+          "attribute"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "Object id or api_slug"
+          },
+          "record_id": {
+            "type": "string",
+            "description": "Record UUID"
+          },
+          "attribute": {
+            "type": "string",
+            "description": "Attribute id or slug"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          }
+        }
+      },
+      "options": {
+        "object": {
+          "method": "listObjects",
+          "labelKey": "plural_noun",
+          "valueKey": "api_slug"
+        }
+      }
     },
     {
       "id": "listRecordEntries",
@@ -188,14 +458,37 @@
       "verb": "GET",
       "path": "/v2/objects/{object}/records/{record_id}/entries",
       "credits": 0,
-      "input": { "type": "object", "required": ["object", "record_id"], "properties": {
-        "object": { "type": "string", "description": "Object id or api_slug" },
-        "record_id": { "type": "string", "description": "Record UUID" },
-        "limit": { "type": "integer" },
-        "offset": { "type": "integer" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "object",
+          "record_id"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "Object id or api_slug"
+          },
+          "record_id": {
+            "type": "string",
+            "description": "Record UUID"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          }
+        }
+      },
+      "options": {
+        "object": {
+          "method": "listObjects",
+          "labelKey": "plural_noun",
+          "valueKey": "api_slug"
+        }
+      }
     },
-
     {
       "id": "listAttributes",
       "label": "List Attributes",
@@ -203,12 +496,29 @@
       "verb": "GET",
       "path": "/v2/{target}/{identifier}/attributes",
       "credits": 0,
-      "input": { "type": "object", "required": ["target", "identifier"], "properties": {
-        "target": { "type": "string", "description": "'objects' or 'lists'" },
-        "identifier": { "type": "string", "description": "Object/list slug or id, e.g. 'companies'" },
-        "limit": { "type": "integer" },
-        "offset": { "type": "integer" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "target",
+          "identifier"
+        ],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "'objects' or 'lists'"
+          },
+          "identifier": {
+            "type": "string",
+            "description": "Object/list slug or id, e.g. 'companies'"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          }
+        }
+      }
     },
     {
       "id": "getAttribute",
@@ -217,11 +527,28 @@
       "verb": "GET",
       "path": "/v2/{target}/{identifier}/attributes/{attribute}",
       "credits": 0,
-      "input": { "type": "object", "required": ["target", "identifier", "attribute"], "properties": {
-        "target": { "type": "string", "description": "'objects' or 'lists'" },
-        "identifier": { "type": "string", "description": "Object/list slug or id" },
-        "attribute": { "type": "string", "description": "Attribute id or slug" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "target",
+          "identifier",
+          "attribute"
+        ],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "'objects' or 'lists'"
+          },
+          "identifier": {
+            "type": "string",
+            "description": "Object/list slug or id"
+          },
+          "attribute": {
+            "type": "string",
+            "description": "Attribute id or slug"
+          }
+        }
+      }
     },
     {
       "id": "createAttribute",
@@ -230,11 +557,28 @@
       "verb": "POST",
       "path": "/v2/{target}/{identifier}/attributes",
       "credits": 1,
-      "input": { "type": "object", "required": ["target", "identifier", "data"], "properties": {
-        "target": { "type": "string", "description": "'objects' or 'lists'" },
-        "identifier": { "type": "string", "description": "Object/list slug or id" },
-        "data": { "type": "object", "description": "{ title, api_slug, type, is_required, is_unique, is_multiselect, ... }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "target",
+          "identifier",
+          "data"
+        ],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "'objects' or 'lists'"
+          },
+          "identifier": {
+            "type": "string",
+            "description": "Object/list slug or id"
+          },
+          "data": {
+            "type": "object",
+            "description": "{ title, api_slug, type, is_required, is_unique, is_multiselect, ... }"
+          }
+        }
+      }
     },
     {
       "id": "updateAttribute",
@@ -243,12 +587,33 @@
       "verb": "PATCH",
       "path": "/v2/{target}/{identifier}/attributes/{attribute}",
       "credits": 1,
-      "input": { "type": "object", "required": ["target", "identifier", "attribute", "data"], "properties": {
-        "target": { "type": "string", "description": "'objects' or 'lists'" },
-        "identifier": { "type": "string", "description": "Object/list slug or id" },
-        "attribute": { "type": "string", "description": "Attribute id or slug" },
-        "data": { "type": "object", "description": "Fields to update" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "target",
+          "identifier",
+          "attribute",
+          "data"
+        ],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "'objects' or 'lists'"
+          },
+          "identifier": {
+            "type": "string",
+            "description": "Object/list slug or id"
+          },
+          "attribute": {
+            "type": "string",
+            "description": "Attribute id or slug"
+          },
+          "data": {
+            "type": "object",
+            "description": "Fields to update"
+          }
+        }
+      }
     },
     {
       "id": "listSelectOptions",
@@ -257,11 +622,28 @@
       "verb": "GET",
       "path": "/v2/{target}/{identifier}/attributes/{attribute}/options",
       "credits": 0,
-      "input": { "type": "object", "required": ["target", "identifier", "attribute"], "properties": {
-        "target": { "type": "string", "description": "'objects' or 'lists'" },
-        "identifier": { "type": "string", "description": "Object/list slug or id" },
-        "attribute": { "type": "string", "description": "Select attribute id or slug" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "target",
+          "identifier",
+          "attribute"
+        ],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "'objects' or 'lists'"
+          },
+          "identifier": {
+            "type": "string",
+            "description": "Object/list slug or id"
+          },
+          "attribute": {
+            "type": "string",
+            "description": "Select attribute id or slug"
+          }
+        }
+      }
     },
     {
       "id": "createSelectOption",
@@ -270,12 +652,33 @@
       "verb": "POST",
       "path": "/v2/{target}/{identifier}/attributes/{attribute}/options",
       "credits": 1,
-      "input": { "type": "object", "required": ["target", "identifier", "attribute", "data"], "properties": {
-        "target": { "type": "string", "description": "'objects' or 'lists'" },
-        "identifier": { "type": "string", "description": "Object/list slug or id" },
-        "attribute": { "type": "string", "description": "Select attribute id or slug" },
-        "data": { "type": "object", "description": "{ title }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "target",
+          "identifier",
+          "attribute",
+          "data"
+        ],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "'objects' or 'lists'"
+          },
+          "identifier": {
+            "type": "string",
+            "description": "Object/list slug or id"
+          },
+          "attribute": {
+            "type": "string",
+            "description": "Select attribute id or slug"
+          },
+          "data": {
+            "type": "object",
+            "description": "{ title }"
+          }
+        }
+      }
     },
     {
       "id": "updateSelectOption",
@@ -284,13 +687,38 @@
       "verb": "PATCH",
       "path": "/v2/{target}/{identifier}/attributes/{attribute}/options/{option}",
       "credits": 1,
-      "input": { "type": "object", "required": ["target", "identifier", "attribute", "option", "data"], "properties": {
-        "target": { "type": "string", "description": "'objects' or 'lists'" },
-        "identifier": { "type": "string", "description": "Object/list slug or id" },
-        "attribute": { "type": "string", "description": "Select attribute id or slug" },
-        "option": { "type": "string", "description": "Option id" },
-        "data": { "type": "object", "description": "{ title?, is_archived? }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "target",
+          "identifier",
+          "attribute",
+          "option",
+          "data"
+        ],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "'objects' or 'lists'"
+          },
+          "identifier": {
+            "type": "string",
+            "description": "Object/list slug or id"
+          },
+          "attribute": {
+            "type": "string",
+            "description": "Select attribute id or slug"
+          },
+          "option": {
+            "type": "string",
+            "description": "Option id"
+          },
+          "data": {
+            "type": "object",
+            "description": "{ title?, is_archived? }"
+          }
+        }
+      }
     },
     {
       "id": "listStatuses",
@@ -299,11 +727,28 @@
       "verb": "GET",
       "path": "/v2/{target}/{identifier}/attributes/{attribute}/statuses",
       "credits": 0,
-      "input": { "type": "object", "required": ["target", "identifier", "attribute"], "properties": {
-        "target": { "type": "string", "description": "'objects' or 'lists'" },
-        "identifier": { "type": "string", "description": "Object/list slug or id" },
-        "attribute": { "type": "string", "description": "Status attribute id or slug" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "target",
+          "identifier",
+          "attribute"
+        ],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "'objects' or 'lists'"
+          },
+          "identifier": {
+            "type": "string",
+            "description": "Object/list slug or id"
+          },
+          "attribute": {
+            "type": "string",
+            "description": "Status attribute id or slug"
+          }
+        }
+      }
     },
     {
       "id": "createStatus",
@@ -312,12 +757,33 @@
       "verb": "POST",
       "path": "/v2/{target}/{identifier}/attributes/{attribute}/statuses",
       "credits": 1,
-      "input": { "type": "object", "required": ["target", "identifier", "attribute", "data"], "properties": {
-        "target": { "type": "string", "description": "'objects' or 'lists'" },
-        "identifier": { "type": "string", "description": "Object/list slug or id" },
-        "attribute": { "type": "string", "description": "Status attribute id or slug" },
-        "data": { "type": "object", "description": "{ title, celebration_enabled?, target_time_in_status? }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "target",
+          "identifier",
+          "attribute",
+          "data"
+        ],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "'objects' or 'lists'"
+          },
+          "identifier": {
+            "type": "string",
+            "description": "Object/list slug or id"
+          },
+          "attribute": {
+            "type": "string",
+            "description": "Status attribute id or slug"
+          },
+          "data": {
+            "type": "object",
+            "description": "{ title, celebration_enabled?, target_time_in_status? }"
+          }
+        }
+      }
     },
     {
       "id": "updateStatus",
@@ -326,15 +792,39 @@
       "verb": "PATCH",
       "path": "/v2/{target}/{identifier}/attributes/{attribute}/statuses/{status}",
       "credits": 1,
-      "input": { "type": "object", "required": ["target", "identifier", "attribute", "status", "data"], "properties": {
-        "target": { "type": "string", "description": "'objects' or 'lists'" },
-        "identifier": { "type": "string", "description": "Object/list slug or id" },
-        "attribute": { "type": "string", "description": "Status attribute id or slug" },
-        "status": { "type": "string", "description": "Status id" },
-        "data": { "type": "object", "description": "{ title?, is_archived?, celebration_enabled? }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "target",
+          "identifier",
+          "attribute",
+          "status",
+          "data"
+        ],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "'objects' or 'lists'"
+          },
+          "identifier": {
+            "type": "string",
+            "description": "Object/list slug or id"
+          },
+          "attribute": {
+            "type": "string",
+            "description": "Status attribute id or slug"
+          },
+          "status": {
+            "type": "string",
+            "description": "Status id"
+          },
+          "data": {
+            "type": "object",
+            "description": "{ title?, is_archived?, celebration_enabled? }"
+          }
+        }
+      }
     },
-
     {
       "id": "listLists",
       "label": "List All Lists",
@@ -342,7 +832,10 @@
       "verb": "GET",
       "path": "/v2/lists",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     },
     {
       "id": "getList",
@@ -351,9 +844,25 @@
       "verb": "GET",
       "path": "/v2/lists/{list}",
       "credits": 0,
-      "input": { "type": "object", "required": ["list"], "properties": {
-        "list": { "type": "string", "description": "List id or api_slug" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "list"
+        ],
+        "properties": {
+          "list": {
+            "type": "string",
+            "description": "List id or api_slug"
+          }
+        }
+      },
+      "options": {
+        "list": {
+          "method": "listLists",
+          "labelKey": "name",
+          "valueKey": "api_slug"
+        }
+      }
     },
     {
       "id": "createList",
@@ -362,9 +871,18 @@
       "verb": "POST",
       "path": "/v2/lists",
       "credits": 1,
-      "input": { "type": "object", "required": ["data"], "properties": {
-        "data": { "type": "object", "description": "{ name, api_slug, parent_object, workspace_access, ... }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "{ name, api_slug, parent_object, workspace_access, ... }"
+          }
+        }
+      }
     },
     {
       "id": "updateList",
@@ -373,10 +891,30 @@
       "verb": "PATCH",
       "path": "/v2/lists/{list}",
       "credits": 1,
-      "input": { "type": "object", "required": ["list", "data"], "properties": {
-        "list": { "type": "string", "description": "List id or api_slug" },
-        "data": { "type": "object", "description": "{ name?, api_slug?, workspace_access? }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "list",
+          "data"
+        ],
+        "properties": {
+          "list": {
+            "type": "string",
+            "description": "List id or api_slug"
+          },
+          "data": {
+            "type": "object",
+            "description": "{ name?, api_slug?, workspace_access? }"
+          }
+        }
+      },
+      "options": {
+        "list": {
+          "method": "listLists",
+          "labelKey": "name",
+          "valueKey": "api_slug"
+        }
+      }
     },
     {
       "id": "queryListEntries",
@@ -385,13 +923,45 @@
       "verb": "POST",
       "path": "/v2/lists/{list}/entries/query",
       "credits": 0,
-      "input": { "type": "object", "required": ["list"], "properties": {
-        "list": { "type": "string", "description": "List id or api_slug" },
-        "filter": { "type": "object", "description": "Entry/parent-record filter" },
-        "sorts": { "type": "array", "items": { "type": "object" } },
-        "limit": { "type": "integer", "description": "Max entries (default 500)" },
-        "offset": { "type": "integer" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "list"
+        ],
+        "properties": {
+          "list": {
+            "type": "string",
+            "description": "List id or api_slug"
+          },
+          "filter": {
+            "type": "object",
+            "description": "Entry/parent-record filter"
+          },
+          "sorts": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max entries (default 500)"
+          },
+          "offset": {
+            "type": "integer"
+          }
+        }
+      },
+      "options": {
+        "list": {
+          "method": "listLists",
+          "labelKey": "name",
+          "valueKey": "api_slug"
+        }
+      },
+      "rateLimit": {
+        "rps": 5
+      }
     },
     {
       "id": "createListEntry",
@@ -400,10 +970,30 @@
       "verb": "POST",
       "path": "/v2/lists/{list}/entries",
       "credits": 1,
-      "input": { "type": "object", "required": ["list", "data"], "properties": {
-        "list": { "type": "string", "description": "List id or api_slug" },
-        "data": { "type": "object", "description": "{ parent_record_id, parent_object, entry_values:{...} }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "list",
+          "data"
+        ],
+        "properties": {
+          "list": {
+            "type": "string",
+            "description": "List id or api_slug"
+          },
+          "data": {
+            "type": "object",
+            "description": "{ parent_record_id, parent_object, entry_values:{...} }"
+          }
+        }
+      },
+      "options": {
+        "list": {
+          "method": "listLists",
+          "labelKey": "name",
+          "valueKey": "api_slug"
+        }
+      }
     },
     {
       "id": "assertListEntryByParent",
@@ -412,10 +1002,30 @@
       "verb": "PUT",
       "path": "/v2/lists/{list}/entries",
       "credits": 1,
-      "input": { "type": "object", "required": ["list", "data"], "properties": {
-        "list": { "type": "string", "description": "List id or api_slug" },
-        "data": { "type": "object", "description": "{ parent_record_id, parent_object, entry_values:{...} }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "list",
+          "data"
+        ],
+        "properties": {
+          "list": {
+            "type": "string",
+            "description": "List id or api_slug"
+          },
+          "data": {
+            "type": "object",
+            "description": "{ parent_record_id, parent_object, entry_values:{...} }"
+          }
+        }
+      },
+      "options": {
+        "list": {
+          "method": "listLists",
+          "labelKey": "name",
+          "valueKey": "api_slug"
+        }
+      }
     },
     {
       "id": "getListEntry",
@@ -424,10 +1034,30 @@
       "verb": "GET",
       "path": "/v2/lists/{list}/entries/{entry_id}",
       "credits": 0,
-      "input": { "type": "object", "required": ["list", "entry_id"], "properties": {
-        "list": { "type": "string", "description": "List id or api_slug" },
-        "entry_id": { "type": "string", "description": "Entry UUID" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "list",
+          "entry_id"
+        ],
+        "properties": {
+          "list": {
+            "type": "string",
+            "description": "List id or api_slug"
+          },
+          "entry_id": {
+            "type": "string",
+            "description": "Entry UUID"
+          }
+        }
+      },
+      "options": {
+        "list": {
+          "method": "listLists",
+          "labelKey": "name",
+          "valueKey": "api_slug"
+        }
+      }
     },
     {
       "id": "updateListEntryAppend",
@@ -436,11 +1066,35 @@
       "verb": "PATCH",
       "path": "/v2/lists/{list}/entries/{entry_id}",
       "credits": 1,
-      "input": { "type": "object", "required": ["list", "entry_id", "data"], "properties": {
-        "list": { "type": "string", "description": "List id or api_slug" },
-        "entry_id": { "type": "string", "description": "Entry UUID" },
-        "data": { "type": "object", "description": "{ entry_values:{...} }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "list",
+          "entry_id",
+          "data"
+        ],
+        "properties": {
+          "list": {
+            "type": "string",
+            "description": "List id or api_slug"
+          },
+          "entry_id": {
+            "type": "string",
+            "description": "Entry UUID"
+          },
+          "data": {
+            "type": "object",
+            "description": "{ entry_values:{...} }"
+          }
+        }
+      },
+      "options": {
+        "list": {
+          "method": "listLists",
+          "labelKey": "name",
+          "valueKey": "api_slug"
+        }
+      }
     },
     {
       "id": "updateListEntryOverwrite",
@@ -449,11 +1103,35 @@
       "verb": "PUT",
       "path": "/v2/lists/{list}/entries/{entry_id}",
       "credits": 1,
-      "input": { "type": "object", "required": ["list", "entry_id", "data"], "properties": {
-        "list": { "type": "string", "description": "List id or api_slug" },
-        "entry_id": { "type": "string", "description": "Entry UUID" },
-        "data": { "type": "object", "description": "{ entry_values:{...} }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "list",
+          "entry_id",
+          "data"
+        ],
+        "properties": {
+          "list": {
+            "type": "string",
+            "description": "List id or api_slug"
+          },
+          "entry_id": {
+            "type": "string",
+            "description": "Entry UUID"
+          },
+          "data": {
+            "type": "object",
+            "description": "{ entry_values:{...} }"
+          }
+        }
+      },
+      "options": {
+        "list": {
+          "method": "listLists",
+          "labelKey": "name",
+          "valueKey": "api_slug"
+        }
+      }
     },
     {
       "id": "deleteListEntry",
@@ -462,10 +1140,30 @@
       "verb": "DELETE",
       "path": "/v2/lists/{list}/entries/{entry_id}",
       "credits": 1,
-      "input": { "type": "object", "required": ["list", "entry_id"], "properties": {
-        "list": { "type": "string", "description": "List id or api_slug" },
-        "entry_id": { "type": "string", "description": "Entry UUID" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "list",
+          "entry_id"
+        ],
+        "properties": {
+          "list": {
+            "type": "string",
+            "description": "List id or api_slug"
+          },
+          "entry_id": {
+            "type": "string",
+            "description": "Entry UUID"
+          }
+        }
+      },
+      "options": {
+        "list": {
+          "method": "listLists",
+          "labelKey": "name",
+          "valueKey": "api_slug"
+        }
+      }
     },
     {
       "id": "listListEntryAttributeValues",
@@ -474,15 +1172,42 @@
       "verb": "GET",
       "path": "/v2/lists/{list}/entries/{entry_id}/attributes/{attribute}/values",
       "credits": 0,
-      "input": { "type": "object", "required": ["list", "entry_id", "attribute"], "properties": {
-        "list": { "type": "string", "description": "List id or api_slug" },
-        "entry_id": { "type": "string", "description": "Entry UUID" },
-        "attribute": { "type": "string", "description": "List attribute id or slug" },
-        "limit": { "type": "integer" },
-        "offset": { "type": "integer" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "list",
+          "entry_id",
+          "attribute"
+        ],
+        "properties": {
+          "list": {
+            "type": "string",
+            "description": "List id or api_slug"
+          },
+          "entry_id": {
+            "type": "string",
+            "description": "Entry UUID"
+          },
+          "attribute": {
+            "type": "string",
+            "description": "List attribute id or slug"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          }
+        }
+      },
+      "options": {
+        "list": {
+          "method": "listLists",
+          "labelKey": "name",
+          "valueKey": "api_slug"
+        }
+      }
     },
-
     {
       "id": "listNotes",
       "label": "List Notes",
@@ -490,12 +1215,25 @@
       "verb": "GET",
       "path": "/v2/notes",
       "credits": 0,
-      "input": { "type": "object", "properties": {
-        "parent_object": { "type": "string", "description": "Filter to notes on this object slug" },
-        "parent_record_id": { "type": "string", "description": "Filter to notes on this record" },
-        "limit": { "type": "integer" },
-        "offset": { "type": "integer" }
-      }}
+      "input": {
+        "type": "object",
+        "properties": {
+          "parent_object": {
+            "type": "string",
+            "description": "Filter to notes on this object slug"
+          },
+          "parent_record_id": {
+            "type": "string",
+            "description": "Filter to notes on this record"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          }
+        }
+      }
     },
     {
       "id": "getNote",
@@ -504,9 +1242,18 @@
       "verb": "GET",
       "path": "/v2/notes/{note_id}",
       "credits": 0,
-      "input": { "type": "object", "required": ["note_id"], "properties": {
-        "note_id": { "type": "string", "description": "Note UUID" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "note_id"
+        ],
+        "properties": {
+          "note_id": {
+            "type": "string",
+            "description": "Note UUID"
+          }
+        }
+      }
     },
     {
       "id": "createNote",
@@ -515,9 +1262,18 @@
       "verb": "POST",
       "path": "/v2/notes",
       "credits": 1,
-      "input": { "type": "object", "required": ["data"], "properties": {
-        "data": { "type": "object", "description": "{ parent_object, parent_record_id, title, format:'plaintext'|'markdown', content }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "{ parent_object, parent_record_id, title, format:'plaintext'|'markdown', content }"
+          }
+        }
+      }
     },
     {
       "id": "deleteNote",
@@ -526,11 +1282,19 @@
       "verb": "DELETE",
       "path": "/v2/notes/{note_id}",
       "credits": 1,
-      "input": { "type": "object", "required": ["note_id"], "properties": {
-        "note_id": { "type": "string", "description": "Note UUID" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "note_id"
+        ],
+        "properties": {
+          "note_id": {
+            "type": "string",
+            "description": "Note UUID"
+          }
+        }
+      }
     },
-
     {
       "id": "listTasks",
       "label": "List Tasks",
@@ -538,15 +1302,43 @@
       "verb": "GET",
       "path": "/v2/tasks",
       "credits": 0,
-      "input": { "type": "object", "properties": {
-        "limit": { "type": "integer" },
-        "offset": { "type": "integer" },
-        "sort": { "type": "string", "description": "e.g. 'created_at:asc'" },
-        "linked_object": { "type": "string", "description": "Filter to tasks linked to this object" },
-        "linked_record_id": { "type": "string", "description": "Filter to tasks linked to this record" },
-        "assignee": { "type": "string", "description": "Workspace member id" },
-        "is_completed": { "type": "boolean" }
-      }}
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "sort": {
+            "type": "string",
+            "description": "e.g. 'created_at:asc'"
+          },
+          "linked_object": {
+            "type": "string",
+            "description": "Filter to tasks linked to this object"
+          },
+          "linked_record_id": {
+            "type": "string",
+            "description": "Filter to tasks linked to this record"
+          },
+          "assignee": {
+            "type": "string",
+            "description": "Workspace member id"
+          },
+          "is_completed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "options": {
+        "assignee": {
+          "method": "listWorkspaceMembers",
+          "labelKey": "email_address",
+          "valueKey": "email_address"
+        }
+      }
     },
     {
       "id": "getTask",
@@ -555,9 +1347,18 @@
       "verb": "GET",
       "path": "/v2/tasks/{task_id}",
       "credits": 0,
-      "input": { "type": "object", "required": ["task_id"], "properties": {
-        "task_id": { "type": "string", "description": "Task UUID" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "task_id"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "Task UUID"
+          }
+        }
+      }
     },
     {
       "id": "createTask",
@@ -566,9 +1367,18 @@
       "verb": "POST",
       "path": "/v2/tasks",
       "credits": 1,
-      "input": { "type": "object", "required": ["data"], "properties": {
-        "data": { "type": "object", "description": "{ content, format:'plaintext', deadline_at?, linked_records?, assignees? }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "{ content, format:'plaintext', deadline_at?, linked_records?, assignees? }"
+          }
+        }
+      }
     },
     {
       "id": "updateTask",
@@ -577,10 +1387,23 @@
       "verb": "PATCH",
       "path": "/v2/tasks/{task_id}",
       "credits": 1,
-      "input": { "type": "object", "required": ["task_id", "data"], "properties": {
-        "task_id": { "type": "string", "description": "Task UUID" },
-        "data": { "type": "object", "description": "{ is_completed?, deadline_at?, assignees?, linked_records? }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "data"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "Task UUID"
+          },
+          "data": {
+            "type": "object",
+            "description": "{ is_completed?, deadline_at?, assignees?, linked_records? }"
+          }
+        }
+      }
     },
     {
       "id": "deleteTask",
@@ -589,11 +1412,19 @@
       "verb": "DELETE",
       "path": "/v2/tasks/{task_id}",
       "credits": 1,
-      "input": { "type": "object", "required": ["task_id"], "properties": {
-        "task_id": { "type": "string", "description": "Task UUID" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "task_id"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "Task UUID"
+          }
+        }
+      }
     },
-
     {
       "id": "listThreads",
       "label": "List Threads",
@@ -601,14 +1432,33 @@
       "verb": "GET",
       "path": "/v2/threads",
       "credits": 0,
-      "input": { "type": "object", "properties": {
-        "record_id": { "type": "string", "description": "Scope to a record" },
-        "object": { "type": "string", "description": "Object slug (with record_id)" },
-        "entry_id": { "type": "string", "description": "Scope to a list entry" },
-        "list": { "type": "string", "description": "List id/slug (with entry_id)" },
-        "limit": { "type": "integer" },
-        "offset": { "type": "integer" }
-      }}
+      "input": {
+        "type": "object",
+        "properties": {
+          "record_id": {
+            "type": "string",
+            "description": "Scope to a record"
+          },
+          "object": {
+            "type": "string",
+            "description": "Object slug (with record_id)"
+          },
+          "entry_id": {
+            "type": "string",
+            "description": "Scope to a list entry"
+          },
+          "list": {
+            "type": "string",
+            "description": "List id/slug (with entry_id)"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          }
+        }
+      }
     },
     {
       "id": "getThread",
@@ -617,9 +1467,18 @@
       "verb": "GET",
       "path": "/v2/threads/{thread_id}",
       "credits": 0,
-      "input": { "type": "object", "required": ["thread_id"], "properties": {
-        "thread_id": { "type": "string", "description": "Thread UUID" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "thread_id"
+        ],
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "description": "Thread UUID"
+          }
+        }
+      }
     },
     {
       "id": "createComment",
@@ -628,9 +1487,18 @@
       "verb": "POST",
       "path": "/v2/comments",
       "credits": 1,
-      "input": { "type": "object", "required": ["data"], "properties": {
-        "data": { "type": "object", "description": "{ format:'plaintext', content, author, thread_id? | record? | entry? }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "{ format:'plaintext', content, author, thread_id? | record? | entry? }"
+          }
+        }
+      }
     },
     {
       "id": "getComment",
@@ -639,9 +1507,18 @@
       "verb": "GET",
       "path": "/v2/comments/{comment_id}",
       "credits": 0,
-      "input": { "type": "object", "required": ["comment_id"], "properties": {
-        "comment_id": { "type": "string", "description": "Comment UUID" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "comment_id"
+        ],
+        "properties": {
+          "comment_id": {
+            "type": "string",
+            "description": "Comment UUID"
+          }
+        }
+      }
     },
     {
       "id": "deleteComment",
@@ -650,11 +1527,19 @@
       "verb": "DELETE",
       "path": "/v2/comments/{comment_id}",
       "credits": 1,
-      "input": { "type": "object", "required": ["comment_id"], "properties": {
-        "comment_id": { "type": "string", "description": "Comment UUID" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "comment_id"
+        ],
+        "properties": {
+          "comment_id": {
+            "type": "string",
+            "description": "Comment UUID"
+          }
+        }
+      }
     },
-
     {
       "id": "listWorkspaceMembers",
       "label": "List Workspace Members",
@@ -662,7 +1547,10 @@
       "verb": "GET",
       "path": "/v2/workspace_members",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     },
     {
       "id": "getWorkspaceMember",
@@ -671,11 +1559,26 @@
       "verb": "GET",
       "path": "/v2/workspace_members/{workspace_member_id}",
       "credits": 0,
-      "input": { "type": "object", "required": ["workspace_member_id"], "properties": {
-        "workspace_member_id": { "type": "string", "description": "Workspace member UUID" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "workspace_member_id"
+        ],
+        "properties": {
+          "workspace_member_id": {
+            "type": "string",
+            "description": "Workspace member UUID"
+          }
+        }
+      },
+      "options": {
+        "workspace_member_id": {
+          "method": "listWorkspaceMembers",
+          "labelKey": "email_address",
+          "valueKey": "email_address"
+        }
+      }
     },
-
     {
       "id": "listWebhooks",
       "label": "List Webhooks",
@@ -683,10 +1586,17 @@
       "verb": "GET",
       "path": "/v2/webhooks",
       "credits": 0,
-      "input": { "type": "object", "properties": {
-        "limit": { "type": "integer" },
-        "offset": { "type": "integer" }
-      }}
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          }
+        }
+      }
     },
     {
       "id": "getWebhook",
@@ -695,9 +1605,18 @@
       "verb": "GET",
       "path": "/v2/webhooks/{webhook_id}",
       "credits": 0,
-      "input": { "type": "object", "required": ["webhook_id"], "properties": {
-        "webhook_id": { "type": "string", "description": "Webhook UUID" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "webhook_id"
+        ],
+        "properties": {
+          "webhook_id": {
+            "type": "string",
+            "description": "Webhook UUID"
+          }
+        }
+      }
     },
     {
       "id": "createWebhook",
@@ -706,9 +1625,18 @@
       "verb": "POST",
       "path": "/v2/webhooks",
       "credits": 1,
-      "input": { "type": "object", "required": ["data"], "properties": {
-        "data": { "type": "object", "description": "{ target_url, subscriptions:[{ event_type, filter? }] }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "{ target_url, subscriptions:[{ event_type, filter? }] }"
+          }
+        }
+      }
     },
     {
       "id": "updateWebhook",
@@ -717,10 +1645,23 @@
       "verb": "PATCH",
       "path": "/v2/webhooks/{webhook_id}",
       "credits": 1,
-      "input": { "type": "object", "required": ["webhook_id", "data"], "properties": {
-        "webhook_id": { "type": "string", "description": "Webhook UUID" },
-        "data": { "type": "object", "description": "{ target_url?, subscriptions? }" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "webhook_id",
+          "data"
+        ],
+        "properties": {
+          "webhook_id": {
+            "type": "string",
+            "description": "Webhook UUID"
+          },
+          "data": {
+            "type": "object",
+            "description": "{ target_url?, subscriptions? }"
+          }
+        }
+      }
     },
     {
       "id": "deleteWebhook",
@@ -729,9 +1670,18 @@
       "verb": "DELETE",
       "path": "/v2/webhooks/{webhook_id}",
       "credits": 1,
-      "input": { "type": "object", "required": ["webhook_id"], "properties": {
-        "webhook_id": { "type": "string", "description": "Webhook UUID" }
-      }}
+      "input": {
+        "type": "object",
+        "required": [
+          "webhook_id"
+        ],
+        "properties": {
+          "webhook_id": {
+            "type": "string",
+            "description": "Webhook UUID"
+          }
+        }
+      }
     }
   ]
 }

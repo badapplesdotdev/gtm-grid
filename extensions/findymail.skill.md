@@ -18,8 +18,12 @@
   - `reverseEmail`: 1 credit, **2 with `with_profile=true`**.
   - `findCompany`: 1 credit per success. `findEmployees`: 1 credit **per contact returned**.
   - `leadResults`: consumes credits per record; `leadStatus` / `listContactLists` / `credits` are free.
-- **Rate limit:** up to ~300 concurrent requests by default. `402` response = out of credits.
+- **Rate limit:** Findymail documents **300 concurrent requests** by default (no per-minute/second cap). The manifest sets connector-level `rateLimit: { concurrency: 300 }`, with a stricter per-method override on the credit-heavy `findPhone` (`concurrency: 50`) so a big run can't burn 10-credit phone hits in a burst. `402` response = out of credits.
 - Check balance any time with `findymail.credits` (free) → `{ credits, verifier_credits }`.
+
+## Picker fields (live options)
+- `getContacts.id` (the contact-list id on `GET /lists/{id}/contacts`) is a **picker**: the user selects a list by name and the engine stores its id. It is backed by `listContactLists` (`GET /lists` → `{ lists: [{ id, name }] }`), wired as `options: { id: { method: "listContactLists", itemsPath: "lists", labelKey: "name", valueKey: "id" } }`.
+- No other field is a selection of an enumerable resource: name/domain/linkedin_url/email/website are free text, and `job_titles` (findEmployees) is a free-text array — none get options.
 
 ## Endpoints by job
 

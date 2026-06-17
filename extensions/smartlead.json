@@ -6,7 +6,15 @@
   "description": "Cold email at scale — manage campaigns, push leads, read stats.",
   "baseUrl": "https://server.smartlead.ai/api/v1",
   "logo": "https://www.google.com/s2/favicons?domain=smartlead.ai&sz=128",
-  "auth": { "type": "apiKey", "query": "api_key", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "query": "api_key",
+    "secretKey": "apiKey"
+  },
+  "rateLimit": {
+    "rpm": 60,
+    "concurrency": 3
+  },
   "methods": [
     {
       "id": "listCampaigns",
@@ -17,7 +25,12 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "properties": { "include_tags": { "type": "boolean", "description": "Include campaign tags" } }
+        "properties": {
+          "include_tags": {
+            "type": "boolean",
+            "description": "Include campaign tags"
+          }
+        }
       }
     },
     {
@@ -29,8 +42,23 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["campaign_id"],
-        "properties": { "campaign_id": { "type": "integer", "description": "Smartlead campaign id" } }
+        "required": [
+          "campaign_id"
+        ],
+        "properties": {
+          "campaign_id": {
+            "type": "integer",
+            "description": "Smartlead campaign id"
+          }
+        }
+      },
+      "options": {
+        "campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
+        }
       }
     },
     {
@@ -42,25 +70,51 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["campaign_id", "lead_list"],
+        "required": [
+          "campaign_id",
+          "lead_list"
+        ],
         "properties": {
-          "campaign_id": { "type": "integer", "description": "Target campaign id" },
+          "campaign_id": {
+            "type": "integer",
+            "description": "Target campaign id"
+          },
           "lead_list": {
             "type": "array",
             "description": "Up to 400 leads",
             "items": {
               "type": "object",
-              "required": ["email"],
+              "required": [
+                "email"
+              ],
               "properties": {
-                "email": { "type": "string" },
-                "first_name": { "type": "string" },
-                "last_name": { "type": "string" },
-                "company_name": { "type": "string" },
-                "phone_number": { "type": "string" },
-                "website": { "type": "string" },
-                "location": { "type": "string" },
-                "linkedin_profile": { "type": "string" },
-                "custom_fields": { "type": "object" }
+                "email": {
+                  "type": "string"
+                },
+                "first_name": {
+                  "type": "string"
+                },
+                "last_name": {
+                  "type": "string"
+                },
+                "company_name": {
+                  "type": "string"
+                },
+                "phone_number": {
+                  "type": "string"
+                },
+                "website": {
+                  "type": "string"
+                },
+                "location": {
+                  "type": "string"
+                },
+                "linkedin_profile": {
+                  "type": "string"
+                },
+                "custom_fields": {
+                  "type": "object"
+                }
               }
             }
           },
@@ -69,6 +123,17 @@
             "description": "Optional import settings (ignore_global_block_list, ignore_unsubscribe_list, ignore_duplicate_leads_in_other_campaign, etc.)"
           }
         }
+      },
+      "options": {
+        "campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
+        }
+      },
+      "rateLimit": {
+        "rpm": 30
       }
     },
     {
@@ -80,8 +145,14 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["email"],
-        "properties": { "email": { "type": "string" } }
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        }
       }
     },
     {
@@ -93,11 +164,28 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["campaign_id"],
+        "required": [
+          "campaign_id"
+        ],
         "properties": {
-          "campaign_id": { "type": "integer" },
-          "offset": { "type": "integer" },
-          "limit": { "type": "integer", "description": "Max 1000" }
+          "campaign_id": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max 1000"
+          }
+        }
+      },
+      "options": {
+        "campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -110,7 +198,14 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "properties": { "offset": { "type": "integer" }, "limit": { "type": "integer" } }
+        "properties": {
+          "offset": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        }
       }
     }
   ]
