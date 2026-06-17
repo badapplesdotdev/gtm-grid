@@ -392,6 +392,11 @@ export const tables = pgTable(
     name: text("name").notNull(),
     position: doublePrecision("position").notNull(),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    // Whether this table is pinned to the sidebar's favourites. WORKSPACE-SHARED
+    // (the cloud counterpart of the local engine's favourites): any member's pin
+    // is visible to every teammate, so it lives on the table row, not a per-user
+    // join.
+    favorite: boolean("favorite").notNull().default(false),
     // The sidebar folder this table is filed under (null = root). SET NULL on
     // folder delete so removing a folder unfiles its tables, never deletes them.
     folderId: uuid("folder_id").references(() => folders.id, {

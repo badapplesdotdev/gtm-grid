@@ -242,5 +242,10 @@ export const applyGridEvent = (
       // Sidebar folder organization changed — a `getTable` snapshot holds no
       // folder data, so the grid is unaffected (the list view refetches).
       return snapshot;
+
+    case "table.favorite":
+      // A favourite/pin toggled — sidebar-only state, no `getTable` data, so
+      // the grid is unaffected (the list view refetches + reorders).
+      return snapshot;
   }
 };

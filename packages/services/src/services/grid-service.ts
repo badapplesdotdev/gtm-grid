@@ -368,6 +368,8 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         yield* membership.requireMember(project.workspaceId);
         const projectTables = yield* tables.listByProject(projectId);
         const counts = yield* rows.countByTableIds(projectTables.map((t) => t.id));
+        // `favorite` is a workspace-shared column on the table row, so every
+        // member's list reflects the same pins.
         return projectTables.map((t) => ({ ...t, rows: counts[t.id] ?? 0 }));
       });
 
@@ -831,6 +833,27 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       });
 
     /**
+     * Pin/unpin a table (the cloud mirror of the local engine's favourites).
+     * WORKSPACE-SHARED: the flag lives on the table row, so any member's pin is
+     * visible to every teammate. Members-only + cloud-gated (a shared write).
+     * Idempotent and NOT metered (a pin isn't a billable action). Broadcasts
+     * `table.favorite` on the workspace room so every member's sidebar restyles
+     * + reorders live. Returns the effective `favorite` state.
+     */
+    const setTableFavorite = (tableId: string, favorite: boolean) =>
+      Effect.gen(function* () {
+        const table = yield* requireTable(tableId);
+        yield* requireCloudMember(table.workspaceId);
+        yield* tables.setFavorite(tableId, favorite);
+        yield* publishWorkspaceTablesChanged(table.workspaceId, {
+          type: "table.favorite",
+          tableId,
+          favorite,
+        });
+        return { favorite };
+      });
+
+    /**
      * Move a column to a new display index within its table (0-based, clamped to
      * the column count). Members-only. Metered ONE. Reindexes the affected
      * columns to a contiguous 0..N-1 order — writing ONLY the columns whose
@@ -1184,6 +1207,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       addRowsWithCells,
       deleteTable,
       renameTable,
+      setTableFavorite,
       reorderColumn,
       reorderRow,
       listFolders,

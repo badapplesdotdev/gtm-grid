@@ -51,7 +51,7 @@ const callerFor = (fixtures: TestLayerFixtures) =>
 
 const table = (over: Partial<StoreTable> = {}): StoreTable => ({
   id: "t1", workspaceId: WS, projectId: "p1", name: "T1", position: 0, createdAt: 1,
-  dedupeColumn: null, dedupeKeep: null, folderId: null, ...over,
+  dedupeColumn: null, dedupeKeep: null, folderId: null, favorite: false, ...over,
 });
 const column = (over: Partial<StoreColumn> = {}): StoreColumn => ({
   id: "c1", workspaceId: WS, tableId: "t1", name: "A", type: "text",

@@ -47,6 +47,9 @@ import {
 const WS = "ws-1";
 const memberships: readonly Membership[] = [
   { workspaceId: WS, userId: "member", role: "member" },
+  // A second member, used to prove favourites are WORKSPACE-SHARED (one member's
+  // pin is visible to the other).
+  { workspaceId: WS, userId: "member2", role: "member" },
 ];
 
 function harness(opts: {
@@ -112,7 +115,7 @@ const failTag = (exit: Exit.Exit<unknown, unknown>): string | undefined => {
 
 const table = (over: Partial<StoreTable> = {}): StoreTable => ({
   id: "t1", workspaceId: WS, projectId: "p1", name: "T1", position: 0, createdAt: 1,
-  dedupeColumn: null, dedupeKeep: null, folderId: null, ...over,
+  dedupeColumn: null, dedupeKeep: null, folderId: null, favorite: false, ...over,
 });
 const column = (over: Partial<StoreColumn> = {}): StoreColumn => ({
   id: "c1", workspaceId: WS, tableId: "t1", name: "A", type: "text",
@@ -783,6 +786,89 @@ describe("GridService.renameTable", () => {
     const store = makeGridStore({ tables: [table()] });
     const { run } = harness({ store, currentUserId: "stranger" });
     const exit = await run(Effect.flatMap(GridService, (s) => s.renameTable("t1", "X")));
+    expect(failTag(exit)).toBe("NotAMemberError");
+  });
+});
+
+describe("GridService.setTableFavorite (cloud mirror of local favourites)", () => {
+  const favStore = () =>
+    makeGridStore({
+      projects: [{ id: "p1", workspaceId: WS, name: "P", createdAt: 1 }],
+      tables: [table({ id: "t1", name: "T1" })],
+    });
+
+  it("pins a table (shared column) and surfaces favorite:true in listTables", async () => {
+    const store = favStore();
+    const { run } = harness({ store });
+    const set = await run(
+      Effect.flatMap(GridService, (s) => s.setTableFavorite("t1", true)),
+    );
+    expect(Exit.isSuccess(set)).toBe(true);
+    if (Exit.isSuccess(set)) expect(set.value).toEqual({ favorite: true });
+    expect(store.tables[0]!.favorite).toBe(true);
+    const list = await run(Effect.flatMap(GridService, (s) => s.listTables("p1")));
+    if (Exit.isSuccess(list)) {
+      expect(list.value.map((t) => ({ id: t.id, favorite: t.favorite }))).toEqual([
+        { id: "t1", favorite: true },
+      ]);
+    }
+  });
+
+  it("unpinning clears the flag (favorite:false)", async () => {
+    const store = favStore();
+    const { run } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.setTableFavorite("t1", true)));
+    await run(Effect.flatMap(GridService, (s) => s.setTableFavorite("t1", false)));
+    expect(store.tables[0]!.favorite).toBe(false);
+    const list = await run(Effect.flatMap(GridService, (s) => s.listTables("p1")));
+    if (Exit.isSuccess(list)) expect(list.value[0]!.favorite).toBe(false);
+  });
+
+  it("does NOT meter (a pin is not a billable action)", async () => {
+    const store = favStore();
+    const quotas = new Map<string, MeterQuota>();
+    const { run } = harness({ store, quotas });
+    await run(Effect.flatMap(GridService, (s) => s.setTableFavorite("t1", true)));
+    expect(quotas.get(WS)?.cloudActionsUsed ?? 0).toBe(0);
+  });
+
+  it("favourites are WORKSPACE-SHARED — another member sees the same pin", async () => {
+    const store = favStore();
+    // `member` pins t1…
+    await harness({ store }).run(
+      Effect.flatMap(GridService, (s) => s.setTableFavorite("t1", true)),
+    );
+    // …and `member2` listing the same project sees it pinned too.
+    const list = await harness({ store, currentUserId: "member2" }).run(
+      Effect.flatMap(GridService, (s) => s.listTables("p1")),
+    );
+    if (Exit.isSuccess(list)) expect(list.value[0]!.favorite).toBe(true);
+  });
+
+  it("broadcasts table.favorite on the workspace room so sidebars restyle live", async () => {
+    const store = favStore();
+    const { run, events } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.setTableFavorite("t1", true)));
+    const favs = events.filter((e) => e.event.type === "table.favorite");
+    expect(favs.map((e) => e.tableId)).toEqual(["_workspace"]);
+    expect(favs[0]!.event).toMatchObject({ type: "table.favorite", tableId: "t1", favorite: true });
+  });
+
+  it("blocks a lapsed/Free workspace with PlanRequiredError", async () => {
+    const store = favStore();
+    const { run } = harness({ store, plan: null });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.setTableFavorite("t1", true)),
+    );
+    expect(failTag(exit)).toBe("PlanRequiredError");
+  });
+
+  it("rejects a non-member before touching data", async () => {
+    const store = favStore();
+    const { run } = harness({ store, currentUserId: "stranger" });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.setTableFavorite("t1", true)),
+    );
     expect(failTag(exit)).toBe("NotAMemberError");
   });
 });
