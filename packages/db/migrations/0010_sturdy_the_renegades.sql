@@ -1,0 +1,1 @@
+ALTER TABLE "tables" ADD COLUMN "favorite" boolean DEFAULT false NOT NULL;

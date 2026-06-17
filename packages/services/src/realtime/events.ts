@@ -168,6 +168,18 @@ export interface FoldersChangedEvent {
 }
 
 /**
+ * A table was pinned/unpinned (the workspace-shared favourite flag). Broadcast
+ * on the WORKSPACE room so every member's sidebar restyles + reorders live. It
+ * carries no `getTable` data, so the reducer passes it through; the sidebar
+ * refetches its tables list.
+ */
+export interface TableFavoriteEvent {
+  readonly type: "table.favorite";
+  readonly tableId: string;
+  readonly favorite: boolean;
+}
+
+/**
  * The discriminated union of every grid change the publisher emits and the
  * reducer applies. Discriminated on `type` so a `switch` is exhaustive.
  */
@@ -183,7 +195,8 @@ export type GridChangeEvent =
   | TableInsertEvent
   | TableDeleteEvent
   | TableRenameEvent
-  | FoldersChangedEvent;
+  | FoldersChangedEvent
+  | TableFavoriteEvent;
 
 /**
  * The `getTable`-shaped client cache the reducer patches. Identical in shape to
