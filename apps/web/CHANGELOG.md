@@ -1,5 +1,21 @@
 # @gtmgrid/web
 
+## 0.14.0
+
+### Minor Changes
+
+- 651e34b: Cloud tables now support rename and pin-to-favourites in the sidebar, matching local tables. Renames persist via a new `grid.renameTable` mutation and broadcast `table.rename` so every member's sidebar and the open grid relabel live. Favourites are workspace-shared (a `favorite` column on the table row): any member's pin is visible to the whole workspace, sorts favourites to the top, and broadcasts `table.favorite` so sidebars restyle and reorder in real time.
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.14.0
+- @gtmgrid/auth@0.14.0
+- @gtmgrid/cloud@0.14.0
+- @gtmgrid/db@0.14.0
+- @gtmgrid/email@0.14.0
+- @gtmgrid/engine@0.14.0
+- @gtmgrid/services@0.14.0
+
 ## 0.13.0
 
 ### Patch Changes
