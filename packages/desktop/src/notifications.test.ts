@@ -36,8 +36,6 @@ const eligibleAutoSync = {
 const inputs = (over: Partial<NotificationInputs> = {}): NotificationInputs => ({
   trialDaysLeft: null,
   autoSync: { ...eligibleAutoSync },
-  updateVersion: null,
-  updateError: null,
   persist: EMPTY_PERSIST_STATE,
   ...over,
 });
@@ -119,41 +117,33 @@ describe("buildNotifications — per-state items", () => {
     expect(out.map((n) => n.kind)).not.toContain("autoSyncNudge");
   });
 
-  it("includes the update item with version + error when an update is present", () => {
-    const out = buildNotifications(inputs({ updateVersion: "0.4.0", updateError: "Install failed.", autoSync: { ...eligibleAutoSync, cloudEnabled: false } }));
-    const update = out.find((n) => n.kind === "update");
-    expect(update?.body).toBe("GTM Grid v0.4.0 is available. Install failed.");
-    expect(update?.actions.map((a) => a.id)).toEqual(["update.install", "update.dismiss"]);
+  it("never includes an update item (updates live outside the notification center)", () => {
+    const out = buildNotifications(inputs({ trialDaysLeft: 3 }));
+    expect(out.map((n) => n.kind)).not.toContain("update");
   });
 
-  it("omits the update item when none / dismissed", () => {
-    expect(buildNotifications(inputs({ updateVersion: null })).map((n) => n.kind)).not.toContain("update");
-    const persist: NotificationPersistState = { dismissed: ["update"], seen: [] };
-    expect(buildNotifications(inputs({ updateVersion: "0.4.0", persist })).map((n) => n.kind)).not.toContain("update");
-  });
-
-  it("orders newest-first: update, then auto-sync nudge, then trial", () => {
-    const out = buildNotifications(inputs({ trialDaysLeft: 3, updateVersion: "0.4.0" }));
-    expect(out.map((n) => n.kind)).toEqual(["update", "autoSyncNudge", "trial"]);
+  it("orders newest-first: auto-sync nudge, then trial", () => {
+    const out = buildNotifications(inputs({ trialDaysLeft: 3 }));
+    expect(out.map((n) => n.kind)).toEqual(["autoSyncNudge", "trial"]);
   });
 });
 
 describe("unreadCount — active + unseen", () => {
   it("counts every active item when none are seen", () => {
-    const i = inputs({ trialDaysLeft: 3, updateVersion: "0.4.0" });
+    const i = inputs({ trialDaysLeft: 3 });
     const out = buildNotifications(i);
-    expect(out).toHaveLength(3);
-    expect(unreadCount(out, i.persist)).toBe(3);
+    expect(out).toHaveLength(2);
+    expect(unreadCount(out, i.persist)).toBe(2);
   });
 
   it("excludes seen kinds from the badge", () => {
-    const i = inputs({ trialDaysLeft: 3, updateVersion: "0.4.0", persist: { dismissed: [], seen: ["update", "trial"] } });
+    const i = inputs({ trialDaysLeft: 3, persist: { dismissed: [], seen: ["trial"] } });
     const out = buildNotifications(i);
     expect(unreadCount(out, i.persist)).toBe(1); // only the nudge unseen
   });
 
   it("is zero when every active item is seen", () => {
-    const i = inputs({ trialDaysLeft: 3, updateVersion: "0.4.0", persist: { dismissed: [], seen: ["update", "trial", "autoSyncNudge"] } });
+    const i = inputs({ trialDaysLeft: 3, persist: { dismissed: [], seen: ["trial", "autoSyncNudge"] } });
     const out = buildNotifications(i);
     expect(unreadCount(out, i.persist)).toBe(0);
   });
@@ -161,21 +151,21 @@ describe("unreadCount — active + unseen", () => {
 
 describe("markAllSeen — opening the center clears the badge", () => {
   it("marks every active item seen so unreadCount becomes 0", () => {
-    const i = inputs({ trialDaysLeft: 3, updateVersion: "0.4.0" });
+    const i = inputs({ trialDaysLeft: 3 });
     const out = buildNotifications(i);
-    expect(unreadCount(out, i.persist)).toBe(3);
+    expect(unreadCount(out, i.persist)).toBe(2);
     const next = markAllSeen(out, i.persist);
     expect(unreadCount(out, next)).toBe(0);
-    expect([...next.seen].sort()).toEqual(["autoSyncNudge", "trial", "update"]);
+    expect([...next.seen].sort()).toEqual(["autoSyncNudge", "trial"]);
   });
 
   it("prunes seen entries that are no longer active", () => {
-    // update went away; previously seen.
-    const persist: NotificationPersistState = { dismissed: [], seen: ["update", "trial"] };
-    const out = buildNotifications(inputs({ trialDaysLeft: 3, updateVersion: null, autoSync: { ...eligibleAutoSync, cloudEnabled: false } }));
+    // the auto-sync nudge went away; previously seen.
+    const persist: NotificationPersistState = { dismissed: [], seen: ["autoSyncNudge", "trial"] };
+    const out = buildNotifications(inputs({ trialDaysLeft: 3, autoSync: { ...eligibleAutoSync, cloudEnabled: false } }));
     expect(out.map((n) => n.kind)).toEqual(["trial"]);
     const next = markAllSeen(out, persist);
-    expect(next.seen).toEqual(["trial"]); // "update" pruned
+    expect(next.seen).toEqual(["trial"]); // "autoSyncNudge" pruned
   });
 
   it("does not mutate the input persist state", () => {
@@ -196,16 +186,16 @@ describe("dismissNotification — removes + persists", () => {
   });
 
   it("is idempotent and does not mutate the input", () => {
-    const persist: NotificationPersistState = { dismissed: ["update"], seen: [] };
-    const a = dismissNotification("update", persist);
-    expect(a.dismissed).toEqual(["update"]);
-    expect(persist.dismissed).toEqual(["update"]);
+    const persist: NotificationPersistState = { dismissed: ["autoSyncNudge"], seen: [] };
+    const a = dismissNotification("autoSyncNudge", persist);
+    expect(a.dismissed).toEqual(["autoSyncNudge"]);
+    expect(persist.dismissed).toEqual(["autoSyncNudge"]);
   });
 });
 
 describe("persistence — parse / serialize / round-trip", () => {
   it("round-trips dismissed + seen through serialize/parse", () => {
-    const state: NotificationPersistState = { dismissed: ["update"], seen: ["update", "trial"] };
+    const state: NotificationPersistState = { dismissed: ["autoSyncNudge"], seen: ["autoSyncNudge", "trial"] };
     const raw = serializePersistState(state);
     const back = parsePersistState(raw, false);
     expect(back).toEqual(state);
@@ -219,8 +209,8 @@ describe("persistence — parse / serialize / round-trip", () => {
   });
 
   it("drops unknown kinds and dedupes", () => {
-    const raw = JSON.stringify({ dismissed: ["update", "bogus", "update"], seen: ["nope"] });
-    expect(parsePersistState(raw, false)).toEqual({ dismissed: ["update"], seen: [] });
+    const raw = JSON.stringify({ dismissed: ["trial", "bogus", "trial", "update"], seen: ["nope"] });
+    expect(parsePersistState(raw, false)).toEqual({ dismissed: ["trial"], seen: [] });
   });
 
   it("migrates the legacy auto-sync-nudge dismissal so it stays dismissed", () => {

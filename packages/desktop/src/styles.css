@@ -214,6 +214,41 @@ html, body, #root {
   width: 320px; max-width: calc(100vw - 24px); z-index: 101; transform-origin: top right;
 }
 .notif-list { max-height: 380px; overflow-y: auto; padding: 6px; }
+
+/* Update-available download button, sits to the LEFT of the bell. Accent-tinted
+   with a gently bobbing icon + a pulsing dot so a pending update is noticeable
+   without nagging. */
+.update-dl-btn { position: relative; color: var(--accent); }
+.update-dl-btn:hover { background: var(--accent-bg); color: var(--accent); }
+.update-dl-btn svg { animation: update-bob 1.8s ease-in-out infinite; }
+.update-dl-dot {
+  position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); border: 1.5px solid var(--surface);
+  animation: update-dot-pulse 1.8s ease-in-out infinite;
+}
+@keyframes update-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(1.5px); }
+}
+@keyframes update-dot-pulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 var(--accent-ring); }
+  50% { transform: scale(1.2); box-shadow: 0 0 0 4px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-dl-btn svg, .update-dl-dot { animation: none; }
+}
+
+/* Update + changelog dialog bodies (built on the shared .modal shell). */
+.update-lead { margin: 0; font: 400 13.5px var(--font-sans); color: var(--text); }
+.update-lead strong { font-weight: 600; }
+.update-notes {
+  margin-top: 2px; max-height: 220px; overflow-y: auto; white-space: pre-wrap;
+  font: 400 12.5px var(--font-sans); color: var(--text-2); line-height: 1.5;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 10px 12px;
+}
+.changelog-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; }
+.changelog-list li { font: 400 13px var(--font-sans); color: var(--text-2); line-height: 1.5; }
 .notif-empty {
   display: flex; flex-direction: column; align-items: center; gap: 8px;
   padding: 26px 16px 30px; color: var(--text-3); font-size: 12.5px;
@@ -1515,6 +1550,7 @@ select:focus-visible,
 
 /* ─── Agent panel (Claude Code / Codex) ───────────────────── */
 .agent-panel {
+  position: relative;
   width: var(--agent-w);
   min-width: var(--agent-w);
   background: var(--surface);
@@ -1526,6 +1562,17 @@ select:focus-visible,
   transition: width .18s ease, min-width .18s ease;
 }
 .agent-panel.collapsed { width: 58px; min-width: 58px; }
+
+/* Drag-to-resize handle on the agent panel's LEFT edge (mirrors .sidebar-resize,
+   which sits on the sidebar's right edge). */
+.agent-resize {
+  position: absolute; top: 0; left: 0; bottom: 0; width: 5px;
+  cursor: col-resize; z-index: 20;
+}
+.agent-resize:hover { background: var(--accent); opacity: 0.5; }
+/* Kill the collapse width-transition while actively dragging so resize tracks
+   the cursor instead of easing toward each intermediate width. */
+body.resizing-agent .agent-panel { transition: none; }
 
 /* collapsed vertical rail */
 .agent-rail { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 9px 0; height: 100%; }

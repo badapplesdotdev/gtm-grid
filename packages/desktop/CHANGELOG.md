@@ -1,5 +1,29 @@
 # @gtmgrid/desktop
 
+## 0.13.0
+
+### Minor Changes
+
+- 21230d3: Rework update notifications. App-update alerts now live in a dedicated download button next to the notification bell (animated when an update is available, with a "Download version X" tooltip) instead of the notification center. On launch with a pending update, an upgrade dialog offers to download & restart; choosing "Later" keeps it behind the download button. After installing a new version, a "What's new" changelog dialog is shown on first launch.
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.13.0
+- @gtmgrid/cloud@0.13.0
+- @gtmgrid/services@0.13.0
+
+## 0.12.0
+
+### Minor Changes
+
+- 4f0cede: Add drag-to-resize to the agent panel, matching the app sidebar. Drag the panel's left edge to set its width (clamped 320–720px); the width persists across launches and keeps the plan drawer aligned.
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.12.0
+- @gtmgrid/cloud@0.12.0
+- @gtmgrid/services@0.12.0
+
 ## 0.11.1
 
 ### Patch Changes
