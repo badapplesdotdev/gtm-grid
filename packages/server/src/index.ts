@@ -23,7 +23,7 @@ import {
   listProjects,
   DEFAULT_HERMES_BASE_URL,
 } from "@gtmgrid/engine";
-import type { CellProgress } from "@gtmgrid/engine";
+import type { CellProgress, RunErrorContext } from "@gtmgrid/engine";
 import { detectAgents, streamClaude, streamCodex, streamHermes, setAgentPath, rescanAgents, generateWithAgent, parseAgentCloud, type AgentKind } from "./agent.js";
 import { localProviderEnv, resolveCloudProviderEnv } from "./provider-env.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
@@ -164,6 +164,10 @@ function aiConfig() {
     ai: aiConfigFromEnv() ?? storedAiConfig(globalDb),
     aiProviders: storedAiProviders(globalDb),
     aiFallback: aiAgentFallback,
+    // Surface systemic run failures (connector/AI bugs) to PostHog Error Tracking,
+    // deduped per run by the engine. Per-cell errors still land as cell status.
+    reportError: (error: unknown, ctx: RunErrorContext) =>
+      captureException(error, { source: "engine-run", ...ctx }),
   };
 }
 

@@ -17,6 +17,7 @@ import { type AppServices, appLayer, DUE_PAGE_SIZE, FANOUT_CHUNK, type SignalDue
 import { Effect, ManagedRuntime } from "effect";
 import { inngest } from "../client";
 import { onFailure } from "../on-failure";
+import { captureServerException } from "../../posthog-server";
 
 /** Build a per-run Effect runtime (no member identity) and run one program. */
 async function withRuntime<A>(run: (exec: <X>(e: Effect.Effect<X, unknown, AppServices>) => Promise<X>) => Promise<A>): Promise<A> {
@@ -119,6 +120,11 @@ export const processSignalBinding = inngest.createFunction(
               const tag = (e as { _tag?: string })?._tag ?? "Error";
               const message = (e as { message?: string })?.message ?? String(e);
               console.error(`[signals] binding ${bindingId} sync failed: ${tag}: ${message}`);
+              // Isolated from the batch, but still a real failure — surface it to
+              // Error Tracking (the binding's lastError is the user-facing copy).
+              captureServerException(e, {
+                properties: { source: "signals", phase: "sync", binding_id: bindingId, tag },
+              });
               return Effect.succeed({ added: 0, error: `${tag}: ${message}` });
             }),
           ),
@@ -177,6 +183,9 @@ export const warmUpSignalBinding = inngest.createFunction(
                 const tag = (e as { _tag?: string })?._tag ?? "Error";
                 const message = (e as { message?: string })?.message ?? String(e);
                 console.error(`[signals] warm-up ${bindingId} attempt ${attempt} failed: ${tag}: ${message}`);
+                captureServerException(e, {
+                  properties: { source: "signals", phase: "warm-up", binding_id: bindingId, attempt, tag },
+                });
                 return Effect.succeed({ added: 0, error: `${tag}: ${message}` });
               }),
             ),

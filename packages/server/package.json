@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@gtmgrid/engine": "workspace:*",
+    "@gtmgrid/observability": "workspace:*",
     "effect": "^3.21.3",
     "posthog-node": "^5.37.0"
   }

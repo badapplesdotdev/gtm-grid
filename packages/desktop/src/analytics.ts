@@ -24,7 +24,7 @@ import posthog from "posthog-js";
 
 const KEY = import.meta.env.VITE_POSTHOG_KEY as string | undefined;
 const HOST =
-  (import.meta.env.VITE_POSTHOG_HOST as string | undefined) ?? "https://eu.i.posthog.com";
+  (import.meta.env.VITE_POSTHOG_HOST as string | undefined) ?? "https://us.i.posthog.com";
 
 export const analyticsEnabled = Boolean(KEY);
 
@@ -36,7 +36,7 @@ export function initAnalytics(): void {
   started = true;
   posthog.init(KEY, {
     api_host: HOST,
-    ui_host: "https://eu.posthog.com",
+    ui_host: "https://us.posthog.com",
     persistence: "localStorage",
     capture_pageview: false,
     // Autocapture browser exceptions (incl. window.onerror / unhandledrejection).

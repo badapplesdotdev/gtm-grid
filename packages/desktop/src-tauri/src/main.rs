@@ -104,18 +104,9 @@ fn spawn_sidecar(app: &tauri::App) -> Option<Child> {
     make_executable(&node);
     make_executable(&launcher);
 
-    // PostHog config for the sidecar's error tracking. Prefer a runtime override
-    // (dev / CI), else the value baked at build time (build.rs maps VITE_POSTHOG_*
-    // → GTMGRID_POSTHOG_* via cargo:rustc-env). Empty when unconfigured — the
-    // sidecar's observability module no-ops on a falsy key.
-    let posthog_key = std::env::var("GTMGRID_POSTHOG_KEY")
-        .ok()
-        .or_else(|| option_env!("GTMGRID_POSTHOG_KEY").map(str::to_string))
-        .unwrap_or_default();
-    let posthog_host = std::env::var("GTMGRID_POSTHOG_HOST")
-        .ok()
-        .or_else(|| option_env!("GTMGRID_POSTHOG_HOST").map(str::to_string))
-        .unwrap_or_else(|| "https://eu.i.posthog.com".into());
+    // PostHog config for the sidecar's error tracking (shared with the shell's
+    // panic hook). Empty key when unconfigured — the sidecar no-ops on a falsy key.
+    let (posthog_key, posthog_host) = posthog_config();
 
     Command::new(&node)
         .arg(&server)
@@ -130,7 +121,65 @@ fn spawn_sidecar(app: &tauri::App) -> Option<Child> {
         .ok()
 }
 
+/// Resolve the PostHog key + host for the desktop shell + sidecar: a runtime
+/// override (dev / CI) wins, else the value baked at build time (build.rs maps
+/// VITE_POSTHOG_* → GTMGRID_POSTHOG_* via cargo:rustc-env). Key is empty when
+/// unconfigured (every consumer no-ops on a falsy key).
+fn posthog_config() -> (String, String) {
+    let key = std::env::var("GTMGRID_POSTHOG_KEY")
+        .ok()
+        .or_else(|| option_env!("GTMGRID_POSTHOG_KEY").map(str::to_string))
+        .unwrap_or_default();
+    let host = std::env::var("GTMGRID_POSTHOG_HOST")
+        .ok()
+        .or_else(|| option_env!("GTMGRID_POSTHOG_HOST").map(str::to_string))
+        .unwrap_or_else(|| "https://us.i.posthog.com".into());
+    (key, host)
+}
+
+/// Report shell panics to PostHog Error Tracking, then delegate to the default
+/// (stderr) hook. Best-effort: a missing key or a network error is silently
+/// ignored and the post never re-panics. Without this a Rust-side panic (sidecar
+/// spawn, updater, window setup, the `.run(...)` expect below) dies to stderr with
+/// no remote trace.
+fn install_panic_hook() {
+    let (key, host) = posthog_config();
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default_hook(info);
+        if key.is_empty() {
+            return;
+        }
+        let message = info.to_string();
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_default();
+        let body = serde_json::json!({
+            "api_key": key,
+            "event": "$exception",
+            "distinct_id": "desktop-shell",
+            "properties": {
+                "$exception_list": [{ "type": "RustPanic", "value": &message }],
+                "$exception_type": "RustPanic",
+                "$exception_message": &message,
+                "source": "tauri-shell",
+                "location": location,
+            }
+        });
+        let agent = ureq::AgentBuilder::new()
+            .timeout(std::time::Duration::from_secs(3))
+            .build();
+        let _ = agent
+            .post(&format!("{}/i/v0/e/", host.trim_end_matches('/')))
+            .set("Content-Type", "application/json")
+            .send_string(&body.to_string());
+    }));
+}
+
 fn main() {
+    // Surface shell panics to PostHog before anything else can crash.
+    install_panic_hook();
     tauri::Builder::default()
         // single-instance MUST be registered BEFORE the deep-link plugin on
         // desktop: a second launch (the OS handing us a `gtmgrid://` URL) is
