@@ -10,6 +10,10 @@
     "header": "X-API-Key",
     "secretKey": "apiKey"
   },
+  "rateLimit": {
+    "rpm": 300,
+    "concurrency": 3
+  },
   "methods": [
     {
       "id": "emailFinder",
@@ -115,7 +119,10 @@
           }
         }
       },
-      "category": "Enrich people"
+      "category": "Enrich people",
+      "rateLimit": {
+        "rpm": 100
+      }
     },
     {
       "id": "b2bProfile",
@@ -205,7 +212,10 @@
           }
         }
       },
-      "category": "Enrich company"
+      "category": "Enrich company",
+      "rateLimit": {
+        "rpm": 100
+      }
     },
     {
       "id": "companyFunding",
@@ -402,7 +412,37 @@
           }
         }
       },
-      "category": "Jobs"
+      "category": "Jobs",
+      "rateLimit": {
+        "rpm": 100
+      },
+      "options": {
+        "country_id": {
+          "method": "jobCountries",
+          "labelKey": "name",
+          "valueKey": "id"
+        },
+        "job_type_id": {
+          "method": "jobTypes",
+          "labelKey": "name",
+          "valueKey": "id"
+        },
+        "region_id": {
+          "method": "jobRegions",
+          "labelKey": "name",
+          "valueKey": "id"
+        },
+        "company_industry_id": {
+          "method": "jobIndustries",
+          "labelKey": "name",
+          "valueKey": "id"
+        },
+        "company_type_id": {
+          "method": "jobCompanyTypes",
+          "labelKey": "name",
+          "valueKey": "id"
+        }
+      }
     },
     {
       "id": "jobCountries",

@@ -2286,6 +2286,14 @@ body.resizing-agent .agent-panel { transition: none; }
 }
 .cep-map-none { color: var(--text-3); font-style: italic; }
 .cep-map-missing .ai-select-btn { border-color: var(--danger); }
+/* Live-options pick dropdown: a search box pinned at the top of the menu, and a
+   muted secondary line on each option (e.g. a campaign's status/count). */
+.cep-pick-search {
+  position: sticky; top: 0; z-index: 1; margin: 0 0 4px; width: 100%;
+  border: none; border-bottom: 1px solid var(--border-2); border-radius: 0;
+  background: var(--bg-1);
+}
+.cep-pick-sub { color: var(--text-3); font-size: 11px; }
 
 /* Read-only code body */
 .cep-code { max-height: 280px; overflow: auto; }

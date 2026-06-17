@@ -12,6 +12,10 @@
     "scheme": "Bearer ",
     "secretKey": "apiKey"
   },
+  "rateLimit": {
+    "rpm": 600,
+    "concurrency": 5
+  },
   "methods": [
     {
       "id": "listCampaigns",
@@ -54,6 +58,17 @@
           "id": {
             "type": "string",
             "description": "Campaign UUID"
+          }
+        }
+      },
+      "options": {
+        "id": {
+          "method": "listCampaigns",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
           }
         }
       }
@@ -134,6 +149,17 @@
             }
           }
         }
+      },
+      "options": {
+        "id": {
+          "method": "listCampaigns",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        }
       }
     },
     {
@@ -152,6 +178,17 @@
           "id": {
             "type": "string",
             "description": "Campaign UUID"
+          }
+        }
+      },
+      "options": {
+        "id": {
+          "method": "listCampaigns",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
           }
         }
       }
@@ -174,6 +211,17 @@
             "description": "Campaign UUID"
           }
         }
+      },
+      "options": {
+        "id": {
+          "method": "listCampaigns",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        }
       }
     },
     {
@@ -192,6 +240,17 @@
           "id": {
             "type": "string",
             "description": "Campaign UUID"
+          }
+        }
+      },
+      "options": {
+        "id": {
+          "method": "listCampaigns",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
           }
         }
       }
@@ -259,6 +318,25 @@
           "skip_if_in_campaign": {
             "type": "boolean",
             "description": "Skip if already in the campaign"
+          }
+        }
+      },
+      "options": {
+        "campaign": {
+          "method": "listCampaigns",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        },
+        "list_id": {
+          "method": "listLeadLists",
+          "labelKey": "name",
+          "valueKey": "id",
+          "args": {
+            "limit": 100
           }
         }
       }
@@ -373,6 +451,25 @@
             "description": "Pagination cursor"
           }
         }
+      },
+      "options": {
+        "campaign": {
+          "method": "listCampaigns",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        },
+        "list_id": {
+          "method": "listLeadLists",
+          "labelKey": "name",
+          "valueKey": "id",
+          "args": {
+            "limit": 100
+          }
+        }
       }
     },
     {
@@ -406,6 +503,25 @@
           "skip_if_in_campaign": {
             "type": "boolean",
             "description": "Dedupe against existing campaign members"
+          }
+        }
+      },
+      "options": {
+        "campaign": {
+          "method": "listCampaigns",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        },
+        "list_id": {
+          "method": "listLeadLists",
+          "labelKey": "name",
+          "valueKey": "id",
+          "args": {
+            "limit": 100
           }
         }
       }
@@ -442,6 +558,42 @@
           "to_list_id": {
             "type": "string",
             "description": "Destination list UUID"
+          }
+        }
+      },
+      "options": {
+        "campaign": {
+          "method": "listCampaigns",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        },
+        "list_id": {
+          "method": "listLeadLists",
+          "labelKey": "name",
+          "valueKey": "id",
+          "args": {
+            "limit": 100
+          }
+        },
+        "to_campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        },
+        "to_list_id": {
+          "method": "listLeadLists",
+          "labelKey": "name",
+          "valueKey": "id",
+          "args": {
+            "limit": 100
           }
         }
       }
@@ -505,6 +657,16 @@
             "description": "Lead-list UUID"
           }
         }
+      },
+      "options": {
+        "id": {
+          "method": "listLeadLists",
+          "labelKey": "name",
+          "valueKey": "id",
+          "args": {
+            "limit": 100
+          }
+        }
       }
     },
     {
@@ -528,6 +690,16 @@
             "type": "string"
           }
         }
+      },
+      "options": {
+        "id": {
+          "method": "listLeadLists",
+          "labelKey": "name",
+          "valueKey": "id",
+          "args": {
+            "limit": 100
+          }
+        }
       }
     },
     {
@@ -546,6 +718,16 @@
           "id": {
             "type": "string",
             "description": "Lead-list UUID"
+          }
+        }
+      },
+      "options": {
+        "id": {
+          "method": "listLeadLists",
+          "labelKey": "name",
+          "valueKey": "id",
+          "args": {
+            "limit": 100
           }
         }
       }
@@ -568,7 +750,10 @@
           }
         }
       },
-      "category": "Verify email"
+      "category": "Verify email",
+      "rateLimit": {
+        "rps": 2
+      }
     },
     {
       "id": "getEmailVerificationStatus",
@@ -631,6 +816,16 @@
           "email": {
             "type": "string",
             "description": "Sending account email"
+          }
+        }
+      },
+      "options": {
+        "email": {
+          "method": "listAccounts",
+          "labelKey": "email",
+          "valueKey": "email",
+          "args": {
+            "limit": 100
           }
         }
       }
@@ -718,6 +913,16 @@
             "type": "integer"
           }
         }
+      },
+      "options": {
+        "email": {
+          "method": "listAccounts",
+          "labelKey": "email",
+          "valueKey": "email",
+          "args": {
+            "limit": 100
+          }
+        }
       }
     },
     {
@@ -736,6 +941,16 @@
           "email": {
             "type": "string",
             "description": "Sending account email"
+          }
+        }
+      },
+      "options": {
+        "email": {
+          "method": "listAccounts",
+          "labelKey": "email",
+          "valueKey": "email",
+          "args": {
+            "limit": 100
           }
         }
       }
@@ -758,6 +973,16 @@
             "description": "Sending account email"
           }
         }
+      },
+      "options": {
+        "email": {
+          "method": "listAccounts",
+          "labelKey": "email",
+          "valueKey": "email",
+          "args": {
+            "limit": 100
+          }
+        }
       }
     },
     {
@@ -776,6 +1001,16 @@
           "email": {
             "type": "string",
             "description": "Sending account email"
+          }
+        }
+      },
+      "options": {
+        "email": {
+          "method": "listAccounts",
+          "labelKey": "email",
+          "valueKey": "email",
+          "args": {
+            "limit": 100
           }
         }
       }
@@ -834,6 +1069,17 @@
             "description": "YYYY-MM-DD"
           }
         }
+      },
+      "options": {
+        "id": {
+          "method": "listCampaigns",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        }
       }
     },
     {
@@ -857,6 +1103,17 @@
           "end_date": {
             "type": "string",
             "description": "YYYY-MM-DD"
+          }
+        }
+      },
+      "options": {
+        "campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
           }
         }
       }
@@ -885,6 +1142,17 @@
           },
           "include_opportunities_count": {
             "type": "boolean"
+          }
+        }
+      },
+      "options": {
+        "campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
           }
         }
       }
@@ -925,6 +1193,25 @@
           "starting_after": {
             "type": "string",
             "description": "Pagination cursor"
+          }
+        }
+      },
+      "options": {
+        "campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        },
+        "eaccount": {
+          "method": "listAccounts",
+          "labelKey": "email",
+          "valueKey": "email",
+          "args": {
+            "limit": 100
           }
         }
       }
@@ -978,6 +1265,16 @@
           "body": {
             "type": "object",
             "description": "{ html: '...', text: '...' }"
+          }
+        }
+      },
+      "options": {
+        "eaccount": {
+          "method": "listAccounts",
+          "labelKey": "email",
+          "valueKey": "email",
+          "args": {
+            "limit": 100
           }
         }
       }

@@ -10,6 +10,17 @@
 
 ## Auth & cost
 - **Base URL:** `https://api.trigify.io`. Auth is the **`x-api-key`** header (the manifest injects it from the secret) — there is no Bearer token.
+- **Rate limit:** documented at **100 requests / 60s window** (429 = back off and retry). Manifest sets a connector-level `rateLimit` of `{ rpm: 100, concurrency: 3 }`. Credit-burning / live-write endpoints carry a stricter per-method override: enrichment + engager pulls (`enrichProfile`, `enrichCompany`, `enrichXUser`, `lookupXUser`, `postEngagements`, `xPostEngagements`, `xPostComments`, `getTopicEngagements`, `getTopicPostEngagements`, `profileEngagementResults`, `profilePostEngagementResults`, `socialMapping`) at `rps: 2`; X write actions (`xCreatePost`, `xReply`, `xRepost`, `xLikePost`, `xFollow`, `xSendDm`, `xDeletePost`) at `rps: 1`.
+
+## Picker fields (live `options`)
+The manifest wires `options` on every field that takes an id another endpoint can enumerate, so the grid renders a name-picker and stores the id:
+- **Search id** (`getSearch`/`updateSearch`/`deleteSearch`/`searchResults`, plus `createWorkflow.search_id`) → `listSearches` (`data[]`, label `name`, value `id`, sublabel `status`).
+- **Workflow id** (`getWorkflow`/`updateWorkflow`/`deleteWorkflow`/`*WorkflowDraft`/`testWorkflow`/`listWorkflowExecutions`/`getWorkflowExecution`) → `listWorkflows` (`items[]`, label `name`, value `id`, sublabel `status`).
+- **Topic id** (`getTopic`/`updateTopic`/`deleteTopic`/`getTopicCreditsSummary`/`getTopicEngagements`/`getTopicPostEngagements`) → `listTopics`.
+- **Social-signal subscription id** (`getSocialSignalSubscription`/`updateSocialSignalSubscription`/`stopSocialSignalSubscription`) → `listSocialSignalSubscriptions`; **target id** (`getSocialSignalTargetProfile`/`listSocialSignalTargetInsights`/`listSocialSignalTargetCheckRuns`) → `listSocialSignalTargets`.
+- **X `account_id`** (all `x*` write actions) → `listXAccounts` (label `username`, value `id`).
+- **Integration sub-resources:** `getNotionSchema.database_id` → `listNotionDatabases`; `listAirtableTables.base_id` → `listAirtableBases`; `listLinearStates.team_id` / `listLinearUsers.team_id` → `listLinearTeams` (`teams[]`); `listGoogleSheetsSheets.document_id` → `listGoogleSheetsDocuments`.
+- Not wired (no enumerable list endpoint on this connector): URL/handle/keyword/post-URN inputs, `listCampaigns.type` and `integrationHealth.type` (fixed enums), and grandchild ids that need a parent id first (Airtable `table_id` fields, Sheets `sheet_id`, Notion page properties).
 - **Credits:** Trigify is credit-metered (1 credit ≈ 1 post monitored or 1 workflow/enrichment action). Enrichment, engager pulls, and signal subscriptions burn credits per row — estimate first with `estimateSocialSignals` / `getTopicCreditsSummary`, and watch the balance with `creditsBalance`.
 - **Most common entry points:** `trigify.enrichProfile` (LinkedIn → fields), `trigify.postEngagements` (post URL → likers), and the per-platform `trigify.create*Search` + `trigify.searchResults` (async monitor → results).
 

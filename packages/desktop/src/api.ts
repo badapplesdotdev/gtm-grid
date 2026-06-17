@@ -206,6 +206,21 @@ export interface FullTable {
   rows: Row[];
   dedupe?: { column: string; keep: "oldest" | "newest" } | null;
 }
+/** A field whose value is picked from a live connector list (name → id). */
+export interface FieldOptionSource {
+  method: string;
+  itemsPath?: string;
+  labelKey?: string;
+  valueKey?: string;
+  sublabelKey?: string;
+  args?: Record<string, unknown>;
+}
+/** One resolved choice for a pick-field dropdown. */
+export interface FieldOption {
+  label: string;
+  value: string;
+  sublabel?: string;
+}
 export interface FunctionMethod {
   method: string;
   label: string;
@@ -214,6 +229,8 @@ export interface FunctionMethod {
   category?: string | null;
   credits: number;
   input?: Record<string, unknown> | null;
+  /** Fields rendered as a live name-picker (field id → its option source). */
+  options?: Record<string, FieldOptionSource> | null;
   source?: string | null;
   batchSize?: number;
   output?: string;
@@ -429,6 +446,15 @@ export const api = {
       `/api/tables/${tableId}/preview-function`,
       { method: "POST", body: JSON.stringify(body) },
     ),
+  // Live options for a pick-field: resolves the field's declared option source
+  // (e.g. listCampaigns) using the connector's stored key and returns the
+  // name→id choices for the column-editor dropdown. `search` filters server-side
+  // when the source endpoint supports it.
+  fieldOptions: (body: { provider: string; method: string; field: string; search?: string }) =>
+    http<{ options?: FieldOption[]; error?: string }>("/api/options", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   // Streaming run: emits per-cell progress (SSE) so the UI patches changed cells
   // as they complete, with no full-grid refetch afterwards. LOCAL projects only.
   runColumnStream: (

@@ -6,36 +6,107 @@
   "description": "AI meeting notes — pull your summarized notes and full transcripts. Requires a Business-plan API key (grn_...).",
   "baseUrl": "https://public-api.granola.ai/v1",
   "logo": "https://www.google.com/s2/favicons?domain=granola.ai&sz=128",
-  "auth": { "type": "apiKey", "header": "Authorization", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "Authorization",
+    "secretKey": "apiKey"
+  },
+  "rateLimit": {
+    "rpm": 300,
+    "rps": 5,
+    "concurrency": 3
+  },
   "methods": [
     {
       "id": "listNotes",
       "label": "List Notes",
-      "description": "List meeting notes that have a generated AI summary. Supports pagination. Returns a list of notes (id, title, summary, date). Notes without a summary are excluded.",
+      "description": "List meeting notes that have a generated AI summary. Supports date and folder filters plus cursor pagination. Returns { notes:[{id,object,title,owner,created_at,updated_at}], hasMore, cursor }. Notes without a summary are excluded.",
       "verb": "GET",
       "path": "/notes",
       "credits": 0,
       "input": {
         "type": "object",
         "properties": {
-          "limit": { "type": "integer", "description": "Page size" },
-          "cursor": { "type": "string", "description": "Pagination cursor" }
+          "created_after": {
+            "type": "string",
+            "description": "ISO 8601 — only notes created on/after this time"
+          },
+          "created_before": {
+            "type": "string",
+            "description": "ISO 8601 — only notes created before this time"
+          },
+          "updated_after": {
+            "type": "string",
+            "description": "ISO 8601 — only notes updated on/after this time"
+          },
+          "folder_id": {
+            "type": "string",
+            "description": "Scope to a folder (and its children). Folder id (fol_...)"
+          },
+          "page_size": {
+            "type": "integer",
+            "description": "Page size, 1-30 (default 10)"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Pagination cursor (from previous response)"
+          }
+        }
+      },
+      "options": {
+        "folder_id": {
+          "method": "listFolders",
+          "itemsPath": "folders",
+          "labelKey": "name",
+          "valueKey": "id",
+          "args": {
+            "page_size": 30
+          }
         }
       }
     },
     {
       "id": "getNote",
       "label": "Get Note",
-      "description": "Get a single note by id. Pass include='transcript' to also return the full transcript. Returns the note detail (summary, attendees, optionally transcript).",
+      "description": "Get a single note by id (note_id, not_...). Pass include='transcript' to also return the full transcript. Returns the note detail (summary_text, summary_markdown, attendees, calendar_event, optionally transcript).",
       "verb": "GET",
-      "path": "/notes/{id}",
+      "path": "/notes/{note_id}",
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
+        "required": [
+          "note_id"
+        ],
         "properties": {
-          "id": { "type": "string", "description": "Note id" },
-          "include": { "type": "string", "description": "Set to 'transcript' to include the full transcript" }
+          "note_id": {
+            "type": "string",
+            "description": "Note id (not_...)"
+          },
+          "include": {
+            "type": "string",
+            "description": "Set to 'transcript' to include the full transcript"
+          }
+        }
+      }
+    },
+    {
+      "id": "listFolders",
+      "label": "List Folders",
+      "description": "List accessible folders alphabetically, cursor-paginated. Returns { folders:[{id,object,name,parent_folder_id}], hasMore, cursor }. Folder ids look like fol_...; feed one into listNotes folder_id.",
+      "verb": "GET",
+      "path": "/folders",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "page_size": {
+            "type": "integer",
+            "description": "Page size, 1-30 (default 10)"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Pagination cursor"
+          }
         }
       }
     }

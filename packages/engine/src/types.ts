@@ -84,6 +84,44 @@ export interface Credential {
   created_at: number;
 }
 
+/**
+ * Declares that an input field's value should be PICKED from a live list the
+ * connector itself can fetch — e.g. an Instantly `campaign` UUID picked by
+ * campaign NAME, resolved from `listCampaigns`. The UI renders a searchable
+ * dropdown (labels shown, value stored) instead of forcing a hand-pasted id.
+ */
+export interface FieldOptionSource {
+  /** A method id ON THE SAME CONNECTOR that returns the list of choices. */
+  method: string;
+  /** Dot-path to the array inside the source response (e.g. "items", "data.campaigns").
+   *  Absent → a sensible fallback chain (response itself if an array, else items/data/results). */
+  itemsPath?: string;
+  /** Key on each item used for the human label (e.g. "name"). Default: name|title|label. */
+  labelKey?: string;
+  /** Key on each item used for the stored value (e.g. "id"). Default: id|uuid|_id|value. */
+  valueKey?: string;
+  /** Optional secondary line under the label (e.g. a status or count key). */
+  sublabelKey?: string;
+  /** Static args passed to the source method call (e.g. { limit: 100 }). */
+  args?: Record<string, unknown>;
+}
+
+/**
+ * A throttle applied to a connector's outbound calls so a large run is SPREAD
+ * over time rather than firing N requests at once (respecting the upstream API's
+ * documented limits). Enforced engine-side in {@link Engine.dispatch}. Set at the
+ * connector level as a default; a single method may override with a stricter cap
+ * (e.g. a heavy bulk/verify endpoint). Absent ⇒ no throttle (legacy behaviour).
+ */
+export interface RateLimit {
+  /** Max requests per second. */
+  rps?: number;
+  /** Max requests per minute (used when rps is absent). */
+  rpm?: number;
+  /** Max in-flight requests at once for this connector (independent of run concurrency). */
+  concurrency?: number;
+}
+
 /** A single callable method on a connector — the unit that becomes a column, an sdk call, and an MCP tool. */
 export interface ConnectorMethod {
   id: string; // e.g. "generate"
@@ -94,6 +132,14 @@ export interface ConnectorMethod {
   category?: string;
   /** JSON Schema for inputs (derived from zod via zod-to-json-schema). */
   inputSchema: Record<string, unknown>;
+  /**
+   * Fields whose value is picked from a live list the connector can fetch
+   * (field id → its option source). Surfaced to the UI so e.g. a `campaign`
+   * field renders as a name dropdown resolving to the campaign id.
+   */
+  options?: Record<string, FieldOptionSource>;
+  /** Effective per-call throttle for this method (method override ?? connector default). */
+  rateLimit?: RateLimit;
   batchSize: number;
   credits: number;
   /** Output value type — surfaced in the function detail ("outputs json"). Default "text". */
@@ -164,5 +210,7 @@ export interface Connector {
   category: string;
   /** Auth requirement; null for built-ins like AI that read from AI provider config. */
   auth: { type: "apiKey"; header?: string; query?: string } | null;
+  /** Default outbound throttle for every method (a method may override it stricter). */
+  rateLimit?: RateLimit;
   methods: ConnectorMethod[];
 }

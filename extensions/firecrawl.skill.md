@@ -12,7 +12,8 @@
 - **Base URL:** `https://api.firecrawl.dev`. Auth is **`Authorization: Bearer fc-...`** (the manifest injects the `fc-` token from the secret).
 - **Credits:** scrape/map/search cost ~1 credit per page; crawl and batch-scrape burn 1 credit *per page scraped* (a 500-page crawl ≈ 500 credits); extract is billed in **Extract tokens**, tracked separately from credits. Screenshot/json formats cost extra. Status/error/cancel calls are free.
 - **Check before big jobs:** `firecrawl.getCreditUsage` (remaining credits) and `firecrawl.getTokenUsage` (Extract tokens). Map first to size a crawl.
-- **Rate limits** are per-plan (free tier is tight); a `429` means back off, a `402` means out of credits.
+- **Rate limits** are per-plan and per-endpoint (sliding 60s window, shared across a team's API keys). The manifest sets a connector default of `rpm: 500, concurrency: 5` (Standard-plan scrape/map tier + concurrent-browser cap), with stricter per-method overrides on the heavy job starters: `startCrawl`, `startBatchScrape`, `startExtract`, `extract` → `rpm: 50` (crawl/extract tier), and `search` → `rpm: 250`. Free tier is far tighter (scrape 10, crawl 1, search 5 rpm). A `429` means back off, a `402` means out of credits/tokens. Docs: https://docs.firecrawl.dev/rate-limits.
+- **No picker (`options`) fields.** Firecrawl is a stateless web-data API — every input is a URL, query, JSON Schema, or a job `id` returned by a prior `start*` call. There is no enumerable account-scoped resource (campaign/list/account/etc.) to pick from, so no field carries `options`.
 
 ## Endpoints by job
 

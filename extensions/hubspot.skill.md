@@ -11,7 +11,7 @@
 ## Auth & cost
 - **Base URL:** `https://api.hubapi.com`. Auth is a **private app access token** sent as `Authorization: Bearer <token>` (the manifest injects it from the `apiKey` secret — the connector prepends `Bearer `). Create the token in HubSpot → Settings → Integrations → Private Apps.
 - **Scopes matter.** A 403 almost always means the private app is missing a scope, not a bad token. Typical scopes: `crm.objects.contacts.read/write`, `crm.objects.companies.read/write`, `crm.objects.deals.read/write`, `tickets`, `crm.schemas.*.read`, `crm.lists.read/write`, `crm.objects.owners.read`.
-- **Rate limits:** ~100–190 requests / 10 seconds per private app (tier-dependent), plus a daily cap (~250k on Pro/Enterprise). Search endpoints are stricter (~5 req/sec). A `429` is rate-limiting — back off and retry.
+- **Rate limits:** documented burst is **100 req / 10s** (Free/Starter) or **190 req / 10s** (Pro/Enterprise) per private app, plus a daily cap (250k Free/Starter, 625k Pro, 1M Enterprise). The **CRM Search API is capped at 4 req/sec** across all `search*` endpoints. The manifest enforces a connector-level `rateLimit` of `{ rpm: 600, concurrency: 3 }` (≈10 rps — safe for the stricter Free/Starter tier) and a per-method `{ rps: 4 }` override on every search endpoint (`searchContacts/Companies/Deals/Tickets/Objects/Lists`). A `429` is rate-limiting — back off and retry.
 - **Credits:** reads/searches are free (0). Writes and batch ops cost 1 credit. Prefer one batch call over 100 single writes — it's both cheaper and far kinder to the rate limit.
 
 ## Endpoints by job
@@ -54,6 +54,15 @@
 **Lists (segments)**
 - `hubspot.createList`, `getList`, `searchLists`, `getListMemberships`.
 - `hubspot.addListMemberships` / `removeListMemberships` — membership changes work only on MANUAL/SNAPSHOT lists; the body is a JSON array of record id strings.
+
+## Picker fields (live options)
+Several inputs are populated from a live list so the user picks by name and the engine stores the id:
+- **`ownerId`** (`getOwner`) → `listOwners`. Owners have no name field, so the dropdown labels by **email** and stores the owner `id`.
+- **`pipelineId`** (`getPipeline`, `listPipelineStages`) → `listPipelines`. Labels by pipeline `label`, stores `id`. Backed with a static `objectType: "deals"` arg — for **ticket** pipelines the picker won't list them; pass the ticket `pipelineId` manually (or set `objectType: "tickets"`).
+- **`listId`** (`getList`, `getListMemberships`, `addListMemberships`, `removeListMemberships`) → `searchLists`. Response envelope is `lists` (not `results`); labels by `name`, sublabel `processingType`, stores `listId`.
+- **`objectType`** (`listObjects`, `searchObjects`, `createObject`) → `listSchemas` (added GET `/crm/v3/schemas`, `includeStandard: true`). Stores `fullyQualifiedName`; sublabel is the `objectTypeId`. The per-object methods (contacts/companies/etc.) keep their fixed paths and are unaffected.
+
+Note: `listSchemas` is a new gap-fill list endpoint added purely to back the object-type picker.
 
 ## Recipes
 1. **Match a row to a contact by email, then return CRM fields**

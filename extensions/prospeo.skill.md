@@ -15,6 +15,10 @@
 - **No-match = no charge.** You are never billed when no result is found.
 - Bulk endpoints process up to **50 records** per call; charged per matched record only.
 
+## Rate limits & picker fields
+- **Rate limit (enforced by the connector):** Prospeo splits limits into two endpoint classes. Enrich endpoints (`/enrich-person`, `/enrich-company`, `/bulk-enrich-person`, `/bulk-enrich-company`) allow **5 req/s, 300 req/min** on Starter/Growth (up to 30 req/s on Pro). Search endpoints (`/search-person`, `/search-company`) are stricter at **1 req/s, 30 req/min** on Starter (2 req/s Growth, 5 req/s Pro). Over-limit returns HTTP **429 RATE_LIMITED**. The manifest sets a connector-level default of `rps:5 / rpm:300 / concurrency:3` and a per-method override of `rps:1 / rpm:30` on both search endpoints (conservative Starter baseline — raise if you are on Growth/Pro).
+- **No live picker (`options`) fields.** Prospeo is a stateless enrichment/search API: there are no campaigns, lists, workspaces, sequences, owners, folders, or tags to enumerate by id/name. Filter values for Search People/Companies are resolved live via the free `searchSuggestions` endpoint (free-text in, canonical values out), not a fixed enumerable list, so no field is wired to an `options` list method.
+
 ## Endpoints by job
 
 ### Find email / mobile for a known person

@@ -11,6 +11,10 @@
     "header": "X-Api-Key",
     "secretKey": "apiKey"
   },
+  "rateLimit": {
+    "rpm": 200,
+    "concurrency": 3
+  },
   "methods": [
     {
       "id": "enrichPerson",
@@ -97,7 +101,10 @@
           }
         }
       },
-      "category": "Enrich people"
+      "category": "Enrich people",
+      "rateLimit": {
+        "rps": 2
+      }
     },
     {
       "id": "enrichOrganization",
@@ -181,7 +188,10 @@
           }
         }
       },
-      "category": "Search"
+      "category": "Search",
+      "rateLimit": {
+        "rpm": 100
+      }
     },
     {
       "id": "searchOrganizations",
@@ -222,7 +232,125 @@
           }
         }
       },
-      "category": "Search"
+      "category": "Search",
+      "rateLimit": {
+        "rpm": 100
+      }
+    },
+    {
+      "id": "searchSequences",
+      "label": "Search Sequences",
+      "description": "Search Apollo sequences (emailer campaigns) created by your team. Returns { emailer_campaigns: [{ id, name, active, num_steps, ... }] }. Requires a master API key.",
+      "verb": "POST",
+      "path": "/emailer_campaigns/search",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "q_name": {
+            "type": "string",
+            "description": "Filter sequences by name"
+          },
+          "page": {
+            "type": "integer"
+          },
+          "per_page": {
+            "type": "integer",
+            "description": "Max 100"
+          }
+        }
+      },
+      "category": "Sequences"
+    },
+    {
+      "id": "listEmailAccounts",
+      "label": "List Email Accounts",
+      "description": "List the linked sending email accounts (mailboxes) on your Apollo account. Returns { email_accounts: [{ id, email, type, active, default, ... }] }. Use an account id for send_email_from_email_account_id when adding contacts to a sequence. Requires a master API key.",
+      "verb": "GET",
+      "path": "/email_accounts",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {}
+      },
+      "category": "Sequences"
+    },
+    {
+      "id": "addContactsToSequence",
+      "label": "Add Contacts to Sequence",
+      "description": "Add existing Apollo contacts to a sequence (emailer campaign). Provide the sequence id plus contact_ids[] (or label_names[]) and send_email_from_email_account_id (the mailbox to send from). Rate limited to 600 calls/hour. Requires a master API key.",
+      "verb": "POST",
+      "path": "/emailer_campaigns/{sequence_id}/add_contact_ids",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": [
+          "sequence_id",
+          "emailer_campaign_id",
+          "send_email_from_email_account_id"
+        ],
+        "properties": {
+          "sequence_id": {
+            "type": "string",
+            "description": "Sequence (emailer campaign) id — path param"
+          },
+          "emailer_campaign_id": {
+            "type": "string",
+            "description": "Sequence id again (body); must match sequence_id"
+          },
+          "contact_ids": {
+            "type": "array",
+            "description": "Apollo contact ids to add",
+            "items": {
+              "type": "string"
+            }
+          },
+          "label_names": {
+            "type": "array",
+            "description": "Alternative: add all contacts carrying these list/label names",
+            "items": {
+              "type": "string"
+            }
+          },
+          "send_email_from_email_account_id": {
+            "type": "string",
+            "description": "Mailbox (email account) id to send from"
+          },
+          "sequence_no_email": {
+            "type": "boolean",
+            "description": "Add contacts without sending the first email step"
+          }
+        }
+      },
+      "options": {
+        "sequence_id": {
+          "method": "searchSequences",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "active",
+          "args": {
+            "per_page": 100
+          }
+        },
+        "emailer_campaign_id": {
+          "method": "searchSequences",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "active",
+          "args": {
+            "per_page": 100
+          }
+        },
+        "send_email_from_email_account_id": {
+          "method": "listEmailAccounts",
+          "labelKey": "email",
+          "valueKey": "id"
+        }
+      },
+      "rateLimit": {
+        "rps": 1
+      },
+      "category": "Sequences"
     }
   ]
 }

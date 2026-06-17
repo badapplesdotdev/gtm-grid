@@ -6,7 +6,15 @@
   "description": "HubSpot CRM — read, search, create, update and associate contacts, companies, deals, tickets and other CRM records, plus properties, owners, pipelines, engagements and lists.",
   "logo": "https://www.google.com/s2/favicons?domain=hubspot.com&sz=128",
   "baseUrl": "https://api.hubapi.com",
-  "auth": { "type": "apiKey", "header": "Authorization", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "Authorization",
+    "secretKey": "apiKey"
+  },
+  "rateLimit": {
+    "rpm": 600,
+    "concurrency": 3
+  },
   "methods": [
     {
       "id": "listContacts",
@@ -18,11 +26,32 @@
       "input": {
         "type": "object",
         "properties": {
-          "limit": { "type": "integer", "description": "Page size, max 100 (default 10)" },
-          "after": { "type": "string", "description": "Pagination cursor from paging.next.after" },
-          "properties": { "type": "array", "items": { "type": "string" }, "description": "Property names to return, e.g. ['email','firstname','lastname','company']" },
-          "associations": { "type": "array", "items": { "type": "string" }, "description": "Associated object types to include, e.g. ['companies','deals']" },
-          "archived": { "type": "boolean", "description": "Return only archived records (default false)" }
+          "limit": {
+            "type": "integer",
+            "description": "Page size, max 100 (default 10)"
+          },
+          "after": {
+            "type": "string",
+            "description": "Pagination cursor from paging.next.after"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Property names to return, e.g. ['email','firstname','lastname','company']"
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Associated object types to include, e.g. ['companies','deals']"
+          },
+          "archived": {
+            "type": "boolean",
+            "description": "Return only archived records (default false)"
+          }
         }
       }
     },
@@ -35,13 +64,35 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["contactId"],
+        "required": [
+          "contactId"
+        ],
         "properties": {
-          "contactId": { "type": "string", "description": "Contact record id (or an idProperty value if idProperty is set)" },
-          "properties": { "type": "array", "items": { "type": "string" }, "description": "Property names to return" },
-          "associations": { "type": "array", "items": { "type": "string" }, "description": "Associated object types to include" },
-          "idProperty": { "type": "string", "description": "Look up by a unique property instead of id, e.g. 'email'" },
-          "archived": { "type": "boolean" }
+          "contactId": {
+            "type": "string",
+            "description": "Contact record id (or an idProperty value if idProperty is set)"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Property names to return"
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Associated object types to include"
+          },
+          "idProperty": {
+            "type": "string",
+            "description": "Look up by a unique property instead of id, e.g. 'email'"
+          },
+          "archived": {
+            "type": "boolean"
+          }
         }
       }
     },
@@ -55,13 +106,43 @@
       "input": {
         "type": "object",
         "properties": {
-          "filterGroups": { "type": "array", "items": { "type": "object" }, "description": "Array of { filters: [{ propertyName, operator, value }] }; groups are OR'd, filters within a group are AND'd (max 5 groups, 6 filters each)" },
-          "sorts": { "type": "array", "items": { "type": "object" }, "description": "[{ propertyName, direction: 'ASCENDING'|'DESCENDING' }]" },
-          "properties": { "type": "array", "items": { "type": "string" }, "description": "Property names to return for matches" },
-          "query": { "type": "string", "description": "Free-text search across default searchable properties" },
-          "limit": { "type": "integer", "description": "Max 100 (default 10)" },
-          "after": { "type": "string", "description": "Pagination cursor" }
+          "filterGroups": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Array of { filters: [{ propertyName, operator, value }] }; groups are OR'd, filters within a group are AND'd (max 5 groups, 6 filters each)"
+          },
+          "sorts": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "[{ propertyName, direction: 'ASCENDING'|'DESCENDING' }]"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Property names to return for matches"
+          },
+          "query": {
+            "type": "string",
+            "description": "Free-text search across default searchable properties"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max 100 (default 10)"
+          },
+          "after": {
+            "type": "string",
+            "description": "Pagination cursor"
+          }
         }
+      },
+      "rateLimit": {
+        "rps": 4
       }
     },
     {
@@ -73,10 +154,21 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["properties"],
+        "required": [
+          "properties"
+        ],
         "properties": {
-          "properties": { "type": "object", "description": "Map of property name → value, e.g. { email, firstname, lastname, phone, company }" },
-          "associations": { "type": "array", "items": { "type": "object" }, "description": "Optional [{ to:{ id }, types:[{ associationCategory, associationTypeId }] }]" }
+          "properties": {
+            "type": "object",
+            "description": "Map of property name → value, e.g. { email, firstname, lastname, phone, company }"
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Optional [{ to:{ id }, types:[{ associationCategory, associationTypeId }] }]"
+          }
         }
       }
     },
@@ -89,11 +181,22 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["contactId", "properties"],
+        "required": [
+          "contactId",
+          "properties"
+        ],
         "properties": {
-          "contactId": { "type": "string" },
-          "properties": { "type": "object", "description": "Property name → new value" },
-          "idProperty": { "type": "string", "description": "Update by a unique property instead of id, e.g. 'email'" }
+          "contactId": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "object",
+            "description": "Property name → new value"
+          },
+          "idProperty": {
+            "type": "string",
+            "description": "Update by a unique property instead of id, e.g. 'email'"
+          }
         }
       }
     },
@@ -106,8 +209,14 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["contactId"],
-        "properties": { "contactId": { "type": "string" } }
+        "required": [
+          "contactId"
+        ],
+        "properties": {
+          "contactId": {
+            "type": "string"
+          }
+        }
       }
     },
     {
@@ -119,12 +228,33 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["inputs"],
+        "required": [
+          "inputs"
+        ],
         "properties": {
-          "inputs": { "type": "array", "items": { "type": "object" }, "description": "Up to 100 of { id }" },
-          "properties": { "type": "array", "items": { "type": "string" } },
-          "propertiesWithHistory": { "type": "array", "items": { "type": "string" } },
-          "idProperty": { "type": "string", "description": "e.g. 'email' to read by email instead of id" }
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Up to 100 of { id }"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "propertiesWithHistory": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "idProperty": {
+            "type": "string",
+            "description": "e.g. 'email' to read by email instead of id"
+          }
         }
       }
     },
@@ -137,9 +267,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["inputs"],
+        "required": [
+          "inputs"
+        ],
         "properties": {
-          "inputs": { "type": "array", "items": { "type": "object" }, "description": "Up to 100 of { properties:{...} }" }
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Up to 100 of { properties:{...} }"
+          }
         }
       }
     },
@@ -152,13 +290,20 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["inputs"],
+        "required": [
+          "inputs"
+        ],
         "properties": {
-          "inputs": { "type": "array", "items": { "type": "object" }, "description": "Up to 100 of { id, properties:{...} }" }
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Up to 100 of { id, properties:{...} }"
+          }
         }
       }
     },
-
     {
       "id": "listCompanies",
       "label": "List Companies",
@@ -169,11 +314,29 @@
       "input": {
         "type": "object",
         "properties": {
-          "limit": { "type": "integer", "description": "Max 100 (default 10)" },
-          "after": { "type": "string" },
-          "properties": { "type": "array", "items": { "type": "string" }, "description": "e.g. ['name','domain','industry','numberofemployees']" },
-          "associations": { "type": "array", "items": { "type": "string" } },
-          "archived": { "type": "boolean" }
+          "limit": {
+            "type": "integer",
+            "description": "Max 100 (default 10)"
+          },
+          "after": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "e.g. ['name','domain','industry','numberofemployees']"
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "archived": {
+            "type": "boolean"
+          }
         }
       }
     },
@@ -186,13 +349,32 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["companyId"],
+        "required": [
+          "companyId"
+        ],
         "properties": {
-          "companyId": { "type": "string" },
-          "properties": { "type": "array", "items": { "type": "string" } },
-          "associations": { "type": "array", "items": { "type": "string" } },
-          "idProperty": { "type": "string", "description": "e.g. 'domain'" },
-          "archived": { "type": "boolean" }
+          "companyId": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "idProperty": {
+            "type": "string",
+            "description": "e.g. 'domain'"
+          },
+          "archived": {
+            "type": "boolean"
+          }
         }
       }
     },
@@ -206,13 +388,38 @@
       "input": {
         "type": "object",
         "properties": {
-          "filterGroups": { "type": "array", "items": { "type": "object" } },
-          "sorts": { "type": "array", "items": { "type": "object" } },
-          "properties": { "type": "array", "items": { "type": "string" } },
-          "query": { "type": "string" },
-          "limit": { "type": "integer", "description": "Max 100" },
-          "after": { "type": "string" }
+          "filterGroups": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "sorts": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "query": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "after": {
+            "type": "string"
+          }
         }
+      },
+      "rateLimit": {
+        "rps": 4
       }
     },
     {
@@ -224,10 +431,20 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["properties"],
+        "required": [
+          "properties"
+        ],
         "properties": {
-          "properties": { "type": "object", "description": "e.g. { name, domain, industry, city }" },
-          "associations": { "type": "array", "items": { "type": "object" } }
+          "properties": {
+            "type": "object",
+            "description": "e.g. { name, domain, industry, city }"
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
         }
       }
     },
@@ -240,11 +457,21 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["companyId", "properties"],
+        "required": [
+          "companyId",
+          "properties"
+        ],
         "properties": {
-          "companyId": { "type": "string" },
-          "properties": { "type": "object" },
-          "idProperty": { "type": "string", "description": "e.g. 'domain'" }
+          "companyId": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "object"
+          },
+          "idProperty": {
+            "type": "string",
+            "description": "e.g. 'domain'"
+          }
         }
       }
     },
@@ -257,8 +484,14 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["companyId"],
-        "properties": { "companyId": { "type": "string" } }
+        "required": [
+          "companyId"
+        ],
+        "properties": {
+          "companyId": {
+            "type": "string"
+          }
+        }
       }
     },
     {
@@ -270,11 +503,25 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["inputs"],
+        "required": [
+          "inputs"
+        ],
         "properties": {
-          "inputs": { "type": "array", "items": { "type": "object" } },
-          "properties": { "type": "array", "items": { "type": "string" } },
-          "idProperty": { "type": "string" }
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "idProperty": {
+            "type": "string"
+          }
         }
       }
     },
@@ -287,8 +534,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["inputs"],
-        "properties": { "inputs": { "type": "array", "items": { "type": "object" } } }
+        "required": [
+          "inputs"
+        ],
+        "properties": {
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
       }
     },
     {
@@ -300,11 +556,19 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["inputs"],
-        "properties": { "inputs": { "type": "array", "items": { "type": "object" } } }
+        "required": [
+          "inputs"
+        ],
+        "properties": {
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
       }
     },
-
     {
       "id": "listDeals",
       "label": "List Deals",
@@ -315,11 +579,29 @@
       "input": {
         "type": "object",
         "properties": {
-          "limit": { "type": "integer", "description": "Max 100" },
-          "after": { "type": "string" },
-          "properties": { "type": "array", "items": { "type": "string" }, "description": "e.g. ['dealname','amount','dealstage','pipeline','closedate']" },
-          "associations": { "type": "array", "items": { "type": "string" } },
-          "archived": { "type": "boolean" }
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "after": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "e.g. ['dealname','amount','dealstage','pipeline','closedate']"
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "archived": {
+            "type": "boolean"
+          }
         }
       }
     },
@@ -332,12 +614,28 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["dealId"],
+        "required": [
+          "dealId"
+        ],
         "properties": {
-          "dealId": { "type": "string" },
-          "properties": { "type": "array", "items": { "type": "string" } },
-          "associations": { "type": "array", "items": { "type": "string" } },
-          "archived": { "type": "boolean" }
+          "dealId": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "archived": {
+            "type": "boolean"
+          }
         }
       }
     },
@@ -351,13 +649,38 @@
       "input": {
         "type": "object",
         "properties": {
-          "filterGroups": { "type": "array", "items": { "type": "object" } },
-          "sorts": { "type": "array", "items": { "type": "object" } },
-          "properties": { "type": "array", "items": { "type": "string" } },
-          "query": { "type": "string" },
-          "limit": { "type": "integer", "description": "Max 100" },
-          "after": { "type": "string" }
+          "filterGroups": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "sorts": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "query": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "after": {
+            "type": "string"
+          }
         }
+      },
+      "rateLimit": {
+        "rps": 4
       }
     },
     {
@@ -369,10 +692,21 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["properties"],
+        "required": [
+          "properties"
+        ],
         "properties": {
-          "properties": { "type": "object", "description": "e.g. { dealname, amount, dealstage, pipeline, closedate }" },
-          "associations": { "type": "array", "items": { "type": "object" }, "description": "Associate to contacts/companies on create" }
+          "properties": {
+            "type": "object",
+            "description": "e.g. { dealname, amount, dealstage, pipeline, closedate }"
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Associate to contacts/companies on create"
+          }
         }
       }
     },
@@ -385,10 +719,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["dealId", "properties"],
+        "required": [
+          "dealId",
+          "properties"
+        ],
         "properties": {
-          "dealId": { "type": "string" },
-          "properties": { "type": "object" }
+          "dealId": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "object"
+          }
         }
       }
     },
@@ -401,8 +742,14 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["dealId"],
-        "properties": { "dealId": { "type": "string" } }
+        "required": [
+          "dealId"
+        ],
+        "properties": {
+          "dealId": {
+            "type": "string"
+          }
+        }
       }
     },
     {
@@ -414,10 +761,22 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["inputs"],
+        "required": [
+          "inputs"
+        ],
         "properties": {
-          "inputs": { "type": "array", "items": { "type": "object" } },
-          "properties": { "type": "array", "items": { "type": "string" } }
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -430,8 +789,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["inputs"],
-        "properties": { "inputs": { "type": "array", "items": { "type": "object" } } }
+        "required": [
+          "inputs"
+        ],
+        "properties": {
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
       }
     },
     {
@@ -443,11 +811,19 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["inputs"],
-        "properties": { "inputs": { "type": "array", "items": { "type": "object" } } }
+        "required": [
+          "inputs"
+        ],
+        "properties": {
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
       }
     },
-
     {
       "id": "listTickets",
       "label": "List Tickets",
@@ -458,11 +834,29 @@
       "input": {
         "type": "object",
         "properties": {
-          "limit": { "type": "integer", "description": "Max 100" },
-          "after": { "type": "string" },
-          "properties": { "type": "array", "items": { "type": "string" }, "description": "e.g. ['subject','hs_pipeline_stage','hs_ticket_priority']" },
-          "associations": { "type": "array", "items": { "type": "string" } },
-          "archived": { "type": "boolean" }
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "after": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "e.g. ['subject','hs_pipeline_stage','hs_ticket_priority']"
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "archived": {
+            "type": "boolean"
+          }
         }
       }
     },
@@ -475,12 +869,28 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ticketId"],
+        "required": [
+          "ticketId"
+        ],
         "properties": {
-          "ticketId": { "type": "string" },
-          "properties": { "type": "array", "items": { "type": "string" } },
-          "associations": { "type": "array", "items": { "type": "string" } },
-          "archived": { "type": "boolean" }
+          "ticketId": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "archived": {
+            "type": "boolean"
+          }
         }
       }
     },
@@ -494,13 +904,38 @@
       "input": {
         "type": "object",
         "properties": {
-          "filterGroups": { "type": "array", "items": { "type": "object" } },
-          "sorts": { "type": "array", "items": { "type": "object" } },
-          "properties": { "type": "array", "items": { "type": "string" } },
-          "query": { "type": "string" },
-          "limit": { "type": "integer", "description": "Max 100" },
-          "after": { "type": "string" }
+          "filterGroups": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "sorts": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "query": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "after": {
+            "type": "string"
+          }
         }
+      },
+      "rateLimit": {
+        "rps": 4
       }
     },
     {
@@ -512,10 +947,20 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["properties"],
+        "required": [
+          "properties"
+        ],
         "properties": {
-          "properties": { "type": "object", "description": "e.g. { subject, content, hs_pipeline, hs_pipeline_stage, hs_ticket_priority }" },
-          "associations": { "type": "array", "items": { "type": "object" } }
+          "properties": {
+            "type": "object",
+            "description": "e.g. { subject, content, hs_pipeline, hs_pipeline_stage, hs_ticket_priority }"
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
         }
       }
     },
@@ -528,10 +973,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["ticketId", "properties"],
+        "required": [
+          "ticketId",
+          "properties"
+        ],
         "properties": {
-          "ticketId": { "type": "string" },
-          "properties": { "type": "object" }
+          "ticketId": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "object"
+          }
         }
       }
     },
@@ -544,8 +996,14 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["ticketId"],
-        "properties": { "ticketId": { "type": "string" } }
+        "required": [
+          "ticketId"
+        ],
+        "properties": {
+          "ticketId": {
+            "type": "string"
+          }
+        }
       }
     },
     {
@@ -557,10 +1015,22 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["inputs"],
+        "required": [
+          "inputs"
+        ],
         "properties": {
-          "inputs": { "type": "array", "items": { "type": "object" } },
-          "properties": { "type": "array", "items": { "type": "string" } }
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -573,8 +1043,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["inputs"],
-        "properties": { "inputs": { "type": "array", "items": { "type": "object" } } }
+        "required": [
+          "inputs"
+        ],
+        "properties": {
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
       }
     },
     {
@@ -586,11 +1065,19 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["inputs"],
-        "properties": { "inputs": { "type": "array", "items": { "type": "object" } } }
+        "required": [
+          "inputs"
+        ],
+        "properties": {
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
       }
     },
-
     {
       "id": "listLineItems",
       "label": "List Line Items",
@@ -601,10 +1088,25 @@
       "input": {
         "type": "object",
         "properties": {
-          "limit": { "type": "integer", "description": "Max 100" },
-          "after": { "type": "string" },
-          "properties": { "type": "array", "items": { "type": "string" } },
-          "associations": { "type": "array", "items": { "type": "string" } }
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "after": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -617,10 +1119,19 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["lineItemId"],
+        "required": [
+          "lineItemId"
+        ],
         "properties": {
-          "lineItemId": { "type": "string" },
-          "properties": { "type": "array", "items": { "type": "string" } }
+          "lineItemId": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -633,14 +1144,23 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["properties"],
+        "required": [
+          "properties"
+        ],
         "properties": {
-          "properties": { "type": "object", "description": "e.g. { name, price, quantity, hs_product_id }" },
-          "associations": { "type": "array", "items": { "type": "object" } }
+          "properties": {
+            "type": "object",
+            "description": "e.g. { name, price, quantity, hs_product_id }"
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
         }
       }
     },
-
     {
       "id": "listProducts",
       "label": "List Products",
@@ -651,9 +1171,19 @@
       "input": {
         "type": "object",
         "properties": {
-          "limit": { "type": "integer", "description": "Max 100" },
-          "after": { "type": "string" },
-          "properties": { "type": "array", "items": { "type": "string" } }
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "after": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -666,10 +1196,19 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["productId"],
+        "required": [
+          "productId"
+        ],
         "properties": {
-          "productId": { "type": "string" },
-          "properties": { "type": "array", "items": { "type": "string" } }
+          "productId": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -682,13 +1221,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["properties"],
+        "required": [
+          "properties"
+        ],
         "properties": {
-          "properties": { "type": "object", "description": "e.g. { name, price, hs_sku, description }" }
+          "properties": {
+            "type": "object",
+            "description": "e.g. { name, price, hs_sku, description }"
+          }
         }
       }
     },
-
     {
       "id": "listQuotes",
       "label": "List Quotes",
@@ -699,10 +1242,25 @@
       "input": {
         "type": "object",
         "properties": {
-          "limit": { "type": "integer", "description": "Max 100" },
-          "after": { "type": "string" },
-          "properties": { "type": "array", "items": { "type": "string" } },
-          "associations": { "type": "array", "items": { "type": "string" } }
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "after": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -715,10 +1273,19 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["quoteId"],
+        "required": [
+          "quoteId"
+        ],
         "properties": {
-          "quoteId": { "type": "string" },
-          "properties": { "type": "array", "items": { "type": "string" } }
+          "quoteId": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -731,14 +1298,23 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["properties"],
+        "required": [
+          "properties"
+        ],
         "properties": {
-          "properties": { "type": "object", "description": "e.g. { hs_title, hs_expiration_date, hs_status }" },
-          "associations": { "type": "array", "items": { "type": "object" } }
+          "properties": {
+            "type": "object",
+            "description": "e.g. { hs_title, hs_expiration_date, hs_status }"
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
         }
       }
     },
-
     {
       "id": "listObjects",
       "label": "List Records (Any Object)",
@@ -748,14 +1324,47 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["objectType"],
+        "required": [
+          "objectType"
+        ],
         "properties": {
-          "objectType": { "type": "string", "description": "Object name or objectTypeId, e.g. 'contacts','companies','tickets','p_pets','2-12345'" },
-          "limit": { "type": "integer", "description": "Max 100" },
-          "after": { "type": "string" },
-          "properties": { "type": "array", "items": { "type": "string" } },
-          "associations": { "type": "array", "items": { "type": "string" } },
-          "archived": { "type": "boolean" }
+          "objectType": {
+            "type": "string",
+            "description": "Object name or objectTypeId, e.g. 'contacts','companies','tickets','p_pets','2-12345'"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "after": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "archived": {
+            "type": "boolean"
+          }
+        }
+      },
+      "options": {
+        "objectType": {
+          "method": "listSchemas",
+          "labelKey": "name",
+          "valueKey": "fullyQualifiedName",
+          "sublabelKey": "objectTypeId",
+          "args": {
+            "includeStandard": true
+          }
         }
       }
     },
@@ -768,15 +1377,56 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["objectType"],
+        "required": [
+          "objectType"
+        ],
         "properties": {
-          "objectType": { "type": "string", "description": "Object name or objectTypeId" },
-          "filterGroups": { "type": "array", "items": { "type": "object" } },
-          "sorts": { "type": "array", "items": { "type": "object" } },
-          "properties": { "type": "array", "items": { "type": "string" } },
-          "query": { "type": "string" },
-          "limit": { "type": "integer", "description": "Max 100" },
-          "after": { "type": "string" }
+          "objectType": {
+            "type": "string",
+            "description": "Object name or objectTypeId"
+          },
+          "filterGroups": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "sorts": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "query": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "after": {
+            "type": "string"
+          }
+        }
+      },
+      "rateLimit": {
+        "rps": 4
+      },
+      "options": {
+        "objectType": {
+          "method": "listSchemas",
+          "labelKey": "name",
+          "valueKey": "fullyQualifiedName",
+          "sublabelKey": "objectTypeId",
+          "args": {
+            "includeStandard": true
+          }
         }
       }
     },
@@ -789,15 +1439,38 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["objectType", "properties"],
+        "required": [
+          "objectType",
+          "properties"
+        ],
         "properties": {
-          "objectType": { "type": "string", "description": "Object name or objectTypeId" },
-          "properties": { "type": "object" },
-          "associations": { "type": "array", "items": { "type": "object" } }
+          "objectType": {
+            "type": "string",
+            "description": "Object name or objectTypeId"
+          },
+          "properties": {
+            "type": "object"
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "options": {
+        "objectType": {
+          "method": "listSchemas",
+          "labelKey": "name",
+          "valueKey": "fullyQualifiedName",
+          "sublabelKey": "objectTypeId",
+          "args": {
+            "includeStandard": true
+          }
         }
       }
     },
-
     {
       "id": "listAssociations",
       "label": "List Associations (v4)",
@@ -807,13 +1480,31 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["fromObjectType", "fromObjectId", "toObjectType"],
+        "required": [
+          "fromObjectType",
+          "fromObjectId",
+          "toObjectType"
+        ],
         "properties": {
-          "fromObjectType": { "type": "string", "description": "e.g. 'contacts'" },
-          "fromObjectId": { "type": "string", "description": "Source record id" },
-          "toObjectType": { "type": "string", "description": "e.g. 'companies'" },
-          "limit": { "type": "integer", "description": "Max 500 (default 10)" },
-          "after": { "type": "string" }
+          "fromObjectType": {
+            "type": "string",
+            "description": "e.g. 'contacts'"
+          },
+          "fromObjectId": {
+            "type": "string",
+            "description": "Source record id"
+          },
+          "toObjectType": {
+            "type": "string",
+            "description": "e.g. 'companies'"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max 500 (default 10)"
+          },
+          "after": {
+            "type": "string"
+          }
         }
       }
     },
@@ -826,12 +1517,25 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["fromObjectType", "fromObjectId", "toObjectType", "toObjectId"],
+        "required": [
+          "fromObjectType",
+          "fromObjectId",
+          "toObjectType",
+          "toObjectId"
+        ],
         "properties": {
-          "fromObjectType": { "type": "string" },
-          "fromObjectId": { "type": "string" },
-          "toObjectType": { "type": "string" },
-          "toObjectId": { "type": "string" }
+          "fromObjectType": {
+            "type": "string"
+          },
+          "fromObjectId": {
+            "type": "string"
+          },
+          "toObjectType": {
+            "type": "string"
+          },
+          "toObjectId": {
+            "type": "string"
+          }
         }
       }
     },
@@ -844,12 +1548,25 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["fromObjectType", "fromObjectId", "toObjectType", "toObjectId"],
+        "required": [
+          "fromObjectType",
+          "fromObjectId",
+          "toObjectType",
+          "toObjectId"
+        ],
         "properties": {
-          "fromObjectType": { "type": "string" },
-          "fromObjectId": { "type": "string" },
-          "toObjectType": { "type": "string" },
-          "toObjectId": { "type": "string" }
+          "fromObjectType": {
+            "type": "string"
+          },
+          "fromObjectId": {
+            "type": "string"
+          },
+          "toObjectType": {
+            "type": "string"
+          },
+          "toObjectId": {
+            "type": "string"
+          }
         }
       }
     },
@@ -862,12 +1579,25 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["fromObjectType", "fromObjectId", "toObjectType", "toObjectId"],
+        "required": [
+          "fromObjectType",
+          "fromObjectId",
+          "toObjectType",
+          "toObjectId"
+        ],
         "properties": {
-          "fromObjectType": { "type": "string" },
-          "fromObjectId": { "type": "string" },
-          "toObjectType": { "type": "string" },
-          "toObjectId": { "type": "string" }
+          "fromObjectType": {
+            "type": "string"
+          },
+          "fromObjectId": {
+            "type": "string"
+          },
+          "toObjectType": {
+            "type": "string"
+          },
+          "toObjectId": {
+            "type": "string"
+          }
         }
       }
     },
@@ -880,14 +1610,42 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["fromObjectType", "toObjectType"],
+        "required": [
+          "fromObjectType",
+          "toObjectType"
+        ],
         "properties": {
-          "fromObjectType": { "type": "string", "description": "e.g. 'contacts'" },
-          "toObjectType": { "type": "string", "description": "e.g. 'companies'" }
+          "fromObjectType": {
+            "type": "string",
+            "description": "e.g. 'contacts'"
+          },
+          "toObjectType": {
+            "type": "string",
+            "description": "e.g. 'companies'"
+          }
         }
       }
     },
-
+    {
+      "id": "listSchemas",
+      "label": "List Object Schemas",
+      "description": "List object type schemas (custom objects, plus standard when includeStandard=true). Returns { results[]{ objectTypeId, fullyQualifiedName, name, labels{ singular, plural } } }. Use fullyQualifiedName or objectTypeId as the objectType for generic object methods. Free read.",
+      "verb": "GET",
+      "path": "/crm/v3/schemas",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "includeStandard": {
+            "type": "boolean",
+            "description": "Include standard object schemas (contacts/companies/deals/tickets) as well as custom (default false)"
+          },
+          "archived": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
     {
       "id": "listProperties",
       "label": "List Properties",
@@ -897,10 +1655,17 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["objectType"],
+        "required": [
+          "objectType"
+        ],
         "properties": {
-          "objectType": { "type": "string", "description": "e.g. 'contacts','companies','deals','tickets'" },
-          "archived": { "type": "boolean" }
+          "objectType": {
+            "type": "string",
+            "description": "e.g. 'contacts','companies','deals','tickets'"
+          },
+          "archived": {
+            "type": "boolean"
+          }
         }
       }
     },
@@ -913,10 +1678,18 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["objectType", "propertyName"],
+        "required": [
+          "objectType",
+          "propertyName"
+        ],
         "properties": {
-          "objectType": { "type": "string" },
-          "propertyName": { "type": "string", "description": "e.g. 'lifecyclestage'" }
+          "objectType": {
+            "type": "string"
+          },
+          "propertyName": {
+            "type": "string",
+            "description": "e.g. 'lifecyclestage'"
+          }
         }
       }
     },
@@ -929,19 +1702,48 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["objectType", "name", "label", "type", "fieldType", "groupName"],
+        "required": [
+          "objectType",
+          "name",
+          "label",
+          "type",
+          "fieldType",
+          "groupName"
+        ],
         "properties": {
-          "objectType": { "type": "string" },
-          "name": { "type": "string", "description": "Internal property name (lowercase, no spaces)" },
-          "label": { "type": "string", "description": "Human-readable label" },
-          "type": { "type": "string", "description": "string | number | date | datetime | enumeration | bool" },
-          "fieldType": { "type": "string", "description": "text | textarea | number | select | radio | checkbox | date" },
-          "groupName": { "type": "string", "description": "Property group to place it in, e.g. 'contactinformation'" },
-          "options": { "type": "array", "items": { "type": "object" }, "description": "For enumeration types: [{ label, value, displayOrder }]" }
+          "objectType": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "Internal property name (lowercase, no spaces)"
+          },
+          "label": {
+            "type": "string",
+            "description": "Human-readable label"
+          },
+          "type": {
+            "type": "string",
+            "description": "string | number | date | datetime | enumeration | bool"
+          },
+          "fieldType": {
+            "type": "string",
+            "description": "text | textarea | number | select | radio | checkbox | date"
+          },
+          "groupName": {
+            "type": "string",
+            "description": "Property group to place it in, e.g. 'contactinformation'"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "For enumeration types: [{ label, value, displayOrder }]"
+          }
         }
       }
     },
-
     {
       "id": "listOwners",
       "label": "List Owners",
@@ -952,10 +1754,20 @@
       "input": {
         "type": "object",
         "properties": {
-          "email": { "type": "string", "description": "Filter to the owner with this email" },
-          "limit": { "type": "integer", "description": "Max 500 (default 100)" },
-          "after": { "type": "string" },
-          "archived": { "type": "boolean" }
+          "email": {
+            "type": "string",
+            "description": "Filter to the owner with this email"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max 500 (default 100)"
+          },
+          "after": {
+            "type": "string"
+          },
+          "archived": {
+            "type": "boolean"
+          }
         }
       }
     },
@@ -968,13 +1780,27 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ownerId"],
+        "required": [
+          "ownerId"
+        ],
         "properties": {
-          "ownerId": { "type": "string", "description": "Owner id (the value used in hubspot_owner_id)" }
+          "ownerId": {
+            "type": "string",
+            "description": "Owner id (the value used in hubspot_owner_id)"
+          }
+        }
+      },
+      "options": {
+        "ownerId": {
+          "method": "listOwners",
+          "labelKey": "email",
+          "valueKey": "id",
+          "args": {
+            "limit": 500
+          }
         }
       }
     },
-
     {
       "id": "listPipelines",
       "label": "List Pipelines",
@@ -984,9 +1810,14 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["objectType"],
+        "required": [
+          "objectType"
+        ],
         "properties": {
-          "objectType": { "type": "string", "description": "'deals' or 'tickets'" }
+          "objectType": {
+            "type": "string",
+            "description": "'deals' or 'tickets'"
+          }
         }
       }
     },
@@ -999,10 +1830,28 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["objectType", "pipelineId"],
+        "required": [
+          "objectType",
+          "pipelineId"
+        ],
         "properties": {
-          "objectType": { "type": "string", "description": "'deals' or 'tickets'" },
-          "pipelineId": { "type": "string" }
+          "objectType": {
+            "type": "string",
+            "description": "'deals' or 'tickets'"
+          },
+          "pipelineId": {
+            "type": "string"
+          }
+        }
+      },
+      "options": {
+        "pipelineId": {
+          "method": "listPipelines",
+          "labelKey": "label",
+          "valueKey": "id",
+          "args": {
+            "objectType": "deals"
+          }
         }
       }
     },
@@ -1015,14 +1864,31 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["objectType", "pipelineId"],
+        "required": [
+          "objectType",
+          "pipelineId"
+        ],
         "properties": {
-          "objectType": { "type": "string", "description": "'deals' or 'tickets'" },
-          "pipelineId": { "type": "string" }
+          "objectType": {
+            "type": "string",
+            "description": "'deals' or 'tickets'"
+          },
+          "pipelineId": {
+            "type": "string"
+          }
+        }
+      },
+      "options": {
+        "pipelineId": {
+          "method": "listPipelines",
+          "labelKey": "label",
+          "valueKey": "id",
+          "args": {
+            "objectType": "deals"
+          }
         }
       }
     },
-
     {
       "id": "listNotes",
       "label": "List Notes",
@@ -1033,10 +1899,25 @@
       "input": {
         "type": "object",
         "properties": {
-          "limit": { "type": "integer", "description": "Max 100" },
-          "after": { "type": "string" },
-          "properties": { "type": "array", "items": { "type": "string" } },
-          "associations": { "type": "array", "items": { "type": "string" } }
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "after": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -1049,10 +1930,21 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["properties"],
+        "required": [
+          "properties"
+        ],
         "properties": {
-          "properties": { "type": "object", "description": "{ hs_note_body, hs_timestamp }" },
-          "associations": { "type": "array", "items": { "type": "object" }, "description": "Associate to the record(s) this note belongs to" }
+          "properties": {
+            "type": "object",
+            "description": "{ hs_note_body, hs_timestamp }"
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Associate to the record(s) this note belongs to"
+          }
         }
       }
     },
@@ -1066,10 +1958,25 @@
       "input": {
         "type": "object",
         "properties": {
-          "limit": { "type": "integer", "description": "Max 100" },
-          "after": { "type": "string" },
-          "properties": { "type": "array", "items": { "type": "string" } },
-          "associations": { "type": "array", "items": { "type": "string" } }
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "after": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -1082,10 +1989,20 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["properties"],
+        "required": [
+          "properties"
+        ],
         "properties": {
-          "properties": { "type": "object", "description": "{ hs_task_subject, hs_task_status, hs_task_priority, hs_timestamp, hubspot_owner_id }" },
-          "associations": { "type": "array", "items": { "type": "object" } }
+          "properties": {
+            "type": "object",
+            "description": "{ hs_task_subject, hs_task_status, hs_task_priority, hs_timestamp, hubspot_owner_id }"
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
         }
       }
     },
@@ -1099,10 +2016,25 @@
       "input": {
         "type": "object",
         "properties": {
-          "limit": { "type": "integer", "description": "Max 100" },
-          "after": { "type": "string" },
-          "properties": { "type": "array", "items": { "type": "string" } },
-          "associations": { "type": "array", "items": { "type": "string" } }
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "after": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -1115,10 +2047,20 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["properties"],
+        "required": [
+          "properties"
+        ],
         "properties": {
-          "properties": { "type": "object", "description": "{ hs_call_title, hs_call_body, hs_call_duration, hs_call_direction, hs_timestamp }" },
-          "associations": { "type": "array", "items": { "type": "object" } }
+          "properties": {
+            "type": "object",
+            "description": "{ hs_call_title, hs_call_body, hs_call_duration, hs_call_direction, hs_timestamp }"
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
         }
       }
     },
@@ -1132,10 +2074,25 @@
       "input": {
         "type": "object",
         "properties": {
-          "limit": { "type": "integer", "description": "Max 100" },
-          "after": { "type": "string" },
-          "properties": { "type": "array", "items": { "type": "string" } },
-          "associations": { "type": "array", "items": { "type": "string" } }
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "after": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -1148,10 +2105,20 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["properties"],
+        "required": [
+          "properties"
+        ],
         "properties": {
-          "properties": { "type": "object", "description": "{ hs_email_subject, hs_email_text, hs_email_direction, hs_timestamp }" },
-          "associations": { "type": "array", "items": { "type": "object" } }
+          "properties": {
+            "type": "object",
+            "description": "{ hs_email_subject, hs_email_text, hs_email_direction, hs_timestamp }"
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
         }
       }
     },
@@ -1165,10 +2132,25 @@
       "input": {
         "type": "object",
         "properties": {
-          "limit": { "type": "integer", "description": "Max 100" },
-          "after": { "type": "string" },
-          "properties": { "type": "array", "items": { "type": "string" } },
-          "associations": { "type": "array", "items": { "type": "string" } }
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "after": {
+            "type": "string"
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
@@ -1181,14 +2163,23 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["properties"],
+        "required": [
+          "properties"
+        ],
         "properties": {
-          "properties": { "type": "object", "description": "{ hs_meeting_title, hs_meeting_start_time, hs_meeting_end_time, hs_timestamp }" },
-          "associations": { "type": "array", "items": { "type": "object" } }
+          "properties": {
+            "type": "object",
+            "description": "{ hs_meeting_title, hs_meeting_start_time, hs_meeting_end_time, hs_timestamp }"
+          },
+          "associations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
         }
       }
     },
-
     {
       "id": "createList",
       "label": "Create List",
@@ -1198,12 +2189,27 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["name", "objectTypeId", "processingType"],
+        "required": [
+          "name",
+          "objectTypeId",
+          "processingType"
+        ],
         "properties": {
-          "name": { "type": "string" },
-          "objectTypeId": { "type": "string", "description": "e.g. '0-1' (contacts), '0-2' (companies)" },
-          "processingType": { "type": "string", "description": "MANUAL | SNAPSHOT | DYNAMIC" },
-          "filterBranch": { "type": "object", "description": "Filter definition for DYNAMIC lists" }
+          "name": {
+            "type": "string"
+          },
+          "objectTypeId": {
+            "type": "string",
+            "description": "e.g. '0-1' (contacts), '0-2' (companies)"
+          },
+          "processingType": {
+            "type": "string",
+            "description": "MANUAL | SNAPSHOT | DYNAMIC"
+          },
+          "filterBranch": {
+            "type": "object",
+            "description": "Filter definition for DYNAMIC lists"
+          }
         }
       }
     },
@@ -1216,10 +2222,29 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["listId"],
+        "required": [
+          "listId"
+        ],
         "properties": {
-          "listId": { "type": "string" },
-          "includeFilters": { "type": "boolean", "description": "Include the list's filter definition" }
+          "listId": {
+            "type": "string"
+          },
+          "includeFilters": {
+            "type": "boolean",
+            "description": "Include the list's filter definition"
+          }
+        }
+      },
+      "options": {
+        "listId": {
+          "method": "searchLists",
+          "itemsPath": "lists",
+          "labelKey": "name",
+          "valueKey": "listId",
+          "sublabelKey": "processingType",
+          "args": {
+            "count": 100
+          }
         }
       }
     },
@@ -1233,12 +2258,34 @@
       "input": {
         "type": "object",
         "properties": {
-          "query": { "type": "string", "description": "Match against list names" },
-          "processingTypes": { "type": "array", "items": { "type": "string" }, "description": "MANUAL | SNAPSHOT | DYNAMIC" },
-          "listIds": { "type": "array", "items": { "type": "string" } },
-          "count": { "type": "integer", "description": "Page size" },
-          "offset": { "type": "integer" }
+          "query": {
+            "type": "string",
+            "description": "Match against list names"
+          },
+          "processingTypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "MANUAL | SNAPSHOT | DYNAMIC"
+          },
+          "listIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "description": "Page size"
+          },
+          "offset": {
+            "type": "integer"
+          }
         }
+      },
+      "rateLimit": {
+        "rps": 4
       }
     },
     {
@@ -1250,11 +2297,32 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["listId"],
+        "required": [
+          "listId"
+        ],
         "properties": {
-          "listId": { "type": "string" },
-          "limit": { "type": "integer", "description": "Max 250" },
-          "after": { "type": "string" }
+          "listId": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max 250"
+          },
+          "after": {
+            "type": "string"
+          }
+        }
+      },
+      "options": {
+        "listId": {
+          "method": "searchLists",
+          "itemsPath": "lists",
+          "labelKey": "name",
+          "valueKey": "listId",
+          "sublabelKey": "processingType",
+          "args": {
+            "count": 100
+          }
         }
       }
     },
@@ -1267,9 +2335,25 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["listId"],
+        "required": [
+          "listId"
+        ],
         "properties": {
-          "listId": { "type": "string" }
+          "listId": {
+            "type": "string"
+          }
+        }
+      },
+      "options": {
+        "listId": {
+          "method": "searchLists",
+          "itemsPath": "lists",
+          "labelKey": "name",
+          "valueKey": "listId",
+          "sublabelKey": "processingType",
+          "args": {
+            "count": 100
+          }
         }
       }
     },
@@ -1282,9 +2366,25 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["listId"],
+        "required": [
+          "listId"
+        ],
         "properties": {
-          "listId": { "type": "string" }
+          "listId": {
+            "type": "string"
+          }
+        }
+      },
+      "options": {
+        "listId": {
+          "method": "searchLists",
+          "itemsPath": "lists",
+          "labelKey": "name",
+          "valueKey": "listId",
+          "sublabelKey": "processingType",
+          "args": {
+            "count": 100
+          }
         }
       }
     }

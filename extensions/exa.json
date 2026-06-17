@@ -11,6 +11,10 @@
     "header": "x-api-key",
     "secretKey": "apiKey"
   },
+  "rateLimit": {
+    "rps": 10,
+    "concurrency": 5
+  },
   "methods": [
     {
       "id": "search",

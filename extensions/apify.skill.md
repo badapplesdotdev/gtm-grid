@@ -12,6 +12,11 @@
 - Base URL: `https://api.apify.com/v2`.
 - Grid credits: 1 per actor/task run, 0 for fetch/status/store/account calls. **Real Apify billing is separate** — each actor charges your Apify account by its own pricing (per-result, per-event, or compute units). Bulk/expensive actors can burn real money fast.
 - Limits: sync run endpoints hard-cap at **300s** (408 on timeout). Key-value CRUD ~200 req/s per resource. `searchStore` returns max 1000 items/page.
+- **Rate limit (connector):** Apify's documented default is **60 req/s per resource**; run-Actor endpoints sit in a higher 400 req/s bucket. The manifest sets a connector default of `rps: 60` (concurrency 5) and a stricter per-method `rps: 3` override on `runActorSync`/`runActor` because each run bills your real Apify account — bulk grid runs should drip, not flood.
+
+## Picker (options) fields
+- `actorId` (on `runActorSync` / `runActor`) → backed by **`listActors`** (`my=1`, `itemsPath: data.items`, label `title`, value `id`, sublabel `username`). Only enumerates Actors you own/created; public Store actors are discovered via `searchStore`, then passed as free text in the `username~name` form (the field stays typeable).
+- `datasetId` (on `getDatasetItems`) → backed by **`listDatasets`** (`itemsPath: data.items`, label `name`, value `id`, sublabel `itemCount`). Pick a named dataset, or paste a run's `defaultDatasetId`.
 
 ## Endpoints by job
 

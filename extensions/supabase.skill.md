@@ -11,7 +11,8 @@
 ## Auth & cost
 - **Base URL:** `https://api.supabase.com`. Auth is `Authorization: Bearer <PAT>` — a **Personal Access Token** (starts `sbp_...`). Create one at supabase.com/dashboard/account/tokens. The manifest injects it from the `apiKey` secret.
 - **The `{ref}` project ref is in nearly every project path.** It's the 20-char project id you see in the dashboard URL (`app.supabase.com/project/<ref>`) — get it from `supabase.listProjects` / `listOrganizationProjects` if you don't already have it.
-- **Rate limits:** roughly **60 requests/min** per token (some endpoints lower). Reads are credits 0; create/update/delete/`runQuery`/`applyMigration` are credits 1 (`runQuery` can mutate).
+- **Rate limits:** **120 requests/min**, tracked separately per project and per organization (manifest sets connector `rateLimit: { rpm: 120, concurrency: 3 }`). A few endpoints are stricter — `getDatabaseContext` (`GET .../database/context`) is capped at **10/min and 1/sec**, so it carries a per-method `rateLimit: { rpm: 10, rps: 1 }` override. Reads are credits 0; create/update/delete/`runQuery`/`applyMigration` are credits 1 (`runQuery` can mutate). Back off on `429` using the `X-RateLimit-Reset` header.
+- **Picker fields (live options):** `ref` (project ref — on ~30 methods like `runQuery`, `getProject`, `createBranch`) is populated from `listProjects` (label = project `name`, value = `id`, sublabel = `status`). `slug` (org slug — on `getOrganization`, `listOrganizationMembers`, `listOrganizationProjects`) and `createProject.organization_slug` are populated from `listOrganizations` (label = org `name`, value = `slug`). Other id-ish path params (`function_slug`, `branch_id_or_ref`, snippet `id`) are NOT wired to pickers because enumerating them first needs a chosen `ref`, which the static-args options resolver can't supply.
 - **Most common entry points:** `supabase.runQuery` (SQL → rows), `supabase.listProjects` (find a `ref`), and `supabase.getDatabaseContext` (schema before writing SQL).
 
 ## Endpoints by job
@@ -73,6 +74,6 @@
 - **Escape values pulled from columns to avoid SQL injection.** `{{Column}}` templates are interpolated as plain text — quote string values, and prefer the `parameters` array for untrusted input rather than string-concatenating it into `query`.
 - **`{ref}` must be the project ref string** (the 20-char id from the dashboard URL / `listProjects`), not the project name or display label. Branch endpoints (`getBranch`/`deleteBranch`) take `branch_id_or_ref` instead.
 - **PAT scopes & expiry.** A `401` means a missing/invalid/expired Personal Access Token (`sbp_...`), or one without the scope for that resource — regenerate at the dashboard tokens page. This is a token issue, not a per-project anon-key issue.
-- **Rate limits ~60/min per token.** Batch large fan-outs and back off on `429`.
+- **Rate limits 120/min per project & per org.** `getDatabaseContext` is much stricter (10/min, 1/sec). Batch large fan-outs and back off on `429`.
 - **SQL must be a single string** in the `query` body field — a multi-statement script is fine, but it's one `query` value, not an array. `createSecrets`/`deleteSecrets` bodies are arrays (of `{name,value}` / of names).
 - Docs: https://supabase.com/docs/reference/api (OpenAPI at https://api.supabase.com/api/v1-json).

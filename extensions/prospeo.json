@@ -11,6 +11,11 @@
     "header": "X-KEY",
     "secretKey": "apiKey"
   },
+  "rateLimit": {
+    "rpm": 300,
+    "rps": 5,
+    "concurrency": 3
+  },
   "methods": [
     {
       "id": "enrichPerson",
@@ -236,6 +241,10 @@
       "verb": "POST",
       "path": "/search-person",
       "credits": 1,
+      "rateLimit": {
+        "rps": 1,
+        "rpm": 30
+      },
       "input": {
         "type": "object",
         "required": [
@@ -261,6 +270,10 @@
       "verb": "POST",
       "path": "/search-company",
       "credits": 1,
+      "rateLimit": {
+        "rps": 1,
+        "rpm": 30
+      },
       "input": {
         "type": "object",
         "required": [
