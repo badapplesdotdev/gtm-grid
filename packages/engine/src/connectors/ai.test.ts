@@ -8,9 +8,10 @@ import type { AiConfig, MethodContext } from "../types.js";
 
 // vi.mock factories are hoisted above imports, so the spies they reference must
 // be created with vi.hoisted (not plain top-level consts).
-const { openaiCtor, createMock, anthropicCreate } = vi.hoisted(() => ({
+const { openaiCtor, createMock, anthropicCtor, anthropicCreate } = vi.hoisted(() => ({
   openaiCtor: vi.fn(),
   createMock: vi.fn(),
+  anthropicCtor: vi.fn(),
   anthropicCreate: vi.fn(),
 }));
 
@@ -22,7 +23,10 @@ vi.mock("openai", () => ({
 }));
 
 vi.mock("@anthropic-ai/sdk", () => ({
-  default: vi.fn().mockImplementation(() => ({ messages: { create: anthropicCreate } })),
+  default: vi.fn().mockImplementation((opts: unknown) => {
+    anthropicCtor(opts);
+    return { messages: { create: anthropicCreate } };
+  }),
 }));
 
 import { aiConnector } from "./ai.js";
@@ -41,8 +45,32 @@ const OPENAI: AiConfig = { provider: "openai", apiKey: "oa-key", model: "gpt-4o-
 beforeEach(() => {
   openaiCtor.mockClear();
   createMock.mockClear();
+  anthropicCtor.mockClear();
   anthropicCreate.mockClear();
   createMock.mockResolvedValue({ choices: [{ message: { content: "ok" } }] });
+  anthropicCreate.mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+});
+
+const ANTHROPIC: AiConfig = { provider: "anthropic", apiKey: "an-key", model: "claude-haiku-4-5" };
+
+describe("ai.generate — SDK resilience + connector throttle", () => {
+  it("declares a moderate connector-level rate limit", () => {
+    expect(aiConnector.rateLimit).toEqual({ rps: 3, concurrency: 5 });
+  });
+
+  it("constructs the OpenAI client with explicit maxRetries + timeout (SDK owns retry)", async () => {
+    await generate.run({ prompt: "hi", model: "gpt-4o" }, ctx([OPENAI]));
+    expect(openaiCtor).toHaveBeenCalledWith(
+      expect.objectContaining({ maxRetries: 4, timeout: 60_000 }),
+    );
+  });
+
+  it("constructs the Anthropic client with explicit maxRetries + timeout (SDK owns retry)", async () => {
+    await generate.run({ prompt: "hi", model: "claude-haiku-4-5" }, ctx([ANTHROPIC]));
+    expect(anthropicCtor).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "an-key", maxRetries: 4, timeout: 60_000 }),
+    );
+  });
 });
 
 describe("ai.generate — Hermes routing", () => {

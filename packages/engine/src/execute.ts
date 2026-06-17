@@ -43,6 +43,15 @@ export interface EngineConfig {
    * user's own machine, so localhost/LAN connectors stay valid).
    */
   guardSsrf?: boolean;
+  /**
+   * Safety-default outbound throttle applied to any OUTBOUND connector that
+   * declares no `rateLimit` of its own (including user-uploaded manifests) — so an
+   * unconfigured connector can never fire an unbounded burst. Defaults to
+   * {@link DEFAULT_RATE_LIMIT}. Pass `{}` (no bounds) to opt a trusted engine out,
+   * or a tuned {@link RateLimit} to raise/lower it. Connectors marked `local`
+   * (pure in-process transforms) are always exempt regardless of this value.
+   */
+  defaultRateLimit?: RateLimit;
 }
 
 /** A cell's state as observed during a run, for per-cell progress streaming.
@@ -158,7 +167,8 @@ export class Engine {
 
   /** Run `fn` behind the connector's (and any stricter per-method) rate gate. */
   private throttle<T>(provider: string, m: ConnectorMethod, fn: () => Promise<T>): Promise<T> {
-    const connRate = this.registry.get(provider)?.rateLimit;
+    const connector = this.registry.get(provider);
+    const connRate = connector?.rateLimit;
     const mRate = m.rateLimit;
     // The loader sets method.rateLimit to the connector-default OBJECT when the
     // method declares none, so reference inequality ⇒ a genuine per-method gate
@@ -173,6 +183,15 @@ export class Engine {
     if (connRate) {
       const inner = run;
       run = () => this.cachedLimiter(provider, connRate).run(inner);
+    } else if (!hasMethodGate && !connector?.local) {
+      // No explicit connector or per-method rate, and this connector makes
+      // outbound calls (not a pure-local transform): apply the conservative
+      // safety default so an unconfigured/user-uploaded connector can't fire an
+      // unbounded burst. Each provider gets its OWN default budget (keyed by
+      // provider), not a shared global one.
+      const def = this.config.defaultRateLimit ?? DEFAULT_RATE_LIMIT;
+      const inner = run;
+      run = () => this.cachedLimiter(provider, def).run(inner);
     }
     return run();
   }
@@ -594,6 +613,16 @@ export function chunk<T>(items: T[], size: number): T[][] {
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
 }
+
+/**
+ * The conservative safety-default throttle applied to any OUTBOUND connector that
+ * declares no `rateLimit` of its own (incl. user-uploaded manifests). It exists to
+ * guarantee an unconfigured connector can never fire an unbounded burst — when a
+ * provider's real limits are unknown, 2 req/s with ≤2 in flight is a safe floor
+ * (matches the "unknown provider" recommendation from the rate-limit research).
+ * Override per-engine via {@link EngineConfig.defaultRateLimit}.
+ */
+export const DEFAULT_RATE_LIMIT: RateLimit = { rps: 2, concurrency: 2 };
 
 /**
  * A per-connector outbound throttle: spreads call STARTS by a minimum interval

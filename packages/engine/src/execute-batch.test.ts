@@ -95,7 +95,7 @@ describe("runColumn honors batchSize", () => {
     const reg = batchRegistry(N);
     const { colId, rowIds } = seed({ provider: "test", method: "upper" }, ROWS);
 
-    const engine = new Engine(db, {}, reg.registry);
+    const engine = new Engine(db, { defaultRateLimit: {} }, reg.registry);
     const res = await engine.runColumn(colId);
 
     expect(res).toEqual({ ran: ROWS, errors: 0 });
@@ -116,7 +116,7 @@ describe("runColumn honors batchSize", () => {
   it("preserves order when results are mapped back to cells", async () => {
     const reg = batchRegistry(10);
     const { colId, rowIds } = seed({ provider: "test", method: "upper" }, 10);
-    const engine = new Engine(db, {}, reg.registry);
+    const engine = new Engine(db, { defaultRateLimit: {} }, reg.registry);
     await engine.runColumn(colId);
 
     // One batch of 10, in the same row order we seeded.
@@ -130,7 +130,7 @@ describe("runColumn honors batchSize", () => {
   it("falls back to per-row run() when batchSize is 1", async () => {
     const reg = batchRegistry(1);
     const { colId, rowIds } = seed({ provider: "test", method: "upper" }, 4);
-    const engine = new Engine(db, {}, reg.registry);
+    const engine = new Engine(db, { defaultRateLimit: {} }, reg.registry);
     const res = await engine.runColumn(colId);
 
     expect(res).toEqual({ ran: 4, errors: 0 });
@@ -146,7 +146,7 @@ describe("runColumn honors batchSize", () => {
     db.setCell(rowIds[0], colId, { value: "DONE", status: "done" });
     db.setCell(rowIds[2], colId, { value: "DONE", status: "done" });
 
-    const engine = new Engine(db, {}, reg.registry);
+    const engine = new Engine(db, { defaultRateLimit: {} }, reg.registry);
     const res = await engine.runColumn(colId);
 
     expect(res).toEqual({ ran: 2, errors: 0 });
@@ -174,7 +174,7 @@ describe("runColumn honors batchSize", () => {
     const connector: Connector = { id: "test", name: "Test", category: "test", auth: null, methods: [method] };
     const { colId, rowIds } = seed({ provider: "test", method: "boom" }, 3);
 
-    const engine = new Engine(db, {}, new Registry([connector]));
+    const engine = new Engine(db, { defaultRateLimit: {} }, new Registry([connector]));
     const res = await engine.runColumn(colId);
 
     expect(res).toMatchObject({ ran: 0, errors: 3 });

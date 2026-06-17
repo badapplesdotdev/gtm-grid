@@ -3,6 +3,7 @@
 // and a JSON-Schema input. One manifest → callable sdk methods + MCP tools + UI.
 
 import { z } from "zod";
+import { fetchWithRetry } from "../http-retry.js";
 import type { Connector, ConnectorMethod, MethodContext, RateLimit } from "../types.js";
 
 /** A live-options source for one input field (pick by name → store the id). */
@@ -196,7 +197,13 @@ async function httpCall(
     init.body = JSON.stringify(body);
   }
 
-  const resp = await fetch(url, init);
+  // Retry transient upstream failures (429/503/5xx and network blips) with capped
+  // exponential backoff + full jitter, honouring `Retry-After`, and abort a hung
+  // request via a per-attempt timeout. Mirrors the declarative HTTP connector
+  // (connectors/http.ts). `init` is passed through untouched, so `redirect:
+  // "manual"` is preserved and a 3xx is returned unretried for the location
+  // branch below; 402/other-4xx also fall through unretried for the throw below.
+  const resp = await fetchWithRetry(url, init);
   // Redirect responses (e.g. avatar/image endpoints) → return the resolved URL.
   if (resp.status >= 300 && resp.status < 400) {
     const loc = resp.headers.get("location");

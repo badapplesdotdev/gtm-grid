@@ -6,7 +6,7 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { fetchWithRetry } from "../http-retry.js";
 import { assertPublicUrl } from "../ssrf.js";
-import type { Connector, ConnectorMethod, MethodContext } from "../types.js";
+import type { Connector, ConnectorMethod, MethodContext, RateLimit } from "../types.js";
 
 export interface HttpMethodDef {
   id: string;
@@ -20,6 +20,8 @@ export interface HttpMethodDef {
   input: z.ZodTypeAny;
   batchSize?: number;
   credits?: number;
+  /** Per-method outbound throttle override (stricter than the connector default). */
+  rateLimit?: RateLimit;
   /** Build querystring params from inputs (GET). */
   query?: (input: any) => Record<string, string | number | undefined>;
   /** Build request body from inputs (POST). Defaults to the whole input object. */
@@ -50,6 +52,12 @@ export interface HttpConnectorDef {
   auth: Connector["auth"];
   /** Which decrypted secret holds the token (default "apiKey"). */
   secretKey?: string;
+  /**
+   * Default outbound throttle for every method (mirrors a manifest's connector-level
+   * `rateLimit`). A method may override it stricter. Absent ⇒ the engine applies its
+   * conservative safety default ({@link DEFAULT_RATE_LIMIT}) like any other connector.
+   */
+  rateLimit?: RateLimit;
   methods: HttpMethodDef[];
 }
 
@@ -135,6 +143,10 @@ export function defineHttpConnector(def: HttpConnectorDef): Connector {
       description: m.description,
       category: m.category,
       inputSchema: zodToJsonSchema(m.input, m.id) as Record<string, unknown>,
+      // Method override wins; otherwise inherit the connector default (the SAME
+      // object reference, so the engine's throttle can tell an override apart from
+      // an inherited default). Mirrors the manifest loader.
+      rateLimit: m.rateLimit ?? def.rateLimit,
       batchSize,
       credits: m.credits ?? 1,
       run,
@@ -163,5 +175,12 @@ export function defineHttpConnector(def: HttpConnectorDef): Connector {
     return method;
   });
 
-  return { id: def.id, name: def.name, category: def.category, auth: def.auth, methods };
+  return {
+    id: def.id,
+    name: def.name,
+    category: def.category,
+    auth: def.auth,
+    rateLimit: def.rateLimit,
+    methods,
+  };
 }

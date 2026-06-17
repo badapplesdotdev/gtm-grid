@@ -24,11 +24,25 @@ const generateInput = z.object({
   maxTokens: z.coerce.number().optional().describe("Max output tokens (default 512)."),
 });
 
+/**
+ * Per-attempt request timeout and retry budget handed to the vendor SDKs. Both
+ * `@anthropic-ai/sdk` and `openai` do their OWN capped exponential backoff with
+ * jitter and honour `retry-after`, so the SDK is the single owner of retry on the
+ * AI path — we only raise the defaults (SDK default is `maxRetries: 2`). Do NOT
+ * wrap these calls in `fetchWithRetry` as well (that would nest two retry loops).
+ */
+const AI_MAX_RETRIES = 4;
+const AI_TIMEOUT_MS = 60_000;
+
 export const aiConnector: Connector = {
   id: "ai",
   name: "AI",
   category: "ai",
   auth: null,
+  // Moderate default throttle: AI keys are bring-your-own and tier-dependent, so a
+  // conservative pace (3 req/s, ≤5 in flight) keeps a large run under typical
+  // tier-1 RPM limits without clamping it to the tight unknown-provider default.
+  rateLimit: { rps: 3, concurrency: 5 },
   methods: [
     {
       id: "generate",
@@ -80,7 +94,11 @@ export const aiConnector: Connector = {
         const model = wantModel || ai.model;
 
         if (ai.provider === "anthropic") {
-          const client = new Anthropic({ apiKey: ai.apiKey });
+          const client = new Anthropic({
+            apiKey: ai.apiKey,
+            maxRetries: AI_MAX_RETRIES,
+            timeout: AI_TIMEOUT_MS,
+          });
           const msg = await client.messages.create({
             model,
             max_tokens: maxTokens,
@@ -106,6 +124,8 @@ export const aiConnector: Connector = {
               : undefined;
         const client = new OpenAI({
           apiKey: ai.apiKey || "hermes",
+          maxRetries: AI_MAX_RETRIES,
+          timeout: AI_TIMEOUT_MS,
           ...(baseURL ? { baseURL } : {}),
         });
         const r = await client.chat.completions.create({

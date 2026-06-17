@@ -212,5 +212,13 @@ export interface Connector {
   auth: { type: "apiKey"; header?: string; query?: string } | null;
   /** Default outbound throttle for every method (a method may override it stricter). */
   rateLimit?: RateLimit;
+  /**
+   * This connector makes NO outbound network calls — its methods are pure-local
+   * transforms (e.g. formatting/formula helpers). Such connectors are exempt from
+   * the engine's safety-default rate limit so a formula calling `sdk.formatting.*`
+   * across thousands of rows is never paced like a remote API. Outbound connectors
+   * leave this unset and inherit the default throttle unless they declare a `rateLimit`.
+   */
+  local?: boolean;
   methods: ConnectorMethod[];
 }
