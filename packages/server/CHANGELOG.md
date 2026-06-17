@@ -1,5 +1,12 @@
 # @gtmgrid/server
 
+## 0.15.0
+
+### Patch Changes
+
+- Updated dependencies [f414614]
+  - @gtmgrid/engine@0.15.0
+
 ## 0.14.0
 
 ### Patch Changes
