@@ -25,6 +25,7 @@ import {
   type CloudCellStatus,
   CredentialCryptoService,
   isValidUpsertKeyValue,
+  type MemberRepoError,
   MembershipService,
   type NotAMemberError,
   type SecretMap,
@@ -47,6 +48,10 @@ import {
   type WebhookRepoError,
 } from "../repositories/webhook-repo.js";
 import { ColumnRepo } from "../repositories/column-repo.js";
+import {
+  ExtensionRepo,
+  type ExtensionRepoError,
+} from "../repositories/extension-repo.js";
 import type { GridChangeEvent, GridEventCell } from "../realtime/events.js";
 import { RealtimePublisher } from "./realtime-publisher.js";
 
@@ -180,6 +185,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
       const crypto = yield* CredentialCryptoService;
       const entitlement = yield* EntitlementService;
       const columnRepo = yield* ColumnRepo;
+      const extensionRepo = yield* ExtensionRepo;
       const realtime = yield* RealtimePublisher;
 
       /**
@@ -1140,6 +1146,32 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           return { secrets };
         });
 
+      /**
+       * The workspace's installed extension MANIFESTS, so the headless worker can
+       * build an extension-aware engine registry (the SAME connectors a local
+       * project loads) before recomputing a function column. Without these the
+       * worker only has the built-ins (ai/formatting/formula/github/http) and any
+       * column wired to an uploaded connector (leadmagic/trigify/…) dereferences an
+       * undefined `sdk.<provider>` and hard-fails.
+       *
+       * Trust mirrors {@link getCredential}: member-gated on the member path (a
+       * non-member gets 403), skipped on the headless secret path. Returns just the
+       * raw manifest blobs — what the engine's `parseManifest` consumes.
+       */
+      const listExtensionManifests = (args: {
+        readonly workspaceId: string;
+      }): Effect.Effect<
+        readonly unknown[],
+        ExtensionRepoError | NotAMemberError | MemberRepoError
+      > =>
+        Effect.gen(function* () {
+          yield* assertMemberIfIdentified(args.workspaceId);
+          const extensions = yield* extensionRepo.listByWorkspace(
+            args.workspaceId,
+          );
+          return extensions.map((e) => e.manifest);
+        });
+
       return {
         listWebhooks,
         createWebhook,
@@ -1160,6 +1192,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         setCells,
         setCellStatus,
         getCredential,
+        listExtensionManifests,
       } as const;
     }),
     dependencies: [],

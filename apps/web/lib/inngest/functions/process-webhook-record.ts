@@ -3,10 +3,13 @@ import {
   Engine,
   aiConfigFromEnv,
   cloudGridStoreShape,
+  connectorFromManifest,
   defaultRegistry,
+  parseManifest,
   type Column,
   type EngineConfig,
   type GridStoreShape,
+  type Registry,
   type RunErrorContext,
 } from "@gtmgrid/engine";
 import { Effect } from "effect";
@@ -131,6 +134,47 @@ function buildWorkerStore(
   );
 }
 
+/**
+ * Fetch the workspace's installed extension MANIFESTS through the worker
+ * endpoint. The worker is headless, so it can't read the member-gated
+ * `extensions` table directly — `/api/worker/listExtensions` surfaces the raw
+ * manifests behind the shared worker-secret bearer. A `null`/empty response (a
+ * workspace with no uploaded connectors) yields `[]`.
+ */
+export async function fetchWorkspaceManifests(
+  workspaceId: string,
+): Promise<readonly unknown[]> {
+  const result = (await workerClient.query("/api/worker/listExtensions", {
+    workspaceId,
+  })) as { readonly manifests?: readonly unknown[] } | null;
+  return result?.manifests ?? [];
+}
+
+/**
+ * Build the engine registry with the workspace's uploaded extension connectors
+ * loaded on top of the built-ins — mirroring `registryWithExtensions` in
+ * `packages/mcp/src/cloud-source.ts` and the engine's own `openProject` loader.
+ * Without this the registry only exposes the built-ins (ai/formatting/formula/
+ * github/http-request), so a function column wired to `leadmagic.emailFinder`
+ * (or any non-built-in connector) finds no `sdk.<provider>` and hard-fails.
+ *
+ * Best-effort per manifest: a single malformed entry is skipped, never failing
+ * the whole registry (so one bad connector can't break every column run).
+ */
+export function registryWithManifests(
+  manifests: Iterable<unknown>,
+): Registry {
+  const registry = defaultRegistry();
+  for (const manifest of manifests) {
+    try {
+      registry.add(connectorFromManifest(parseManifest(manifest)));
+    } catch {
+      /* skip a single malformed manifest — keep the built-ins + the rest */
+    }
+  }
+  return registry;
+}
+
 /** The grid shape `/webhook/getTable` returns (table + columns/rows/cells). */
 interface WorkerGrid {
   readonly columns: ReadonlyArray<{
@@ -204,6 +248,10 @@ export async function runEnrichColumn(
   rowId: string,
 ): Promise<number> {
   const store = await buildWorkerStore(data.tableId, data.workspaceId);
+  // Load the workspace's uploaded extension connectors so a column wired to a
+  // non-built-in provider (leadmagic/trigify/…) resolves `sdk.<provider>` — a
+  // bare `defaultRegistry()` only has the built-ins and would hard-fail the run.
+  const manifests = await fetchWorkspaceManifests(data.workspaceId);
   // Systemic run failures (connector/AI bugs) → PostHog Error Tracking, deduped by
   // the engine. There's no user identity in the worker, so group under the workspace.
   const reportError = (error: unknown, ctx: RunErrorContext): void =>
@@ -214,7 +262,7 @@ export async function runEnrichColumn(
   const engine = new Engine(
     undefined,
     { ...engineConfig(), reportError },
-    defaultRegistry(),
+    registryWithManifests(manifests),
     undefined,
     { store, creds: store },
   );

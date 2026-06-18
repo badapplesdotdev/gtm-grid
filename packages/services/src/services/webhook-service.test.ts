@@ -34,6 +34,10 @@ import type {
 import { webhookRepoLayer } from "../repositories/webhook-repo.js";
 import { workspaceRepoLayer } from "../repositories/workspace-repo.js";
 import { columnRepoLayer } from "../repositories/column-repo.js";
+import {
+  type Extension,
+  extensionRepoLayer,
+} from "../repositories/extension-repo.js";
 import { makeGridStore, type StoreColumn } from "../repositories/grid-store.js";
 import {
   RealtimePublisher,
@@ -98,6 +102,8 @@ function harness(opts: {
   plan?: string | null;
   /** Columns visible to ColumnRepo (MUTATED by ensureWebhookColumn). */
   gridColumns?: StoreColumn[];
+  /** The workspace's installed extension manifests (for listExtensionManifests). */
+  extensions?: Extension[];
   /**
    * Override the realtime publisher layer. Defaults to the recording layer;
    * pass a failing layer to prove the worker's publish is best-effort.
@@ -141,6 +147,7 @@ function harness(opts: {
   // ColumnRepo backs ensureWebhookColumn (the Clay-style raw-payload column).
   const gridColumns = opts.gridColumns ?? [];
   const columnRepo = columnRepoLayer(makeGridStore({ columns: gridColumns }));
+  const extensionRepo = extensionRepoLayer(opts.extensions ?? []);
   // Recording publisher: tests read back the realtime events worker writes emit.
   const published: RecordedGridEvent[] = [];
   const layer = WebhookService.Default.pipe(
@@ -151,6 +158,7 @@ function harness(opts: {
     Layer.provide(opts.crypto ?? credentialCryptoTest()),
     Layer.provide(entitlement),
     Layer.provide(columnRepo),
+    Layer.provide(extensionRepo),
     Layer.provide(opts.realtime ?? recordingRealtimePublisherLayer(published)),
   );
   const run = <A, E>(program: Effect.Effect<A, E, WebhookService>) =>
@@ -635,6 +643,7 @@ describe("WebhookService.upsertRow — TRI-3270 indexed point lookup", () => {
       Layer.provide(credentialCryptoTest()),
       Layer.provide(entitlement),
       Layer.provide(columnRepoLayer(makeGridStore())),
+      Layer.provide(extensionRepoLayer([])),
       Layer.provide(recordingRealtimePublisherLayer()),
     );
     const run = <A, E>(program: Effect.Effect<A, E, WebhookService>) =>
@@ -860,6 +869,67 @@ describe("WebhookService.getCredential", () => {
       ),
     );
     expect(Exit.isSuccess(exit) && exit.value).toBe(null);
+  });
+});
+
+describe("WebhookService.listExtensionManifests", () => {
+  const leadmagic: Extension = {
+    id: "ext-1",
+    workspaceId: WS,
+    extensionId: "leadmagic",
+    name: "LeadMagic",
+    category: "enrichment",
+    manifest: { id: "leadmagic", name: "LeadMagic", methods: [] },
+  };
+
+  it("returns the workspace's raw extension manifests for the worker", async () => {
+    const { run } = harness({ extensions: [leadmagic] });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) => s.listExtensionManifests({ workspaceId: WS })),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value).toEqual([leadmagic.manifest]);
+    }
+  });
+
+  it("returns [] when the workspace has no installed extensions", async () => {
+    const { run } = harness({ extensions: [] });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) => s.listExtensionManifests({ workspaceId: WS })),
+      ),
+    );
+    expect(Exit.isSuccess(exit) && exit.value).toEqual([]);
+  });
+
+  it("rejects a non-member on the member-attributed path", async () => {
+    const { run } = harness({ extensions: [leadmagic], currentUserId: "stranger" });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) => s.listExtensionManifests({ workspaceId: WS })),
+      ),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const f = Cause.failureOption(exit.cause);
+      expect(f._tag === "Some" && f.value._tag).toBe("NotAMemberError");
+    }
+  });
+
+  it("allows the headless worker-secret path (no identity → skip member gate)", async () => {
+    const { run } = harness({ extensions: [leadmagic], currentUserId: null });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) => s.listExtensionManifests({ workspaceId: WS })),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value).toEqual([leadmagic.manifest]);
+    }
   });
 });
 

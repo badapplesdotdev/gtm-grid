@@ -48,6 +48,7 @@ export const DeleteColumnSchema = z.object({ columnId: id });
 export const DeleteRowSchema = z.object({ rowId: id });
 export const DeleteTableSchema = z.object({ tableId: id });
 export const GetCredentialSchema = z.object({ workspaceId: id, extensionId: id });
+export const ListExtensionsSchema = z.object({ workspaceId: id });
 export const GetTableSchema = z.object({ tableId: id });
 export const ListTablesSchema = z.object({ projectId: id });
 export const RenameTableSchema = z.object({ tableId: id, name: z.string() });

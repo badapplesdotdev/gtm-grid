@@ -7,11 +7,16 @@
  * repointed off Convex. No live network, no DB, no engine run.
  */
 
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StepRunner, WebhookRecordData } from "./process-webhook-record";
 import {
   fetchGrid,
+  fetchWorkspaceManifests,
   processWebhookRecordHandler,
+  registryWithManifests,
   resolveRow,
 } from "./process-webhook-record";
 
@@ -234,6 +239,68 @@ describe("per-column enrich step keys (TRI-3280 regression)", () => {
     // The expensive setup steps were also memoized (not repeated on retry).
     expect(step.bodyRuns.get(`insert-row:${recordId}`)).toBe(1);
     expect(step.bodyRuns.get(`enrich-columns:${recordId}`)).toBe(1);
+  });
+});
+
+describe("fetchWorkspaceManifests", () => {
+  it("POSTs /api/worker/listExtensions and returns the manifests array", async () => {
+    const fetchMock = fetchReturning(
+      200,
+      JSON.stringify({ manifests: [{ id: "leadmagic" }] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const manifests = await fetchWorkspaceManifests("ws-1");
+
+    expect(manifests).toEqual([{ id: "leadmagic" }]);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`${SITE_URL}/api/worker/listExtensions`);
+    expect(new Headers(init.headers).get("Authorization")).toBe(
+      `Bearer ${SECRET}`,
+    );
+    expect(JSON.parse(String(init.body))).toEqual({ workspaceId: "ws-1" });
+  });
+
+  it("returns [] when the worker reports no installed extensions", async () => {
+    vi.stubGlobal("fetch", fetchReturning(200, JSON.stringify({ manifests: [] })));
+    expect(await fetchWorkspaceManifests("ws-1")).toEqual([]);
+  });
+});
+
+// REGRESSION: a function column wired to `leadmagic.emailFinder` ran through the
+// worker with a bare `defaultRegistry()`, so `sdk.leadmagic` was never created
+// and the column dereferenced `undefined`. The worker must load the workspace's
+// uploaded manifests so the non-built-in connector is dispatchable.
+describe("registryWithManifests", () => {
+  const repoRoot = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../../../..",
+  );
+  const leadmagicManifest = readFileSync(
+    join(repoRoot, "extensions/leadmagic.json"),
+    "utf8",
+  );
+
+  it("loads the workspace's extension connectors on top of the built-ins", () => {
+    const registry = registryWithManifests([leadmagicManifest]);
+    const ids = registry.list().map((c) => c.id);
+    // Built-ins still present…
+    expect(ids).toContain("ai");
+    expect(ids).toContain("http");
+    // …AND leadmagic.emailFinder is now dispatchable (the missing piece).
+    expect(ids).toContain("leadmagic");
+    expect(registry.method("leadmagic", "emailFinder")).toBeDefined();
+  });
+
+  it("a bare default registry does NOT expose leadmagic — proving the load is what fixes it", () => {
+    expect(registryWithManifests([]).list().map((c) => c.id)).not.toContain(
+      "leadmagic",
+    );
+  });
+
+  it("skips a malformed manifest without dropping the valid connectors", () => {
+    const registry = registryWithManifests(["{ not valid json", leadmagicManifest]);
+    expect(registry.list().map((c) => c.id)).toContain("leadmagic");
   });
 });
 
