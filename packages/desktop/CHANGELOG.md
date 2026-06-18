@@ -1,5 +1,14 @@
 # @gtmgrid/desktop
 
+## 0.16.2
+
+### Patch Changes
+
+- Updated dependencies [c297b2a]
+  - @gtmgrid/services@0.16.2
+  - @gtmgrid/analytics@0.16.2
+  - @gtmgrid/cloud@0.16.2
+
 ## 0.16.1
 
 ### Patch Changes

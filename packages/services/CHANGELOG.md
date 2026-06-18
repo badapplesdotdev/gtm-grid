@@ -1,5 +1,14 @@
 # @gtmgrid/services
 
+## 0.16.2
+
+### Patch Changes
+
+- c297b2a: Make realtime grid/webhook broadcasts genuinely best-effort so a publish failure can't fail an already-committed write. The `process-webhook-record` worker was 500ing on every record: after `insertRow` committed and metered the row, the PartyKit publish returned 401 and the resulting `RealtimePublisherError` propagated out and mapped to a 500 — halting ingestion and risking duplicate rows on Inngest retries (the row commits before the publish). Despite doc comments claiming the publish swallowed transport errors, nothing did. Both GridService and the webhook service now wrap their `publish` / `publishWorkspaceTablesChanged` helpers in `catchTag("RealtimePublisherError", () => Effect.void)`, so a realtime outage can never fail a grid mutation. Regression tests prove a failing publisher leaves the write committed and successful. (Live broadcasts stay down until `PARTY_PUBLISH_SECRET` is realigned across web/worker and the party deployment — an env/infra change, not code.)
+  - @gtmgrid/cloud@0.16.2
+  - @gtmgrid/db@0.16.2
+  - @gtmgrid/email@0.16.2
+
 ## 0.16.1
 
 ### Patch Changes
