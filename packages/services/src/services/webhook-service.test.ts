@@ -36,6 +36,8 @@ import { workspaceRepoLayer } from "../repositories/workspace-repo.js";
 import { columnRepoLayer } from "../repositories/column-repo.js";
 import { makeGridStore, type StoreColumn } from "../repositories/grid-store.js";
 import {
+  RealtimePublisher,
+  RealtimePublisherError,
   recordingRealtimePublisherLayer,
   type RecordedGridEvent,
 } from "./realtime-publisher.js";
@@ -96,6 +98,11 @@ function harness(opts: {
   plan?: string | null;
   /** Columns visible to ColumnRepo (MUTATED by ensureWebhookColumn). */
   gridColumns?: StoreColumn[];
+  /**
+   * Override the realtime publisher layer. Defaults to the recording layer;
+   * pass a failing layer to prove the worker's publish is best-effort.
+   */
+  realtime?: Layer.Layer<RealtimePublisher>;
 }) {
   const webhookRepo = webhookRepoLayer({
     webhooks: opts.webhooks ?? [{ ...webhook }],
@@ -144,7 +151,7 @@ function harness(opts: {
     Layer.provide(opts.crypto ?? credentialCryptoTest()),
     Layer.provide(entitlement),
     Layer.provide(columnRepo),
-    Layer.provide(recordingRealtimePublisherLayer(published)),
+    Layer.provide(opts.realtime ?? recordingRealtimePublisherLayer(published)),
   );
   const run = <A, E>(program: Effect.Effect<A, E, WebhookService>) =>
     Effect.runPromiseExit(program.pipe(Effect.provide(layer)));
@@ -277,6 +284,40 @@ describe("WebhookService.insertRow", () => {
       const f = Cause.failureOption(exit.cause);
       expect(f._tag === "Some" && f.value._tag).toBe("CloudActionsLimitError");
     }
+  });
+
+  // Regression (error-tracking issue 019ed668): the process-webhook-record worker
+  // 500'd on every record because the realtime party rejected the broadcast with
+  // 401 and the RealtimePublisherError propagated out of insertRow. The row is
+  // already written + metered by then, so a realtime failure must be swallowed —
+  // otherwise Inngest retries re-commit the row (duplicate-row risk) and the
+  // record never finishes processing.
+  it("succeeds insertRow even when the realtime publish fails (best-effort)", async () => {
+    const failingRealtime = Layer.succeed(RealtimePublisher, {
+      publish: () =>
+        Effect.fail(
+          new RealtimePublisherError({
+            message: "party publish failed: 401 Unauthorized",
+          }),
+        ),
+    });
+    const rows: GridRow[] = [];
+    const cells: GridCell[] = [];
+    const { run } = harness({ rows, cells, realtime: failingRealtime });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.insertRow({
+            webhookId: "wh-1",
+            cells: { [COL_EMAIL]: "a@b.com", [COL_NAME]: "Ann" },
+          }),
+        ),
+      ),
+    );
+    // The write committed; the publish 401 did NOT surface as a worker 500.
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(rows).toHaveLength(1);
+    expect(cells).toHaveLength(2);
   });
 });
 

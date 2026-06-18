@@ -40,6 +40,8 @@ import { GridService } from "./grid-service.js";
 import { WORKSPACE_ROOM_TABLE_ID } from "../realtime/events.js";
 import { type MeterQuota, meterServiceLayer } from "./meter-service.js";
 import {
+  RealtimePublisher,
+  RealtimePublisherError,
   type RecordedGridEvent,
   recordingRealtimePublisherLayer,
 } from "./realtime-publisher.js";
@@ -58,6 +60,11 @@ function harness(opts: {
   currentUserId?: string | null;
   /** The workspace's cached plan; `undefined` defaults to "team" (cloud on). */
   plan?: string | null;
+  /**
+   * Override the realtime publisher layer. Defaults to the recording layer that
+   * captures events; pass a failing layer to prove publish is best-effort.
+   */
+  realtime?: Layer.Layer<RealtimePublisher>;
 }) {
   const store = opts.store ?? makeGridStore();
   const quotas = opts.quotas ?? new Map<string, MeterQuota>();
@@ -99,7 +106,7 @@ function harness(opts: {
     Layer.provide(CellMerge.Default),
     Layer.provide(membership),
     Layer.provide(meterServiceLayer(quotas)),
-    Layer.provide(recordingRealtimePublisherLayer(events)),
+    Layer.provide(opts.realtime ?? recordingRealtimePublisherLayer(events)),
     Layer.provide(entitlement),
   );
   const run = <A, E>(program: Effect.Effect<A, E, GridService>) =>
@@ -632,6 +639,27 @@ describe("GridService realtime publishing (TRI-3251)", () => {
     const { run, events } = harness({ store, currentUserId: "stranger" });
     await run(Effect.flatMap(GridService, (s) => s.deleteRow("r1")));
     expect(events).toHaveLength(0);
+  });
+
+  // Regression (TRI: realtime 401 → 500 on every webhook record): a publish
+  // failure must NEVER fail an already-committed write. The publisher raises a
+  // typed RealtimePublisherError on any non-2xx/transport error; the service
+  // helpers swallow it so the surrounding mutation still succeeds.
+  it("succeeds the write even when the realtime publish fails (best-effort)", async () => {
+    const failingRealtime = Layer.succeed(RealtimePublisher, {
+      publish: () =>
+        Effect.fail(
+          new RealtimePublisherError({
+            message: "party publish failed: 401 Unauthorized",
+          }),
+        ),
+    });
+    const store = makeGridStore({ tables: [table()] });
+    const { run } = harness({ store, realtime: failingRealtime });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.addRow("t1")));
+    expect(Exit.isSuccess(exit)).toBe(true);
+    // The row was actually committed despite the realtime broadcast failing.
+    expect(store.rows).toHaveLength(1);
   });
 });
 
