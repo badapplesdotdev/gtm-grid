@@ -96,8 +96,6 @@ export const manifestSchema = z.object({
   category: z.string().optional(),
   /** Short description shown in the extensions gallery. */
   description: z.string().optional(),
-  /** Surface this extension in the "Featured" row of the gallery. */
-  featured: z.boolean().optional(),
   /** Optional brand logo URL; falls back to a derived favicon when absent. */
   logo: z.string().url().optional(),
   baseUrl: z.string().url(),
