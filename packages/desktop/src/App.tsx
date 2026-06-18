@@ -75,6 +75,7 @@ import { useWorkspaceCredentials } from "./cloud/useWorkspaceCredentials";
 import {
   useCloudProjects,
   useCloudTables,
+  useCloudTablePaged,
   useWorkspaceRealtime,
   useCloudFolders,
   useCloudProjectMutations,
@@ -1589,6 +1590,8 @@ export default function App() {
     createProject: createCloudProject,
     createTable: createCloudTable,
     deleteTable: deleteCloudTable,
+    renameTable: renameCloudTable,
+    setTableFavorite: setCloudTableFavorite,
     createFolder: createCloudFolder,
     renameFolder: renameCloudFolder,
     deleteFolder: deleteCloudFolder,
@@ -1683,18 +1686,30 @@ export default function App() {
       tableId: cloudTableId,
     };
   }, [cloudSession, activeWorkspace, cloudProject, cloudTableId]);
+  // Active CLOUD table's live view. Shares CloudGrid's paged query key, so this
+  // dedups with CloudGrid's own useCloudTablePaged (no extra fetch) and is a
+  // safe no-op when passed `null`. Gives the agent's "Active table" hint the
+  // cloud table the user is actually viewing (TRI-3296 follow-up): in cloud mode
+  // the visible grid is driven by `cloudTableId`, not local `tableData`, so
+  // without this the hint would stay stuck on the last local table.
+  const cloudActiveTable = useCloudTablePaged(inCloud ? cloudTableId : null).data;
   // Stable `activeTable` for the agent panel (TRI-3306). Previously passed as an
   // inline object literal, giving it a new identity on every App re-render
   // (react-query cloud polling, etc.); the panel keyed an abort-on-change effect
   // off it and so aborted the live agent turn on every unrelated re-render. The
   // panel now depends on scalar keys, but we still memoize here for hygiene so
   // the prop identity only changes when the table name or column set actually
-  // does.
-  const activeTableColumnNames = tableData?.columns.map((c) => c.name).join("\n") ?? null;
+  // does. In cloud mode we source it from the cloud table so the hint follows
+  // `cloudTableId`; in local mode we keep the `tableData` derivation.
+  const activeTableSource = inCloud ? cloudActiveTable ?? null : tableData;
+  const activeTableColumnNames = activeTableSource?.columns.map((c) => c.name).join("\n") ?? null;
   const activeTable = useMemo(
-    () => (tableData ? { name: tableData.name, columns: tableData.columns.map((c) => c.name) } : null),
+    () =>
+      activeTableSource
+        ? { name: activeTableSource.name, columns: activeTableSource.columns.map((c) => c.name) }
+        : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the table name + serialized column names, not the FullTable identity
-    [tableData?.name, activeTableColumnNames],
+    [activeTableSource?.name, activeTableColumnNames],
   );
   // Agent presence (Co-Pilot cursor): the agent's gtmgrid tool calls — streamed
   // through the panel's SSE — light up the cell/column it's working on for
@@ -2525,16 +2540,20 @@ export default function App() {
     () =>
       inCloud
         ? dedupeTableRowsByName(
-            (cloudTables ?? []).map<TableListRow>((t) => ({
-              kind: "cloud" as const,
-              id: t._id,
-              name: t.name,
-              synced: true,
-              favorite: false,
-              rows: t.rows ?? 0,
-              folderId: t.folderId,
-              position: t.position,
-            })),
+            [...(cloudTables ?? [])]
+              // Favourites-first (stable: position order holds within a group),
+              // matching the local list's favourites-pinned-to-top ordering.
+              .sort((a, b) => Number(b.favorite) - Number(a.favorite))
+              .map<TableListRow>((t) => ({
+                kind: "cloud" as const,
+                id: t._id,
+                name: t.name,
+                synced: true,
+                favorite: t.favorite,
+                rows: t.rows ?? 0,
+                folderId: t.folderId,
+                position: t.position,
+              })),
           )
         : buildTableList({
             localTables: tables.map((t) => ({
@@ -2690,18 +2709,23 @@ export default function App() {
   const renderTableRow = (row: TableListRow, inFolder: boolean) => {
     const local = row.kind === "local" ? localById.get(row.id) : undefined;
     const cloudRowLocked = row.kind === "cloud" && cloudLocked;
-    if (local && renamingTableId === local.id) {
+    // Inline rename works for BOTH local and cloud rows (a locked cloud row
+    // can't be renamed). The commit routes to the local sidecar or the cloud
+    // tRPC mutation by row kind.
+    const commitRowRename = (name: string) =>
+      row.kind === "cloud" ? commitCloudRename(row.id, name) : commitRename(row.id, name);
+    if (renamingTableId === row.id && !cloudRowLocked) {
       return (
-        <div key={`local:${row.id}`} className={`sidebar-item${inFolder ? " in-folder" : ""}`} style={{ paddingTop: 2, paddingBottom: 2 }}>
+        <div key={`${row.kind}:${row.id}`} className={`sidebar-item${inFolder ? " in-folder" : ""}`} style={{ paddingTop: 2, paddingBottom: 2 }}>
           <span className="sidebar-item-icon"><Icon.Table /></span>
           <input
             className="sidebar-rename-input"
             value={renameDraft}
             autoFocus
             onChange={e => setRenameDraft(e.target.value)}
-            onBlur={() => commitRename(local.id, renameDraft)}
+            onBlur={() => commitRowRename(renameDraft)}
             onKeyDown={e => {
-              if (e.key === "Enter") commitRename(local.id, renameDraft);
+              if (e.key === "Enter") commitRowRename(renameDraft);
               if (e.key === "Escape") setRenamingTableId(null);
             }}
           />
@@ -2725,7 +2749,13 @@ export default function App() {
         onKeyDown={onActivateKey(() => (cloudRowLocked ? setShowUpgrade(true) : onSelectTableRow(row)))}
         role="button"
         tabIndex={0}
-        onContextMenu={local ? (e => openCtx(e, tableMenuItems(local))) : undefined}
+        onContextMenu={
+          local
+            ? (e => openCtx(e, tableMenuItems(local)))
+            : row.kind === "cloud" && !cloudRowLocked && cloudById.get(row.id)
+              ? (e => openCtx(e, cloudTableMenuItems(row)))
+              : undefined
+        }
       >
         <span className="sidebar-item-icon">
           {cloudRowLocked ? "🔒" : <Icon.Table />}
@@ -2752,17 +2782,26 @@ export default function App() {
           </>
         )}
         {row.kind === "cloud" && !cloudRowLocked && cloudById.get(row.id) && (
-          <button
-            className="sidebar-item-del"
-            title="Delete table"
-            onClick={e => {
-              e.stopPropagation();
-              const ct = cloudById.get(row.id);
-              if (ct) setConfirmDeleteCloudTable({ _id: ct._id, name: ct.name });
-            }}
-          >
-            <Icon.Trash />
-          </button>
+          <>
+            <button
+              className="sidebar-item-del"
+              title="Delete table"
+              onClick={e => {
+                e.stopPropagation();
+                const ct = cloudById.get(row.id);
+                if (ct) setConfirmDeleteCloudTable({ _id: ct._id, name: ct.name });
+              }}
+            >
+              <Icon.Trash />
+            </button>
+            <button
+              className="sidebar-item-more"
+              title="Table options"
+              onClick={e => { e.stopPropagation(); openCtx(e, cloudTableMenuItems(row)); }}
+            >
+              <Icon.More />
+            </button>
+          </>
         )}
         {/* Trailing indicator: a cloud icon on cloud/synced rows; the
             sync dot (cloud users) or row count on unsynced local rows. */}
@@ -2879,6 +2918,35 @@ export default function App() {
     },
     { label: "Rename", onClick: () => { setRenameDraft(t.name); setRenamingTableId(t.id); } },
     { label: "Delete", danger: true, onClick: () => setConfirmDeleteTable(t) },
+  ];
+
+  // ── Cloud table actions (parity with the local context menu above) ─────────
+  // Rename + favourite go through the tRPC mutations and both broadcast to every
+  // teammate: rename relabels live, and a favourite is workspace-shared (any
+  // member's pin shows for all).
+  const commitCloudRename = async (id: string, name: string) => {
+    setRenamingTableId(null);
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    await renameCloudTable(id as Id<"tables">, trimmed).catch(() => {});
+  };
+  const toggleCloudFavorite = async (id: string, favorite: boolean) => {
+    await setCloudTableFavorite(id as Id<"tables">, favorite).catch(() => {});
+  };
+  const cloudTableMenuItems = (row: TableListRow) => [
+    {
+      label: row.favorite ? "Unpin from Favorites" : "Pin to Favorites",
+      onClick: () => void toggleCloudFavorite(row.id, !row.favorite),
+    },
+    { label: "Rename", onClick: () => { setRenameDraft(row.name); setRenamingTableId(row.id); } },
+    {
+      label: "Delete",
+      danger: true,
+      onClick: () => {
+        const ct = cloudById.get(row.id);
+        if (ct) setConfirmDeleteCloudTable({ _id: ct._id, name: ct.name });
+      },
+    },
   ];
 
   // ── Sidebar folders (create / rename / delete / move) ─────────────────────

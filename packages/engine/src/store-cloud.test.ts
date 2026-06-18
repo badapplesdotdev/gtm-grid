@@ -495,7 +495,9 @@ describe("ConvexGridStore — read scaling (#24)", () => {
     const engine = new Engine(
       // db/credsDb are unused: the cloud store is injected for both reads/creds.
       undefined,
-      {},
+      // Opt out of the safety-default throttle: this test measures read scaling
+      // over 30 rows, not rate limiting, so it must run at full speed.
+      { defaultRateLimit: {} },
       echoRegistry(),
       undefined,
       { store, creds: store },

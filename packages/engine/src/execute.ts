@@ -18,7 +18,7 @@ import {
   type GridStoreError,
   type GridStoreShape,
 } from "./store.js";
-import type { AiConfig, AiFallbackRequest, Column, ConnectorMethod } from "./types.js";
+import type { AiConfig, AiFallbackRequest, Column, ConnectorMethod, RateLimit } from "./types.js";
 
 /** Stored on a cell's `error` (with status "empty") when a run condition gates the
  *  row off, so the grid can show a muted "Run condition not met" note instead of a dash. */
@@ -43,6 +43,36 @@ export interface EngineConfig {
    * user's own machine, so localhost/LAN connectors stay valid).
    */
   guardSsrf?: boolean;
+  /**
+   * Safety-default outbound throttle applied to any OUTBOUND connector that
+   * declares no `rateLimit` of its own (including user-uploaded manifests) — so an
+   * unconfigured connector can never fire an unbounded burst. Defaults to
+   * {@link DEFAULT_RATE_LIMIT}. Pass `{}` (no bounds) to opt a trusted engine out,
+   * or a tuned {@link RateLimit} to raise/lower it. Connectors marked `local`
+   * (pure in-process transforms) are always exempt regardless of this value.
+   */
+  defaultRateLimit?: RateLimit;
+  /**
+   * Optional exception sink for run failures. The engine runs in several hosts
+   * (sidecar, cloud worker, MCP, CLI), so it never imports a telemetry client —
+   * the host injects a reporter that forwards to PostHog Error Tracking (mirrors
+   * {@link aiFallback}/{@link guardSsrf} injection). Called from a failing cell run
+   * with the ORIGINAL thrown error (full stack), but DEDUPED per run: at most a few
+   * distinct error signatures are reported, so a 1000-row run with one failure mode
+   * raises one exception, not a thousand. Per-cell errors are still recorded as cell
+   * status regardless; this is purely the systemic-bug signal. Absent ⇒ no reporting.
+   */
+  reportError?: (error: unknown, context: RunErrorContext) => void;
+}
+
+/** Context handed to {@link EngineConfig.reportError} for a failed cell run. */
+export interface RunErrorContext {
+  readonly columnId: string;
+  readonly provider: string | null;
+  readonly method: string | null;
+  readonly rowId: string;
+  /** How many cells have failed in this run so far (this error included). */
+  readonly errorCount: number;
 }
 
 /** A cell's state as observed during a run, for per-cell progress streaming.
@@ -138,6 +168,55 @@ export class Engine {
     return requireDb(this.db, "db");
   }
 
+  /**
+   * Per-connector outbound throttles, lazily created from a method's resolved
+   * {@link RateLimit}. A column run drives ONE method over many rows, so a single
+   * limiter keyed by provider paces the whole run; a method that declares a
+   * stricter override than its connector default gets an additional gate. Calls
+   * with no rate limit go straight through (legacy behaviour, no overhead).
+   */
+  private limiters = new Map<string, RateLimiter>();
+
+  private cachedLimiter(key: string, rl: RateLimit): RateLimiter {
+    let lim = this.limiters.get(key);
+    if (!lim) {
+      lim = new RateLimiter(rl);
+      this.limiters.set(key, lim);
+    }
+    return lim;
+  }
+
+  /** Run `fn` behind the connector's (and any stricter per-method) rate gate. */
+  private throttle<T>(provider: string, m: ConnectorMethod, fn: () => Promise<T>): Promise<T> {
+    const connector = this.registry.get(provider);
+    const connRate = connector?.rateLimit;
+    const mRate = m.rateLimit;
+    // The loader sets method.rateLimit to the connector-default OBJECT when the
+    // method declares none, so reference inequality ⇒ a genuine per-method gate
+    // (a stricter override, or a method-only rate on an otherwise unlimited connector).
+    const hasMethodGate = !!mRate && mRate !== connRate;
+
+    let run = fn;
+    if (hasMethodGate) {
+      const inner = run;
+      run = () => this.cachedLimiter(`${provider}:${m.id}`, mRate as RateLimit).run(inner);
+    }
+    if (connRate) {
+      const inner = run;
+      run = () => this.cachedLimiter(provider, connRate).run(inner);
+    } else if (!hasMethodGate && !connector?.local) {
+      // No explicit connector or per-method rate, and this connector makes
+      // outbound calls (not a pure-local transform): apply the conservative
+      // safety default so an unconfigured/user-uploaded connector can't fire an
+      // unbounded burst. Each provider gets its OWN default budget (keyed by
+      // provider), not a shared global one.
+      const def = this.config.defaultRateLimit ?? DEFAULT_RATE_LIMIT;
+      const inner = run;
+      run = () => this.cachedLimiter(provider, def).run(inner);
+    }
+    return run();
+  }
+
   /** Host-side dispatcher exposed to the sandbox as `sdk.<provider>.<method>`. */
   dispatch: SandboxDispatch = (provider, method, input) =>
     Effect.runPromise(
@@ -151,13 +230,15 @@ export class Engine {
             ? [this.config.ai]
             : [];
         return yield* Effect.promise(() =>
-          m.run(input, {
-            secrets: cred?.secrets ?? {},
-            ai: this.config.ai,
-            aiProviders,
-            guardSsrf: this.config.guardSsrf,
-          aiFallback: this.config.aiFallback,
-          }),
+          this.throttle(provider, m, () =>
+            m.run(input, {
+              secrets: cred?.secrets ?? {},
+              ai: this.config.ai,
+              aiProviders,
+              guardSsrf: this.config.guardSsrf,
+              aiFallback: this.config.aiFallback,
+            }),
+          ),
         );
       }),
     );
@@ -281,6 +362,12 @@ export class Engine {
     // tool) can tell the user WHY a run failed (e.g. a missing AI/connector key)
     // without a follow-up get_table read.
     let firstError: string | undefined;
+    // Deduped systemic-error reporting (PostHog Error Tracking, via the injected
+    // `reportError`): emit at most MAX_REPORTED_ERRORS DISTINCT error signatures
+    // per run, so a 1000-row run with one failure mode raises a single exception,
+    // not a thousand. Per-cell status is recorded regardless (see markError).
+    const reportedSignatures = new Set<string>();
+    const MAX_REPORTED_ERRORS = 3;
     // Stores that batch terminal writes (the cloud store) coalesce the interim
     // `running` write away so a cell is ONE write, not two HTTP POSTs. Cheap
     // synchronous stores leave the flag unset and keep streaming `running`.
@@ -349,6 +436,27 @@ export class Engine {
       );
       emit({ rowId, columnId, value: null, status: "error", error: message });
       counters.errors++;
+      // Forward the ORIGINAL error (full stack) to the host's exception sink,
+      // deduped per run so noise stays bounded. Never let a telemetry failure
+      // abort the run.
+      const report = this.config.reportError;
+      if (report && reportedSignatures.size < MAX_REPORTED_ERRORS) {
+        const signature = `${col.provider}:${col.method}:${message}`;
+        if (!reportedSignatures.has(signature)) {
+          reportedSignatures.add(signature);
+          try {
+            report(e, {
+              columnId,
+              provider: col.provider,
+              method: col.method,
+              rowId,
+              errorCount: counters.errors,
+            });
+          } catch {
+            /* a telemetry sink failure must never fail the run */
+          }
+        }
+      }
     };
 
     if (batchMethod) {
@@ -467,13 +575,16 @@ export class Engine {
       : this.config.ai
         ? [this.config.ai]
         : [];
-    return m.runBatch(inputs, {
-      secrets: cred?.secrets ?? {},
-      ai: this.config.ai,
-      aiProviders,
-      guardSsrf: this.config.guardSsrf,
-          aiFallback: this.config.aiFallback,
-    });
+    // A batch is ONE external call → one acquisition against the rate gate.
+    return this.throttle(col.provider ?? "", m, () =>
+      m.runBatch!(inputs, {
+        secrets: cred?.secrets ?? {},
+        ai: this.config.ai,
+        aiProviders,
+        guardSsrf: this.config.guardSsrf,
+        aiFallback: this.config.aiFallback,
+      }),
+    );
   }
 
   /**
@@ -550,6 +661,75 @@ export function chunk<T>(items: T[], size: number): T[][] {
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
 }
+
+/**
+ * The conservative safety-default throttle applied to any OUTBOUND connector that
+ * declares no `rateLimit` of its own (incl. user-uploaded manifests). It exists to
+ * guarantee an unconfigured connector can never fire an unbounded burst — when a
+ * provider's real limits are unknown, 2 req/s with ≤2 in flight is a safe floor
+ * (matches the "unknown provider" recommendation from the rate-limit research).
+ * Override per-engine via {@link EngineConfig.defaultRateLimit}.
+ */
+export const DEFAULT_RATE_LIMIT: RateLimit = { rps: 2, concurrency: 2 };
+
+/**
+ * A per-connector outbound throttle: spreads call STARTS by a minimum interval
+ * (derived from `rps`/`rpm`) and optionally caps in-flight calls (`concurrency`).
+ * This is what stops a 1,000-row run from firing 1,000 requests in a second — it
+ * paces them to the upstream API's documented limit regardless of the run's own
+ * fan-out concurrency. Construct one per connector and funnel every call through
+ * {@link run}. A limiter with no usable bounds is a passthrough.
+ */
+export class RateLimiter {
+  private readonly minIntervalMs: number;
+  private readonly maxConcurrent: number;
+  /** Earliest epoch-ms the next call may START (advanced by minIntervalMs each acquire). */
+  private nextStart = 0;
+  private active = 0;
+  private waiters: Array<() => void> = [];
+
+  constructor(rl: RateLimit) {
+    const rps = rl.rps ?? (rl.rpm ? rl.rpm / 60 : 0);
+    this.minIntervalMs = rps > 0 ? 1000 / rps : 0;
+    this.maxConcurrent = rl.concurrency && rl.concurrency > 0 ? rl.concurrency : Infinity;
+  }
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    await this.acquireSlot();
+    try {
+      const now = Date.now();
+      const start = Math.max(now, this.nextStart);
+      // Reserve this call's slot in the schedule; the next call starts one
+      // interval later, so concurrent acquirers are fanned out in time.
+      this.nextStart = start + this.minIntervalMs;
+      const wait = start - now;
+      if (wait > 0) await delay(wait);
+      return await fn();
+    } finally {
+      this.releaseSlot();
+    }
+  }
+
+  private acquireSlot(): Promise<void> {
+    if (this.active < this.maxConcurrent) {
+      this.active++;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) =>
+      this.waiters.push(() => {
+        this.active++;
+        resolve();
+      }),
+    );
+  }
+
+  private releaseSlot(): void {
+    this.active--;
+    this.waiters.shift()?.();
+  }
+}
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Bounded-concurrency map (Revcode's `mapConcurrent`). */
 export async function mapConcurrent<T>(

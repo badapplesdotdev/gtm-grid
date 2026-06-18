@@ -11,7 +11,16 @@
 - **Auth header:** `x-api-key: <apiKey>` (secret key name: `apiKey`).
 - **Base URL:** `https://smuggler.dev/api/v1`.
 - **Credits:** all search/get/list/engagement reads are **0 credits**. Email resolution costs **1 credit** (`findEmail`, `bulkFindEmail`). `bulkFindEmail` skips already-enriched ids, so you only pay for net-new emails.
-- Rate limits: not documented (see Gotchas) — treat search `limit` ≤ 100 per page and paginate with `offset`.
+- **Rate limit:** not documented by smuggler.dev (see "Not verified"), so the connector applies a safe default of **120 rpm / concurrency 3**. The two credit-consuming email calls (`findEmail`, `bulkFindEmail`) carry a stricter per-method override of **2 rps**. Treat search `limit` ≤ 100 per page and paginate with `offset`.
+
+## Picker fields (live options)
+Several id fields are now backed by live list endpoints, so they render as name-pickers (the engine stores the id):
+- `listLeads.campaignId` → `listCampaigns` (label `name`, sublabel `status`).
+- `listLeads.profileId` → `listProfiles` (label `fullName`, sublabel `headline`).
+- `topEngagers.id` → `listProfiles` (a monitored-profile id).
+- `postEngagements.id` → `listPosts` (label `title`, sublabel `authorName`).
+
+The backing list endpoints (`listCampaigns`, `listProfiles`, `listPosts`) are all **0-credit** GETs returning `data[]`. Their field names follow the manifest's own conventions and could not be cross-checked against live docs (smuggler.dev is undocumented).
 
 ## Endpoints by job
 
@@ -31,6 +40,9 @@
 - `smuggler.listLeads` — captured leads (people who engaged with monitored profiles/posts) with engagement counts + enrichment status. Inputs: `campaignId`, `profileId`, `search`, `limit` (max 100), `offset`. Use to pull a working list, then `bulkFindEmail` the ids.
 - `smuggler.postEngagements` — who engaged with a specific LinkedIn post. Input: `id` (Smuggler post id, required). Returns `data[]` of `{ id, type, engagerName, engagerHeadline, engagerLinkedinUrl, engagedAt }`.
 - `smuggler.topEngagers` — top engagers for a monitored profile. Input: `id` (Smuggler profile id, required). Returns `data[]` of `{ personId, fullName, headline, engagementCount, lastEngagedAt }`. Note `personId` (not `id`) is the person key.
+- `smuggler.listCampaigns` — list engagement-monitoring campaigns. Inputs: `search`, `limit` (max 100), `offset`. Returns `data[]` of `{ id, name, status, profileCount, leadCount }`. Backs the `campaignId` picker on `listLeads`.
+- `smuggler.listProfiles` — list monitored LinkedIn profiles. Inputs: `campaignId`, `search`, `limit` (max 100), `offset`. Returns `data[]` of `{ id, fullName, headline, linkedinUrl, status, lastSyncedAt }`. Backs the `profileId` picker on `listLeads` and the `id` picker on `topEngagers`.
+- `smuggler.listPosts` — list monitored LinkedIn posts. Inputs: `profileId`, `search`, `limit` (max 100), `offset`. Returns `data[]` of `{ id, title, authorName, postUrl, engagementCount, postedAt }`. Backs the `id` picker on `postEngagements`.
 
 ### Account
 - `smuggler.credits` — balance + usage. No input. Returns `{ allowed, balance, usage, included, unlimited, interval, nextResetAt }`. Check before a large `bulkFindEmail`.

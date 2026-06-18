@@ -222,13 +222,19 @@ export const SignalRepoLive: Layer.Layer<SignalRepo, never, DbClient> = Layer.ef
             // A `manual`/unknown schedule never matches (it's excluded by the
             // `ne(schedule, "manual")` clause and falls through the CASE to
             // NULL, so the `lte` below is never true — mirroring
-            // `isBindingDue` returning false). NULL, not -Infinity:
-            // `last_synced_at` is bigint and Postgres rejects -Infinity for
-            // integer types, which made this query fail on every execution.
+            // `isBindingDue` returning false).
+            //
+            // Each threshold is cast to `bigint` so the CASE has a concrete
+            // result type. Without the cast every branch is an untyped bound
+            // parameter (or NULL), so Postgres can't resolve the CASE result
+            // type and the outer `last_synced_at (bigint) <= CASE(...)`
+            // comparison fails at EXECUTION on every run ("Failed query") —
+            // which silently broke the hourly poll cron. The cast anchors the
+            // type; `last_synced_at` is itself bigint, so the comparison lines up.
             const dueThreshold = sql<number>`CASE ${sb.schedule}
-              WHEN 'hourly' THEN ${now - SCHEDULE_DUE_MS.hourly}
-              WHEN 'daily' THEN ${now - SCHEDULE_DUE_MS.daily}
-              WHEN 'weekly' THEN ${now - SCHEDULE_DUE_MS.weekly}
+              WHEN 'hourly' THEN ${now - SCHEDULE_DUE_MS.hourly}::bigint
+              WHEN 'daily' THEN ${now - SCHEDULE_DUE_MS.daily}::bigint
+              WHEN 'weekly' THEN ${now - SCHEDULE_DUE_MS.weekly}::bigint
               ELSE NULL
             END`;
             const duePredicate = and(

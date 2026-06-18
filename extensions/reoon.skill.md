@@ -52,5 +52,9 @@
 - Bulk runs at the power-mode credit rate per email; a 50k list is a large credit spend — call `accountBalance` first.
 - `task_id` is returned by `createBulkTask`; don't invent it. A bad/expired `task_id` returns an error inside a 200-style JSON body, so check `status`/error fields rather than assuming HTTP success means data.
 
+## Rate limit & picker fields
+- Rate limit: the official docs publish no rpm/rps number, only "you should not verify continuously in more than 5 threads" on the single `verify` endpoint. The connector sets a safe default `rateLimit` of `{ rpm: 120, concurrency: 5 }`; `verify` overrides to `concurrency: 5` and `createBulkTask` (heavy: up to 50k emails, 3 credits) overrides to `rps: 1`.
+- No picker (`options`) fields: Reoon is a stateless verification API with no list/collection endpoints. Inputs are free-text (`email`, `emails`, `name`, `mode`) and `task_id` (returned by `createBulkTask`, not enumerable). Nothing to back with a live dropdown.
+
 ## Source
 Official API docs: https://www.reoon.com/articles/api-documentation-of-reoon-email-verifier/

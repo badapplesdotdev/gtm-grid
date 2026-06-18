@@ -399,3 +399,46 @@ describe("SignalService.remove / listByTable (entitlement gated)", () => {
     expect(failureTag(exit)).toBe("PlanRequiredError");
   });
 });
+
+// In-process resilience for the Trigify call, under the cron's outer Inngest
+// step-retries: a transient 429/5xx/network blip is retried with capped
+// exponential backoff + jitter; a permanent 4xx fails fast (no wasted retries).
+describe("SignalService.syncForWorker — Trigify transient retry (backoff + jitter)", () => {
+  const workerFixtures = async () => ({
+    currentUserId: null,
+    workspaces: [{ id: WS, name: "WS", ownerId: "owner", currentPlanId: "team" }],
+    signalBindings: [binding()],
+    tables: [table(WS)],
+    webhookCredentials: new Map([[`${WS}:trigify`, await encryptedKey(WS, "tk_live")]]),
+  });
+
+  it("retries a transient 429 then succeeds", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("slow down", { status: 429 }))
+      .mockResolvedValue(new Response(JSON.stringify([{ id: "r1" }]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const exit = await run(await workerFixtures(), (s) => s.syncForWorker("sig-1"));
+    expect(Exit.isSuccess(exit) && exit.value).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2); // first 429 retried, second 200 succeeded
+  });
+
+  it("retries a network error (fetch rejection) then succeeds", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("connection reset"))
+      .mockResolvedValue(new Response(JSON.stringify([{ id: "r1" }]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const exit = await run(await workerFixtures(), (s) => s.syncForWorker("sig-1"));
+    expect(Exit.isSuccess(exit) && exit.value).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does NOT retry a permanent 4xx — fails fast on the first attempt", async () => {
+    const fetchMock = vi.fn(async () => new Response("bad key", { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const exit = await run(await workerFixtures(), (s) => s.syncForWorker("sig-1"));
+    expect(failureTag(exit)).toBe("SignalError");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

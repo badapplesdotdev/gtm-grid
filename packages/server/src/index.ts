@@ -12,6 +12,7 @@ import {
   defaultRegistry,
   parseManifest,
   connectorFromManifest,
+  extractOptions,
   connectAi,
   storedAiConfig,
   storedAiProviders,
@@ -22,7 +23,7 @@ import {
   listProjects,
   DEFAULT_HERMES_BASE_URL,
 } from "@gtmgrid/engine";
-import type { CellProgress } from "@gtmgrid/engine";
+import type { CellProgress, RunErrorContext } from "@gtmgrid/engine";
 import { detectAgents, streamClaude, streamCodex, streamHermes, setAgentPath, rescanAgents, generateWithAgent, parseAgentCloud, type AgentKind } from "./agent.js";
 import { localProviderEnv, resolveCloudProviderEnv } from "./provider-env.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
@@ -170,6 +171,10 @@ function aiConfig() {
     ai: aiConfigFromEnv() ?? storedAiConfig(globalDb),
     aiProviders: storedAiProviders(globalDb),
     aiFallback: aiAgentFallback,
+    // Surface systemic run failures (connector/AI bugs) to PostHog Error Tracking,
+    // deduped per run by the engine. Per-cell errors still land as cell status.
+    reportError: (error: unknown, ctx: RunErrorContext) =>
+      captureException(error, { source: "engine-run", ...ctx }),
   };
 }
 
@@ -394,6 +399,8 @@ route("GET", "/api/functions", () =>
         category: m.category ?? null,
         credits: m.credits,
         input: m.inputSchema ?? null,
+        // Fields the UI should render as a live name-picker (field → option source).
+        options: m.options ?? null,
         source: m.source ?? null,
         batchSize: m.batchSize ?? 1,
         output: m.output ?? "text",
@@ -1049,6 +1056,38 @@ route("POST", "/api/tables/:id/preview-function", async (p, body) => {
     ),
   );
   return { results };
+});
+
+// Live options for a pick-field: resolve `provider.method`'s declared option
+// source for `field`, call the source list endpoint with the connector's stored
+// credential, and return `{ label, value }[]`. Powers the column-editor's
+// name-dropdown so a user picks an Instantly campaign / HeyReach sender by NAME
+// and the id is stored — no hand-pasted UUIDs. `search` is forwarded to the
+// source call (most list endpoints accept a search/keyword filter).
+route("POST", "/api/options", async (_p, body) => {
+  const provider = String(body?.provider ?? "");
+  const ownerMethod = String(body?.method ?? "");
+  const field = String(body?.field ?? "");
+  if (!provider || !ownerMethod || !field) throw new Error("provider, method and field are required");
+  const m = registry.method(provider, ownerMethod);
+  const source = m?.options?.[field];
+  if (!source) return { error: `no option source for ${provider}.${ownerMethod}.${field}` };
+  const args: Record<string, unknown> = { ...source.args };
+  const search = typeof body?.search === "string" ? body.search.trim() : "";
+  // Best-effort search passthrough: forward under whichever filter key the
+  // source endpoint exposes (its input schema tells us). Harmless if unused.
+  if (search) {
+    const srcMethod = registry.method(provider, source.method);
+    const props = ((srcMethod?.inputSchema as any)?.properties ?? {}) as Record<string, unknown>;
+    for (const key of ["search", "keyword", "query", "q", "name"]) {
+      if (key in props) {
+        args[key] = search;
+        break;
+      }
+    }
+  }
+  const raw = await runLimiter.run(() => current.engine.dispatch(provider, source.method, args));
+  return { options: extractOptions(raw, source) };
 });
 
 // --- cloud run path (T9) ---

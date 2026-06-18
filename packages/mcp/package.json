@@ -1,6 +1,6 @@
 {
   "name": "@gtmgrid/mcp",
-  "version": "0.13.0",
+  "version": "0.16.0",
   "private": true,
   "type": "module",
   "bin": {
@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@gtmgrid/engine": "workspace:*",
+    "@gtmgrid/observability": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.0.4",
     "effect": "^3.21.3",
     "zod": "^3.24.1"

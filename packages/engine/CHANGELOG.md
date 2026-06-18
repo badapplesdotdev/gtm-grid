@@ -1,5 +1,32 @@
 # @gtmgrid/engine
 
+## 0.16.0
+
+### Minor Changes
+
+- 735d94c: Full PostHog Error Tracking observability so bugs surface as they occur. All telemetry now points at the GTM Grid **US** project (`us.i.posthog.com`). New `@gtmgrid/observability` package shares one error-tracking + structured-logging convention across the sidecar, MCP server, and CLI (process-level crash handlers + exception capture).
+
+  Closed the remaining blind spots:
+
+  - **Engine run failures** — connector/AI/enrichment errors now feed Error Tracking via an injected, dependency-free `reportError` hook on the engine, **deduped per run** (a large run with one failure mode raises one exception, not thousands), plus a `column_run_failed` analytics event for failure-rate dashboards.
+  - **tRPC** — non-typed defects keep their original stack (attached as the `TRPCError` cause) instead of being flattened to a string.
+  - **Services** — a new injectable `ErrorReporter` port surfaces deliberately-swallowed best-effort failures (e.g. a failed invite email) without coupling the package to a telemetry client.
+  - **Signals** — per-binding sync/warm-up failures in the cron worker are now reported (previously `console.error` only).
+  - **Desktop shell** — a Rust panic hook reports Tauri-side panics (sidecar spawn, updater, window setup) to Error Tracking.
+  - **PartyKit** — realtime handlers capture unexpected exceptions.
+
+  No behaviour change when PostHog is unconfigured — every surface no-ops without a key.
+
+## 0.15.0
+
+### Minor Changes
+
+- f414614: Respect third-party API rate limits across all connectors. Every outbound connector call is now paced by a per-connector throttle (requests/second + max in-flight) at the engine's dispatch choke point, with researched limits baked into all bundled extensions and a conservative safety default (2 req/s, 2 concurrent) for any connector that declares none — so a large run can no longer fire an unbounded burst at a provider. Pure-local connectors (formatting/formula) are exempt.
+
+  Transient failures (429/503/5xx and network blips) now retry with capped exponential backoff + jitter, honouring `Retry-After`: the manifest connector routes through the shared `fetchWithRetry`, the AI connector uses the vendor SDKs' own retry (maxRetries + timeout), and the cloud Trigify signal sync retries transient failures via an Effect schedule.
+
+## 0.14.0
+
 ## 0.13.0
 
 ## 0.12.0

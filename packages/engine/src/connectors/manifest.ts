@@ -3,7 +3,31 @@
 // and a JSON-Schema input. One manifest → callable sdk methods + MCP tools + UI.
 
 import { z } from "zod";
-import type { Connector, ConnectorMethod, MethodContext } from "../types.js";
+import { fetchWithRetry } from "../http-retry.js";
+import type { Connector, ConnectorMethod, MethodContext, RateLimit } from "../types.js";
+
+/** A live-options source for one input field (pick by name → store the id). */
+const fieldOptionSourceSchema = z.object({
+  /** A method id ON THIS CONNECTOR that returns the list of choices. */
+  method: z.string(),
+  /** Dot-path to the array in the source response (default: items/data/results, or the response if it is itself an array). */
+  itemsPath: z.string().optional(),
+  /** Key on each item for the display label (default: name|title|label). */
+  labelKey: z.string().optional(),
+  /** Key on each item for the stored value (default: id|uuid|_id|value). */
+  valueKey: z.string().optional(),
+  /** Optional key for a secondary line under the label. */
+  sublabelKey: z.string().optional(),
+  /** Static args passed to the source method call (e.g. { limit: 100 }). */
+  args: z.record(z.string(), z.any()).optional(),
+});
+
+/** Outbound throttle — spreads a large run over time per the upstream API limits. */
+const rateLimitSchema = z.object({
+  rps: z.number().positive().optional(),
+  rpm: z.number().positive().optional(),
+  concurrency: z.number().int().positive().optional(),
+});
 
 const methodSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9_]+$/, "method id must be alphanumeric/underscore"),
@@ -18,6 +42,16 @@ const methodSchema = z.object({
   path: z.string(),
   /** JSON Schema for inputs (object). Surfaced to agents + UI as-is. */
   input: z.record(z.string(), z.any()).optional(),
+  /**
+   * Fields whose value is PICKED from a live list the connector can fetch
+   * (field id → option source). The UI renders a searchable name-dropdown that
+   * resolves to the stored id — so e.g. an Instantly `campaign` field is picked
+   * by campaign name instead of pasting a UUID. The `method` must be another
+   * method on this same connector that returns the list of choices.
+   */
+  options: z.record(z.string(), fieldOptionSourceSchema).optional(),
+  /** Per-method outbound throttle override (stricter than the connector default). */
+  rateLimit: rateLimitSchema.optional(),
   /** For GET/DELETE: which input fields become querystring (default: all non-path fields). */
   query: z.array(z.string()).optional(),
   /** For body verbs: input fields to omit from the JSON body. */
@@ -79,6 +113,8 @@ export const manifestSchema = z.object({
     .optional(),
   /** Static headers sent on every request. */
   headers: z.record(z.string(), z.string()).optional(),
+  /** Default outbound throttle for every method (a method may override it stricter). */
+  rateLimit: rateLimitSchema.optional(),
   methods: z.array(methodSchema).min(1),
 });
 
@@ -91,12 +127,35 @@ export function parseManifest(raw: unknown): ExtensionManifest {
   return manifestSchema.parse(obj);
 }
 
+/**
+ * Coerce string inputs to the type their input-schema declares (integer/number/
+ * boolean). The UI's column-mapping and the live-options picker both hand values
+ * over as strings, so a field typed `integer` (e.g. a HeyReach `campaignId`)
+ * would otherwise be sent as `"123"` and rejected by the API. Only clean,
+ * unambiguous strings are converted; anything else is passed through untouched.
+ */
+function coerceInputTypes(input: Record<string, unknown>, schema: unknown): Record<string, unknown> {
+  const props = ((schema as { properties?: Record<string, { type?: string }> } | undefined)?.properties) ?? {};
+  const out: Record<string, unknown> = { ...input };
+  for (const [k, v] of Object.entries(out)) {
+    if (typeof v !== "string") continue;
+    const t = props[k]?.type;
+    if ((t === "integer" || t === "number") && v.trim() !== "" && /^-?\d+(\.\d+)?$/.test(v.trim())) {
+      out[k] = Number(v);
+    } else if (t === "boolean" && (v === "true" || v === "false")) {
+      out[k] = v === "true";
+    }
+  }
+  return out;
+}
+
 async function httpCall(
   man: ExtensionManifest,
   m: ManifestMethod,
-  input: Record<string, unknown>,
+  rawInput: Record<string, unknown>,
   ctx: MethodContext,
 ): Promise<unknown> {
+  const input = coerceInputTypes(rawInput, m.input);
   const secretKey = man.auth?.secretKey ?? "apiKey";
   const pathParams = new Set<string>();
   const path = m.path.replace(/\{(\w+)\}/g, (_, k: string) => {
@@ -136,7 +195,13 @@ async function httpCall(
     init.body = JSON.stringify(body);
   }
 
-  const resp = await fetch(url, init);
+  // Retry transient upstream failures (429/503/5xx and network blips) with capped
+  // exponential backoff + full jitter, honouring `Retry-After`, and abort a hung
+  // request via a per-attempt timeout. Mirrors the declarative HTTP connector
+  // (connectors/http.ts). `init` is passed through untouched, so `redirect:
+  // "manual"` is preserved and a 3xx is returned unretried for the location
+  // branch below; 402/other-4xx also fall through unretried for the throw below.
+  const resp = await fetchWithRetry(url, init);
   // Redirect responses (e.g. avatar/image endpoints) → return the resolved URL.
   if (resp.status >= 300 && resp.status < 400) {
     const loc = resp.headers.get("location");
@@ -159,6 +224,61 @@ async function httpCall(
     throw new Error(`${man.name} ${m.id} HTTP ${resp.status}: ${detail}`);
   }
   return data;
+}
+
+/** One resolved choice for a pick-field dropdown. */
+export interface FieldOption {
+  label: string;
+  value: string;
+  sublabel?: string;
+}
+
+/**
+ * Map a connector list-response into `{label, value}[]` for a pick-field
+ * dropdown, per a {@link FieldOptionSource}. Tolerant of the common envelope
+ * shapes (`items`/`data`/`results`, or a bare array) and the common id/name
+ * key spellings, so a manifest can declare just `{ method }` and still resolve.
+ */
+export function extractOptions(
+  raw: unknown,
+  source: {
+    itemsPath?: string;
+    labelKey?: string;
+    valueKey?: string;
+    sublabelKey?: string;
+  },
+): FieldOption[] {
+  let arr: unknown = source.itemsPath ? getPath(raw, source.itemsPath) : raw;
+  if (!Array.isArray(arr)) {
+    // Fallback: unwrap the usual list envelopes.
+    for (const k of ["items", "data", "results", "records", "campaigns", "lists", "accounts"]) {
+      const v = getPath(raw, k);
+      if (Array.isArray(v)) {
+        arr = v;
+        break;
+      }
+    }
+  }
+  if (!Array.isArray(arr)) return [];
+  const labelKeys = source.labelKey ? [source.labelKey] : ["name", "title", "label", "displayName"];
+  const valueKeys = source.valueKey ? [source.valueKey] : ["id", "uuid", "_id", "value"];
+  const pick = (item: unknown, keys: string[]): string | undefined => {
+    if (item == null || typeof item !== "object") return undefined;
+    for (const k of keys) {
+      const v = (item as Record<string, unknown>)[k];
+      if (v != null && v !== "") return String(v);
+    }
+    return undefined;
+  };
+  const out: FieldOption[] = [];
+  for (const item of arr) {
+    const value = pick(item, valueKeys);
+    if (value === undefined) continue;
+    const label = pick(item, labelKeys) ?? value;
+    const sublabel = source.sublabelKey ? pick(item, [source.sublabelKey]) : undefined;
+    out.push(sublabel ? { label, value, sublabel } : { label, value });
+  }
+  return out;
 }
 
 /** Build a runnable Connector from a validated manifest. */
@@ -228,17 +348,30 @@ async function runPollingMethod(
 }
 
 export function connectorFromManifest(man: ExtensionManifest): Connector {
+  const connectorRate: RateLimit | undefined = man.rateLimit;
   const methods: ConnectorMethod[] = man.methods.map((m) => ({
     id: m.id,
     label: m.label ?? m.id,
     description: m.description,
     category: m.category,
     inputSchema: m.input ?? { type: "object", properties: {} },
+    options: m.options,
+    // Method override wins; otherwise inherit the connector default. So every
+    // method on a throttled connector is throttled, and a heavy endpoint can
+    // tighten its own cap further.
+    rateLimit: m.rateLimit ?? connectorRate,
     batchSize: m.batchSize ?? 1,
     credits: m.credits ?? 1,
     run: m.poll
       ? (input, ctx) => runPollingMethod(man, m, input, ctx)
       : (input, ctx) => httpCall(man, m, input, ctx),
   }));
-  return { id: man.id, name: man.name, category: man.category ?? "custom", auth: man.auth ?? null, methods };
+  return {
+    id: man.id,
+    name: man.name,
+    category: man.category ?? "custom",
+    auth: man.auth ?? null,
+    rateLimit: connectorRate,
+    methods,
+  };
 }

@@ -11,6 +11,10 @@
     "query": "key",
     "secretKey": "apiKey"
   },
+  "rateLimit": {
+    "rpm": 120,
+    "concurrency": 5
+  },
   "methods": [
     {
       "id": "verify",
@@ -19,6 +23,9 @@
       "verb": "GET",
       "path": "/verify",
       "credits": 1,
+      "rateLimit": {
+        "concurrency": 5
+      },
       "input": {
         "type": "object",
         "required": [
@@ -44,6 +51,9 @@
       "verb": "POST",
       "path": "/create-bulk-verification-task/",
       "credits": 3,
+      "rateLimit": {
+        "rps": 1
+      },
       "input": {
         "type": "object",
         "required": [

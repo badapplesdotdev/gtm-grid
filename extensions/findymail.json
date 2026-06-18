@@ -11,6 +11,10 @@
     "header": "Authorization",
     "secretKey": "apiKey"
   },
+  "rateLimit": {
+    "rpm": 300,
+    "concurrency": 3
+  },
   "methods": [
     {
       "id": "findFromName",
@@ -78,7 +82,11 @@
           }
         }
       },
-      "category": "Find phone"
+      "category": "Find phone",
+      "rateLimit": {
+        "rpm": 60,
+        "concurrency": 2
+      }
     },
     {
       "id": "reverseEmail",
@@ -133,6 +141,73 @@
         "type": "object",
         "properties": {}
       }
+    },
+    {
+      "id": "listContactLists",
+      "label": "List Contact Lists",
+      "description": "List the saved contact lists in your Findymail account. Returns { lists: [{ id, name }] }. Free.",
+      "verb": "GET",
+      "path": "/lists",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {}
+      },
+      "category": "Contact lists"
+    },
+    {
+      "id": "createContactList",
+      "label": "Create Contact List",
+      "description": "Create a new contact list. Input: name. Returns the created list. Free.",
+      "verb": "POST",
+      "path": "/lists",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name for the new contact list"
+          }
+        }
+      },
+      "category": "Contact lists"
+    },
+    {
+      "id": "getContacts",
+      "label": "Get Contacts In List",
+      "description": "Get the contacts saved in a specific list. Returns { contacts: [...] }. Free.",
+      "verb": "GET",
+      "path": "/lists/{id}/contacts",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Contact list id (pick by name)"
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number for pagination"
+          }
+        }
+      },
+      "options": {
+        "id": {
+          "method": "listContactLists",
+          "itemsPath": "lists",
+          "labelKey": "name",
+          "valueKey": "id"
+        }
+      },
+      "category": "Contact lists"
     }
   ]
 }

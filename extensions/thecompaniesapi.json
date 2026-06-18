@@ -12,6 +12,10 @@
     "scheme": "Basic ",
     "secretKey": "apiKey"
   },
+  "rateLimit": {
+    "rps": 50,
+    "concurrency": 5
+  },
   "methods": [
     {
       "id": "enrichByDomain",
@@ -259,7 +263,18 @@
           }
         }
       },
-      "category": "Search"
+      "category": "Search",
+      "options": {
+        "listsToExclude": {
+          "method": "fetchLists",
+          "itemsPath": "lists",
+          "labelKey": "name",
+          "valueKey": "id",
+          "args": {
+            "size": 100
+          }
+        }
+      }
     },
     {
       "id": "similarCompanies",
@@ -587,7 +602,18 @@
           }
         }
       },
-      "category": "Search"
+      "category": "Search",
+      "options": {
+        "listId": {
+          "method": "fetchLists",
+          "itemsPath": "lists",
+          "labelKey": "name",
+          "valueKey": "id",
+          "args": {
+            "size": 100
+          }
+        }
+      }
     },
     {
       "id": "checkUser",
@@ -600,6 +626,28 @@
         "type": "object",
         "properties": {}
       }
+    },
+    {
+      "id": "fetchLists",
+      "label": "List Company Lists",
+      "description": "Fetch the team's saved company lists (paginated). Returns { lists[], meta } where each list has { id, name }. Backs the list-picker fields (listId, listsToExclude).",
+      "verb": "GET",
+      "path": "/lists",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "integer",
+            "description": "Page number (default 1)"
+          },
+          "size": {
+            "type": "integer",
+            "description": "Lists per page, 1-100 (default 10)"
+          }
+        }
+      },
+      "category": "Search"
     }
   ]
 }

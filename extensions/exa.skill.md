@@ -10,6 +10,10 @@
 ## Auth & cost
 - Base URL: `https://api.exa.ai`
 - Auth header: `x-api-key: <EXA_API_KEY>` (secret key `apiKey` in the connector). Content-Type `application/json`.
+
+## Rate limit & picker fields
+- **Rate limit (documented):** default **10 QPS** on `/search` and `/answer`; `/contents` is more permissive at 100 QPS; the legacy `/research/v1` API caps at 15 concurrent tasks. The connector sets a conservative `rateLimit` of `{ "rps": 10, "concurrency": 5 }` at the connector level (the strictest shared limit). No per-method override is added because the only more-permissive endpoint (`/contents`) does not need a *stricter* cap. 429 → `{ "error": "rate limit exceeded" }`. Higher limits via Enterprise (hello@exa.ai).
+- **No selectable (`options`) fields.** Exa is a stateless web-search/retrieval API with no enumerable account-scoped resources (no campaigns/lists/accounts/sequences/workspaces/owners/folders/tags/tables/sending accounts). All inputs are free-text queries, URLs, domains, dates, or fixed string enums (`type`, `category`) — nothing another endpoint can list. So no list endpoint and no `options` blocks were added; only the connector-level `rateLimit`.
 - Billing is usage/credit based per request; `search`, `getContents`, `findSimilar`, `answer` ≈ 1 credit; research tasks are heavier (marked 3). `getResearchTask` / `listResearchTasks` are free polls.
 - Every response includes a `costDollars` breakdown — read it if you need exact spend. `numResults`, `text`, and `summary` all increase cost.
 

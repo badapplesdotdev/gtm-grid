@@ -11,7 +11,10 @@
 - **Base URL:** `https://app.fullenrich.com/api/v1` (paths below are relative to it; FullEnrich's own docs label them `/api/v2` but the routes are identical).
 - **Auth:** Bearer token in the `Authorization` header. Grid stores it as the `apiKey` secret; the connector adds `Authorization: Bearer <apiKey>` for you.
 - **Credits:** Enrich/reverse cost ~1 credit per successfully enriched contact (charged on the contact, not the submit); polling and account calls are free. Search endpoints charge per call/page. Check live balance with `fullenrich.credits`.
-- **Rate limit:** `/contact/enrich/bulk` allows 60 calls/min × up to 100 contacts = ~6000 contacts/min. Status `RATE_LIMIT` in a poll means back off.
+- **Rate limit:** FullEnrich allows **60 API calls/minute** across all endpoints, with a queue of **100 concurrent enrichments** (and 100 concurrent reverse lookups). The connector enforces this at the manifest level (`rateLimit: { rpm: 60, concurrency: 100 }`); `enrichBulk` carries a stricter per-method override (`rps: 1`) because it is the credit-consuming bulk submit. Bulk endpoints take up to 100 contacts/call, so ~6000 contacts/min is achievable. Status `RATE_LIMIT` in a poll means back off.
+
+## Picker (selection) fields
+- **None.** FullEnrich is a stateless enrichment/search API. Every input is free-text (names, domains, emails) or an id that a *prior* call on this connector returned (`enrichment_id` from `enrichBulk`/`reverseEmailBulk`) — there is no endpoint that *enumerates* enrichments, lists, accounts, campaigns, etc. So no field is backed by a live list; no `options` blocks are wired. `enrich_fields` is a fixed enum (`contact.emails`, `contact.phones`), not an enumerable resource. If FullEnrich later ships a "list enrichments" endpoint, `enrichment_id` could become a picker.
 
 ## Endpoints by job
 

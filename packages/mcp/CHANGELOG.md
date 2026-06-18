@@ -1,5 +1,26 @@
 # @gtmgrid/mcp
 
+## 0.16.0
+
+### Patch Changes
+
+- Updated dependencies [735d94c]
+  - @gtmgrid/observability@0.16.0
+  - @gtmgrid/engine@0.16.0
+
+## 0.15.0
+
+### Patch Changes
+
+- Updated dependencies [f414614]
+  - @gtmgrid/engine@0.15.0
+
+## 0.14.0
+
+### Patch Changes
+
+- @gtmgrid/engine@0.14.0
+
 ## 0.13.0
 
 ### Patch Changes

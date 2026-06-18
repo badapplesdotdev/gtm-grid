@@ -92,4 +92,14 @@ describe("tableAbortKey — abort iff the active TABLE actually changes", () => 
     expect(tableAbortKey(null)).not.toBe(tableAbortKey({ name: "Leads", columns: [] }));
     expect(tableAbortKey(null)).toBe(tableAbortKey(null));
   });
+
+  it("changes when switching between two CLOUD tables (the cloud-stuck-table fix)", () => {
+    // In cloud mode `activeTable` now follows the active cloud table, so a switch
+    // between two cloud tables yields a new key — tearing down the prior turn and
+    // re-orienting the agent. Previously the cloud hint never moved off the last
+    // local table, so the agent stayed stuck on one table.
+    expect(tableAbortKey({ name: "Trigify mentions", columns: ["a"] })).not.toBe(
+      tableAbortKey({ name: "Brand mentions", columns: ["a"] }),
+    );
+  });
 });

@@ -11,6 +11,10 @@
     "header": "Authorization",
     "secretKey": "apiKey"
   },
+  "rateLimit": {
+    "rpm": 500,
+    "concurrency": 5
+  },
   "methods": [
     {
       "id": "scrape",
@@ -184,7 +188,10 @@
           }
         }
       },
-      "category": "Scraping"
+      "category": "Scraping",
+      "rateLimit": {
+        "rpm": 50
+      }
     },
     {
       "id": "getCrawlStatus",
@@ -390,7 +397,10 @@
           }
         }
       },
-      "category": "Search"
+      "category": "Search",
+      "rateLimit": {
+        "rpm": 250
+      }
     },
     {
       "id": "startExtract",
@@ -442,7 +452,10 @@
           }
         }
       },
-      "category": "Extraction"
+      "category": "Extraction",
+      "rateLimit": {
+        "rpm": 50
+      }
     },
     {
       "id": "getExtractStatus",
@@ -474,16 +487,45 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["urls"],
+        "required": [
+          "urls"
+        ],
         "properties": {
-          "urls": { "type": "array", "items": { "type": "string" }, "description": "URLs to extract from; glob patterns allowed, e.g. 'https://site.com/*'" },
-          "prompt": { "type": "string", "description": "Guidance for what to extract" },
-          "schema": { "type": "object", "description": "JSON Schema defining the structure of the extracted data" },
-          "enableWebSearch": { "type": "boolean", "description": "Allow web search for supporting data (default false)" },
-          "includeSubdomains": { "type": "boolean", "description": "Include subdomains when expanding URLs (default true)" },
-          "showSources": { "type": "boolean", "description": "Return the source URLs for each field (default false)" },
-          "scrapeOptions": { "type": "object", "description": "Scrape config applied to source pages" },
-          "ignoreInvalidURLs": { "type": "boolean", "description": "Skip invalid URLs instead of failing (default true)" }
+          "urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "URLs to extract from; glob patterns allowed, e.g. 'https://site.com/*'"
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Guidance for what to extract"
+          },
+          "schema": {
+            "type": "object",
+            "description": "JSON Schema defining the structure of the extracted data"
+          },
+          "enableWebSearch": {
+            "type": "boolean",
+            "description": "Allow web search for supporting data (default false)"
+          },
+          "includeSubdomains": {
+            "type": "boolean",
+            "description": "Include subdomains when expanding URLs (default true)"
+          },
+          "showSources": {
+            "type": "boolean",
+            "description": "Return the source URLs for each field (default false)"
+          },
+          "scrapeOptions": {
+            "type": "object",
+            "description": "Scrape config applied to source pages"
+          },
+          "ignoreInvalidURLs": {
+            "type": "boolean",
+            "description": "Skip invalid URLs instead of failing (default true)"
+          }
         }
       },
       "poll": {
@@ -492,13 +534,18 @@
         "idParam": "id",
         "statusFrom": "status",
         "doneWhen": "completed",
-        "failWhen": ["failed", "cancelled"],
+        "failWhen": [
+          "failed",
+          "cancelled"
+        ],
         "dataFrom": "data",
         "intervalMs": 3000,
         "timeoutMs": 300000
+      },
+      "rateLimit": {
+        "rpm": 50
       }
     },
-
     {
       "id": "startBatchScrape",
       "label": "Start Batch Scrape (Async Job)",
@@ -546,7 +593,10 @@
           }
         }
       },
-      "category": "Scraping"
+      "category": "Scraping",
+      "rateLimit": {
+        "rpm": 50
+      }
     },
     {
       "id": "getBatchScrapeStatus",

@@ -11,6 +11,10 @@
     "header": "x-api-key",
     "secretKey": "apiKey"
   },
+  "rateLimit": {
+    "rpm": 100,
+    "concurrency": 3
+  },
   "methods": [
     {
       "id": "enrichProfile",
@@ -31,7 +35,10 @@
           }
         }
       },
-      "category": "Enrich people"
+      "category": "Enrich people",
+      "rateLimit": {
+        "rps": 2
+      }
     },
     {
       "id": "profilePosts",
@@ -115,7 +122,10 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "rateLimit": {
+        "rps": 2
+      }
     },
     {
       "id": "profilePostEngagementResults",
@@ -145,7 +155,10 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "rateLimit": {
+        "rps": 2
+      }
     },
     {
       "id": "profileEngagementRemove",
@@ -186,7 +199,10 @@
           }
         }
       },
-      "category": "Enrich company"
+      "category": "Enrich company",
+      "rateLimit": {
+        "rps": 2
+      }
     },
     {
       "id": "companyPosts",
@@ -253,7 +269,10 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "rateLimit": {
+        "rps": 2
+      }
     },
     {
       "id": "postComments",
@@ -431,7 +450,10 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "rateLimit": {
+        "rps": 2
+      }
     },
     {
       "id": "listSearches",
@@ -477,7 +499,19 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listSearches",
+          "itemsPath": "data",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        }
+      }
     },
     {
       "id": "updateSearch",
@@ -507,7 +541,19 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listSearches",
+          "itemsPath": "data",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        }
+      }
     },
     {
       "id": "deleteSearch",
@@ -527,7 +573,19 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listSearches",
+          "itemsPath": "data",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        }
+      }
     },
     {
       "id": "searchResults",
@@ -575,7 +633,19 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listSearches",
+          "itemsPath": "data",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        }
+      }
     },
     {
       "id": "searchPodcasts",
@@ -1797,7 +1867,15 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listSocialSignalSubscriptions",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
+        }
+      }
     },
     {
       "id": "updateSocialSignalSubscription",
@@ -1824,7 +1902,15 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listSocialSignalSubscriptions",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
+        }
+      }
     },
     {
       "id": "stopSocialSignalSubscription",
@@ -1844,7 +1930,15 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listSocialSignalSubscriptions",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
+        }
+      }
     },
     {
       "id": "estimateSocialSignals",
@@ -1977,7 +2071,14 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listSocialSignalTargets",
+          "labelKey": "name",
+          "valueKey": "id"
+        }
+      }
     },
     {
       "id": "listSocialSignalTargetInsights",
@@ -2001,7 +2102,14 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listSocialSignalTargets",
+          "labelKey": "name",
+          "valueKey": "id"
+        }
+      }
     },
     {
       "id": "listSocialSignalTargetCheckRuns",
@@ -2025,7 +2133,14 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listSocialSignalTargets",
+          "labelKey": "name",
+          "valueKey": "id"
+        }
+      }
     },
     {
       "id": "listSocialSignalResults",
@@ -2187,7 +2302,15 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listTopics",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
+        }
+      }
     },
     {
       "id": "updateTopic",
@@ -2213,7 +2336,15 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listTopics",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
+        }
+      }
     },
     {
       "id": "deleteTopic",
@@ -2233,7 +2364,15 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listTopics",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
+        }
+      }
     },
     {
       "id": "getTopicCreditsSummary",
@@ -2253,7 +2392,15 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listTopics",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
+        }
+      }
     },
     {
       "id": "getTopicEngagements",
@@ -2279,7 +2426,18 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listTopics",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
+        }
+      },
+      "rateLimit": {
+        "rps": 2
+      }
     },
     {
       "id": "getTopicPostEngagements",
@@ -2311,7 +2469,18 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listTopics",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
+        }
+      },
+      "rateLimit": {
+        "rps": 2
+      }
     },
     {
       "id": "getUsage",
@@ -2357,7 +2526,10 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "rateLimit": {
+        "rps": 2
+      }
     },
     {
       "id": "xPostEngagements",
@@ -2381,7 +2553,10 @@
           }
         }
       },
-      "category": "Signals"
+      "category": "Signals",
+      "rateLimit": {
+        "rps": 2
+      }
     },
     {
       "id": "enrichXUser",
@@ -2402,7 +2577,10 @@
           }
         }
       },
-      "category": "Enrich people"
+      "category": "Enrich people",
+      "rateLimit": {
+        "rps": 2
+      }
     },
     {
       "id": "lookupXUser",
@@ -2422,7 +2600,10 @@
           }
         }
       },
-      "category": "Enrich people"
+      "category": "Enrich people",
+      "rateLimit": {
+        "rps": 2
+      }
     },
     {
       "id": "xLikePost",
@@ -2444,6 +2625,16 @@
             "type": "string"
           }
         }
+      },
+      "options": {
+        "account_id": {
+          "method": "listXAccounts",
+          "labelKey": "username",
+          "valueKey": "id"
+        }
+      },
+      "rateLimit": {
+        "rps": 1
       }
     },
     {
@@ -2471,6 +2662,16 @@
             "type": "string"
           }
         }
+      },
+      "options": {
+        "account_id": {
+          "method": "listXAccounts",
+          "labelKey": "username",
+          "valueKey": "id"
+        }
+      },
+      "rateLimit": {
+        "rps": 1
       }
     },
     {
@@ -2493,6 +2694,16 @@
             "type": "string"
           }
         }
+      },
+      "options": {
+        "account_id": {
+          "method": "listXAccounts",
+          "labelKey": "username",
+          "valueKey": "id"
+        }
+      },
+      "rateLimit": {
+        "rps": 1
       }
     },
     {
@@ -2515,6 +2726,16 @@
             "type": "string"
           }
         }
+      },
+      "options": {
+        "account_id": {
+          "method": "listXAccounts",
+          "labelKey": "username",
+          "valueKey": "id"
+        }
+      },
+      "rateLimit": {
+        "rps": 1
       }
     },
     {
@@ -2556,6 +2777,16 @@
             "type": "string"
           }
         }
+      },
+      "options": {
+        "account_id": {
+          "method": "listXAccounts",
+          "labelKey": "username",
+          "valueKey": "id"
+        }
+      },
+      "rateLimit": {
+        "rps": 1
       }
     },
     {
@@ -2578,6 +2809,16 @@
             "type": "string"
           }
         }
+      },
+      "options": {
+        "account_id": {
+          "method": "listXAccounts",
+          "labelKey": "username",
+          "valueKey": "id"
+        }
+      },
+      "rateLimit": {
+        "rps": 1
       }
     },
     {
@@ -2605,6 +2846,16 @@
             "type": "string"
           }
         }
+      },
+      "options": {
+        "account_id": {
+          "method": "listXAccounts",
+          "labelKey": "username",
+          "valueKey": "id"
+        }
+      },
+      "rateLimit": {
+        "rps": 1
       }
     },
     {
@@ -2777,6 +3028,18 @@
             "description": "DRAFT | PUBLISHED"
           }
         }
+      },
+      "options": {
+        "search_id": {
+          "method": "listSearches",
+          "itemsPath": "data",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        }
       }
     },
     {
@@ -2860,6 +3123,18 @@
             "type": "string"
           }
         }
+      },
+      "options": {
+        "id": {
+          "method": "listWorkflows",
+          "itemsPath": "items",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        }
       }
     },
     {
@@ -2895,6 +3170,18 @@
             "description": "DRAFT | PUBLISHED"
           }
         }
+      },
+      "options": {
+        "id": {
+          "method": "listWorkflows",
+          "itemsPath": "items",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        }
       }
     },
     {
@@ -2912,6 +3199,18 @@
         "properties": {
           "id": {
             "type": "string"
+          }
+        }
+      },
+      "options": {
+        "id": {
+          "method": "listWorkflows",
+          "itemsPath": "items",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
           }
         }
       }
@@ -2944,6 +3243,18 @@
             "type": "object"
           }
         }
+      },
+      "options": {
+        "id": {
+          "method": "listWorkflows",
+          "itemsPath": "items",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        }
       }
     },
     {
@@ -2963,6 +3274,18 @@
             "type": "string"
           }
         }
+      },
+      "options": {
+        "id": {
+          "method": "listWorkflows",
+          "itemsPath": "items",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        }
       }
     },
     {
@@ -2980,6 +3303,18 @@
         "properties": {
           "id": {
             "type": "string"
+          }
+        }
+      },
+      "options": {
+        "id": {
+          "method": "listWorkflows",
+          "itemsPath": "items",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
           }
         }
       }
@@ -3009,6 +3344,18 @@
             "description": "{ mode, strict_data_validation, action_mocks }"
           }
         }
+      },
+      "options": {
+        "id": {
+          "method": "listWorkflows",
+          "itemsPath": "items",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        }
       }
     },
     {
@@ -3034,6 +3381,18 @@
             "type": "string"
           }
         }
+      },
+      "options": {
+        "id": {
+          "method": "listWorkflows",
+          "itemsPath": "items",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        }
       }
     },
     {
@@ -3057,6 +3416,18 @@
           "runId": {
             "type": "string",
             "description": "Execution run ID"
+          }
+        }
+      },
+      "options": {
+        "id": {
+          "method": "listWorkflows",
+          "itemsPath": "items",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
           }
         }
       }
@@ -3205,6 +3576,14 @@
             "type": "string"
           }
         }
+      },
+      "options": {
+        "team_id": {
+          "method": "listLinearTeams",
+          "itemsPath": "teams",
+          "labelKey": "name",
+          "valueKey": "id"
+        }
       }
     },
     {
@@ -3223,6 +3602,14 @@
           "team_id": {
             "type": "string"
           }
+        }
+      },
+      "options": {
+        "team_id": {
+          "method": "listLinearTeams",
+          "itemsPath": "teams",
+          "labelKey": "name",
+          "valueKey": "id"
         }
       }
     },
@@ -3263,6 +3650,13 @@
             "type": "string"
           }
         }
+      },
+      "options": {
+        "database_id": {
+          "method": "listNotionDatabases",
+          "labelKey": "title",
+          "valueKey": "id"
+        }
       }
     },
     {
@@ -3293,6 +3687,13 @@
           "base_id": {
             "type": "string"
           }
+        }
+      },
+      "options": {
+        "base_id": {
+          "method": "listAirtableBases",
+          "labelKey": "name",
+          "valueKey": "id"
         }
       }
     },
@@ -3347,6 +3748,13 @@
           "document_id": {
             "type": "string"
           }
+        }
+      },
+      "options": {
+        "document_id": {
+          "method": "listGoogleSheetsDocuments",
+          "labelKey": "name",
+          "valueKey": "id"
         }
       }
     },

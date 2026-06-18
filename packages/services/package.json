@@ -1,6 +1,6 @@
 {
   "name": "@gtmgrid/services",
-  "version": "0.13.0",
+  "version": "0.16.0",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -20,5 +20,8 @@
     "drizzle-orm": "^0.45.2",
     "effect": "^3.21.3",
     "partysocket": "^1.1.4"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.2.0"
   }
 }

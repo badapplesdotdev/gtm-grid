@@ -131,6 +131,11 @@ import {
   workspaceRepoLayer,
 } from "./repositories/workspace-repo.js";
 import { ExtensionService } from "./services/extension-service.js";
+import {
+  ErrorReporter,
+  errorReporterLayer,
+  errorReporterNoop,
+} from "./services/error-reporter.js";
 import { EntitlementService } from "./services/entitlement-service.js";
 import { GridService } from "./services/grid-service.js";
 import {
@@ -193,9 +198,18 @@ export const identityFromUserId = (
 export const appLayer = (params: {
   readonly db: Db;
   readonly userId: string | null;
+  /**
+   * Host sink for SWALLOWED, best-effort failures (e.g. a failed invite email) →
+   * PostHog Error Tracking. apps/web passes `captureServerException`; omitted ⇒ a
+   * no-op reporter (tests / OSS). Uncaught failures still surface at the boundary.
+   */
+  readonly reportError?: (error: unknown, context?: Record<string, unknown>) => void;
 }): Layer.Layer<AppServices> => {
   const dbLayer = dbClientLayer(params.db);
   const identity = identityFromUserId(params.userId);
+  const errorReporter: Layer.Layer<ErrorReporter> = params.reportError
+    ? errorReporterLayer(params.reportError)
+    : errorReporterNoop;
   const memberRepo = MemberRepoLive.pipe(Layer.provide(dbLayer));
   const workspaceRepo = WorkspaceRepoLive.pipe(Layer.provide(dbLayer));
   const workspaceMemberRepo = WorkspaceMemberRepoLive.pipe(
@@ -259,7 +273,7 @@ export const appLayer = (params: {
     Layer.provide(membershipService),
     Layer.provide(seatsService),
     Layer.provide(identity),
-    Layer.provide(InviteEmailPortLive),
+    Layer.provide(InviteEmailPortLive.pipe(Layer.provide(errorReporter))),
   );
   const credentialService = CredentialService.Default.pipe(
     Layer.provide(credentialRepo),

@@ -11,6 +11,10 @@
     "header": "Authorization",
     "secretKey": "apiKey"
   },
+  "rateLimit": {
+    "rpm": 60,
+    "concurrency": 5
+  },
   "methods": [
     {
       "id": "enrichBulk",
@@ -43,7 +47,11 @@
           }
         }
       },
-      "category": "Find email"
+      "category": "Find email",
+      "rateLimit": {
+        "rps": 1,
+        "concurrency": 100
+      }
     },
     {
       "id": "getResult",

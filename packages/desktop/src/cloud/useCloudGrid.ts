@@ -92,6 +92,12 @@ export interface CloudTableSummary {
    * did not report a count (older API), so the UI falls back to the dash.
    */
   readonly rows: number | null;
+  /**
+   * Whether this table is pinned to favourites. WORKSPACE-SHARED (any teammate's
+   * pin shows for everyone), drives the sidebar star + favourites-first ordering,
+   * mirroring local tables.
+   */
+  readonly favorite: boolean;
 }
 
 /** A cloud sidebar folder (the `listFolders` query shape). */
@@ -219,6 +225,7 @@ export function useCloudTables(
         createdAt: t.createdAt,
         folderId: t.folderId ?? null,
         rows: t.rows ?? null,
+        favorite: t.favorite ?? false,
       })),
     [q.data],
   );
@@ -306,6 +313,31 @@ export function useCloudProjectMutations() {
     },
     [qc],
   );
+  const renameTable = useCallback(
+    async (tableId: Id<"tables">, name: string) => {
+      await apiClient!.grid.renameTable.mutate({ tableId, name });
+      // Relabel the sidebar list(s) and the table's own grid (its header reads
+      // the cached name). The rename only carries the tableId, so invalidate
+      // every loaded tables list by key prefix.
+      await qc.invalidateQueries({
+        predicate: (query) =>
+          query.queryKey[0] === "grid" && query.queryKey[1] === "tables",
+      });
+      await qc.invalidateQueries({ queryKey: gridQueryKeys.table(tableId) });
+    },
+    [qc],
+  );
+  const setTableFavorite = useCallback(
+    async (tableId: Id<"tables">, favorite: boolean) => {
+      await apiClient!.grid.setTableFavorite.mutate({ tableId, favorite });
+      // The favourite flag + favourites-first ordering live in the tables list.
+      await qc.invalidateQueries({
+        predicate: (query) =>
+          query.queryKey[0] === "grid" && query.queryKey[1] === "tables",
+      });
+    },
+    [qc],
+  );
   // ── Sidebar folders ───────────────────────────────────────────────────────
   // Folder CRUD + table moves refresh BOTH the folders and tables lists for the
   // project (a move changes a table's folderId; a folder delete unfiles tables).
@@ -355,6 +387,8 @@ export function useCloudProjectMutations() {
     createProject,
     createTable,
     deleteTable,
+    renameTable,
+    setTableFavorite,
     createFolder,
     renameFolder,
     deleteFolder,

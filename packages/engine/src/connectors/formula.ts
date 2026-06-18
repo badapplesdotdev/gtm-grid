@@ -13,6 +13,8 @@ export const formulaConnector: Connector = {
   name: "Formula",
   category: "formula",
   auth: null,
+  // Pure-local expression evaluation — exempt from the safety-default rate limit.
+  local: true,
   methods: [
     {
       id: "eval",
