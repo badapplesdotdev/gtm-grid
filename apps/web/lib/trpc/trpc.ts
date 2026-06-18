@@ -96,9 +96,14 @@ export async function runEffect<A, E>(
     const err = failure.value as { _tag?: string; message?: string };
     throw toTrpcError(err._tag, err.message ?? "Request failed.");
   }
+  // A non-typed defect (a real crash). Preserve the ORIGINAL error as `cause` —
+  // `Cause.pretty` flattens it to a readable string for the message, but the route
+  // `onError` hook forwards `error.cause ?? error` to PostHog Error Tracking, so
+  // attaching the squashed defect keeps the real stack/grouping instead of a string.
   throw new TRPCError({
     code: "INTERNAL_SERVER_ERROR",
     message: Cause.pretty(exit.cause),
+    cause: Cause.squash(exit.cause),
   });
 }
 

@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./packages/analytics" },
+    { "path": "./packages/observability" },
     { "path": "./packages/cloud" },
     { "path": "./packages/db" },
     { "path": "./packages/services" },

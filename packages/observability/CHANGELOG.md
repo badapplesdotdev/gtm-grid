@@ -1,4 +1,4 @@
-# @gtmgrid/analytics
+# @gtmgrid/observability
 
 ## 0.16.0
 
@@ -16,17 +16,3 @@
   - **PartyKit** — realtime handlers capture unexpected exceptions.
 
   No behaviour change when PostHog is unconfigured — every surface no-ops without a key.
-
-## 0.15.0
-
-## 0.14.0
-
-## 0.13.0
-
-## 0.12.0
-
-## 0.11.1
-
-## 0.11.0
-
-## 0.10.0

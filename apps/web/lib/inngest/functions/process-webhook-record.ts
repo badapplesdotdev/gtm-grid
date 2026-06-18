@@ -7,10 +7,12 @@ import {
   type Column,
   type EngineConfig,
   type GridStoreShape,
+  type RunErrorContext,
 } from "@gtmgrid/engine";
 import { Effect } from "effect";
 import { inngest } from "../client";
 import { onFailure } from "../on-failure";
+import { captureServer, captureServerException } from "../../posthog-server";
 import { workerClient, WORKER_REFS } from "../worker-client";
 
 /**
@@ -202,11 +204,37 @@ export async function runEnrichColumn(
   rowId: string,
 ): Promise<number> {
   const store = await buildWorkerStore(data.tableId, data.workspaceId);
-  const engine = new Engine(undefined, engineConfig(), defaultRegistry(), undefined, {
-    store,
-    creds: store,
-  });
-  const { ran } = await engine.runColumn(columnId, { rowIds: [rowId] });
+  // Systemic run failures (connector/AI bugs) → PostHog Error Tracking, deduped by
+  // the engine. There's no user identity in the worker, so group under the workspace.
+  const reportError = (error: unknown, ctx: RunErrorContext): void =>
+    captureServerException(error, {
+      distinctId: data.workspaceId,
+      properties: { source: "engine-run", surface: "cloud", table_id: data.tableId, ...ctx },
+    });
+  const engine = new Engine(
+    undefined,
+    { ...engineConfig(), reportError },
+    defaultRegistry(),
+    undefined,
+    { store, creds: store },
+  );
+  const { ran, errors, firstError } = await engine.runColumn(columnId, { rowIds: [rowId] });
+  // Failure-rate signal for dashboards/alerts (complements the deduped exceptions).
+  if (errors > 0) {
+    captureServer("column_run_failed", {
+      distinctId: data.workspaceId,
+      properties: {
+        column_id: columnId,
+        provider: null,
+        method: null,
+        ran,
+        errors,
+        first_error: firstError,
+        surface: "cloud",
+      },
+      groups: { workspace: data.workspaceId },
+    });
+  }
   return ran;
 }
 

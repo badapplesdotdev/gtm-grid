@@ -20,6 +20,7 @@ import { getSessionUserId } from "@gtmgrid/auth";
 import { getAuth } from "@gtmgrid/auth";
 import { type AppServices, appLayer } from "@gtmgrid/services";
 import { Layer, ManagedRuntime } from "effect";
+import { captureServerException } from "../posthog-server";
 
 /** The services available to every procedure for this request. */
 export type ServicesRuntime = ManagedRuntime.ManagedRuntime<AppServices, never>;
@@ -43,7 +44,16 @@ export async function createContext(opts: {
   const auth = await getAuth();
   const userId = await getSessionUserId(auth, opts.req.headers);
   const { db } = await import("@gtmgrid/db/client");
-  const runtime = ManagedRuntime.make(appLayer({ db, userId }));
+  // Wire the host exception sink so services-internal swallowed failures (e.g. a
+  // best-effort invite email) still reach PostHog Error Tracking.
+  const runtime = ManagedRuntime.make(
+    appLayer({
+      db,
+      userId,
+      reportError: (error, context) =>
+        captureServerException(error, { distinctId: userId ?? undefined, properties: context }),
+    }),
+  );
   return { userId, runtime };
 }
 

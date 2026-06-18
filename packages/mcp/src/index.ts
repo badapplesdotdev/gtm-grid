@@ -23,6 +23,8 @@ import {
   parseManifest,
   type Registry,
 } from "@gtmgrid/engine";
+import type { RunErrorContext } from "@gtmgrid/engine";
+import { captureException, installProcessHandlers } from "@gtmgrid/observability";
 import { capCellValue } from "./cell.js";
 import { describeGridEnv, selectGridEnv } from "./cloud-context.js";
 import {
@@ -39,6 +41,15 @@ import {
   makeCloudSource,
   registryWithExtensions,
 } from "./cloud-source.js";
+
+// Last-gasp crash reporting for the long-lived MCP process (uncaught exceptions /
+// unhandled rejections → PostHog Error Tracking, tagged "mcp"). No-ops without a key.
+installProcessHandlers("mcp");
+
+// Forward systemic run failures (connector/AI bugs) from the engine to Error
+// Tracking, deduped per run. Wired onto both the local and cloud engine config.
+const reportEngineError = (error: unknown, ctx: RunErrorContext): void =>
+  captureException(error, { source: "engine-run", ...ctx });
 
 const gridEnv = selectGridEnv(process.env);
 
@@ -98,10 +109,13 @@ const mcpAiFallback = async (req: { prompt: string; system?: string; model?: str
 // build one with the SAME extensions loaded so cloud == local (skip `openProject`).
 const local = gridEnv.mode === "local" ? openProject(gridEnv.project) : undefined;
 // AI columns fall back to the user's coding-agent model when no key is set (both modes).
-if (local) local.engine.config.aiFallback = mcpAiFallback;
+if (local) {
+  local.engine.config.aiFallback = mcpAiFallback;
+  local.engine.config.reportError = reportEngineError;
+}
 const cloudDeps =
   gridEnv.mode === "cloud"
-    ? defaultCloudSourceDeps(cloudRegistry(), { aiFallback: mcpAiFallback })
+    ? defaultCloudSourceDeps(cloudRegistry(), { aiFallback: mcpAiFallback, reportError: reportEngineError })
     : undefined;
 const cloudSource =
   gridEnv.mode === "cloud" && cloudDeps

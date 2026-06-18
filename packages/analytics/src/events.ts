@@ -37,6 +37,22 @@ export interface AnalyticsEventMap {
     fn?: string;
   };
   column_run: { table_id: string; column_id: string; rows: number; cloud: boolean };
+  /**
+   * A column run finished with one or more failed cells. Emitted by the run's host
+   * (sidecar / cloud worker / MCP) from `runColumn`'s `{ ran, errors, firstError }`
+   * summary — the monitoring signal for connector/AI/enrichment failure RATES
+   * (dashboards + alerts), complementary to the deduped systemic exceptions raised
+   * via the engine's `reportError` hook. `surface` says where the run executed.
+   */
+  column_run_failed: {
+    column_id: string;
+    provider: string | null;
+    method: string | null;
+    ran: number;
+    errors: number;
+    first_error?: string;
+    surface: "sidecar" | "cloud" | "mcp";
+  };
   agent_turn_completed: {
     agent: "claude" | "codex" | "hermes";
     mode?: string;

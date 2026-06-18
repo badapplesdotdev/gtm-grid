@@ -20,6 +20,7 @@
 
 import { inviteEmail, sendEmail } from "@gtmgrid/email";
 import { Context, Effect, Layer } from "effect";
+import { ErrorReporter } from "./error-reporter.js";
 
 /** The arguments for one invite email. */
 export interface InviteEmailArgs {
@@ -47,31 +48,38 @@ export class InviteEmailPort extends Context.Tag("InviteEmailPort")<
  * any failure (including an unset Resend key, which `sendEmail` no-ops) resolves
  * to `false` instead of failing.
  */
-export const InviteEmailPortLive: Layer.Layer<InviteEmailPort> = Layer.succeed(
-  InviteEmailPort,
-  {
-    send: (args) =>
-      Effect.tryPromise(() =>
-        sendEmail(
-          inviteEmail({
-            to: args.to,
-            workspaceName: args.workspaceName,
-            inviterName: args.inviterName,
-            inviterEmail: args.inviterEmail,
-            acceptUrl: args.acceptUrl,
-          }),
-        ),
-      ).pipe(
-        Effect.as(true),
-        Effect.catchAll((cause) =>
-          Effect.sync(() => {
-            console.error("[invitations] invite email failed:", cause);
-            return false;
-          }),
-        ),
-      ),
-  },
-);
+export const InviteEmailPortLive: Layer.Layer<InviteEmailPort, never, ErrorReporter> =
+  Layer.effect(
+    InviteEmailPort,
+    Effect.gen(function* () {
+      // Captured at layer build so the `send` signature stays requirement-free.
+      const reporter = yield* ErrorReporter;
+      return {
+        send: (args) =>
+          Effect.tryPromise(() =>
+            sendEmail(
+              inviteEmail({
+                to: args.to,
+                workspaceName: args.workspaceName,
+                inviterName: args.inviterName,
+                inviterEmail: args.inviterEmail,
+                acceptUrl: args.acceptUrl,
+              }),
+            ),
+          ).pipe(
+            Effect.as(true),
+            // Best-effort: a delivery failure must NOT fail the invite, but it's a
+            // real failure worth seeing — report it to Error Tracking, then fold to
+            // `false` (the UI surfaces the copyable-link fallback).
+            Effect.catchAll((cause) =>
+              reporter
+                .report(cause, { source: "invite-email", to: args.to })
+                .pipe(Effect.as(false)),
+            ),
+          ),
+      };
+    }),
+  );
 
 /**
  * An in-memory `InviteEmailPort` for tests. Records each call into `sent` and

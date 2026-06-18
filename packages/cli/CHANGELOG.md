@@ -1,5 +1,13 @@
 # @gtmgrid/cli
 
+## 0.16.0
+
+### Patch Changes
+
+- Updated dependencies [735d94c]
+  - @gtmgrid/observability@0.16.0
+  - @gtmgrid/engine@0.16.0
+
 ## 0.15.0
 
 ### Patch Changes
