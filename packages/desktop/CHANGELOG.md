@@ -1,5 +1,16 @@
 # @gtmgrid/desktop
 
+## 0.16.1
+
+### Patch Changes
+
+- 9ce6189: Track the active cloud table in the agent co-pilot's system-prompt context. Previously the "Active table" hint was derived only from local SQLite `tableData`, so in cloud mode the agent stayed stuck reasoning about a stale table while its MCP tools (keyed off `GTMGRID_CLOUD_TABLE`) operated on the correct one. `activeTable` now sources from the active cloud table via `useCloudTablePaged` when in cloud mode (sharing CloudGrid's paged query key, so no extra fetch), falling back to `tableData` locally.
+- 9ce6189: Re-enable in-app HTML5 drag-and-drop (drag tables into sidebar folders, CSV file-drop import). Tauri's webview intercepts OS-level drag-drop by default (`dragDropEnabled`), which swallowed all HTML5 `dragover`/`drop` events inside the app. The app uses only HTML5 DnD with no Tauri-native drop handlers, so disabling Tauri's interception safely restores folder filing for local and cloud tables plus CSV drop import.
+- Updated dependencies [a9ba3ac]
+  - @gtmgrid/services@0.16.1
+  - @gtmgrid/analytics@0.16.1
+  - @gtmgrid/cloud@0.16.1
+
 ## 0.16.0
 
 ### Patch Changes
