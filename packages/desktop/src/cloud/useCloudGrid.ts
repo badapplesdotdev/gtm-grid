@@ -261,17 +261,54 @@ export function useCloudFolders(
  * the grid-cell mutations so the switcher/sidebar can create without subscribing
  * to a table.
  */
+/** The raw `grid.listTables` cache shape (an array of table summaries). */
+type TablesListCache = Awaited<
+  ReturnType<NonNullable<typeof apiClient>["grid"]["listTables"]["query"]>
+>;
+/** The raw `grid.listFolders` cache shape. */
+type FoldersListCache = Awaited<
+  ReturnType<NonNullable<typeof apiClient>["grid"]["listFolders"]["query"]>
+>;
+
 export function useCloudProjectMutations() {
   const qc = useQueryClient();
+
+  /**
+   * Optimistically patch EVERY loaded tables list (the sidebar lists are keyed
+   * `["grid","tables",projectId]`; a structural edit carries only the tableId,
+   * so patch them all by prefix). Snapshots the matched caches and returns a
+   * `rollback`. The trailing `invalidate` reconciles with server truth (and the
+   * realtime workspace broadcast already refreshes other members).
+   */
+  const patchTablesLists = useCallback(
+    (update: (list: TablesListCache) => TablesListCache): (() => void) => {
+      const prev = qc.getQueriesData<TablesListCache>({
+        predicate: (q) =>
+          q.queryKey[0] === "grid" && q.queryKey[1] === "tables",
+      });
+      qc.setQueriesData<TablesListCache>(
+        {
+          predicate: (q) =>
+            q.queryKey[0] === "grid" && q.queryKey[1] === "tables",
+        },
+        (list) => (list ? update(list) : list),
+      );
+      return () => {
+        for (const [key, data] of prev) qc.setQueryData(key, data);
+      };
+    },
+    [qc],
+  );
+
   const createProject = useCallback(
     async (
       workspaceId: Id<"workspaces">,
       name: string,
     ): Promise<Id<"projects">> => {
-      const id = await apiClient!.grid.createProject.mutate({
-        workspaceId,
-        name,
-      });
+      // Client-supplied id: deterministic, so the caller can route to the new
+      // project the instant the mutation resolves and the realtime echo converges.
+      const id = crypto.randomUUID();
+      await apiClient!.grid.createProject.mutate({ workspaceId, name, id });
       await qc.invalidateQueries({
         queryKey: gridQueryKeys.projects(workspaceId),
       });
@@ -287,10 +324,12 @@ export function useCloudProjectMutations() {
       name: string,
       folderId?: string | null,
     ): Promise<Id<"tables">> => {
-      const id = await apiClient!.grid.createTable.mutate({
+      const id = crypto.randomUUID();
+      await apiClient!.grid.createTable.mutate({
         projectId,
         name,
         folderId: folderId ?? null,
+        id,
       });
       await qc.invalidateQueries({
         queryKey: gridQueryKeys.tables(projectId),
@@ -301,42 +340,66 @@ export function useCloudProjectMutations() {
   );
   const deleteTable = useCallback(
     async (tableId: Id<"tables">) => {
-      await apiClient!.grid.deleteTable.mutate({ tableId });
-      // Refresh the sidebar list (the delete only carries the tableId, so
-      // invalidate every loaded tables list by key prefix) and drop the now-gone
-      // table's own query.
-      await qc.invalidateQueries({
-        predicate: (query) =>
-          query.queryKey[0] === "grid" && query.queryKey[1] === "tables",
-      });
+      // Optimistic: drop the table from every loaded sidebar list instantly.
+      const rollback = patchTablesLists((list) =>
+        list.filter((t) => t.id !== tableId),
+      );
       qc.removeQueries({ queryKey: gridQueryKeys.table(tableId) });
+      try {
+        await apiClient!.grid.deleteTable.mutate({ tableId });
+      } catch (e) {
+        rollback();
+        throw e;
+      } finally {
+        await qc.invalidateQueries({
+          predicate: (query) =>
+            query.queryKey[0] === "grid" && query.queryKey[1] === "tables",
+        });
+      }
     },
-    [qc],
+    [qc, patchTablesLists],
   );
   const renameTable = useCallback(
     async (tableId: Id<"tables">, name: string) => {
-      await apiClient!.grid.renameTable.mutate({ tableId, name });
-      // Relabel the sidebar list(s) and the table's own grid (its header reads
-      // the cached name). The rename only carries the tableId, so invalidate
-      // every loaded tables list by key prefix.
-      await qc.invalidateQueries({
-        predicate: (query) =>
-          query.queryKey[0] === "grid" && query.queryKey[1] === "tables",
-      });
-      await qc.invalidateQueries({ queryKey: gridQueryKeys.table(tableId) });
+      // Optimistic: relabel the sidebar list(s) and the open grid header instantly.
+      const rollback = patchTablesLists((list) =>
+        list.map((t) => (t.id === tableId ? { ...t, name } : t)),
+      );
+      try {
+        await apiClient!.grid.renameTable.mutate({ tableId, name });
+      } catch (e) {
+        rollback();
+        throw e;
+      } finally {
+        await qc.invalidateQueries({
+          predicate: (query) =>
+            query.queryKey[0] === "grid" && query.queryKey[1] === "tables",
+        });
+        await qc.invalidateQueries({ queryKey: gridQueryKeys.table(tableId) });
+      }
     },
-    [qc],
+    [qc, patchTablesLists],
   );
   const setTableFavorite = useCallback(
     async (tableId: Id<"tables">, favorite: boolean) => {
-      await apiClient!.grid.setTableFavorite.mutate({ tableId, favorite });
-      // The favourite flag + favourites-first ordering live in the tables list.
-      await qc.invalidateQueries({
-        predicate: (query) =>
-          query.queryKey[0] === "grid" && query.queryKey[1] === "tables",
-      });
+      // Optimistic: flip the pin instantly (favourites-first ordering reconciles
+      // on the refetch / the workspace broadcast).
+      const rollback = patchTablesLists((list) =>
+        list.map((t) => (t.id === tableId ? { ...t, favorite } : t)),
+      );
+      try {
+        await apiClient!.grid.setTableFavorite.mutate({ tableId, favorite });
+      } catch (e) {
+        rollback();
+        throw e;
+      } finally {
+        await qc.invalidateQueries({
+          predicate: (query) =>
+            query.queryKey[0] === "grid" && query.queryKey[1] === "tables",
+        });
+      }
     },
-    [qc],
+    [qc, patchTablesLists],
   );
   // ── Sidebar folders ───────────────────────────────────────────────────────
   // Folder CRUD + table moves refresh BOTH the folders and tables lists for the
@@ -349,27 +412,68 @@ export function useCloudProjectMutations() {
       ]),
     [qc],
   );
+  /** Optimistically patch one project's folders list; returns a `rollback`. */
+  const patchFoldersList = useCallback(
+    (
+      projectId: Id<"projects">,
+      update: (list: FoldersListCache) => FoldersListCache,
+    ): (() => void) => {
+      const key = gridQueryKeys.folders(projectId);
+      const prev = qc.getQueryData<FoldersListCache>(key);
+      qc.setQueryData<FoldersListCache>(key, (list) =>
+        list ? update(list) : list,
+      );
+      return () => qc.setQueryData(key, prev);
+    },
+    [qc],
+  );
+
   const createFolder = useCallback(
     async (projectId: Id<"projects">, name: string): Promise<string> => {
-      const id = await apiClient!.grid.createFolder.mutate({ projectId, name });
+      const id = crypto.randomUUID();
+      await apiClient!.grid.createFolder.mutate({ projectId, name, id });
       await invalidateFolderLists(projectId);
-      return id as string;
+      return id;
     },
     [invalidateFolderLists],
   );
   const renameFolder = useCallback(
     async (projectId: Id<"projects">, folderId: string, name: string) => {
-      await apiClient!.grid.renameFolder.mutate({ folderId, name });
-      await invalidateFolderLists(projectId);
+      const rollback = patchFoldersList(projectId, (list) =>
+        list.map((f) => (f.id === folderId ? { ...f, name } : f)),
+      );
+      try {
+        await apiClient!.grid.renameFolder.mutate({ folderId, name });
+      } catch (e) {
+        rollback();
+        throw e;
+      } finally {
+        await invalidateFolderLists(projectId);
+      }
     },
-    [invalidateFolderLists],
+    [invalidateFolderLists, patchFoldersList],
   );
   const deleteFolder = useCallback(
     async (projectId: Id<"projects">, folderId: string) => {
-      await apiClient!.grid.deleteFolder.mutate({ folderId });
-      await invalidateFolderLists(projectId);
+      // Optimistic: remove the folder AND unfile its tables to the root (the
+      // server's FK is ON DELETE SET NULL), so the sidebar reshapes instantly.
+      const rollbackFolders = patchFoldersList(projectId, (list) =>
+        list.filter((f) => f.id !== folderId),
+      );
+      const rollbackTables = patchTablesLists((list) =>
+        list.map((t) => (t.folderId === folderId ? { ...t, folderId: null } : t)),
+      );
+      try {
+        await apiClient!.grid.deleteFolder.mutate({ folderId });
+      } catch (e) {
+        rollbackTables();
+        rollbackFolders();
+        throw e;
+      } finally {
+        await invalidateFolderLists(projectId);
+      }
     },
-    [invalidateFolderLists],
+    [invalidateFolderLists, patchFoldersList, patchTablesLists],
   );
   const moveTable = useCallback(
     async (
@@ -378,10 +482,24 @@ export function useCloudProjectMutations() {
       folderId: string | null,
       position?: number,
     ) => {
-      await apiClient!.grid.moveTable.mutate({ tableId, folderId, position });
-      await invalidateFolderLists(projectId);
+      // Optimistic: refile the table (and reposition) in the sidebar instantly.
+      const rollback = patchTablesLists((list) =>
+        list.map((t) =>
+          t.id === tableId
+            ? { ...t, folderId, ...(position !== undefined ? { position } : {}) }
+            : t,
+        ),
+      );
+      try {
+        await apiClient!.grid.moveTable.mutate({ tableId, folderId, position });
+      } catch (e) {
+        rollback();
+        throw e;
+      } finally {
+        await invalidateFolderLists(projectId);
+      }
     },
-    [invalidateFolderLists],
+    [invalidateFolderLists, patchTablesLists],
   );
   return {
     createProject,
@@ -1210,42 +1328,152 @@ export function useCloudGridMutations() {
     [qc],
   );
 
-  const setCell = useCallback(
-    async (rowId: Id<"rows">, columnId: Id<"columns">, value: unknown) => {
-      const res = await apiClient!.grid.setCell.mutate({
-        rowId,
-        columnId,
-        value,
-        status: "done",
-        error: null,
-      });
-      return res;
+  /**
+   * Read a column's CURRENT cached projection (for building an optimistic
+   * `column.update`, which carries the FULL column, not just the patch). Prefers
+   * the paged cache the live grid renders; falls back to the unpaged snapshot.
+   */
+  const currentColumn = useCallback(
+    (
+      tableId: string,
+      columnId: string,
+    ): GridPage["columns"][number] | undefined => {
+      const paged = qc.getQueryData<{ pages: GridPage[] }>(
+        gridQueryKeys.tablePaged(tableId),
+      );
+      const fromPaged = paged?.pages[0]?.columns.find((c) => c._id === columnId);
+      if (fromPaged) return fromPaged;
+      const unpaged = qc.getQueryData<GridCacheSnapshot>(
+        gridQueryKeys.table(tableId),
+      );
+      return unpaged?.columns.find((c) => c._id === columnId);
     },
-    [],
+    [qc],
+  );
+
+  /**
+   * Begin an optimistic mutation: cancel any in-flight refetch for this table (so
+   * a late response can't clobber the patch), SNAPSHOT both caches, then apply the
+   * event(s) immediately. Returns a `rollback` to restore the snapshot if the
+   * server write fails.
+   *
+   * Because the writer is itself a realtime subscriber, the server's broadcast
+   * echoes the SAME id-keyed event back ~1 RTT later; `applyGridEvent` is
+   * idempotent (de-dupes inserts by `_id`, keys cells by `rowId:columnId`), so a
+   * successful optimistic write and its echo CONVERGE rather than duplicate —
+   * which is exactly why inserts carry a CLIENT-supplied id (the optimistic id IS
+   * the persisted id).
+   */
+  const beginOptimistic = useCallback(
+    (
+      tableId: string,
+      events: ReadonlyArray<Parameters<typeof patchGridCache>[1]>,
+    ): (() => void) => {
+      void qc.cancelQueries({
+        predicate: (q) =>
+          q.queryKey[0] === "grid" &&
+          (q.queryKey[1] === "table" || q.queryKey[1] === "tablePaged") &&
+          q.queryKey[2] === tableId,
+      });
+      const prevTable = qc.getQueryData(gridQueryKeys.table(tableId));
+      const prevPaged = qc.getQueryData(gridQueryKeys.tablePaged(tableId));
+      for (const event of events) applyOptimistic(tableId, event);
+      return () => {
+        qc.setQueryData(gridQueryKeys.table(tableId), prevTable);
+        qc.setQueryData(gridQueryKeys.tablePaged(tableId), prevPaged);
+      };
+    },
+    [qc, applyOptimistic],
+  );
+
+  const setCell = useCallback(
+    async (
+      tableId: Id<"tables">,
+      rowId: Id<"rows">,
+      columnId: Id<"columns">,
+      value: unknown,
+    ) => {
+      // Optimistic: cells are keyed by (rowId, columnId), so the patch needs no
+      // new id and the realtime echo of the SAME cell converges. No refetch — a
+      // cell edit is the hottest path and the echo already reconciles (TRI-3274).
+      const rollback = beginOptimistic(tableId, [
+        { type: "cell.upsert", cell: { rowId, columnId, value, status: "done", error: null } },
+      ]);
+      try {
+        return await apiClient!.grid.setCell.mutate({
+          rowId,
+          columnId,
+          value,
+          status: "done",
+          error: null,
+        });
+      } catch (e) {
+        rollback();
+        throw e;
+      }
+    },
+    [beginOptimistic],
   );
   const addRow = useCallback(
     async (tableId: Id<"tables">) => {
-      const res = await apiClient!.grid.addRow.mutate({ tableId });
-      await refresh(tableId);
-      return res;
+      // Client-supplied id → the optimistic row IS the persisted row (the echo
+      // converges). The new row appears instantly when the final page is loaded;
+      // the trailing refetch reconciles server-derived fields (position) and the
+      // tail-page case.
+      const id = crypto.randomUUID();
+      const rollback = beginOptimistic(tableId, [
+        { type: "row.insert", row: { _id: id }, cells: [] },
+      ]);
+      try {
+        const res = await apiClient!.grid.addRow.mutate({ tableId, id });
+        await refresh(tableId);
+        return res;
+      } catch (e) {
+        rollback();
+        throw e;
+      }
     },
-    [refresh],
+    [beginOptimistic, refresh],
   );
   /**
    * Bulk insert rows + cells for CSV import. Each row is a `{ columnId: value }`
    * map; metered as one cloud action per row. Throws when the import would
-   * exceed the plan's quota.
+   * exceed the plan's quota. Client-supplied row ids make the import optimistic
+   * and echo-convergent.
    */
   const addRowsWithCells = useCallback(
     async (tableId: Id<"tables">, rows: Array<Record<string, unknown>>) => {
-      const res = await apiClient!.grid.addRowsWithCells.mutate({
-        tableId,
-        rows,
-      });
-      await refresh(tableId);
-      return res;
+      const rowIds = rows.map(() => crypto.randomUUID());
+      const events = rows.map((cellMap, i) => ({
+        type: "row.insert" as const,
+        row: { _id: rowIds[i]! },
+        // Mirror the server's filter (drop empty values) so the optimistic cells
+        // match what gets persisted.
+        cells: Object.entries(cellMap)
+          .filter(([, v]) => v !== "" && v !== null && v !== undefined)
+          .map(([columnId, value]) => ({
+            rowId: rowIds[i]!,
+            columnId,
+            value,
+            status: "done",
+            error: null,
+          })),
+      }));
+      const rollback = beginOptimistic(tableId, events);
+      try {
+        const res = await apiClient!.grid.addRowsWithCells.mutate({
+          tableId,
+          rows,
+          rowIds,
+        });
+        await refresh(tableId);
+        return res;
+      } catch (e) {
+        rollback();
+        throw e;
+      }
     },
-    [refresh],
+    [beginOptimistic, refresh],
   );
   /**
    * Add a column. `fn` ("provider.method") maps onto provider/method/kind the
@@ -1263,51 +1491,85 @@ export function useCloudGridMutations() {
       },
     ) => {
       const { provider, method, kind } = deriveColumnKind(body);
-      const res = await apiClient!.grid.addColumn.mutate({
-        tableId,
-        name: body.name,
-        type: (body.type ?? "text") as
-          | "text"
-          | "number"
-          | "boolean"
-          | "date"
-          | "json",
-        kind,
-        provider,
-        method,
-        code: body.code ?? null,
-        params: body.params ?? {},
-      });
-      await refresh(tableId);
-      return res;
+      const type = (body.type ?? "text") as
+        | "text"
+        | "number"
+        | "boolean"
+        | "date"
+        | "json";
+      const id = crypto.randomUUID();
+      const rollback = beginOptimistic(tableId, [
+        {
+          type: "column.insert",
+          column: {
+            _id: id,
+            name: body.name,
+            type,
+            kind,
+            provider,
+            method,
+            code: body.code ?? null,
+            params: body.params ?? {},
+            condition: null,
+          },
+        },
+      ]);
+      try {
+        const res = await apiClient!.grid.addColumn.mutate({
+          tableId,
+          name: body.name,
+          type,
+          kind,
+          provider,
+          method,
+          code: body.code ?? null,
+          params: body.params ?? {},
+          id,
+        });
+        await refresh(tableId);
+        return res;
+      } catch (e) {
+        rollback();
+        throw e;
+      }
     },
-    [refresh],
+    [beginOptimistic, refresh],
   );
   const deleteRow = useCallback(
     async (tableId: Id<"tables">, rowId: Id<"rows">) => {
-      applyOptimistic(tableId, { type: "row.delete", rowId });
+      const rollback = beginOptimistic(tableId, [{ type: "row.delete", rowId }]);
       try {
         await apiClient!.grid.deleteRow.mutate({ rowId });
       } catch (e) {
-        if (!isNotFoundError(e)) throw e; // already gone → optimistic state is right
+        if (!isNotFoundError(e)) {
+          rollback(); // real failure → restore the row
+          throw e;
+        }
+        // already gone → optimistic delete is right; keep it
       } finally {
         await refresh(tableId);
       }
     },
-    [applyOptimistic, refresh],
+    [beginOptimistic, refresh],
   );
   const deleteColumn = useCallback(
     async (tableId: Id<"tables">, columnId: Id<"columns">) => {
-      applyOptimistic(tableId, { type: "column.delete", columnId });
+      const rollback = beginOptimistic(tableId, [
+        { type: "column.delete", columnId },
+      ]);
       try {
         await apiClient!.grid.deleteColumn.mutate({ columnId });
       } catch (e) {
-        if (!isNotFoundError(e)) throw e; // already gone → optimistic state is right
+        if (!isNotFoundError(e)) {
+          rollback(); // real failure → restore the column
+          throw e;
+        }
+        // already gone → optimistic delete is right; keep it
       } finally {
         await refresh(tableId);
       }
     },
-    [applyOptimistic, refresh],
+    [beginOptimistic, refresh],
   );
   /**
    * Patch a column's definition (rename / type / function config). Invalidates
@@ -1329,13 +1591,42 @@ export function useCloudGridMutations() {
         condition?: string | null;
       },
     ) => {
+      // Optimistic: a `column.update` carries the FULL column, so merge the patch
+      // onto the current cached projection and patch instantly. Skip if the
+      // column isn't cached (the refetch still reflects the edit).
+      const current = currentColumn(tableId, columnId);
+      const rollback = current
+        ? beginOptimistic(tableId, [
+            {
+              type: "column.update",
+              column: {
+                _id: columnId,
+                name: patch.name ?? current.name,
+                type: patch.type ?? current.type,
+                kind: patch.kind ?? current.kind,
+                provider:
+                  patch.provider !== undefined ? patch.provider : current.provider,
+                method: patch.method !== undefined ? patch.method : current.method,
+                code: patch.code !== undefined ? patch.code : current.code,
+                params: patch.params !== undefined ? patch.params : current.params,
+                condition:
+                  patch.condition !== undefined
+                    ? patch.condition
+                    : current.condition,
+              },
+            },
+          ])
+        : null;
       try {
         return await apiClient!.grid.updateColumn.mutate({ columnId, ...patch });
+      } catch (e) {
+        rollback?.();
+        throw e;
       } finally {
         await refresh(tableId);
       }
     },
-    [refresh],
+    [beginOptimistic, currentColumn, refresh],
   );
 
   /** Set (or clear) the table's dedupe config; the server sweeps immediately. */

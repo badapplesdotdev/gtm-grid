@@ -42,7 +42,7 @@ import { buildColumnMetaMap } from "../FnIcon";
 import { DedupePopover } from "../DedupePopover";
 import { resolveRowHeight } from "../gridVirtual";
 import { buildPresenceView } from "../gridPresence";
-import { runCloudColumn } from "./cloud-run";
+import { runCloudColumn, runCloudPreview } from "./cloud-run";
 import { WebhookModal } from "./WebhookModal";
 import { useMe } from "./auth";
 import { gridPresenceStore, useGridPresenceRoster } from "./presenceStore";
@@ -52,7 +52,7 @@ import {
   useCloudSession,
   useCloudTablePaged,
 } from "./useCloudGrid";
-import { isCloudTableMissing } from "../cloudSync";
+import { isCloudTableMissing } from "../tableTree";
 
 /** Fixed cloud column width (px) — cloud columns are not resizable. */
 const CLOUD_COL_W = 180;
@@ -455,11 +455,12 @@ export function CloudGrid({
       },
       generateFormula: api.generateFormula,
       aiProviders: api.aiProviders,
-      // Previewing a function runs it through the local sidecar (same as cloud
-      // column runs), so reuse the local endpoint.
-      previewFunction: api.previewFunction,
+      // Previewing a function dry-runs it through the sidecar's cloud preview
+      // route (same worker-backed store as a cloud column run, but persisting /
+      // metering nothing). Authenticated as the signed-in member via `session`.
+      previewFunction: (tId, body) => runCloudPreview(session, { tableId: tId, ...body }),
     }),
-    [addColumn, updateColumn, tableId],
+    [addColumn, updateColumn, tableId, session],
   );
 
   if (tableId === null) {
@@ -606,11 +607,11 @@ export function CloudGrid({
     runCell,
     runCells,
     setCell: (rowId, colId, value) =>
-      void guard(() => setCell(rowId as Id<"rows">, colId as Id<"columns">, value), "set cell"),
+      void guard(() => setCell(tableId, rowId as Id<"rows">, colId as Id<"columns">, value), "set cell"),
     deleteRow: (rowId) => void guard(() => deleteRow(tableId, rowId as Id<"rows">), "delete row"),
     deleteColumn: (colId) => void guard(() => deleteColumn(tableId, colId as Id<"columns">), "delete column"),
     clearCell: (rowId, colId) =>
-      void guard(() => setCell(rowId as Id<"rows">, colId as Id<"columns">, ""), "clear cell"),
+      void guard(() => setCell(tableId, rowId as Id<"rows">, colId as Id<"columns">, ""), "clear cell"),
     // One right rail at a time: the edit panel overlaps the details drawer.
     editColumn: (col) => { setDetail(null); setEditCol(col); },
     renameColumn: (colId, name) =>
@@ -677,6 +678,7 @@ export function CloudGrid({
             void guard(
               () =>
                 setCell(
+                  tableId,
                   cellExpand.rowId as Id<"rows">,
                   cellExpand.colId as Id<"columns">,
                   v,

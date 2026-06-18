@@ -3,15 +3,12 @@
 // non-2xx. Also proves nested {{Column}} templating reaches `headers`/`body`
 // end-to-end through `Engine.runColumn` (the whole point of the HTTP column).
 
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Db } from "../db.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Engine } from "../execute.js";
 import { Registry } from "../registry.js";
 import { httpRequestConnector } from "./http-request.js";
 import { SsrfBlockedError } from "../ssrf.js";
+import { makeMemoryStore } from "../test-helpers.js";
 import type { Connector, ConnectorMethod, MethodContext } from "../types.js";
 
 const method = (): ConnectorMethod => {
@@ -183,17 +180,6 @@ describe("http.request connector", () => {
 
 // ── End-to-end: nested {{Column}} templating through Engine.runColumn ──
 describe("http.request nested templating via runColumn", () => {
-  let dir: string;
-  let db: Db;
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "http-template-test-"));
-    db = new Db(join(dir, "project.db"));
-  });
-  afterEach(() => {
-    db.close();
-    rmSync(dir, { recursive: true, force: true });
-  });
-
   it("interpolates cell values inside `url`, `headers`, and `body`", async () => {
     // A stub http connector that echoes the (already-resolved) inputs into the cell,
     // so we can assert templating reached the nested objects.
@@ -208,11 +194,12 @@ describe("http.request nested templating via runColumn", () => {
     };
     const stub: Connector = { id: "http", name: "HTTP", category: "http", auth: null, methods: [echoRequest] };
 
-    const table = db.createTable("Leads");
-    const token = db.createColumn({ tableId: table.id, name: "Token", kind: "manual" });
-    const domain = db.createColumn({ tableId: table.id, name: "Domain", kind: "manual" });
-    const out = db.createColumn({
-      tableId: table.id,
+    const store = makeMemoryStore();
+    store.addColumn({ id: "token", table_id: "t", name: "Token", kind: "manual" });
+    store.addColumn({ id: "domain", table_id: "t", name: "Domain", kind: "manual" });
+    store.addColumn({
+      id: "out",
+      table_id: "t",
       name: "Resp",
       kind: "function",
       provider: "http",
@@ -224,15 +211,15 @@ describe("http.request nested templating via runColumn", () => {
         body: { company_domain: "{{Domain}}", limit: 10 },
       },
     });
-    const row = db.createRow(table.id);
-    db.setCell(row.id, token.id, { value: "tok_abc", status: "done" });
-    db.setCell(row.id, domain.id, { value: "stripe.com", status: "done" });
+    store.addRow({ id: "r", table_id: "t" });
+    store.setCellSync("r", "token", { value: "tok_abc", status: "done" });
+    store.setCellSync("r", "domain", { value: "stripe.com", status: "done" });
 
-    const engine = new Engine(db, {}, new Registry([stub]));
-    const res = await engine.runColumn(out.id, { force: true });
+    const engine = new Engine({}, new Registry([stub]), { store, creds: store });
+    const res = await engine.runColumn("out", { force: true });
     expect(res).toEqual({ ran: 1, errors: 0 });
 
-    const cell = db.getCell(row.id, out.id);
+    const cell = store.readCell("r", "out");
     const value = cell?.value as { url: string; headers: Record<string, string>; body: Record<string, unknown> };
     expect(value.url).toBe("https://api.example.com/search?domain=stripe.com");
     expect(value.headers.Authorization).toBe("Bearer tok_abc");
@@ -243,34 +230,24 @@ describe("http.request nested templating via runColumn", () => {
 
 // ── "Try on N rows" preview — Engine.previewColumn ──
 describe("Engine.previewColumn (Try on N rows)", () => {
-  let dir: string;
-  let db: Db;
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "http-preview-test-"));
-    db = new Db(join(dir, "project.db"));
-  });
-  afterEach(() => {
-    db.close();
-    rmSync(dir, { recursive: true, force: true });
-  });
-
   const stubWith = (run: ConnectorMethod["run"]): Connector => ({
     id: "http", name: "HTTP", category: "http", auth: null,
     methods: [{ id: "request", label: "HTTP Request", description: "stub", inputSchema: {}, batchSize: 1, credits: 0, run }],
   });
 
   it("dry-runs the first N rows with templated params and writes NO cells", async () => {
-    const table = db.createTable("Leads");
-    const domain = db.createColumn({ tableId: table.id, name: "Domain", kind: "manual" });
-    const rows = ["a.com", "b.com", "c.com"].map((d) => {
-      const r = db.createRow(table.id);
-      db.setCell(r.id, domain.id, { value: d, status: "done" });
-      return r;
+    const store = makeMemoryStore();
+    store.addColumn({ id: "domain", table_id: "t", name: "Domain", kind: "manual" });
+    const rows = ["a.com", "b.com", "c.com"].map((d, i) => {
+      const id = `r${i}`;
+      store.addRow({ id, table_id: "t" });
+      store.setCellSync(id, "domain", { value: d, status: "done" });
+      return { id };
     });
 
-    const engine = new Engine(db, {}, new Registry([stubWith(async (i) => ({ hit: i.url }))]));
+    const engine = new Engine({}, new Registry([stubWith(async (i) => ({ hit: i.url }))]), { store, creds: store });
     const results = await engine.previewColumn(
-      { provider: "http", method: "request", table_id: table.id, params: { url: "https://x/{{Domain}}" } },
+      { provider: "http", method: "request", table_id: "t", params: { url: "https://x/{{Domain}}" } },
       2,
     );
 
@@ -279,17 +256,17 @@ describe("Engine.previewColumn (Try on N rows)", () => {
     expect(results[1].value).toEqual({ hit: "https://x/b.com" });
     // Preview must not persist anything: the existing Domain cells are untouched
     // and the transient column id never appears in the store.
-    expect(db.getCell(rows[0].id, domain.id)?.value).toBe("a.com");
-    expect(db.listColumns(table.id).some((c) => c.id === "__preview__")).toBe(false);
+    expect(store.readCell(rows[0].id, "domain")?.value).toBe("a.com");
+    expect(store.readCell(rows[0].id, "__preview__")).toBeUndefined();
   });
 
   it("captures a per-row error instead of throwing", async () => {
-    const table = db.createTable("Leads");
-    db.createColumn({ tableId: table.id, name: "Domain", kind: "manual" });
-    db.createRow(table.id);
-    const engine = new Engine(db, {}, new Registry([stubWith(async () => { throw new Error("kaboom"); })]));
+    const store = makeMemoryStore();
+    store.addColumn({ id: "domain", table_id: "t", name: "Domain", kind: "manual" });
+    store.addRow({ id: "r", table_id: "t" });
+    const engine = new Engine({}, new Registry([stubWith(async () => { throw new Error("kaboom"); })]), { store, creds: store });
     const results = await engine.previewColumn(
-      { provider: "http", method: "request", table_id: table.id, params: { url: "https://x" } },
+      { provider: "http", method: "request", table_id: "t", params: { url: "https://x" } },
       5,
     );
     expect(results).toHaveLength(1);

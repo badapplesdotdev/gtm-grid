@@ -15,12 +15,8 @@
  * — i.e. the run really flowed through the cloud store, not local SQLite.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  Db,
   Registry,
   type ConnectorMethod,
   type Connector,
@@ -36,22 +32,6 @@ import {
   runCloudColumn,
   type CloudRunDeps,
 } from "./cloud-run.js";
-
-let dir: string;
-let db: Db;
-
-beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "cloud-run-test-"));
-  // The cloud path is Db-free, so `runCloudColumn` no longer takes a Db. We keep
-  // a local Db here ONLY as a witness: after a cloud run we assert it stayed
-  // empty, proving the run wrote through the injected Convex store, not SQLite.
-  db = new Db(join(dir, "unused.db"));
-});
-
-afterEach(() => {
-  db.close();
-  rmSync(dir, { recursive: true, force: true });
-});
 
 /** A registry whose single connector upper-cases its `value` input. */
 const upperRegistry = (): Registry => {
@@ -255,8 +235,8 @@ describe("runCloudColumn", () => {
     );
     expect(writtenStatuses).toEqual(["done", "done"]);
     expect(writtenStatuses).not.toContain("running");
-    // No local SQLite write happened — the unused db has no such table/column.
-    expect(db.getCell("r1", "c_upper")).toBeUndefined();
+    // The run flowed entirely through the injected cloud store — there is no
+    // local SQLite grid for it to touch (the local paradigm has been removed).
   });
 
   it("records an error status back to Convex when the column body throws", async () => {

@@ -3,27 +3,11 @@
 // per run — at most a few distinct signatures, so a large run with one failure
 // mode raises one exception, not thousands. Per-cell status is unaffected.
 
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Db } from "./db.js";
+import { describe, expect, it, vi } from "vitest";
 import { Engine } from "./execute.js";
 import { Registry } from "./registry.js";
+import { makeMemoryStore, type MemoryStore } from "./test-helpers.js";
 import type { Connector, ConnectorMethod, RunErrorContext } from "./types.js";
-
-let dir: string;
-let db: Db;
-
-beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "report-error-test-"));
-  db = new Db(join(dir, "project.db"));
-});
-
-afterEach(() => {
-  db.close();
-  rmSync(dir, { recursive: true, force: true });
-});
 
 /** A connector whose `boom` method throws — fixed message, or per-row distinct. */
 function throwingRegistry(opts: { distinctPerRow?: boolean } = {}) {
@@ -42,12 +26,12 @@ function throwingRegistry(opts: { distinctPerRow?: boolean } = {}) {
   return new Registry([connector]);
 }
 
-/** Seed N rows with a plain `test.boom` function column. */
-function seed(n: number) {
-  const table = db.createTable("Leads");
-  const name = db.createColumn({ tableId: table.id, name: "Name", kind: "manual" });
-  const out = db.createColumn({
-    tableId: table.id,
+/** Seed N rows with a plain `test.boom` function column into a memory store. */
+function seed(store: MemoryStore, n: number): string {
+  store.addColumn({ id: "name", table_id: "t", name: "Name", kind: "manual" });
+  store.addColumn({
+    id: "boom",
+    table_id: "t",
     name: "Boom",
     kind: "function",
     provider: "test",
@@ -55,17 +39,18 @@ function seed(n: number) {
     params: { value: "{{Name}}" },
   });
   for (let i = 0; i < n; i++) {
-    const r = db.createRow(table.id);
-    db.setCell(r.id, name.id, { value: `name${i}`, status: "done" });
+    store.addRow({ id: `r${i}`, table_id: "t" });
+    store.setCellSync(`r${i}`, "name", { value: `name${i}`, status: "done" });
   }
-  return out.id;
+  return "boom";
 }
 
 describe("engine reportError (deduped systemic-error seam)", () => {
   it("reports ONE exception for a run where every row fails the same way", async () => {
+    const store = makeMemoryStore();
     const reportError = vi.fn();
-    const colId = seed(8);
-    const engine = new Engine(db, { defaultRateLimit: {}, reportError }, throwingRegistry());
+    const colId = seed(store, 8);
+    const engine = new Engine({ defaultRateLimit: {}, reportError }, throwingRegistry(), { store, creds: store });
 
     const res = await engine.runColumn(colId);
 
@@ -79,9 +64,14 @@ describe("engine reportError (deduped systemic-error seam)", () => {
   });
 
   it("caps distinct signatures at 3 even with many distinct failures", async () => {
+    const store = makeMemoryStore();
     const reportError = vi.fn();
-    const colId = seed(10); // 10 distinct messages
-    const engine = new Engine(db, { defaultRateLimit: {}, reportError }, throwingRegistry({ distinctPerRow: true }));
+    const colId = seed(store, 10); // 10 distinct messages
+    const engine = new Engine(
+      { defaultRateLimit: {}, reportError },
+      throwingRegistry({ distinctPerRow: true }),
+      { store, creds: store },
+    );
 
     const res = await engine.runColumn(colId);
 
@@ -90,8 +80,9 @@ describe("engine reportError (deduped systemic-error seam)", () => {
   });
 
   it("never calls reportError when none is injected (cells still error)", async () => {
-    const colId = seed(3);
-    const engine = new Engine(db, { defaultRateLimit: {} }, throwingRegistry());
+    const store = makeMemoryStore();
+    const colId = seed(store, 3);
+    const engine = new Engine({ defaultRateLimit: {} }, throwingRegistry(), { store, creds: store });
     const res = await engine.runColumn(colId);
     expect(res.errors).toBe(3); // unchanged behaviour, no throw
   });

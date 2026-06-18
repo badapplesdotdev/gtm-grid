@@ -1,10 +1,8 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, memo, lazy, Suspense, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { api, TableSummary, FullTable, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type FolderSummary, type SignalSource, type CellProgressEvent } from "./api";
+import { api, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource } from "./api";
 import { onActivateKey } from "./lib/utils";
 import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
-import CellDetails, { extractCode } from "./CellDetails";
-import { DedupePopover } from "./DedupePopover";
 import { CommandPalette, type PaletteAction } from "./CommandPalette";
 import { resolveEditTrigger } from "./useGridKeyboardNav";
 import { Dialog, DialogContent } from "./components/ui/dialog";
@@ -12,39 +10,15 @@ import { BrandIcon } from "./BrandIcon";
 import { ProjectSwitcher, CloudIcon } from "./ProjectSwitcher";
 import { AccountBar, PlanBillingModal } from "./cloud/AccountBar";
 import { PendingInvites } from "./cloud/PendingInvites";
-import { cloudEnabled, queryClient, syncWorkspacePlan, apiClient, API_URL, getStoredAuthToken } from "./cloud/client";
+import { cloudEnabled, queryClient, syncWorkspacePlan, apiClient } from "./cloud/client";
 import {
-  SYNC_META,
-  mapSyncStatus,
-  syncUiVisible,
-  decidePush,
-  isOverwriteConfirmNeeded,
-  overwriteConfirmMessage,
-  pendingCount,
-  planSyncAll,
-  shouldAutoPush,
-  parseAutoSyncFlag,
-  AUTO_SYNC_DEBOUNCE_MS,
-  AUTO_SYNC_ENABLE_WARNING,
-  SYNC_LINKS_STORAGE_KEY,
-  parseSyncLinks,
-  serializeSyncLinks,
-  upsertSyncLink,
-  hydrateSyncLinksForProject,
-  shouldCloseConflictPopover,
-  mergeServerSyncLinks,
-  resolveStaleCloudTableFallback,
-  resolveTargetCloudProject,
-  buildTableList,
   dedupeTableRowsByName,
   groupTableList,
   positionForMove,
   type MoveTarget,
   type SidebarFolder,
-  type SyncStatus,
   type TableListRow,
-} from "./cloudSync";
-import { CloudPushHttpError } from "./api";
+} from "./tableTree";
 import { useMe, useActiveWorkspace, useAuthState } from "./cloud/auth";
 import {
   useMyPendingInvitations,
@@ -66,7 +40,6 @@ import {
   parsePersistState,
   serializePersistState,
   NOTIFICATIONS_PERSIST_KEY,
-  LEGACY_AUTO_SYNC_NUDGE_KEY,
   type NotificationPersistState,
   type NotificationActionId,
   type AppNotification,
@@ -91,10 +64,10 @@ import { type SignalsCloud } from "./SignalsModal";
 import type { AgentCloudContext } from "./AgentPanel";
 import type { TableCard } from "./Panels";
 import type { ImportWriter } from "./csvImport";
+// NOTE: DataGrid / buildColumnMetaMap / resolveRowHeight were only used by the
+// removed local-sidecar grid render path; the cloud grid (CloudGrid) is
+// self-contained. They are intentionally no longer imported here.
 import type { Id } from "./cloud/ids";
-import { DataGrid } from "./DataGrid";
-import { buildColumnMetaMap } from "./FnIcon";
-import { resolveRowHeight } from "./gridVirtual";
 import "./styles.css";
 
 // ── Lazy-loaded panels (TRI-3287) ─────────────────────────────────────
@@ -129,13 +102,6 @@ const TablesBrowse = lazy(() =>
 const SkillPanel = lazy(() =>
   import("./Panels").then((m) => ({ default: m.SkillPanel })),
 );
-const AddColumnPopover = lazy(() =>
-  import("./AddColumn").then((m) => ({ default: m.AddColumnPopover })),
-);
-const FunctionsModal = lazy(() =>
-  import("./AddColumn").then((m) => ({ default: m.FunctionsModal })),
-);
-const ColumnEditPanel = lazy(() => import("./ColumnEditPanel"));
 const SignalsModal = lazy(() =>
   import("./SignalsModal").then((m) => ({ default: m.SignalsModal })),
 );
@@ -316,17 +282,6 @@ function formatReceivedAt(ms: number): string {
     minute: "2-digit",
   });
 }
-
-// Column width: a modest default, hard min/max so cells stay readable & clipped.
-const DEFAULT_COL_W = 200;
-const MIN_COL_W = 80;
-const MAX_COL_W = 460;
-const GUTTER_W = 48; // row-number column
-const ADD_COL_W = 44; // trailing "+" column
-
-// Max function columns run concurrently by "Run all". Independent columns fan
-// out up to this bound; dependent columns still serialize behind their inputs.
-const RUN_ALL_CONCURRENCY = 4;
 
 // Persisted id of the last cloud project the user had open, so a relaunch
 // reopens it (default-to-cloud for signed-in users).
@@ -786,67 +741,20 @@ export function ExpandedEditor({
   );
 }
 
-// ─── New Table Modal ──────────────────────────────────────
-
-function NewTableModal({ onClose, onCreated, folderId = null }: { onClose: () => void; onCreated: (id: string) => void; folderId?: string | null }) {
-  const [name, setName] = useState("Untitled table");
-  const [saving, setSaving] = useState(false);
-
-  const handleCreate = async () => {
-    if (!name.trim()) return;
-    setSaving(true);
-    try {
-      const t = await api.createTable(name.trim(), folderId);
-      onCreated(t.id);
-      onClose();
-    } catch {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="modal" srTitle="New table">
-        <div className="modal-header">
-          <span className="modal-title">New table</span>
-          <button className="modal-close" onClick={onClose}><Icon.X /></button>
-        </div>
-        <div className="modal-body">
-          <div className="form-row">
-            <label className="form-label">Table name</label>
-            <input className="form-input" value={name} onChange={e => setName(e.target.value)} autoFocus
-              onKeyDown={e => e.key === "Enter" && handleCreate()} />
-          </div>
-        </div>
-        <div className="modal-footer">
-          <button className="btn btn-outline" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={handleCreate} disabled={saving || !name.trim()}>
-            {saving ? "Creating…" : "Create table"}
-          </button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 // ─── New Table Chooser ────────────────────────────────────
 
 /**
- * The "New table" chooser — three option tiles (Blank / CSV upload / Webhook)
- * replacing the old straight-to-blank entry points. Reuses the centered
- * `.overlay > .modal` surface and the `.acx-*` tile pattern. Webhook is
- * CLOUD-ONLY: in local mode the tile is disabled with a "requires a cloud
- * workspace" hint (the design's paid/cloud gate).
+ * The "New table" chooser — option tiles (Blank / CSV upload / Social Signals /
+ * Webhook). Reuses the centered `.overlay > .modal` surface and the `.acx-*`
+ * tile pattern. Every option creates a cloud table.
  */
 function NewTableChooser({
-  inCloud,
   onClose,
   onBlank,
   onCsv,
   onWebhook,
   onSignals,
 }: {
-  inCloud: boolean;
   onClose: () => void;
   onBlank: () => void;
   onCsv: () => void;
@@ -861,9 +769,6 @@ function NewTableChooser({
   );
   const WebhookIcon = (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17a4 4 0 0 1 3.6-3.98" /><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06" /><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8" /></svg>
-  );
-  const LockIcon = (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
   );
 
   return (
@@ -899,25 +804,14 @@ function NewTableChooser({
               </span>
               <span className="acx-item-caret">{Caret}</span>
             </button>
-            {inCloud ? (
-              <button className="acx-item" onClick={() => { onWebhook(); onClose(); }}>
-                <span className="acx-item-icon">{WebhookIcon}</span>
-                <span className="acx-item-text">
-                  <span className="acx-item-title">Driven by a webhook</span>
-                  <span className="acx-item-sub">POST JSON to populate rows automatically.</span>
-                </span>
-                <span className="acx-item-caret">{Caret}</span>
-              </button>
-            ) : (
-              <button className="acx-item acx-disabled" disabled title="Requires a cloud workspace">
-                <span className="acx-item-icon">{WebhookIcon}</span>
-                <span className="acx-item-text">
-                  <span className="acx-item-title">Driven by a webhook</span>
-                  <span className="acx-item-sub">Requires a cloud workspace.</span>
-                </span>
-                <span className="acx-item-caret" style={{ color: "var(--text-3)" }}>{LockIcon}</span>
-              </button>
-            )}
+            <button className="acx-item" onClick={() => { onWebhook(); onClose(); }}>
+              <span className="acx-item-icon">{WebhookIcon}</span>
+              <span className="acx-item-text">
+                <span className="acx-item-title">Driven by a webhook</span>
+                <span className="acx-item-sub">POST JSON to populate rows automatically.</span>
+              </span>
+              <span className="acx-item-caret">{Caret}</span>
+            </button>
           </div>
         </div>
       </DialogContent>
@@ -925,146 +819,6 @@ function NewTableChooser({
   );
 }
 
-// ─── Sync popover (TRI-3297) ──────────────────────────────
-// The per-table sync dialog, anchored to the right of the clicked sidebar row.
-// Head = table name + status pill; a workspace row; and a state-varying body
-// (synced / ahead|local / syncing / conflict-as-overwrite-confirm / offline).
-// Recreated from the design's `SyncPopover` (app/SyncPanel.jsx + app/sync.css),
-// mapped onto the live app's tokens.
-
-const SyncDot = ({ status }: { status: SyncStatus }) => (
-  <span className={`sync-dot is-${status}`} aria-label={SYNC_META[status].label} />
-);
-
-function SyncPopover({
-  tableName,
-  rowCount,
-  status,
-  workspaceName,
-  memberCount,
-  anchorTop,
-  sidebarWidth,
-  cloudRowCount,
-  error,
-  onPush,
-  onConfirmOverwrite,
-  onRepush,
-  onClose,
-}: {
-  tableName: string;
-  rowCount: number;
-  status: SyncStatus;
-  workspaceName: string;
-  memberCount: number;
-  anchorTop: number;
-  sidebarWidth: number;
-  cloudRowCount: number | null;
-  error: string | null;
-  onPush: () => void;
-  onConfirmOverwrite: () => void;
-  // TRI-3306: v1 sync is one-way (local→cloud), so the synced state offers a
-  // re-push, not a "check for updates" (there is nothing to pull).
-  onRepush: () => void;
-  onClose: () => void;
-}) {
-  const meta = SYNC_META[status];
-  // TRI-3314-2: clamp `top` against the ACTUAL rendered height, not a fixed 330px
-  // guess. A tall branch (conflict / synced + error) used to exceed the guess and
-  // clip the action button. We measure the popover after layout and re-clamp so it
-  // can never overflow the bottom edge (and flips above the anchor when needed).
-  const popRef = useRef<HTMLDivElement>(null);
-  const [top, setTop] = useState(() => Math.max(8, Math.min(anchorTop, window.innerHeight - 330)));
-  useLayoutEffect(() => {
-    const el = popRef.current;
-    const measured = el ? el.getBoundingClientRect().height : 330;
-    setTop(Math.max(8, Math.min(anchorTop, window.innerHeight - measured - 8)));
-  }, [anchorTop, status, error]);
-  return (
-    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent
-        ref={popRef}
-        className="sync-pop"
-        style={{ top, left: sidebarWidth + 8 }}
-        overlayClassName="bare-scrim"
-        srTitle="Sync"
-      >
-        <div className="sync-pop-head">
-          <span className="sync-pop-table">
-            <span className="sync-pop-table-ic"><Icon.Table /></span>
-            {tableName}
-          </span>
-          <span className={`sync-pill is-${meta.tone}`}>
-            <SyncDot status={status} />
-            {meta.label}
-          </span>
-        </div>
-
-        <div className="sync-pop-ws">
-          <span className="sync-pop-ws-text">
-            <span className="sync-pop-ws-name">{workspaceName}</span>
-            <span className="sync-pop-ws-sub">{memberCount} member{memberCount === 1 ? "" : "s"} · realtime</span>
-          </span>
-        </div>
-
-        {status === "syncing" ? (
-          <div className="sync-prog">
-            <div className="sync-prog-top">
-              <span className="cell-spinner" />
-              <span>Uploading rows…</span>
-            </div>
-            <div className="sync-prog-bar"><span style={{ width: "60%" }} /></div>
-            <div className="sync-prog-note">execution stays local — only table data is uploaded</div>
-          </div>
-        ) : status === "synced" ? (
-          <div className="sync-body">
-            <div className="sync-row"><span className="sync-row-k">Rows in cloud</span><span className="sync-row-v mono">{(cloudRowCount ?? rowCount).toLocaleString()}</span></div>
-            <button className="btn btn-outline sync-act" onClick={onRepush}>
-              <Icon.CloudUp size={13} /> Re-push to cloud
-            </button>
-            {error && <div className="account-menu-error" role="alert">{error}</div>}
-          </div>
-        ) : status === "conflict" ? (
-          <div className="sync-body">
-            <div className="sync-conflict-note">
-              <Icon.Alert size={13} />
-              <span>Re-syncing <strong>{tableName}</strong> overwrites the cloud copy ({rowCount.toLocaleString()} row{rowCount === 1 ? "" : "s"}) with your local version.</span>
-            </div>
-            <div className="sync-choices">
-              <button className="sync-choice" onClick={onConfirmOverwrite}>
-                <span className="sync-choice-t">Keep my version</span>
-                <span className="sync-choice-s">overwrite the cloud copy</span>
-              </button>
-              <button className="sync-choice" onClick={onClose}>
-                <span className="sync-choice-t">Cancel</span>
-                <span className="sync-choice-s">leave the cloud copy as-is</span>
-              </button>
-            </div>
-            {error && <div className="account-menu-error" role="alert">{error}</div>}
-          </div>
-        ) : status === "offline" ? (
-          <div className="sync-body">
-            <div className="sync-offline-note">
-              <Icon.CloudOff size={14} />
-              <span>Engine offline. Changes are saved locally and will push when you reconnect.</span>
-            </div>
-          </div>
-        ) : (
-          /* ahead OR local */
-          <div className="sync-body">
-            <div className="sync-diff">
-              <div className="sync-diff-line new"><span className="sync-diff-ic">↑</span>{rowCount.toLocaleString()} row{rowCount === 1 ? "" : "s"} · not in cloud yet</div>
-            </div>
-            <button className="btn btn-primary sync-act" onClick={onPush}>
-              <Icon.CloudUp size={14} /> Push table to cloud
-            </button>
-            <div className="sync-prog-note">teammates get your changes in realtime</div>
-            {error && <div className="account-menu-error" role="alert">{error}</div>}
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 // ─── Notification center (TRI-3308) ───────────────────────
 // The bell popover. Reuses the account-menu shell (same surface / border /
@@ -1229,22 +983,15 @@ function ChangelogDialog({
 // ─── Main App ─────────────────────────────────────────────
 
 export default function App() {
-  // Health
+  // Health (the execution sidecar liveness).
   const [healthStatus, setHealthStatus] = useState<"loading" | "connected" | "offline">("loading");
-  const [projectName, setProjectName] = useState("gtmgrid");
 
-  // Tables
-  const [tables, setTables] = useState<TableSummary[]>([]);
-  const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
-  const [tableData, setTableData] = useState<FullTable | null>(null);
-  const [tableLoading, setTableLoading] = useState(false);
+  // Tables (cloud-backed). Inline-rename draft state for the sidebar rows.
   const [renamingTableId, setRenamingTableId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
-  const [confirmDeleteTable, setConfirmDeleteTable] = useState<TableSummary | null>(null);
   const [confirmDeleteCloudTable, setConfirmDeleteCloudTable] = useState<{ _id: Id<"tables">; name: string } | null>(null);
 
-  // Sidebar folders (local project; cloud folders come from useCloudFolders).
-  const [localFolders, setLocalFolders] = useState<FolderSummary[]>([]);
+  // Sidebar folders (cloud folders come from useCloudFolders).
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
   const [folderDraft, setFolderDraft] = useState("");
   // The header "+" add menu (New table / New folder).
@@ -1292,17 +1039,10 @@ export default function App() {
   const [view, setView] = useState<View>({ kind: "table" });
 
   // Modals
-  const [showAddCol, setShowAddCol] = useState(false);
-  const [addColAnchor, setAddColAnchor] = useState<{ left: number; top: number } | null>(null);
-  const [showFunctions, setShowFunctions] = useState(false);
-  const [editCol, setEditCol] = useState<Column | null>(null);
-  const [showNewTable, setShowNewTable] = useState(false);
   // The "New table" chooser (Blank / CSV / Webhook) replaces the old
   // straight-to-blank entry points.
   const [showNewTableChooser, setShowNewTableChooser] = useState(false);
   const [showSignals, setShowSignals] = useState(false);
-  const [warmingTableId, setWarmingTableId] = useState<string | null>(null);
-  const warmTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Bumped to ask the CloudGrid to auto-open the webhook setup form (the chooser's
   // Webhook flow). A monotonic token so each request re-triggers cleanly.
   const [openWebhookToken, setOpenWebhookToken] = useState(0);
@@ -1310,7 +1050,6 @@ export default function App() {
   const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
   // Cmd/Ctrl+K command palette (quick table nav + actions).
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [currentProjectPath, setCurrentProjectPath] = useState<string | null>(null);
   // Resizable sidebar — width persisted to localStorage, clamped to a sane range.
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     const v = Number(localStorage.getItem("gtmgrid:sidebarW"));
@@ -1366,15 +1105,14 @@ export default function App() {
     document.addEventListener("mouseup", onUp);
   };
 
-  // ── Cloud project mode (multiplayer via Convex) ──────────────
-  // A cloud project is selected from the switcher; while one is active the main
-  // area renders the live CloudGrid instead of the local sidecar grid. Local
-  // state above is left intact so switching back is instant and unchanged.
+  // ── Cloud project (multiplayer via Convex) ──────────────
+  // The app is cloud-only: a signed-in user always has a cloud project open and
+  // the main area renders the live CloudGrid.
   const me = useMe();
   const { isAuthenticated, isLoading: authLoading } = useAuthState();
   // A captured invite (deep link `gtmgrid://invite/<token>` or `?invite=` URL).
-  // When present + signed out it FORCES the auth flow even in local mode, so an
-  // invitee is always guided to sign up / sign in and then auto-enrolled.
+  // When present + signed out it routes the auth gate to sign-up so an invitee is
+  // always guided to sign up / sign in and then auto-enrolled.
   const pendingInviteToken = usePendingInviteToken();
   // In-app auto-update (Tauri only): a newer SIGNED release surfaces a download
   // affordance next to the bell + an UpdateDialog that downloads/installs/relaunches.
@@ -1422,17 +1160,6 @@ export default function App() {
     }
     try { localStorage.setItem("gtmgrid:lastVersion", __APP_VERSION__); } catch { /* ignore */ }
   }, [changelogItems]);
-  // Local-first: when cloud is configured but the user hasn't signed in, the
-  // onboarding offers "Continue locally" — which sets this persisted flag so the
-  // app boots straight into local mode (no cloud features) on future launches.
-  // Signing in (via the AccountBar) unlocks cloud at any time.
-  const [localMode, setLocalMode] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem("gtmgrid:localMode") === "1";
-    } catch {
-      return false;
-    }
-  });
   // Boot-loader timing (see the boot gate before the main return). A signed-in
   // cloud user lands in a cloud project; we hold the full-screen branded loader
   // until that resolves so the app never flashes local-then-cloud on open.
@@ -1453,14 +1180,6 @@ export default function App() {
       clearTimeout(min);
       clearTimeout(max);
     };
-  }, []);
-  const continueLocally = useCallback(() => {
-    try {
-      localStorage.setItem("gtmgrid:localMode", "1");
-    } catch {
-      /* no storage — local mode just won't persist across launches */
-    }
-    setLocalMode(true);
   }, []);
   // Pull fresh cloud state (user, workspaces, plan, seats) after a flow that
   // changes it — finishing onboarding or accepting an invite — so the badge,
@@ -1578,12 +1297,6 @@ export default function App() {
   useWorkspaceRealtime(activeWorkspace?._id ?? null);
   const [cloudProject, setCloudProject] = useState<CloudProject | null>(null);
   const [cloudTableId, setCloudTableId] = useState<Id<"tables"> | null>(null);
-  // The LOCAL table the open cloud view corresponds to, when known (set on a
-  // sync push / swap repoint). Drives the open-cloud-table 404 self-heal
-  // (TRI-3312): if the open cloud id is a stale deleted id, we recover to this
-  // local table's CURRENT linked cloud id. `null` for a cloud table opened with
-  // no known local link (nothing to recover to → leave the existing behaviour).
-  const [cloudTableLocalId, setCloudTableLocalId] = useState<string | null>(null);
   const cloudTables = useCloudTables(cloudProject?._id ?? null);
   const cloudFolders = useCloudFolders(cloudProject?._id ?? null);
   const {
@@ -1602,22 +1315,10 @@ export default function App() {
   // Post-push cache invalidations (TRI-3309 A/E): refetch the cloud-tables list
   // and re-seed the open cloud table's grid after a push / re-sync swap.
   const { invalidateCloudTables, invalidateCloudTable } = useCloudSyncRefresh();
-  // CSV import: which mode's modal is open (null = closed). Local writes via the
-  // sidecar; cloud writes via Convex (metered). Writers are built below.
-  const [importMode, setImportMode] = useState<null | "local" | "cloud">(null);
+  // CSV import: whether the cloud import modal is open (null = closed). Cloud
+  // writes go via the metered Convex mutations (writer built below).
+  const [importMode, setImportMode] = useState<null | "cloud">(null);
 
-  // Local import writer — sidecar HTTP (unmetered). Stable across renders.
-  const localImportWriter = useMemo<ImportWriter>(
-    () => ({
-      createTable: async (name) => (await api.createTable(name)).id,
-      addColumn: async (tableId, col) =>
-        (await api.addColumn(tableId, { name: col.name, type: col.type })).id,
-      addRowsChunk: async (tableId, rows) => {
-        await api.addRowsBulk(tableId, rows);
-      },
-    }),
-    [],
-  );
   // Cloud import writer — Convex mutations (metered; quota-guarded). Null until a
   // cloud project is open. Branded Convex ids are strings at runtime.
   const cloudImportWriter = useMemo<ImportWriter | null>(() => {
@@ -1667,12 +1368,10 @@ export default function App() {
   // silently. Both are cleared on the next attempt / success.
   const [cloudCreating, setCloudCreating] = useState(false);
   const [cloudCreateError, setCloudCreateError] = useState<string | null>(null);
-  // Whether the app is currently viewing a cloud project (vs. local).
-  const inCloud = cloudProject !== null;
   // CLOUD context for the agent (TRI-3296): the signed-in session + the active
   // cloud workspace/project/table, so the agent's MCP table tools operate on
   // Supabase. Null unless ALL are present (a cloud project + table is open and
-  // we have a session), in which case the agent keeps its local-SQLite path.
+  // we have a session).
   // (`cloudSession` is declared above, alongside the credential source.)
   const agentCloud = useMemo<AgentCloudContext | null>(() => {
     if (!cloudSession || !activeWorkspace || !cloudProject || !cloudTableId) {
@@ -1689,19 +1388,17 @@ export default function App() {
   // Active CLOUD table's live view. Shares CloudGrid's paged query key, so this
   // dedups with CloudGrid's own useCloudTablePaged (no extra fetch) and is a
   // safe no-op when passed `null`. Gives the agent's "Active table" hint the
-  // cloud table the user is actually viewing (TRI-3296 follow-up): in cloud mode
-  // the visible grid is driven by `cloudTableId`, not local `tableData`, so
-  // without this the hint would stay stuck on the last local table.
-  const cloudActiveTable = useCloudTablePaged(inCloud ? cloudTableId : null).data;
+  // cloud table the user is actually viewing (TRI-3296 follow-up): the visible
+  // grid is driven by `cloudTableId`.
+  const cloudActiveTable = useCloudTablePaged(cloudTableId).data;
   // Stable `activeTable` for the agent panel (TRI-3306). Previously passed as an
   // inline object literal, giving it a new identity on every App re-render
   // (react-query cloud polling, etc.); the panel keyed an abort-on-change effect
   // off it and so aborted the live agent turn on every unrelated re-render. The
   // panel now depends on scalar keys, but we still memoize here for hygiene so
   // the prop identity only changes when the table name or column set actually
-  // does. In cloud mode we source it from the cloud table so the hint follows
-  // `cloudTableId`; in local mode we keep the `tableData` derivation.
-  const activeTableSource = inCloud ? cloudActiveTable ?? null : tableData;
+  // does. We source it from the cloud table so the hint follows `cloudTableId`.
+  const activeTableSource = cloudActiveTable ?? null;
   const activeTableColumnNames = activeTableSource?.columns.map((c) => c.name).join("\n") ?? null;
   const activeTable = useMemo(
     () =>
@@ -1753,13 +1450,13 @@ export default function App() {
     setImportMode(null);
   }, [cloudTableId, view]);
 
-  // ── Default-to-cloud for signed-in users ─────────────────────────────────
+  // ── Default cloud project for signed-in users ────────────────────────────
   // Persist the last-selected cloud project id so a relaunch reopens it, and on
   // first load (when a workspace + its projects are ready and nothing is open
   // yet) auto-select that project — or the most recent / first — so a signed-in
-  // user lands in CLOUD mode, not local. Guarded by a ref so it runs ONCE per
+  // user always lands in a cloud project. Guarded by a ref so it runs ONCE per
   // workspace and never fights the workspace-change reset or an explicit user
-  // action. Signed-out users have no cloud projects, so they stay local.
+  // action.
   const autoCloudWorkspaceRef = useRef<Id<"workspaces"> | null>(null);
   useEffect(() => {
     if (!activeWorkspaceId) return;
@@ -1768,18 +1465,14 @@ export default function App() {
       try { localStorage.setItem(LAST_CLOUD_PROJECT_KEY, cloudProject._id); } catch { /* ignore */ }
     }
     // One-shot auto-select per workspace: only when nothing is open yet and the
-    // projects have loaded. An empty list (or a still-loading `undefined`) is a
-    // no-op, so a user with no cloud projects simply stays in local mode.
+    // projects have loaded. A still-loading `undefined` is a no-op.
     if (autoCloudWorkspaceRef.current === activeWorkspaceId) return;
     if (cloudProject !== null) return;
     if (!cloudProjects) return; // still loading
     if (cloudProjects.length === 0) {
-      // A cloud workspace must NEVER fall back to the local engine — that would
-      // silently save tables to disk instead of the cloud. If the workspace has
-      // no projects yet, auto-create a default cloud project so the app enters
-      // cloud mode (`inCloud`) and the local table section stays hidden. Skip when
-      // cloud is locked (the lapsed-trial panel owns that state).
-      if (cloudLocked || !activeWorkspace) return;
+      // The app is cloud-only: if the workspace has no projects yet, auto-create
+      // a default cloud project so a brand-new user always lands in a project.
+      if (!activeWorkspace) return;
       autoCloudWorkspaceRef.current = activeWorkspaceId;
       void (async () => {
         try {
@@ -1810,89 +1503,22 @@ export default function App() {
       setCloudTableId(null);
       setView({ kind: "table" });
     }
-  }, [activeWorkspaceId, cloudProjects, cloudProject, cloudLocked, activeWorkspace, createCloudProject]);
+  }, [activeWorkspaceId, cloudProjects, cloudProject, activeWorkspace, createCloudProject]);
 
   // Appearance: only the dark-mode toggle is user-controllable. Density and
   // accent are fixed (compact + green) by product decision.
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try { return (localStorage.getItem("gtmgrid:theme") as "light" | "dark") || "light"; } catch { return "light"; }
   });
-  // Per-density row height the virtualizer estimates with (the scroll container
-  // + column windowing now live inside the shared DataGrid).
-  const [rowHeight, setRowHeight] = useState(resolveRowHeight);
   useEffect(() => {
     const root = document.documentElement;
     root.setAttribute("data-theme", theme);
     root.setAttribute("data-density", "compact");
     root.setAttribute("data-accent", "green");
-    setRowHeight(resolveRowHeight());
     try { localStorage.setItem("gtmgrid:theme", theme); } catch { /* ignore */ }
   }, [theme]);
 
   // Open the add-column popover anchored just below the clicked "+" button.
-  const openAddCol = (e: React.MouseEvent) => {
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    setAddColAnchor({ left: r.left, top: r.bottom });
-    setShowAddCol(true);
-  };
-
-  // Run state
-  const [runProgress, setRunProgress] = useState<{ current: number; total: number } | null>(null);
-  const [runningColId, setRunningColId] = useState<string | null>(null);
-  const [runningCells, setRunningCells] = useState<Set<string>>(new Set()); // `${rowId}:${colId}`
-  // Auto-run: recompute dependent function columns when an input cell changes.
-  const [autoRun, setAutoRun] = useState<boolean>(() => {
-    try { return localStorage.getItem("gtmgrid:autoRun") !== "off"; } catch { return true; }
-  });
-  // Mirror into a ref so the per-cell `onEdit` closure always reads the CURRENT
-  // value. Cells are memoized (cellPropsEqual ignores onEdit), so they keep a stale
-  // closure across a toggle — without this the toggle wouldn't take effect until the
-  // cell re-rendered for another reason, so "Auto-run off" was being ignored.
-  const autoRunRef = useRef(autoRun);
-  autoRunRef.current = autoRun;
-  const toggleAutoRun = useCallback(() => {
-    setAutoRun((v) => {
-      const next = !v;
-      try { localStorage.setItem("gtmgrid:autoRun", next ? "on" : "off"); } catch { /* ignore */ }
-      return next;
-    });
-  }, []);
-
-  // Cell details drawer + column widths (resize)
-  const [detail, setDetail] = useState<{
-    columnName: string;
-    value: unknown;
-    /** Run metadata + ids for the raw-response fetch (function cells only). */
-    meta?: { rowId: string; colId: string; fn: string | null; ranAt?: number | null; runMs?: number | null } | null;
-  } | null>(null);
-  const [expandCell, setExpandCell] = useState<
-    { rowId: string; colId: string; columnName: string; value: string; editable: boolean; anchor: { left: number; top: number; width: number } } | null
-  >(null);
-  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
-    try {
-      return JSON.parse(localStorage.getItem("gtmgrid:colWidths") || "{}");
-    } catch {
-      return {};
-    }
-  });
-  const setColWidth = useCallback((colId: string, w: number) => {
-    setColWidths((prev) => {
-      const next = { ...prev, [colId]: Math.max(MIN_COL_W, Math.min(MAX_COL_W, Math.round(w))) };
-      try {
-        localStorage.setItem("gtmgrid:colWidths", JSON.stringify(next));
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
-  }, []);
-  // Effective rendered width for a column (clamped — old saved widths can be huge).
-  const colW = useCallback(
-    (id: string) => Math.max(MIN_COL_W, Math.min(MAX_COL_W, colWidths[id] ?? DEFAULT_COL_W)),
-    [colWidths],
-  );
-
-
   // Right-click context menu
   const [ctxMenu, setCtxMenu] = useState<{
     x: number;
@@ -1910,29 +1536,24 @@ export default function App() {
     const boot = async () => {
       try {
         // `health` is the liveness contract — gate connected/offline on it ALONE.
-        const h = await api.health();
+        await api.health();
         if (cancelled) return;
         setHealthStatus("connected");
-        setProjectName(h.project ?? "gtmgrid");
-        // Load feature data resiliently: a single missing/failed route (e.g. a
+        // Load engine metadata resiliently: a single missing/failed route (e.g. a
         // version-skewed sidecar lacking a newer endpoint) must degrade that one
-        // feature, never blank the whole app with "server not reachable".
-        const [t, fl, f, e, ai, sk] = await Promise.all([
-          api.tables().catch(() => []),
-          api.folders().catch(() => []),
+        // feature, never blank the whole app with "server not reachable". (Tables
+        // live in the cloud now, so only engine metadata is fetched here.)
+        const [f, e, ai, sk] = await Promise.all([
           api.functions().catch(() => []),
           api.extensions().catch(() => []),
           api.aiProviders().catch(() => []),
           api.skills().catch(() => []),
         ]);
         if (cancelled) return;
-        setTables(t);
-        setLocalFolders(fl);
         setConnectors(f);
         setExtensions(e);
         setAiProviders(ai);
         setSkills(sk);
-        setSelectedTableId((cur) => cur ?? (t.length > 0 ? t[0].id : null));
       } catch {
         if (cancelled) return;
         setHealthStatus("offline");
@@ -1946,95 +1567,8 @@ export default function App() {
     };
   }, []);
 
-  // ── Load selected table ────────────────────
-
-  const loadTable = useCallback(async (id: string) => {
-    setTableLoading(true);
-    try {
-      const data = await api.table(id);
-      setTableData(data);
-    } catch {
-      setTableData(null);
-    } finally {
-      setTableLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (selectedTableId) loadTable(selectedTableId);
-    else setTableData(null);
-  }, [selectedTableId, loadTable]);
-
-  // Patch a single cell in place from a streamed run progress event. Keeps the
-  // rest of the grid untouched so a local run updates only the cells that
-  // actually changed (no full setTableData replacement / loadTable refetch).
-  // Ignores events for a table other than the one currently loaded.
-  const patchCell = useCallback((tableId: string, e: CellProgressEvent) => {
-    setTableData((cur) => {
-      if (!cur || cur.id !== tableId) return cur;
-      let touched = false;
-      const rows = cur.rows.map((row) => {
-        if (row.id !== e.rowId) return row;
-        touched = true;
-        return { ...row, cells: { ...row.cells, [e.columnId]: e.cell } };
-      });
-      return touched ? { ...cur, rows } : cur;
-    });
-  }, []);
-
-  // A freshly-created social-signal table populates asynchronously (Trigify
-  // scrapes results over ~10-60s). Poll until rows land, showing a skeleton.
-  const startWarming = useCallback((tableId: string) => {
-    setWarmingTableId(tableId);
-    if (warmTimerRef.current) clearInterval(warmTimerRef.current);
-    let ticks = 0;
-    warmTimerRef.current = setInterval(async () => {
-      ticks++;
-      try {
-        const data = await api.table(tableId);
-        if (data.rows.length > 0) {
-          setTableData((cur) => (cur && cur.id === tableId ? data : cur));
-          setWarmingTableId(null);
-          if (warmTimerRef.current) clearInterval(warmTimerRef.current);
-          return;
-        }
-      } catch { /* keep polling */ }
-      if (ticks >= 40) {
-        setWarmingTableId(null);
-        if (warmTimerRef.current) clearInterval(warmTimerRef.current);
-      }
-    }, 8000);
-  }, []);
-
-  // Live refresh when the in-app agent mutates the grid (Phase D).
-  const refreshAll = useCallback(async () => {
-    const t = await api.tables().catch(() => null);
-    if (!t) return;
-    setTables(t);
-    setSelectedTableId((cur) => {
-      if (cur && t.some((x) => x.id === cur)) {
-        loadTable(cur);
-        return cur;
-      }
-      return t.length ? t[t.length - 1].id : null;
-    });
-  }, [loadTable]);
-
-  // ── Table management (rename / delete / favorite) ──
-
-  const reloadTables = useCallback(async () => {
-    const t = await api.tables().catch(() => null);
-    if (t) setTables(t);
-  }, []);
-
-  const reloadFolders = useCallback(async () => {
-    const f = await api.folders().catch(() => null);
-    if (f) setLocalFolders(f);
-  }, []);
-
   // ── Cloud project selection ──────────────
-  // Open a cloud project: leave the local sidecar untouched, switch the main
-  // area to the live CloudGrid, and default to its first table once they load.
+  // Open a cloud project and default to its first table once the tables load.
   const onCloudProjectSelected = useCallback((project: CloudProject) => {
     setShowProjects(false);
     setCloudProject(project);
@@ -2116,151 +1650,28 @@ export default function App() {
     }
   }, [cloudProject, createCloudTable, cloudCreating]);
 
-  // Switch the app to LOCAL mode (used by the account menu's Environment
-  // switcher): drop the open cloud project so the sidecar grid is shown.
-  const switchToLocal = useCallback(() => {
-    setCloudProject(null);
-    setCloudTableId(null);
-    setView({ kind: "table" });
-  }, []);
-
-  // ── Table sync (TRI-3297) ────────────────────────────────────────────────
-  // Per local-table sync facts, tracked CLIENT-SIDE: a table is `linked` once a
-  // push succeeds; a push that returns its row count marks it synced. The link
-  // state is also confirmed by the server — a 409 re-routes through the
-  // destructive-overwrite confirm. `pushingTableId` is the in-flight row (busy
-  // dot); `syncErrors` surfaces a failed push inline (no toast system).
-  // `rowCount` is the LAST-PUSHED cloud row count, known only for links
-  // established this session; a link HYDRATED from the localStorage mirror
-  // (TRI-3309 bug B) carries no count (the popover then falls back to the live
-  // local count). `undefined` rowCount = linked-but-count-unknown.
-  const [syncLinks, setSyncLinks] = useState<Record<string, { cloudTableId: string; rowCount?: number }>>({});
-  // Set of table ids with a push in flight (TRI-3307): a bulk "Sync all" pushes
-  // many tables concurrently, so each pushing row must show its own busy dot — a
-  // single id would only mark one row. Single-push adds/removes its one id here.
-  const [pushingTableIds, setPushingTableIds] = useState<ReadonlySet<string>>(new Set());
-  const [syncErrors, setSyncErrors] = useState<Record<string, string>>({});
-  // The open sync popover: the table id + the clicked row's viewport top, so the
-  // popover anchors to the right of the row (design's `.sync-pop`).
-  const [syncPopover, setSyncPopover] = useState<{ tableId: string; anchorTop: number } | null>(null);
-  const [dedupeOpen, setDedupeOpen] = useState(false);
-  // A pending destructive-overwrite confirm: a linked table whose re-push would
-  // overwrite cloud data. Holds the table + cloud row count for the warning copy.
-  const [overwriteConfirm, setOverwriteConfirm] = useState<{ tableId: string; name: string; rowCount: number } | null>(null);
-  // A pending BULK destructive-overwrite confirm for "Sync all" (TRI-3307): holds
-  // the linked table ids to re-push and the unlinked ids to create on accept. ONE
-  // confirm covers ALL linked tables so none are silently skipped; on cancel none
-  // of the linked tables push (the unlinked creates are non-destructive).
-  const [bulkOverwriteConfirm, setBulkOverwriteConfirm] = useState<{ toOverwrite: string[]; toCreate: string[] } | null>(null);
-
-  // Hydrate the in-memory sync links from the SIDECAR meta — the source of truth
-  // (TRI-3311) — whenever the open cloud project changes. The localStorage mirror
-  // (TRI-3309 bug B) is kept ONLY as an offline/fast-path cache: we seed from it
-  // synchronously so the Synced/ahead status paints immediately, then overlay the
-  // server's authoritative `{ [localTableId]: cloudTableId }` map with the SERVER
-  // WINNING on every conflict (mergeServerSyncLinks), so a stale mirror can never
-  // drift the displayed status. The mirror is namespaced per cloud project; the
-  // server route returns the CURRENT project's links (the sidecar follows the
-  // active project), so we only overlay when this remains the active project.
-  useEffect(() => {
-    const projectKey = cloudProject?._id ?? null;
-    if (projectKey === null) {
-      setSyncLinks({});
-      return;
-    }
-    // 1) Fast-path: seed from the local mirror for this project (sync, offline).
-    let stored: Record<string, string> = {};
-    try {
-      stored = parseSyncLinks(localStorage.getItem(SYNC_LINKS_STORAGE_KEY));
-    } catch {
-      stored = {};
-    }
-    const mirror = hydrateSyncLinksForProject(stored, projectKey);
-    setSyncLinks(
-      Object.fromEntries(
-        Object.entries(mirror).map(([localId, cloudTableId]) => [
-          localId,
-          { cloudTableId },
-        ]),
-      ),
-    );
-    // 2) Source of truth: overlay the sidecar's persisted links (server wins).
-    let cancelled = false;
-    api
-      .cloudTableLinks()
-      .then((server) => {
-        if (cancelled) return;
-        const merged = mergeServerSyncLinks(server, mirror);
-        setSyncLinks((cur) =>
-          Object.fromEntries(
-            Object.entries(merged).map(([localId, cloudTableId]) => [
-              localId,
-              // Preserve any rowCount already known from a this-session push.
-              cur[localId]?.cloudTableId === cloudTableId
-                ? cur[localId]!
-                : { cloudTableId },
-            ]),
-          ),
-        );
-      })
-      .catch(() => {
-        /* offline / sidecar unreachable → keep the mirror-seeded links */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [cloudProject?._id]);
-
-  // ── Auto-sync setting (TRI-3298) ─────────────────────────────────────────
-  // The global `auto_sync_offline_tables` flag (default OFF), loaded from the
-  // sidecar. When ON, local tables auto-link + push on create / debounced edit.
-  // `autoSyncEnable` holds a pending enable-time destructive-overwrite confirm:
-  // turning it ON requires confirming local tables will REPEATEDLY overwrite
-  // their cloud copies. Toggling OFF is immediate (no confirm).
-  const [autoSyncOn, setAutoSyncOn] = useState(false);
-  const [autoSyncEnableConfirm, setAutoSyncEnableConfirm] = useState(false);
   // Notification-center persistence (TRI-3308): dismissed/seen kinds, persisted
-  // across sessions. On first run we MIGRATE the legacy auto-sync-nudge flag
-  // (LEGACY_AUTO_SYNC_NUDGE_KEY) so a previously-dismissed nudge stays dismissed
-  // (no regression of TRI-3298's "stays dismissed across sessions").
+  // across sessions.
   const [notifPersist, setNotifPersist] = useState<NotificationPersistState>(() => {
     try {
-      const legacy = localStorage.getItem(LEGACY_AUTO_SYNC_NUDGE_KEY) === "1";
-      return parsePersistState(localStorage.getItem(NOTIFICATIONS_PERSIST_KEY), legacy);
+      return parsePersistState(localStorage.getItem(NOTIFICATIONS_PERSIST_KEY));
     } catch {
-      return parsePersistState(null, false);
+      return parsePersistState(null);
     }
   });
   // Whether the bell's notification center popover is open.
   const [notifOpen, setNotifOpen] = useState(false);
   const bellRef = useRef<HTMLButtonElement | null>(null);
 
-  // Load the persisted flag once the sidecar is reachable. Defaults OFF on any
-  // failure (parseAutoSyncFlag treats a missing value as OFF).
-  useEffect(() => {
-    let cancelled = false;
-    api.getAutoSync()
-      .then((r) => { if (!cancelled) setAutoSyncOn(parseAutoSyncFlag(r.enabled ? "true" : "false")); })
-      .catch(() => { /* default OFF */ });
-    return () => { cancelled = true; };
-  }, []);
-
-  // The sync UI (dots + popover + sync-all) is visible only for cloud-enabled,
-  // signed-in users with a cloud project open. Hidden in pure-local builds.
-  const showSyncUi = syncUiVisible({ cloudEnabled, inCloud, isAuthenticated });
-
-  // Build the active notification list (TRI-3308) from app state. Eligibility is
-  // unchanged from the banners these replace: the trial item mirrors
-  // `showTrialBanner`, the auto-sync nudge reuses `autoSyncNudgeVisible` (inside
-  // buildNotifications), and the update item mirrors the old `.update-banner`.
+  // Build the active notification list (TRI-3308) from app state. The trial item
+  // mirrors `showTrialBanner`.
   const notifications = useMemo(
     () =>
       buildNotifications({
         trialDaysLeft: showTrialBanner ? trialDaysLeft : null,
-        autoSync: { cloudEnabled, inCloud, isAuthenticated, autoSyncOn },
         persist: notifPersist,
       }),
-    [showTrialBanner, trialDaysLeft, cloudEnabled, inCloud, isAuthenticated, autoSyncOn, notifPersist],
+    [showTrialBanner, trialDaysLeft, notifPersist],
   );
   // Bell badge = active notifications not yet seen.
   const unreadNotifs = countUnread(notifications, notifPersist);
@@ -2282,345 +1693,64 @@ export default function App() {
     persistNotifState(dismissNotification(kind, notifPersist));
   }, [notifPersist, persistNotifState]);
 
-  // Map a notification action id to its behaviour. Each preserves the original
-  // banner's action — notably `autoSync.enable` still routes through the
-  // TRI-3298 enable-time overwrite confirm (setAutoSyncEnableConfirm) rather than
-  // enabling directly.
+  // Map a notification action id to its behaviour.
   const runNotificationAction = useCallback((id: NotificationActionId) => {
     switch (id) {
       case "trial.upgrade":
         setShowUpgrade(true);
         setNotifOpen(false);
         break;
-      case "autoSync.enable":
-        setAutoSyncEnableConfirm(true);
-        setNotifOpen(false);
-        break;
-      case "autoSync.dismiss":
-        dismissNotif("autoSyncNudge");
-        break;
     }
-  }, [dismissNotif]);
-
-  // Persist the flag to the sidecar. Toggling OFF is immediate; toggling ON must
-  // go through `requestAutoSyncToggle` (which shows the enable-time confirm).
-  const persistAutoSync = useCallback(async (next: boolean) => {
-    setAutoSyncOn(next);
-    try { await api.setAutoSync(next); } catch { setAutoSyncOn(!next); }
   }, []);
 
-  // Toggle entry point. OFF→ON opens the destructive-overwrite confirm and only
-  // enables on accept. ON→OFF disables immediately.
-  const requestAutoSyncToggle = useCallback(() => {
-    if (autoSyncOn) { void persistAutoSync(false); return; }
-    setAutoSyncEnableConfirm(true);
-  }, [autoSyncOn, persistAutoSync]);
-
-  // Derive a table's design SYNC_META status from its client-tracked facts.
-  const syncStatusFor = useCallback(
-    (tableId: string): SyncStatus =>
-      mapSyncStatus({
-        linked: syncLinks[tableId] !== undefined,
-        // v1 cannot diff local edits against the last push without a backend
-        // GET, so a linked table is treated as `synced` until the user pushes
-        // again; an unlinked table is `local`. (No fabricated change counts.)
-        hasLocalChanges: false,
-        pushing: pushingTableIds.has(tableId),
-        offline: healthStatus === "offline",
-        needsOverwriteConfirm: overwriteConfirm?.tableId === tableId,
-      }),
-    [syncLinks, pushingTableIds, healthStatus, overwriteConfirm],
-  );
-
-  // Run a single table push. `confirmOverwrite` is supplied by the confirm flow.
-  // A 409 (LinkConflictError) means the server demands explicit confirmation:
-  // surface the destructive-overwrite confirm instead of a generic error.
-  const runPush = useCallback(
-    async (tableId: string, confirmOverwrite: boolean) => {
-      const apiUrl = API_URL;
-      const token = getStoredAuthToken();
-      if (!apiUrl || !token) {
-        setSyncErrors((m) => ({ ...m, [tableId]: "Sign in to a cloud workspace to sync." }));
-        return;
-      }
-      // TRI-3313-B: a push from the LOCAL env must NOT require an open cloud
-      // project. Resolve a TARGET project (open → last-used → most-recent → first)
-      // WITHOUT opening it; the server reads the local table from the sidecar and
-      // only needs a valid target projectId. If the workspace has NO project to
-      // target, prompt the user to pick/create one (open the ProjectSwitcher)
-      // rather than erroring with "not found".
-      let lastUsed: string | null = null;
-      try { lastUsed = localStorage.getItem(LAST_CLOUD_PROJECT_KEY); } catch { /* ignore */ }
-      const target = resolveTargetCloudProject(cloudProject, lastUsed, cloudProjects ?? null);
-      const projectId = target?._id ?? null;
-      if (!projectId) {
-        setShowProjects(true);
-        return;
-      }
-      setPushingTableIds((s) => { const next = new Set(s); next.add(tableId); return next; });
-      setSyncErrors((m) => { const next = { ...m }; delete next[tableId]; return next; });
-      try {
-        const result = await api.pushTable({ apiUrl, token, projectId, localTableId: tableId, confirmOverwrite });
-        // The cloud id this local table previously pointed at (if any), so we can
-        // detect a re-sync SWAP (TRI-3309 bug E): a re-push builds a NEW cloud
-        // table and deletes the old one, so the open grid would otherwise point
-        // at a now-deleted id.
-        const prevCloudTableId = syncLinks[tableId]?.cloudTableId ?? null;
-        setSyncLinks((m) => ({ ...m, [tableId]: { cloudTableId: result.cloudTableId, rowCount: result.rowCount } }));
-        // Persist the link to the localStorage MIRROR (TRI-3309 bug B) so the
-        // Synced status survives a reload (sidecar meta stays authoritative for
-        // overwrite detection — this only drives the UI status).
-        try {
-          const stored = parseSyncLinks(localStorage.getItem(SYNC_LINKS_STORAGE_KEY));
-          localStorage.setItem(
-            SYNC_LINKS_STORAGE_KEY,
-            serializeSyncLinks(upsertSyncLink(stored, projectId, tableId, result.cloudTableId)),
-          );
-        } catch { /* mirror is best-effort; a write failure only loses hydration */ }
-        setOverwriteConfirm((c) => (c?.tableId === tableId ? null : c));
-        // TRI-3309 bug A: the push mutated the cloud project outside the tRPC
-        // mutation hooks, so refetch the "TABLES (CLOUD)" list (it stays "No
-        // tables yet" until reload otherwise).
-        void invalidateCloudTables();
-        // TRI-3309 bug E: a re-sync swap repointed the link to a NEW cloud id and
-        // deleted the old one. If the open cloud table was the deleted old id,
-        // re-point it to the new id; either way invalidate the new table's grid
-        // so it re-seeds against the surviving table.
-        if (prevCloudTableId !== null && prevCloudTableId !== result.cloudTableId) {
-          setCloudTableId((cur) => {
-            if (cur !== prevCloudTableId) return cur;
-            // The open view followed this local table — remember the association
-            // so a later stale-id 404 can self-heal to its current link (TRI-3312).
-            setCloudTableLocalId(tableId);
-            return result.cloudTableId as Id<"tables">;
-          });
-        }
-        void invalidateCloudTable(result.cloudTableId);
-      } catch (e) {
-        if (e instanceof CloudPushHttpError && isOverwriteConfirmNeeded(e)) {
-          // Server says this table is linked and a re-push overwrites it. Route
-          // into the destructive-overwrite confirm (naming the table + rows).
-          // TRI-3310 bug D: show EXACTLY ONE confirmation. `syncStatusFor` maps a
-          // pending overwriteConfirm to the `conflict` state, so an OPEN sync
-          // popover for this same table would ALSO render the conflict confirm
-          // body — two overlapping confirms. Close that popover so only the modal
-          // shows (never both).
-          const t = tables.find((x) => x.id === tableId);
-          setSyncPopover((p) =>
-            p !== null && shouldCloseConflictPopover({ modalTableId: tableId, openPopoverTableId: p.tableId })
-              ? null
-              : p,
-          );
-          setOverwriteConfirm({ tableId, name: t?.name ?? "table", rowCount: t?.rows ?? 0 });
-        } else {
-          setSyncErrors((m) => ({ ...m, [tableId]: e instanceof Error ? e.message : "Push failed." }));
-        }
-      } finally {
-        setPushingTableIds((s) => { const next = new Set(s); next.delete(tableId); return next; });
-      }
-    },
-    [cloudProject, cloudProjects, tables, syncLinks, invalidateCloudTables, invalidateCloudTable],
-  );
-
-  // Push entry point from the popover / sync-all. Decides create-vs-overwrite:
-  // an unlinked table pushes straight through; a linked table prompts the
-  // destructive-overwrite confirm first (it only pushes after the user accepts).
-  const onPushTable = useCallback(
-    (tableId: string) => {
-      const linked = syncLinks[tableId] !== undefined;
-      const decision = decidePush({ linked, userConfirmed: false });
-      if (decision.needsConfirm) {
-        const t = tables.find((x) => x.id === tableId);
-        // TRI-3310 bug D: opening the overwrite-confirm modal flips this table's
-        // sync status to `conflict`, which would ALSO render the conflict-confirm
-        // body inside an open sync popover for the same table (two overlapping
-        // confirms). Close that popover so only the modal shows — never both.
-        setSyncPopover((p) =>
-          p !== null && shouldCloseConflictPopover({ modalTableId: tableId, openPopoverTableId: p.tableId })
-            ? null
-            : p,
-        );
-        setOverwriteConfirm({ tableId, name: t?.name ?? "table", rowCount: t?.rows ?? 0 });
-        return;
-      }
-      void runPush(tableId, decision.confirmOverwrite);
-    },
-    [syncLinks, tables, runPush],
-  );
-
-  // User accepted the destructive overwrite — re-push with confirmOverwrite.
-  const onConfirmOverwrite = useCallback(() => {
-    const target = overwriteConfirm;
-    if (!target) return;
-    void runPush(target.tableId, true);
-  }, [overwriteConfirm, runPush]);
-
-  // ── Auto-push trigger (TRI-3298) ─────────────────────────────────────────
-  // When auto-sync is ON, local tables auto-link + push on create and (debounced)
-  // on edit. Auto-pushes always send `confirmOverwrite: true` because the user
-  // gave one-time consent at enable-time — per-edit prompts would defeat the
-  // automation. Re-pushes REUSE the stored TRI-3295 link, so no duplicate cloud
-  // tables are created. The gate is recomputed at fire time (via a ref) so a
-  // setting flip / sign-out cancels pending pushes — when OFF, zero auto traffic.
-  const autoPushGateRef = useRef({ autoSyncOn, cloudEnabled, inCloud, isAuthenticated });
-  autoPushGateRef.current = { autoSyncOn, cloudEnabled, inCloud, isAuthenticated };
-  const autoPushTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-
-  // Fire an auto-push immediately if the gate is satisfied at THIS moment.
-  const autoPushNow = useCallback((tableId: string) => {
-    if (!shouldAutoPush(autoPushGateRef.current)) return;
-    void runPush(tableId, true);
-  }, [runPush]);
-
-  // Schedule a debounced auto-push for an edited table (coalesces rapid edits).
-  const scheduleAutoPush = useCallback((tableId: string) => {
-    if (!shouldAutoPush(autoPushGateRef.current)) return;
-    const timers = autoPushTimers.current;
-    if (timers[tableId]) clearTimeout(timers[tableId]);
-    timers[tableId] = setTimeout(() => {
-      delete timers[tableId];
-      autoPushNow(tableId);
-    }, AUTO_SYNC_DEBOUNCE_MS);
-  }, [autoPushNow]);
-
-  // Drop any pending debounced pushes when auto-sync turns OFF (or eligibility is
-  // lost) so no straggler push fires after the user opts out — zero auto traffic.
-  useEffect(() => {
-    if (shouldAutoPush({ autoSyncOn, cloudEnabled, inCloud, isAuthenticated })) return;
-    const timers = autoPushTimers.current;
-    for (const id of Object.keys(timers)) { clearTimeout(timers[id]); delete timers[id]; }
-  }, [autoSyncOn, cloudEnabled, inCloud, isAuthenticated]);
-
-  // Push every table that has un-pushed work (the sync-all header control).
-  // TRI-3307: split pending tables into unlinked (create) vs linked (overwrite)
-  // via the pure planner. Unlinked tables create straight through (non-
-  // destructive). If ANY linked tables are pending, gate ALL of them behind ONE
-  // bulk destructive-overwrite confirm — so no linked table is silently skipped
-  // (the old per-table loop clobbered the single `overwriteConfirm`, surfacing
-  // only the LAST linked table). On cancel, NONE of the linked tables push.
-  const onSyncAll = useCallback(() => {
-    const plan = planSyncAll(
-      tables.map((t) => ({ id: t.id, linked: syncLinks[t.id] !== undefined, status: syncStatusFor(t.id) })),
-    );
-    for (const id of plan.toCreate) void runPush(id, false);
-    if (plan.toOverwrite.length > 0) {
-      setBulkOverwriteConfirm({ toOverwrite: [...plan.toOverwrite], toCreate: [...plan.toCreate] });
-    }
-  }, [tables, syncLinks, syncStatusFor, runPush]);
-
-  // User accepted the bulk "Sync all" overwrite — re-push EVERY linked table with
-  // confirmOverwrite (the unlinked creates already fired in onSyncAll). None of
-  // the linked tables are omitted.
-  const onConfirmBulkOverwrite = useCallback(() => {
-    const target = bulkOverwriteConfirm;
-    setBulkOverwriteConfirm(null);
-    if (!target) return;
-    for (const id of target.toOverwrite) void runPush(id, true);
-  }, [bulkOverwriteConfirm, runPush]);
-
-  // How many local tables have un-pushed work (drives `.sync-all-btn.has-pending`).
-  const syncPending = useMemo(
-    () => (showSyncUi ? pendingCount(tables.map((t) => syncStatusFor(t.id))) : 0),
-    [showSyncUi, tables, syncStatusFor],
-  );
-
-  // ── Unified Tables list (TRI-3313-C) ──────────────────────────────────────
-  // ONE merged, de-duplicated list of local + cloud tables (a local table linked
-  // via `syncLinks` is rendered ONCE as a synced local row; its cloud copy is
-  // folded in). Drives a SINGLE active-table selection so only one row highlights.
-  // CLEAR local/cloud separation (TRI-3313 follow-up): the Tables list shows ONE
-  // environment's tables, never both. In CLOUD mode it is purely the cloud
-  // tables; in LOCAL mode it is purely the local tables (still synced-tagged so
-  // the sync dot / cloud icon renders). Because exactly one environment's rows
-  // exist, exactly one row can be active — no more dual highlight from two
-  // independent lists. Cloud rows are built directly (no dedup against local
-  // links) so EVERY cloud table is visible in cloud mode, including ones a local
-  // table is linked to.
+  // ── Tables list (cloud-only) ──────────────────────────────────────────────
+  // The sidebar Tables list is purely the open cloud project's tables (cloud is
+  // the only data path). De-duplicated by name; favourites pinned to the top.
   const tableList = useMemo(
     () =>
-      inCloud
-        ? dedupeTableRowsByName(
-            [...(cloudTables ?? [])]
-              // Favourites-first (stable: position order holds within a group),
-              // matching the local list's favourites-pinned-to-top ordering.
-              .sort((a, b) => Number(b.favorite) - Number(a.favorite))
-              .map<TableListRow>((t) => ({
-                kind: "cloud" as const,
-                id: t._id,
-                name: t.name,
-                synced: true,
-                favorite: t.favorite,
-                rows: t.rows ?? 0,
-                folderId: t.folderId,
-                position: t.position,
-              })),
-          )
-        : buildTableList({
-            localTables: tables.map((t) => ({
-              id: t.id,
-              name: t.name,
-              favorite: t.favorite,
-              rows: t.rows,
-              folderId: t.folderId,
-              position: t.position,
-            })),
-            cloudTables: [],
-            syncLinks,
-          }),
-    [inCloud, tables, cloudTables, syncLinks],
+      dedupeTableRowsByName(
+        [...(cloudTables ?? [])]
+          // Favourites-first (stable: position order holds within a group).
+          .sort((a, b) => Number(b.favorite) - Number(a.favorite))
+          .map<TableListRow>((t) => ({
+            kind: "cloud" as const,
+            id: t._id,
+            name: t.name,
+            synced: true,
+            favorite: t.favorite,
+            rows: t.rows ?? 0,
+            folderId: t.folderId,
+            position: t.position,
+          })),
+      ),
+    [cloudTables],
   );
-  // The sidebar's folders for the ACTIVE environment (cloud project's folders in
-  // cloud mode; the local project's folders otherwise), in position order.
+  // The sidebar's folders for the open cloud project, in position order.
   const sidebarFolders = useMemo<SidebarFolder[]>(
-    () =>
-      inCloud
-        ? (cloudFolders ?? []).map((f) => ({ id: f._id, name: f.name, position: f.position }))
-        : localFolders.map((f) => ({ id: f.id, name: f.name, position: f.position })),
-    [inCloud, cloudFolders, localFolders],
+    () => (cloudFolders ?? []).map((f) => ({ id: f._id, name: f.name, position: f.position })),
+    [cloudFolders],
   );
   // Folder sections + root rows the sidebar renders.
   const groupedTables = useMemo(
     () => groupTableList(tableList, sidebarFolders),
     [tableList, sidebarFolders],
   );
-  // Lookups by id so the unified rows can recover their original summaries (the
-  // local TableSummary for context-menu / rename / delete; the branded cloud id
-  // for selection) without re-casting strings.
-  const localById = useMemo(() => {
-    const m = new Map<string, TableSummary>();
-    for (const t of tables) m.set(t.id, t);
-    return m;
-  }, [tables]);
+  // Lookup by id so the rows can recover their cloud summary for selection.
   const cloudById = useMemo(() => {
     const m = new Map<string, CloudTableSummary>();
     for (const t of cloudTables ?? []) m.set(String(t._id), t);
     return m;
   }, [cloudTables]);
-  // The ONE active row id, unifying the old independent cloud (`cloudTableId`) vs
-  // local (`selectedTableId`) selection: when a cloud project is open and a cloud
-  // table is selected, the cloud id wins; otherwise the local selection wins.
-  const activeRowId = inCloud && cloudTableId !== null ? String(cloudTableId) : selectedTableId;
-  // Select any row from the unified list: a LOCAL row drops the open cloud project
-  // (so the local sidecar grid renders) and selects the local table; a CLOUD row
-  // keeps the cloud project open and points the live grid at that cloud table.
-  // Either way exactly ONE row ends up active.
+  // The active row id is the open cloud table's id (every row is cloud-backed).
+  const activeRowId = cloudTableId !== null ? String(cloudTableId) : null;
+  // Select a row from the list: point the live grid at that cloud table.
   const onSelectTableRow = useCallback(
     (row: TableListRow) => {
-      if (row.kind === "cloud") {
-        const ct = cloudById.get(row.id);
-        if (ct) setCloudTableId(ct._id);
-        setView({ kind: "table" });
-        return;
-      }
-      // Local row: leave cloud mode so the local grid shows this table.
-      if (inCloud) {
-        setCloudProject(null);
-        setCloudTableId(null);
-      }
-      setSelectedTableId(row.id);
+      const ct = cloudById.get(row.id);
+      if (ct) setCloudTableId(ct._id);
       setView({ kind: "table" });
     },
-    [inCloud, cloudById],
+    [cloudById],
   );
 
   // Cmd/Ctrl+K toggles the command palette. Registered once; safe to fire even
@@ -2636,24 +1766,18 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Recency-sorted table cards for the Tables page. Cloud rows sort by their
-  // createdAt; local rows by sidebar position (a new table is appended, so the
-  // highest position is the most recent).
+  // Recency-sorted table cards for the Tables page, sorted by cloud createdAt.
   const tableCards = useMemo<TableCard[]>(() => {
     const ranked = tableList.map((row) => {
-      const local = row.kind === "local" ? localById.get(row.id) : undefined;
-      const cloud = row.kind === "cloud" ? cloudById.get(row.id) : undefined;
-      const recency = row.kind === "cloud" ? Number(cloud?.createdAt ?? 0) : (local?.position ?? row.position);
+      const cloud = cloudById.get(row.id);
+      const recency = Number(cloud?.createdAt ?? 0);
       const card: TableCard = {
         key: `${row.kind}:${row.id}`,
         kind: row.kind,
         id: row.id,
         name: row.name,
-        rows:
-          row.kind === "local"
-            ? (local?.rows ?? row.rows)
-            : (cloud?.rows ?? (row.rows > 0 ? row.rows : null)),
-        columns: row.kind === "local" ? (local?.columns ?? null) : null,
+        rows: cloud?.rows ?? (row.rows > 0 ? row.rows : null),
+        columns: null,
         favorite: row.favorite,
         synced: row.synced,
         active: String(row.id) === String(activeRowId),
@@ -2663,57 +1787,37 @@ export default function App() {
     });
     ranked.sort((a, b) => b.recency - a.recency);
     return ranked.map((r) => r.card);
-  }, [tableList, localById, cloudById, activeRowId]);
+  }, [tableList, cloudById, activeRowId]);
 
-  // Tables-page actions, reusing the existing open/delete/favorite/rename machinery
-  // (cloud rename isn't exposed by the worker API, so it's gated to local rows in
-  // the gallery). Plain functions — they close over the latest state at click time.
+  // Tables-page actions (cloud-only). Plain functions — they close over the
+  // latest state at click time. Rename/favourite go through the cloud mutations.
   const onOpenCard = (c: TableCard) => {
-    if (c.kind === "cloud") {
-      const ct = cloudById.get(c.id);
-      if (ct) setCloudTableId(ct._id);
-      setView({ kind: "table" });
-      return;
-    }
-    if (inCloud) { setCloudProject(null); setCloudTableId(null); }
-    setSelectedTableId(c.id);
+    const ct = cloudById.get(c.id);
+    if (ct) setCloudTableId(ct._id);
     setView({ kind: "table" });
   };
   const onDeleteCard = (c: TableCard) => {
-    if (c.kind === "cloud") {
-      const ct = cloudById.get(c.id);
-      if (ct) setConfirmDeleteCloudTable({ _id: ct._id, name: ct.name });
-      return;
-    }
-    const local = localById.get(c.id);
-    if (local) setConfirmDeleteTable(local);
+    const ct = cloudById.get(c.id);
+    if (ct) setConfirmDeleteCloudTable({ _id: ct._id, name: ct.name });
   };
-  const onFavoriteCard = (c: TableCard) => { if (c.kind === "local") void toggleFavorite(c.id, !c.favorite); };
-  const onRenameCard = (c: TableCard, name: string) => { if (c.kind === "local") void commitRename(c.id, name); };
+  const onFavoriteCard = (c: TableCard) => { void toggleCloudFavorite(c.id, !c.favorite); };
+  const onRenameCard = (c: TableCard, name: string) => { void commitCloudRename(c.id, name); };
   // Bulk delete from the Tables hub — the page confirms once before calling this,
-  // so it deletes each directly (no per-item modal), then refreshes.
+  // so it deletes each directly (no per-item modal).
   const onBulkDeleteCards = async (cs: TableCard[]) => {
     for (const c of cs) {
-      if (c.kind === "cloud") {
-        const ct = cloudById.get(c.id);
-        if (ct) await deleteCloudTable(ct._id).catch(() => {});
-      } else {
-        await api.deleteTable(c.id).catch(() => {});
-      }
+      const ct = cloudById.get(c.id);
+      if (ct) await deleteCloudTable(ct._id).catch(() => {});
     }
-    await reloadTables();
   };
 
   // One unified sidebar table row (root or inside a folder). Not memoized — it
   // closes over the drag/drop + rename state and renders a handful of rows.
   const renderTableRow = (row: TableListRow, inFolder: boolean) => {
-    const local = row.kind === "local" ? localById.get(row.id) : undefined;
-    const cloudRowLocked = row.kind === "cloud" && cloudLocked;
-    // Inline rename works for BOTH local and cloud rows (a locked cloud row
-    // can't be renamed). The commit routes to the local sidecar or the cloud
-    // tRPC mutation by row kind.
-    const commitRowRename = (name: string) =>
-      row.kind === "cloud" ? commitCloudRename(row.id, name) : commitRename(row.id, name);
+    const cloudRowLocked = cloudLocked;
+    // Inline rename goes through the cloud tRPC mutation (a locked row can't be
+    // renamed).
+    const commitRowRename = (name: string) => commitCloudRename(row.id, name);
     if (renamingTableId === row.id && !cloudRowLocked) {
       return (
         <div key={`${row.kind}:${row.id}`} className={`sidebar-item${inFolder ? " in-folder" : ""}`} style={{ paddingTop: 2, paddingBottom: 2 }}>
@@ -2750,11 +1854,9 @@ export default function App() {
         role="button"
         tabIndex={0}
         onContextMenu={
-          local
-            ? (e => openCtx(e, tableMenuItems(local)))
-            : row.kind === "cloud" && !cloudRowLocked && cloudById.get(row.id)
-              ? (e => openCtx(e, cloudTableMenuItems(row)))
-              : undefined
+          !cloudRowLocked && cloudById.get(row.id)
+            ? (e => openCtx(e, cloudTableMenuItems(row)))
+            : undefined
         }
       >
         <span className="sidebar-item-icon">
@@ -2763,25 +1865,7 @@ export default function App() {
         <span className="sidebar-item-name">{row.name}</span>
         {row.favorite && <span className="sidebar-item-star"><Icon.Star filled /></span>}
         {row.rows > 0 && <span className="sidebar-item-count">{row.rows.toLocaleString()}</span>}
-        {local && (
-          <>
-            <button
-              className="sidebar-item-del"
-              title="Delete table"
-              onClick={e => { e.stopPropagation(); setConfirmDeleteTable(local); }}
-            >
-              <Icon.Trash />
-            </button>
-            <button
-              className="sidebar-item-more"
-              title="Table options"
-              onClick={e => { e.stopPropagation(); openCtx(e, tableMenuItems(local)); }}
-            >
-              <Icon.More />
-            </button>
-          </>
-        )}
-        {row.kind === "cloud" && !cloudRowLocked && cloudById.get(row.id) && (
+        {!cloudRowLocked && cloudById.get(row.id) && (
           <>
             <button
               className="sidebar-item-del"
@@ -2803,29 +1887,10 @@ export default function App() {
             </button>
           </>
         )}
-        {/* Trailing indicator: a cloud icon on cloud/synced rows; the
-            sync dot (cloud users) or row count on unsynced local rows. */}
+        {/* Trailing indicator: a cloud icon on cloud-backed rows; otherwise
+            the row count. Every table is cloud-backed in the cloud-only app. */}
         {row.synced ? (
           <span className="sidebar-item-cloud" title="Synced to cloud">{CloudIcon}</span>
-        ) : showSyncUi && local ? (
-          <button
-            className={`row-sync is-${syncStatusFor(local.id)}`}
-            title={SYNC_META[syncStatusFor(local.id)].label}
-            onClick={e => {
-              e.stopPropagation();
-              const host = e.currentTarget.closest(".sidebar-item");
-              const top = host instanceof HTMLElement ? host.getBoundingClientRect().top : 80;
-              setSyncPopover({ tableId: local.id, anchorTop: top });
-              // TRI-3310 bug C: the popover diff + the overwrite-confirm
-              // copy read the row count from the cached TableSummary,
-              // which goes stale after edits. Refresh the summary at
-              // popover-open so the count reflects the table's real
-              // current rows (the push itself always sends the live rows).
-              void reloadTables();
-            }}
-          >
-            <SyncDot status={syncStatusFor(local.id)} />
-          </button>
         ) : (
           <span className="sidebar-item-count">{row.rows}</span>
         )}
@@ -2835,92 +1900,27 @@ export default function App() {
 
   // Default the active cloud table to the first one once the list loads.
   useEffect(() => {
-    if (!inCloud) return;
     if (cloudTables && cloudTables.length > 0 && cloudTableId === null) {
       setCloudTableId(cloudTables[0]._id);
     }
-  }, [inCloud, cloudTables, cloudTableId]);
+  }, [cloudTables, cloudTableId]);
 
   // Open-cloud-table 404 self-heal (TRI-3312). When the open cloud table's load
   // returns 404 / not-found (CloudGrid reports it via `onMissing`), the open id
-  // is a STALE deleted id (a swap before this session's link state, or a
-  // teammate re-synced). Rather than leave the dead-id error, fall back to the
-  // open view's local table's CURRENT linked cloud id (from the now
-  // server-hydrated `syncLinks`) and open that. `resolveStaleCloudTableFallback`
-  // returns `null` when there is nothing to recover to (no link, or the link
-  // still points at the same dead id), so we never loop on the same dead id.
+  // is a STALE deleted id (deleted out-of-band / by a teammate). Fall back to
+  // another available cloud table so the view never sticks on the dead id.
   const onCloudTableMissing = useCallback(() => {
-    const fallback = resolveStaleCloudTableFallback({
-      openCloudTableId: cloudTableId,
-      localTableId: cloudTableLocalId,
-      links: syncLinks,
+    // The open cloud table no longer exists (deleted out-of-band / by a
+    // teammate). Fall back to the first available cloud table, or clear the
+    // selection if the project is now empty.
+    setCloudTableId((cur) => {
+      const next = cloudTables?.find((t) => t._id !== cur);
+      return next ? next._id : null;
     });
-    if (fallback !== null) setCloudTableId(fallback as Id<"tables">);
-  }, [cloudTableId, cloudTableLocalId, syncLinks]);
+  }, [cloudTables]);
 
-  // Switch to a different LOCAL project: also exit cloud mode so the sidecar
-  // grid is shown. Tables change; global creds/extensions stay.
-  const onProjectSwitched = useCallback(async (name: string) => {
-    setShowProjects(false);
-    setCloudProject(null);
-    setCloudTableId(null);
-    setCloudTableLocalId(null);
-    setProjectName(name);
-    setView({ kind: "table" });
-    const [t, fl, e, ai] = await Promise.all([
-      api.tables().catch(() => [] as TableSummary[]),
-      api.folders().catch(() => [] as FolderSummary[]),
-      api.extensions().catch(() => null),
-      api.aiProviders().catch(() => null),
-    ]);
-    setTables(t);
-    setLocalFolders(fl);
-    setSelectedTableId(t.length ? t[0].id : null);
-    if (e) setExtensions(e);
-    if (ai) setAiProviders(ai);
-  }, []);
 
-  // Refresh the current local project path; the AccountBar owns its open state.
-  const openAccountMenu = useCallback(async () => {
-    const ps = await api.projects().catch(() => []);
-    setCurrentProjectPath(ps.find((p) => p.current)?.path ?? null);
-  }, []);
-
-  const toggleFavorite = async (id: string, favorite: boolean) => {
-    await api.favoriteTable(id, favorite).catch(() => {});
-    await reloadTables();
-  };
-
-  const commitRename = async (id: string, name: string) => {
-    setRenamingTableId(null);
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    await api.renameTable(id, trimmed).catch(() => {});
-    await reloadTables();
-  };
-
-  // window.confirm() is a no-op in Tauri's webview, so we use an in-app modal.
-  const deleteTable = async (id: string) => {
-    await api.deleteTable(id).catch(() => {});
-    const t = await api.tables().catch(() => []);
-    setTables(t);
-    if (selectedTableId === id) {
-      const next = t[0]?.id ?? null;
-      setSelectedTableId(next);
-      setView({ kind: "table" });
-    }
-  };
-
-  const tableMenuItems = (t: TableSummary) => [
-    {
-      label: t.favorite ? "Unpin from Favorites" : "Pin to Favorites",
-      onClick: () => toggleFavorite(t.id, !t.favorite),
-    },
-    { label: "Rename", onClick: () => { setRenameDraft(t.name); setRenamingTableId(t.id); } },
-    { label: "Delete", danger: true, onClick: () => setConfirmDeleteTable(t) },
-  ];
-
-  // ── Cloud table actions (parity with the local context menu above) ─────────
+  // ── Cloud table actions (context menu + cards) ─────────────────────────────
   // Rename + favourite go through the tRPC mutations and both broadcast to every
   // teammate: rename relabels live, and a favourite is workspace-shared (any
   // member's pin shows for all).
@@ -2950,9 +1950,7 @@ export default function App() {
   ];
 
   // ── Sidebar folders (create / rename / delete / move) ─────────────────────
-  // One set of handlers serving BOTH environments: cloud mode goes through the
-  // tRPC folder mutations (shared with teammates), local mode through the
-  // sidecar's /api/folders routes (per-project SQLite).
+  // Folder ops go through the tRPC folder mutations (shared with teammates).
 
   const uniqueFolderName = (base: string): string => {
     const names = new Set(sidebarFolders.map((f) => f.name.toLowerCase()));
@@ -2965,14 +1963,8 @@ export default function App() {
   const onCreateFolder = async () => {
     const name = uniqueFolderName("New folder");
     try {
-      let id: string;
-      if (inCloud) {
-        if (!cloudProject) return;
-        id = await createCloudFolder(cloudProject._id, name);
-      } else {
-        id = (await api.createFolder(name)).id;
-        await reloadFolders();
-      }
+      if (!cloudProject) return;
+      const id = await createCloudFolder(cloudProject._id, name);
       // Open the new folder and drop straight into rename (matching the design).
       setOpenFolders((o) => ({ ...o, [id]: true }));
       setFolderDraft(name);
@@ -2984,24 +1976,15 @@ export default function App() {
     setRenamingFolderId(null);
     const trimmed = name.trim();
     if (!trimmed) return;
-    if (inCloud) {
-      if (!cloudProject) return;
-      await renameCloudFolder(cloudProject._id, id, trimmed).catch(() => {});
-    } else {
-      await api.renameFolder(id, trimmed).catch(() => {});
-      await reloadFolders();
-    }
+    if (!cloudProject) return;
+    await renameCloudFolder(cloudProject._id, id, trimmed).catch(() => {});
   };
 
-  // Deleting a folder UNFILES its tables back to the root (both backends), so
-  // no confirm modal is needed — nothing destructive happens to table data.
+  // Deleting a folder UNFILES its tables back to the root, so no confirm modal
+  // is needed — nothing destructive happens to table data.
   const onDeleteFolder = async (id: string) => {
-    if (inCloud) {
-      if (!cloudProject) return;
+    if (cloudProject) {
       await deleteCloudFolder(cloudProject._id, id).catch(() => {});
-    } else {
-      await api.deleteFolder(id).catch(() => {});
-      await Promise.all([reloadFolders(), reloadTables()]);
     }
     setOpenFolders((o) => {
       if (!(id in o)) return o;
@@ -3018,16 +2001,11 @@ export default function App() {
 
   // Move a dragged table row into a folder / to the root / next to another row.
   // The fractional position is computed CLIENT-side from the visible list (pure
-  // helper) so both backends get one simple "set folderId + position" write.
+  // helper) so the backend gets one simple "set folderId + position" write.
   const onMoveTableRow = async (row: TableListRow, target: MoveTarget) => {
     const position = positionForMove(tableList, row.id, target);
-    if (row.kind === "cloud") {
-      if (!cloudProject) return;
-      await moveCloudTable(cloudProject._id, row.id as Id<"tables">, target.folderId, position).catch(() => {});
-    } else {
-      await api.moveTable(row.id, target.folderId, position).catch(() => {});
-      await reloadTables();
-    }
+    if (!cloudProject) return;
+    await moveCloudTable(cloudProject._id, row.id as Id<"tables">, target.folderId, position).catch(() => {});
     if (target.folderId !== null) openFolder(target.folderId);
   };
 
@@ -3107,279 +2085,10 @@ export default function App() {
     clearDrag();
   };
 
-  // ── Run all function cols ──────────────────
-
-  const runAll = async () => {
-    if (!tableData) return;
-    const tableId = tableData.id;
-    const fnCols = tableData.columns.filter(c => c.kind === "function");
-    if (!fnCols.length) return;
-    // Run independent columns concurrently (bounded), serializing only columns
-    // with true {{dependencies}} (topological order). Each column streams its
-    // per-cell progress and patches cells as they land — no full-grid refetch.
-    const deps = buildColumnDeps(fnCols);
-    let completed = 0;
-    setRunProgress({ current: 0, total: fnCols.length });
-    await runColumnsWithDeps(
-      fnCols,
-      deps,
-      RUN_ALL_CONCURRENCY,
-      async (col) => { await api.runColumnStream(col.id, (e) => patchCell(tableId, e)); },
-      () => { completed += 1; setRunProgress({ current: completed, total: fnCols.length }); },
-    );
-    setRunProgress(null);
-  };
-
-  // ── Run only the selected rows ─────────────
-  // Same dependency-aware orchestration as `runAll`, but each column streams
-  // against just the chosen row IDs — so the user can process a custom batch at
-  // a time instead of the whole table. Non-force: already-`done` cells in those
-  // rows are skipped (and not re-billed), matching Run-all semantics.
-  const runRows = async (rowIds: string[]) => {
-    if (!tableData || rowIds.length === 0) return;
-    const tableId = tableData.id;
-    const fnCols = tableData.columns.filter(c => c.kind === "function");
-    if (!fnCols.length) return;
-    const deps = buildColumnDeps(fnCols);
-    let completed = 0;
-    setRunProgress({ current: 0, total: fnCols.length });
-    await runColumnsWithDeps(
-      fnCols,
-      deps,
-      RUN_ALL_CONCURRENCY,
-      async (col) => { await api.runColumnStream(col.id, (e) => patchCell(tableId, e), { rowIds }); },
-      () => { completed += 1; setRunProgress({ current: completed, total: fnCols.length }); },
-    );
-    setRunProgress(null);
-  };
-
-  // ── Auto-run cascade ───────────────────────
-  //
-  // A single-column or single-cell run doesn't walk the dependency graph the way
-  // Run-all does, so columns that map from the one we just ran would otherwise sit
-  // empty until the user hit play on each. These helpers auto-populate them.
-  //
-  // Free/mapped columns always cascade (no credit cost), even with Auto-run off;
-  // a billed enrichment cascades only when Auto-run is on. See `isFreeColumn`.
-  const cascadeEligible = (c: Column): boolean =>
-    c.kind === "function" && (autoRunRef.current || isFreeColumn(c));
-
-  // After the columns named by `sourceColIds` have run, run the eligible function
-  // columns that reference them, transitively (a dependent we run becomes a source
-  // for its own dependents). `opts` mirrors the triggering run: a single-cell edit
-  // cascades force-scoped to that row; a full-column run fills empty dependent cells
-  // without forcing, so already-`done` cells are never re-billed (TRI-3283 L2).
-  const cascadeDependents = async (
-    tableId: string,
-    sourceColIds: string[],
-    opts: { force?: boolean; rowIds?: string[] } = {},
-  ) => {
-    const ran = new Set<string>(sourceColIds);
-    let snapshot = await api.table(tableId);
-    let frontier = snapshot.columns.filter((c) => sourceColIds.includes(c.id)).map((c) => c.name);
-    while (frontier.length) {
-      const deps = snapshot.columns.filter(
-        (c) => !ran.has(c.id) && cascadeEligible(c) && frontier.some((n) => columnDependsOn(c, n)),
-      );
-      if (!deps.length) break;
-      for (const dc of deps) {
-        ran.add(dc.id);
-        await api.runColumnStream(dc.id, (e) => patchCell(tableId, e), opts).catch(() => {});
-      }
-      frontier = deps.map((c) => c.name);
-      snapshot = await api.table(tableId);
-    }
-  };
-
-  // ── Run single column ──────────────────────
-
-  const runColumn = async (colId: string, opts?: { force?: boolean; rowIds?: string[] }) => {
-    const tableId = selectedTableId;
-    if (!tableId) return;
-    setRunningColId(colId);
-    // Patch cells in place as the sidecar streams per-cell progress (SSE),
-    // instead of refetching+replacing the whole grid after the run.
-    try {
-      await api.runColumnStream(colId, (e) => patchCell(tableId, e), opts);
-      // Cascade keeps the triggering run's ROW scope but never its force —
-      // dependents fill empty cells only, so done cells are never re-billed.
-      await cascadeDependents(tableId, [colId], opts?.rowIds ? { rowIds: opts.rowIds } : {});
-    } catch { /* ignore */ }
-    setRunningColId(null);
-  };
-
-  // ── Run an explicit set of function cells (range selection's "Run N cells") ──
-  // Grouped per column into ONE scoped run each (force + the selected rowIds),
-  // honouring inter-column {{dependencies}} like Run all / Run row do.
-  const runCells = async (cells: Array<{ rowId: string; colId: string }>) => {
-    if (!tableData) return;
-    const tableId = tableData.id;
-    const byCol = new Map<string, string[]>();
-    for (const { rowId, colId } of cells) {
-      const list = byCol.get(colId) ?? [];
-      list.push(rowId);
-      byCol.set(colId, list);
-    }
-    const fnCols = tableData.columns.filter((c) => c.kind === "function" && byCol.has(c.id));
-    if (!fnCols.length) return;
-    const keys = cells.map(({ rowId, colId }) => `${rowId}:${colId}`);
-    setRunningCells((s) => { const n = new Set(s); for (const k of keys) n.add(k); return n; });
-    try {
-      const deps = buildColumnDeps(fnCols);
-      await runColumnsWithDeps(fnCols, deps, RUN_ALL_CONCURRENCY, async (col) => {
-        const rowIds = byCol.get(col.id)!;
-        try {
-          await api.runColumnStream(col.id, (e) => patchCell(tableId, e), { force: true, rowIds });
-        } finally {
-          setRunningCells((s) => {
-            const n = new Set(s);
-            for (const rowId of rowIds) n.delete(`${rowId}:${col.id}`);
-            return n;
-          });
-        }
-      });
-    } finally {
-      setRunningCells((s) => { const n = new Set(s); for (const k of keys) n.delete(k); return n; });
-    }
-  };
-
-
-  // ── Run a single cell (this row × this function column) ──
-  const runCell = async (rowId: string, colId: string) => {
-    const tableId = selectedTableId;
-    if (!tableId) return;
-    const key = `${rowId}:${colId}`;
-    setRunningCells(s => new Set(s).add(key));
-    try {
-      // Force is scoped to the ONE explicitly-targeted cell via `rowIds:[rowId]`,
-      // so re-running this cell never re-runs (or re-bills) any other row's
-      // already-`done` cell in the column (TRI-3283 L2).
-      await api.runColumnStream(colId, (e) => patchCell(tableId, e), { force: true, rowIds: [rowId] });
-      await cascadeDependents(tableId, [colId], { force: true, rowIds: [rowId] });
-    } catch { /* ignore */ }
-    setRunningCells(s => { const n = new Set(s); n.delete(key); return n; });
-  };
-
-  // ── Add row ────────────────────────────────
-
-  const addRow = async () => {
-    if (!tableData) return;
-    await api.addRow(tableData.id);
-    await loadTable(tableData.id);
-    scheduleAutoPush(tableData.id);
-  };
-
-  // ── Promote a JSON field to a column (from the Cell details drawer) ──
-
-  const uniqueColName = (base: string): string => {
-    const existing = new Set((tableData?.columns ?? []).map((c) => c.name.toLowerCase()));
-    if (!existing.has(base.toLowerCase())) return base;
-    let n = 2;
-    while (existing.has(`${base} ${n}`.toLowerCase())) n++;
-    return `${base} ${n}`;
-  };
-
-  const promoteCreate = async (path: string[], label: string) => {
-    if (!detail || !selectedTableId) return;
-    const res = await api.addColumn(selectedTableId, {
-      name: uniqueColName(label),
-      code: extractCode(path),
-      params: { src: `{{${detail.columnName}}}` },
-      type: "text",
-    });
-    await api.runColumn(res.id).catch(() => {});
-    await loadTable(selectedTableId);
-  };
-
-  const promoteMap = async (path: string[], targetId: string) => {
-    if (!detail || !selectedTableId) return;
-    await api.updateColumn(targetId, {
-      kind: "function",
-      provider: null,
-      method: null,
-      code: extractCode(path),
-      params: { src: `{{${detail.columnName}}}` },
-    });
-    await api.runColumn(targetId).catch(() => {});
-    await loadTable(selectedTableId);
-  };
-
-  // ── Rename / duplicate a column (header context menu) ──
-
-  const renameColumn = async (colId: string, name: string) => {
-    await api.updateColumn(colId, { name }).catch(() => {});
-    reloadCurrent();
-    if (selectedTableId) scheduleAutoPush(selectedTableId);
-  };
-
-  const duplicateColumn = async (col: Column) => {
-    if (!selectedTableId) return;
-    const body: Parameters<typeof api.addColumn>[1] = {
-      name: uniqueColName(`${col.name} copy`),
-      type: col.type,
-      params: col.params,
-      condition: col.condition ?? null,
-    };
-    // The server synthesizes fn === "code" for custom-code columns — those
-    // round-trip via `code`, everything else via the real `provider.method`.
-    if (col.fn === "code") body.code = col.code ?? undefined;
-    else if (col.fn) body.fn = col.fn;
-    await api.addColumn(selectedTableId, body).catch(() => {});
-    reloadCurrent();
-  };
-
-  // ── Column resize (drag the header edge) ──
-
-  const startResize = (colId: string, startX: number, startW: number) => {
-    const onMove = (e: MouseEvent) => setColWidth(colId, startW + (e.clientX - startX));
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      document.body.style.cursor = "";
-    };
-    document.body.style.cursor = "col-resize";
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  };
-
-  // ── Delete row / cell / column ─────────────
-
-  const reloadCurrent = () => {
-    if (selectedTableId) loadTable(selectedTableId);
-  };
-  const deleteRow = async (rowId: string) => {
-    await api.deleteRow(rowId).catch(() => {});
-    reloadCurrent();
-  };
-  const clearCell = async (rowId: string, columnId: string) => {
-    await api.clearCell(rowId, columnId).catch(() => {});
-    reloadCurrent();
-  };
-  const deleteColumn = async (columnId: string) => {
-    await api.deleteColumn(columnId).catch(() => {});
-    reloadCurrent();
-  };
+  // The shared sidebar/grid context menu (cloud table + folder menus).
   const openCtx = (e: React.MouseEvent, items: { label: string; danger?: boolean; onClick: () => void }[]) => {
     e.preventDefault();
     setCtxMenu({ x: e.clientX, y: e.clientY, items });
-  };
-
-  // ── Set cell ───────────────────────────────
-
-  const setCell = async (rowId: string, colId: string, value: string) => {
-    await api.setCell(rowId, colId, value);
-    if (!selectedTableId) return;
-    setTableData(await api.table(selectedTableId));
-
-    // Auto-run: re-run the columns that map from the edited one, for this row only
-    // (`rowIds:[rowId]`, so other rows' already-`done` dependents aren't re-billed —
-    // TRI-3283 L2). Free/mapped dependents always cascade; billed enrichments only
-    // when Auto-run is on (handled by `cascadeEligible`).
-    await cascadeDependents(selectedTableId, [colId], { force: true, rowIds: [rowId] });
-    setTableData(await api.table(selectedTableId));
-
-    // Auto-sync (TRI-3298): a debounced push after the edit settles.
-    scheduleAutoPush(selectedTableId);
   };
 
   // ── Sidebar: connector groups ──────────────
@@ -3401,56 +2110,10 @@ export default function App() {
   // RENDER
   // ─────────────────────────────────────────
 
-  const fnColCount = tableData?.columns.filter(c => c.kind === "function").length ?? 0;
-
-  // "provider.method" → presentation metadata (logo, labels, credits) for the
-  // grid headers; rebuilt only when the connector catalog changes.
-  const fnColumnMeta = useMemo(() => buildColumnMetaMap(connectors), [connectors]);
-
-  // model id → AI provider identity (Anthropic, OpenAI, Hermes, OpenRouter…),
-  // so an ai.generate column wears the logo of the model it actually calls.
-  const aiModelMeta = useMemo(() => {
-    const m = new Map<string, { providerName: string; logo: string | null }>();
-    for (const p of aiProviders) {
-      for (const model of p.models) if (!m.has(model)) m.set(model, { providerName: p.name, logo: p.logo });
-    }
-    return m;
-  }, [aiProviders]);
-
-  const columnMeta = useCallback(
-    (col: Column) => {
-      const base = col.fn ? fnColumnMeta.get(col.fn) ?? null : null;
-      if (col.provider === "ai") {
-        const model = typeof col.params?.model === "string" ? col.params.model : "";
-        const mp = model ? aiModelMeta.get(model) : undefined;
-        if (mp) {
-          return {
-            providerName: mp.providerName,
-            logo: mp.logo,
-            methodLabel: model,
-            category: "AI",
-            credits: base?.credits,
-            requiredInputs: base?.requiredInputs,
-          };
-        }
-      }
-      return base;
-    },
-    [fnColumnMeta, aiModelMeta],
-  );
-
-  // ── Cloud sign-in welcome (dismissable to local) ─────────────
-  // When cloud is configured, first launch shows the sign-in/onboarding screen —
-  // but it is NOT a hard gate: "Continue locally" (onClose → continueLocally)
-  // drops into local mode with NO cloud features, free + offline. Cloud access
-  // (workspaces, sync, realtime) requires signing in. Once the user has chosen
-  // local (or signed in), this never blocks again.
-  // A pending invite OVERRIDES local mode: an invitee who previously chose
-  // "continue locally" must still be guided through sign-in to accept + join.
-  const mustAuth =
-    cloudEnabled &&
-    !isAuthenticated &&
-    (!localMode || pendingInviteToken !== null);
+  // ── Mandatory cloud sign-in gate ─────────────
+  // The app is cloud-only: a signed-out user is held at the onboarding screen
+  // with NO opt-out (a hard mandatory-login gate).
+  const mustAuth = !isAuthenticated;
   if (mustAuth && authLoading) {
     return <AppLoader inShell label="Signing you in…" />;
   }
@@ -3462,9 +2125,9 @@ export default function App() {
           initialScreen={pendingInviteToken !== null ? "signup" : "signin"}
           hasSession={false}
           onClose={() => {
-            // Opting out clears the invite so the gate doesn't re-fire in a loop.
+            // No opt-out for signed-out users; just clear any captured invite so
+            // the gate doesn't re-fire in a loop.
             if (pendingInviteToken !== null) clearPendingInviteToken();
-            continueLocally();
           }}
           onDone={() => {}}
         />
@@ -3478,13 +2141,11 @@ export default function App() {
   // LOCAL mode and then visibly flip to cloud. Hold the full-screen branded loader
   // until the cloud environment is settled (a project is open).
   //
-  // We deliberately do NOT gate on `localMode`: a signed-in user auto-enters cloud
-  // on every boot regardless of a stale localMode flag, so they'd otherwise still
-  // see the flash. Skipped only when the trial is locked (its own panel owns the
-  // screen). The loader holds until BOTH the project is open AND the minimum window
-  // has elapsed (so an instant load still reads as an intentional branded splash),
+  // Skipped only when the trial is locked (its own panel owns the screen). The
+  // loader holds until BOTH the project is open AND the minimum window has
+  // elapsed (so an instant load still reads as an intentional branded splash),
   // bounded by the safety ceiling so it can never stick.
-  const cloudUser = cloudEnabled && !cloudLocked && isAuthenticated;
+  const cloudUser = !cloudLocked && isAuthenticated;
   const bootingCloud =
     cloudUser && !bootTimedOut && (cloudProject === null || !bootMinElapsed);
   if (bootingCloud) {
@@ -3518,7 +2179,7 @@ export default function App() {
         }}
         actions={[
           { id: "new-table", label: "New table", keywords: "create add", run: () => { setNewTableFolderId(null); setShowNewTableChooser(true); } },
-          { id: "import-csv", label: "Import CSV", keywords: "upload file", run: () => setImportMode(inCloud ? "cloud" : "local") },
+          { id: "import-csv", label: "Import CSV", keywords: "upload file", run: () => setImportMode("cloud") },
           { id: "browse-tables", label: "Browse all tables", keywords: "search manage", run: () => setView({ kind: "tables" }) },
           { id: "switch-project", label: "Switch project / workspace", keywords: "change", run: () => setShowProjects(true) },
           ...(activeWorkspace ? [{ id: "workspace-settings", label: "Workspace settings", keywords: "members seats billing", run: () => setShowWorkspaceSettings(true) } as PaletteAction] : []),
@@ -3552,7 +2213,7 @@ export default function App() {
           <button className="sidebar-proj" onClick={() => setShowProjects(true)} title="Switch project / workspace">
             <span className="brand-name">GTM Grid</span>
             <span className="sidebar-project">
-              {inCloud ? cloudProject!.name : projectName}
+              {cloudProject?.name ?? "GTM Grid"}
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
             </span>
           </button>
@@ -3605,15 +2266,11 @@ export default function App() {
         </div>
 
         <div className="sidebar-scroll">
-          {/* Tables section — CLEAR local/cloud separation. The list shows ONE
-              environment's tables: in CLOUD mode the cloud tables, in LOCAL mode
-              the local tables. Because only one environment's rows exist at a
-              time, only one row can ever be active (no dual highlight). The sync
-              affordances (sync-all button, per-row sync dots, auto-sync toggle)
-              appear ONLY in local mode while signed into cloud (`showSyncUi`). */}
+          {/* Tables section — the open cloud project's tables (cloud is the only
+              data path), so exactly one row can be active. */}
           <div className="sidebar-section">
             <div className="sidebar-section-label">
-              <span className="sidebar-label-text">Tables{cloudLocked && inCloud ? " 🔒" : ""}</span>
+              <span className="sidebar-label-text">Tables{cloudLocked ? " 🔒" : ""}</span>
               <span className="sidebar-label-actions">
                 <button
                   className={`section-link${view.kind === "tables" ? " active" : ""}`}
@@ -3622,19 +2279,8 @@ export default function App() {
                 >
                   Browse all
                 </button>
-                {showSyncUi && (
-                  <button
-                    className={`sync-all-btn${syncPending ? " has-pending" : ""}`}
-                    title={syncPending ? `Sync ${syncPending} table${syncPending > 1 ? "s" : ""}` : "All tables synced"}
-                    disabled={pushingTableIds.size > 0}
-                    onClick={onSyncAll}
-                  >
-                    {pushingTableIds.size > 0 ? <span className="cell-spinner" /> : <Icon.CloudUp size={13} />}
-                    {syncPending ? <span className="sync-all-count">{syncPending}</span> : null}
-                  </button>
-                )}
                 <span className="add-menu-wrap">
-                  <button onClick={() => setAddMenuOpen(o => !o)} title="Add table or folder" disabled={inCloud && cloudLocked}>
+                  <button onClick={() => setAddMenuOpen(o => !o)} title="Add table or folder" disabled={cloudLocked}>
                     <Icon.Plus />
                   </button>
                   {addMenuOpen && (
@@ -3653,24 +2299,7 @@ export default function App() {
                 </span>
               </span>
             </div>
-            {/* Auto-sync setting (TRI-3298): default OFF. Turning it ON requires
-                confirming the destructive overwrite warning; OFF is immediate. */}
-            {showSyncUi && (
-              <label className="auto-sync-toggle">
-                <span className="auto-sync-toggle__label">Auto-sync to cloud</span>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={autoSyncOn}
-                  className={`switch${autoSyncOn ? " is-on" : ""}`}
-                  title={autoSyncOn ? "Auto-sync is on — local tables overwrite the cloud copy on every change" : "Turn on auto-sync (will overwrite cloud copies)"}
-                  onClick={requestAutoSyncToggle}
-                >
-                  <span className="switch__knob" />
-                </button>
-              </label>
-            )}
-            {cloudTables === undefined && inCloud ? (
+            {cloudTables === undefined ? (
               <div className="skeleton-row">
                 <div className="shimmer skeleton-bar" style={{ width: "65%", height: 13 }} />
               </div>
@@ -3756,7 +2385,7 @@ export default function App() {
                 </div>
               </>
             )}
-            {inCloud && cloudLocked ? (
+            {cloudLocked ? (
               <button
                 className="btn btn--primary"
                 style={{ margin: "8px 12px", width: "calc(100% - 24px)", justifyContent: "center" }}
@@ -3779,7 +2408,7 @@ export default function App() {
                     {cloudCreating ? "Creating…" : "New table"}
                   </span>
                 </div>
-                <div className="sidebar-item" onClick={() => setImportMode(inCloud ? "cloud" : "local")} onKeyDown={onActivateKey(() => setImportMode(inCloud ? "cloud" : "local"))} role="button" tabIndex={0}>
+                <div className="sidebar-item" onClick={() => setImportMode("cloud")} onKeyDown={onActivateKey(() => setImportMode("cloud"))} role="button" tabIndex={0}>
                   <span className="sidebar-item-icon"><Icon.Table /></span>
                   <span className="sidebar-item-name">Import CSV…</span>
                 </div>
@@ -3986,16 +2615,10 @@ export default function App() {
         {/* Footer: account / project menu (cloud auth + workspace switcher +
             appearance/dark-mode toggle). */}
         <AccountBar
-          projectName={projectName}
+          projectName={cloudProject?.name ?? ""}
           healthStatus={healthStatus}
-          currentProjectPath={currentProjectPath}
-          inCloud={inCloud}
           cloudProjectName={cloudProject?.name ?? null}
-          onSwitchToLocal={switchToLocal}
-          cloudProjects={activeWorkspace ? cloudProjects : undefined}
-          onOpenCloudProject={onCloudProjectSelected}
           onSwitchProject={() => setShowProjects(true)}
-          onOpenMenu={openAccountMenu}
           theme={theme}
           onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
           onStartOnboarding={
@@ -4025,26 +2648,7 @@ export default function App() {
 
         {/* CSV import — rendered INLINE in this center pane (filling the area
             between the two sidebars), replacing the grid/empty-state while open.
-            Closing returns to the grid. Local writes via the sidecar; cloud via
-            Convex. */}
-        {importMode === "local" && (
-          <Suspense fallback={<PanelFallback />}>
-            <ImportCsvModal
-              inline
-              writer={localImportWriter}
-              onClose={() => setImportMode(null)}
-              onImported={() => { api.tables().then(setTables); }}
-              onOpenTable={id => {
-                api.tables().then(t => {
-                  setTables(t);
-                  setSelectedTableId(id);
-                  setView({ kind: "table" });
-                });
-                setImportMode(null);
-              }}
-            />
-          </Suspense>
-        )}
+            Closing returns to the grid. Writes via the metered Convex mutations. */}
         {importMode === "cloud" && cloudImportWriter && (
           <Suspense fallback={<PanelFallback />}>
             <ImportCsvModal
@@ -4059,10 +2663,9 @@ export default function App() {
           </Suspense>
         )}
 
-        {/* Cloud project: the LIVE multiplayer grid (Convex). Replaces the local
-            sidecar grid entirely while a cloud project is open. Hidden while a
-            CSV import is open in this pane. */}
-        {!importMode && inCloud && !cloudLocked && view.kind === "table" && (
+        {/* Cloud project: the LIVE multiplayer grid (Convex) — the only data
+            grid. Hidden while a CSV import is open in this pane. */}
+        {!importMode && !cloudLocked && view.kind === "table" && (
           <Suspense fallback={<PanelFallback />}>
             <CloudGrid
               tableId={cloudTableId}
@@ -4075,8 +2678,8 @@ export default function App() {
         )}
 
         {/* Cloud locked: the trial lapsed / Free plan. Cloud data stays safe but
-            inaccessible until the user upgrades; local tables are unaffected. */}
-        {!importMode && inCloud && cloudLocked && view.kind === "table" && (
+            inaccessible until the user upgrades. */}
+        {!importMode && cloudLocked && view.kind === "table" && (
           <div className="cloud-locked">
             <div className="cloud-locked__card">
               <div className="cloud-locked__icon">🔒</div>
@@ -4101,15 +2704,13 @@ export default function App() {
           <Suspense fallback={<PanelFallback />}>
             <TablesBrowse
               cards={tableCards}
-              workspaceName={inCloud ? (cloudProject?.name ?? undefined) : undefined}
-              syncing={pushingTableIds.size > 0}
+              workspaceName={cloudProject?.name ?? undefined}
               onOpen={onOpenCard}
               onDelete={onDeleteCard}
               onFavorite={onFavoriteCard}
               onRename={onRenameCard}
               onNew={() => { setNewTableFolderId(null); setShowNewTableChooser(true); }}
               onBulkDelete={onBulkDeleteCards}
-              onSyncAll={showSyncUi ? onSyncAll : undefined}
             />
           </Suspense>
         )}
@@ -4164,135 +2765,23 @@ export default function App() {
           </Suspense>
         )}
 
-        {!importMode && !inCloud && view.kind === "table" && (
-          !selectedTableId ? (
-            <div className="empty-state">
-              <div className="empty-icon"><Icon.Grid /></div>
-              <div className="empty-title">No table selected</div>
-              <p className="empty-sub">Create your first table to start building your GTM data grid.</p>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button className="btn btn-primary" onClick={() => { setNewTableFolderId(null); setShowNewTableChooser(true); }}>
-                  <Icon.Plus /> Create table
-                </button>
-                <button className="btn btn-outline" onClick={() => setImportMode("local")}>
-                  <Icon.Table /> Import CSV
-                </button>
-              </div>
-            </div>
-          ) : tableLoading ? (
-            <div className="empty-state">
-              <div className="cell-spinner" style={{ width: 20, height: 20, borderWidth: 2 }} />
-            </div>
-          ) : tableData ? (
-            <DataGrid
-              controller={{
-                table: tableData,
-                rowHeight,
-                columnWidth: colW,
-                minColWidth: MIN_COL_W,
-                maxColWidth: MAX_COL_W,
-                runProgress,
-                runningColId,
-                runningCells,
-                fnColCount,
-                canRun: !runProgress,
-                runDisabledReason: runProgress ? "Running…" : undefined,
-                canAddRow: !runProgress,
-                autoRun: { value: autoRun, onToggle: toggleAutoRun },
-                toolbarLeftExtras: (
-                  <button
-                    className="autorun-toggle"
-                    onClick={() => setDedupeOpen(true)}
-                    title="Deduplicate rows on a column"
-                  >
-                    <span className="autorun-label">Dedupe</span>
-                    {tableData.dedupe && <span className="dedupe-on-dot" title="Auto-dedupe is on" />}
-                  </button>
-                ),
-                columnMeta,
-                addRow,
-                runAll,
-                runRows,
-                runColumn,
-                runCell,
-                runCells,
-                setCell,
-                deleteRow,
-                deleteColumn,
-                clearCell,
-                // One right rail at a time: the edit panel and the cell-details
-                // drawer overlap, so opening one closes the other.
-                editColumn: (col) => { setDetail(null); setEditCol(col); },
-                renameColumn,
-                duplicateColumn,
-                openAddColumn: (anchor) => { setAddColAnchor(anchor); setShowAddCol(true); },
-                resizeColumn: startResize,
-                openCellDetails: (col, cell, rowId) => {
-                  setEditCol(null);
-                  setDetail({
-                    columnName: col.name,
-                    value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
-                    meta:
-                      col.kind === "function" && rowId
-                        ? { rowId, colId: col.id, fn: col.fn, ranAt: cell?.ranAt, runMs: cell?.runMs }
-                        : null,
-                  });
-                },
-                expandCell: (a) => setExpandCell(a),
-              }}
-              bodyOverride={
-                tableData.rows.length === 0 && warmingTableId === tableData.id ? (
-                  <div className="empty-state">
-                    <div className="cell-spinner" style={{ width: 22, height: 22, borderWidth: 2, marginBottom: 14 }} />
-                    <div className="empty-title">Pulling results from Trigify…</div>
-                    <p className="empty-sub">Trigify is scraping your signal — first results can take a few minutes. They'll appear here automatically, and keep updating on your schedule.</p>
-                  </div>
-                ) : undefined
-              }
-            />
-          ) : null
-        )}
       </div>
 
       {/* ── Agent panel (Claude Code / Codex) ─ */}
       <Suspense fallback={null}>
         <AgentPanel
-          onGridChange={refreshAll}
+          onGridChange={() => {
+            // The agent mutates the cloud grid — refetch the cloud table list and
+            // the open table so the UI reflects the agent's writes.
+            void invalidateCloudTables();
+            if (cloudTableId !== null) void invalidateCloudTable(cloudTableId);
+          }}
           activeTable={activeTable}
           cloud={agentCloud}
           onAgentEvent={onAgentEvent}
           onResizeStart={startAgentResize}
         />
       </Suspense>
-
-      {/* ── Cell details drawer ─ */}
-      {detail && (
-        <CellDetails
-          source={detail}
-          columns={(tableData?.columns ?? []).map((c) => ({ id: c.id, name: c.name }))}
-          onClose={() => setDetail(null)}
-          onCreate={promoteCreate}
-          onMapTo={promoteMap}
-          meta={detail.meta}
-          fetchRaw={
-            detail.meta
-              ? () => api.cell(detail.meta!.rowId, detail.meta!.colId).then((c) => c.raw)
-              : undefined
-          }
-        />
-      )}
-
-      {/* ── Expanded cell editor ─ */}
-      {expandCell && (
-        <ExpandedEditor
-          columnName={expandCell.columnName}
-          value={expandCell.value}
-          editable={expandCell.editable}
-          anchor={expandCell.anchor}
-          onSave={(v) => setCell(expandCell.rowId, expandCell.colId, v)}
-          onClose={() => setExpandCell(null)}
-        />
-      )}
 
       {/* ── Right-click context menu ─ */}
       {ctxMenu && (
@@ -4375,145 +2864,29 @@ export default function App() {
         />
       )}
 
-      {showAddCol && tableData && (
-        <Suspense fallback={<PanelFallback />}>
-          <AddColumnPopover
-            tableId={tableData.id}
-            anchor={addColAnchor}
-            onClose={() => setShowAddCol(false)}
-            onAdded={() => loadTable(tableData.id)}
-            onUseFunction={() => { setShowAddCol(false); setShowFunctions(true); }}
-          />
-        </Suspense>
-      )}
-
-      {showFunctions && tableData && (
-        <Suspense fallback={<PanelFallback />}>
-          <FunctionsModal
-            tableId={tableData.id}
-            connectors={connectors}
-            onClose={() => setShowFunctions(false)}
-            onAdded={(col) => {
-              void loadTable(tableData.id);
-              // Clay flow: the column was just added — configure it in the rail.
-              // (Columns are created with EMPTY params here, so the auto-run-
-              // free-column behaviour doesn't apply — the run happens via the
-              // panel's Save & run once inputs are mapped.)
-              if (col) {
-                setDetail(null);
-                setEditCol(col);
-              }
-            }}
-            onOpenAiSettings={() => {
-              setShowFunctions(false);
-              const target = aiProviders[0]?.id ?? "anthropic";
-              setView({ kind: "ai", id: target });
-            }}
-          />
-        </Suspense>
-      )}
-
-      {editCol && tableData && (
-        <Suspense fallback={<PanelFallback />}>
-          <ColumnEditPanel
-            column={editCol}
-            columns={tableData.columns.map((c) => ({ id: c.id, name: c.name, type: c.type }))}
-            connectors={connectors}
-            tableId={tableData.id}
-            rows={tableData.rows}
-            onClose={() => setEditCol(null)}
-            onSaved={(run) => {
-              void loadTable(tableData.id);
-              if (run) void runColumn(editCol.id, run);
-            }}
-            onOpenExtension={(id) => setView({ kind: "extension", id })}
-          />
-        </Suspense>
-      )}
-
       {showNewTableChooser && (
         <NewTableChooser
-          inCloud={inCloud}
           onClose={() => setShowNewTableChooser(false)}
-          onBlank={() => {
-            if (inCloud) void onCreateCloudTable(newTableFolderId);
-            else setShowNewTable(true);
-          }}
-          onCsv={() => setImportMode(inCloud ? "cloud" : "local")}
+          onBlank={() => { void onCreateCloudTable(newTableFolderId); }}
+          onCsv={() => setImportMode("cloud")}
           onWebhook={() => { void onChooseWebhook(); }}
           onSignals={() => setShowSignals(true)}
         />
       )}
 
-      {showSignals && (
+      {showSignals && signalsCloud && (
         <Suspense fallback={<PanelFallback />}>
           <SignalsModal
-            cloud={inCloud ? signalsCloud : undefined}
+            cloud={signalsCloud}
             onClose={() => setShowSignals(false)}
             onConnectTrigify={() => { setShowSignals(false); setView({ kind: "extension", id: "trigify" }); }}
-            onCreated={(tableId, added) => {
+            onCreated={(tableId) => {
               setShowSignals(false);
-              if (inCloud) {
-                setCloudTableId(tableId as Id<"tables">);
-                setView({ kind: "table" });
-              } else {
-                api.tables().then((t) => {
-                  setTables(t);
-                  setSelectedTableId(tableId);
-                  setView({ kind: "table" });
-                }).catch(() => {});
-                if (!added) startWarming(tableId);
-              }
+              setCloudTableId(tableId as Id<"tables">);
+              setView({ kind: "table" });
             }}
           />
         </Suspense>
-      )}
-
-      {showNewTable && (
-        <NewTableModal
-          folderId={newTableFolderId}
-          onClose={() => { setShowNewTable(false); setNewTableFolderId(null); }}
-          onCreated={id => {
-            if (newTableFolderId !== null) {
-              const fid = newTableFolderId;
-              setOpenFolders((o) => (o[fid] ? o : { ...o, [fid]: true }));
-            }
-            api.tables().then(t => {
-              setTables(t);
-              setSelectedTableId(id);
-            });
-            // Auto-sync (TRI-3298): a new local table auto-links + pushes
-            // immediately when the setting is ON (first push creates the cloud
-            // table; the link is reused on later auto-pushes — no duplicates).
-            autoPushNow(id);
-          }}
-        />
-      )}
-
-      {confirmDeleteTable && (
-        <Dialog open onOpenChange={(o) => { if (!o) setConfirmDeleteTable(null); }}>
-          <DialogContent className="modal" style={{ width: 380 }} srTitle="Delete table">
-            <div className="modal-header">
-              <span className="modal-title">Delete table</span>
-              <button className="modal-close" onClick={() => setConfirmDeleteTable(null)}><Icon.X /></button>
-            </div>
-            <div className="modal-body">
-              <p style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>
-                Delete <strong style={{ color: "var(--text)" }}>{confirmDeleteTable.name}</strong>? This permanently
-                removes the table and all of its columns and rows. This can't be undone.
-              </p>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-outline" onClick={() => setConfirmDeleteTable(null)}>Cancel</button>
-              <button
-                className="btn btn-danger"
-                onClick={() => { const t = confirmDeleteTable; setConfirmDeleteTable(null); deleteTable(t.id); }}
-              >
-                Delete table
-              </button>
-            </div>
-          </DialogContent>
-        </Dialog>
       )}
 
       {confirmDeleteCloudTable && (
@@ -4547,143 +2920,15 @@ export default function App() {
         </Dialog>
       )}
 
-      {/* Per-table sync popover (TRI-3297). */}
-      {/* TRI-3310 bug D: NEVER render the popover while the overwrite-confirm
-          modal is open for the SAME table — the popover would show the
-          conflict-confirm body alongside the modal (two overlapping confirms).
-          The call sites also close the popover when the modal opens; this render
-          guard makes the "exactly one confirmation" invariant structural. */}
-      {showSyncUi && syncPopover && overwriteConfirm?.tableId !== syncPopover.tableId && (() => {
-        const t = tables.find((x) => x.id === syncPopover.tableId);
-        if (!t) return null;
-        const status = syncStatusFor(t.id);
-        return (
-          <SyncPopover
-            tableName={t.name}
-            rowCount={t.rows}
-            status={status}
-            workspaceName={activeWorkspace?.name ?? "Workspace"}
-            memberCount={activeWorkspace?.seatUsage.used ?? 1}
-            anchorTop={syncPopover.anchorTop}
-            sidebarWidth={sidebarWidth}
-            cloudRowCount={syncLinks[t.id]?.rowCount ?? null}
-            error={syncErrors[t.id] ?? null}
-            onPush={() => onPushTable(t.id)}
-            // Conflict state already names the destructive overwrite and asks
-            // "Keep my version / Cancel", so push DIRECTLY here (TRI-3306) —
-            // routing through onPushTable would pop a second identical overwrite
-            // modal (double-confirm) for the one action the user just accepted.
-            onConfirmOverwrite={() => { setSyncPopover(null); void runPush(t.id, true); }}
-            onRepush={() => onPushTable(t.id)}
-            onClose={() => setSyncPopover(null)}
-          />
-        );
-      })()}
-
-      {dedupeOpen && tableData && (
-        <DedupePopover
-          columns={tableData.columns.map((c) => ({ id: c.id, name: c.name }))}
-          current={tableData.dedupe ?? null}
-          setDedupe={(body) => api.setDedupe(tableData.id, body)}
-          dedupeTable={() => api.dedupeTable(tableData.id)}
-          onClose={() => setDedupeOpen(false)}
-          onChanged={() => loadTable(tableData.id)}
-        />
-      )}
-
-      {/* Destructive-overwrite confirm (TRI-3297): a re-push of a LINKED table
-          overwrites cloud data, so name the table + row count before sending
-          confirmOverwrite. A first push (unlinked → create) never reaches here. */}
-      {overwriteConfirm && (
-        <Dialog open onOpenChange={(o) => { if (!o) setOverwriteConfirm(null); }}>
-          <DialogContent className="modal" style={{ width: 400 }} srTitle="Overwrite cloud copy?">
-            <div className="modal-header">
-              <span className="modal-title">Overwrite cloud copy?</span>
-              <button className="modal-close" onClick={() => setOverwriteConfirm(null)}><Icon.X /></button>
-            </div>
-            <div className="modal-body">
-              <p style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>
-                {overwriteConfirmMessage(overwriteConfirm.name, overwriteConfirm.rowCount)}
-              </p>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-outline" onClick={() => setOverwriteConfirm(null)}>Cancel</button>
-              <button className="btn btn-danger" onClick={() => { onConfirmOverwrite(); setOverwriteConfirm(null); }}>
-                Keep my version — overwrite the cloud copy
-              </button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
-
-      {/* Bulk destructive-overwrite confirm (TRI-3307): "Sync all" with linked
-          tables pending shows ONE confirm naming the COUNT, then re-pushes ALL of
-          them on accept. On cancel none of the linked tables push. */}
-      {bulkOverwriteConfirm && (
-        <Dialog open onOpenChange={(o) => { if (!o) setBulkOverwriteConfirm(null); }}>
-          <DialogContent className="modal" style={{ width: 400 }} srTitle="Re-push linked tables?">
-            <div className="modal-header">
-              <span className="modal-title">Re-push linked tables?</span>
-              <button className="modal-close" onClick={() => setBulkOverwriteConfirm(null)}><Icon.X /></button>
-            </div>
-            <div className="modal-body">
-              <p style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>
-                Re-push {bulkOverwriteConfirm.toOverwrite.length} linked table{bulkOverwriteConfirm.toOverwrite.length === 1 ? "" : "s"}? This overwrites their cloud copies with your local versions.
-              </p>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-outline" onClick={() => setBulkOverwriteConfirm(null)}>Cancel</button>
-              <button className="btn btn-danger" onClick={onConfirmBulkOverwrite}>
-                Keep my versions — overwrite the cloud copies
-              </button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
-
-      {/* Auto-sync enable-time confirm (TRI-3298): turning the setting ON
-          requires confirming the repeated-overwrite behaviour. Only enables on
-          accept; cancelling leaves it OFF. */}
-      {autoSyncEnableConfirm && (
-        <Dialog open onOpenChange={(o) => { if (!o) setAutoSyncEnableConfirm(false); }}>
-          <DialogContent className="modal" style={{ width: 420 }} srTitle="Turn on auto-sync?">
-            <div className="modal-header">
-              <span className="modal-title">Turn on auto-sync?</span>
-              <button className="modal-close" onClick={() => setAutoSyncEnableConfirm(false)}><Icon.X /></button>
-            </div>
-            <div className="modal-body">
-              <p style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>
-                {AUTO_SYNC_ENABLE_WARNING}
-              </p>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-outline" onClick={() => setAutoSyncEnableConfirm(false)}>Cancel</button>
-              <button
-                className="btn btn-danger"
-                onClick={() => { setAutoSyncEnableConfirm(false); void persistAutoSync(true); }}
-              >
-                Turn on — overwrite cloud copies automatically
-              </button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
-
-      {showProjects && (
+      {showProjects && activeWorkspace && (
         <ProjectSwitcher
-          current={projectName}
           onClose={() => setShowProjects(false)}
-          onSwitched={onProjectSwitched}
-          cloud={
-            activeWorkspace
-              ? {
-                  projects: cloudProjects,
-                  activeId: cloudProject?._id ?? null,
-                  onSelect: onCloudProjectSelected,
-                  onCreate: onCreateCloudProject,
-                }
-              : undefined
-          }
+          cloud={{
+            projects: cloudProjects,
+            activeId: cloudProject?._id ?? null,
+            onSelect: onCloudProjectSelected,
+            onCreate: onCreateCloudProject,
+          }}
         />
       )}
       </div>

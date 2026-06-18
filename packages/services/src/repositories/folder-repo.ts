@@ -28,6 +28,12 @@ export interface Folder {
 
 /** Fields a `createFolder` insert supplies. */
 export interface NewFolder {
+  /**
+   * Client-supplied primary key. Optional: the DB generates one when omitted.
+   * Supplied by the cloud grid so an optimistic folder insert matches the
+   * server's id.
+   */
+  readonly id?: string;
   readonly workspaceId: string;
   readonly projectId: string;
   readonly name: string;
@@ -198,8 +204,8 @@ export const folderRepoLayer = (store: GridStore): Layer.Layer<FolderRepo> =>
       ),
     insert: (values) =>
       Effect.sync(() => {
-        const id = store.nextId("folder");
-        store.folders.push({ id, ...values });
+        const id = values.id ?? store.nextId("folder");
+        store.folders.push({ ...values, id });
         return id;
       }),
     rename: (id, name) =>

@@ -2,30 +2,24 @@
 // gtmgrid MCP server — exposes the grid (tables, columns, connectors, runs) as
 // MCP tools over stdio, so Claude Code / Codex can build and run GTM pipelines.
 //
-// DATA SOURCE (TRI-3296): the project to operate on is resolved from the
-// environment by `selectGridEnv`. In LOCAL mode (the default, and every
-// pure-local build with no cloud context) the tools open the SQLite project
-// named by GTMGRID_PROJECT via `openProject` — byte-identical to before. In
-// CLOUD mode (GTMGRID_MODE=cloud + the threaded apiUrl/token/workspace/project/
-// table) the table tools operate on the user's CLOUD (Supabase) project through
-// the engine's cloud GridStore + the apps/web worker API. The mode is EXPLICIT
-// (read from GTMGRID_MODE), never guessed inside a tool, and the bearer token is
-// never logged.
+// DATA SOURCE: the grid is ALWAYS a CLOUD (Postgres) project. The cloud context
+// (GTMGRID_MODE=cloud + the threaded apiUrl/token/workspace/project/table) is
+// resolved by `selectGridEnv`; the table tools operate on the user's cloud
+// project through the engine's cloud GridStore + the apps/web worker API. The
+// local SQLite grid paradigm has been removed; the only local SQLite store is the
+// secrets-only vault (`global.db`) the cloud registry reads extensions from. The
+// bearer token is never logged.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
   Db,
-  connectorFromManifest,
   globalDbPath,
-  openProject,
-  parseManifest,
   type Registry,
 } from "@gtmgrid/engine";
 import type { RunErrorContext } from "@gtmgrid/engine";
 import { captureException, installProcessHandlers } from "@gtmgrid/observability";
-import { capCellValue } from "./cell.js";
 import { describeGridEnv, selectGridEnv } from "./cloud-context.js";
 import {
   decide,
@@ -47,7 +41,7 @@ import {
 installProcessHandlers("mcp");
 
 // Forward systemic run failures (connector/AI bugs) from the engine to Error
-// Tracking, deduped per run. Wired onto both the local and cloud engine config.
+// Tracking, deduped per run. Wired onto the cloud engine config.
 const reportEngineError = (error: unknown, ctx: RunErrorContext): void =>
   captureException(error, { source: "engine-run", ...ctx });
 
@@ -55,14 +49,13 @@ const gridEnv = selectGridEnv(process.env);
 
 /**
  * Build the CLOUD registry: the built-in connectors PLUS every JSON-manifest
- * extension from the SHARED global db — the SAME set `openProject` loads for a
- * LOCAL project (engine `openProject` reads `globalDb.listExtensions()`). Without
- * this the cloud agent only saw the built-ins (ai/formatting/formula/github/http)
- * and reported enrichment/social connectors like Trigify as "not available",
- * diverging from local. The MCP runs on the user's machine (spawned by the
- * sidecar), so `globalDbPath()` resolves to the same global.db the sidecar uses.
- * Read-only + best-effort: a missing db or a bad manifest degrades to the
- * built-ins rather than failing the whole MCP.
+ * extension from the SHARED secrets vault (`global.db`). Without this the cloud
+ * agent would only see the built-ins (ai/formatting/formula/github/http) and
+ * report enrichment/social connectors like Trigify as "not available". The MCP
+ * runs on the user's machine (spawned by the sidecar), so `globalDbPath()`
+ * resolves to the same global.db the sidecar uses. Read-only + best-effort: a
+ * missing db or a bad manifest degrades to the built-ins rather than failing the
+ * whole MCP.
  */
 function cloudRegistry(): Registry {
   try {
@@ -103,29 +96,19 @@ const mcpAiFallback = async (req: { prompt: string; system?: string; model?: str
   return data.text;
 };
 
-// LOCAL mode opens the SQLite project (and exposes its registry of connectors).
-// CLOUD mode opens NO SQLite file (the engine is Db-free, backed by the cloud
-// store); it still needs a registry for connector discovery + cloud runs, so we
-// build one with the SAME extensions loaded so cloud == local (skip `openProject`).
-const local = gridEnv.mode === "local" ? openProject(gridEnv.project) : undefined;
-// AI columns fall back to the user's coding-agent model when no key is set (both modes).
-if (local) {
-  local.engine.config.aiFallback = mcpAiFallback;
-  local.engine.config.reportError = reportEngineError;
-}
-const cloudDeps =
-  gridEnv.mode === "cloud"
-    ? defaultCloudSourceDeps(cloudRegistry(), { aiFallback: mcpAiFallback, reportError: reportEngineError })
-    : undefined;
-const cloudSource =
-  gridEnv.mode === "cloud" && cloudDeps
-    ? makeCloudSource(gridEnv.context, cloudDeps)
-    : undefined;
+// The engine is Db-free, backed by the cloud store; it still needs a registry for
+// connector discovery + cloud runs, built with the user's uploaded extensions
+// loaded from the secrets vault. AI columns fall back to the user's coding-agent
+// model when no provider key is set.
+const cloudDeps = defaultCloudSourceDeps(cloudRegistry(), {
+  aiFallback: mcpAiFallback,
+  reportError: reportEngineError,
+});
+const cloudSource = makeCloudSource(gridEnv.context, cloudDeps);
 
-// The registry the discovery + run_function tools read from. In local mode it is
-// the project's (with uploaded extensions loaded); in cloud mode it is the
-// default registry on the cloud deps.
-const registry = local ? local.engine.registry : cloudDeps!.registry;
+// The registry the discovery + run_function tools read from — the default
+// registry on the cloud deps (with uploaded extensions loaded).
+const registry = cloudDeps.registry;
 
 const server = new McpServer({ name: "gtmgrid", version: "0.0.1" });
 
@@ -255,13 +238,6 @@ function gate(
     }),
   };
 }
-
-/** LOCAL-only helper: resolve a table by id/name on the SQLite project. */
-const localTableOr = (ref: string) => {
-  const t = local!.db.resolveTable(ref);
-  if (!t) throw new Error(`No table "${ref}". Use list_tables.`);
-  return t;
-};
 
 /** Reject a write tool that the cloud worker boundary does not yet expose. */
 const cloudUnsupported = (tool: string): never => {
@@ -404,23 +380,13 @@ server.tool(
 );
 
 server.tool("list_tables", "List all tables in the project with their column and row counts.", {}, async () => {
-  if (cloudSource) return ok(await cloudSource.listTables());
-  return ok(
-    local!.db.listTables().map((t) => ({
-      id: t.id,
-      name: t.name,
-      columns: local!.db.listColumns(t.id).length,
-      rows: local!.db.listRows(t.id).length,
-    })),
-  );
+  return ok(await cloudSource.listTables());
 });
 
 server.tool("create_table", "Create a new table.", { name: z.string() }, async ({ name }) => {
   const blocked = planGuard("create_table", "Create table", name);
   if (blocked) return blocked;
-  if (cloudSource) return ok(await cloudSource.createTable(name));
-  const t = local!.db.createTable(name);
-  return ok({ id: t.id, name: t.name });
+  return ok(await cloudSource.createTable(name));
 });
 
 server.tool(
@@ -445,48 +411,17 @@ server.tool(
   async ({ table, name, formula, fn, code, type, params, condition }) => {
     const blocked = planGuard("add_column", "Add column", `${table} › ${name}`);
     if (blocked) return blocked;
-    if (cloudSource) {
-      return ok(
-        await cloudSource.addColumn(table, {
-          name,
-          ...(formula !== undefined ? { formula } : {}),
-          ...(fn !== undefined ? { fn } : {}),
-          ...(code !== undefined ? { code } : {}),
-          ...(type !== undefined ? { type } : {}),
-          ...(params !== undefined ? { params } : {}),
-          ...(condition !== undefined ? { condition } : {}),
-        }),
-      );
-    }
-    const t = localTableOr(table);
-    let provider: string | null = null;
-    let method: string | null = null;
-    let colParams: Record<string, unknown> = params ?? {};
-    if (formula) {
-      // A formula column is a function column backed by the built-in `formula` connector.
-      provider = "formula";
-      method = "eval";
-      colParams = { ...colParams, expression: formula };
-    } else if (fn) {
-      const [p, m] = fn.split(".");
-      if (!p || !m) throw new Error("fn must be 'provider.method'");
-      if (!registry.method(p, m)) throw new Error(`Unknown function ${fn}. Use list_functions.`);
-      provider = p;
-      method = m;
-    }
-    const kind = provider || code ? "function" : "manual";
-    const col = local!.db.createColumn({
-      tableId: t.id,
-      name,
-      type: type ?? "text",
-      kind,
-      provider,
-      method,
-      code: code ?? null,
-      params: colParams,
-      condition: condition?.trim() ? condition.trim() : null,
-    });
-    return ok({ id: col.id, name: col.name, kind, fn: formula ? "formula.eval" : (fn ?? null), condition: col.condition });
+    return ok(
+      await cloudSource.addColumn(table, {
+        name,
+        ...(formula !== undefined ? { formula } : {}),
+        ...(fn !== undefined ? { fn } : {}),
+        ...(code !== undefined ? { code } : {}),
+        ...(type !== undefined ? { type } : {}),
+        ...(params !== undefined ? { params } : {}),
+        ...(condition !== undefined ? { condition } : {}),
+      }),
+    );
   },
 );
 
@@ -497,20 +432,7 @@ server.tool(
   async ({ table, rows }) => {
     const blocked = planGuard("add_rows", "Add rows", table);
     if (blocked) return blocked;
-    if (cloudSource) return ok(await cloudSource.addRows(table, rows));
-    const t = localTableOr(table);
-    // Resolve { ColumnName: value } -> { columnId: value }, validating names up front.
-    const resolved = rows.map((r) => {
-      const cells: Record<string, unknown> = {};
-      for (const [colName, val] of Object.entries(r)) {
-        const col = local!.db.resolveColumn(t.id, colName);
-        if (!col) throw new Error(`No column "${colName}" in "${t.name}"`);
-        cells[col.id] = val;
-      }
-      return cells;
-    });
-    const res = local!.db.addRowsDeduped(t.id, resolved);
-    return ok({ added: res.added, skipped: res.skipped, replaced: res.replaced });
+    return ok(await cloudSource.addRows(table, rows));
   },
 );
 
@@ -521,17 +443,7 @@ server.tool(
   async ({ table, column, keep }) => {
     const blocked = planGuard("set_dedupe", "Set dedupe", table);
     if (blocked) return blocked;
-    if (cloudSource) return ok(await cloudSource.setDedupe(table, column, keep ?? "oldest"));
-    const t = localTableOr(table);
-    if (column === null || column === "") {
-      local!.db.setTableDedupe(t.id, null);
-      return ok({ dedupe: null });
-    }
-    const col = local!.db.resolveColumn(t.id, column);
-    if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
-    local!.db.setTableDedupe(t.id, { column: col.id, keep: keep ?? "oldest" });
-    const swept = local!.db.dedupeTable(t.id);
-    return ok({ dedupe: { column: col.name, keep: keep ?? "oldest" }, removedExistingDuplicates: swept.deleted });
+    return ok(await cloudSource.setDedupe(table, column, keep ?? "oldest"));
   },
 );
 
@@ -541,89 +453,17 @@ server.tool(
   { table: z.string(), column: z.string(), force: z.boolean().optional(), concurrency: z.number().optional(), limit: z.number().optional(), offset: z.number().optional(), confirm: z.boolean().optional() },
   async ({ table, column, force, concurrency, limit, offset, confirm }) => {
     const args = { table, column, force, concurrency, limit, offset, confirm };
-    if (cloudSource) {
-      // Cloud lacks a cheap pending-count, so gate conservatively: a small
-      // limit-scoped run auto-approves (matches local), an unbounded run asks. The
-      // precise count + credit estimate aren't available without running.
-      const g = gate("run_column", args, {
-        affected: limit ?? CONFIRM_THRESHOLD + 1,
-        perRowCredits: 1,
-        action: "Run column",
-        target: `${table} › ${column}`,
-      });
-      if (!g.ok) return g.result;
-      return ok(withRunHint(await cloudSource.runColumn(table, column, { force, concurrency, limit, offset })));
-    }
-    const t = localTableOr(table);
-    const col = local!.db.resolveColumn(t.id, column);
-    if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
-    // Candidate rows in grid order (listRows is already sorted by position,
-    // created_at). Without `force`, skip cells already `done`; with it, every row
-    // is a candidate. `limit`/`offset` then scope to the next N — so "run 10 rows"
-    // fills the first 10 unfilled cells in display order, not a random subset.
-    const ordered = local!.db.listRows(t.id);
-    const candidates = force
-      ? ordered
-      : ordered.filter((r) => (local!.db.getCell(r.id, col.id)?.status ?? "empty") !== "done");
-    const scoped = limit != null ? candidates.slice(offset ?? 0, (offset ?? 0) + limit) : candidates;
-    const pending = scoped.length;
-    const method = col.provider && col.method ? local!.engine.registry.method(col.provider, col.method) : undefined;
-    // Permission/cost gate — mode-aware: a paid or large run asks (and only a human
-    // approval, not the model's own confirm, unlocks it). Counts the SCOPED set, so
-    // a deliberately small `limit` run never trips the threshold.
+    // Cloud lacks a cheap pending-count, so gate conservatively: a small
+    // limit-scoped run auto-approves, an unbounded run asks. The precise count +
+    // credit estimate aren't available without running.
     const g = gate("run_column", args, {
-      affected: pending,
-      perRowCredits: method?.credits ?? 0,
-      estimatedCredits: (method?.credits ?? 0) * pending,
+      affected: limit ?? CONFIRM_THRESHOLD + 1,
+      perRowCredits: 1,
       action: "Run column",
-      target: `${t.name} › ${col.name}`,
-      extra: {
-        // Surface the "only run if" rule so a ran:0 (every row skipped by the
-        // condition) is explainable up front, not a mystery after the fact.
-        condition: col.condition ?? undefined,
-        hint: col.condition
-          ? "rows that fail the column's run-condition are skipped (may run fewer than shown)"
-          : "enriches every pending row",
-      },
+      target: `${table} › ${column}`,
     });
     if (!g.ok) return g.result;
-    if (pending > CONFIRM_THRESHOLD) {
-      // Large (confirmed) run → delegate to the PERSISTENT sidecar so the work
-      // outlives the 5-min agent turn. A synchronous run here would block the turn
-      // and be killed mid-way (the "connection drop" on big Firecrawl/enrichment runs).
-      // A limit-scoped run forwards its rowIds so the background run honours the scope.
-      const port = process.env.GTMGRID_PORT ?? "8787";
-      try {
-        const r = await fetch(`http://127.0.0.1:${port}/api/columns/${col.id}/run/async`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            force,
-            concurrency,
-            rowIds: limit != null ? scoped.map((row) => row.id) : undefined,
-          }),
-        });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      } catch (e) {
-        throw new Error(
-          `Couldn't start the background run (${e instanceof Error ? e.message : String(e)}). The user can run it from the column's ▶ button instead.`,
-        );
-      }
-      return ok({
-        column: col.name,
-        started: true,
-        pending,
-        note: `Started enriching ${pending} rows in the background — it keeps running past this turn. Poll get_column("${col.name}") or get_table to watch the done count rise, and tell the user when it finishes. Do NOT re-run the column while it's in progress.`,
-      });
-    }
-    const res = await local!.engine.runColumn(col.id, {
-      force,
-      concurrency: concurrency ?? 5,
-      // Only pass an explicit row scope when the caller asked for one; otherwise
-      // leave it undefined so the engine runs every row exactly as before.
-      rowIds: limit != null ? scoped.map((r) => r.id) : undefined,
-    });
-    return ok(withRunHint({ column: col.name, ...res }));
+    return ok(withRunHint(await cloudSource.runColumn(table, column, { force, concurrency, limit, offset })));
   },
 );
 
@@ -632,40 +472,7 @@ server.tool(
   "Get a table's columns + rows (each row carries its _id for update_cells/delete_rows). Bounded: returns up to `limit` rows (default 200) from `offset`, plus totalRows — for a big table, paginate or use find_rows/get_column instead of pulling it all. Large cell values are truncated with a '…[+N chars]' marker (full value stays in the cell; extract fields via a code/formula column); small/compiled columns come through whole.",
   { table: z.string(), limit: z.number().optional(), offset: z.number().optional() },
   async ({ table, limit, offset }) => {
-    if (cloudSource) return ok(await cloudSource.getTable(table, { limit, offset }));
-    const t = localTableOr(table);
-    const cols = local!.db.listColumns(t.id);
-    const total = local!.db.countRows(t.id);
-    const start = Math.max(offset ?? 0, 0);
-    const cap = Math.min(Math.max(limit ?? 200, 1), 1000);
-    const rows = local!.db.listRows(t.id).slice(start, start + cap).map((r) => {
-      const cells = local!.db.rowCells(r.id);
-      const obj: Record<string, unknown> = { _id: r.id };
-      for (const c of cols) {
-        const cell = cells.get(c.id);
-        obj[c.name] = cell ? (cell.status === "error" ? { error: capCellValue(cell.error) } : capCellValue(cell.value)) : null;
-      }
-      return obj;
-    });
-    return ok({
-      table: t.name,
-      columns: cols.map((c) => ({
-        name: c.name,
-        kind: c.kind,
-        fn: c.provider ? `${c.provider}.${c.method}` : c.code ? "code" : null,
-        // Expose the column's logic so the agent can DIAGNOSE/FIX it in place: a
-        // wrong "only run if" condition skips every row → run_column reports ran:0,
-        // and without seeing the condition the agent can't tell why.
-        condition: c.condition ?? null,
-        params: c.params,
-        code: typeof c.code === "string" && c.code.length > 600 ? `${c.code.slice(0, 600)}…[+${c.code.length - 600} chars]` : c.code ?? null,
-      })),
-      rows,
-      totalRows: total,
-      returned: rows.length,
-      offset: start,
-      truncated: start + rows.length < total,
-    });
+    return ok(await cloudSource.getTable(table, { limit, offset }));
   },
 );
 
@@ -679,26 +486,7 @@ server.tool(
     limit: z.number().optional(),
   },
   async ({ table, where, columns, limit }) => {
-    if (cloudSource) return ok(await cloudSource.findRows(table, where, columns, limit));
-    const t = localTableOr(table);
-    const match: Record<string, unknown> = {};
-    for (const [name, val] of Object.entries(where ?? {})) {
-      const col = local!.db.resolveColumn(t.id, name);
-      if (!col) throw new Error(`No column "${name}" in "${t.name}"`);
-      match[col.id] = val;
-    }
-    const wantCols = (columns ?? local!.db.listColumns(t.id).map((c) => c.name))
-      .map((n) => local!.db.resolveColumn(t.id, n))
-      .filter((c): c is NonNullable<typeof c> => !!c);
-    const rows = local!.db.findRows(t.id, match, Math.min(limit ?? 100, 1000)).map((r) => {
-      const obj: Record<string, unknown> = { _id: r.id };
-      for (const c of wantCols) {
-        const cell = local!.db.getCell(r.id, c.id);
-        obj[c.name] = cell ? capCellValue(cell.value) : null;
-      }
-      return obj;
-    });
-    return ok({ matched: rows.length, rows });
+    return ok(await cloudSource.findRows(table, where, columns, limit));
   },
 );
 
@@ -707,16 +495,7 @@ server.tool(
   "Read one column's values (each with its row _id) — a lean alternative to get_table for assessing a big table on a single field. Bounded by `limit`.",
   { table: z.string(), column: z.string(), limit: z.number().optional() },
   async ({ table, column, limit }) => {
-    if (cloudSource) return ok(await cloudSource.getColumn(table, column, limit));
-    const t = localTableOr(table);
-    const col = local!.db.resolveColumn(t.id, column);
-    if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
-    const cap = Math.min(limit ?? 1000, 5000);
-    const values = local!.db.listRows(t.id).slice(0, cap).map((r) => ({
-      _id: r.id,
-      value: capCellValue(local!.db.getCell(r.id, col.id)?.value ?? null),
-    }));
-    return ok({ column: col.name, total: local!.db.countRows(t.id), returned: values.length, values });
+    return ok(await cloudSource.getColumn(table, column, limit));
   },
 );
 
@@ -725,21 +504,7 @@ server.tool(
   "Show exactly HOW a column computes its values — its function (provider.method), params (the {{Column}} input mapping), 'only run if' condition, full custom code (uncapped), output type and kind. Use this to understand how an EXISTING column was worked out — e.g. one that already has data filled in — before you edit it, re-run it, or answer 'how is this calculated?'. For a quick overview of every column at once, get_table now also returns a (capped) condition/code/params per column.",
   { table: z.string(), column: z.string() },
   async ({ table, column }) => {
-    if (cloudSource) return ok(await cloudSource.describeColumn(table, column));
-    const t = localTableOr(table);
-    const col = local!.db.resolveColumn(t.id, column);
-    if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
-    return ok({
-      name: col.name,
-      kind: col.kind,
-      type: col.type,
-      fn: col.provider ? `${col.provider}.${col.method}` : col.code ? "code" : null,
-      provider: col.provider,
-      method: col.method,
-      params: col.params,
-      condition: col.condition ?? null,
-      code: col.code ?? null, // FULL body, not capped — this is the recipe
-    });
+    return ok(await cloudSource.describeColumn(table, column));
   },
 );
 
@@ -753,27 +518,9 @@ server.tool(
   },
   async ({ table, updates, confirm }) => {
     const gargs = { table, updates, confirm };
-    if (cloudSource) {
-      const g = gate("update_cells", gargs, { affected: updates.length, action: "Update cells", target: table });
-      if (!g.ok) return g.result;
-      return ok(await cloudSource.updateCells(table, updates));
-    }
-    const t = localTableOr(table);
-    const g = gate("update_cells", gargs, { affected: updates.length, action: "Update cells", target: t.name });
+    const g = gate("update_cells", gargs, { affected: updates.length, action: "Update cells", target: table });
     if (!g.ok) return g.result;
-    // Scope row ids to THIS table — never write a cell against a row id that
-    // belongs to another table (a stray/hallucinated id).
-    const tableRows = new Set(local!.db.listRows(t.id).map((r) => r.id));
-    let updated = 0;
-    for (const u of updates) {
-      if (!tableRows.has(u.row)) throw new Error(`Row "${u.row}" is not in "${t.name}"`);
-      const col = local!.db.resolveColumn(t.id, u.column);
-      if (!col) throw new Error(`No column "${u.column}" in "${t.name}"`);
-      if (u.value === null || u.value === undefined || u.value === "") local!.db.deleteCell(u.row, col.id);
-      else local!.db.setCell(u.row, col.id, { value: u.value, status: "done" });
-      updated++;
-    }
-    return ok({ updated });
+    return ok(await cloudSource.updateCells(table, updates));
   },
 );
 
@@ -788,40 +535,13 @@ server.tool(
   },
   async ({ table, ids, where, confirm }) => {
     const gargs = { table, ids, where, confirm };
-    if (cloudSource) {
-      // Preview the target count WITHOUT deleting (drives the approval card and
-      // short-circuits an empty match), then gate the destructive op.
-      const preview = await cloudSource.deleteRows(table, { ids, where, dryRun: true });
-      if (preview.deleted === 0) return ok({ deleted: 0, note: "no matching rows" });
-      const g = gate("delete_rows", gargs, { affected: preview.deleted, action: "Delete rows", target: table });
-      if (!g.ok) return g.result;
-      return ok(await cloudSource.deleteRows(table, { ids, where }));
-    }
-    const t = localTableOr(table);
-    const targets = new Set<string>();
-    if (ids?.length) {
-      // Only delete ids that actually belong to THIS table — a stray id must not
-      // delete a row in another table (deleteRow is keyed by id alone).
-      const tableRows = new Set(local!.db.listRows(t.id).map((r) => r.id));
-      for (const id of ids) {
-        if (!tableRows.has(id)) throw new Error(`Row "${id}" is not in "${t.name}"`);
-        targets.add(id);
-      }
-    }
-    if (where && Object.keys(where).length) {
-      const match: Record<string, unknown> = {};
-      for (const [name, val] of Object.entries(where)) {
-        const col = local!.db.resolveColumn(t.id, name);
-        if (!col) throw new Error(`No column "${name}" in "${t.name}"`);
-        match[col.id] = val;
-      }
-      for (const r of local!.db.findRows(t.id, match, 1_000_000)) targets.add(r.id);
-    }
-    if (targets.size === 0) return ok({ deleted: 0, note: "no matching rows" });
-    const g = gate("delete_rows", gargs, { affected: targets.size, action: "Delete rows", target: t.name });
+    // Preview the target count WITHOUT deleting (drives the approval card and
+    // short-circuits an empty match), then gate the destructive op.
+    const preview = await cloudSource.deleteRows(table, { ids, where, dryRun: true });
+    if (preview.deleted === 0) return ok({ deleted: 0, note: "no matching rows" });
+    const g = gate("delete_rows", gargs, { affected: preview.deleted, action: "Delete rows", target: table });
     if (!g.ok) return g.result;
-    for (const id of targets) local!.db.deleteRow(id);
-    return ok({ deleted: targets.size });
+    return ok(await cloudSource.deleteRows(table, { ids, where }));
   },
 );
 
@@ -832,19 +552,10 @@ server.tool(
   async ({ table, column, confirm }) => {
     const gargs = { table, column, confirm };
     const hint = { hint: "removes the column and its cells from every row" };
-    if (cloudSource) {
-      const { rows } = await cloudSource.tableStats(table);
-      const g = gate("delete_column", gargs, { affected: rows, action: "Delete column", target: `${table} › ${column}`, extra: hint });
-      if (!g.ok) return g.result;
-      return ok(await cloudSource.deleteColumn(table, column));
-    }
-    const t = localTableOr(table);
-    const col = local!.db.resolveColumn(t.id, column);
-    if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
-    const g = gate("delete_column", gargs, { affected: local!.db.countRows(t.id), action: "Delete column", target: `${t.name} › ${col.name}`, extra: hint });
+    const { rows } = await cloudSource.tableStats(table);
+    const g = gate("delete_column", gargs, { affected: rows, action: "Delete column", target: `${table} › ${column}`, extra: hint });
     if (!g.ok) return g.result;
-    local!.db.deleteColumn(col.id);
-    return ok({ deleted: col.name });
+    return ok(await cloudSource.deleteColumn(table, column));
   },
 );
 
@@ -855,17 +566,10 @@ server.tool(
   async ({ table, confirm }) => {
     const gargs = { table, confirm };
     const hint = { hint: "permanently removes the whole table" };
-    if (cloudSource) {
-      const { rows } = await cloudSource.tableStats(table);
-      const g = gate("delete_table", gargs, { affected: rows, action: "Delete table", target: table, extra: hint });
-      if (!g.ok) return g.result;
-      return ok(await cloudSource.deleteTable(table));
-    }
-    const t = localTableOr(table);
-    const g = gate("delete_table", gargs, { affected: local!.db.countRows(t.id), action: "Delete table", target: t.name, extra: hint });
+    const { rows } = await cloudSource.tableStats(table);
+    const g = gate("delete_table", gargs, { affected: rows, action: "Delete table", target: table, extra: hint });
     if (!g.ok) return g.result;
-    local!.db.deleteTable(t.id);
-    return ok({ deleted: t.name });
+    return ok(await cloudSource.deleteTable(table));
   },
 );
 
@@ -888,14 +592,7 @@ server.tool(
   async ({ table, column, patch }) => {
     const blocked = planGuard("update_column", "Update column", `${table} › ${column}`);
     if (blocked) return blocked;
-    if (cloudSource) return ok(await cloudSource.updateColumn(table, column, patch));
-    const t = localTableOr(table);
-    const col = local!.db.resolveColumn(t.id, column);
-    if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
-    // patch.type arrives as a string; the db's ColumnType union accepts it at runtime.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const updated = local!.db.updateColumn(col.id, patch as any);
-    return ok({ column: updated?.name ?? col.name });
+    return ok(await cloudSource.updateColumn(table, column, patch));
   },
 );
 
@@ -906,10 +603,7 @@ server.tool(
   async ({ table, name }) => {
     const blocked = planGuard("rename_table", "Rename table", table);
     if (blocked) return blocked;
-    if (cloudSource) return ok(await cloudSource.renameTable(table, name));
-    const t = localTableOr(table);
-    local!.db.renameTable(t.id, name.trim() || t.name);
-    return ok({ renamed: name.trim() || t.name });
+    return ok(await cloudSource.renameTable(table, name));
   },
 );
 
@@ -920,11 +614,7 @@ server.tool(
   async ({ table, column, toIndex }) => {
     const blocked = planGuard("reorder_columns", "Reorder columns", table);
     if (blocked) return blocked;
-    if (cloudSource) return ok(await cloudSource.reorderColumn(table, column, toIndex));
-    const t = localTableOr(table);
-    const col = local!.db.resolveColumn(t.id, column);
-    if (!col) throw new Error(`No column "${column}" in "${t.name}"`);
-    return ok({ columnIds: local!.db.moveColumn(col.id, toIndex) });
+    return ok(await cloudSource.reorderColumn(table, column, toIndex));
   },
 );
 
@@ -935,10 +625,7 @@ server.tool(
   async ({ table, row, toIndex }) => {
     const blocked = planGuard("reorder_rows", "Reorder rows", table);
     if (blocked) return blocked;
-    if (cloudSource) return ok(await cloudSource.reorderRow(table, row, toIndex));
-    const t = localTableOr(table);
-    if (!local!.db.listRows(t.id).some((r) => r.id === row)) throw new Error(`Row "${row}" is not in "${t.name}"`);
-    return ok({ rowIds: local!.db.moveRow(row, toIndex) });
+    return ok(await cloudSource.reorderRow(table, row, toIndex));
   },
 );
 
@@ -952,38 +639,17 @@ server.tool(
       ran: cols.reduce((n, c) => n + c.ran, 0),
       errors: cols.reduce((n, c) => n + c.errors, 0),
     });
-    if (cloudSource) {
-      const fns = await cloudSource.functionColumns(table);
-      const pending = force
-        ? (await cloudSource.tableStats(table)).rows * fns.length
-        : fns.reduce((n, c) => n + c.pending, 0);
-      // Treat a full-table run as paid (it runs function columns) — gate accordingly.
-      const g = gate("run_table", gargs, { affected: pending, perRowCredits: 1, action: "Run table", target: table, extra: { functionColumns: fns.length } });
-      if (!g.ok) return g.result;
-      const targets = force ? fns : fns.filter((c) => c.pending > 0);
-      const results: { column: string; ran: number; errors: number; firstError?: string }[] = [];
-      for (const c of targets) results.push(await cloudSource.runColumn(table, c.name, { force, concurrency }));
-      return ok(withRunHint({ columns: results, ...totals(results), firstError: results.find((r) => r.firstError)?.firstError }));
-    }
-    const t = localTableOr(table);
-    const rows = local!.db.listRows(t.id);
-    const fnCols = local!.db.listColumns(t.id).filter((c) => c.kind === "function");
-    const perCol = fnCols.map((col) => ({
-      col,
-      pending: force ? rows.length : rows.filter((r) => (local!.db.getCell(r.id, col.id)?.status ?? "empty") !== "done").length,
-    }));
-    const pending = perCol.reduce((n, c) => n + c.pending, 0);
-    // Paid if any function column charges credits — that drives the spend gate.
-    const anyPaid = fnCols.some((c) => (c.provider && c.method ? (local!.engine.registry.method(c.provider, c.method)?.credits ?? 0) : 0) > 0);
-    const g = gate("run_table", gargs, { affected: pending, perRowCredits: anyPaid ? 1 : 0, action: "Run table", target: t.name, extra: { functionColumns: fnCols.length } });
+    const fns = await cloudSource.functionColumns(table);
+    const pending = force
+      ? (await cloudSource.tableStats(table)).rows * fns.length
+      : fns.reduce((n, c) => n + c.pending, 0);
+    // Treat a full-table run as paid (it runs function columns) — gate accordingly.
+    const g = gate("run_table", gargs, { affected: pending, perRowCredits: 1, action: "Run table", target: table, extra: { functionColumns: fns.length } });
     if (!g.ok) return g.result;
+    const targets = force ? fns : fns.filter((c) => c.pending > 0);
     const results: { column: string; ran: number; errors: number; firstError?: string }[] = [];
-    for (const { col, pending: p } of perCol) {
-      if (!force && p === 0) continue; // nothing to do for this column
-      const res = await local!.engine.runColumn(col.id, { force, concurrency: concurrency ?? 5 });
-      results.push({ column: col.name, ...res });
-    }
-    return ok({ columns: results, ...totals(results) });
+    for (const c of targets) results.push(await cloudSource.runColumn(table, c.name, { force, concurrency }));
+    return ok(withRunHint({ columns: results, ...totals(results), firstError: results.find((r) => r.firstError)?.firstError }));
   },
 );
 
@@ -991,14 +657,12 @@ server.tool(
   "upload_extension",
   "Upload a JSON-manifest extension (a connector defined as data: baseUrl, auth, and HTTP methods). Its methods become callable via sdk.<id>.<method> and appear in list_functions. Pass the manifest JSON as a string.",
   { manifestJson: z.string().describe("The extension manifest as a JSON string.") },
-  async ({ manifestJson }) => {
+  async ({ manifestJson: _manifestJson }) => {
     const blocked = planGuard("upload_extension", "Upload extension", "project");
     if (blocked) return blocked;
-    if (cloudSource) return cloudUnsupported("upload_extension");
-    const manifest = parseManifest(manifestJson);
-    local!.db.saveExtension({ ...manifest });
-    registry.add(connectorFromManifest(manifest));
-    return ok({ id: manifest.id, name: manifest.name, methods: manifest.methods.map((m) => `${manifest.id}.${m.id}`) });
+    // Uploading a connector manifest is not exposed by the cloud worker boundary;
+    // direct the user to the gtm grid UI (Extensions panel) instead.
+    return cloudUnsupported("upload_extension");
   },
 );
 
@@ -1024,14 +688,12 @@ server.tool(
     });
     if (!g.ok) return g.result;
     // Cloud resolves the workspace's shared credentials through the worker and
-    // dispatches in-process (cloud-source.runFunction); local hits the SQLite
-    // credential store directly. Same registry validation either way (index.ts:76).
-    // A connector auth error (missing/invalid key, 401) is re-thrown with an
-    // actionable hint so the agent tells the user which key to connect.
+    // dispatches in-process (cloud-source.runFunction), validated against the
+    // same registry. A connector auth error (missing/invalid key, 401) is
+    // re-thrown with an actionable hint so the agent tells the user which key to
+    // connect.
     try {
-      const result = cloudSource
-        ? await cloudSource.runFunction(provider, method, input ?? {})
-        : await local!.engine.dispatch(provider, method, input ?? {});
+      const result = await cloudSource.runFunction(provider, method, input ?? {});
       return ok(result);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -1043,5 +705,5 @@ server.tool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-// Token-free banner: report the mode + project only — never the bearer token.
+// Token-free banner: report the cloud project/table only — never the bearer token.
 console.error(`gtmgrid MCP server connected (${describeGridEnv(gridEnv)})`);

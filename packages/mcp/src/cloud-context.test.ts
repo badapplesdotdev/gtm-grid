@@ -14,7 +14,6 @@ const FULL_CLOUD: McpEnv = {
   GTMGRID_WORKSPACE_ID: "ws_1",
   GTMGRID_CLOUD_PROJECT: "proj_1",
   GTMGRID_CLOUD_TABLE: "tbl_1",
-  GTMGRID_PROJECT: "my-local",
 };
 
 describe("cloudContextFromEnv — explicit, complete cloud context", () => {
@@ -33,7 +32,7 @@ describe("cloudContextFromEnv — explicit, complete cloud context", () => {
   });
 
   it("returns undefined when mode is absent (mode is explicit, never guessed)", () => {
-    // apiUrl + token + everything present, but no GTMGRID_MODE → still LOCAL.
+    // apiUrl + token + everything present, but no GTMGRID_MODE → not a cloud context.
     const { GTMGRID_MODE: _omit, ...noMode } = FULL_CLOUD;
     expect(cloudContextFromEnv(noMode)).toBeUndefined();
   });
@@ -63,35 +62,24 @@ describe("cloudContextFromEnv — explicit, complete cloud context", () => {
   });
 });
 
-describe("selectGridEnv — data-source selection by mode (the core AC)", () => {
+describe("selectGridEnv — cloud is the only data source", () => {
   it("selects CLOUD when a complete cloud context is present", () => {
     const env = selectGridEnv(FULL_CLOUD);
     expect(env.mode).toBe("cloud");
-    if (env.mode === "cloud") {
-      expect(env.context.projectId).toBe("proj_1");
-      expect(env.context.tableId).toBe("tbl_1");
-    }
+    expect(env.context.projectId).toBe("proj_1");
+    expect(env.context.tableId).toBe("tbl_1");
   });
 
-  it("selects LOCAL (the named project) when no cloud context is present", () => {
-    const env = selectGridEnv({ GTMGRID_PROJECT: "my-local" });
-    expect(env).toEqual({ mode: "local", project: "my-local" });
+  it("throws when no cloud context is present (the local grid was removed)", () => {
+    expect(() => selectGridEnv({})).toThrow();
   });
 
-  it("selects LOCAL with 'default' when GTMGRID_PROJECT is also absent (byte-identical default)", () => {
-    expect(selectGridEnv({})).toEqual({ mode: "local", project: "default" });
+  it("throws when a build sets an apiUrl but mode is not cloud", () => {
+    expect(() => selectGridEnv({ GTMGRID_API_URL: "https://app.test" })).toThrow();
   });
 
-  it("selects LOCAL when a build sets an apiUrl but mode is not cloud (no VITE_API_URL cloud build)", () => {
-    // A pure-local build never sets GTMGRID_MODE=cloud, so even a stray apiUrl
-    // does not flip the source to cloud.
-    const env = selectGridEnv({ GTMGRID_API_URL: "https://app.test", GTMGRID_PROJECT: "p" });
-    expect(env.mode).toBe("local");
-  });
-
-  it("falls back to LOCAL when the cloud context is incomplete (token missing)", () => {
-    const env = selectGridEnv({ ...FULL_CLOUD, GTMGRID_TOKEN: undefined });
-    expect(env).toEqual({ mode: "local", project: "my-local" });
+  it("throws when the cloud context is incomplete (token missing)", () => {
+    expect(() => selectGridEnv({ ...FULL_CLOUD, GTMGRID_TOKEN: undefined })).toThrow();
   });
 });
 
@@ -101,11 +89,5 @@ describe("describeGridEnv — token-free banner (token not logged)", () => {
     expect(line).toContain("proj_1");
     expect(line).toContain("tbl_1");
     expect(line).not.toContain("secret-bearer");
-  });
-
-  it("describes a local env by project name", () => {
-    expect(describeGridEnv(selectGridEnv({ GTMGRID_PROJECT: "my-local" }))).toBe(
-      "local project my-local",
-    );
   });
 });

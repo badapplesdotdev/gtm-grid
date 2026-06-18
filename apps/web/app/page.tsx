@@ -5,7 +5,7 @@
 // to the REAL app: repo badapplesdotdev/gtm-grid, version from the latest GitHub
 // release, source-available under FSL-1.1-MIT (not "open source / MIT"), the 20
 // real connectors with their method counts, the real cloud pricing
-// (Free local-only · Team $20 · Business $40 · Unlimited $99), the real MCP tool
+// (Self-host free · Team $20 · Business $40 · Unlimited $99), the real MCP tool
 // names, and the real download flow (DownloadCTA → /api/download/<platform>).
 //
 // Voice: lowercase wordmark, direct second person, technical precision, no emoji.
@@ -76,9 +76,10 @@ export default async function Home() {
             Every column is <span className="accent">a function.</span>
           </h1>
           <p className="hero-lead">
-            gtm grid is a programmable GTM spreadsheet that runs entirely on your machine.
-            Type a column, or make it a function — <code>ai.generate</code>, an enrichment
-            connector, anything — and watch it run over every row.
+            gtm grid is a programmable GTM spreadsheet. Your data lives in Postgres — self-hosted
+            or ours — while execution and your keys stay on your machine. Type a column, or make it
+            a function — <code>ai.generate</code>, an enrichment connector, anything — and watch it
+            run over every row.
           </p>
           <div className="hero-cta">
             <DownloadCTA size="lg" />
@@ -89,7 +90,7 @@ export default async function Home() {
           </div>
           <div className="hero-sub">
             <span><Check /> Bring your own AI key</span>
-            <span><Check /> SQLite on your disk</span>
+            <span><Check /> Self-host your own Postgres</span>
             <span><Check /> Drive it from Claude Code</span>
           </div>
           <HeroGrid />
@@ -277,11 +278,12 @@ export default async function Home() {
         <div className="wrap">
           <div className="sec-head center">
             <span className="eyebrow"><span className="dot" />Source-available</span>
-            <h2>Free on your machine. <span className="accent">Cloud only when you need it.</span></h2>
+            <h2>Self-host it free. <span className="accent">Or let us host it.</span></h2>
             <p>
-              The desktop app is free and source-available — run it offline, ship your own connectors,
-              send the good ones back as a PR. Cloud is where it gets serious: put your whole team on
-              the data and keep every grid running while you&apos;re away.
+              The whole thing is source-available — point it at your own Postgres and run the backend
+              yourself, ship your own connectors, send the good ones back as a PR. Or skip the ops and
+              use our hosted cloud: managed Postgres, your whole team on the data, every grid running
+              while you&apos;re away.
             </p>
           </div>
 
@@ -289,10 +291,10 @@ export default async function Home() {
             <div className="lc-card local">
               <div className="lc-head">
                 <span className="lc-ico"><GitHubMark /></span>
-                <span className="lc-tag">Free · FSL-1.1-MIT</span>
+                <span className="lc-tag">Self-host · FSL-1.1-MIT</span>
               </div>
-              <h3>The source-available desktop app</h3>
-              <p className="lc-sub">Everything runs on your machine. No account, no caps, no pricing gate — and the full source is yours to read, fork, and extend.</p>
+              <h3>Self-host on your own Postgres</h3>
+              <p className="lc-sub">Run the backend against a Postgres you control — a local Docker image or your own server. Your execution and keys stay on your machine, and the full source is yours to read, fork, and extend.</p>
               <ul className="lc-list">
                 <li><Check /> <span><b>Unlimited</b> rows, tables &amp; function columns</span></li>
                 <li><Check /> <span>Every connector — bring your own keys</span></li>
@@ -310,10 +312,10 @@ export default async function Home() {
                 <span className="lc-ico">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M17.5 19a4.5 4.5 0 0 0 .9-8.91 6 6 0 0 0-11.64-1.6A4 4 0 0 0 6 19Z" /></svg>
                 </span>
-                <span className="lc-tag">Optional · from $20</span>
+                <span className="lc-tag">Hosted · from $20</span>
               </div>
-              <h3>Cloud, for when you step away</h3>
-              <p className="lc-sub">The same grid, hosted — so it keeps running with your laptop closed, fires on incoming events, and opens up to your whole team.</p>
+              <h3>Hosted cloud, managed for you</h3>
+              <p className="lc-sub">The same grid on our managed Postgres — no ops to run. It keeps going with your laptop closed, fires on incoming events, and opens up to your whole team.</p>
               <ul className="lc-list">
                 <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3a6 6 0 0 0-6 6c0 7-3 9-3 9h18s-3-2-3-9a6 6 0 0 0-6-6Z" /><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" /></svg> <span><b>Runs when your computer&apos;s asleep</b> — scheduled refreshes keep firing</span></li>
                 <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m13 2-3 7h6l-3 7" /><path d="M5 12h2M17 12h2M12 5V3M12 21v-2" /></svg> <span><b>Webhooks</b> — new rows enrich themselves on inbound events</span></li>
@@ -327,22 +329,22 @@ export default async function Home() {
             </div>
           </div>
 
-          <div className="lc-detail-lab">Under the hood — how local-first works</div>
+          <div className="lc-detail-lab">Under the hood — how it works</div>
           <div className="feat-grid">
             <div className="feat-card">
               <div className="feat-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5" /><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3" /></svg></div>
-              <h3>SQLite on disk</h3>
-              <p>Tables, columns, and cell history live in a local <code>.db</code> file at <code>~/gtmgrid/&lt;name&gt;.db</code>. Close the laptop lid — it&apos;s still yours.</p>
+              <h3>Postgres source of truth</h3>
+              <p>Tables, columns, and cell history live in <code>Postgres</code> — your own self-hosted instance, or our managed cloud. One database, accessed through the apps/web API.</p>
             </div>
             <div className="feat-card">
               <div className="feat-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg></div>
-              <h3>Encrypted credentials</h3>
-              <p>Every key is <code>AES-256-GCM</code> encrypted and scoped <span className="mono" style={{ color: "var(--text)" }}>Local / Personal / Team</span>. Nothing is synced to a server.</p>
+              <h3>Keys stay on your machine</h3>
+              <p>Your connector &amp; AI keys live in a local credential vault, <code>AES-256-GCM</code> encrypted on disk. The sidecar engine runs execution locally — keys never leave your machine.</p>
             </div>
             <div className="feat-card">
               <div className="feat-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg></div>
               <h3>Sandboxed logic</h3>
-              <p>Column functions run in a <code>QuickJS</code> sandbox with a declarative HTTP layer. Predictable, bounded, no surprises.</p>
+              <p>Column functions run in a local <code>QuickJS</code> sandbox with a declarative HTTP layer. Predictable, bounded, no surprises.</p>
             </div>
           </div>
         </div>
@@ -353,17 +355,17 @@ export default async function Home() {
         <div className="wrap">
           <div className="sec-head center">
             <span className="eyebrow"><span className="dot" />Cloud pricing</span>
-            <h2>The app is free. <span className="accent">Cloud is metered.</span></h2>
+            <h2>Self-host free. <span className="accent">Hosted is metered.</span></h2>
             <p>
-              Cloud plans are billed per seat and metered by <b>cloud actions</b> — runs that happen on
-              our infrastructure instead of your machine. No row, table, or connector caps, ever. The
-              desktop app stays free no matter what.
+              Run your own Postgres and the backend yourself for free. Or use our hosted cloud: billed
+              per seat and metered by <b>cloud actions</b> — runs that happen on our infrastructure
+              instead of your machine. No row, table, or connector caps, ever.
             </p>
           </div>
 
           <div className="local-strip">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M2 20h20" /></svg>
-            <span className="ls-tx"><b>Desktop app — $0, source-available, unlimited.</b> Cloud only covers runs that happen off your machine.</span>
+            <span className="ls-tx"><b>Self-host — $0, source-available, unlimited.</b> Bring your own Postgres; hosted plans only cover runs on our infrastructure.</span>
             <a href="/download">Download free <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg></a>
           </div>
 
@@ -380,7 +382,7 @@ export default async function Home() {
             </div>
             <div className="bill-note">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2 4 5v6c0 5 3.4 8.4 8 11 4.6-2.6 8-6 8-11V5l-8-3Z" /><path d="m9 12 2 2 4-4" /></svg>
-              <div><h5>The desktop app is always free</h5><p>Source-available under FSL-1.1-MIT and unlimited on your own machine. Cloud is purely additive — for when grids need to run without you.</p></div>
+              <div><h5>Self-hosting is always free</h5><p>Source-available under FSL-1.1-MIT and unlimited on your own Postgres. Our hosted cloud is purely additive — for when you&apos;d rather not run the database yourself.</p></div>
             </div>
           </div>
         </div>
@@ -395,8 +397,8 @@ export default async function Home() {
           </div>
           <div className="faq-list">
             {[
-              { q: "Is my data really local?", a: <>Yes. Storage is SQLite in a file on your disk, column logic runs in a local QuickJS sandbox, and credentials are encrypted at rest. The only outbound traffic is the connector and AI calls <em>you</em> trigger, sent directly to those providers.</> },
-              { q: "Do I have to use the cloud?", a: <>No. The desktop app is free and source-available — local, solo, unlimited. Cloud is an optional layer you turn on only when a grid needs to run without you: scheduled refreshes while your laptop&apos;s closed, webhook triggers, team workspaces, and shared credentials. If you never need those, you never pay.</> },
+              { q: "Where does my data live?", a: <>In Postgres. You can self-host your own instance — a local Docker image or your own server — for free, or use our managed cloud. Either way, your connector and AI keys stay in a local encrypted vault, and column execution runs on your machine via the sidecar engine. The only outbound traffic from your machine is the connector and AI calls <em>you</em> trigger, sent directly to those providers.</> },
+              { q: "Do I need an account?", a: <>Yes. gtm grid is account-based — there&apos;s no anonymous or offline-only mode. The free path is self-hosting: run your own Postgres plus the backend, sign in against it, and you&apos;re unlimited. Don&apos;t want to run a database? Use our hosted cloud instead, on the same login.</> },
               { q: "What does “bring your own key” mean for cost?", a: <>You add your own Anthropic / OpenAI key and your existing connector keys. gtm grid adds no markup — you pay providers their list price, and the app itself is free. AI columns can also run on your own Claude Code or Codex subscription.</> },
               { q: "How do I add a connector that isn't bundled?", a: <>Drop a JSON manifest into <code>extensions/</code> with a <code>baseUrl</code>, an <code>auth</code> block, and your <code>methods</code>. It immediately becomes an <code>sdk.&lt;id&gt;.&lt;method&gt;()</code> call, an MCP tool the agent can use, and a connection form in the UI.</> },
               { q: "Do I have to use the AI agent?", a: <>No. The grid works fully on its own — add columns, pick functions, hit Run. The Claude Code / Codex panel is there when you&apos;d rather describe what you want than click through it.</> },
@@ -418,8 +420,8 @@ export default async function Home() {
       {/* ───────── Final CTA ───────── */}
       <section className="cta-band">
         <div className="wrap">
-          <h2>Stop renting your pipeline. <br /><span className="accent">Run it locally.</span></h2>
-          <p>Download the app, point it at your keys, and build your first grid in a couple of minutes.</p>
+          <h2>Stop renting your pipeline. <br /><span className="accent">Run it your way.</span></h2>
+          <p>Download the app, point it at your Postgres and your keys, and build your first grid in a couple of minutes.</p>
           <div className="cta-cmd">
             <span className="prompt">$</span>
             <span>{CLONE_CMD}</span>
@@ -439,7 +441,7 @@ export default async function Home() {
             <a className="brand" href="#top" aria-label="GTM Grid — home">
               <img className="brand-logo" src="/brand/logo.svg" alt="GTM Grid" width={136} height={22} />
             </a>
-            <p className="footer-tag">Local-first programmable GTM spreadsheet — every column is a function.</p>
+            <p className="footer-tag">Programmable GTM spreadsheet — every column is a function. Your data in Postgres, your execution local.</p>
           </div>
           <div className="foot-col">
             <h5>Product</h5>

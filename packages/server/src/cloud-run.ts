@@ -339,7 +339,7 @@ export async function runCloudColumn(
   await assertColumnRunQuota(client, req);
   const workspaceId = await resolveWorkspaceId(client, req.tableId);
   const store = await buildCloudStore(client, req.tableId, workspaceId);
-  const engine = new Engine(undefined, deps.config, deps.registry, undefined, {
+  const engine = new Engine(deps.config, deps.registry, {
     store,
     creds: store,
   });
@@ -350,4 +350,43 @@ export async function runCloudColumn(
     // `req.concurrency` cannot multiply worker POSTs / sandboxed executions.
     concurrency: clampConcurrency(req.concurrency),
   });
+}
+
+/** Inputs the desktop forwards to preview a not-yet-saved function column. */
+export interface CloudPreviewRequest {
+  /** The apps/web API base URL (the desktop's `VITE_API_URL`). */
+  readonly apiUrl: string;
+  /** The signed-in member's Better Auth bearer token (localhost trust boundary). */
+  readonly token: string;
+  /** The `tables.id` to preview against. */
+  readonly tableId: string;
+  /** The connector/AI provider the previewed method belongs to. */
+  readonly provider: string;
+  /** The method to dry-run. */
+  readonly method: string;
+  /** The (unsaved) column params, with {{Column}} templates resolved per row. */
+  readonly params: Record<string, unknown>;
+  /** How many rows to preview (defaults to the engine's own default). */
+  readonly limit?: number;
+}
+
+/**
+ * Dry-run a not-yet-saved function column on a CLOUD table (the "Try on N rows"
+ * preview). Mirrors {@link runCloudColumn} — a worker-backed client, the
+ * cloud-backed GridStore + an Engine over it — but persists/meters NOTHING, so
+ * there is NO quota gate: `Engine.previewColumn` only reads the first `limit`
+ * rows and returns per-row results without writing a column or any cell.
+ */
+export async function previewCloudColumn(
+  req: CloudPreviewRequest,
+  deps: CloudRunDeps,
+): Promise<Array<{ rowId: string; value?: unknown; error?: string }>> {
+  const client = deps.makeClient(req.apiUrl, req.token);
+  const workspaceId = await resolveWorkspaceId(client, req.tableId);
+  const store = await buildCloudStore(client, req.tableId, workspaceId);
+  const engine = new Engine(deps.config, deps.registry, { store, creds: store });
+  return engine.previewColumn(
+    { provider: req.provider, method: req.method, params: req.params, table_id: req.tableId },
+    req.limit ?? 5,
+  );
 }

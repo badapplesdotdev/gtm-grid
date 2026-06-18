@@ -35,6 +35,12 @@ export interface Column {
 
 /** Fields an `addColumn` insert supplies. */
 export interface NewColumn {
+  /**
+   * Client-supplied primary key. Optional: the DB generates one when omitted.
+   * Supplied by the cloud grid so an optimistic column insert matches the
+   * server's id and the realtime self-echo converges instead of duplicating.
+   */
+  readonly id?: string;
   readonly workspaceId: string;
   readonly tableId: string;
   readonly name: string;
@@ -186,6 +192,7 @@ export const ColumnRepoLive: Layer.Layer<ColumnRepo, never, DbClient> =
               const rows = await db
                 .insert(schema.columns)
                 .values({
+                  ...(values.id !== undefined ? { id: values.id } : {}),
                   workspaceId: values.workspaceId,
                   tableId: values.tableId,
                   name: values.name,
@@ -285,8 +292,8 @@ export const columnRepoLayer = (store: GridStore): Layer.Layer<ColumnRepo> =>
       ),
     insert: (values) =>
       Effect.sync(() => {
-        const id = store.nextId("column");
-        store.columns.push({ id, ...values });
+        const id = values.id ?? store.nextId("column");
+        store.columns.push({ ...values, id });
         return id;
       }),
     update: (id, patch) =>

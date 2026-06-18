@@ -3,8 +3,7 @@
 // column detail) for function columns.
 
 import { useState, useMemo, useEffect, useRef, createContext, useContext, ReactNode, CSSProperties } from "react";
-import { api, ConnectorInfo, AiProviderInfo, type Column } from "./api";
-import { BrandIcon } from "./Panels";
+import { api, ConnectorInfo, type Column } from "./api";
 import { Dialog, DialogContent } from "./components/ui/dialog";
 
 /**
@@ -21,15 +20,55 @@ import { Dialog, DialogContent } from "./components/ui/dialog";
  * all read the active backend without threading a prop through every layer.
  */
 export interface ColumnAuthoringApi {
-  addColumn: (typeof api)["addColumn"];
-  updateColumn: (typeof api)["updateColumn"];
+  addColumn: (
+    tableId: string,
+    body: {
+      name: string;
+      type?: string;
+      fn?: string;
+      code?: string;
+      params?: Record<string, unknown>;
+      condition?: string | null;
+    },
+  ) => Promise<{ id: string }>;
+  updateColumn: (
+    columnId: string,
+    patch: {
+      name?: string;
+      type?: string;
+      kind?: string;
+      provider?: string | null;
+      method?: string | null;
+      code?: string | null;
+      params?: Record<string, unknown>;
+      condition?: string | null;
+    },
+  ) => Promise<{ ok: boolean; tableId?: string; id?: string }>;
   generateFormula: (typeof api)["generateFormula"];
   aiProviders: (typeof api)["aiProviders"];
   /** Preview a column's function on the first N rows (the HTTP column "Try" action). */
-  previewFunction: (typeof api)["previewFunction"];
+  previewFunction: (
+    tableId: string,
+    body: {
+      provider: string;
+      method: string;
+      params: Record<string, unknown>;
+      limit?: number;
+    },
+  ) => Promise<{ results: Array<{ rowId: string; value?: unknown; error?: string }> }>;
 }
 
-const ColumnAuthoringApiContext = createContext<ColumnAuthoringApi>(api);
+// The desktop is cloud-only: the real column-authoring backend is ALWAYS supplied
+// by CloudGrid via {@link ColumnAuthoringApiProvider}. The default just inherits
+// the surviving sidecar-backed reads (formula/AI/preview) and throws if a mutation
+// is somehow attempted without a provider.
+const ColumnAuthoringApiContext = createContext<ColumnAuthoringApi>({
+  addColumn: () => Promise.reject(new Error("No column-authoring backend")),
+  updateColumn: () => Promise.reject(new Error("No column-authoring backend")),
+  generateFormula: api.generateFormula,
+  aiProviders: api.aiProviders,
+  previewFunction: () => Promise.reject(new Error("No column-authoring backend")),
+});
 
 /** Wrap the column-authoring modals to point them at a non-local backend. */
 export const ColumnAuthoringApiProvider = ColumnAuthoringApiContext.Provider;

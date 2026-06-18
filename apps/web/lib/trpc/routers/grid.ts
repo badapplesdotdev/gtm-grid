@@ -66,7 +66,15 @@ export const gridRouter = router({
 
   /** Create a project in a workspace. Members-only. */
   createProject: protectedProcedure
-    .input(z.object({ workspaceId: z.string().min(1), name: z.string() }))
+    .input(
+      z.object({
+        workspaceId: z.string().min(1),
+        name: z.string(),
+        // Optional client-supplied id so an optimistic create uses the same id
+        // the server persists (the realtime self-echo then converges).
+        id: z.string().min(1).optional(),
+      }),
+    )
     .mutation(({ ctx, input }) =>
       runEffect(
         ctx.runtime,
@@ -75,6 +83,7 @@ export const gridRouter = router({
           return yield* svc.createProject({
             workspaceId: input.workspaceId,
             name: input.name,
+            ...(input.id !== undefined ? { id: input.id } : {}),
           });
         }),
       ),
@@ -143,6 +152,7 @@ export const gridRouter = router({
         projectId: z.string().min(1),
         name: z.string(),
         folderId: z.string().min(1).nullish(),
+        id: z.string().min(1).optional(),
       }),
     )
     .mutation(({ ctx, input }) =>
@@ -154,6 +164,7 @@ export const gridRouter = router({
             projectId: input.projectId,
             name: input.name,
             folderId: input.folderId ?? null,
+            ...(input.id !== undefined ? { id: input.id } : {}),
           });
         }),
       ),
@@ -176,7 +187,13 @@ export const gridRouter = router({
 
   /** Create a sidebar folder in a project. Members-only. Not metered. */
   createFolder: protectedProcedure
-    .input(z.object({ projectId: z.string().min(1), name: z.string() }))
+    .input(
+      z.object({
+        projectId: z.string().min(1),
+        name: z.string(),
+        id: z.string().min(1).optional(),
+      }),
+    )
     .mutation(({ ctx, input }) =>
       runEffect(
         ctx.runtime,
@@ -185,6 +202,7 @@ export const gridRouter = router({
           return yield* svc.createFolder({
             projectId: input.projectId,
             name: input.name,
+            ...(input.id !== undefined ? { id: input.id } : {}),
           });
         }),
       ),
@@ -260,9 +278,10 @@ export const gridRouter = router({
         method: z.string().nullish(),
         code: z.string().nullish(),
         params: z.unknown().optional(),
-        // The "only run if" rule — carried so a local→cloud push preserves a
-        // function column's run condition (GridService/repo already persist it).
+        // The "only run if" rule — carried so a function column's run condition
+        // round-trips (GridService/repo already persist it).
         condition: z.string().nullish(),
+        id: z.string().min(1).optional(),
       }),
     )
     .mutation(({ ctx, input }) =>
@@ -280,6 +299,7 @@ export const gridRouter = router({
             code: input.code ?? null,
             params: input.params,
             condition: input.condition ?? null,
+            ...(input.id !== undefined ? { id: input.id } : {}),
           });
         }),
       ),
@@ -287,13 +307,18 @@ export const gridRouter = router({
 
   /** Add a row to a table. Members-only. Metered. */
   addRow: protectedProcedure
-    .input(z.object({ tableId: z.string().min(1) }))
+    .input(
+      z.object({
+        tableId: z.string().min(1),
+        id: z.string().min(1).optional(),
+      }),
+    )
     .mutation(({ ctx, input }) =>
       runEffect(
         ctx.runtime,
         Effect.gen(function* () {
           const svc = yield* GridService;
-          return yield* svc.addRow(input.tableId);
+          return yield* svc.addRow(input.tableId, input.id);
         }),
       ),
     ),
@@ -308,6 +333,9 @@ export const gridRouter = router({
           .max(MAX_ROWS_PER_IMPORT, {
             message: `Too many rows in one import (max ${MAX_ROWS_PER_IMPORT}). Split the request into smaller chunks.`,
           }),
+        // Optional client-supplied row ids aligned by index with `rows` so an
+        // optimistic bulk import uses the same ids the server persists.
+        rowIds: z.array(z.string().min(1)).optional(),
       }),
     )
     .mutation(({ ctx, input }) =>
@@ -318,6 +346,7 @@ export const gridRouter = router({
           return yield* svc.addRowsWithCells({
             tableId: input.tableId,
             rows: input.rows,
+            ...(input.rowIds !== undefined ? { rowIds: input.rowIds } : {}),
           });
         }),
       ),

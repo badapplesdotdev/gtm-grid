@@ -1,67 +1,44 @@
 /**
- * Cloud-context resolution + data-source selection for the gtmgrid MCP server
- * (TRI-3296).
+ * Cloud-context resolution for the gtmgrid MCP server.
  *
  * The MCP server is a process spawned by the desktop sidecar (see
- * packages/server/src/agent.ts `mcpConfig`). Historically it only received
- * `GTMGRID_PROJECT` and always opened a LOCAL SQLite project via `openProject`,
- * so an agent driving a CLOUD project still read/wrote local SQLite.
- *
- * This module threads the cloud context the sidecar forwards (mode + apiUrl +
- * bearer token + workspaceId + cloud projectId + active cloud tableId) and turns
- * it into an explicit data-source choice. The choice is made HERE, from explicit
- * inputs — never guessed inside a tool handler — so:
- *
- *   - `mode === "cloud"` (with a complete cloud context) → the cloud data source
- *     (Supabase-backed via the engine's `cloudGridStoreShape` + the sidecar's
- *     cloud run path), and
- *   - anything else (mode local, or a pure-local build with no `VITE_API_URL` and
- *     therefore no cloud context) → the LOCAL SQLite data source, byte-identical
- *     to the prior behaviour.
+ * packages/server/src/agent.ts `mcpConfig`). The grid the agent operates on is
+ * ALWAYS a CLOUD (Postgres) project — there is no local SQLite grid. The sidecar
+ * threads the cloud context (mode + apiUrl + bearer token + workspaceId + cloud
+ * projectId + active cloud tableId) and this module assembles it into an explicit
+ * {@link CloudContext}.
  *
  * The token is read from the environment and NEVER logged: the connected banner
- * the server prints reports only the mode + project, not the bearer.
+ * the server prints reports only the project, not the bearer.
  */
-
-/** The agent's data environment, threaded from the sidecar as an env var. */
-export type GridMode = "local" | "cloud";
 
 /**
  * The complete cloud context an MCP cloud data source needs. Assembled from the
- * sidecar's env vars (see {@link cloudContextFromEnv}); every field is required
- * for a cloud source, so a partial/blank context falls back to local.
+ * sidecar's env vars (see {@link cloudContextFromEnv}); every field is required.
  */
 export interface CloudContext {
   /** The apps/web API base URL (the desktop's `VITE_API_URL`). */
   readonly apiUrl: string;
   /** The signed-in member's Better Auth bearer token (localhost trust boundary). */
   readonly token: string;
-  /** The Convex `workspaces._id` the cloud project/table belongs to. */
+  /** The `workspaces.id` the cloud project/table belongs to. */
   readonly workspaceId: string;
-  /** The active cloud `projects._id` the agent operates within. */
+  /** The active cloud `projects.id` the agent operates within. */
   readonly projectId: string;
   /**
-   * The active cloud `tables._id` the agent operates on by default. The worker
+   * The active cloud `tables.id` the agent operates on by default. The worker
    * boundary is table-scoped (getTable / setCell / run), so the cloud source is
    * built for ONE active table — the one the user is viewing.
    */
   readonly tableId: string;
 }
 
-/**
- * The resolved data environment for an MCP run: either LOCAL (open the SQLite
- * project named by `project`) or CLOUD (use `context`). A discriminated union so
- * a handler branches on `mode` with the right payload present — the selection is
- * explicit, not re-derived per tool call.
- */
-export type GridEnv =
-  | { readonly mode: "local"; readonly project: string }
-  | { readonly mode: "cloud"; readonly context: CloudContext };
+/** The resolved data environment for an MCP run — always CLOUD. */
+export type GridEnv = { readonly mode: "cloud"; readonly context: CloudContext };
 
 /** The MCP server's relevant environment variables (a subset of `process.env`). */
 export interface McpEnv {
-  readonly GTMGRID_PROJECT?: string;
-  /** Explicit mode the sidecar sets ("cloud" | "local"). Absent ⇒ local. */
+  /** Explicit mode the sidecar sets — must be "cloud". */
   readonly GTMGRID_MODE?: string;
   readonly GTMGRID_API_URL?: string;
   /** Bearer token — read here, never logged. */
@@ -81,10 +58,8 @@ function nonEmpty(value: string | undefined): string | undefined {
 /**
  * Resolve the cloud context from the MCP env, or `undefined` when it is not a
  * COMPLETE cloud context. A cloud context requires the mode to be explicitly
- * `cloud` AND all of apiUrl/token/workspaceId/projectId/tableId to be present —
- * so a half-threaded or local environment never resolves to cloud (the local
- * SQLite path is the fallback). The mode is read from `GTMGRID_MODE`, NOT guessed
- * from the mere presence of an apiUrl.
+ * `cloud` AND all of apiUrl/token/workspaceId/projectId/tableId to be present.
+ * The mode is read from `GTMGRID_MODE`, NOT guessed from the presence of an apiUrl.
  */
 export function cloudContextFromEnv(env: McpEnv): CloudContext | undefined {
   if (nonEmpty(env.GTMGRID_MODE)?.toLowerCase() !== "cloud") return undefined;
@@ -106,18 +81,18 @@ export function cloudContextFromEnv(env: McpEnv): CloudContext | undefined {
 }
 
 /**
- * Select the MCP data environment from the process env. CLOUD only when
- * {@link cloudContextFromEnv} resolves a complete cloud context (explicit
- * `GTMGRID_MODE=cloud` + every cloud field); otherwise LOCAL, opening the SQLite
- * project named by `GTMGRID_PROJECT` (default `"default"`) exactly as before.
- *
- * This is the single place the cloud-vs-local decision is made; tool handlers
- * consume the resolved {@link GridEnv} and never re-guess the mode.
+ * Select the MCP data environment from the process env. The grid is always
+ * cloud-backed, so a complete cloud context is REQUIRED; an incomplete/absent
+ * context throws (the MCP cannot operate on a grid without one).
  */
 export function selectGridEnv(env: McpEnv): GridEnv {
   const context = cloudContextFromEnv(env);
-  if (context !== undefined) return { mode: "cloud", context };
-  return { mode: "local", project: nonEmpty(env.GTMGRID_PROJECT) ?? "default" };
+  if (context === undefined) {
+    throw new Error(
+      "gtmgrid MCP requires a cloud context (GTMGRID_MODE=cloud + apiUrl/token/workspace/project/table). The local grid paradigm has been removed.",
+    );
+  }
+  return { mode: "cloud", context };
 }
 
 /**
@@ -126,7 +101,5 @@ export function selectGridEnv(env: McpEnv): GridEnv {
  * excluded so it never lands in a log line.
  */
 export function describeGridEnv(env: GridEnv): string {
-  return env.mode === "cloud"
-    ? `cloud project ${env.context.projectId} (table ${env.context.tableId})`
-    : `local project ${env.project}`;
+  return `cloud project ${env.context.projectId} (table ${env.context.tableId})`;
 }
