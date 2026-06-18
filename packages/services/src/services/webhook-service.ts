@@ -192,7 +192,10 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         workspaceId: string,
         tableId: string,
         event: GridChangeEvent,
-      ) => realtime.publish({ workspaceId, tableId, event });
+      ) =>
+        realtime
+          .publish({ workspaceId, tableId, event })
+          .pipe(Effect.catchTag("RealtimePublisherError", () => Effect.void));
 
       /** The cells {@link writeCells} will actually persist, as realtime event
        *  payloads (same skip rules: blank values and foreign columns dropped). */

@@ -247,7 +247,10 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       workspaceId: string,
       tableId: string,
       event: GridChangeEvent,
-    ) => realtime.publish({ workspaceId, tableId, event });
+    ) =>
+      realtime
+        .publish({ workspaceId, tableId, event })
+        .pipe(Effect.catchTag("RealtimePublisherError", () => Effect.void));
 
     /**
      * Broadcast a tables-list change on the WORKSPACE channel — the reserved
@@ -259,7 +262,10 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
     const publishWorkspaceTablesChanged = (
       workspaceId: string,
       event: GridChangeEvent,
-    ) => realtime.publish({ workspaceId, tableId: WORKSPACE_ROOM_TABLE_ID, event });
+    ) =>
+      realtime
+        .publish({ workspaceId, tableId: WORKSPACE_ROOM_TABLE_ID, event })
+        .pipe(Effect.catchTag("RealtimePublisherError", () => Effect.void));
 
     /** Load a project or fail typed. */
     const requireProject = (
