@@ -75,6 +75,7 @@ import { useWorkspaceCredentials } from "./cloud/useWorkspaceCredentials";
 import {
   useCloudProjects,
   useCloudTables,
+  useCloudTablePaged,
   useWorkspaceRealtime,
   useCloudFolders,
   useCloudProjectMutations,
@@ -1685,18 +1686,30 @@ export default function App() {
       tableId: cloudTableId,
     };
   }, [cloudSession, activeWorkspace, cloudProject, cloudTableId]);
+  // Active CLOUD table's live view. Shares CloudGrid's paged query key, so this
+  // dedups with CloudGrid's own useCloudTablePaged (no extra fetch) and is a
+  // safe no-op when passed `null`. Gives the agent's "Active table" hint the
+  // cloud table the user is actually viewing (TRI-3296 follow-up): in cloud mode
+  // the visible grid is driven by `cloudTableId`, not local `tableData`, so
+  // without this the hint would stay stuck on the last local table.
+  const cloudActiveTable = useCloudTablePaged(inCloud ? cloudTableId : null).data;
   // Stable `activeTable` for the agent panel (TRI-3306). Previously passed as an
   // inline object literal, giving it a new identity on every App re-render
   // (react-query cloud polling, etc.); the panel keyed an abort-on-change effect
   // off it and so aborted the live agent turn on every unrelated re-render. The
   // panel now depends on scalar keys, but we still memoize here for hygiene so
   // the prop identity only changes when the table name or column set actually
-  // does.
-  const activeTableColumnNames = tableData?.columns.map((c) => c.name).join("\n") ?? null;
+  // does. In cloud mode we source it from the cloud table so the hint follows
+  // `cloudTableId`; in local mode we keep the `tableData` derivation.
+  const activeTableSource = inCloud ? cloudActiveTable ?? null : tableData;
+  const activeTableColumnNames = activeTableSource?.columns.map((c) => c.name).join("\n") ?? null;
   const activeTable = useMemo(
-    () => (tableData ? { name: tableData.name, columns: tableData.columns.map((c) => c.name) } : null),
+    () =>
+      activeTableSource
+        ? { name: activeTableSource.name, columns: activeTableSource.columns.map((c) => c.name) }
+        : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the table name + serialized column names, not the FullTable identity
-    [tableData?.name, activeTableColumnNames],
+    [activeTableSource?.name, activeTableColumnNames],
   );
   // Agent presence (Co-Pilot cursor): the agent's gtmgrid tool calls — streamed
   // through the panel's SSE — light up the cell/column it's working on for
