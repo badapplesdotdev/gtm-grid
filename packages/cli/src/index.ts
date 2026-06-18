@@ -3,6 +3,11 @@
 
 import { readFileSync } from "node:fs";
 import { openProject, projectPath, connectAi, parseManifest, type Column } from "@gtmgrid/engine";
+import { captureException, installProcessHandlers } from "@gtmgrid/observability";
+
+// Crash reporting for the short-lived CLI process (uncaught/unhandled → PostHog
+// Error Tracking, tagged "cli"). No-ops without GTMGRID_POSTHOG_KEY.
+installProcessHandlers("cli");
 
 interface Args {
   _: string[];
@@ -257,5 +262,6 @@ function cellText(cell: ReturnType<import("@gtmgrid/engine").Db["getCell"]>, _co
 
 main().catch((e) => {
   console.error("Error:", e instanceof Error ? e.message : e);
+  captureException(e, { source: "cli" });
   process.exitCode = 1;
 });

@@ -29,15 +29,15 @@ const nextConfig: NextConfig = {
     return [
       {
         source: "/ingest/static/:path*",
-        destination: "https://eu-assets.i.posthog.com/static/:path*",
+        destination: "https://us-assets.i.posthog.com/static/:path*",
       },
       {
         source: "/ingest/array/:path*",
-        destination: "https://eu-assets.i.posthog.com/array/:path*",
+        destination: "https://us-assets.i.posthog.com/array/:path*",
       },
       {
         source: "/ingest/:path*",
-        destination: "https://eu.i.posthog.com/:path*",
+        destination: "https://us.i.posthog.com/:path*",
       },
     ];
   },
@@ -56,7 +56,7 @@ const nextConfig: NextConfig = {
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https:",
       "font-src 'self' data:",
-      "connect-src 'self' https://eu.i.posthog.com https://eu-assets.i.posthog.com https://*.posthog.com https://*.ingest.vercel.com https://vitals.vercel-insights.com",
+      "connect-src 'self' https://us.i.posthog.com https://us-assets.i.posthog.com https://*.posthog.com https://*.ingest.vercel.com https://vitals.vercel-insights.com",
       "worker-src 'self' blob:",
       "frame-ancestors 'self'",
       "base-uri 'self'",
