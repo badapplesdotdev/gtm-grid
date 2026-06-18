@@ -1,34 +1,27 @@
 /**
  * Notification-center model (TRI-3308) — PURE, DOM-free.
  *
- * The app used to stack full-width banners at the top of the shell (trial-ends,
- * the auto-sync nudge, and update-available). Stacked they looked bad and ate
- * vertical space, so they're consolidated behind a bell-icon notification
- * center. This module is the model: it derives the ACTIVE notification list from
- * app state, computes the unread badge, and owns the dismissed/seen persistence
- * shape — all unit-testable offline (no DOM, no React), so App.tsx only wires
- * the action ids to handlers and renders.
+ * The app used to stack full-width banners at the top of the shell (trial-ends
+ * and update-available). Stacked they looked bad and ate vertical space, so
+ * they're consolidated behind a bell-icon notification center. This module is the
+ * model: it derives the ACTIVE notification list from app state, computes the
+ * unread badge, and owns the dismissed/seen persistence shape — all unit-testable
+ * offline (no DOM, no React), so App.tsx only wires the action ids to handlers
+ * and renders.
  *
  * Eligibility is unchanged from the banners it replaces: the trial item mirrors
- * the old `.trial-banner` gate, the auto-sync nudge reuses
- * {@link autoSyncNudgeVisible} from cloudSync.ts (eligible cloud user + auto-sync
- * OFF + not dismissed), and the update item mirrors the old `.update-banner`.
+ * the old `.trial-banner` gate, and the update item mirrors the old
+ * `.update-banner`.
  */
-
-import { autoSyncNudgeVisible } from "./cloudSync";
 
 /** The notification kinds migrated from the stacked banners. Also the stable
  * item `id` (one of each is live at a time), so dismissed/seen sets key on the
  * kind. App-update alerts are NOT here — they live in the dedicated download
  * affordance next to the bell (UpdateDialog), not the notification center. */
-export type NotificationKind = "trial" | "autoSyncNudge";
+export type NotificationKind = "trial";
 
-/** All kinds in newest-first display order: the auto-sync nudge, then the trial
- * countdown. */
-export const NOTIFICATION_ORDER: readonly NotificationKind[] = [
-  "autoSyncNudge",
-  "trial",
-];
+/** All kinds in newest-first display order. */
+export const NOTIFICATION_ORDER: readonly NotificationKind[] = ["trial"];
 
 /** Visual tone, mapped onto the app's existing accent/warn/danger tokens. */
 export type NotificationSeverity = "info" | "success" | "warning";
@@ -46,10 +39,7 @@ export interface NotificationAction {
 }
 
 /** Every action id the notification center can emit. */
-export type NotificationActionId =
-  | "trial.upgrade"
-  | "autoSync.enable"
-  | "autoSync.dismiss";
+export type NotificationActionId = "trial.upgrade";
 
 /** A built notification item, newest-first in {@link buildNotifications}. */
 export interface AppNotification {
@@ -82,13 +72,6 @@ export interface NotificationInputs {
   /** Whole days left until the active workspace's trial ends, or null when not
    * trialing / cloud trial banner shouldn't show (mirrors `showTrialBanner`). */
   readonly trialDaysLeft: number | null;
-  /** The auto-sync nudge eligibility gate (reused from cloudSync.ts). */
-  readonly autoSync: {
-    readonly cloudEnabled: boolean;
-    readonly inCloud: boolean;
-    readonly isAuthenticated: boolean;
-    readonly autoSyncOn: boolean;
-  };
   /** Persisted dismissed/seen kinds. */
   readonly persist: NotificationPersistState;
 }
@@ -111,29 +94,9 @@ function trialNotification(daysLeft: number): AppNotification {
   };
 }
 
-/** The auto-sync nudge item — copy preserved verbatim from the old banner,
- * including the overwrite warning. */
-function autoSyncNudgeNotification(): AppNotification {
-  return {
-    id: "autoSyncNudge",
-    kind: "autoSyncNudge",
-    title: "Back up your local tables",
-    body:
-      "Keep your local tables backed up — turn on auto-sync to push them to the cloud automatically. Your local version always overwrites the cloud copy.",
-    severity: "success",
-    dismissible: true,
-    actions: [
-      { id: "autoSync.enable", label: "Turn on auto-sync", variant: "primary" },
-      { id: "autoSync.dismiss", label: "Dismiss", variant: "ghost" },
-    ],
-  };
-}
-
 /**
  * Derive the active notification list (newest-first) from app state. Each kind's
  * eligibility matches the banner it replaces:
- *   - autoSyncNudge: {@link autoSyncNudgeVisible} (eligible cloud user, auto-sync
- *     OFF, not dismissed),
  *   - trial: a trial countdown is present (the trial banner is NOT dismissible).
  * Dismissed kinds are excluded so a dismissed item never reappears in-session or
  * across sessions (the caller backs `persist` with localStorage). App-update
@@ -143,15 +106,6 @@ function autoSyncNudgeNotification(): AppNotification {
 export function buildNotifications(input: NotificationInputs): readonly AppNotification[] {
   const dismissed = new Set(input.persist.dismissed);
   const out: AppNotification[] = [];
-
-  const nudgeVisible = autoSyncNudgeVisible({
-    cloudEnabled: input.autoSync.cloudEnabled,
-    inCloud: input.autoSync.inCloud,
-    isAuthenticated: input.autoSync.isAuthenticated,
-    autoSyncOn: input.autoSync.autoSyncOn,
-    dismissed: dismissed.has("autoSyncNudge"),
-  });
-  if (nudgeVisible) out.push(autoSyncNudgeNotification());
 
   if (input.trialDaysLeft !== null && !dismissed.has("trial")) {
     out.push(trialNotification(input.trialDaysLeft));
@@ -210,24 +164,19 @@ export function dismissNotification(
   return { dismissed: [...dismissed], seen: persist.seen };
 }
 
-// ── Persistence (localStorage, reusing the auto-sync nudge key/pattern) ──────
+// ── Persistence (localStorage) ───────────────────────────────────────────────
 //
-// The auto-sync nudge already persisted a single dismissed flag under
-// `gtmgrid:autoSyncNudgeDismissed`. The center generalises that to a JSON
-// dismissed/seen map under one key; on first run we MIGRATE the old flag so a
-// previously-dismissed nudge STAYS dismissed (no regression of TRI-3298's
-// "stays dismissed across sessions").
+// The center persists a JSON dismissed/seen map under one key.
 
 /** The notification-center persistence key (dismissed + seen, JSON). */
 export const NOTIFICATIONS_PERSIST_KEY = "gtmgrid:notifications";
-/** The legacy single-flag auto-sync nudge dismissal key (TRI-3298). */
-export const LEGACY_AUTO_SYNC_NUDGE_KEY = "gtmgrid:autoSyncNudgeDismissed";
 
 /** Whether a parsed value is a NotificationKind (drops unknown/garbage kinds). */
 function isKind(v: unknown): v is NotificationKind {
-  // "update" is intentionally excluded — legacy persisted update dismissals are
-  // dropped on parse now that updates live outside the notification center.
-  return v === "trial" || v === "autoSyncNudge";
+  // "update" / "autoSyncNudge" are intentionally excluded — legacy persisted
+  // dismissals of those are dropped on parse now that updates live outside the
+  // center and auto-sync (the local paradigm) is gone.
+  return v === "trial";
 }
 
 /** Coerce an unknown JSON value into a deduped array of valid kinds. */
@@ -239,14 +188,11 @@ function toKindList(v: unknown): NotificationKind[] {
 }
 
 /**
- * Parse persisted state from the stored JSON string plus the legacy nudge flag.
- * Garbage / missing values yield {@link EMPTY_PERSIST_STATE}. When the legacy
- * flag is set, `autoSyncNudge` is folded into BOTH dismissed and seen so a
- * previously-dismissed nudge stays dismissed and silent.
+ * Parse persisted state from the stored JSON string. Garbage / missing values
+ * yield {@link EMPTY_PERSIST_STATE}.
  */
 export function parsePersistState(
   raw: string | null | undefined,
-  legacyNudgeDismissed: boolean,
 ): NotificationPersistState {
   let dismissed: NotificationKind[] = [];
   let seen: NotificationKind[] = [];
@@ -261,14 +207,6 @@ export function parsePersistState(
     } catch {
       /* garbage → empty */
     }
-  }
-  if (legacyNudgeDismissed) {
-    const d = new Set(dismissed);
-    d.add("autoSyncNudge");
-    dismissed = [...d];
-    const s = new Set(seen);
-    s.add("autoSyncNudge");
-    seen = [...s];
   }
   return { dismissed, seen };
 }

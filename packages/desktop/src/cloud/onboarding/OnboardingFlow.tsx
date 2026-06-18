@@ -16,8 +16,8 @@
  * Logic (the screen state machine, plan/billing → planId, checkout routing) lives
  * in ./flow-logic (pure / Effect, unit-tested); this file is presentation + event
  * wiring only. OAuth buttons render per the design but are DISABLED ("Coming
- * soon") — native deep-link OAuth is deferred (#17). The flow is fully
- * dismissible back to the local app (local-first preserved).
+ * soon") — native deep-link OAuth is deferred (#17). The desktop app is
+ * cloud-only: the flow is a HARD mandatory-login gate with no opt-out.
  */
 
 import { useCallback, useMemo, useState } from "react";
@@ -118,13 +118,17 @@ interface OnboardingFlowProps {
   initialScreen: OnboardingScreen;
   /** Whether a Convex session already exists (skip auth on first-run). */
   hasSession: boolean;
-  /** Dismiss the flow back to the local app (local-first opt-out). */
+  /**
+   * Retained for API compatibility; the desktop app is cloud-only so there is no
+   * opt-out and the App passes a no-op. The flow never dismisses itself.
+   */
   onClose: () => void;
   /** Called when setup completes; the app enters with this workspace selected. */
   onDone: (workspaceId: Id<"workspaces"> | null) => void;
   /**
-   * Forced (pro) mode: auth is REQUIRED to use the app at all (even local), so
-   * the dismiss/"continue local only" escape is hidden. OSS builds never set this.
+   * Forced mode: the App owns post-login routing (it auto-creates/opens a cloud
+   * project), so the wizard does NOT advance to its own "workspace" step after
+   * auth. The mandatory-login gate always renders the flow forced.
    */
   forced?: boolean;
 }
@@ -258,7 +262,7 @@ function OAuthRow(props: {
 }
 
 export function OnboardingFlow(props: OnboardingFlowProps) {
-  const { initialScreen, hasSession, onClose, onDone, forced = false } = props;
+  const { initialScreen, hasSession, onDone, forced = false } = props;
   const [screen, setScreen] = useState<OnboardingScreen>(initialScreen);
   const [state, setStateRaw] = useState<FlowState>(INITIAL);
   const [busy, setBusy] = useState(false);
@@ -534,19 +538,6 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
         }`}
       >
         <div className="ob-form-pane">
-          {/* Dismiss back to local — local-first opt-out. Hidden in forced (pro)
-              mode where an account is required even to use the app locally. */}
-          {!forced && (
-            <button
-              className="ob-dismiss"
-              onClick={onClose}
-              title="Continue without an account (local only)"
-              aria-label="Close onboarding"
-            >
-              <X s={16} />
-            </button>
-          )}
-
           {authStep === "verify" ? (
             <VerifyEmail
               email={state.email}
@@ -600,7 +591,6 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
               onError={setError}
               onSubmit={() => void submitAuth("signIn")}
               onGoSignup={() => go("signup")}
-              onSkip={onClose}
               onForgot={
                 emailAuthEnabled
                   ? () => {
@@ -621,7 +611,6 @@ export function OnboardingFlow(props: OnboardingFlowProps) {
               onError={setError}
               onSubmit={() => void submitAuth("signUp")}
               onGoSignin={() => go("signin")}
-              onSkip={onClose}
             />
           )}
           {screen === "workspace" && (
@@ -703,7 +692,6 @@ function SignIn(props: {
   onError: (message: string) => void;
   onSubmit: () => void;
   onGoSignup: () => void;
-  onSkip: () => void;
   /** Open the password-reset flow; absent when email auth is off. */
   onForgot?: () => void;
 }) {
@@ -716,7 +704,6 @@ function SignIn(props: {
     onError,
     onSubmit,
     onGoSignup,
-    onSkip,
     onForgot,
   } = props;
   return (
@@ -774,18 +761,6 @@ function SignIn(props: {
       >
         {busy ? "Signing in…" : "Sign in"} <ArrowRight s={15} />
       </button>
-
-      <button
-        className="ob-btn ob-btn-ghost ob-btn-block"
-        onClick={onSkip}
-        style={{ marginTop: 8 }}
-      >
-        Continue locally — no account
-      </button>
-      <p className="ob-fineprint">
-        Local stays free: your tables, engine and runs work fully offline. Sign in
-        only to unlock cloud workspaces, sync &amp; realtime teams.
-      </p>
     </Pane>
   );
 }
@@ -800,7 +775,6 @@ function SignUp(props: {
   onError: (message: string) => void;
   onSubmit: () => void;
   onGoSignin: () => void;
-  onSkip: () => void;
 }) {
   const {
     state,
@@ -811,7 +785,6 @@ function SignUp(props: {
     onError,
     onSubmit,
     onGoSignin,
-    onSkip,
   } = props;
   return (
     <Pane
@@ -874,17 +847,9 @@ function SignUp(props: {
       >
         {busy ? "Creating…" : "Create account"} <ArrowRight s={15} />
       </button>
-
-      <button
-        className="ob-btn ob-btn-ghost ob-btn-block"
-        onClick={onSkip}
-        style={{ marginTop: 8 }}
-      >
-        Continue locally — no account
-      </button>
       <p className="ob-fineprint">
-        Local stays free and works fully offline. An account only unlocks cloud
-        workspaces, sync &amp; realtime teams.
+        Execution still runs on your machine via the local engine; your data lives
+        in your workspace.
       </p>
     </Pane>
   );

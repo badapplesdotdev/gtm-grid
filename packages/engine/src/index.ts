@@ -1,13 +1,11 @@
 // Public API for the gtmgrid engine.
 
 import { homedir } from "node:os";
-import { join, basename } from "node:path";
-import { mkdirSync, existsSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { mkdirSync, existsSync } from "node:fs";
 import { Db } from "./db.js";
 import type { AiConfig } from "./types.js";
-import { Engine, aiConfigFromEnv, type EngineConfig } from "./execute.js";
-import { defaultRegistry, Registry } from "./registry.js";
-import { parseManifest, connectorFromManifest } from "./connectors/manifest.js";
+import type { EngineConfig } from "./execute.js";
 
 export { Db } from "./db.js";
 export { Engine, mapConcurrent, RateLimiter, DEFAULT_RATE_LIMIT, aiConfigFromEnv } from "./execute.js";
@@ -40,15 +38,12 @@ export {
   type CloudCredentialScope,
 } from "./cloud-schema.js";
 // GridStore — the engine's async storage abstraction (Effect service + typed
-// errors + Layer). SqliteGridStore is the local implementation; the cloud store
-// adds a cloud-client-backed Layer for the same tag.
+// errors + Layer). The engine is always cloud-store-backed; the cloud store
+// (`store-cloud.ts`) provides the cloud-client-backed Layer for the same tag.
 export {
   GridStore,
   CredentialStore,
   GridStoreError,
-  sqliteGridStore,
-  sqliteCredentialStore,
-  sqliteGridStoreShape,
   type GridStoreShape,
   type CellPatch,
 } from "./store.js";
@@ -65,43 +60,6 @@ export {
   type CloudCredentialResolution,
   type CloudCredentialForRunResult,
 } from "./store-cloud.js";
-// The local→cloud one-way table push orchestrator (TRI-3295). A scoped Effect
-// service owning its own resilience (retry/jitter/timeout/rate-limit/bounded
-// concurrency) over a THIN, NON-retrying injected transport — so the engine
-// build stays backend-agnostic and the sidecar wires the tRPC grid surface.
-export {
-  CloudPushService,
-  TransientPushError,
-  FatalPushError,
-  CloudActionsLimitError,
-  LinkConflictError,
-  PUSH_ROW_CHUNK,
-  PUSH_MAX_CONCURRENCY,
-  PUSH_RATE_LIMIT,
-  PUSH_TIMEOUT,
-  PUSH_MAX_RETRIES,
-  type CloudPushTransport,
-  type CloudPushError,
-  type CloudPushConfig,
-  type CloudCellMap,
-  type CloudColumnSpec,
-  type PushOutcome,
-  type PushResult,
-  type PushTableInput,
-} from "./cloud-push.js";
-
-export interface OpenProjectResult {
-  db: Db;
-  engine: Engine;
-  /**
-   * The shared global db holding connector/AI credentials (see {@link globalDbPath}).
-   * Distinct from {@link db} (the project store) since the global-db split: callers
-   * that read or write credentials (CLI `connect`/`status`) MUST use this, not `db`,
-   * or they'll save/inspect keys the engine never resolves. Equals `db` only when the
-   * opened project IS the global db.
-   */
-  credsDb: Db;
-}
 
 /**
  * Root directory for all project + global .db files. Defaults to `~/gtmgrid`;
@@ -123,28 +81,6 @@ export function projectPath(name: string): string {
 /** The shared global db holding credentials, extensions, and AI config. */
 export function globalDbPath(): string {
   return join(gtmgridDir(), "global.db");
-}
-
-export interface ProjectInfo {
-  name: string;
-  path: string;
-  mtimeMs: number;
-}
-
-/** List projects in ~/gtmgrid (every *.db except the shared global.db), newest first. */
-export function listProjects(): ProjectInfo[] {
-  const dir = gtmgridDir();
-  const out: ProjectInfo[] = [];
-  for (const file of readdirSync(dir)) {
-    if (!file.endsWith(".db") || file === "global.db") continue;
-    const path = join(dir, file);
-    try {
-      out.push({ name: basename(file, ".db"), path, mtimeMs: statSync(path).mtimeMs });
-    } catch {
-      /* skip unreadable */
-    }
-  }
-  return out.sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
 /**
@@ -178,40 +114,6 @@ export function migrateGlobals(globalDb: Db, legacyPath: string): void {
   } finally {
     legacy.close();
   }
-}
-
-/** Open (or create) a project and return a wired engine. AI config: env first, then stored (encrypted). */
-export function openProject(
-  pathOrName: string,
-  opts: { config?: EngineConfig; registry?: Registry } = {},
-): OpenProjectResult {
-  const path = pathOrName.endsWith(".db") || pathOrName.includes("/") ? pathOrName : projectPath(pathOrName);
-  const db = new Db(path);
-  // Connector secrets + AI config live in the SHARED global db (since the
-  // global-db split). The desktop sidecar already wires this as the Engine's
-  // credsDb (`new Engine(projectDb, …, globalDb)`); openProject must do the same
-  // or every key stored only in global.db (exa, firecrawl, …) resolves to
-  // undefined and the connector fires keyless — e.g. Exa then 402s. Reuse `db`
-  // when this project IS the global db so we never double-open it.
-  const gPath = globalDbPath();
-  const credsDb = path === gPath ? db : new Db(gPath);
-  const config =
-    opts.config ?? { ai: aiConfigFromEnv() ?? storedAiConfig(credsDb), aiProviders: storedAiProviders(credsDb) };
-  const registry = opts.registry ?? defaultRegistry();
-  // Load JSON-manifest extensions from the GLOBAL db, not the project db — they
-  // live alongside credentials in the shared global store (see {@link globalDbPath}),
-  // and the server seeds the current `extensions/*.json` set there on startup. A
-  // project db only ever held a stale snapshot, so the MCP agent (which opens a
-  // project) was missing connectors the UI showed — firecrawl, notion, supabase…
-  for (const manifest of credsDb.listExtensions()) {
-    try {
-      registry.add(connectorFromManifest(parseManifest(manifest)));
-    } catch (err) {
-      console.error(`Skipping invalid extension "${(manifest as any)?.id}": ${err instanceof Error ? err.message : err}`);
-    }
-  }
-  const engine = new Engine(db, config, registry, credsDb);
-  return { db, engine, credsDb };
 }
 
 const DEFAULT_MODEL = {

@@ -8,27 +8,11 @@
 //   - an unscoped, unforced run skips every already-`done` cell (no re-bill),
 //     only writing the rows that still need computing.
 
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Db } from "./db.js";
+import { describe, expect, it } from "vitest";
 import { Engine, type CellProgress } from "./execute.js";
 import { Registry } from "./registry.js";
+import { makeMemoryStore } from "./test-helpers.js";
 import type { Connector, ConnectorMethod } from "./types.js";
-
-let dir: string;
-let db: Db;
-
-beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "run-rebill-test-"));
-  db = new Db(join(dir, "project.db"));
-});
-
-afterEach(() => {
-  db.close();
-  rmSync(dir, { recursive: true, force: true });
-});
 
 /** Echo connector — pure, no network/AI; `{ text }` from the input. */
 const echoRegistry = (): Registry => {
@@ -53,64 +37,66 @@ const echoRegistry = (): Registry => {
 
 describe("runColumn re-bill guard (TRI-3283 L2)", () => {
   it("a forced single-cell run writes ONLY the target row, not other done rows", async () => {
-    const table = db.createTable("Leads");
-    const name = db.createColumn({ tableId: table.id, name: "Name", kind: "manual" });
-    const upper = db.createColumn({
-      tableId: table.id,
+    const store = makeMemoryStore();
+    store.addColumn({ id: "name", table_id: "t", name: "Name", kind: "manual" });
+    store.addColumn({
+      id: "upper",
+      table_id: "t",
       name: "Upper",
       kind: "function",
       code: "function(inputs, sdk){ return { text: String(inputs.name).toUpperCase() }; }",
       params: { name: "{{Name}}" },
     });
-    const r1 = db.createRow(table.id);
-    const r2 = db.createRow(table.id);
-    const r3 = db.createRow(table.id);
-    db.setCell(r1.id, name.id, { value: "ada", status: "done" });
-    db.setCell(r2.id, name.id, { value: "grace", status: "done" });
-    db.setCell(r3.id, name.id, { value: "lin", status: "done" });
+    store.addRow({ id: "r1", table_id: "t" });
+    store.addRow({ id: "r2", table_id: "t" });
+    store.addRow({ id: "r3", table_id: "t" });
+    store.setCellSync("r1", "name", { value: "ada", status: "done" });
+    store.setCellSync("r2", "name", { value: "grace", status: "done" });
+    store.setCellSync("r3", "name", { value: "lin", status: "done" });
     // r2 + r3 are already computed (done); only r1 is the explicit target.
-    db.setCell(r2.id, upper.id, { value: "GRACE", status: "done" });
-    db.setCell(r3.id, upper.id, { value: "LIN", status: "done" });
+    store.setCellSync("r2", "upper", { value: "GRACE", status: "done" });
+    store.setCellSync("r3", "upper", { value: "LIN", status: "done" });
 
     const events: CellProgress[] = [];
-    const engine = new Engine(db, {}, echoRegistry());
-    const res = await engine.runColumn(upper.id, {
+    const engine = new Engine({}, echoRegistry(), { store, creds: store });
+    const res = await engine.runColumn("upper", {
       force: true,
-      rowIds: [r1.id],
+      rowIds: ["r1"],
       onCell: (c) => events.push(c),
     });
 
     // Exactly one cell ran (the target); the already-done r2/r3 were untouched.
     expect(res).toEqual({ ran: 1, errors: 0 });
-    expect(new Set(events.map((e) => e.rowId))).toEqual(new Set([r1.id]));
-    expect(events.some((e) => e.rowId === r2.id)).toBe(false);
-    expect(events.some((e) => e.rowId === r3.id)).toBe(false);
+    expect(new Set(events.map((e) => e.rowId))).toEqual(new Set(["r1"]));
+    expect(events.some((e) => e.rowId === "r2")).toBe(false);
+    expect(events.some((e) => e.rowId === "r3")).toBe(false);
   });
 
   it("an unforced full-column run skips every already-done cell (no re-bill)", async () => {
-    const table = db.createTable("Leads");
-    const name = db.createColumn({ tableId: table.id, name: "Name", kind: "manual" });
-    const upper = db.createColumn({
-      tableId: table.id,
+    const store = makeMemoryStore();
+    store.addColumn({ id: "name", table_id: "t", name: "Name", kind: "manual" });
+    store.addColumn({
+      id: "upper",
+      table_id: "t",
       name: "Upper",
       kind: "function",
       code: "function(inputs, sdk){ return { text: String(inputs.name).toUpperCase() }; }",
       params: { name: "{{Name}}" },
     });
-    const r1 = db.createRow(table.id);
-    const r2 = db.createRow(table.id);
-    db.setCell(r1.id, name.id, { value: "ada", status: "done" });
-    db.setCell(r2.id, name.id, { value: "grace", status: "done" });
+    store.addRow({ id: "r1", table_id: "t" });
+    store.addRow({ id: "r2", table_id: "t" });
+    store.setCellSync("r1", "name", { value: "ada", status: "done" });
+    store.setCellSync("r2", "name", { value: "grace", status: "done" });
     // r1 is already done; r2 has never been computed.
-    db.setCell(r1.id, upper.id, { value: "ADA", status: "done" });
+    store.setCellSync("r1", "upper", { value: "ADA", status: "done" });
 
     const events: CellProgress[] = [];
-    const engine = new Engine(db, {}, echoRegistry());
-    const res = await engine.runColumn(upper.id, { onCell: (c) => events.push(c) });
+    const engine = new Engine({}, echoRegistry(), { store, creds: store });
+    const res = await engine.runColumn("upper", { onCell: (c) => events.push(c) });
 
     // Only the pending r2 ran; the already-done r1 was not re-billed.
     expect(res).toEqual({ ran: 1, errors: 0 });
-    expect(new Set(events.map((e) => e.rowId))).toEqual(new Set([r2.id]));
-    expect(events.some((e) => e.rowId === r1.id)).toBe(false);
+    expect(new Set(events.map((e) => e.rowId))).toEqual(new Set(["r2"]));
+    expect(events.some((e) => e.rowId === "r1")).toBe(false);
   });
 });

@@ -1,7 +1,7 @@
 /**
  * Shared server-side observability for GTM Grid's long-lived/short-lived Node
- * processes — the desktop sidecar (`@gtmgrid/server`), the MCP server
- * (`@gtmgrid/mcp`), and the CLI (`@gtmgrid/cli`). None of these has a signed-in
+ * processes — the desktop sidecar (`@gtmgrid/server`) and the MCP server
+ * (`@gtmgrid/mcp`). Neither has a signed-in
  * user identity (that lives in the desktop renderer / web app), so this module's
  * job is the gap the client can't cover: surfacing server-side EXCEPTIONS
  * (uncaught crashes, run failures) and shipping structured logs to PostHog.
@@ -10,7 +10,7 @@
  * everything no-ops and logging falls back to stderr only — a local/OSS build runs
  * untouched. Each consumer calls {@link setObservabilitySource} once at boot so its
  * telemetry groups under a recognisable pseudo-person (e.g. "desktop-sidecar",
- * "mcp", "cli"); apps/web has its OWN posthog-node client (NEXT_PUBLIC token) and
+ * "mcp"); apps/web has its OWN posthog-node client (NEXT_PUBLIC token) and
  * does not use this module.
  */
 import { PostHog } from "posthog-node";

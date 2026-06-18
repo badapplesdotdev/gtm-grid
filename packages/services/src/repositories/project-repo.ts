@@ -25,6 +25,12 @@ export interface Project {
 
 /** Fields a `createProject` insert supplies. */
 export interface NewProject {
+  /**
+   * Client-supplied primary key. Optional: the DB generates one when omitted.
+   * Supplied by the cloud grid so an optimistic project insert matches the
+   * server's id.
+   */
+  readonly id?: string;
   readonly workspaceId: string;
   readonly name: string;
   readonly createdAt: number;
@@ -137,8 +143,8 @@ export const projectRepoLayer = (store: GridStore): Layer.Layer<ProjectRepo> =>
       ),
     insert: (values) =>
       Effect.sync(() => {
-        const id = store.nextId("project");
-        store.projects.push({ id, ...values });
+        const id = values.id ?? store.nextId("project");
+        store.projects.push({ ...values, id });
         return id;
       }),
   });

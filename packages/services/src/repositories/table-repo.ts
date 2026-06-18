@@ -34,6 +34,12 @@ export interface Table {
 
 /** Fields a `createTable` insert supplies. */
 export interface NewTable {
+  /**
+   * Client-supplied primary key. Optional: the DB generates one when omitted.
+   * Supplied by the cloud grid so an optimistic table insert matches the
+   * server's id and the realtime self-echo converges instead of duplicating.
+   */
+  readonly id?: string;
   readonly workspaceId: string;
   readonly projectId: string;
   readonly name: string;
@@ -266,10 +272,10 @@ export const tableRepoLayer = (store: GridStore): Layer.Layer<TableRepo> =>
       ),
     insert: (values) =>
       Effect.sync(() => {
-        const id = store.nextId("table");
+        const id = values.id ?? store.nextId("table");
         store.tables.push({
-          id,
           ...values,
+          id,
           dedupeColumn: null,
           dedupeKeep: null,
           folderId: values.folderId ?? null,

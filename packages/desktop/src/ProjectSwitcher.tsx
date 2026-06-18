@@ -1,18 +1,11 @@
-// Command-palette project switcher: search recent projects, open one, or
-// create a new project. LOCAL projects live in ~/gtmgrid/ and switch in-process
-// via the sidecar. When signed into a workspace, the switcher ALSO lists that
-// workspace's CLOUD projects (Convex) and offers "New cloud project" — selecting
-// one routes the app to the live multiplayer grid instead of the local sidecar.
+// Command-palette project switcher: search the active workspace's CLOUD projects
+// (Postgres-backed, live multiplayer), open one, or create a new one. The desktop
+// is cloud-only — there is no local project list — so the switcher is driven
+// entirely by the `cloud` section.
 
-import { useState, useEffect, useMemo } from "react";
-import { api, ProjectInfo } from "./api";
+import { useState, useMemo } from "react";
 import type { CloudProject } from "./cloud/useCloudGrid";
 
-const DbIcon = (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5v14a9 3 0 0 0 18 0V5" /><path d="M3 12a9 3 0 0 0 18 0" />
-  </svg>
-);
 const SearchIcon = (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
@@ -29,14 +22,14 @@ const CheckIcon = (
   </svg>
 );
 /** Cloud glyph — reused by the unified Tables list (TRI-3313-C) to mark cloud /
- *  synced rows, so cloud vs local is clear at a glance. */
+ *  synced rows. */
 export const CloudIcon = (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
   </svg>
 );
 
-/** A cloud project the switcher can list/select (workspace-scoped, Convex). */
+/** The cloud-projects section the switcher lists/selects (workspace-scoped). */
 export interface CloudProjectsSection {
   /** The active workspace's cloud projects, or `undefined` while loading. */
   readonly projects: readonly CloudProject[] | undefined;
@@ -49,72 +42,34 @@ export interface CloudProjectsSection {
 }
 
 export function ProjectSwitcher({
-  current,
   onClose,
-  onSwitched,
   cloud,
 }: {
-  current: string;
   onClose: () => void;
-  onSwitched: (name: string) => void;
-  /** When signed into a workspace, the cloud-projects section to render. */
-  cloud?: CloudProjectsSection;
+  /** The cloud-projects section that drives the switcher. */
+  cloud: CloudProjectsSection;
 }) {
-  const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [query, setQuery] = useState("");
-  const [creating, setCreating] = useState(false);
-  const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
   const [creatingCloud, setCreatingCloud] = useState(false);
   const [newCloudName, setNewCloudName] = useState("");
   const [cloudError, setCloudError] = useState<string | null>(null);
 
-  useEffect(() => {
-    api.projects().then(setProjects).catch(() => setProjects([]));
-  }, []);
-
   const q = query.trim().toLowerCase();
-  const filtered = useMemo(
-    () => (q ? projects.filter((p) => p.name.toLowerCase().includes(q)) : projects),
-    [projects, q],
-  );
-
-  const open = async (name: string) => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      await api.switchProject(name);
-      onSwitched(name);
-    } catch {
-      setBusy(false);
-    }
-  };
-
-  const create = async () => {
-    const name = newName.trim().replace(/[/\\]/g, "");
-    if (!name) return;
-    setBusy(true);
-    try {
-      await api.createProject(name);
-      onSwitched(name);
-    } catch {
-      setBusy(false);
-    }
-  };
 
   const filteredCloud = useMemo(
     () =>
-      cloud?.projects
+      cloud.projects
         ? q
           ? cloud.projects.filter((p) => p.name.toLowerCase().includes(q))
           : cloud.projects
         : [],
-    [cloud?.projects, q],
+    [cloud.projects, q],
   );
 
   const createCloud = async () => {
     const name = newCloudName.trim();
-    if (!name || !cloud) return;
+    if (!name) return;
     setBusy(true);
     setCloudError(null);
     try {
@@ -143,109 +98,65 @@ export function ProjectSwitcher({
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Escape") onClose();
-              if (e.key === "Enter" && filtered[0]) open(filtered[0].name);
+              if (e.key === "Enter" && filteredCloud[0]) cloud.onSelect(filteredCloud[0]);
             }}
           />
           <button className="palette-esc" onClick={onClose}>ESC</button>
         </div>
 
         <div className="palette-body">
-          {filtered.length > 0 && <div className="palette-label">Local</div>}
-          {filtered.map((p) => (
-            <button key={p.name} className="palette-row" onClick={() => open(p.name)} disabled={busy}>
-              <span className="palette-row-icon">{DbIcon}</span>
-              <span className="palette-row-text">
-                <span className="palette-row-name">{p.name}</span>
-                <span className="palette-row-path">{p.path}</span>
-              </span>
-              {p.name === current && <span className="palette-row-check">{CheckIcon}</span>}
-            </button>
-          ))}
-
-          {/* New LOCAL project — lives with the local rows it creates. */}
-          {creating ? (
-            <div className="palette-create">
-              <span className="palette-row-icon">{PlusIcon}</span>
-              <input
-                className="palette-create-input"
-                placeholder="Local project name…"
-                value={newName}
-                autoFocus
-                onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") create();
-                  if (e.key === "Escape") { setCreating(false); setNewName(""); }
-                }}
-              />
-              <button className="btn btn-primary btn-sm" onClick={create} disabled={busy || !newName.trim()}>
-                {busy ? "Creating…" : "Create"}
-              </button>
-            </div>
+          <div className="palette-label">Workspace (cloud)</div>
+          {cloud.projects === undefined ? (
+            <div style={{ padding: "4px 16px", fontSize: 12, color: "var(--text-3)" }}>Loading…</div>
+          ) : filteredCloud.length === 0 ? (
+            <div style={{ padding: "4px 16px", fontSize: 12, color: "var(--text-3)" }}>No cloud projects yet</div>
           ) : (
-            <button className="palette-row" onClick={() => setCreating(true)} disabled={busy}>
-              <span className="palette-row-icon">{PlusIcon}</span>
-              <span className="palette-row-name">New local project…</span>
-            </button>
+            filteredCloud.map((p) => (
+              <button
+                key={p._id}
+                className="palette-row"
+                onClick={() => cloud.onSelect(p)}
+                disabled={busy}
+              >
+                <span className="palette-row-icon">{CloudIcon}</span>
+                <span className="palette-row-text">
+                  <span className="palette-row-name">{p.name}</span>
+                  <span className="palette-row-path">Live multiplayer</span>
+                </span>
+                {p._id === cloud.activeId && <span className="palette-row-check">{CheckIcon}</span>}
+              </button>
+            ))
           )}
-
-          {/* Cloud projects (active workspace) — only when signed in. */}
-          {cloud && (
+          {creatingCloud ? (
             <>
-              <div className="palette-sep" />
-              <div className="palette-label">Workspace (cloud)</div>
-              {cloud.projects === undefined ? (
-                <div style={{ padding: "4px 16px", fontSize: 12, color: "var(--text-3)" }}>Loading…</div>
-              ) : filteredCloud.length === 0 ? (
-                <div style={{ padding: "4px 16px", fontSize: 12, color: "var(--text-3)" }}>No cloud projects yet</div>
-              ) : (
-                filteredCloud.map((p) => (
-                  <button
-                    key={p._id}
-                    className="palette-row"
-                    onClick={() => cloud.onSelect(p)}
-                    disabled={busy}
-                  >
-                    <span className="palette-row-icon">{CloudIcon}</span>
-                    <span className="palette-row-text">
-                      <span className="palette-row-name">{p.name}</span>
-                      <span className="palette-row-path">Live multiplayer</span>
-                    </span>
-                    {p._id === cloud.activeId && <span className="palette-row-check">{CheckIcon}</span>}
-                  </button>
-                ))
-              )}
-              {creatingCloud ? (
-                <>
-                <div className="palette-create">
-                  <span className="palette-row-icon">{CloudIcon}</span>
-                  <input
-                    className="palette-create-input"
-                    placeholder="Cloud project name…"
-                    value={newCloudName}
-                    autoFocus
-                    onChange={(e) => setNewCloudName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void createCloud();
-                      if (e.key === "Escape") { setCreatingCloud(false); setNewCloudName(""); setCloudError(null); }
-                    }}
-                  />
-                  <button className="btn btn-primary btn-sm" onClick={() => void createCloud()} disabled={busy || !newCloudName.trim()}>
-                    {busy ? "Creating…" : "Create"}
-                  </button>
-                </div>
-                {cloudError && (
-                  <div className="account-menu-error" role="alert" style={{ margin: "4px 16px" }}>
-                    {cloudError}
-                  </div>
-                )}
-                </>
-              ) : (
-                <button className="palette-row" onClick={() => setCreatingCloud(true)} disabled={busy}>
-                  <span className="palette-row-icon">{PlusIcon}</span>
-                  <span className="palette-row-name">New cloud project…</span>
+              <div className="palette-create">
+                <span className="palette-row-icon">{CloudIcon}</span>
+                <input
+                  className="palette-create-input"
+                  placeholder="Cloud project name…"
+                  value={newCloudName}
+                  autoFocus
+                  onChange={(e) => setNewCloudName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void createCloud();
+                    if (e.key === "Escape") { setCreatingCloud(false); setNewCloudName(""); setCloudError(null); }
+                  }}
+                />
+                <button className="btn btn-primary btn-sm" onClick={() => void createCloud()} disabled={busy || !newCloudName.trim()}>
+                  {busy ? "Creating…" : "Create"}
                 </button>
+              </div>
+              {cloudError && (
+                <div className="account-menu-error" role="alert" style={{ margin: "4px 16px" }}>
+                  {cloudError}
+                </div>
               )}
             </>
+          ) : (
+            <button className="palette-row" onClick={() => setCreatingCloud(true)} disabled={busy}>
+              <span className="palette-row-icon">{PlusIcon}</span>
+              <span className="palette-row-name">New cloud project…</span>
+            </button>
           )}
         </div>
 

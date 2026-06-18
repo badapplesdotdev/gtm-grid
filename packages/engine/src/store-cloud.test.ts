@@ -493,13 +493,10 @@ describe("ConvexGridStore — read scaling (#24)", () => {
     const { client, calls } = fakeClient(grid(n));
     const store = await buildStore({ client, refs: REFS, tableId: TABLE_ID });
     const engine = new Engine(
-      // db/credsDb are unused: the cloud store is injected for both reads/creds.
-      undefined,
       // Opt out of the safety-default throttle: this test measures read scaling
       // over 30 rows, not rate limiting, so it must run at full speed.
       { defaultRateLimit: {} },
       echoRegistry(),
-      undefined,
       { store, creds: store },
     );
     const res = await engine.runColumn("col_fn");
@@ -618,12 +615,11 @@ describe("Engine — Db-free construction over an injected fake store", () => {
       row_id: "r1", column_id: "c_name", value: "ada", status: "done", error: null, updated_at: 1,
     });
 
-    // No Db is passed; the injected store backs BOTH project data and credentials.
-    const engine = new Engine(undefined, {}, upperRegistry(), undefined, {
+    // The injected store backs BOTH project data and credentials — no Db exists.
+    const engine = new Engine({}, upperRegistry(), {
       store,
       creds: store,
     });
-    expect(engine.db).toBeUndefined();
 
     const res = await engine.runColumn("c_upper");
     expect(res).toEqual({ ran: 1, errors: 0 });
@@ -631,14 +627,5 @@ describe("Engine — Db-free construction over an injected fake store", () => {
     const written = cells.get("r1::c_upper");
     expect(written?.value).toBe("ADA");
     expect(written?.status).toBe("done");
-  });
-
-  it("requireDb() throws a clear error when the engine was built without a Db", () => {
-    const { store } = memoryStore([], []);
-    const engine = new Engine(undefined, {}, upperRegistry(), undefined, {
-      store,
-      creds: store,
-    });
-    expect(() => engine.requireDb()).toThrowError(/requires a Db/);
   });
 });

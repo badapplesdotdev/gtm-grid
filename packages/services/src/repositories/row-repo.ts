@@ -29,6 +29,13 @@ export interface Row {
 
 /** Fields an `addRow` insert supplies. */
 export interface NewRow {
+  /**
+   * Client-supplied primary key. Optional: when omitted the DB generates one via
+   * `defaultRandom()`. The cloud desktop grid supplies it so an OPTIMISTIC insert
+   * uses the SAME id the server persists — the realtime self-echo then converges
+   * (idempotent `applyGridEvent` de-dupes by id) instead of duplicating the row.
+   */
+  readonly id?: string;
   readonly workspaceId: string;
   readonly tableId: string;
   readonly position: number;
@@ -485,15 +492,15 @@ export const rowRepoLayer = (
       }),
     insert: (values) =>
       Effect.sync(() => {
-        const id = store.nextId("row");
-        store.rows.push({ id, ...values });
+        const id = values.id ?? store.nextId("row");
+        store.rows.push({ ...values, id });
         return id;
       }),
     insertMany: (values) =>
       Effect.sync(() =>
         values.map((v) => {
-          const id = store.nextId("row");
-          store.rows.push({ id, ...v });
+          const id = v.id ?? store.nextId("row");
+          store.rows.push({ ...v, id });
           return id;
         }),
       ),
@@ -504,8 +511,8 @@ export const rowRepoLayer = (
           // throw in buildCells/narrowing leaves rows, cells AND the meter
           // untouched — the in-memory mirror of the live tx rollback.
           const staged = input.rows.map((v) => ({
-            id: store.nextId("row"),
             ...v,
+            id: v.id ?? store.nextId("row"),
           }));
           const ids = staged.map((r) => r.id);
           const cells = input

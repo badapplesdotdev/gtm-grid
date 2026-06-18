@@ -212,10 +212,8 @@ export async function runEnrichColumn(
       properties: { source: "engine-run", surface: "cloud", table_id: data.tableId, ...ctx },
     });
   const engine = new Engine(
-    undefined,
     { ...engineConfig(), reportError },
     defaultRegistry(),
-    undefined,
     { store, creds: store },
   );
   const { ran, errors, firstError } = await engine.runColumn(columnId, { rowIds: [rowId] });

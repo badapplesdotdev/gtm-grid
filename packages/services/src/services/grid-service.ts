@@ -350,10 +350,13 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
     const createProject = (args: {
       readonly workspaceId: string;
       readonly name: string;
+      /** Client-supplied id (optimistic create); the DB generates one if omitted. */
+      readonly id?: string;
     }) =>
       Effect.gen(function* () {
         yield* requireCloudMember(args.workspaceId);
         return yield* projects.insert({
+          ...(args.id !== undefined ? { id: args.id } : {}),
           workspaceId: args.workspaceId,
           name: args.name,
           createdAt: Date.now(),
@@ -492,6 +495,8 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       readonly name: string;
       /** Sidebar folder to file the new table under (omitted/null = root). */
       readonly folderId?: string | null;
+      /** Client-supplied id (optimistic create); the DB generates one if omitted. */
+      readonly id?: string;
     }) =>
       Effect.gen(function* () {
         const project = yield* requireProject(args.projectId);
@@ -513,6 +518,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         }
         const position = yield* tables.nextPosition(args.projectId);
         const id = yield* tables.insert({
+          ...(args.id !== undefined ? { id: args.id } : {}),
           workspaceId: project.workspaceId,
           projectId: args.projectId,
           name: args.name,
@@ -543,12 +549,15 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       readonly code?: string | null;
       readonly params?: unknown;
       readonly condition?: string | null;
+      /** Client-supplied id (optimistic create); the DB generates one if omitted. */
+      readonly id?: string;
     }) =>
       Effect.gen(function* () {
         const table = yield* requireTable(args.tableId);
         yield* requireCloudMember(table.workspaceId);
         const position = yield* columns.nextPosition(args.tableId);
         const id = yield* columns.insert({
+          ...(args.id !== undefined ? { id: args.id } : {}),
           workspaceId: table.workspaceId,
           tableId: args.tableId,
           name: args.name,
@@ -581,12 +590,13 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       });
 
     /** Add a row to a table. Members-only. Metered ONE action. */
-    const addRow = (tableId: string) =>
+    const addRow = (tableId: string, rowId?: string) =>
       Effect.gen(function* () {
         const table = yield* requireTable(tableId);
         yield* requireCloudMember(table.workspaceId);
         const position = yield* rows.nextPosition(tableId);
         const id = yield* rows.insert({
+          ...(rowId !== undefined ? { id: rowId } : {}),
           workspaceId: table.workspaceId,
           tableId,
           position,
@@ -609,6 +619,13 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
     const addRowsWithCells = (args: {
       readonly tableId: string;
       readonly rows: readonly CellMap[];
+      /**
+       * Client-supplied row ids aligned by index with `rows` (optimistic bulk
+       * import). When omitted the DB generates each id. The returned `rowIds`
+       * preserve input order either way, so the cells built from them stay
+       * correctly keyed.
+       */
+      readonly rowIds?: readonly string[];
     }) =>
       Effect.gen(function* () {
         const table = yield* requireTable(args.tableId);
@@ -641,6 +658,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         // per-row filtered cell payloads (keyed by input index — the row id is
         // not known until insertMany returns it in input order).
         const newRows: NewRow[] = args.rows.map((_, i) => ({
+          ...(args.rowIds?.[i] !== undefined ? { id: args.rowIds[i] } : {}),
           workspaceId: table.workspaceId,
           tableId: args.tableId,
           position: basePosition + i,
@@ -735,12 +753,15 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
     const createFolder = (args: {
       readonly projectId: string;
       readonly name: string;
+      /** Client-supplied id (optimistic create); the DB generates one if omitted. */
+      readonly id?: string;
     }) =>
       Effect.gen(function* () {
         const project = yield* requireProject(args.projectId);
         yield* requireCloudMember(project.workspaceId);
         const position = yield* folders.nextPosition(args.projectId);
         const id = yield* folders.insert({
+          ...(args.id !== undefined ? { id: args.id } : {}),
           workspaceId: project.workspaceId,
           projectId: args.projectId,
           name: args.name,

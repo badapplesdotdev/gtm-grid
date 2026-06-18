@@ -10,7 +10,6 @@
     "node": ">=20"
   },
   "scripts": {
-    "cli": "tsx packages/cli/src/index.ts",
     "mcp": "tsx packages/mcp/src/index.ts",
     "server": "tsx packages/server/src/index.ts",
     "desktop": "pnpm --filter @gtmgrid/desktop dev",

@@ -398,12 +398,12 @@ export interface CloudSourceDeps {
 
 /**
  * Build a registry with the user's JSON-manifest extensions loaded on top of the
- * built-in connectors — the SAME set the engine's `openProject` loads for a LOCAL
- * project (`registry.add(connectorFromManifest(parseManifest(m)))` per stored
- * manifest). The cloud agent MUST use this so `list_functions` / `run_column` see
- * the enrichment/social connectors (Trigify, Apollo, …) exactly as local does —
- * otherwise cloud only exposes the built-ins (ai/formatting/formula/github/http)
- * and the agent reports those connectors as "not available", diverging from local.
+ * built-in connectors (`registry.add(connectorFromManifest(parseManifest(m)))`
+ * per stored manifest). The cloud agent MUST use this so `list_functions` /
+ * `run_column` see the enrichment/social connectors (Trigify, Apollo, …) the
+ * user has installed — otherwise it only exposes the built-ins
+ * (ai/formatting/formula/github/http) and reports those connectors as "not
+ * available".
  *
  * `manifests` are raw manifests — objects (e.g. `globalDb.listExtensions()`) or
  * JSON strings; `parseManifest` accepts either. Decoupled from any Db so it is
@@ -844,7 +844,7 @@ export function makeCloudSource(
           : candidates;
       const workspaceId = await deps.resolveWorkspaceId(client, tableId);
       const store = await buildCloudStore(client, tableId, workspaceId);
-      const engine = new Engine(undefined, deps.config, deps.registry, undefined, {
+      const engine = new Engine(deps.config, deps.registry, {
         store,
         creds: store,
       });
@@ -866,7 +866,7 @@ export function makeCloudSource(
       // route required.
       const workspaceId = await deps.resolveWorkspaceId(client, context.tableId);
       const store = await buildCloudStore(client, context.tableId, workspaceId);
-      const engine = new Engine(undefined, deps.config, deps.registry, undefined, {
+      const engine = new Engine(deps.config, deps.registry, {
         store,
         creds: store,
       });
