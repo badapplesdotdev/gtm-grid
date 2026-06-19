@@ -38,7 +38,15 @@ interface VirtualGridBodyProps<Row> {
   scrollRef: RefObject<HTMLElement | null>;
   /** Pixel height of one row (matches the CSS `--row-h` for the density). */
   rowHeight: number;
-  /** Rows rendered above/below the viewport to avoid blank flashes on scroll. */
+  /**
+   * Rows rendered above/below the viewport. This is the buffer that hides
+   * windowing latency: WebKit's momentum/compositor scroll can run AHEAD of the
+   * scroll event that re-windows the list, so with too small a buffer the
+   * viewport reaches the (blank) spacer before React commits the next rows and
+   * you watch rows paint in. A generous default (~one viewport each way) keeps
+   * the edge off-screen during a fling; the rows are cheap now that they're
+   * memoized, so the extra mounted DOM is negligible.
+   */
   overscan?: number;
   /**
    * Number of trailing `<td>`s a spacer row must span so the spacer keeps the
@@ -65,7 +73,7 @@ export function VirtualGridBody<Row>({
   rows,
   scrollRef,
   rowHeight,
-  overscan = 8,
+  overscan = 20,
   colSpan,
   columnWindow,
   renderRow,

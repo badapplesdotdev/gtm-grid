@@ -62,7 +62,12 @@ interface UseColumnWindowArgs {
   scrollRef: RefObject<HTMLElement | null>;
   /** Resolve the pixel width of the column at `index`. */
   getColumnWidth: (index: number) => number;
-  /** Columns rendered left/right of the viewport to avoid blank flashes. */
+  /**
+   * Columns rendered left/right of the viewport. The X-axis buffer against
+   * windowing latency (see {@link VirtualGridBody}'s `overscan`): on a fast
+   * horizontal fling WebKit can scroll past the rendered columns into the blank
+   * spacer before React re-windows, so a too-small buffer flashes blank columns.
+   */
   overscan?: number;
 }
 
@@ -76,7 +81,7 @@ export function useColumnWindow({
   count,
   scrollRef,
   getColumnWidth,
-  overscan = 3,
+  overscan = 8,
 }: UseColumnWindowArgs): ColumnWindow {
   const virtualizer = useVirtualizer({
     horizontal: true,
