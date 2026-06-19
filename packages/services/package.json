@@ -6,7 +6,8 @@
   "main": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./realtime": "./src/realtime/index.ts"
+    "./realtime": "./src/realtime/index.ts",
+    "./columns": "./src/columns/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",

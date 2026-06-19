@@ -13,6 +13,7 @@ import {
   fetchGrid,
   processWebhookRecordHandler,
   resolveRow,
+  workspaceRegistry,
 } from "./process-webhook-record";
 
 const SITE_URL = "https://app.gtmgrid.test";
@@ -234,6 +235,80 @@ describe("per-column enrich step keys (TRI-3280 regression)", () => {
     // The expensive setup steps were also memoized (not repeated on retry).
     expect(step.bodyRuns.get(`insert-row:${recordId}`)).toBe(1);
     expect(step.bodyRuns.get(`enrich-columns:${recordId}`)).toBe(1);
+  });
+});
+
+/**
+ * A step runner that executes the REAL `enrich-columns` body (so the actual
+ * dependency-ordering runs against a mocked grid), intercepts `insert-row`, and
+ * records the ORDER per-column enrich steps fire in.
+ */
+class OrderRecordingStep implements StepRunner {
+  readonly order: string[] = [];
+  constructor(private readonly recordId: string) {}
+  async run<T>(id: string, body: () => Promise<T>): Promise<T> {
+    if (id === `insert-row:${this.recordId}`) return "row-1" as T;
+    if (id === `enrich-columns:${this.recordId}`) return body(); // real topo-sort
+    const prefix = `enrich:${this.recordId}:`;
+    if (id.startsWith(prefix)) {
+      this.order.push(id.slice(prefix.length));
+      return 1 as T;
+    }
+    throw new Error(`unexpected step id: ${id}`);
+  }
+}
+
+describe("enrichment ordering", () => {
+  it("runs function columns in {{ref}} dependency order, not authored position", async () => {
+    // Authored OUT of order: C (position 0) reads {{B}}, B (position 1) reads
+    // {{A}}, A (position 2) is the source. A manual column is excluded entirely.
+    const grid = {
+      columns: [
+        { _id: "C", name: "C", type: "text", kind: "function", provider: "formula", params: { expr: "{{B}} + 1" }, condition: null, position: 0 },
+        { _id: "B", name: "B", type: "text", kind: "function", provider: "formula", params: { src: "{{A}}" }, condition: null, position: 1 },
+        { _id: "A", name: "A", type: "text", kind: "function", provider: "leadmagic", params: {}, condition: null, position: 2 },
+        { _id: "M", name: "M", type: "text", kind: "manual", provider: null, params: {}, condition: null, position: 3 },
+      ],
+      rows: [{ _id: "row-1" }],
+      cells: [],
+    };
+    vi.stubGlobal("fetch", fetchReturning(200, JSON.stringify(grid)));
+
+    const step = new OrderRecordingStep("rec-dep");
+    await processWebhookRecordHandler(
+      { ...baseData, recordId: "rec-dep", autoRun: true },
+      "wh-dep",
+      step,
+    );
+
+    // Source before its dependents; the manual column never runs.
+    expect(step.order).toEqual(["A", "B", "C"]);
+  });
+});
+
+describe("workspaceRegistry", () => {
+  it("registers the workspace's manifest connectors so sdk[provider] resolves", async () => {
+    // The exact gap behind "sandbox cannot read property emailfinder": without
+    // the manifest connector registered, sdk["leadmagic"] is undefined.
+    const manifest = {
+      id: "leadmagic",
+      name: "LeadMagic",
+      baseUrl: "https://api.leadmagic.io",
+      methods: [
+        { id: "emailFinder", description: "Find a work email", verb: "POST", path: "/v1/people/email-finder" },
+      ],
+    };
+    vi.stubGlobal("fetch", fetchReturning(200, JSON.stringify([manifest])));
+
+    const providers = (await workspaceRegistry("ws-reg-ok")).providerMap();
+    expect(Object.keys(providers)).toContain("leadmagic");
+    expect(providers.leadmagic).toContain("emailFinder");
+  });
+
+  it("falls back to the built-in connectors when the extensions fetch fails", async () => {
+    vi.stubGlobal("fetch", fetchReturning(500, "boom"));
+    const providers = (await workspaceRegistry("ws-reg-fail")).providerMap();
+    expect(Object.keys(providers)).toContain("formula"); // built-ins still present
   });
 });
 

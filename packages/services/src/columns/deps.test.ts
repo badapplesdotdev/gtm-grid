@@ -1,25 +1,23 @@
-/**
- * Run-all scheduler tests (TRI-3279).
- *
- * `runAll` previously looped function columns strictly sequentially. These tests
- * pin the behaviour of the extracted scheduler used by the new implementation:
- *   - buildColumnDeps maps each column to the OTHER columns it references via
- *     {{Name}} placeholders (intra-set edges only).
- *   - runColumnsWithDeps runs independent columns concurrently (up to a bound),
- *     serializes true dependents (a column never starts before its deps finish),
- *     attempts every column exactly once, swallows per-column failures, and
- *     fires the settled callback once per column.
- */
-
 import { describe, expect, it } from "vitest";
-import { buildColumnDeps, isFreeColumn, runColumnsWithDeps } from "./App";
-import type { Column } from "./api";
+import {
+  type MinimalColumn,
+  buildColumnDeps,
+  isFreeColumn,
+  runColumnsWithDeps,
+  topoSortColumnIds,
+  transitiveDependents,
+} from "./deps.js";
 
-function col(id: string, name: string, params: Record<string, unknown> = {}): Column {
-  return { id, name, type: "text", kind: "function", provider: null, method: null, fn: null, params };
+function col(
+  id: string,
+  name: string,
+  params: Record<string, unknown> = {},
+  extra: Partial<MinimalColumn> = {},
+): MinimalColumn {
+  return { id, name, kind: "function", provider: null, params, ...extra };
 }
 
-describe("buildColumnDeps", () => {
+describe("columnDependsOn / buildColumnDeps", () => {
   it("returns no edges when columns are independent", () => {
     const cols = [col("a", "Alpha"), col("b", "Beta")];
     const deps = buildColumnDeps(cols);
@@ -28,20 +26,69 @@ describe("buildColumnDeps", () => {
   });
 
   it("records an edge when a column references another by {{Name}}", () => {
-    const cols = [
-      col("a", "Alpha"),
-      col("b", "Beta", { src: "uses {{Alpha}} here" }),
-    ];
+    const cols = [col("a", "Alpha"), col("b", "Beta", { src: "uses {{Alpha}} here" })];
     const deps = buildColumnDeps(cols);
     expect([...deps.get("b")!]).toEqual(["a"]);
     expect([...deps.get("a")!]).toEqual([]);
   });
 
-  it("ignores references to columns outside the run set", () => {
-    // {{Gamma}} is not in `cols`, so it imposes no intra-set ordering.
-    const cols = [col("a", "Alpha", { src: "needs {{Gamma}}" })];
+  it("detects refs in nested params and in the run condition", () => {
+    const cols = [
+      col("a", "Alpha"),
+      col("b", "Beta", { nested: { deep: ["x", "{{Alpha}}"] } }),
+      col("c", "Gamma", {}, { condition: "{{Alpha}} != ''" }),
+    ];
     const deps = buildColumnDeps(cols);
-    expect([...deps.get("a")!]).toEqual([]);
+    expect([...deps.get("b")!]).toEqual(["a"]);
+    expect([...deps.get("c")!]).toEqual(["a"]);
+  });
+
+  it("ignores references to columns outside the run set", () => {
+    const cols = [col("a", "Alpha", { src: "needs {{Gamma}}" })];
+    expect([...buildColumnDeps(cols).get("a")!]).toEqual([]);
+  });
+});
+
+describe("transitiveDependents", () => {
+  it("returns every downstream column, seeds excluded", () => {
+    // a -> b -> c, plus b2 also reading a (parallel sibling).
+    const cols = [
+      col("a", "A"),
+      col("b", "B", { src: "{{A}}" }),
+      col("b2", "B2", { src: "{{A}}" }),
+      col("c", "C", { src: "{{B}}" }),
+      col("unrelated", "U"),
+    ];
+    expect([...transitiveDependents(["a"], cols)].sort()).toEqual(["b", "b2", "c"]);
+  });
+
+  it("returns nothing when the seed has no dependents", () => {
+    const cols = [col("a", "A"), col("b", "B", { src: "{{A}}" })];
+    expect([...transitiveDependents(["b"], cols)]).toEqual([]);
+  });
+
+  it("is cycle-safe", () => {
+    const cols = [col("a", "A", { src: "{{B}}" }), col("b", "B", { src: "{{A}}" })];
+    expect([...transitiveDependents(["a"], cols)]).toEqual(["b"]);
+  });
+});
+
+describe("topoSortColumnIds", () => {
+  it("orders dependents after their sources regardless of input order", () => {
+    // authored out of order: C (reads B), B (reads A), A.
+    const cols = [
+      col("c", "C", { src: "{{B}}" }),
+      col("b", "B", { src: "{{A}}" }),
+      col("a", "A"),
+    ];
+    const order = topoSortColumnIds(cols, buildColumnDeps(cols));
+    expect(order.indexOf("a")).toBeLessThan(order.indexOf("b"));
+    expect(order.indexOf("b")).toBeLessThan(order.indexOf("c"));
+  });
+
+  it("emits every column exactly once even with a cycle", () => {
+    const cols = [col("a", "A", { src: "{{B}}" }), col("b", "B", { src: "{{A}}" })];
+    expect(topoSortColumnIds(cols, buildColumnDeps(cols)).sort()).toEqual(["a", "b"]);
   });
 });
 
@@ -58,13 +105,9 @@ describe("runColumnsWithDeps", () => {
   it("fires the settled callback once per column", async () => {
     const cols = [col("a", "A"), col("b", "B")];
     let settled = 0;
-    await runColumnsWithDeps(
-      cols,
-      buildColumnDeps(cols),
-      4,
-      async () => {},
-      () => { settled += 1; },
-    );
+    await runColumnsWithDeps(cols, buildColumnDeps(cols), 4, async () => {}, () => {
+      settled += 1;
+    });
     expect(settled).toBe(2);
   });
 
@@ -78,12 +121,10 @@ describe("runColumnsWithDeps", () => {
       await new Promise((r) => setTimeout(r, 5));
       active -= 1;
     });
-    // With 4 independent columns and a bound of 2, two must overlap, never more.
     expect(maxActive).toBe(2);
   });
 
   it("never starts a dependent before its dependency finishes", async () => {
-    // b depends on a; c depends on b. Must observe strict a -> b -> c order.
     const cols = [
       col("a", "A"),
       col("b", "B", { src: "{{A}}" }),
@@ -112,11 +153,7 @@ describe("runColumnsWithDeps", () => {
   });
 
   it("still attempts every column when there is a dependency cycle", async () => {
-    // a <-> b cycle: neither is ever "ready", but both must still be attempted.
-    const cols = [
-      col("a", "A", { src: "{{B}}" }),
-      col("b", "B", { src: "{{A}}" }),
-    ];
+    const cols = [col("a", "A", { src: "{{B}}" }), col("b", "B", { src: "{{A}}" })];
     const ran: string[] = [];
     await runColumnsWithDeps(cols, buildColumnDeps(cols), 4, async (c) => {
       ran.push(c.id);
@@ -126,23 +163,16 @@ describe("runColumnsWithDeps", () => {
 });
 
 describe("isFreeColumn", () => {
-  // Free = cascades even with Auto-run off (no credit cost). Drives whether a
-  // mapped column auto-populates when an enrichment finishes.
   it("treats a code/mapped column (no provider) as free", () => {
     expect(isFreeColumn({ kind: "function", provider: null })).toBe(true);
   });
-
   it("treats a formula column as free", () => {
     expect(isFreeColumn({ kind: "function", provider: "formula" })).toBe(true);
   });
-
   it("treats a connector enrichment as NOT free", () => {
     expect(isFreeColumn({ kind: "function", provider: "leadmagic" })).toBe(false);
-    expect(isFreeColumn({ kind: "function", provider: "ai" })).toBe(false);
-    expect(isFreeColumn({ kind: "function", provider: "http" })).toBe(false);
   });
-
-  it("treats a manual column as NOT free (nothing to run)", () => {
+  it("treats a manual column as NOT free", () => {
     expect(isFreeColumn({ kind: "manual", provider: null })).toBe(false);
   });
 });

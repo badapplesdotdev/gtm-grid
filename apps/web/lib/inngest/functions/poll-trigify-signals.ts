@@ -18,6 +18,8 @@ import { Effect, ManagedRuntime } from "effect";
 import { inngest } from "../client";
 import { onFailure } from "../on-failure";
 import { captureServerException } from "../../posthog-server";
+import { enrichRowInDepOrder } from "../enrich-row";
+import { toStepRunner } from "./process-webhook-record";
 
 /** Build a per-run Effect runtime (no member identity) and run one program. */
 async function withRuntime<A>(run: (exec: <X>(e: Effect.Effect<X, unknown, AppServices>) => Promise<X>) => Promise<A>): Promise<A> {
@@ -109,8 +111,14 @@ export const processSignalBinding = inngest.createFunction(
         exec(
           Effect.gen(function* () {
             const svc = yield* SignalService;
-            const added = yield* svc.syncForWorker(bindingId);
-            return { added, error: null as string | null };
+            const r = yield* svc.syncForWorker(bindingId);
+            return {
+              added: r.added,
+              rowIds: r.rowIds,
+              tableId: r.tableId,
+              workspaceId: r.workspaceId,
+              error: null as string | null,
+            };
           }).pipe(
             // Isolate per-binding failures so one bad binding can't abort the
             // batch — but make them VISIBLE (log + surface in the step output)
@@ -125,13 +133,76 @@ export const processSignalBinding = inngest.createFunction(
               captureServerException(e, {
                 properties: { source: "signals", phase: "sync", binding_id: bindingId, tag },
               });
-              return Effect.succeed({ added: 0, error: `${tag}: ${message}` });
+              return Effect.succeed({
+                added: 0,
+                rowIds: [] as readonly string[],
+                tableId: null as string | null,
+                workspaceId: null as string | null,
+                error: `${tag}: ${message}`,
+              });
             }),
           ),
         ),
       ),
     );
-    return { bindingId, ...result };
+    const enrichEvents = signalEnrichEvents(result);
+    if (enrichEvents.length > 0) await step.sendEvent("enqueue-signal-enrich", enrichEvents);
+    return { bindingId, added: result.added, error: result.error };
+  },
+);
+
+/** The new-row payload a signal sync returns (table/workspace null on failure). */
+interface SignalSyncRows {
+  readonly rowIds: readonly string[];
+  readonly tableId: string | null;
+  readonly workspaceId: string | null;
+}
+
+/**
+ * Build the `signals/row.inserted` events to enrich each row a signal sync just
+ * inserted — one per row, idempotent by rowId (dedupes a replayed enqueue),
+ * handled by {@link enrichSignalRow}. Signal rows previously landed un-enriched;
+ * this gives them the same dependency-ordered cascade webhook rows get. Returns
+ * an empty array when nothing was inserted (the caller skips the sendEvent).
+ */
+export function signalEnrichEvents(
+  result: SignalSyncRows,
+): Array<{ name: "signals/row.inserted"; data: { tableId: string; workspaceId: string; rowId: string }; id: string }> {
+  const { rowIds, tableId, workspaceId } = result;
+  if (rowIds.length === 0 || !tableId || !workspaceId) return [];
+  return rowIds.map((rowId) => ({
+    name: "signals/row.inserted" as const,
+    data: { tableId, workspaceId, rowId },
+    id: `sig-enrich:${rowId}`,
+  }));
+}
+
+/**
+ * Enrich one signal-inserted row: run its table's function columns in `{{ref}}`
+ * dependency order (same cascade as the webhook enricher), each in its own
+ * durable step so a mid-cascade failure retries only the remaining columns.
+ */
+export const enrichSignalRow = inngest.createFunction(
+  {
+    id: "enrich-signal-row",
+    concurrency: [
+      { scope: "account", key: '"signals-enrich"', limit: 50 },
+      { key: "event.data.workspaceId", limit: 4 },
+    ],
+    retries: 2,
+    onFailure,
+    triggers: [{ event: "signals/row.inserted" }],
+  },
+  async ({ event, step }) => {
+    const d = event.data as { tableId?: string; workspaceId?: string; rowId?: string };
+    if (!d.tableId || !d.workspaceId || !d.rowId) return { enriched: false as const };
+    const ran = await enrichRowInDepOrder(toStepRunner(step), {
+      tableId: d.tableId,
+      workspaceId: d.workspaceId,
+      rowId: d.rowId,
+      keyPrefix: `sig:${d.rowId}`,
+    });
+    return { rowId: d.rowId, enriched: true as const, ran };
   },
 );
 
@@ -176,8 +247,14 @@ export const warmUpSignalBinding = inngest.createFunction(
           exec(
             Effect.gen(function* () {
               const svc = yield* SignalService;
-              const added = yield* svc.syncForWorker(bindingId);
-              return { added, error: null as string | null };
+              const r = yield* svc.syncForWorker(bindingId);
+              return {
+                added: r.added,
+                rowIds: r.rowIds,
+                tableId: r.tableId,
+                workspaceId: r.workspaceId,
+                error: null as string | null,
+              };
             }).pipe(
               Effect.catchAll((e) => {
                 const tag = (e as { _tag?: string })?._tag ?? "Error";
@@ -186,13 +263,21 @@ export const warmUpSignalBinding = inngest.createFunction(
                 captureServerException(e, {
                   properties: { source: "signals", phase: "warm-up", binding_id: bindingId, attempt, tag },
                 });
-                return Effect.succeed({ added: 0, error: `${tag}: ${message}` });
+                return Effect.succeed({
+                  added: 0,
+                  rowIds: [] as readonly string[],
+                  tableId: null as string | null,
+                  workspaceId: null as string | null,
+                  error: `${tag}: ${message}`,
+                });
               }),
             ),
           ),
         ),
       );
       if (result.added > 0) {
+        const enrichEvents = signalEnrichEvents(result);
+        if (enrichEvents.length > 0) await step.sendEvent("warm-up-enrich", enrichEvents);
         return { bindingId, added: result.added, attempts: attempt + 1 };
       }
     }
