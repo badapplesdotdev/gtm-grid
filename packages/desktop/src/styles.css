@@ -711,6 +711,10 @@ html, body, #root {
   flex: 1;
   overflow: auto;
   position: relative;
+  /* Match the cell surface so the brief unrendered area a momentum scroll can
+     expose (the virtualization spacer) blends in instead of flashing the page
+     background — softens any residual paint-in during a hard fling. */
+  background: var(--surface);
 }
 
 .grid-wrap::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -922,7 +926,8 @@ html, body, #root {
   vertical-align: middle;
   padding: 0;
   background: var(--surface);
-  transition: background 0.08s;
+  /* No background transition: the hover/selection tint must track the cursor
+     instantly. An 0.08s fade reads as lag/smear when the pointer sweeps rows. */
   overflow: hidden;
   position: relative;
 }
