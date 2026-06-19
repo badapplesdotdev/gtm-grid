@@ -1,5 +1,12 @@
 # @gtmgrid/auth
 
+## 0.18.0
+
+### Patch Changes
+
+- @gtmgrid/db@0.18.0
+- @gtmgrid/email@0.18.0
+
 ## 0.17.4
 
 ### Patch Changes
