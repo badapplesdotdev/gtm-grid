@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { MinimalColumn } from "@gtmgrid/services/columns";
-import { cascadeDependents, runColumnsInDepOrder, type RunOne } from "./gridRun";
+import { cascadeDependents, cellIsRunning, runColumnsInDepOrder, type RunOne } from "./gridRun";
 
 function col(id: string, name: string, params: Record<string, unknown> = {}): MinimalColumn {
   return { id, name, kind: "function", provider: null, params };
@@ -122,3 +122,30 @@ function runFrom(calls: Array<{ id: string; force: boolean; rowIds?: string[] }>
 function recorder2() {
   return { calls: [] as Array<{ id: string; force: boolean; rowIds?: string[] }>, startOrder: [] as string[] };
 }
+
+describe("cellIsRunning (column-run loading state)", () => {
+  const NONE = new Set<string>();
+
+  it("is true when a per-cell run is in flight (regardless of column run)", () => {
+    expect(cellIsRunning(new Set(["r1:c1"]), null, "r1", "c1", "done")).toBe(true);
+  });
+
+  it("during a column run, shows loading for every UNRESOLVED cell in that column", () => {
+    for (const status of [undefined, "empty", "pending", "running"]) {
+      expect(cellIsRunning(NONE, "c1", "r1", "c1", status)).toBe(true);
+    }
+  });
+
+  it("during a column run, KEEPS done/error cells (no flicker back to a spinner)", () => {
+    expect(cellIsRunning(NONE, "c1", "r1", "c1", "done")).toBe(false);
+    expect(cellIsRunning(NONE, "c1", "r1", "c1", "error")).toBe(false);
+  });
+
+  it("does not touch cells in OTHER columns", () => {
+    expect(cellIsRunning(NONE, "c1", "r1", "c2", undefined)).toBe(false);
+  });
+
+  it("is false when nothing is running", () => {
+    expect(cellIsRunning(NONE, null, "r1", "c1", undefined)).toBe(false);
+  });
+});

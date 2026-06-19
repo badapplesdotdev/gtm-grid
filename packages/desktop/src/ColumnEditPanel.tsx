@@ -316,6 +316,7 @@ export function ColumnEditPanel({
   rows,
   onClose,
   onSaved,
+  onError,
   onOpenExtension,
 }: {
   column: Column;
@@ -328,6 +329,8 @@ export function ColumnEditPanel({
   /** Fired after a successful save; `run` asks the parent to run the column
    *  with that scope (the Save split-button's choice). */
   onSaved: (run?: { force?: boolean; rowIds?: string[] }) => void;
+  /** Surface a background save failure after the rail has already closed. */
+  onError?: (message: string) => void;
   /** Open the provider's extension panel (local only — manage the API key). */
   onOpenExtension?: (providerId: string) => void;
 }) {
@@ -481,9 +484,12 @@ export function ColumnEditPanel({
         await gridApi.updateColumn(column.id, patch);
         onSaved(runScope);
       } catch (e) {
-        // The rail is already closed — log rather than strand the user. A future
-        // toast could surface this; the failed run also shows per-cell errors.
+        // The rail is already closed, so route the failure to the grid's inline
+        // error banner (not just the console) — otherwise a rejected save looks
+        // like it succeeded.
+        const message = e instanceof Error ? e.message : "Failed to save column";
         console.error("Failed to save column:", e);
+        onError?.(message);
       }
     })();
   };

@@ -30,6 +30,7 @@ import { GridColSpacer } from "./GridColSpacer";
 import { type PresenceUser, presenceCellKey } from "./gridPresence";
 import type { ActiveCell } from "./useGridKeyboardNav";
 import type { ColumnWindow } from "./useColumnWindow";
+import { cellIsRunning } from "./gridRun";
 
 /** Cross-cutting interaction state shared by every cell in the row. */
 export interface GridRowInteraction {
@@ -141,15 +142,7 @@ function GridRowInner({
             }
             isAnchor={!!sel && sel.anchor.r === rowIdx && sel.anchor.c === vc.index}
             isActiveCell={isActiveCell}
-            running={
-              runningCells.has(`${row.id}:${col.id}`) ||
-              // A column-level run is in flight: show its unresolved cells as
-              // loading right away (and keep done/error cells showing their
-              // result, so a re-run never flickers finished cells back to a
-              // spinner). Per-cell `status: "running"` from realtime refines this.
-              (runningColId === col.id &&
-                (!cell || (cell.status !== "done" && cell.status !== "error")))
-            }
+            running={cellIsRunning(runningCells, runningColId, row.id, col.id, cell?.status)}
             waiting={waitingByCol.has(col.id)}
             editSignal={isActiveCell ? interaction.editSignal : 0}
             editSeed={isActiveCell ? interaction.getEditSeed() : undefined}

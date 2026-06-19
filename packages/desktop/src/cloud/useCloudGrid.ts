@@ -1294,12 +1294,18 @@ export function useCloudGridMutations() {
   // realtime broadcast was unconfigured or dropped. Invalidating the paged key
   // too makes every mutation authoritatively reflect, broadcast or not.
   const refresh = useCallback(
-    (tableId: string) =>
+    (tableId: string, opts?: { refetchType?: "active" | "none" }) =>
       qc.invalidateQueries({
         predicate: (q) =>
           q.queryKey[0] === "grid" &&
           (q.queryKey[1] === "table" || q.queryKey[1] === "tablePaged") &&
           q.queryKey[2] === tableId,
+        // `refetchType: "none"` marks the cache stale WITHOUT an immediate
+        // refetch — used after an optimistic column save so a slow background
+        // refetch can't land a pre-run snapshot that clobbers the cells a
+        // just-started run is streaming in via realtime. A natural refetch
+        // (window focus / staleTime) reconciles later.
+        ...(opts?.refetchType ? { refetchType: opts.refetchType } : {}),
       }),
     [qc],
   );
@@ -1530,7 +1536,7 @@ export function useCloudGridMutations() {
         // `column.insert` echo already show the column instantly. Reconcile in the
         // BACKGROUND so the save resolves immediately instead of blocking on a
         // full multi-page refetch (the bulk of the "add column takes 20–30s").
-        void refresh(tableId);
+        void refresh(tableId, { refetchType: "none" });
         return res;
       } catch (e) {
         rollback();
@@ -1630,7 +1636,7 @@ export function useCloudGridMutations() {
         // Optimistic `column.update` + the realtime echo already reflect the edit;
         // reconcile in the BACKGROUND so saving a mapped field returns instantly
         // instead of blocking on a full multi-page refetch.
-        void refresh(tableId);
+        void refresh(tableId, { refetchType: "none" });
       }
     },
     [beginOptimistic, currentColumn, refresh],

@@ -823,6 +823,7 @@ export function CloudGrid({
             setEditCol(null);
             if (run) void runColumn(colId, run);
           }}
+          onError={setActionError}
         />
       )}
     </ColumnAuthoringApiProvider>
