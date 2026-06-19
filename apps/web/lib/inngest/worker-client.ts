@@ -100,6 +100,10 @@ export const workerClient: CloudClientLike = {
  */
 export const WORKER_REFS: CloudFunctionRefs = {
   getTable: "/api/worker/getTable",
+  // Scoped + keyset reads so a cloud column run never loads a whole 50k-row
+  // grid: a row-scoped run fetches only its rows, a full run streams pages.
+  getTableForRows: "/api/worker/getTableForRows",
+  getTablePage: "/api/worker/getTablePage",
   setCell: "/api/worker/setCell",
   setCellStatus: "/api/worker/setCellStatus",
   // Batched cell writes: the cloud store buffers terminal writes and flushes

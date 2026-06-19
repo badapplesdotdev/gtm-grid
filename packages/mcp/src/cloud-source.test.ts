@@ -90,6 +90,33 @@ function fakeClient(grid: FakeGrid): {
           cells: grid.cells,
         };
       }
+      if (name === "/api/worker/getTablePage") {
+        // Keyset page over rows in position order; cursor is the next start index.
+        const ordered = [...grid.rows].sort(
+          (a, b) => (a.position as number) - (b.position as number),
+        );
+        const start = (args.cursor as number | null) ?? 0;
+        const limit = (args.limit as number) ?? 200;
+        const pageRows = ordered.slice(start, start + limit);
+        const ids = new Set(pageRows.map((r) => r._id as string));
+        const nextStart = start + limit;
+        return {
+          table: { workspaceId: "wks_1" },
+          columns: grid.columns,
+          rows: pageRows,
+          cells: grid.cells.filter((c) => ids.has(c.rowId)),
+          nextCursor: nextStart < ordered.length ? nextStart : null,
+        };
+      }
+      if (name === "/api/worker/getTableForRows") {
+        const ids = new Set((args.rowIds as string[]) ?? []);
+        return {
+          table: { workspaceId: "wks_1" },
+          columns: grid.columns,
+          rows: grid.rows.filter((r) => ids.has(r._id as string)),
+          cells: grid.cells.filter((c) => ids.has(c.rowId)),
+        };
+      }
       if (name === "/api/worker/listTables") {
         // The project-wide list route returns tables with counts; echo a
         // two-table project so the test asserts the source returns ALL of them.
@@ -222,6 +249,47 @@ describe("makeCloudSource.getTable — reads the active cloud table from Supabas
   });
 });
 
+describe("makeCloudSource.getTable — bounded keyset paging (scale)", () => {
+  const bigGrid = (n: number): FakeGrid => ({
+    columns: [
+      { _id: "c1", tableId: "t1", name: "Name", type: "text", kind: "manual", provider: null, method: null, code: null, params: {}, position: 0, createdAt: 0 },
+    ],
+    rows: Array.from({ length: n }, (_, i) => ({ _id: `r${i}`, tableId: "t1", position: i, createdAt: i })),
+    cells: Array.from({ length: n }, (_, i) => ({
+      rowId: `r${i}`, columnId: "c1", value: `v${i}`, status: "done", error: null, updatedAt: 1,
+    })),
+  });
+
+  it("reads via getTablePage (server-paged) and NEVER the full getTable", async () => {
+    const { deps, client } = depsFor(bigGrid(5));
+    await makeCloudSource(CTX, deps).getTable("", { limit: 2, offset: 0 });
+    expect(client.queries.some((q) => q.name === "/api/worker/getTable")).toBe(false);
+    expect(client.queries.some((q) => q.name === "/api/worker/getTablePage")).toBe(true);
+  });
+
+  it("returns only the requested [offset, offset+limit) window", async () => {
+    const { deps } = depsFor(bigGrid(5));
+    const out = await makeCloudSource(CTX, deps).getTable("", { limit: 2, offset: 1 });
+    expect(out.rows.map((r) => r._id)).toEqual(["r1", "r2"]);
+    expect(out.returned).toBe(2);
+    expect(out.offset).toBe(1);
+    expect(out.truncated).toBe(true); // rows remain past the window
+  });
+
+  it("WALKS multiple keyset pages to reach a deep offset window", async () => {
+    // 250 rows, default page size 200 → reaching offset 200 needs a second page.
+    const { deps, client } = depsFor(bigGrid(250));
+    const out = await makeCloudSource(CTX, deps).getTable("", { limit: 100, offset: 200 });
+    expect(out.rows.map((r) => r._id)).toEqual(
+      Array.from({ length: 50 }, (_, i) => `r${200 + i}`),
+    );
+    expect(
+      client.queries.filter((q) => q.name === "/api/worker/getTablePage").length,
+    ).toBe(2);
+    expect(out.truncated).toBe(false); // exhausted the table
+  });
+});
+
 describe("makeCloudSource — multi-table addressing (honors the table arg, not just the active table)", () => {
   // A one-column active table; the fake's listTables advertises t1/Leads + t2/Accounts.
   const simpleGrid = (): FakeGrid => ({
@@ -231,8 +299,9 @@ describe("makeCloudSource — multi-table addressing (honors the table arg, not 
     rows: [{ _id: "r1", tableId: "t1", position: 0, createdAt: 0 }],
     cells: [],
   });
+  // get_table now reads via the keyset page endpoint (bounded), not the full grid.
   const getTableCalls = (c: ReturnType<typeof depsFor>["client"]) =>
-    c.queries.filter((q) => q.name === "/api/worker/getTable");
+    c.queries.filter((q) => q.name === "/api/worker/getTablePage");
   const listCalls = (c: ReturnType<typeof depsFor>["client"]) =>
     c.queries.filter((q) => q.name === "/api/worker/listTables");
 

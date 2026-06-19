@@ -84,6 +84,25 @@ describe("schema: indexes recreated + new cells index", () => {
     ]);
   });
 
+  it("adds the rows (table_id, position, created_at, id) ordering index", () => {
+    const names = indexNames(schema.rows);
+    expect(names).toContain("rows_by_table");
+    expect(names).toContain("rows_by_workspace");
+    // The composite that serves the grid's ordered + keyset row loads without
+    // an in-memory sort (perf at 50k rows).
+    expect(names).toContain("rows_by_table_position");
+
+    const idx = getTableConfig(schema.rows).indexes.find(
+      (i) => i.config.name === "rows_by_table_position",
+    );
+    expect(idx?.config.columns.map((c) => (c as { name: string }).name)).toEqual([
+      "table_id",
+      "position",
+      "created_at",
+      "id",
+    ]);
+  });
+
   it("recreates members composite + invitations unique indexes", () => {
     expect(indexNames(schema.members)).toContain("members_by_workspace_user");
     expect(indexNames(schema.invitations)).toContain(

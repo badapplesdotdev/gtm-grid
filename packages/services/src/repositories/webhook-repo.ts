@@ -24,7 +24,7 @@ import {
   matchesUpsertKey,
 } from "@gtmgrid/cloud";
 import { schema } from "@gtmgrid/db";
-import { and, asc, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, or } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
 
@@ -108,6 +108,19 @@ export interface GridRow {
   /** Creation time — carried into the worker getTable grid (engine row docs).
    *  Optional so in-memory fixtures stay terse; the live repo always sets it. */
   readonly createdAt?: number;
+}
+
+/** Keyset cursor over the row `(position, createdAt, id)` total order. */
+export interface WorkerRowCursor {
+  readonly position: number;
+  readonly createdAt: number;
+  readonly id: string;
+}
+
+/** One keyset page of rows plus the cursor to fetch the next (or `null`). */
+export interface WorkerRowPage {
+  readonly rows: readonly GridRow[];
+  readonly nextCursor: WorkerRowCursor | null;
 }
 
 /** A grid cell projection the worker reads/writes. */
@@ -245,6 +258,44 @@ export class WebhookRepo extends Context.Tag("WebhookRepo")<
     readonly listCellsByRow: (
       rowId: string,
     ) => Effect.Effect<readonly GridCell[], WebhookRepoError>;
+    /**
+     * A single COLUMN's cells across a table (served by `cells_by_table_column`)
+     * — for the column-run quota pre-flight, which only inspects the run
+     * column's `done` status. ~one cell per row instead of the full rows×columns
+     * matrix.
+     */
+    readonly listCellsByTableColumn: (
+      tableId: string,
+      columnId: string,
+    ) => Effect.Effect<readonly GridCell[], WebhookRepoError>;
+    /**
+     * Rows restricted to a given id set (position order) — for the scoped
+     * `getTableForRows` worker read. Bounded by `rowIds.length`, never the whole
+     * table. An empty set returns `[]` without touching the database.
+     */
+    readonly listRowsByIds: (
+      rowIds: readonly string[],
+    ) => Effect.Effect<readonly GridRow[], WebhookRepoError>;
+    /**
+     * Cells belonging to a given set of rows — for the scoped `getTableForRows`
+     * worker read (the multi-row analogue of {@link listCellsByRow}). Bounded by
+     * `rowIds.length`; an empty set returns `[]` without a query.
+     */
+    readonly listCellsByRowIds: (
+      rowIds: readonly string[],
+    ) => Effect.Effect<readonly GridCell[], WebhookRepoError>;
+    /**
+     * One keyset PAGE of a table's rows in `(position, createdAt, id)` order —
+     * the worker analogue of `RowRepo.listKeysetByTable`, for the engine's paged
+     * full-column run. Returns at most `limit` rows plus the `nextCursor` to seek
+     * the following page (`null` on the last). Rides `rows_by_table_position`, so
+     * deep pages stay O(limit) with no in-memory sort.
+     */
+    readonly listRowsKeyset: (args: {
+      readonly tableId: string;
+      readonly limit: number;
+      readonly cursor: WorkerRowCursor | null;
+    }) => Effect.Effect<WorkerRowPage, WebhookRepoError>;
     /** The cell at (rowId, columnId), or `None` — for setCell merge. */
     readonly findCell: (
       rowId: string,
@@ -668,6 +719,137 @@ export const WebhookRepoLive: Layer.Layer<WebhookRepo, never, DbClient> =
             catch: fail("cell-by-row list failed"),
           }),
 
+        listCellsByTableColumn: (tableId, columnId) =>
+          UUID_RE.test(tableId) && UUID_RE.test(columnId)
+            ? Effect.tryPromise({
+                try: async () => {
+                  const rows = await db
+                    .select({
+                      id: schema.cells.id,
+                      rowId: schema.cells.rowId,
+                      columnId: schema.cells.columnId,
+                      value: schema.cells.value,
+                      status: schema.cells.status,
+                      error: schema.cells.error,
+                      updatedAt: schema.cells.updatedAt,
+                    })
+                    .from(schema.cells)
+                    .where(
+                      and(
+                        eq(schema.cells.tableId, tableId),
+                        eq(schema.cells.columnId, columnId),
+                      ),
+                    );
+                  return rows;
+                },
+                catch: fail("cells-by-table-column list failed"),
+              })
+            : Effect.succeed([] as readonly GridCell[]),
+
+        listRowsByIds: (rowIds) => {
+          const valid = rowIds.filter((id) => UUID_RE.test(id));
+          return valid.length === 0
+            ? Effect.succeed([] as readonly GridRow[])
+            : Effect.tryPromise({
+                try: async () => {
+                  const rows = await db
+                    .select({
+                      id: schema.rows.id,
+                      tableId: schema.rows.tableId,
+                      position: schema.rows.position,
+                      createdAt: schema.rows.createdAt,
+                    })
+                    .from(schema.rows)
+                    .where(inArray(schema.rows.id, valid))
+                    .orderBy(asc(schema.rows.position));
+                  return rows;
+                },
+                catch: fail("rows-by-ids list failed"),
+              });
+        },
+
+        listCellsByRowIds: (rowIds) => {
+          const valid = rowIds.filter((id) => UUID_RE.test(id));
+          return valid.length === 0
+            ? Effect.succeed([] as readonly GridCell[])
+            : Effect.tryPromise({
+                try: async () => {
+                  const rows = await db
+                    .select({
+                      id: schema.cells.id,
+                      rowId: schema.cells.rowId,
+                      columnId: schema.cells.columnId,
+                      value: schema.cells.value,
+                      status: schema.cells.status,
+                      error: schema.cells.error,
+                      updatedAt: schema.cells.updatedAt,
+                    })
+                    .from(schema.cells)
+                    .where(inArray(schema.cells.rowId, valid));
+                  return rows;
+                },
+                catch: fail("cells-by-row-ids list failed"),
+              });
+        },
+
+        listRowsKeyset: ({ tableId, limit, cursor }) =>
+          !UUID_RE.test(tableId)
+            ? Effect.succeed<WorkerRowPage>({ rows: [], nextCursor: null })
+            : Effect.tryPromise({
+                try: async () => {
+                  const base = eq(schema.rows.tableId, tableId);
+                  // Seek strictly past the cursor in (position, createdAt, id).
+                  const seek =
+                    cursor === null
+                      ? base
+                      : and(
+                          base,
+                          or(
+                            gt(schema.rows.position, cursor.position),
+                            and(
+                              eq(schema.rows.position, cursor.position),
+                              gt(schema.rows.createdAt, cursor.createdAt),
+                            ),
+                            and(
+                              eq(schema.rows.position, cursor.position),
+                              eq(schema.rows.createdAt, cursor.createdAt),
+                              gt(schema.rows.id, cursor.id),
+                            ),
+                          ),
+                        );
+                  const fetched = await db
+                    .select({
+                      id: schema.rows.id,
+                      tableId: schema.rows.tableId,
+                      position: schema.rows.position,
+                      createdAt: schema.rows.createdAt,
+                    })
+                    .from(schema.rows)
+                    .where(seek)
+                    .orderBy(
+                      asc(schema.rows.position),
+                      asc(schema.rows.createdAt),
+                      asc(schema.rows.id),
+                    )
+                    .limit(limit + 1);
+                  const hasMore = fetched.length > limit;
+                  const page = hasMore ? fetched.slice(0, limit) : fetched;
+                  const last = page[page.length - 1];
+                  return {
+                    rows: page,
+                    nextCursor:
+                      hasMore && last !== undefined
+                        ? {
+                            position: last.position,
+                            createdAt: last.createdAt,
+                            id: last.id,
+                          }
+                        : null,
+                  } satisfies WorkerRowPage;
+                },
+                catch: fail("row keyset page failed"),
+              }),
+
         findCell: (rowId, columnId) =>
           Effect.tryPromise({
             try: async () => {
@@ -1081,6 +1263,63 @@ export const webhookRepoLayer = (fixtures: {
       ),
     listCellsByRow: (rowId) =>
       Effect.succeed(cells.filter((c) => c.rowId === rowId)),
+    listCellsByTableColumn: (tableId, columnId) =>
+      Effect.succeed(
+        cells.filter((c) => {
+          if (c.columnId !== columnId) return false;
+          const r = rows.find((row) => row.id === c.rowId);
+          return r?.tableId === tableId;
+        }),
+      ),
+    listRowsByIds: (rowIds) => {
+      const set = new Set(rowIds);
+      return Effect.succeed(
+        [...rows]
+          .filter((r) => set.has(r.id))
+          .sort((a, b) => a.position - b.position),
+      );
+    },
+    listCellsByRowIds: (rowIds) => {
+      const set = new Set(rowIds);
+      return Effect.succeed(cells.filter((c) => set.has(c.rowId)));
+    },
+    listRowsKeyset: ({ tableId, limit, cursor }) =>
+      Effect.succeed(
+        (() => {
+          const ordered = [...rows]
+            .filter((r) => r.tableId === tableId)
+            .sort(
+              (a, b) =>
+                a.position - b.position ||
+                (a.createdAt ?? 0) - (b.createdAt ?? 0) ||
+                (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+            );
+          const after =
+            cursor === null
+              ? ordered
+              : ordered.filter((r) => {
+                  const c = (r.createdAt ?? 0) - cursor.createdAt;
+                  if (r.position !== cursor.position)
+                    return r.position > cursor.position;
+                  if (c !== 0) return c > 0;
+                  return r.id > cursor.id;
+                });
+          const page = after.slice(0, limit);
+          const hasMore = after.length > limit;
+          const last = page[page.length - 1];
+          return {
+            rows: page,
+            nextCursor:
+              hasMore && last !== undefined
+                ? {
+                    position: last.position,
+                    createdAt: last.createdAt ?? 0,
+                    id: last.id,
+                  }
+                : null,
+          } satisfies WorkerRowPage;
+        })(),
+      ),
     findCell: (rowId, columnId) =>
       Effect.succeed(
         Option.fromNullable(
