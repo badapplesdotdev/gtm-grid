@@ -42,6 +42,10 @@ export interface GridRowInteraction {
   readonly presenceByCell: ReadonlyMap<string, readonly PresenceUser[]> | undefined;
   readonly flashCell: string | null;
   readonly runningCells: ReadonlySet<string>;
+  /** The column currently running via a column-level run (header / save & run),
+   *  or null. Its not-yet-resolved cells render a loading state immediately —
+   *  before the per-cell `status: "running"` realtime patches arrive. */
+  readonly runningColId: string | null;
   readonly waitingByCol: ReadonlyMap<string, string[]>;
 }
 
@@ -84,7 +88,7 @@ function GridRowInner({
   interaction,
   handlers,
 }: GridRowProps) {
-  const { selRect, sel, activeCell, runningCells, waitingByCol, presenceByCell } = interaction;
+  const { selRect, sel, activeCell, runningCells, runningColId, waitingByCol, presenceByCell } = interaction;
   return (
     <tr
       role="row"
@@ -137,7 +141,15 @@ function GridRowInner({
             }
             isAnchor={!!sel && sel.anchor.r === rowIdx && sel.anchor.c === vc.index}
             isActiveCell={isActiveCell}
-            running={runningCells.has(`${row.id}:${col.id}`)}
+            running={
+              runningCells.has(`${row.id}:${col.id}`) ||
+              // A column-level run is in flight: show its unresolved cells as
+              // loading right away (and keep done/error cells showing their
+              // result, so a re-run never flickers finished cells back to a
+              // spinner). Per-cell `status: "running"` from realtime refines this.
+              (runningColId === col.id &&
+                (!cell || (cell.status !== "done" && cell.status !== "error")))
+            }
             waiting={waitingByCol.has(col.id)}
             editSignal={isActiveCell ? interaction.editSignal : 0}
             editSeed={isActiveCell ? interaction.getEditSeed() : undefined}

@@ -1526,7 +1526,11 @@ export function useCloudGridMutations() {
           params: body.params ?? {},
           id,
         });
-        await refresh(tableId);
+        // The optimistic patch (client id == persisted id) AND the realtime
+        // `column.insert` echo already show the column instantly. Reconcile in the
+        // BACKGROUND so the save resolves immediately instead of blocking on a
+        // full multi-page refetch (the bulk of the "add column takes 20–30s").
+        void refresh(tableId);
         return res;
       } catch (e) {
         rollback();
@@ -1623,7 +1627,10 @@ export function useCloudGridMutations() {
         rollback?.();
         throw e;
       } finally {
-        await refresh(tableId);
+        // Optimistic `column.update` + the realtime echo already reflect the edit;
+        // reconcile in the BACKGROUND so saving a mapped field returns instantly
+        // instead of blocking on a full multi-page refetch.
+        void refresh(tableId);
       }
     },
     [beginOptimistic, currentColumn, refresh],

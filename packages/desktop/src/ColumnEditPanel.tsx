@@ -402,7 +402,9 @@ export function ColumnEditPanel({
     return out;
   });
   const [aiProviderList, setAiProviderList] = useState<AiProviderInfo[]>([]);
-  const [saving, setSaving] = useState(false);
+  // The rail now closes instantly on save (persist + run happen in the
+  // background), so there's no in-rail "Saving…" state to track.
+  const saving = false;
   const [err, setErr] = useState("");
 
   // ── Account / credential status (connector columns with auth) ──
@@ -461,25 +463,29 @@ export function ColumnEditPanel({
     return patch;
   };
 
-  const save = async (run?: { force?: boolean; rowIds?: "first10" | "all" }) => {
+  const save = (run?: { force?: boolean; rowIds?: "first10" | "all" }) => {
     if (!name.trim()) { setErr("Column name is required"); return; }
-    setSaving(true);
-    setErr("");
-    try {
-      await gridApi.updateColumn(column.id, buildPatch());
-      onSaved(
-        run
-          ? {
-              force: run.force,
-              rowIds: run.rowIds === "first10" ? rows.slice(0, 10).map((r) => r.id) : undefined,
-            }
-          : undefined,
-      );
-      onClose();
-    } catch (e) {
-      setErr((e as Error)?.message ?? "Failed to save");
-      setSaving(false);
-    }
+    const patch = buildPatch();
+    const runScope = run
+      ? {
+          force: run.force,
+          rowIds: run.rowIds === "first10" ? rows.slice(0, 10).map((r) => r.id) : undefined,
+        }
+      : undefined;
+    // Dismiss the rail IMMEDIATELY. The column already exists in the grid and its
+    // cells render a loading state while the run fills them, so the user never
+    // waits on the rail: persist the config + kick off the run in the background.
+    onClose();
+    void (async () => {
+      try {
+        await gridApi.updateColumn(column.id, patch);
+        onSaved(runScope);
+      } catch (e) {
+        // The rail is already closed — log rather than strand the user. A future
+        // toast could surface this; the failed run also shows per-cell errors.
+        console.error("Failed to save column:", e);
+      }
+    })();
   };
 
   const TypePicker = (

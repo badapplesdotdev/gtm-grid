@@ -614,22 +614,30 @@ export function CloudGrid({
   };
   const promoteCreate = async (path: string[], label: string) => {
     if (!detail) return;
+    const srcName = detail.columnName;
+    // Dismiss the cell-details drawer immediately — the new column appears in the
+    // grid with its cells loading while the run (below) fills them.
+    setDetail(null);
     const id = await addColumn(tableId, {
       name: uniqueColName(label),
       type: "text",
       code: extractCode(path),
-      params: { src: `{{${detail.columnName}}}` },
+      params: { src: `{{${srcName}}}` },
     });
     await runColumn(String(id)).catch(() => {});
   };
   const promoteMap = async (path: string[], targetId: string) => {
     if (!detail) return;
+    const srcName = detail.columnName;
+    // Dismiss the cell-details drawer immediately; the mapped column's cells show
+    // a loading state until the run populates them.
+    setDetail(null);
     await updateColumn(tableId, targetId as Id<"columns">, {
       kind: "function",
       provider: null,
       method: null,
       code: extractCode(path),
-      params: { src: `{{${detail.columnName}}}` },
+      params: { src: `{{${srcName}}}` },
     });
     await runColumn(targetId).catch(() => {});
   };
