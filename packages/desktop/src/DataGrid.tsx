@@ -27,6 +27,7 @@ import { missingInputs } from "./columnInputs";
 import type { Cell, Column, FullTable } from "./api";
 import { VirtualGridBody } from "./VirtualGridBody";
 import { useColumnWindow } from "./useColumnWindow";
+import { useAdaptiveOverscan } from "./useAdaptiveOverscan";
 import { GridColSpacer } from "./GridColSpacer";
 import { GridRow, type GridRowHandlers, type GridRowInteraction } from "./GridRow";
 import { csvFilename, downloadCsv, tableToCsv } from "./csvExport";
@@ -520,6 +521,13 @@ export function DataGrid({
     [kbd.active],
   );
 
+  // Velocity-adaptive virtualization buffers: tiny at rest / slow scroll (cheap
+  // frames + clean resting view), huge during a fast fling so the viewport never
+  // reaches the blank spacer and rows/columns never visibly paint in. Tables run
+  // to the thousands of rows, so the fast-scroll row buffer is deliberately large.
+  const rowOverscan = useAdaptiveOverscan(gridScrollRef, "y", { idle: 8, fast: 100 });
+  const colOverscan = useAdaptiveOverscan(gridScrollRef, "x", { idle: 3, fast: 24 });
+
   // Column virtualization (TRI-3286): window the DATA columns horizontally so a
   // table with hundreds of columns mounts only the visible columns × visible
   // rows. The gutter is the always-present sticky cell rendered once, excluded
@@ -531,6 +539,7 @@ export function DataGrid({
       const col = table.columns[i];
       return col ? c.columnWidth(col.id) : c.minColWidth;
     },
+    overscan: colOverscan,
   });
 
   // Tie lazy paging to the viewport: when scrolled within ~10 rows of the bottom
@@ -1031,6 +1040,7 @@ export function DataGrid({
                 rows={table.rows}
                 scrollRef={gridScrollRef}
                 rowHeight={c.rowHeight}
+                overscan={rowOverscan}
                 colSpan={table.columns.length + 2}
                 columnWindow={columnWindow}
                 renderRow={(row, idx, cw) => (
