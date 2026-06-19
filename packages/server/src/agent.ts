@@ -5,7 +5,7 @@
 // no key storage — the app drives the CLI the user already logged into.
 
 import { spawn, execFile, execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, chmodSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import type { ServerResponse } from "node:http";
 import { join, dirname } from "node:path";
@@ -643,8 +643,10 @@ export function parseAgentCloud(raw: unknown): AgentCloud | undefined {
  * The env the MCP server is spawned with. LOCAL: only `GTMGRID_PROJECT`
  * (byte-identical to before). CLOUD: `GTMGRID_MODE=cloud` plus the threaded
  * apiUrl/token/workspace/project/table so `selectGridEnv` in the MCP resolves a
- * cloud data source. The token rides the ENV, not the config string, so it
- * never appears in a logged command line.
+ * cloud data source. For claude/codex the token rides the ENV on an ephemeral
+ * argv, never touching disk. (Cursor is the exception — it has no inline MCP flag,
+ * so {@link writeCursorMcpConfig} writes this env to a 0600 file it deletes after
+ * the turn.)
  */
 /** A human-approved action, threaded into the resumed turn's MCP env (Phase 2). */
 export interface AgentApproval {
@@ -1104,12 +1106,21 @@ function runCodexOneShot(bin: string, prompt: string, system: string): Promise<{
  *  we drop never touches the user's real projects (or the app bundle). */
 const CURSOR_WORKSPACE = join(CONFIG_DIR, "cursor");
 
+/** Absolute path of the cursor MCP config file. */
+const CURSOR_MCP_CONFIG = join(CURSOR_WORKSPACE, ".cursor", "mcp.json");
+
 /**
  * Write the gtmgrid MCP server into the cursor workspace's `.cursor/mcp.json` so a
  * `cursor-agent` spawned with cwd={@link CURSOR_WORKSPACE} mounts the grid tools.
  * Reuses {@link mcpConfig} (the same `{ mcpServers: { gtmgrid } }` shape claude
  * gets), so the gtmgrid env carries cloud context / permission mode / approval
  * identically. Returns the workspace dir to use as the spawn cwd.
+ *
+ * SECURITY: unlike claude/codex — which pass the gtmgrid env (incl. the cloud
+ * member bearer `GTMGRID_TOKEN`) on an EPHEMERAL argv — cursor-agent has no inline
+ * MCP flag, so the env is written to THIS file on disk. It is therefore created
+ * 0600 (owner-only) inside a 0700 dir, and {@link streamCursor} deletes it once the
+ * turn's child exits, so the token never lingers world-readable.
  */
 export function writeCursorMcpConfig(
   repoRoot: string,
@@ -1119,9 +1130,22 @@ export function writeCursorMcpConfig(
   approval?: AgentApproval,
 ): string {
   const dir = join(CURSOR_WORKSPACE, ".cursor");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "mcp.json"), mcpConfig(repoRoot, project, undefined, cloud, mode, approval));
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(CURSOR_MCP_CONFIG, mcpConfig(repoRoot, project, undefined, cloud, mode, approval), { mode: 0o600 });
+  // `mode` on writeFileSync only applies on CREATE; force it in case the file
+  // already existed (e.g. left 0644 by an older build) so the token is never
+  // group/world-readable.
+  chmodSync(CURSOR_MCP_CONFIG, 0o600);
   return CURSOR_WORKSPACE;
+}
+
+/** Remove the on-disk cursor MCP config (with the cloud token) after a turn. */
+function cleanupCursorMcpConfig(): void {
+  try {
+    unlinkSync(CURSOR_MCP_CONFIG);
+  } catch {
+    /* already gone / never written — fine */
+  }
 }
 
 /** Strip the MCP-server prefix cursor puts on a tool name (`mcp_gtmgrid_<tool>` /
@@ -1208,7 +1232,12 @@ export function streamCursor(
           else if (block.type === "tool_use") {
             const short = cursorToolShort(block.name);
             sse.write({ type: "tool", name: short, raw: block.name, input: block.input ?? {} });
-            if (MUTATING.has(short)) gridDirty = true;
+            // Only a gtmgrid MUTATING tool dirties the grid — mirror claude's
+            // prefix guard so a coincidentally-named non-gtmgrid tool can't force
+            // a spurious refetch. cursor prefixes gtmgrid tools `mcp_gtmgrid_` /
+            // `mcp__gtmgrid__` / `gtmgrid_`.
+            const isGtmgridTool = /^(mcp__?gtmgrid__?|gtmgrid[:_])/i.test(String(block.name));
+            if (isGtmgridTool && MUTATING.has(short)) gridDirty = true;
           }
         }
       } else if (e.type === "user") {
@@ -1244,10 +1273,12 @@ export function streamCursor(
 
   child.on("error", (err) => {
     lifecycle.dispose();
+    cleanupCursorMcpConfig();
     sse.write({ type: "error", message: `Failed to launch cursor-agent: ${err.message}` });
     sse.end();
   });
   child.on("close", (code) => {
+    cleanupCursorMcpConfig(); // remove the on-disk token now the child has exited
     if (code !== 0 && code !== null) {
       sse.write({ type: "error", message: stderr.slice(-400) || `cursor-agent exited ${code}` });
     }
