@@ -63,10 +63,9 @@ interface UseColumnWindowArgs {
   /** Resolve the pixel width of the column at `index`. */
   getColumnWidth: (index: number) => number;
   /**
-   * Columns rendered left/right of the viewport. The X-axis buffer against
-   * windowing latency; the caller drives it with {@link useAdaptiveOverscan} so a
-   * fast horizontal fling gets a big buffer (no blank columns) while a slow
-   * scroll stays cheap.
+   * Columns rendered left/right of the viewport. Kept small (see
+   * {@link VirtualGridBody}'s `overscan`): a wider buffer renders more cells per
+   * scroll step, lengthening the paint-in blank rather than shortening it.
    */
   overscan?: number;
 }

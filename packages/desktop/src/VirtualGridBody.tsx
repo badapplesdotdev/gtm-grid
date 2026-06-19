@@ -39,10 +39,10 @@ interface VirtualGridBodyProps<Row> {
   /** Pixel height of one row (matches the CSS `--row-h` for the density). */
   rowHeight: number;
   /**
-   * Rows rendered above/below the viewport. The caller drives this with
-   * {@link useAdaptiveOverscan} — small at rest, large during a fast fling — so a
-   * momentum scroll never reaches the blank spacer (which would paint rows in)
-   * without making slow scrolling composite a needlessly huge window.
+   * Rows rendered above/below the viewport. Kept SMALL on purpose: the paint-in
+   * lag on a fast scroll is the COST of rendering the newly-windowed rows, so a
+   * bigger buffer renders MORE cells per scroll step and BLANKS LONGER, not less.
+   * The lever that shortens it is cheaper per-cell rendering, not overscan.
    */
   overscan?: number;
   /**
