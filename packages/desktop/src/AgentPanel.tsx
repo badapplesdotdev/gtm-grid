@@ -17,7 +17,7 @@ import { onActivateKey } from "./lib/utils";
 import { capture } from "./analytics";
 import { abortAllRuns, abortRun, tableAbortKey, type AbortControllers } from "./agentAbort";
 
-type AgentKind = "claude" | "codex" | "hermes";
+type AgentKind = "claude" | "codex" | "cursor";
 
 interface ToolCallT {
   name: string;
@@ -109,7 +109,11 @@ function withParts(m: Message): Message {
   return { ...m, tools, parts };
 }
 
-const AGENT_LABEL: Record<AgentKind, string> = { claude: "Claude Code", codex: "Codex", hermes: "Hermes" };
+const AGENT_LABEL: Record<AgentKind, string> = { claude: "Claude", codex: "Codex", cursor: "Cursor" };
+/** The on-PATH binary name for each agent (Cursor's headless CLI is `cursor-agent`). */
+const AGENT_BIN_NAME: Record<AgentKind, string> = { claude: "claude", codex: "codex", cursor: "cursor-agent" };
+/** The subscription/plan name shown once an agent is connected. */
+const AGENT_PLAN: Record<AgentKind, string> = { claude: "Max", codex: "Codex", cursor: "Cursor" };
 
 /**
  * Slash commands the user can type in the chat. Typing `/` at the start of an
@@ -138,7 +142,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
  * `--permission-mode` on the server (packages/server/src/agent.ts). Only the
  * headless-safe modes are offered: in `-p` the "ask" mode can't surface a prompt
  * (stdin is closed), so it's omitted. Bypass is the default — it matches the
- * Codex/Hermes bridges' existing posture and stops non-grid tools (Bash, grep)
+ * Codex/Cursor bridges' existing posture and stops non-grid tools (Bash, grep)
  * from being denied.
  */
 type PermMode = "bypassPermissions" | "auto" | "acceptEdits" | "plan";
@@ -180,10 +184,10 @@ function loadModels(): Record<AgentKind, string> {
     return {
       claude: typeof obj?.claude === "string" ? obj.claude : "",
       codex: typeof obj?.codex === "string" ? obj.codex : "",
-      hermes: typeof obj?.hermes === "string" ? obj.hermes : "",
+      cursor: typeof obj?.cursor === "string" ? obj.cursor : "",
     };
   } catch {
-    return { claude: "", codex: "", hermes: "" };
+    return { claude: "", codex: "", cursor: "" };
   }
 }
 
@@ -206,15 +210,33 @@ const MODEL_OPTIONS: Record<AgentKind, { value: string; label: string }[]> = {
     { value: "o3", label: "o3" },
     { value: "o4-mini", label: "o4-mini" },
   ],
-  // Hermes exposes its models as ACP modelIds (provider:vendor/model).
-  hermes: [
+  // Cursor's model lineup, passed via `cursor-agent --model` (slugs follow
+  // Cursor's documented kebab convention, e.g. `claude-4.6-sonnet`, `composer-2.5`).
+  // "" = the model selected in the Cursor app / `cursor-agent` config (its default).
+  cursor: [
     { value: "", label: "Default" },
-    { value: "openrouter:anthropic/claude-opus-4.8", label: "Opus" },
-    { value: "openrouter:anthropic/claude-sonnet-4.6", label: "Sonnet" },
-    { value: "openrouter:anthropic/claude-haiku-4.5", label: "Haiku" },
+    // Cursor's own models
+    { value: "composer-2.5", label: "Composer 2.5" },
+    { value: "composer-1.5", label: "Composer 1.5" },
+    // Anthropic Claude
+    { value: "claude-4.6-sonnet", label: "Claude 4.6 Sonnet" },
+    { value: "claude-4.6-opus", label: "Claude 4.6 Opus" },
+    { value: "claude-opus-4.8", label: "Claude Opus 4.8" },
+    { value: "claude-fable-5", label: "Claude Fable 5" },
+    { value: "claude-4.5-haiku", label: "Claude 4.5 Haiku" },
+    // OpenAI
+    { value: "gpt-5.2", label: "GPT-5.2" },
+    { value: "gpt-5", label: "GPT-5" },
+    { value: "gpt-5-codex", label: "GPT-5 Codex" },
+    { value: "gpt-5-mini", label: "GPT-5 Mini" },
+    // Google Gemini
+    { value: "gemini-3-pro", label: "Gemini 3 Pro" },
+    { value: "gemini-3-flash", label: "Gemini 3 Flash" },
+    // xAI Grok
+    { value: "grok-4.3", label: "Grok 4.3" },
   ],
 };
-const AGENT_SHORT: Record<AgentKind, string> = { claude: "Claude", codex: "Codex", hermes: "Hermes" };
+const AGENT_SHORT: Record<AgentKind, string> = { claude: "Claude", codex: "Codex", cursor: "Cursor" };
 
 const PROMPTS = [
   "Enrich every row with their Trigify profile and company",
@@ -260,19 +282,23 @@ const IconStop = ({ s = 13 }: { s?: number }) => (
 
 // Brand logomarks for the agent tabs (inline SVG — no network, ships offline).
 const AGENT_LOGO: Record<AgentKind, ReactNode> = {
-  hermes: (
-    <svg className="agent-logo" viewBox="0 0 24 24" fill="none" stroke="#C8A24A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 4v17" />
-      <path d="M12 8c-2.4-2.6-6-3-9-1 2.4 2.2 6 2.6 9 1Z" />
-      <path d="M12 8c2.4-2.6 6-3 9-1-2.4 2.2-6 2.6-9 1Z" />
-      <circle cx="12" cy="4.2" r="1.5" fill="#C8A24A" stroke="none" />
+  // Official Cursor logomark (the faceted cube), centered in a square viewBox so it
+  // sits the same size as the Claude/Codex marks. `currentColor` so it themes.
+  cursor: (
+    <svg className="agent-logo" viewBox="-32.68 0 532.09 532.09" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M457.43,125.94L244.42,2.96c-6.84-3.95-15.28-3.95-22.12,0L9.3,125.94c-5.75,3.32-9.3,9.46-9.3,16.11v247.99c0,6.65,3.55,12.79,9.3,16.11l213.01,122.98c6.84,3.95,15.28,3.95,22.12,0l213.01-122.98c5.75-3.32,9.3-9.46,9.3-16.11v-247.99c0-6.65-3.55-12.79-9.3-16.11h-.01ZM444.05,151.99l-205.63,356.16c-1.39,2.4-5.06,1.42-5.06-1.36v-233.21c0-4.66-2.49-8.97-6.53-11.31L24.87,145.67c-2.4-1.39-1.42-5.06,1.36-5.06h411.26c5.84,0,9.49,6.33,6.57,11.39h-.01Z"
+      />
     </svg>
   ),
+  // Claude Code mark — the Claude sunburst (Anthropic's clay #D97757), not the
+  // Anthropic angular-A wordmark.
   claude: (
-    <svg className="agent-logo" viewBox="0 0 24 24" aria-hidden="true">
+    <svg className="agent-logo" viewBox="0 0 256 257" aria-hidden="true">
       <path
         fill="#D97757"
-        d="M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.541Zm-.3712 10.2456 2.2914-5.9456 2.2914 5.9456Z"
+        d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z"
       />
     </svg>
   ),
@@ -287,16 +313,17 @@ const AGENT_LOGO: Record<AgentKind, ReactNode> = {
 };
 
 const AGENT_MARK: Record<AgentKind, ReactNode> = {
-  hermes: (
-    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#C8A24A" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 4v17" />
-      <path d="M12 8c-2.4-2.6-6-3-9-1 2.4 2.2 6 2.6 9 1Z" />
-      <path d="M12 8c2.4-2.6 6-3 9-1-2.4 2.2-6 2.6-9 1Z" />
+  cursor: (
+    <svg width="11" height="11" viewBox="-32.68 0 532.09 532.09" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M457.43,125.94L244.42,2.96c-6.84-3.95-15.28-3.95-22.12,0L9.3,125.94c-5.75,3.32-9.3,9.46-9.3,16.11v247.99c0,6.65,3.55,12.79,9.3,16.11l213.01,122.98c6.84,3.95,15.28,3.95,22.12,0l213.01-122.98c5.75-3.32,9.3-9.46,9.3-16.11v-247.99c0-6.65-3.55-12.79-9.3-16.11h-.01ZM444.05,151.99l-205.63,356.16c-1.39,2.4-5.06,1.42-5.06-1.36v-233.21c0-4.66-2.49-8.97-6.53-11.31L24.87,145.67c-2.4-1.39-1.42-5.06,1.36-5.06h411.26c5.84,0,9.49,6.33,6.57,11.39h-.01Z"
+      />
     </svg>
   ),
   claude: (
-    <svg width="11" height="11" viewBox="0 0 24 24" aria-hidden="true">
-      <path fill="#D97757" d="M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.541Zm-.3712 10.2456 2.2914-5.9456 2.2914 5.9456Z" />
+    <svg width="11" height="11" viewBox="0 0 256 257" aria-hidden="true">
+      <path fill="#D97757" d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z" />
     </svg>
   ),
   codex: (
@@ -709,8 +736,8 @@ export default function AgentPanel({
   const [models, setModels] = useState<Record<AgentKind, string>>(loadModels);
   // Permission mode (global across agents), persisted. Maps to --permission-mode.
   const [mode, setMode] = useState<PermMode>(loadMode);
-  const [status, setStatus] = useState<{ claude?: AgentStatus; codex?: AgentStatus; hermes?: AgentStatus }>({});
-  const [threads, setThreads] = useState<Record<AgentKind, Message[]>>({ claude: [], codex: [], hermes: [] });
+  const [status, setStatus] = useState<{ claude?: AgentStatus; codex?: AgentStatus; cursor?: AgentStatus }>({});
+  const [threads, setThreads] = useState<Record<AgentKind, Message[]>>({ claude: [], codex: [], cursor: [] });
   const [input, setInput] = useState("");
   // Slash-command menu: open while the composer holds just `/word` (the command
   // name being typed, before any space/argument). `index` is the keyboard cursor.
@@ -720,20 +747,20 @@ export default function AgentPanel({
   const [planView, setPlanView] = useState<string | null>(null);
   // Busy is PER AGENT: a Claude run doesn't disable the Codex composer, and
   // switching tabs shows the busy state of the tab you're viewing.
-  const [busyByAgent, setBusyByAgent] = useState<Record<AgentKind, boolean>>({ claude: false, codex: false, hermes: false });
+  const [busyByAgent, setBusyByAgent] = useState<Record<AgentKind, boolean>>({ claude: false, codex: false, cursor: false });
   const busy = busyByAgent[agent];
   const [collapsed, setCollapsed] = useState(false);
   const [pathInput, setPathInput] = useState("");
   const [connecting, setConnecting] = useState(false);
-  const sessionRef = useRef<Record<AgentKind, string | undefined>>({ claude: undefined, codex: undefined, hermes: undefined });
+  const sessionRef = useRef<Record<AgentKind, string | undefined>>({ claude: undefined, codex: undefined, cursor: undefined });
   // "Start fresh" intent for the next turn. The server resumes the latest native
   // session by default (so continuity survives a Stop/restart with nothing stored
   // here), so a New chat must be signalled explicitly — otherwise an empty
   // sessionRef would just resume the latest thread.
-  const newChatRef = useRef<Record<AgentKind, boolean>>({ claude: false, codex: false, hermes: false });
+  const newChatRef = useRef<Record<AgentKind, boolean>>({ claude: false, codex: false, cursor: false });
   // One in-flight controller PER agent so runs are independent — switching tabs
   // never aborts another agent's live turn (only an unmount / table switch does).
-  const abortRefs = useRef<AbortControllers>({ claude: null, codex: null, hermes: null });
+  const abortRefs = useRef<AbortControllers>({ claude: null, codex: null, cursor: null });
   const scrollRef = useRef<HTMLDivElement>(null);
   // History dropdown: past conversations from the agent's OWN native transcript
   // store (read via the sidecar), NOT a local copy. Opening one loads its messages
@@ -776,7 +803,7 @@ export default function AgentPanel({
     if (!showHistory) return;
     setSessions(null);
     let live = true;
-    if (agent === "hermes") setSessions([]); // Hermes has no native CLI transcript store
+    if (agent === "cursor") setSessions([]); // Cursor's transcript store isn't parsed here (in-session resume only)
     else api.agentSessions(agent).then((r) => live && setSessions(r.sessions)).catch(() => live && setSessions([]));
     const onDoc = (e: MouseEvent) => {
       if (historyRef.current && !historyRef.current.contains(e.target as Node)) setShowHistory(false);
@@ -797,7 +824,7 @@ export default function AgentPanel({
    * adopt its session id so the next turn resumes the CLI's own session. */
   const openSession = async (s: AgentSession) => {
     setShowHistory(false);
-    if (agent === "hermes") return; // Hermes has no native CLI transcript to reopen
+    if (agent === "cursor") return; // Cursor's transcript store isn't parsed here
     try {
       const { messages: msgs } = await api.agentSession(agent, s.id);
       setThreads((t) => ({ ...t, [agent]: (msgs as Message[]).map(withParts) }));
@@ -1025,7 +1052,7 @@ export default function AgentPanel({
             </button>
           </div>
           <div className="agent-rail-sep" />
-          {(["claude", "codex", "hermes"] as AgentKind[]).map((k) => (
+          {(["claude", "codex", "cursor"] as AgentKind[]).map((k) => (
             <button
               key={k}
               className={`agent-rail-btn tab ${status[k]?.installed ? "on" : "off"}${agent === k ? " active" : ""}`}
@@ -1046,7 +1073,7 @@ export default function AgentPanel({
         <div className="agent-resize" onMouseDown={onResizeStart} title="Drag to resize" />
       )}
       <div className="agent-tabs">
-        {(["claude", "codex", "hermes"] as AgentKind[]).map((k) => (
+        {(["claude", "codex", "cursor"] as AgentKind[]).map((k) => (
           <button key={k} className={`agent-tab ${agent === k ? "active" : ""}`} onClick={() => setAgent(k)}>
             <span
               className={`agent-logo-wrap ${status[k]?.installed ? "on" : "off"}`}
@@ -1074,9 +1101,9 @@ export default function AgentPanel({
           <div className="agent-empty-mark"><IconZap s={20} /></div>
           <div className="agent-empty-title">Connect {AGENT_LABEL[agent]}</div>
           <p>
-            {agent === "hermes"
-              ? "Run the local `hermes` binary — gtmgrid drives it over ACP and mounts the grid's tools. This coding-agent path is local-only; no keys stored here. (The remote gateway is for the Hermes AI model provider, not this agent.)"
-              : `Sign in to your ${agent === "claude" ? "Max" : "Codex"} plan in the ${AGENT_LABEL[agent]} CLI — gtmgrid drives the CLI you've already authed. No keys stored.`}
+            {agent === "cursor"
+              ? "Sign in to your Cursor plan with `cursor-agent login` — gtmgrid drives the CLI you've already authed and mounts the grid's tools over MCP. No keys stored."
+              : `Sign in to your ${AGENT_PLAN[agent]} plan in the ${AGENT_LABEL[agent]} CLI — gtmgrid drives the CLI you've already authed. No keys stored.`}
           </p>
           <button className="agent-connect-btn" onClick={() => connect()} disabled={connecting}>
             {connecting ? "Detecting…" : `Detect ${AGENT_LABEL[agent]}`}
@@ -1086,7 +1113,7 @@ export default function AgentPanel({
           <div className="agent-connect-manual">
             <input
               value={pathInput}
-              placeholder={`Path to ${agent} binary`}
+              placeholder={`Path to ${AGENT_BIN_NAME[agent]} binary`}
               onChange={(e) => setPathInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && pathInput.trim() && connect(pathInput.trim())}
               spellCheck={false}
@@ -1096,9 +1123,12 @@ export default function AgentPanel({
             </button>
           </div>
           <p className="agent-connect-hint">
-            Find it with <code>which {agent}</code> in your terminal.{" "}
-            {agent === "hermes" ? (
-              <>Install the Nous Research <code>hermes</code> agent and make sure it's on your <code>PATH</code>.</>
+            Find it with <code>which {AGENT_BIN_NAME[agent]}</code> in your terminal.{" "}
+            {agent === "cursor" ? (
+              <>
+                Or install:{" "}
+                <code>curl https://cursor.com/install -fsS | bash</code>, then <code>cursor-agent login</code>.
+              </>
             ) : (
               <>
                 Or install:{" "}
@@ -1124,7 +1154,7 @@ export default function AgentPanel({
                   </button>
                 ))}
               </div>
-              <span className="agent-plan">{agent === "hermes" ? "Hermes" : `Using your ${agent === "claude" ? "Max" : "Codex"} plan`} · {current?.version}</span>
+              <span className="agent-plan">Using your {AGENT_PLAN[agent]} plan · {current?.version}</span>
             </div>
           ) : (
           <div className="agent-stream" ref={scrollRef}>
