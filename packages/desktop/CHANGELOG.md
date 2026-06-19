@@ -1,5 +1,19 @@
 # @gtmgrid/desktop
 
+## 0.19.0
+
+### Minor Changes
+
+- 4a710f2: feat(agent): replace the Hermes coding agent with Cursor (`cursor-agent`) as the third side-panel AI agent, alongside Claude and Codex. It drives the grid over MCP using your Cursor subscription (`cursor-agent login` once). Hermes is retained as an AI model provider for AI columns. The cloud member token cursor-agent needs is written to an owner-only (0600) MCP config that is deleted after each turn.
+
+### Patch Changes
+
+- f8125f0: fix(connectors): pass sibling field values to dependent dropdowns. A connector dropdown whose option source requires a parent field (e.g. a PlusVibe campaign list that needs `workspace_id`) now receives the in-progress sibling values from the column editor, so it loads instead of failing with a raw upstream 400. The injection is generic — keyed off each source method's own required schema — and surfaces a clear "Select <field> first" prompt when a required parent is still unset.
+- dcaba83: perf(grid): make cloud column save/map feel instant. Saving or mapping a column no longer blocks on a full multi-page refetch (the optimistic patch + realtime echo already reflect it; reconcile happens in the background without an immediate refetch that could clobber a just-started run's cells), the Autumn usage flush is bounded to 2s so a slow billing call can't stall a grid write, and the edit rail / cell-details drawer close immediately. A column run now renders its unresolved cells as loading right away (done/error cells keep their result, so a re-run never flickers finished cells). A background save failure now surfaces in the grid's error banner instead of failing silently.
+  - @gtmgrid/analytics@0.19.0
+  - @gtmgrid/cloud@0.19.0
+  - @gtmgrid/services@0.19.0
+
 ## 0.18.0
 
 ### Minor Changes
