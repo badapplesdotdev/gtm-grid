@@ -21,17 +21,18 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { CellContent, Icon } from "./App";
+import { Icon } from "./App";
 import { FnIcon, type ColumnMeta } from "./FnIcon";
 import { missingInputs } from "./columnInputs";
 import type { Cell, Column, FullTable } from "./api";
 import { VirtualGridBody } from "./VirtualGridBody";
 import { useColumnWindow } from "./useColumnWindow";
 import { GridColSpacer } from "./GridColSpacer";
+import { GridRow, type GridRowHandlers, type GridRowInteraction } from "./GridRow";
 import { csvFilename, downloadCsv, tableToCsv } from "./csvExport";
-import { BotGlyph, PresenceAvatars } from "./PresenceAvatars";
+import { PresenceAvatars } from "./PresenceAvatars";
 import { type GridPresenceView, presenceCellKey } from "./gridPresence";
-import { useGridKeyboardNav, cellDomId } from "./useGridKeyboardNav";
+import { useGridKeyboardNav } from "./useGridKeyboardNav";
 
 /** A `<td>` style that also carries the per-cell presence-ring color variable. */
 type PresenceTdStyle = CSSProperties & { "--presence-color"?: string };
@@ -140,15 +141,49 @@ export interface GridController {
 }
 
 /**
+ * The subset of {@link GridController} that a single cell fires. The memoized
+ * GridRow/GridCell depend on THIS (a referentially-stable bundle) rather than the
+ * whole controller — the controller object is rebuilt every parent render (its
+ * `table` field changes on every realtime flush), so comparing it would re-render
+ * every row on every update. These callbacks, by contrast, are stable, so a flush
+ * that only changes one row's data re-renders exactly that one row.
+ */
+export type CellActions = Pick<
+  GridController,
+  | "setCell"
+  | "runCell"
+  | "clearCell"
+  | "openCellDetails"
+  | "expandCell"
+  | "onActiveCellChange"
+  | "onEditingCellChange"
+  | "canRun"
+>;
+
+/**
  * Optional body override: render the shared toolbar but replace the grid/empty
  * body with custom content (e.g. the local "Pulling results from Trigify…"
  * warming state for a freshly-created, still-empty Trigify table).
  */
 
-type CtxItem =
+export type CtxItem =
   | { label: string; danger?: boolean; disabled?: boolean; onClick: () => void }
   | { separator: true }
   | { header: string };
+
+/** A rectangular cell-range selection over row/column INDICES (anchor + head). */
+export type Sel = {
+  anchor: { r: number; c: number };
+  head: { r: number; c: number };
+};
+
+/** The normalized (min/max) bounds of a {@link Sel}, in row/column indices. */
+export interface SelRect {
+  readonly r1: number;
+  readonly r2: number;
+  readonly c1: number;
+  readonly c2: number;
+}
 
 export function DataGrid({
   controller: c,
@@ -163,6 +198,13 @@ export function DataGrid({
   // The cell briefly flashed after a follow-jump, keyed `${rowId}:${colId}`.
   const [flashCell, setFlashCell] = useState<string | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Clear a pending follow-jump flash on unmount so its trailing setState can't
+  // fire on an unmounted grid (e.g. navigating away mid-flash).
+  useEffect(() => {
+    return () => {
+      if (flashTimer.current !== null) clearTimeout(flashTimer.current);
+    };
+  }, []);
   // Inline header rename (the Clay flow: rename without opening the editor).
   const [renaming, setRenaming] = useState<{ colId: string; draft: string } | null>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -191,6 +233,22 @@ export function DataGrid({
   // Anchor for shift-click range selection (last row toggled via its checkbox).
   const lastClickedRef = useRef<string | null>(null);
 
+  // Render-synced snapshot of the state the lazily-invoked context-menu /
+  // selection handlers need. They read THIS (updated every render, below) so the
+  // handlers themselves stay referentially stable (empty-dep useCallback) — which
+  // is what keeps the memoized `handlers` bundle, and therefore the rows, from
+  // re-rendering on a realtime flush (where `table`/selection identities churn).
+  const snapRef = useRef<{
+    table: FullTable;
+    c: GridController;
+    selectedRows: ReadonlySet<string>;
+    selectedCount: number;
+    selectedIds: string[];
+    selRect: SelRect | null;
+    copySelection: () => void;
+    clearSelection: () => void;
+  }>(undefined as never);
+
   // Selection intersected with the rows that still exist (rows can be deleted
   // out from under a stale selection), in table order.
   const selectedIds = useMemo(
@@ -202,31 +260,28 @@ export function DataGrid({
 
   const clearSelection = useCallback(() => setSelectedRows(new Set()), []);
 
-  const toggleRow = useCallback(
-    (rowId: string, shiftKey: boolean) => {
-      setSelectedRows((prev) => {
-        const next = new Set(prev);
-        const anchor = lastClickedRef.current;
-        if (shiftKey && anchor && anchor !== rowId) {
-          // Add the contiguous range between the anchor and this row.
-          const ids = table.rows.map((r) => r.id);
-          const a = ids.indexOf(anchor);
-          const b = ids.indexOf(rowId);
-          if (a !== -1 && b !== -1) {
-            const [lo, hi] = a < b ? [a, b] : [b, a];
-            for (let i = lo; i <= hi; i++) next.add(ids[i]);
-          }
-        } else if (next.has(rowId)) {
-          next.delete(rowId);
-        } else {
-          next.add(rowId);
+  const toggleRow = useCallback((rowId: string, shiftKey: boolean) => {
+    setSelectedRows((prev) => {
+      const next = new Set(prev);
+      const anchor = lastClickedRef.current;
+      if (shiftKey && anchor && anchor !== rowId) {
+        // Add the contiguous range between the anchor and this row.
+        const ids = snapRef.current.table.rows.map((r) => r.id);
+        const a = ids.indexOf(anchor);
+        const b = ids.indexOf(rowId);
+        if (a !== -1 && b !== -1) {
+          const [lo, hi] = a < b ? [a, b] : [b, a];
+          for (let i = lo; i <= hi; i++) next.add(ids[i]);
         }
-        return next;
-      });
-      lastClickedRef.current = rowId;
-    },
-    [table.rows],
-  );
+      } else if (next.has(rowId)) {
+        next.delete(rowId);
+      } else {
+        next.add(rowId);
+      }
+      return next;
+    });
+    lastClickedRef.current = rowId;
+  }, []);
 
   const toggleAll = useCallback(() => {
     setSelectedRows((prev) => (prev.size > 0 ? new Set() : new Set(table.rows.map((r) => r.id))));
@@ -246,36 +301,34 @@ export function DataGrid({
   // Context-menu items shared by the row gutter and data cells. When the
   // right-clicked row is part of the active selection we act on the whole
   // selection; otherwise we act on just that row.
-  const rowCtxItems = useCallback(
-    (rowId: string, extra: CtxItem[] = []): CtxItem[] => {
-      const inSel = selectedRows.has(rowId) && selectedCount > 0;
-      const ids = inSel ? selectedIds : [rowId];
-      const n = ids.length;
-      const items: CtxItem[] = [];
-      if (c.fnColCount > 0) {
-        items.push({
-          label: inSel ? `Run ${n} selected row${n !== 1 ? "s" : ""}` : "Run this row",
-          disabled: !c.canRun,
-          onClick: () => c.runRows(ids),
-        });
-      }
-      if (selectedCount > 0) items.push({ label: "Clear selection", onClick: clearSelection });
-      items.push(...extra);
+  const rowCtxItems = useCallback((rowId: string, extra: CtxItem[] = []): CtxItem[] => {
+    const { c, selectedRows, selectedCount, selectedIds, clearSelection } = snapRef.current;
+    const inSel = selectedRows.has(rowId) && selectedCount > 0;
+    const ids = inSel ? selectedIds : [rowId];
+    const n = ids.length;
+    const items: CtxItem[] = [];
+    if (c.fnColCount > 0) {
       items.push({
-        label: inSel && n > 1 ? `Delete ${n} selected rows` : "Delete row",
-        danger: true,
-        onClick: () => ids.forEach((id) => c.deleteRow(id)),
+        label: inSel ? `Run ${n} selected row${n !== 1 ? "s" : ""}` : "Run this row",
+        disabled: !c.canRun,
+        onClick: () => c.runRows(ids),
       });
-      return items;
-    },
-    [c, selectedRows, selectedCount, selectedIds, clearSelection],
-  );
+    }
+    if (selectedCount > 0) items.push({ label: "Clear selection", onClick: clearSelection });
+    items.push(...extra);
+    items.push({
+      label: inSel && n > 1 ? `Delete ${n} selected rows` : "Delete row",
+      danger: true,
+      onClick: () => ids.forEach((id) => c.deleteRow(id)),
+    });
+    return items;
+  }, []);
 
   // ── Cell range selection (Clay-style) ──────────────────────────────────
   // Click selects a cell, drag or shift+click extends a rectangular range over
   // row/column INDICES; right-click inside it offers Run N cells / Copy /
   // Clear / Delete rows. Selection is presentation-only local state.
-  const [sel, setSel] = useState<{ anchor: { r: number; c: number }; head: { r: number; c: number } } | null>(null);
+  const [sel, setSel] = useState<Sel | null>(null);
   const dragSelRef = useRef(false);
   // True when a drag extended past its anchor — used to swallow the click that
   // fires on mouseup so it doesn't open a manual cell's inline editor.
@@ -296,7 +349,7 @@ export function DataGrid({
   // Selection indices are only meaningful within one table.
   useEffect(() => setSel(null), [table.id]);
 
-  const selRect = useMemo(() => {
+  const selRect = useMemo<SelRect | null>(() => {
     if (!sel) return null;
     return {
       r1: Math.min(sel.anchor.r, sel.head.r),
@@ -341,7 +394,8 @@ export function DataGrid({
   }, [selRect, copySelection]);
 
   /** The context menu for a multi-cell selection (right-click inside the rect). */
-  const selectionMenuItems = (): CtxItem[] => {
+  const selectionMenuItems = useCallback((): CtxItem[] => {
+    const { selRect, table, c, copySelection } = snapRef.current;
     if (!selRect) return [];
     const rows = table.rows.slice(selRect.r1, selRect.r2 + 1);
     const cols = table.columns.slice(selRect.c1, selRect.c2 + 1);
@@ -350,11 +404,12 @@ export function DataGrid({
       if (col.kind !== "function") continue;
       for (const row of rows) fnCells.push({ rowId: row.id, colId: col.id });
     }
+    const cellCount = (selRect.r2 - selRect.r1 + 1) * (selRect.c2 - selRect.c1 + 1);
     const items: CtxItem[] = [];
     if (c.runCells && fnCells.length > 0) {
       items.push({
         label: `Run ${fnCells.length} cell${fnCells.length !== 1 ? "s" : ""}`,
-        disabled: runDisabled,
+        disabled: !c.canRun,
         onClick: () => c.runCells!(fnCells),
       });
       items.push({ separator: true });
@@ -363,7 +418,7 @@ export function DataGrid({
     items.push(
       { separator: true },
       {
-        label: `Clear ${selCellCount} cell${selCellCount !== 1 ? "s" : ""}`,
+        label: `Clear ${cellCount} cell${cellCount !== 1 ? "s" : ""}`,
         onClick: () => {
           for (const row of rows) for (const col of cols) c.clearCell(row.id, col.id);
           setSel(null);
@@ -379,7 +434,7 @@ export function DataGrid({
       },
     );
     return items;
-  };
+  }, []);
 
   // Follow a member: scroll their cell into view and flash it. Rows are
   // fixed-height so the vertical offset is exact; the horizontal offset sums the
@@ -492,8 +547,10 @@ export function DataGrid({
   );
 
   const runDisabled = !c.canRun;
-  const totalWidth =
-    GUTTER_W + table.columns.reduce((s, col) => s + c.columnWidth(col.id), 0) + ADD_COL_W;
+  const totalWidth = useMemo(
+    () => GUTTER_W + table.columns.reduce((s, col) => s + c.columnWidth(col.id), 0) + ADD_COL_W,
+    [table.columns, c],
+  );
 
   // ── Per-column run telemetry (Clay's header health bar) ────────────────
   // One pass over the rows per table-state change; streaming runs patch cells
@@ -532,6 +589,109 @@ export function DataGrid({
     return m;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [table.columns, columnNameSet, c.columnMeta]);
+
+  // ── Memo seams for the virtualized body (TRI render-perf) ────────────────
+  // Publish this render's snapshot for the stable context-menu handlers above.
+  snapRef.current = {
+    table,
+    c,
+    selectedRows,
+    selectedCount,
+    selectedIds,
+    selRect,
+    copySelection,
+    clearSelection,
+  };
+
+  // A cheap structural signature of the current column window. `columnWindow` is
+  // a fresh object every render (react-virtual), so the memoized <GridRow>
+  // compares THIS string instead: it's stable across a vertical scroll (the
+  // window is unchanged) and only changes on a horizontal scroll. Column WIDTHS
+  // are intentionally absent — `table-layout: fixed` propagates a resized
+  // column's width to body cells from the `<th>`, so a resize never needs the
+  // rows to re-render.
+  const columnWindowKey = useMemo(() => {
+    const vcs = columnWindow.virtualColumns;
+    const first = vcs[0]?.index ?? -1;
+    const last = vcs[vcs.length - 1]?.index ?? -1;
+    return `${first}:${last}:${vcs.length}:${columnWindow.spacers.left}:${columnWindow.spacers.right}`;
+  }, [columnWindow]);
+
+  // The cross-cutting per-cell state, bundled into ONE object so a pure vertical
+  // scroll keeps its identity and every <GridRow> in the window skips. Any change
+  // here (selection, presence, active cell, a run) re-renders the visible rows
+  // once — but the leaf CellContent still memoizes the unchanged cell contents.
+  const interaction = useMemo<GridRowInteraction>(
+    () => ({
+      selRect,
+      sel,
+      selCellCount,
+      activeCell: kbd.active,
+      editSignal: kbd.editSignal,
+      getEditSeed: kbd.getEditSeed,
+      presenceByCell: c.presence?.byCell,
+      flashCell,
+      runningCells: c.runningCells,
+      waitingByCol,
+    }),
+    [
+      selRect,
+      sel,
+      selCellCount,
+      kbd.active,
+      kbd.editSignal,
+      kbd.getEditSeed,
+      c.presence,
+      c.runningCells,
+      flashCell,
+      waitingByCol,
+    ],
+  );
+
+  // The stable cell-action callbacks, decoupled from the controller object (which
+  // is rebuilt every parent render). Stable as long as the controller's callbacks
+  // are — so a realtime flush that changes one row's data re-renders only that row.
+  const cellActions = useMemo<CellActions>(
+    () => ({
+      setCell: c.setCell,
+      runCell: c.runCell,
+      clearCell: c.clearCell,
+      openCellDetails: c.openCellDetails,
+      expandCell: c.expandCell,
+      onActiveCellChange: c.onActiveCellChange,
+      onEditingCellChange: c.onEditingCellChange,
+      canRun: c.canRun,
+    }),
+    [
+      c.setCell,
+      c.runCell,
+      c.clearCell,
+      c.openCellDetails,
+      c.expandCell,
+      c.onActiveCellChange,
+      c.onEditingCellChange,
+      c.canRun,
+    ],
+  );
+
+  // The stable callbacks the rows + cells fire, bundled likewise. Each member is
+  // already referentially stable (useCallback / useState setter / ref), so this
+  // object's identity only changes when one of those genuinely changes (e.g.
+  // selection-derived rowCtxItems), never on scroll.
+  const handlers = useMemo<GridRowHandlers>(
+    () => ({
+      toggleRow,
+      openCtx,
+      rowCtxItems,
+      selectionMenuItems,
+      setSel,
+      dragSelRef,
+      dragMovedRef,
+      onCellFocus: kbd.onCellFocus,
+      cellTabIndex,
+    }),
+    [toggleRow, openCtx, rowCtxItems, selectionMenuItems, kbd.onCellFocus, cellTabIndex],
+  );
 
   // Column-header right-click menu (Clay-style): edit/rename/duplicate, scoped
   // run variants for function columns, then delete. Every run item maps onto
@@ -873,177 +1033,20 @@ export function DataGrid({
                 rowHeight={c.rowHeight}
                 colSpan={table.columns.length + 2}
                 columnWindow={columnWindow}
-                renderRow={(row, idx, cw) => {
-                  const selected = selectedRows.has(row.id);
-                  return (
-                  <tr key={row.id} role="row" aria-rowindex={idx + 1} aria-selected={selected} className={`grid-tr${selected ? " is-selected" : ""}`}>
-                    <td
-                      className="grid-td row-num-td"
-                      onContextMenu={(e) => openCtx(e, rowCtxItems(row.id))}
-                    >
-                      <input
-                        type="checkbox"
-                        className="row-select"
-                        aria-label={`Select row ${idx + 1}`}
-                        checked={selected}
-                        onChange={() => {}}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleRow(row.id, e.shiftKey);
-                        }}
-                      />
-                      <span className="row-num-val">{idx + 1}</span>
-                    </td>
-                    <GridColSpacer side="left" width={cw.spacers.left} />
-                    {cw.virtualColumns.map((vc) => {
-                      const col = table.columns[vc.index];
-                      const cell: Cell | undefined = row.cells[col.id];
-                      const key = presenceCellKey(row.id, col.id);
-                      const here = c.presence?.byCell.get(key);
-                      const isEditingHere = here?.some((u) => u.editing) ?? false;
-                      const tdStyle: PresenceTdStyle | undefined = here
-                        ? { "--presence-color": here[0].color }
-                        : undefined;
-                      const inSel =
-                        !!selRect &&
-                        idx >= selRect.r1 && idx <= selRect.r2 &&
-                        vc.index >= selRect.c1 && vc.index <= selRect.c2;
-                      const isAnchor = !!sel && sel.anchor.r === idx && sel.anchor.c === vc.index;
-                      const isActiveCell = kbd.active?.row === idx && kbd.active?.col === vc.index;
-                      return (
-                        <td
-                          key={col.id}
-                          role="gridcell"
-                          aria-colindex={vc.index + 1}
-                          aria-selected={inSel || undefined}
-                          data-cell={cellDomId(idx, vc.index)}
-                          tabIndex={cellTabIndex(idx, vc.index)}
-                          className={`grid-td${here ? " cell-presence" : ""}${isEditingHere ? " presence-editing" : ""}${flashCell === key ? " presence-flash" : ""}${inSel ? " cell-selected" : ""}${isAnchor ? " cell-sel-anchor" : ""}`}
-                          style={tdStyle}
-                          onMouseDown={(e) => {
-                            if (e.button !== 0) return;
-                            // Never hijack interactions with an open inline editor.
-                            if ((e.target as HTMLElement).closest("input, textarea")) return;
-                            if (e.shiftKey && sel) {
-                              e.preventDefault(); // extend, don't start a text selection
-                              setSel({ anchor: sel.anchor, head: { r: idx, c: vc.index } });
-                            } else {
-                              setSel({ anchor: { r: idx, c: vc.index }, head: { r: idx, c: vc.index } });
-                            }
-                            dragSelRef.current = true;
-                            dragMovedRef.current = false;
-                          }}
-                          onMouseEnter={() => {
-                            if (!dragSelRef.current) return;
-                            dragMovedRef.current = true;
-                            setSel((s) => (s ? { anchor: s.anchor, head: { r: idx, c: vc.index } } : s));
-                          }}
-                          onFocus={() => {
-                            kbd.onCellFocus(idx, vc.index);
-                            c.onActiveCellChange?.({ rowId: row.id, colId: col.id });
-                          }}
-                          onClickCapture={(e) => {
-                            // A drag that extended the range must not ALSO open the
-                            // inline editor of the cell it ended on.
-                            if (dragMovedRef.current) {
-                              dragMovedRef.current = false;
-                              e.preventDefault();
-                              e.stopPropagation();
-                            }
-                          }}
-                          onClick={
-                            c.onActiveCellChange
-                              ? () => c.onActiveCellChange!({ rowId: row.id, colId: col.id })
-                              : undefined
-                          }
-                          onContextMenu={(e) => {
-                            // Right-click inside a multi-cell range selection acts on the
-                            // range; otherwise the row-selection-aware menu applies.
-                            if (selRect && selCellCount > 1 &&
-                                idx >= selRect.r1 && idx <= selRect.r2 &&
-                                vc.index >= selRect.c1 && vc.index <= selRect.c2) {
-                              openCtx(e, selectionMenuItems());
-                              return;
-                            }
-                            openCtx(e, rowCtxItems(row.id, [
-                              ...(col.kind === "function"
-                                ? ([
-                                    { label: "Run cell", disabled: runDisabled, onClick: () => c.runCell(row.id, col.id) },
-                                    ...(c.openCellDetails
-                                      ? [{ label: "View cell details", onClick: () => c.openCellDetails!(col, cell, row.id) }]
-                                      : []),
-                                  ] satisfies CtxItem[])
-                                : []),
-                              {
-                                label: "Copy value",
-                                onClick: () => {
-                                  const v = cell?.value;
-                                  const text = v == null ? "" : typeof v === "string" ? v : JSON.stringify(v);
-                                  void navigator.clipboard?.writeText(text).catch(() => {});
-                                },
-                              },
-                              { label: "Clear cell", onClick: () => c.clearCell(row.id, col.id) },
-                            ]));
-                          }}
-                        >
-                          {here && (
-                            <span
-                              className="presence-cell-chip"
-                              style={{ background: here[0].color }}
-                              title={here
-                                .map((u) => `${u.name ?? u.userId}${u.isAgent && u.activity ? ` — ${u.activity}` : ""}`)
-                                .join(", ")}
-                            >
-                              {here[0].isAgent ? (
-                                <BotGlyph size={9} color="#fff" />
-                              ) : here[0].image ? (
-                                <img src={here[0].image} alt="" referrerPolicy="no-referrer" />
-                              ) : (
-                                (here[0].name ?? "?").slice(0, 1).toUpperCase()
-                              )}
-                            </span>
-                          )}
-                          <CellContent
-                            cell={cell}
-                            col={col}
-                            onEdit={(v) => c.setCell(row.id, col.id, v)}
-                            onEditingChange={
-                              c.onEditingCellChange
-                                ? (ed) =>
-                                    c.onEditingCellChange!(ed ? { rowId: row.id, colId: col.id } : null)
-                                : undefined
-                            }
-                            onOpenDetails={
-                              c.openCellDetails ? () => c.openCellDetails!(col, cell, row.id) : undefined
-                            }
-                            onExpand={
-                              c.expandCell
-                                ? (anchor) =>
-                                    c.expandCell!({
-                                      rowId: row.id,
-                                      colId: col.id,
-                                      columnName: col.name,
-                                      value: cell?.value != null ? String(cell.value) : "",
-                                      editable: col.kind === "manual",
-                                      anchor,
-                                    })
-                                : undefined
-                            }
-                            onRunCell={col.kind === "function" ? () => c.runCell(row.id, col.id) : undefined}
-                            running={c.runningCells.has(`${row.id}:${col.id}`)}
-                            waiting={waitingByCol.has(col.id)}
-                            isActive={isActiveCell}
-                            editSignal={isActiveCell ? kbd.editSignal : 0}
-                            editSeed={isActiveCell ? kbd.getEditSeed() : undefined}
-                          />
-                        </td>
-                      );
-                    })}
-                    <GridColSpacer side="right" width={cw.spacers.right} />
-                    <td className="grid-td" />
-                  </tr>
-                  );
-                }}
+                renderRow={(row, idx, cw) => (
+                  <GridRow
+                    key={row.id}
+                    actions={cellActions}
+                    row={row}
+                    rowIdx={idx}
+                    columns={table.columns}
+                    columnWindow={cw}
+                    columnWindowKey={columnWindowKey}
+                    selected={selectedRows.has(row.id)}
+                    interaction={interaction}
+                    handlers={handlers}
+                  />
+                )}
               />
             )}
           </table>
