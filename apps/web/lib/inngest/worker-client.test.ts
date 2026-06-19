@@ -137,6 +137,8 @@ describe("WORKER_REFS", () => {
   it("maps every ref to its /api/worker route path", () => {
     expect(WORKER_REFS).toEqual({
       getTable: "/api/worker/getTable",
+      getTableForRows: "/api/worker/getTableForRows",
+      getTablePage: "/api/worker/getTablePage",
       setCell: "/api/worker/setCell",
       setCellStatus: "/api/worker/setCellStatus",
       setCells: "/api/worker/setCells",

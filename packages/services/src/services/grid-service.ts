@@ -158,6 +158,14 @@ export interface TablePage {
 /** A `{ columnId: value }` map of one bulk-imported row's cells. */
 export type CellMap = Readonly<Record<string, unknown>>;
 
+/**
+ * Soft ceiling above which the UNPAGED full-grid `getTable` logs a warning. The
+ * grid is paginated (`getTablePage`), so a full-grid read at this size signals a
+ * caller that should be using the paged path — the warning surfaces it without
+ * breaking the (still-served) response.
+ */
+export const FULL_GRID_ROW_WARN_CAP = 20_000;
+
 /** Project a repo `Column` onto the desktop `getTable` column shape. */
 const toGridColumn = (c: Column): GridColumn => ({
   _id: c.id,
@@ -435,6 +443,13 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         const cols = yield* columns.listByTable(tableId);
         const rws = yield* rows.listByTable(tableId);
         const cls = yield* cells.listByTable(tableId);
+        // Guard: a full-grid read at scale means a caller bypassed the paged
+        // path. Warn (telemetry) but still serve so nothing breaks.
+        if (rws.length > FULL_GRID_ROW_WARN_CAP) {
+          yield* Effect.logWarning(
+            `GridService.getTable loaded ${rws.length} rows for table ${tableId} — full-grid read above ${FULL_GRID_ROW_WARN_CAP}; prefer getTablePage at scale.`,
+          );
+        }
         return {
           table: { _id: table.id, name: table.name, dedupe: toDedupe(table) },
           columns: cols.map(toGridColumn),
@@ -1015,10 +1030,13 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         const cfg = toDedupe(table);
         if (cfg === null) return { deleted: 0 };
         const rws = yield* rows.listByTable(tableId); // position, createdAt order
-        const cls = yield* cells.listByTable(tableId);
+        // Read ONLY the dedupe column's cells (the only value this sweep
+        // inspects), served by the `cells_by_table_column` index — ~one cell per
+        // row instead of the full rows×columns matrix.
+        const cls = yield* cells.listByTableColumn(tableId, cfg.column);
         const valueByRow = new Map<string, unknown>();
         for (const c of cls) {
-          if (c.columnId === cfg.column) valueByRow.set(c.rowId, c.value);
+          valueByRow.set(c.rowId, c.value);
         }
         const groups = new Map<string, string[]>();
         for (const r of rws) {

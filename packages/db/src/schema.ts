@@ -467,6 +467,18 @@ export const rows = pgTable(
   (t) => [
     index("rows_by_table").on(t.tableId),
     index("rows_by_workspace").on(t.workspaceId),
+    // The grid loads rows in (position, createdAt, id) order — both the full
+    // `listByTable` and the keyset `listKeysetByTable` (row-repo.ts) ORDER BY
+    // exactly this tuple. `rows_by_table` alone finds the table's rows but
+    // can't supply the ordering, so Postgres sorts all matching rows in memory
+    // every load (and deep keyset pages degrade). This composite turns both
+    // into an index-ordered scan with no sort step.
+    index("rows_by_table_position").on(
+      t.tableId,
+      t.position,
+      t.createdAt,
+      t.id,
+    ),
   ],
 );
 

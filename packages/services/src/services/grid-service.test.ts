@@ -203,6 +203,28 @@ describe("GridService.dedupe (cloud parity with the local engine)", () => {
     expect(store.rows.map((r) => r.id).sort()).toEqual(["r2", "r3"]);
   });
 
+  it("reads ONLY the dedupe column (a sibling column's dup never affects grouping)", async () => {
+    // Proves the narrowed `listByTableColumn` read didn't change semantics: the
+    // sweep groups by the dedupe column alone, ignoring another column's cells.
+    const store = makeGridStore({
+      tables: [table({ dedupeColumn: "c1", dedupeKeep: "oldest" })],
+      columns: [column(), column({ id: "c2", name: "Other", position: 1 })],
+      rows: [row({ id: "r1", position: 0 }), row({ id: "r2", position: 1 })],
+      cells: [
+        // Dedupe column c1: DISTINCT values → no duplicates.
+        { id: "a1", workspaceId: WS, tableId: "t1", rowId: "r1", columnId: "c1", value: "x", status: "done", error: null, updatedAt: 1 },
+        { id: "a2", workspaceId: WS, tableId: "t1", rowId: "r2", columnId: "c1", value: "y", status: "done", error: null, updatedAt: 1 },
+        // Sibling column c2: SAME value on both rows — must NOT cause a delete.
+        { id: "b1", workspaceId: WS, tableId: "t1", rowId: "r1", columnId: "c2", value: "same", status: "done", error: null, updatedAt: 1 },
+        { id: "b2", workspaceId: WS, tableId: "t1", rowId: "r2", columnId: "c2", value: "same", status: "done", error: null, updatedAt: 1 },
+      ],
+    });
+    const { run } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.dedupeTable("t1")));
+    expect(Exit.isSuccess(exit) && exit.value).toEqual({ deleted: 0 });
+    expect(store.rows).toHaveLength(2);
+  });
+
   it("setDedupe persists config and sweeps immediately", async () => {
     const store = makeGridStore({
       tables: [table()],

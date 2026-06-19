@@ -52,6 +52,8 @@ import type { CloudContext } from "./cloud-context.js";
  */
 export const CLOUD_REFS: CloudFunctionRefs = {
   getTable: "/api/worker/getTable",
+  getTableForRows: "/api/worker/getTableForRows",
+  getTablePage: "/api/worker/getTablePage",
   setCell: "/api/worker/setCell",
   setCellStatus: "/api/worker/setCellStatus",
   setCells: "/api/worker/setCells",
@@ -485,6 +487,15 @@ function columnFn(c: CloudColumnDoc): string | null {
   return c.code ? "code" : null;
 }
 
+/** Rows per keyset page when MCP `get_table` walks a window. */
+const MCP_GET_TABLE_PAGE_SIZE = 200;
+/**
+ * Hard ceiling on rows MCP `get_table` will WALK to satisfy a deep offset, so a
+ * huge offset can't force a full 50k-row grid walk. Beyond this the result is
+ * flagged `truncated` and the agent must narrow its query (e.g. `where`).
+ */
+const MCP_GET_TABLE_SCAN_CAP = 10_000;
+
 /** Exact cell equality for client-side `where` matching — trims strings, JSON-compares the rest (mirrors the local engine's `findRows`). */
 function cellEq(a: unknown, b: unknown): boolean {
   if (typeof a === "string" && typeof b === "string") return a.trim() === b.trim();
@@ -648,6 +659,66 @@ export function makeCloudSource(
     return payload;
   };
 
+  /**
+   * Fetch ONLY the `[offset, offset+limit)` row WINDOW by walking keyset
+   * `getTablePage` pages, keeping just the window rows' cells. A 50k-row table is
+   * never loaded whole into the worker (or shipped to the agent) just to show a
+   * 200-row page. Walks at most {@link MCP_GET_TABLE_SCAN_CAP} rows so a deep
+   * offset can't force a full-grid walk; `hasMore` reports whether rows remain
+   * past what was scanned, and `scanned` is the count actually walked (a lower
+   * bound on the true row count when `hasMore`).
+   */
+  const fetchGridWindow = async (
+    tableId: string,
+    offset: number,
+    limit: number,
+  ): Promise<{
+    columns: readonly CloudColumnDoc[];
+    rows: CloudRowDoc[];
+    cells: CloudCellDoc[];
+    scanned: number;
+    hasMore: boolean;
+  }> => {
+    const end = offset + limit;
+    let columns: readonly CloudColumnDoc[] = [];
+    const rows: CloudRowDoc[] = [];
+    const cells: CloudCellDoc[] = [];
+    const windowRowIds = new Set<string>();
+    let cursor: unknown = null;
+    let scanned = 0;
+    let hasMore = false;
+    for (;;) {
+      const payload = await client.query(CLOUD_REFS.getTablePage, {
+        tableId,
+        cursor,
+        limit: MCP_GET_TABLE_PAGE_SIZE,
+      });
+      if (!isCloudGrid(payload)) {
+        throw new Error("getTablePage payload was not a grid");
+      }
+      columns = payload.columns;
+      for (const r of payload.rows) {
+        const idx = scanned++;
+        if (idx >= offset && idx < end) {
+          rows.push(r);
+          windowRowIds.add(r._id);
+        }
+      }
+      // A page's cells are co-located with that page's rows, so the window
+      // rows just added have their cells in THIS page.
+      for (const c of payload.cells) {
+        if (windowRowIds.has(c.rowId)) cells.push(c);
+      }
+      cursor = (payload as { nextCursor?: unknown }).nextCursor ?? null;
+      if (cursor === null) break; // last page — `scanned` is the exact total
+      if (scanned >= end || scanned >= MCP_GET_TABLE_SCAN_CAP) {
+        hasMore = true; // stopped early: more rows exist past what we scanned
+        break;
+      }
+    }
+    return { columns, rows, cells, scanned, hasMore };
+  };
+
   /** Resolve a table ref to its id + grid in one step — the common method head. */
   const resolveGrid = async (
     tableRef?: string,
@@ -678,19 +749,20 @@ export function makeCloudSource(
 
   return {
     getTable: async (tableRef, opts) => {
-      const { tableId, grid } = await resolveGrid(tableRef);
-      const byCell = new Map<string, CloudCellDoc>();
-      for (const cell of grid.cells) {
-        byCell.set(`${cell.rowId}:${cell.columnId}`, cell);
-      }
-      const total = grid.rows.length;
+      const tableId = await resolveTableId(tableRef);
       const start = Math.max(opts?.offset ?? 0, 0);
       const cap = Math.min(Math.max(opts?.limit ?? 200, 1), 1000);
-      const rows = grid.rows.slice(start, start + cap).map((r) => {
+      // Fetch ONLY this row window via keyset paging — never the whole grid.
+      const window = await fetchGridWindow(tableId, start, cap);
+      const byCell = new Map<string, CloudCellDoc>();
+      for (const cell of window.cells) {
+        byCell.set(`${cell.rowId}:${cell.columnId}`, cell);
+      }
+      const rows = window.rows.map((r) => {
         // Carry the row _id (matching the LOCAL get_table) so the agent can feed
         // it back into update_cells / delete_rows / reorder_rows.
         const obj: Record<string, unknown> = { _id: r._id };
-        for (const c of grid.columns) {
+        for (const c of window.columns) {
           const cell = byCell.get(`${r._id}:${c._id}`);
           obj[c.name] = cell
             ? cell.status === "error"
@@ -700,9 +772,11 @@ export function makeCloudSource(
         }
         return obj;
       });
+      // When the walk stopped early (`hasMore`), `scanned` is a LOWER BOUND on
+      // the true row count, and `truncated` tells the agent to narrow its query.
       return {
         table: await tableName(tableId),
-        columns: grid.columns.map((c) => ({
+        columns: window.columns.map((c) => ({
           name: c.name,
           kind: c.kind,
           fn: columnFn(c),
@@ -716,10 +790,10 @@ export function makeCloudSource(
               : c.code ?? null,
         })),
         rows,
-        totalRows: total,
+        totalRows: window.scanned,
         returned: rows.length,
         offset: start,
-        truncated: start + rows.length < total,
+        truncated: window.hasMore || start + rows.length < window.scanned,
       };
     },
 
