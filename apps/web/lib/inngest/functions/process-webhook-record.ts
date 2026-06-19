@@ -3,12 +3,16 @@ import {
   Engine,
   aiConfigFromEnv,
   cloudGridStoreShape,
+  connectorFromManifest,
   defaultRegistry,
+  parseManifest,
   type Column,
   type EngineConfig,
   type GridStoreShape,
+  type Registry,
   type RunErrorContext,
 } from "@gtmgrid/engine";
+import { buildColumnDeps, topoSortColumnIds } from "@gtmgrid/services/columns";
 import { Effect } from "effect";
 import { inngest } from "../client";
 import { onFailure } from "../on-failure";
@@ -117,6 +121,48 @@ function engineConfig(): EngineConfig {
  * pointed at the worker HTTP endpoints and resolving the workspace's SHARED
  * connector secrets. Mirrors `cloud-run.ts` `buildCloudStore`.
  */
+/**
+ * The engine registry for a workspace: the built-in connectors PLUS the
+ * workspace's installed manifest connectors. A connector column with no custom
+ * code runs `sdk[provider][method](inputs)` in the sandbox (execute.ts), so the
+ * provider MUST be registered or `sdk[provider]` is undefined and the run throws
+ * "cannot read property <method>". The desktop sidecar registers manifests at
+ * startup; the cloud worker has to fetch them per workspace.
+ *
+ * Cached per workspace with a short TTL so a newly-installed connector becomes
+ * available within ~a minute without a DB round-trip on every column run. A fetch
+ * failure falls back to the built-ins (the run still works for built-in/formula
+ * columns rather than failing wholesale).
+ */
+const REGISTRY_TTL_MS = 60_000;
+const registryCache = new Map<string, { reg: Promise<Registry>; at: number }>();
+
+export function workspaceRegistry(workspaceId: string): Promise<Registry> {
+  const now = Date.now();
+  const cached = registryCache.get(workspaceId);
+  if (cached && now - cached.at < REGISTRY_TTL_MS) return cached.reg;
+  const reg = (async (): Promise<Registry> => {
+    const registry = defaultRegistry();
+    try {
+      const manifests = (await workerClient.query("/api/worker/getExtensions", {
+        workspaceId,
+      })) as unknown[];
+      for (const manifest of manifests) {
+        try {
+          registry.add(connectorFromManifest(parseManifest(manifest)));
+        } catch {
+          /* skip a single malformed manifest — never fail the whole registry */
+        }
+      }
+    } catch {
+      /* extensions unavailable — fall back to the built-in connectors */
+    }
+    return registry;
+  })();
+  registryCache.set(workspaceId, { reg, at: now });
+  return reg;
+}
+
 function buildWorkerStore(
   tableId: string,
   workspaceId: string,
@@ -135,8 +181,14 @@ function buildWorkerStore(
 interface WorkerGrid {
   readonly columns: ReadonlyArray<{
     readonly _id: string;
+    readonly name: string;
     readonly type: Column["type"];
     readonly kind: Column["kind"];
+    // Carried so enrichment can order columns by their {{ref}} dependency graph
+    // (the worker `getTable` projection already returns these — grid-service).
+    readonly provider: string | null;
+    readonly params: Record<string, unknown>;
+    readonly condition: string | null;
     readonly position: number;
   }>;
   readonly rows: ReadonlyArray<{ readonly _id: string }>;
@@ -199,28 +251,33 @@ export async function resolveRow(
  * unloaded). Returns the number of cells the engine ran.
  */
 export async function runEnrichColumn(
-  data: WebhookRecordData,
+  ctx: { tableId: string; workspaceId: string },
   columnId: string,
   rowId: string,
 ): Promise<number> {
-  const store = await buildWorkerStore(data.tableId, data.workspaceId);
+  const [store, registry] = await Promise.all([
+    buildWorkerStore(ctx.tableId, ctx.workspaceId),
+    // Built-ins + the workspace's installed manifest connectors, so a column that
+    // calls e.g. `sdk["leadmagic"]["emailfinder"](…)` resolves instead of throwing.
+    workspaceRegistry(ctx.workspaceId),
+  ]);
   // Systemic run failures (connector/AI bugs) → PostHog Error Tracking, deduped by
   // the engine. There's no user identity in the worker, so group under the workspace.
-  const reportError = (error: unknown, ctx: RunErrorContext): void =>
+  const reportError = (error: unknown, c: RunErrorContext): void =>
     captureServerException(error, {
-      distinctId: data.workspaceId,
-      properties: { source: "engine-run", surface: "cloud", table_id: data.tableId, ...ctx },
+      distinctId: ctx.workspaceId,
+      properties: { source: "engine-run", surface: "cloud", table_id: ctx.tableId, ...c },
     });
   const engine = new Engine(
     { ...engineConfig(), reportError },
-    defaultRegistry(),
+    registry,
     { store, creds: store },
   );
   const { ran, errors, firstError } = await engine.runColumn(columnId, { rowIds: [rowId] });
   // Failure-rate signal for dashboards/alerts (complements the deduped exceptions).
   if (errors > 0) {
     captureServer("column_run_failed", {
-      distinctId: data.workspaceId,
+      distinctId: ctx.workspaceId,
       properties: {
         column_id: columnId,
         provider: null,
@@ -230,7 +287,7 @@ export async function runEnrichColumn(
         first_error: firstError,
         surface: "cloud",
       },
-      groups: { workspace: data.workspaceId },
+      groups: { workspace: ctx.workspaceId },
     });
   }
   return ran;
@@ -254,7 +311,7 @@ export interface StepRunner {
  * runtime value is unchanged. This adapter is the SINGLE, deliberate place the
  * two type worlds meet — everything downstream is fully typed.
  */
-function toStepRunner(step: {
+export function toStepRunner(step: {
   run: (id: string, fn: () => Promise<unknown>) => Promise<unknown>;
 }): StepRunner {
   return {
@@ -300,10 +357,21 @@ export async function processWebhookRecordHandler(
     `enrich-columns:${data.recordId}`,
     async () => {
       const grid = await fetchGrid(data.tableId);
-      return grid.columns
+      // Order by the {{ref}} DEPENDENCY graph, not authored position, so a column
+      // that maps/computes off another column's output always enriches AFTER its
+      // source (Get API data → map field → compute value cascades correctly even
+      // when the author placed the columns out of order). Cycle-tolerant.
+      const fnCols = grid.columns
         .filter((c) => c.kind === "function")
-        .sort((a, b) => a.position - b.position)
-        .map((c) => c._id);
+        .map((c) => ({
+          id: c._id,
+          name: c.name,
+          kind: c.kind,
+          provider: c.provider,
+          params: c.params,
+          condition: c.condition,
+        }));
+      return topoSortColumnIds(fnCols, buildColumnDeps(fnCols));
     },
   );
 
@@ -315,7 +383,7 @@ export async function processWebhookRecordHandler(
   for (const columnId of functionColumns) {
     const n = await step.run(
       `enrich:${data.recordId}:${columnId}`,
-      async () => runEnrichColumn(data, columnId, rowId),
+      async () => runEnrichColumn({ tableId: data.tableId, workspaceId: data.workspaceId }, columnId, rowId),
     );
     ran += n;
   }

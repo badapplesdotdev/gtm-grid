@@ -2,6 +2,7 @@ import { serve } from "inngest/next";
 import { inngest } from "../../../lib/inngest/client";
 import { processWebhookRecord } from "../../../lib/inngest/functions/process-webhook-record";
 import {
+  enrichSignalRow,
   pollTrigifySignals,
   processSignalBinding,
   warmUpSignalBinding,
@@ -24,5 +25,6 @@ export const { GET, POST, PUT } = serve({
     pollTrigifySignals,
     processSignalBinding,
     warmUpSignalBinding,
+    enrichSignalRow,
   ],
 });

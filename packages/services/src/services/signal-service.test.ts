@@ -110,7 +110,7 @@ describe("SignalService.syncForWorker (membership-free credential path)", () => 
       (s) => s.syncForWorker("sig-1"),
     );
     expect(Exit.isSuccess(exit)).toBe(true);
-    if (Exit.isSuccess(exit)) expect(exit.value).toBe(1);
+    if (Exit.isSuccess(exit)) expect(exit.value.added).toBe(1);
   });
 
   it("fails closed (SignalError) when no shared Trigify credential exists", async () => {
@@ -160,7 +160,7 @@ describe("SignalService.syncForWorker (membership-free credential path)", () => 
       (s) => s.syncForWorker("sig-1"),
     );
     expect(Exit.isSuccess(exit)).toBe(true);
-    if (Exit.isSuccess(exit)) expect(exit.value).toBe(0);
+    if (Exit.isSuccess(exit)) expect(exit.value.added).toBe(0);
   });
 
   it("returns 0 for an unknown binding id", async () => {
@@ -172,7 +172,7 @@ describe("SignalService.syncForWorker (membership-free credential path)", () => 
       },
       (s) => s.syncForWorker("missing"),
     );
-    expect(Exit.isSuccess(exit) && exit.value).toBe(0);
+    expect(Exit.isSuccess(exit) && exit.value.added).toBe(0);
   });
 });
 
@@ -194,7 +194,7 @@ describe("SignalService sync — lastSyncedAt stamping (empty-table warm-up)", (
     stubTrigify([]); // search still scraping — nothing back yet
     const bindings = [binding({ rowsPulled: 0, lastSyncedAt: null })];
     const exit = await run(await fixtures(bindings), (s) => s.syncForWorker("sig-1"));
-    expect(Exit.isSuccess(exit) && exit.value).toBe(0);
+    expect(Exit.isSuccess(exit) && exit.value.added).toBe(0);
     expect(bindings[0].lastSyncedAt).toBeNull();
     expect(bindings[0].lastError).toBeNull();
   });
@@ -203,7 +203,7 @@ describe("SignalService sync — lastSyncedAt stamping (empty-table warm-up)", (
     stubTrigify([{ id: "r1" }]);
     const bindings = [binding({ rowsPulled: 0, lastSyncedAt: null })];
     const exit = await run(await fixtures(bindings), (s) => s.syncForWorker("sig-1"));
-    expect(Exit.isSuccess(exit) && exit.value).toBe(1);
+    expect(Exit.isSuccess(exit) && exit.value.added).toBe(1);
     expect(bindings[0].lastSyncedAt).not.toBeNull();
     expect(bindings[0].rowsPulled).toBe(1);
   });
@@ -212,7 +212,7 @@ describe("SignalService sync — lastSyncedAt stamping (empty-table warm-up)", (
     stubTrigify([]); // nothing new this round
     const bindings = [binding({ rowsPulled: 5, lastSyncedAt: 1000 })];
     const exit = await run(await fixtures(bindings), (s) => s.syncForWorker("sig-1"));
-    expect(Exit.isSuccess(exit) && exit.value).toBe(0);
+    expect(Exit.isSuccess(exit) && exit.value.added).toBe(0);
     // Re-stamped (not nulled): the binding has data, so schedule semantics hold.
     expect(bindings[0].lastSyncedAt).not.toBeNull();
     expect(bindings[0].lastSyncedAt).not.toBe(1000);
@@ -238,7 +238,7 @@ describe("SignalService.syncForWorker (durable dedupe + bulk insert)", () => {
       (s) => s.syncForWorker("sig-1"),
     );
     expect(Exit.isSuccess(exit)).toBe(true);
-    if (Exit.isSuccess(exit)) expect(exit.value).toBe(0);
+    if (Exit.isSuccess(exit)) expect(exit.value.added).toBe(0);
   });
 
   it("inserts rows + cells for fresh results and computes positions above the table's max", async () => {
@@ -262,7 +262,7 @@ describe("SignalService.syncForWorker (durable dedupe + bulk insert)", () => {
       (s) => s.syncForWorker("sig-1"),
     );
     expect(Exit.isSuccess(exit)).toBe(true);
-    if (Exit.isSuccess(exit)) expect(exit.value).toBe(2);
+    if (Exit.isSuccess(exit)) expect(exit.value.added).toBe(2);
     // Two new rows appended above the existing max position (7).
     expect(rows.filter((r) => r.position > 7)).toHaveLength(2);
     expect(rows.map((r) => r.position).sort((a, b) => a - b)).toEqual([7, 8, 9]);
@@ -419,7 +419,7 @@ describe("SignalService.syncForWorker — Trigify transient retry (backoff + jit
       .mockResolvedValue(new Response(JSON.stringify([{ id: "r1" }]), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const exit = await run(await workerFixtures(), (s) => s.syncForWorker("sig-1"));
-    expect(Exit.isSuccess(exit) && exit.value).toBe(1);
+    expect(Exit.isSuccess(exit) && exit.value.added).toBe(1);
     expect(fetchMock).toHaveBeenCalledTimes(2); // first 429 retried, second 200 succeeded
   });
 
@@ -430,7 +430,7 @@ describe("SignalService.syncForWorker — Trigify transient retry (backoff + jit
       .mockResolvedValue(new Response(JSON.stringify([{ id: "r1" }]), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const exit = await run(await workerFixtures(), (s) => s.syncForWorker("sig-1"));
-    expect(Exit.isSuccess(exit) && exit.value).toBe(1);
+    expect(Exit.isSuccess(exit) && exit.value.added).toBe(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 

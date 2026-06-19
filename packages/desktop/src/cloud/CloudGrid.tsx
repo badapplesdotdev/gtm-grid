@@ -43,6 +43,7 @@ import { DedupePopover } from "../DedupePopover";
 import { resolveRowHeight } from "../gridVirtual";
 import { buildPresenceView } from "../gridPresence";
 import { runCloudColumn, runCloudPreview } from "./cloud-run";
+import { cascadeDependents, runColumnsInDepOrder } from "../gridRun";
 import { WebhookModal } from "./WebhookModal";
 import { useMe } from "./auth";
 import { gridPresenceStore, useGridPresenceRoster } from "./presenceStore";
@@ -56,6 +57,13 @@ import { isCloudTableMissing } from "../tableTree";
 
 /** Fixed cloud column width (px) — cloud columns are not resizable. */
 const CLOUD_COL_W = 180;
+
+/**
+ * How many dependent columns a cascade runs at once. Independent siblings run in
+ * parallel up to this bound; the sidecar already clamps per-column row concurrency
+ * and serializes through its own semaphore, so this only caps column fan-out.
+ */
+const CASCADE_CONCURRENCY = 4;
 
 /** A signal binding's status fields the strip renders (tRPC listSignalBindings). */
 interface SignalBindingStatus {
@@ -326,25 +334,28 @@ export function CloudGrid({
     }
   }, [tableId, data, onMissing]);
 
-  const runColumn = useCallback(
-    async (columnId: string, opts?: { force?: boolean; rowIds?: string[] }) => {
+  // Latest function-column set, read by the cascade closures at call time so they
+  // stay referentially stable across realtime updates (runCell is part of the
+  // memoized `cellActions` bundle — see DataGrid; a `data`-dependent closure would
+  // re-render every visible cell on each cell.upsert).
+  const cascadeColumnsRef = useRef<Column[]>([]);
+  cascadeColumnsRef.current = data?.columns ?? [];
+
+  // Raw single-column run (sidecar call + header spinner), WITHOUT cascading — the
+  // unit that the cascade and run-all compose over.
+  const runColumnRaw = useCallback(
+    async (columnId: string, opts: { force?: boolean; rowIds?: string[] }) => {
       if (tableId === null) return;
       setRunningColId(columnId);
       try {
-        // FORCE by default on an explicit column run. A synced-from-local table
-        // arrives with every cell "done", and a non-forced run skips "done"
-        // cells — so without this, hitting Run on a synced function/code column
-        // flips to "running" and instantly exits without recomputing anything.
-        // The header context menu's scoped variants pass `opts` explicitly
-        // (e.g. force:false for "Run unrun & errored rows").
         await runCloudColumn(session, {
           tableId,
           columnId,
-          force: opts?.force ?? true,
-          rowIds: opts?.rowIds,
+          force: opts.force,
+          rowIds: opts.rowIds,
         });
       } catch {
-        /* surfaced live via the cell error status from Convex */
+        /* surfaced live via the cell error status */
       } finally {
         setRunningColId(null);
       }
@@ -352,25 +363,40 @@ export function CloudGrid({
     [tableId, session],
   );
 
-  // Run every function column scoped to a subset of rows (the user's
-  // selection), so a custom batch can be processed at a time. Sequential to
-  // match the cloud `runAll`; each column reports its spinner via runningColId.
+  // The data cascade: once the seed columns produced data for `rowIds`, run every
+  // column DOWNSTREAM of them (force, because their input just changed) in
+  // dependency order — independent siblings in parallel, chained ones serialized.
+  // e.g. Get API data → map field in sibling → compute value in next sibling.
+  const cascadeFrom = useCallback(
+    async (seedColumnIds: string[], rowIds?: string[]) => {
+      const fnCols = cascadeColumnsRef.current.filter((c) => c.kind === "function");
+      await cascadeDependents(seedColumnIds, fnCols, rowIds, CASCADE_CONCURRENCY, runColumnRaw);
+    },
+    [runColumnRaw],
+  );
+
+  const runColumn = useCallback(
+    async (columnId: string, opts?: { force?: boolean; rowIds?: string[] }) => {
+      // FORCE by default on an explicit column run: a synced/re-run table arrives
+      // with cells already "done", and a non-forced run skips them. The header
+      // context menu's scoped variants pass `opts` explicitly (e.g. force:false).
+      await runColumnRaw(columnId, { force: opts?.force ?? true, rowIds: opts?.rowIds });
+      // …then populate everything that depends on it for the same rows.
+      await cascadeFrom([columnId], opts?.rowIds);
+    },
+    [runColumnRaw, cascadeFrom],
+  );
+
+  // Run every function column for a subset of rows (the user's selection) in
+  // dependency order — independent columns in parallel, dependents after sources.
   const runRows = useCallback(
     async (rowIds: string[]) => {
       if (tableId === null || rowIds.length === 0) return;
-      if (!data || isCloudTableMissing(data)) return;
-      for (const col of data.columns.filter((col) => col.kind === "function")) {
-        setRunningColId(col.id);
-        try {
-          await runCloudColumn(session, { tableId, columnId: col.id, rowIds });
-        } catch {
-          /* surfaced live via the cell error status from Convex */
-        } finally {
-          setRunningColId(null);
-        }
-      }
+      const fnCols = cascadeColumnsRef.current.filter((c) => c.kind === "function");
+      // Non-force: "Run selected rows" computes the unrun cells in dep order.
+      await runColumnsInDepOrder(fnCols, rowIds, CASCADE_CONCURRENCY, runColumnRaw, false);
     },
-    [tableId, session, data],
+    [tableId, runColumnRaw],
   );
 
   const runCell = useCallback(
@@ -381,7 +407,7 @@ export function CloudGrid({
       try {
         await runCloudColumn(session, { tableId, columnId, force: true, rowIds: [rowId] });
       } catch {
-        /* surfaced live via the cell error status from Convex */
+        /* surfaced live via the cell error status */
       } finally {
         setRunningCells((s) => {
           const n = new Set(s);
@@ -389,12 +415,14 @@ export function CloudGrid({
           return n;
         });
       }
+      // Cascade dependents for just this row.
+      await cascadeFrom([columnId], [rowId]);
     },
-    [tableId, session],
+    [tableId, session, cascadeFrom],
   );
 
   // Run an explicit set of function cells (range selection's "Run N cells"):
-  // one scoped force+rowIds run per column, sequential like cloud runAll.
+  // one scoped force+rowIds run per column, then cascade the affected columns/rows.
   const runCells = useCallback(
     async (cells: Array<{ rowId: string; colId: string }>) => {
       if (tableId === null) return;
@@ -415,8 +443,9 @@ export function CloudGrid({
           setRunningCells((s) => { const n = new Set(s); for (const k of keys) n.delete(k); return n; });
         }
       }
+      await cascadeFrom([...byCol.keys()], [...new Set(cells.map((c) => c.rowId))]);
     },
-    [tableId, session],
+    [tableId, session, cascadeFrom],
   );
 
   // Surface mutation failures inline instead of dropping them as unhandled
@@ -661,9 +690,10 @@ export function CloudGrid({
     columnMeta,
     addRow: () => void guard(() => addRow(tableId), "add row"),
     runAll: async () => {
-      for (const col of table.columns.filter((c) => c.kind === "function")) {
-        await runColumn(col.id);
-      }
+      // Run every function column in DEPENDENCY order (independent columns in
+      // parallel, dependents after their sources) — the ordering IS the cascade.
+      const fnCols = table.columns.filter((c) => c.kind === "function");
+      await runColumnsInDepOrder(fnCols, undefined, CASCADE_CONCURRENCY, runColumnRaw, true);
     },
     runRows,
     runColumn,

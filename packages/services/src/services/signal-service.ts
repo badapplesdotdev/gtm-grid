@@ -213,6 +213,7 @@ export class SignalService extends Effect.Service<SignalService>()("SignalServic
         const newKeys = yield* repo.recordSeenKeys(binding.id, [...byKey.keys()]);
 
         let added = 0;
+        let insertedRowIds: readonly string[] = [];
         if (newKeys.length > 0) {
           const base = yield* grid.maxRowPosition(binding.tableId);
           const now = Date.now();
@@ -247,6 +248,7 @@ export class SignalService extends Effect.Service<SignalService>()("SignalServic
           });
           yield* grid.insertCellsBulk(cells);
           added = rowIds.length;
+          insertedRowIds = rowIds;
         }
 
         // Stamp `lastSyncedAt` only once the binding has EVER pulled data.
@@ -264,7 +266,14 @@ export class SignalService extends Effect.Service<SignalService>()("SignalServic
           lastError: null,
           rowsPulled: totalPulled,
         });
-        return added;
+        // Return the new rowIds (+ table/workspace) so the worker can enqueue
+        // dependency-ordered enrichment for exactly the rows it just inserted.
+        return {
+          added,
+          rowIds: insertedRowIds,
+          tableId: binding.tableId,
+          workspaceId: binding.workspaceId,
+        };
       }).pipe(
         Effect.catchTag("SignalError", (e) =>
           repo.patch(binding.id, { lastError: e.message }).pipe(Effect.flatMap(() => Effect.fail(e))),
@@ -307,7 +316,12 @@ export class SignalService extends Effect.Service<SignalService>()("SignalServic
         const binding = yield* repo.findById(bindingId);
         let added = 0;
         if (Option.isSome(binding)) {
-          added = yield* runSync(binding.value, apiKey).pipe(Effect.catchTag("SignalError", () => Effect.succeed(0)));
+          const r = yield* runSync(binding.value, apiKey).pipe(
+            Effect.catchTag("SignalError", () =>
+              Effect.succeed({ added: 0, rowIds: [] as readonly string[], tableId: args.tableId, workspaceId }),
+            ),
+          );
+          added = r.added;
         }
         // `workspaceId` rides along so the caller (the tRPC router) can key the
         // post-create warm-up event without re-resolving the table.
@@ -340,7 +354,8 @@ export class SignalService extends Effect.Service<SignalService>()("SignalServic
         yield* membership.requireMember(binding.value.workspaceId);
         yield* entitlement.requireCloudAccess(binding.value.workspaceId);
         const apiKey = yield* trigifyKey(binding.value.workspaceId);
-        return yield* runSync(binding.value, apiKey);
+        // Manual "pull now" preserves its numeric contract (rows added).
+        return (yield* runSync(binding.value, apiKey)).added;
       });
 
     /**
@@ -353,9 +368,12 @@ export class SignalService extends Effect.Service<SignalService>()("SignalServic
     const syncForWorker = (bindingId: string) =>
       Effect.gen(function* () {
         const binding = yield* repo.findById(bindingId);
-        if (Option.isNone(binding)) return 0;
+        if (Option.isNone(binding)) {
+          return { added: 0, rowIds: [] as readonly string[], tableId: null, workspaceId: null };
+        }
         yield* entitlement.requireCloudAccess(binding.value.workspaceId);
         const apiKey = yield* workerTrigifyKey(binding.value.workspaceId);
+        // Returns the new rowIds so the cron can enqueue per-row enrichment.
         return yield* runSync(binding.value, apiKey);
       });
 
