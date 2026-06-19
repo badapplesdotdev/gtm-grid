@@ -39,6 +39,7 @@ import { detectAgents, streamClaude, streamCodex, streamCursor, setAgentPath, re
 import { localProviderEnv, resolveCloudProviderEnv } from "./provider-env.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, previewCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
+import { requiredInputKeys, resolveOptionArgs } from "./option-args.js";
 import { corsHeadersFor, isLoopbackHost, isOriginAllowed } from "./cors.js";
 import { Semaphore } from "./semaphore.js";
 import { captureException, flushObservability, installProcessHandlers, log } from "./observability.js";
@@ -738,7 +739,14 @@ route("POST", "/api/options", async (_p, body) => {
   const m = registry.method(provider, ownerMethod);
   const source = m?.options?.[field];
   if (!source) return { error: `no option source for ${provider}.${ownerMethod}.${field}` };
-  const args: Record<string, unknown> = { ...source.args };
+  // Dependent dropdowns: inject any sibling value the SOURCE method (e.g.
+  // listCampaigns) declares required (e.g. workspace_id) from the in-progress
+  // field values the column editor sends. See ./option-args for the rules.
+  const srcRequired = requiredInputKeys(registry.method(provider, source.method)?.inputSchema);
+  const values = (body?.values ?? {}) as Record<string, unknown>;
+  const { args, missing } = resolveOptionArgs(source.args ?? {}, srcRequired, values);
+  // Surface a clear prompt instead of letting the upstream API reject with a raw 400.
+  if (missing.length) return { error: `Select ${missing.join(", ")} first to load options` };
   const search = typeof body?.search === "string" ? body.search.trim() : "";
   // Best-effort search passthrough: forward under whichever filter key the
   // source endpoint exposes (its input schema tells us). Harmless if unused.

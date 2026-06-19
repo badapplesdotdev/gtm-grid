@@ -66,6 +66,7 @@ function MappingField({
   provider,
   method,
   optionSource,
+  allValues,
 }: {
   paramKey: string;
   required: boolean;
@@ -77,6 +78,9 @@ function MappingField({
   method?: string | null;
   /** When set, this field can be picked from a live connector list. */
   optionSource?: FieldOptionSource | null;
+  /** Current values of the sibling fields, so a dependent dropdown (e.g.
+   *  campaign_id) can pass a required parent value (e.g. workspace_id). */
+  allValues?: Record<string, string>;
 }) {
   const ref = pureColumnRef(value);
   const matched = ref ? columns.find((c) => c.name === ref) : undefined;
@@ -114,7 +118,7 @@ function MappingField({
     setOptLoading(true);
     setOptErr("");
     try {
-      const r = await api.fieldOptions({ provider: provider!, method: method!, field: paramKey, search: q });
+      const r = await api.fieldOptions({ provider: provider!, method: method!, field: paramKey, search: q, values: allValues });
       if (r.error) throw new Error(r.error);
       setOptions(r.options ?? []);
     } catch (e) {
@@ -124,6 +128,17 @@ function MappingField({
       setOptLoading(false);
     }
   };
+  // Drop the cached option list when a sibling value this dropdown depends on
+  // changes (e.g. workspace_id), so the next open — or the current one — re-fetches
+  // against the new parent value instead of showing stale/empty results.
+  const siblingSig = useMemo(
+    () => JSON.stringify(Object.entries(allValues ?? {}).filter(([k]) => k !== paramKey).sort()),
+    [allValues, paramKey],
+  );
+  useEffect(() => {
+    setOptions(null);
+    setOptErr("");
+  }, [siblingSig]);
   // Load when the pick dropdown opens for the first time.
   useEffect(() => {
     if (mode === "pick" && open && options === null && !optLoading) void loadOptions(search);
@@ -581,6 +596,7 @@ export function ColumnEditPanel({
                 provider={column.provider}
                 method={column.method}
                 optionSource={methodInfo?.options?.[k] ?? null}
+                allValues={params}
               />
             ))}
             {orderedSchemaKeys.some((k) => !requiredKeys.has(k)) && (
@@ -601,6 +617,7 @@ export function ColumnEditPanel({
                     provider={column.provider}
                     method={column.method}
                     optionSource={methodInfo?.options?.[k] ?? null}
+                    allValues={params}
                   />
                 ))}
               </HttpField>
