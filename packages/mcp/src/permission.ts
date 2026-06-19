@@ -1,6 +1,6 @@
 /**
  * Permission-mode policy + human-in-the-loop (HITL) approval for the gtmgrid MCP
- * tools — the ONE layer all three agent providers (claude/codex/hermes) share, so
+ * tools — the ONE layer all three agent providers (claude/codex/cursor) share, so
  * the 4 composer modes are enforced uniformly regardless of provider.
  *
  * The four modes and how they gate a GRID tool (there are no file edits, so tools

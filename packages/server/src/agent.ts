@@ -5,7 +5,7 @@
 // no key storage — the app drives the CLI the user already logged into.
 
 import { spawn, execFile, execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, chmodSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import type { ServerResponse } from "node:http";
 import { join, dirname } from "node:path";
@@ -313,7 +313,12 @@ export function questionEventFromToolResult(raw: string): Record<string, unknown
   return null;
 }
 
-export type AgentKind = "claude" | "codex" | "hermes";
+export type AgentKind = "claude" | "codex" | "cursor";
+
+// The on-PATH binary name for each agent. Mostly identical to the kind, except
+// Cursor's headless CLI is `cursor-agent` (not `cursor`). Resolution, version
+// probing and scanning all go through this so a kind never has to equal its bin.
+const AGENT_BIN: Record<AgentKind, string> = { claude: "claude", codex: "codex", cursor: "cursor-agent" };
 
 // ── Locating the user's CLIs ──────────────────────────────────────────────
 // GUI apps launch with a minimal PATH and version managers (nvm) only set up
@@ -383,10 +388,11 @@ export function resolveAgentPath(kind: AgentKind): string | null {
   if (override && existsSync(override)) {
     found = override;
   } else {
+    const bin = AGENT_BIN[kind];
     // interactive login shell (matches the user's terminal)
     const shell = process.env.SHELL || "/bin/zsh";
     try {
-      const out = execFileSync(shell, ["-lic", `command -v ${kind} 2>/dev/null`], {
+      const out = execFileSync(shell, ["-lic", `command -v ${bin} 2>/dev/null`], {
         encoding: "utf8",
         timeout: 6000,
         stdio: ["ignore", "pipe", "ignore"],
@@ -398,7 +404,7 @@ export function resolveAgentPath(kind: AgentKind): string | null {
     }
     if (!found) {
       for (const dir of candidateDirs()) {
-        const p = join(dir, kind);
+        const p = join(dir, bin);
         if (existsSync(p)) {
           found = p;
           break;
@@ -421,7 +427,7 @@ function versionOf(kind: AgentKind): { installed: boolean; version: string | nul
   const path = resolveAgentPath(kind);
   if (!path) return { installed: false, version: null, path: null };
   try {
-    // First line only — `hermes --version` prints a multi-line report; claude/codex are single-line.
+    // First line only — some CLIs print a multi-line report; claude/codex/cursor are single-line.
     const v = execFileSync(path, ["--version"], { encoding: "utf8", timeout: 5000, env: agentSpawnEnv(path) }).split("\n")[0].trim();
     return { installed: true, version: v || null, path };
   } catch {
@@ -430,14 +436,14 @@ function versionOf(kind: AgentKind): { installed: boolean; version: string | nul
 }
 
 export function detectAgents() {
-  return { claude: versionOf("claude"), codex: versionOf("codex"), hermes: versionOf("hermes") };
+  return { claude: versionOf("claude"), codex: versionOf("codex"), cursor: versionOf("cursor") };
 }
 
 /** Clear caches so the next detect re-resolves (after install / manual connect). */
 export function rescanAgents(): void {
   resolveCache.claude = undefined;
   resolveCache.codex = undefined;
-  resolveCache.hermes = undefined;
+  resolveCache.cursor = undefined;
   cachedLoginPath = undefined;
 }
 
@@ -637,8 +643,10 @@ export function parseAgentCloud(raw: unknown): AgentCloud | undefined {
  * The env the MCP server is spawned with. LOCAL: only `GTMGRID_PROJECT`
  * (byte-identical to before). CLOUD: `GTMGRID_MODE=cloud` plus the threaded
  * apiUrl/token/workspace/project/table so `selectGridEnv` in the MCP resolves a
- * cloud data source. The token rides the ENV, not the config string, so it
- * never appears in a logged command line.
+ * cloud data source. For claude/codex the token rides the ENV on an ephemeral
+ * argv, never touching disk. (Cursor is the exception — it has no inline MCP flag,
+ * so {@link writeCursorMcpConfig} writes this env to a 0600 file it deletes after
+ * the turn.)
  */
 /** A human-approved action, threaded into the resumed turn's MCP env (Phase 2). */
 export interface AgentApproval {
@@ -681,7 +689,7 @@ export function mcpEnv(
 /**
  * Build the MCP config for claude. The gtmgrid server's env is resolved via
  * {@link mcpEnv} so it carries the cloud context (TRI-3296) when `cloud` is set;
- * `extra` merges in additional servers (e.g. Hermes-as-a-tool when enabled).
+ * `extra` merges in any additional servers (none today — kept for extensibility).
  * Exported for tests.
  */
 export function mcpConfig(
@@ -706,9 +714,6 @@ export function streamClaude(
   opts: { message: string; project: string; repoRoot: string; sessionId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; mode?: string; cloud?: AgentCloud; providerEnv?: Record<string, string>; approval?: AgentApproval },
 ): void {
   const sse = sseClient(res, opts.origin);
-  // Optionally also expose the user's Hermes agent as an MCP tool (off unless
-  // `hermesAsTool` is set in ~/.gtmgrid/agents.json) so Claude can delegate to it.
-  const hermesTool = hermesToolServer();
   const args = [
     "-p",
     opts.message,
@@ -716,21 +721,20 @@ export function streamClaude(
     "stream-json",
     "--verbose",
     "--mcp-config",
-    mcpConfig(opts.repoRoot, opts.project, hermesTool ? { hermes: hermesTool } : undefined, opts.cloud, opts.mode, opts.approval),
-    // Use ONLY gtmgrid's MCP server (+ Hermes when enabled) — ignore the user's
-    // other Claude Code MCP servers (Trigify/Clay/etc.) so the agent drives
-    // gtmgrid's own tools instead of reaching for an external MCP (auth walls).
-    // The gtmgrid server's env carries cloud context (TRI-3296) when in cloud mode.
+    mcpConfig(opts.repoRoot, opts.project, undefined, opts.cloud, opts.mode, opts.approval),
+    // Use ONLY gtmgrid's MCP server — ignore the user's other Claude Code MCP
+    // servers (Trigify/Clay/etc.) so the agent drives gtmgrid's own tools instead
+    // of reaching for an external MCP (auth walls). The gtmgrid server's env
+    // carries cloud context (TRI-3296) when in cloud mode.
     "--strict-mcp-config",
     "--allowedTools",
     ...GTM_TOOLS.map((t) => `mcp__gtmgrid__${t}`),
-    ...(hermesTool ? ["mcp__hermes"] : []),
   ];
   const preamble = contextPreamble(opts.context, opts.mode, !!opts.cloud);
   if (preamble) args.push("--append-system-prompt", preamble);
   if (opts.model) args.push("--model", opts.model);
   // Permission posture (the composer's mode picker). Default to bypass — it
-  // matches the codex/hermes bridges and stops non-grid tools (Bash, grep) being
+  // matches the codex/cursor bridges and stops non-grid tools (Bash, grep) being
   // denied in headless `-p`, where an "ask" prompt can't be surfaced anyway. PLAN
   // mode also runs at bypass (see claudePermissionMode) so research tools aren't
   // denied; the PLAN_MODE_NOTE preamble keeps it from executing. The gtmgrid
@@ -797,7 +801,7 @@ export function streamClaude(
             // tool_result ("Answer questions?") and ends the turn, so we intercept
             // the tool_use itself and surface the questions as answer cards. The
             // native input shape ({questions:[{header,question,multiSelect,options}]})
-            // matches the desktop's AskRequest exactly. (Codex/Hermes have no native
+            // matches the desktop's AskRequest exactly. (Codex/Cursor have no native
             // tool and instead call mcp__gtmgrid__ask_user_question — caught below.)
             if (block.name === "AskUserQuestion" && Array.isArray(block.input?.questions)) {
               sse.write({ type: "ask_user", questions: block.input.questions });
@@ -899,22 +903,16 @@ export function streamCodex(
   const launcher = mcpLauncher(opts.repoRoot);
   const preamble = contextPreamble(opts.context, opts.mode, !!opts.cloud);
   const message = preamble ? `${preamble}\n\n${opts.message}` : opts.message;
-  // Optionally also expose the user's Hermes agent as an MCP tool (off unless
-  // `hermesAsTool` is set in ~/.gtmgrid/agents.json).
-  const hermesTool = hermesToolServer();
-  const hermesToml = hermesTool
-    ? `, hermes = { command = "${hermesTool.command}", args = [${(hermesTool.args ?? []).map((a) => `"${a}"`).join(", ")}] }`
-    : "";
   const flags = [
     "--json",
     "--skip-git-repo-check",
     ...codexSandboxFlags(opts.mode),
-    // Replace Codex's whole MCP table with ONLY gtmgrid (+ Hermes when enabled),
-    // so it ignores the user's other registered servers (Trigify/exa/etc.) and
-    // drives gtmgrid. The gtmgrid env (incl. cloud context in cloud mode) is
-    // rendered as TOML with every value safely quoted — see `codexEnvToml`.
+    // Replace Codex's whole MCP table with ONLY gtmgrid, so it ignores the user's
+    // other registered servers (Trigify/exa/etc.) and drives gtmgrid. The gtmgrid
+    // env (incl. cloud context in cloud mode) is rendered as TOML with every value
+    // safely quoted — see `codexEnvToml`.
     "-c",
-    `mcp_servers={ gtmgrid = { command = "${launcher}", env = ${codexEnvToml(mcpEnv(opts.project, opts.cloud, opts.mode, opts.approval))} }${hermesToml} }`,
+    `mcp_servers={ gtmgrid = { command = "${launcher}", env = ${codexEnvToml(mcpEnv(opts.project, opts.cloud, opts.mode, opts.approval))} } }`,
     ...(opts.model ? ["-m", opts.model] : []),
   ];
   // Same binding as Claude: an explicit threadId (History pick) wins, else resume
@@ -1089,215 +1087,126 @@ function runCodexOneShot(bin: string, prompt: string, system: string): Promise<{
   });
 }
 
-// ── Hermes (ACP) bridge ────────────────────────────────────────────────────
-// Hermes speaks the Agent Client Protocol — JSON-RPC 2.0 over stdio with
-// newline-delimited framing. We `hermes acp`, `initialize`, open a session with
-// the gtmgrid MCP server mounted INLINE (so the agent drives the same grid tools
-// claude/codex get), then `session/prompt`. The agent's `session/update`
-// notifications (assistant text, tool_call / tool_call_update) map onto the
-// exact SSE shape the panel already renders. Runs the local `hermes` binary.
+// ── Cursor (cursor-agent) bridge ───────────────────────────────────────────
+// Cursor ships a headless CLI — `cursor-agent -p` — that drives the user's Cursor
+// subscription (they run `cursor-agent login` once; no keys are stored here, same
+// as the claude/codex bridges). Its `--output-format stream-json` emits the SAME
+// Anthropic agent-SDK event shape as Claude (assistant/user/result envelopes with
+// text / tool_use / tool_result blocks), so the stdout parser mirrors streamClaude.
+//
+// MCP wiring is the one real difference: cursor-agent has NO inline `--mcp-config`
+// / `--strict-mcp-config` flag (unlike claude/codex). It discovers MCP servers from
+// `.cursor/mcp.json` in its working directory (plus the user's global
+// ~/.cursor/mcp.json). So we spawn it inside an app-owned workspace dir and write
+// gtmgrid's server into that dir's `.cursor/mcp.json` before each turn. Caveat: we
+// cannot suppress the user's OWN global MCP servers the way claude/codex do — the
+// operating-manual preamble steers the agent to gtmgrid's tools instead.
 
-interface AgentsConfig {
-  claude?: string;
-  codex?: string;
-  hermes?: string;
-  /** When set, also expose Hermes (`hermes mcp serve`) as a tool to claude/codex. */
-  hermesAsTool?: boolean;
-}
+/** App-owned working directory we run `cursor-agent` in, so the gtmgrid MCP config
+ *  we drop never touches the user's real projects (or the app bundle). */
+const CURSOR_WORKSPACE = join(CONFIG_DIR, "cursor");
 
-function loadAgentsConfig(): AgentsConfig {
-  try {
-    return JSON.parse(readFileSync(AGENTS_CONFIG, "utf8"));
-  } catch {
-    return {};
-  }
-}
+/** Absolute path of the cursor MCP config file. */
+const CURSOR_MCP_CONFIG = join(CURSOR_WORKSPACE, ".cursor", "mcp.json");
 
-type AcpMcpServer = { name: string; command: string; args: string[]; env: { name: string; value: string }[] };
-export interface HermesTransport {
-  argv: string[];
-  gtmgridMcp: AcpMcpServer;
-  label: string;
-}
-
-/** Resolve how to launch the local Hermes (ACP) and how its session reaches the
- *  gtmgrid MCP server. Returns null if there's no local `hermes` binary. */
-function resolveHermesTransport(
+/**
+ * Write the gtmgrid MCP server into the cursor workspace's `.cursor/mcp.json` so a
+ * `cursor-agent` spawned with cwd={@link CURSOR_WORKSPACE} mounts the grid tools.
+ * Reuses {@link mcpConfig} (the same `{ mcpServers: { gtmgrid } }` shape claude
+ * gets), so the gtmgrid env carries cloud context / permission mode / approval
+ * identically. Returns the workspace dir to use as the spawn cwd.
+ *
+ * SECURITY: unlike claude/codex — which pass the gtmgrid env (incl. the cloud
+ * member bearer `GTMGRID_TOKEN`) on an EPHEMERAL argv — cursor-agent has no inline
+ * MCP flag, so the env is written to THIS file on disk. It is therefore created
+ * 0600 (owner-only) inside a 0700 dir, and {@link streamCursor} deletes it once the
+ * turn's child exits, so the token never lingers world-readable.
+ */
+export function writeCursorMcpConfig(
   repoRoot: string,
   project: string,
+  cloud?: AgentCloud,
   mode?: string,
   approval?: AgentApproval,
-): HermesTransport | null {
-  const bin = resolveAgentPath("hermes");
-  if (!bin) return null;
-  // Hermes is local-only (no cloud), but it gets the SAME permission-mode +
-  // approval env as Claude/Codex so the MCP gate enforces the mode identically.
-  const env = Object.entries(mcpEnv(project, undefined, mode, approval)).map(
-    ([name, value]) => ({ name, value }),
-  );
-  return {
-    argv: [bin, "acp"],
-    gtmgridMcp: { name: "gtmgrid", command: mcpLauncher(repoRoot), args: [], env },
-    label: "local",
-  };
+): string {
+  const dir = join(CURSOR_WORKSPACE, ".cursor");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(CURSOR_MCP_CONFIG, mcpConfig(repoRoot, project, undefined, cloud, mode, approval), { mode: 0o600 });
+  // `mode` on writeFileSync only applies on CREATE; force it in case the file
+  // already existed (e.g. left 0644 by an older build) so the token is never
+  // group/world-readable.
+  chmodSync(CURSOR_MCP_CONFIG, 0o600);
+  return CURSOR_WORKSPACE;
 }
 
-/** When `hermesAsTool` is set, expose the local Hermes agent as an MCP server
- *  (`hermes mcp serve`) to the claude/codex grid agent. */
-function hermesToolServer(): ExtraMcpServer | null {
-  const cfg = loadAgentsConfig();
-  if (!cfg.hermesAsTool) return null;
-  const bin = resolveAgentPath("hermes") || "hermes";
-  return { command: bin, args: ["mcp", "serve"] };
-}
-
-function acpToolName(u: Record<string, any>): string {
-  const t = String(u?.title ?? u?.kind ?? "tool").trim();
-  // Hermes titles MCP tools "mcp_<server>_<tool>" (and sometimes "gtmgrid: <tool>").
-  return t.replace(/^mcp_[a-z0-9-]+_/i, "").replace(/^gtmgrid[:_\s]*/i, "").trim() || "tool";
-}
-/** Full tool-result text (UNtruncated) — used for HITL payload detection, where a
- *  600-char clip could break JSON.parse of a larger ask_user_question payload. */
-function acpToolResultTextFull(u: Record<string, any>): string {
-  if (typeof u?.rawOutput === "string" && u.rawOutput) return u.rawOutput;
-  const blocks = Array.isArray(u?.content) ? u.content : [];
-  return String(
-    blocks
-      .map((b: any) => (typeof b?.content?.text === "string" ? b.content.text : typeof b?.text === "string" ? b.text : ""))
-      .join(""),
-  );
-}
-
-/** Map one ACP `session/update` payload onto SSE events. Pure; exported for tests. */
-export function mapAcpUpdate(update: Record<string, any> | undefined | null): Array<Record<string, unknown>> {
-  const out: Array<Record<string, unknown>> = [];
-  switch (update?.sessionUpdate) {
-    case "agent_message_chunk": {
-      const text = update?.content?.text;
-      if (typeof text === "string" && text) out.push({ type: "text", text });
-      break;
-    }
-    case "tool_call":
-      out.push({ type: "tool", name: acpToolName(update), raw: update?.toolCallId, input: update?.rawInput ?? {} });
-      break;
-    case "tool_call_update":
-      if (update?.status === "completed" || update?.status === "failed") {
-        const full = acpToolResultTextFull(update);
-        out.push({ type: "tool_result", result: full.slice(0, 600) });
-        const pe = permissionEventFromToolResult(full);
-        if (pe) out.push(pe);
-        const qe = questionEventFromToolResult(full);
-        if (qe) out.push(qe);
-        out.push({ type: "grid" }); // a tool finished — nudge the UI to refetch
-      }
-      break;
-    // available_commands_update / usage_update / plan / current_mode_update: ignored.
+/** Remove the on-disk cursor MCP config (with the cloud token) after a turn. */
+function cleanupCursorMcpConfig(): void {
+  try {
+    unlinkSync(CURSOR_MCP_CONFIG);
+  } catch {
+    /* already gone / never written — fine */
   }
-  return out;
 }
 
-/** Choose a permission option that allows the action (headless auto-run, mirrors
- *  the bypass posture of the claude/codex bridges). */
-export function pickAllowOption(options: unknown): string | null {
-  if (!Array.isArray(options)) return null;
-  const byKind = (k: string) => options.find((o: any) => o?.kind === k)?.optionId;
-  return (
-    byKind("allow_once") ??
-    byKind("allow_always") ??
-    options.find((o: any) => /allow/i.test(String(o?.optionId ?? o?.kind ?? "")))?.optionId ??
-    null
-  );
+/** Strip the MCP-server prefix cursor puts on a tool name (`mcp_gtmgrid_<tool>` /
+ *  `mcp__gtmgrid__<tool>` / `gtmgrid_<tool>`) down to the bare gtmgrid tool name.
+ *  Pure; exported for tests. */
+export function cursorToolShort(name: string): string {
+  return String(name)
+    .replace(/^mcp__?gtmgrid__?/i, "")
+    .replace(/^gtmgrid[:_]\s*/i, "")
+    .trim();
 }
 
-/** Minimal child surface the Hermes bridge drives (so tests can inject a fake).
- *  A superset of {@link ManagedChild} that also exposes the stdio the JSON-RPC
- *  client reads/writes. */
-export interface HermesChild extends ManagedChild {
-  stdin: { write(chunk: string): unknown } | null;
-  stdout: { on(event: "data", listener: (chunk: Buffer | string) => void): unknown };
-  stderr: { on(event: "data", listener: (chunk: Buffer | string) => void): unknown };
-  on(event: "close", listener: () => void): unknown;
-  on(event: "error", listener: (err: Error) => void): unknown;
-}
-
-/** Injectable spawn seam for the Hermes child — defaults to a detached `spawn`
- *  so the bridge can group-kill the CLI + its MCP/grandchildren (TRI-3305). */
-export type SpawnHermes = (cmd: string, args: string[], cwd: string) => HermesChild;
-
-const defaultSpawnHermes: SpawnHermes = (cmd, args, cwd) =>
-  // `detached` → own process group, so cleanup can kill the CLI + the gtmgrid
-  // MCP server + their subprocesses as one group, not just the hermes parent.
-  // The real `ChildProcess` structurally satisfies HermesChild (pid + stdio + on).
-  spawn(cmd, args, { env: agentSpawnEnv(cmd), cwd, detached: true });
-
-/** Stream a Hermes turn over SSE via the Agent Client Protocol. */
-export function streamHermes(
+/** Stream a Cursor turn over SSE, driving gtmgrid via MCP. */
+export function streamCursor(
   res: ServerResponse,
-  opts: { message: string; project: string; repoRoot: string; sessionId?: string; context?: AgentContext; origin?: string; model?: string; mode?: string; approval?: AgentApproval },
-  deps: {
-    spawn?: SpawnHermes;
-    control?: ProcessControl;
-    resolveTransport?: (repoRoot: string, project: string, mode?: string, approval?: AgentApproval) => HermesTransport | null;
-  } = {},
+  opts: { message: string; project: string; repoRoot: string; sessionId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; mode?: string; cloud?: AgentCloud; providerEnv?: Record<string, string>; approval?: AgentApproval },
 ): void {
   const sse = sseClient(res, opts.origin);
-  const transport = (deps.resolveTransport ?? resolveHermesTransport)(opts.repoRoot, opts.project, opts.mode, opts.approval);
-  if (!transport) {
-    sse.write({
-      type: "error",
-      message:
-        "Hermes not found. Install the `hermes` binary, or set its path in the panel.",
-    });
+  // cursor-agent has no `--append-system-prompt`; fold the operating manual into the
+  // prompt instead (exactly as the codex bridge does). PLAN mode is enforced by the
+  // preamble's PLAN_MODE_NOTE — there's no separate CLI plan flag.
+  const preamble = contextPreamble(opts.context, opts.mode, !!opts.cloud);
+  const message = preamble ? `${preamble}\n\n${opts.message}` : opts.message;
+
+  // `--force` = "allow commands unless explicitly denied" — the bypass posture the
+  // claude/codex bridges run with (the gtmgrid MCP gate still enforces the mode via
+  // its env). The gtmgrid tool gating is the MCP layer's job, same as the others.
+  const args = ["-p", message, "--output-format", "stream-json", "--force"];
+  if (opts.model) args.push("--model", opts.model);
+  // Resume the user's prior cursor chat for continuity unless they asked for a New
+  // chat. The chat id rides back on the stream's `system`/`result` events (captured
+  // below) and is what the panel stores + replays here next turn.
+  const resumeId = opts.newChat ? null : opts.sessionId ?? null;
+  if (resumeId) args.push("--resume", resumeId);
+
+  const bin = resolveAgentPath("cursor");
+  if (!bin) {
+    sse.write({ type: "error", message: "Cursor not found. Install cursor-agent (cursor.com/cli) and run `cursor-agent login`, or set its path in the panel." });
     sse.write({ type: "end" });
     return sse.end();
   }
+  // Mount gtmgrid's MCP server via a config in cursor's cwd (it has no inline flag).
+  const cwd = writeCursorMcpConfig(opts.repoRoot, opts.project, opts.cloud, opts.mode, opts.approval);
 
-  const [cmd, ...args] = transport.argv;
-  const child = (deps.spawn ?? defaultSpawnHermes)(cmd, args, opts.repoRoot);
+  // `detached` → own process group, so cleanup can kill the CLI + the gtmgrid MCP
+  // server + their subprocesses as one group (TRI-3305). Saved provider keys fill in
+  // UNDER process.env so an explicitly exported var still wins.
+  const child = spawn(bin, args, { env: { ...opts.providerEnv, ...agentSpawnEnv(bin) }, cwd, detached: true });
+  child.stdin?.end(); // prompt is passed via `-p`; close stdin so it doesn't wait on it.
 
-  let sessionId = opts.sessionId ?? null;
-  // Suppress `session/update` events until our prompt is in flight — this drops
-  // setup notifications AND the history replay that session/load streams back.
-  let forwarding = false;
-  // The async driver and the timeout both finish the SSE stream — guard so only
-  // the first one writes the terminal `end` and ends the response.
-  let ended = false;
-  const finish = (): void => {
-    if (ended) return;
-    ended = true;
-    sse.write({ type: "end", sessionId });
-    sse.end();
-  };
-
-  // Group-kill cleanup + max-run ceiling, mirroring the claude/codex bridges.
-  // `terminate()` signals the whole process group (negative pid: SIGTERM→SIGKILL);
-  // `dispose()` (on child close/error) clears the timers so no signal lands after exit.
+  let sessionId = resumeId ?? null;
+  let buf = "";
+  let gridDirty = false;
   const lifecycle = manageChildLifecycle(child, {
-    control: deps.control,
     onTimeout: () => {
-      sse.write({ type: "error", message: `hermes turn exceeded ${Math.round(MAX_RUN_MS / 1000)}s and was terminated` });
-      finish();
+      sse.write({ type: "error", message: `cursor turn exceeded ${Math.round(MAX_RUN_MS / 1000)}s and was terminated` });
+      sse.write({ type: "end", sessionId });
+      sse.end();
     },
   });
 
-  // ── Minimal JSON-RPC 2.0 client over the child's stdio (NDJSON) ──
-  let nextId = 1;
-  const pending = new Map<number, (msg: any) => void>();
-  const sendRaw = (obj: unknown) => child.stdin?.write(JSON.stringify(obj) + "\n");
-  const request = (method: string, params: unknown) =>
-    new Promise<any>((resolve) => {
-      const id = nextId++;
-      pending.set(id, resolve);
-      sendRaw({ jsonrpc: "2.0", id, method, params });
-    });
-  const respond = (id: number, result: unknown) => sendRaw({ jsonrpc: "2.0", id, result });
-  const respondError = (id: number, message: string) => sendRaw({ jsonrpc: "2.0", id, error: { code: -32601, message } });
-  const failAllPending = (message: string) => {
-    for (const [, resolve] of pending) resolve({ error: { message } });
-    pending.clear();
-  };
-
-  let buf = "";
   child.stdout.on("data", (chunk) => {
     buf += chunk.toString();
     let nl: number;
@@ -1305,85 +1214,77 @@ export function streamHermes(
       const line = buf.slice(0, nl).trim();
       buf = buf.slice(nl + 1);
       if (!line) continue;
-      let m: any;
+      let e: any;
       try {
-        m = JSON.parse(line);
+        e = JSON.parse(line);
       } catch {
         continue;
       }
-      // Response to one of our requests (has id + result/error, no method).
-      if (m.id !== undefined && m.method === undefined && pending.has(m.id)) {
-        pending.get(m.id)!(m);
-        pending.delete(m.id);
-        continue;
+      // Capture cursor's chat id as soon as it appears (the `system` init carries it)
+      // so the panel can resume THIS chat next turn; refreshed from `result` below.
+      if (typeof e.session_id === "string" && e.session_id && e.session_id !== sessionId) {
+        sessionId = e.session_id;
+        sse.write({ type: "session", sessionId });
       }
-      // Agent → client request. Auto-allow permission; reject anything else so
-      // Hermes never hangs waiting on us.
-      if (m.method && m.id !== undefined) {
-        if (m.method === "session/request_permission") {
-          const optId = pickAllowOption(m.params?.options);
-          respond(m.id, { outcome: optId ? { outcome: "selected", optionId: optId } : { outcome: "cancelled" } });
-        } else {
-          respondError(m.id, `unsupported: ${m.method}`);
+      if (e.type === "assistant") {
+        for (const block of e.message?.content ?? []) {
+          if (block.type === "text" && block.text) sse.write({ type: "text", text: block.text });
+          else if (block.type === "tool_use") {
+            const short = cursorToolShort(block.name);
+            sse.write({ type: "tool", name: short, raw: block.name, input: block.input ?? {} });
+            // Only a gtmgrid MUTATING tool dirties the grid — mirror claude's
+            // prefix guard so a coincidentally-named non-gtmgrid tool can't force
+            // a spurious refetch. cursor prefixes gtmgrid tools `mcp_gtmgrid_` /
+            // `mcp__gtmgrid__` / `gtmgrid_`.
+            const isGtmgridTool = /^(mcp__?gtmgrid__?|gtmgrid[:_])/i.test(String(block.name));
+            if (isGtmgridTool && MUTATING.has(short)) gridDirty = true;
+          }
         }
-        continue;
+      } else if (e.type === "user") {
+        // Tool results come back as a user message with tool_result blocks.
+        for (const block of e.message?.content ?? []) {
+          if (block.type === "tool_result") {
+            const text = Array.isArray(block.content)
+              ? block.content.map((c: any) => (c?.type === "text" ? c.text : "")).join("")
+              : typeof block.content === "string"
+                ? block.content
+                : "";
+            if (text) sse.write({ type: "tool_result", result: text.slice(0, 600) });
+            const pe = text ? permissionEventFromToolResult(text) : null;
+            if (pe) sse.write(pe);
+            const qe = text ? questionEventFromToolResult(text) : null;
+            if (qe) sse.write(qe);
+          }
+        }
+      } else if (e.type === "result") {
+        if (e.session_id) sessionId = e.session_id;
+        sse.write({ type: "done", result: e.result ?? "", sessionId, isError: e.is_error ?? e.subtype !== "success" });
       }
-      // Notifications.
-      if (m.method === "session/update" && forwarding) {
-        for (const ev of mapAcpUpdate(m.params?.update)) sse.write(ev);
+      // Nudge the UI to refetch as soon as a mutating tool runs (not just at the end).
+      if (gridDirty) {
+        sse.write({ type: "grid" });
+        gridDirty = false;
       }
     }
   });
 
   let stderr = "";
   child.stderr.on("data", (d) => (stderr = appendCapped(stderr, d.toString())));
+
   child.on("error", (err) => {
     lifecycle.dispose();
-    failAllPending(`failed to launch hermes (${transport.label}): ${err.message}`);
+    cleanupCursorMcpConfig();
+    sse.write({ type: "error", message: `Failed to launch cursor-agent: ${err.message}` });
+    sse.end();
   });
-  child.on("close", () => failAllPending("hermes exited"));
-
-  (async () => {
-    try {
-      const init = await request("initialize", {
-        protocolVersion: 1,
-        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-      });
-      if (init?.error) throw new Error(init.error.message ?? "initialize failed");
-
-      const mcpServers = [transport.gtmgridMcp];
-      // Resume the prior session when we have one (re-registering gtmgrid); fall
-      // back to a fresh session if it's unknown/expired.
-      let sess: any = null;
-      if (sessionId) {
-        sess = await request("session/load", { sessionId, cwd: opts.repoRoot, mcpServers });
-        if (sess?.error) sess = null;
-      }
-      if (!sess) sess = await request("session/new", { cwd: opts.repoRoot, mcpServers });
-      if (sess?.error) throw new Error(sess.error.message ?? "session failed");
-      sessionId = sess.result?.sessionId ?? sessionId;
-      if (sessionId) sse.write({ type: "session", sessionId });
-
-      // Best-effort model switch (panel passes an ACP modelId); keep default on failure.
-      if (opts.model) await request("session/set_model", { sessionId, modelId: opts.model });
-
-      const preamble = contextPreamble(opts.context, opts.mode);
-      const text = preamble ? `${preamble}\n\n${opts.message}` : opts.message;
-      forwarding = true;
-      const result = await request("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
-      const stop = result?.result?.stopReason;
-      const isError = !!result?.error || (typeof stop === "string" && stop !== "end_turn");
-      if (result?.error) sse.write({ type: "error", message: result.error.message ?? "prompt failed" });
-      sse.write({ type: "done", result: "", sessionId, isError });
-    } catch (e) {
-      const detail = e instanceof Error ? e.message : String(e);
-      sse.write({ type: "error", message: detail + (stderr ? ` — ${stderr.slice(-300)}` : "") });
-    } finally {
-      finish();
-      // Turn done (or failed) → tear down the whole group, not just the parent.
-      lifecycle.terminate();
+  child.on("close", (code) => {
+    cleanupCursorMcpConfig(); // remove the on-disk token now the child has exited
+    if (code !== 0 && code !== null) {
+      sse.write({ type: "error", message: stderr.slice(-400) || `cursor-agent exited ${code}` });
     }
-  })();
+    sse.write({ type: "end", sessionId });
+    sse.end();
+  });
 
   // Panel unmount / Stop / new send closes the response → kill the whole group.
   res.on("close", () => lifecycle.terminate());

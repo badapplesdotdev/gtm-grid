@@ -35,7 +35,7 @@ import {
 } from "@gtmgrid/engine";
 import { Effect } from "effect";
 import type { RunErrorContext } from "@gtmgrid/engine";
-import { detectAgents, streamClaude, streamCodex, streamHermes, setAgentPath, rescanAgents, generateWithAgent, parseAgentCloud, type AgentKind } from "./agent.js";
+import { detectAgents, streamClaude, streamCodex, streamCursor, setAgentPath, rescanAgents, generateWithAgent, parseAgentCloud, type AgentKind } from "./agent.js";
 import { localProviderEnv, resolveCloudProviderEnv } from "./provider-env.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, previewCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
@@ -852,7 +852,7 @@ route("GET", "/api/agent/sessions/:agent/:id", (p) => ({
 // Manually connect a CLI (set its path) and/or rescan after install.
 route("POST", "/api/agents/connect", (_p, body) => {
   const agent = body?.agent as AgentKind;
-  if ((agent === "claude" || agent === "codex" || agent === "hermes") && typeof body?.path === "string" && body.path.trim()) {
+  if ((agent === "claude" || agent === "codex" || agent === "cursor") && typeof body?.path === "string" && body.path.trim()) {
     setAgentPath(agent, body.path.trim());
   }
   rescanAgents();
@@ -976,9 +976,8 @@ const server = createServer(async (req, res) => {
             registry.list().map((c) => c.id),
             (id) => globalDb.getCredential(id)?.secrets ?? null,
           );
-      // Hermes is a LOCAL ACP coding agent and is never threaded the cloud context.
       const newChat = body?.newChat === true;
-      if (agent === "hermes") streamHermes(res, { message, project: PROJECT_NAME, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model, mode, approval });
+      if (agent === "cursor") streamCursor(res, { message, project: PROJECT_NAME, repoRoot: REPO_ROOT, sessionId: body?.sessionId, newChat, context, origin, model, mode, cloud, providerEnv, approval });
       else if (agent === "codex") streamCodex(res, { message, project: PROJECT_NAME, repoRoot: REPO_ROOT, threadId: body?.sessionId, newChat, context, origin, model, mode, cloud, providerEnv, approval });
       else streamClaude(res, { message, project: PROJECT_NAME, repoRoot: REPO_ROOT, sessionId: body?.sessionId, newChat, context, origin, model, mode, cloud, providerEnv, approval });
     } catch (e) {

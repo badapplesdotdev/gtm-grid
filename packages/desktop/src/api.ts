@@ -209,9 +209,9 @@ export const api = {
   connect: (extId: string, secrets: Record<string, string>, scope?: CredentialScope) =>
     http<{ ok: boolean }>(`/api/extensions/${extId}/connect`, { method: "POST", body: JSON.stringify({ secrets, scope }) }),
   agents: () =>
-    http<{ claude: AgentStatus; codex: AgentStatus; hermes: AgentStatus }>("/api/agents"),
-  connectAgent: (agent: "claude" | "codex" | "hermes", path?: string) =>
-    http<{ claude: AgentStatus; codex: AgentStatus; hermes: AgentStatus }>("/api/agents/connect", {
+    http<{ claude: AgentStatus; codex: AgentStatus; cursor: AgentStatus }>("/api/agents"),
+  connectAgent: (agent: "claude" | "codex" | "cursor", path?: string) =>
+    http<{ claude: AgentStatus; codex: AgentStatus; cursor: AgentStatus }>("/api/agents/connect", {
       method: "POST",
       body: JSON.stringify({ agent, path }),
     }),

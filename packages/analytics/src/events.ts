@@ -54,7 +54,7 @@ export interface AnalyticsEventMap {
     surface: "sidecar" | "cloud" | "mcp";
   };
   agent_turn_completed: {
-    agent: "claude" | "codex" | "hermes";
+    agent: "claude" | "codex" | "cursor";
     mode?: string;
     outcome: "completed" | "stopped" | "error";
   };
