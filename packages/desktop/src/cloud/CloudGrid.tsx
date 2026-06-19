@@ -29,7 +29,7 @@ import { Icon, ExpandedEditor } from "../App";
 import CellDetails, { extractCode } from "../CellDetails";
 import { setAgentPresenceTable } from "./agentPresence";
 import { api } from "../api";
-import type { AiProviderInfo, ConnectorInfo, Column, FullTable } from "../api";
+import type { AiProviderInfo, Cell, ConnectorInfo, Column, FullTable } from "../api";
 import {
   AddColumnPopover,
   FunctionsModal,
@@ -237,7 +237,16 @@ export function CloudGrid({
   // too — it's the engine that executes cloud AI columns.
   const [aiProviders, setAiProviders] = useState<AiProviderInfo[]>([]);
   useEffect(() => {
-    api.aiProviders().then(setAiProviders).catch(() => {});
+    let ignore = false;
+    api
+      .aiProviders()
+      .then((p) => {
+        if (!ignore) setAiProviders(p);
+      })
+      .catch(() => {});
+    return () => {
+      ignore = true;
+    };
   }, []);
   const aiModelMeta = useMemo(() => {
     const m = new Map<string, { providerName: string; logo: string | null }>();
@@ -420,6 +429,60 @@ export function CloudGrid({
       setActionError(e instanceof Error ? e.message : `Failed to ${what}`);
     }
   }, []);
+
+  // ── Stable cell-level intents (TRI render-perf) ──────────────────────────
+  // These feed the memoized grid rows/cells via DataGrid's `cellActions` bundle,
+  // so they MUST keep a stable identity across renders — otherwise a realtime
+  // flush (which rebuilds the controller object) would re-render every visible
+  // cell. `guard`, the mutation fns and `tableId` are all themselves stable.
+  const handleSetCell = useCallback(
+    (rowId: string, colId: string, value: string) => {
+      if (tableId === null) return;
+      void guard(
+        () => setCell(tableId, rowId as Id<"rows">, colId as Id<"columns">, value),
+        "set cell",
+      );
+    },
+    [guard, setCell, tableId],
+  );
+  const handleClearCell = useCallback(
+    (rowId: string, colId: string) => {
+      if (tableId === null) return;
+      void guard(
+        () => setCell(tableId, rowId as Id<"rows">, colId as Id<"columns">, ""),
+        "clear cell",
+      );
+    },
+    [guard, setCell, tableId],
+  );
+  const handleOpenCellDetails = useCallback((col: Column, cell: Cell | undefined) => {
+    // One right rail at a time: the details drawer overlaps the edit panel.
+    setEditCol(null);
+    setDetail({
+      columnName: col.name,
+      value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
+    });
+  }, []);
+  const handleActiveCellChange = useCallback(
+    (cell: { rowId: string; colId: string } | null) =>
+      gridPresenceStore.updateLocal({
+        cursor: cell ? { rowId: cell.rowId, columnId: cell.colId } : null,
+        editing: null,
+      }),
+    [],
+  );
+  const handleEditingCellChange = useCallback(
+    (cell: { rowId: string; colId: string } | null) =>
+      gridPresenceStore.updateLocal(
+        cell
+          ? {
+              editing: { rowId: cell.rowId, columnId: cell.colId },
+              cursor: { rowId: cell.rowId, columnId: cell.colId },
+            }
+          : { editing: null }, // stopped editing — keep the selection cursor
+      ),
+    [],
+  );
 
   // The cloud column-authoring backend. addColumn / updateColumn target the
   // cloud tRPC API; generateFormula / aiProviders reuse the LOCAL sidecar (which
@@ -606,12 +669,10 @@ export function CloudGrid({
     runColumn,
     runCell,
     runCells,
-    setCell: (rowId, colId, value) =>
-      void guard(() => setCell(tableId, rowId as Id<"rows">, colId as Id<"columns">, value), "set cell"),
+    setCell: handleSetCell,
     deleteRow: (rowId) => void guard(() => deleteRow(tableId, rowId as Id<"rows">), "delete row"),
     deleteColumn: (colId) => void guard(() => deleteColumn(tableId, colId as Id<"columns">), "delete column"),
-    clearCell: (rowId, colId) =>
-      void guard(() => setCell(tableId, rowId as Id<"rows">, colId as Id<"columns">, ""), "clear cell"),
+    clearCell: handleClearCell,
     // One right rail at a time: the edit panel overlaps the details drawer.
     editColumn: (col) => { setDetail(null); setEditCol(col); },
     renameColumn: (colId, name) =>
@@ -622,30 +683,12 @@ export function CloudGrid({
     onScrollNearBottom: hasMore && !isLoadingMore ? loadMore : undefined,
     // Inspect a cell's full response (status-code/JSON) like the local grid;
     // the drawer supports promote-to-column (Clay-style field mapping).
-    openCellDetails: (col, cell) => {
-      setEditCol(null);
-      setDetail({
-        columnName: col.name,
-        value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
-      });
-    },
-    expandCell: (a) => setCellExpand(a),
+    openCellDetails: handleOpenCellDetails,
+    expandCell: setCellExpand,
     // ── Multiplayer presence ──
     presence: presenceView,
-    onActiveCellChange: (cell) =>
-      gridPresenceStore.updateLocal({
-        cursor: cell ? { rowId: cell.rowId, columnId: cell.colId } : null,
-        editing: null,
-      }),
-    onEditingCellChange: (cell) =>
-      gridPresenceStore.updateLocal(
-        cell
-          ? {
-              editing: { rowId: cell.rowId, columnId: cell.colId },
-              cursor: { rowId: cell.rowId, columnId: cell.colId },
-            }
-          : { editing: null }, // stopped editing — keep the selection cursor
-      ),
+    onActiveCellChange: handleActiveCellChange,
+    onEditingCellChange: handleEditingCellChange,
   };
 
   return (

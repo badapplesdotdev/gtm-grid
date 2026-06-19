@@ -123,6 +123,11 @@ export function useGridKeyboardNav({
     setEditSignal((s) => s + 1);
   }, []);
 
+  // Stable reader for the current edit seed. Kept referentially stable (it only
+  // reads a ref) so it can be passed across the memoized GridRow/GridCell
+  // boundary without forcing a re-render every frame.
+  const getEditSeed = useCallback(() => editSeedRef.current, []);
+
   /** Sync the active cell when focus enters a cell by mouse/Tab. */
   const onCellFocus = useCallback((row: number, col: number) => {
     setActive((prev) =>
@@ -246,6 +251,6 @@ export function useGridKeyboardNav({
     onKeyDown,
     editSignal,
     /** Read the seed for the current edit request (consumed by the active cell). */
-    getEditSeed: () => editSeedRef.current,
+    getEditSeed,
   };
 }

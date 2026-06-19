@@ -909,10 +909,8 @@ html, body, #root {
   padding: 0;
 }
 
-.grid-tr {
-  transition: background 0.08s;
-}
-
+/* The row hover/selection tint lives on `.grid-td` (below) — `.grid-tr` itself
+   never gets a background, so it carries no transition. */
 .grid-tr:hover .grid-td {
   background: var(--surface-2);
 }
