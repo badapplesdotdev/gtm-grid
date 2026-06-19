@@ -316,6 +316,7 @@ export function ColumnEditPanel({
   rows,
   onClose,
   onSaved,
+  onError,
   onOpenExtension,
 }: {
   column: Column;
@@ -328,6 +329,8 @@ export function ColumnEditPanel({
   /** Fired after a successful save; `run` asks the parent to run the column
    *  with that scope (the Save split-button's choice). */
   onSaved: (run?: { force?: boolean; rowIds?: string[] }) => void;
+  /** Surface a background save failure after the rail has already closed. */
+  onError?: (message: string) => void;
   /** Open the provider's extension panel (local only — manage the API key). */
   onOpenExtension?: (providerId: string) => void;
 }) {
@@ -402,7 +405,9 @@ export function ColumnEditPanel({
     return out;
   });
   const [aiProviderList, setAiProviderList] = useState<AiProviderInfo[]>([]);
-  const [saving, setSaving] = useState(false);
+  // The rail now closes instantly on save (persist + run happen in the
+  // background), so there's no in-rail "Saving…" state to track.
+  const saving = false;
   const [err, setErr] = useState("");
 
   // ── Account / credential status (connector columns with auth) ──
@@ -461,25 +466,32 @@ export function ColumnEditPanel({
     return patch;
   };
 
-  const save = async (run?: { force?: boolean; rowIds?: "first10" | "all" }) => {
+  const save = (run?: { force?: boolean; rowIds?: "first10" | "all" }) => {
     if (!name.trim()) { setErr("Column name is required"); return; }
-    setSaving(true);
-    setErr("");
-    try {
-      await gridApi.updateColumn(column.id, buildPatch());
-      onSaved(
-        run
-          ? {
-              force: run.force,
-              rowIds: run.rowIds === "first10" ? rows.slice(0, 10).map((r) => r.id) : undefined,
-            }
-          : undefined,
-      );
-      onClose();
-    } catch (e) {
-      setErr((e as Error)?.message ?? "Failed to save");
-      setSaving(false);
-    }
+    const patch = buildPatch();
+    const runScope = run
+      ? {
+          force: run.force,
+          rowIds: run.rowIds === "first10" ? rows.slice(0, 10).map((r) => r.id) : undefined,
+        }
+      : undefined;
+    // Dismiss the rail IMMEDIATELY. The column already exists in the grid and its
+    // cells render a loading state while the run fills them, so the user never
+    // waits on the rail: persist the config + kick off the run in the background.
+    onClose();
+    void (async () => {
+      try {
+        await gridApi.updateColumn(column.id, patch);
+        onSaved(runScope);
+      } catch (e) {
+        // The rail is already closed, so route the failure to the grid's inline
+        // error banner (not just the console) — otherwise a rejected save looks
+        // like it succeeded.
+        const message = e instanceof Error ? e.message : "Failed to save column";
+        console.error("Failed to save column:", e);
+        onError?.(message);
+      }
+    })();
   };
 
   const TypePicker = (

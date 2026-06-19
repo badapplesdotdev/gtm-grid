@@ -30,6 +30,7 @@ import { GridColSpacer } from "./GridColSpacer";
 import { type PresenceUser, presenceCellKey } from "./gridPresence";
 import type { ActiveCell } from "./useGridKeyboardNav";
 import type { ColumnWindow } from "./useColumnWindow";
+import { cellIsRunning } from "./gridRun";
 
 /** Cross-cutting interaction state shared by every cell in the row. */
 export interface GridRowInteraction {
@@ -42,6 +43,10 @@ export interface GridRowInteraction {
   readonly presenceByCell: ReadonlyMap<string, readonly PresenceUser[]> | undefined;
   readonly flashCell: string | null;
   readonly runningCells: ReadonlySet<string>;
+  /** The column currently running via a column-level run (header / save & run),
+   *  or null. Its not-yet-resolved cells render a loading state immediately —
+   *  before the per-cell `status: "running"` realtime patches arrive. */
+  readonly runningColId: string | null;
   readonly waitingByCol: ReadonlyMap<string, string[]>;
 }
 
@@ -84,7 +89,7 @@ function GridRowInner({
   interaction,
   handlers,
 }: GridRowProps) {
-  const { selRect, sel, activeCell, runningCells, waitingByCol, presenceByCell } = interaction;
+  const { selRect, sel, activeCell, runningCells, runningColId, waitingByCol, presenceByCell } = interaction;
   return (
     <tr
       role="row"
@@ -137,7 +142,7 @@ function GridRowInner({
             }
             isAnchor={!!sel && sel.anchor.r === rowIdx && sel.anchor.c === vc.index}
             isActiveCell={isActiveCell}
-            running={runningCells.has(`${row.id}:${col.id}`)}
+            running={cellIsRunning(runningCells, runningColId, row.id, col.id, cell?.status)}
             waiting={waitingByCol.has(col.id)}
             editSignal={isActiveCell ? interaction.editSignal : 0}
             editSeed={isActiveCell ? interaction.getEditSeed() : undefined}
