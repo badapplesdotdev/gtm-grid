@@ -39,13 +39,10 @@ interface VirtualGridBodyProps<Row> {
   /** Pixel height of one row (matches the CSS `--row-h` for the density). */
   rowHeight: number;
   /**
-   * Rows rendered above/below the viewport. This is the buffer that hides
-   * windowing latency: WebKit's momentum/compositor scroll can run AHEAD of the
-   * scroll event that re-windows the list, so with too small a buffer the
-   * viewport reaches the (blank) spacer before React commits the next rows and
-   * you watch rows paint in. A generous default (~one viewport each way) keeps
-   * the edge off-screen during a fling; the rows are cheap now that they're
-   * memoized, so the extra mounted DOM is negligible.
+   * Rows rendered above/below the viewport. The caller drives this with
+   * {@link useAdaptiveOverscan} — small at rest, large during a fast fling — so a
+   * momentum scroll never reaches the blank spacer (which would paint rows in)
+   * without making slow scrolling composite a needlessly huge window.
    */
   overscan?: number;
   /**
@@ -73,7 +70,7 @@ export function VirtualGridBody<Row>({
   rows,
   scrollRef,
   rowHeight,
-  overscan = 20,
+  overscan = 8,
   colSpan,
   columnWindow,
   renderRow,
