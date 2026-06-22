@@ -25,6 +25,7 @@ export {
 } from "./http-retry.js";
 export { parseManifest, connectorFromManifest, manifestSchema, extractOptions, type ExtensionManifest, type FieldOption } from "./connectors/manifest.js";
 export { assertPublicUrl, isBlockedIp, SsrfBlockedError, type SsrfOptions } from "./ssrf.js";
+export { SkipCellError, isSkipCellError } from "./skip.js";
 export * from "./types.js";
 // Canonical Effect-TS service pattern (see docs/effect-conventions.md). Later
 // business-logic services (e.g. GridStore) follow this same Service + typed-error + Layer shape.

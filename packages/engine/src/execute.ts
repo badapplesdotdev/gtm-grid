@@ -12,6 +12,7 @@ import {
 } from "./formula.js";
 import { Registry, defaultRegistry } from "./registry.js";
 import { runFunction, type SandboxDispatch } from "./sandbox.js";
+import { isSkipCellError } from "./skip.js";
 import {
   type GridStoreError,
   type GridStorePage,
@@ -193,31 +194,36 @@ export class Engine {
     return run();
   }
 
-  /** Host-side dispatcher exposed to the sandbox as `sdk.<provider>.<method>`. */
-  dispatch: SandboxDispatch = (provider, method, input) =>
-    Effect.runPromise(
-      Effect.gen(this, function* () {
-        const m = this.registry.method(provider, method);
-        if (!m) throw new Error(`Unknown function ${provider}.${method}`);
-        const cred = yield* this.creds.getCredential(provider);
-        const aiProviders = this.config.aiProviders?.length
-          ? this.config.aiProviders
-          : this.config.ai
-            ? [this.config.ai]
-            : [];
-        return yield* Effect.promise(() =>
-          this.throttle(provider, m, () =>
-            m.run(input, {
-              secrets: cred?.secrets ?? {},
-              ai: this.config.ai,
-              aiProviders,
-              guardSsrf: this.config.guardSsrf,
-              aiFallback: this.config.aiFallback,
-            }),
-          ),
-        );
+  /**
+   * Host-side dispatcher exposed to the sandbox as `sdk.<provider>.<method>`.
+   *
+   * Plain async (not wrapped in `Effect.gen`/`Effect.promise`) on purpose: a
+   * method that rejects must propagate its ORIGINAL error object — both so the
+   * injected {@link EngineConfig.reportError} sink gets the real error + stack
+   * (not an opaque Effect `FiberFailure` wrapper), and so a {@link SkipCellError}
+   * keeps its brand across the boundary, letting `runColumn` turn it into a clean
+   * "empty" skip cell instead of an error. Credential resolution still runs through
+   * Effect; only the method call itself is left unwrapped.
+   */
+  dispatch: SandboxDispatch = async (provider, method, input) => {
+    const m = this.registry.method(provider, method);
+    if (!m) throw new Error(`Unknown function ${provider}.${method}`);
+    const cred = await Effect.runPromise(this.creds.getCredential(provider));
+    const aiProviders = this.config.aiProviders?.length
+      ? this.config.aiProviders
+      : this.config.ai
+        ? [this.config.ai]
+        : [];
+    return this.throttle(provider, m, () =>
+      m.run(input, {
+        secrets: cred?.secrets ?? {},
+        ai: this.config.ai,
+        aiProviders,
+        guardSsrf: this.config.guardSsrf,
+        aiFallback: this.config.aiFallback,
       }),
     );
+  };
 
   /**
    * Resolve a column's params for a row, interpolating {{Column Name}} from cells.
@@ -413,6 +419,24 @@ export class Engine {
       emit({ rowId, columnId, value, status: "done", error: null });
       counters.ran++;
     };
+    // A connector method asked to SKIP this cell (a SkipCellError — e.g. a
+    // required company identifier is missing, so the call would be a guaranteed
+    // 4xx). Write it like a run-condition skip: status "empty" with the method's
+    // note, NO credits, NO error count, and NO telemetry — just an explained
+    // blank. Skip the redundant write when the cell already shows this note, but
+    // always stream the progress event so a live grid updates.
+    const markSkip = async (
+      rowId: string,
+      note: string,
+      existing: { status: string; error: string | null } | null | undefined,
+    ): Promise<void> => {
+      if (existing?.status !== "empty" || existing?.error !== note) {
+        await Effect.runPromise(
+          this.store.setCell(rowId, columnId, { value: null, status: "empty", error: note }),
+        );
+      }
+      emit({ rowId, columnId, value: null, status: "empty", error: note });
+    };
     const markError = async (rowId: string, e: unknown): Promise<void> => {
       const message = e instanceof Error ? e.message : String(e);
       if (firstError === undefined) firstError = message;
@@ -535,7 +559,11 @@ export class Engine {
           const result = await runFunction({ code, inputs, providers, dispatch: this.dispatch, prelude: formulaPrelude });
           await markDone(rowId, simplify(result), result);
         } catch (e) {
-          await markError(rowId, e);
+          // A method that threw a SkipCellError (e.g. a missing required company
+          // identifier) is a clean skip, not a failure: write an explained "empty"
+          // cell, no credits/errors/telemetry — same shape as a run-condition skip.
+          if (isSkipCellError(e)) await markSkip(rowId, e.message, existing);
+          else await markError(rowId, e);
         }
       });
     }

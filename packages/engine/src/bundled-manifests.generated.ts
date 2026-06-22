@@ -8382,6 +8382,19 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
             }
           }
         },
+        "requires": [
+          [
+            [
+              "first_name",
+              "last_name"
+            ],
+            "full_name"
+          ],
+          [
+            "domain",
+            "company_name"
+          ]
+        ],
         "category": "Find email"
       },
       {
@@ -8547,6 +8560,13 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
             }
           }
         },
+        "requires": [
+          [
+            "company_domain",
+            "company_name",
+            "profile_url"
+          ]
+        ],
         "category": "Enrich company",
         "rateLimit": {
           "rpm": 100
@@ -8572,6 +8592,12 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
             }
           }
         },
+        "requires": [
+          [
+            "company_domain",
+            "company_name"
+          ]
+        ],
         "category": "Enrich company"
       },
       {
@@ -8598,6 +8624,12 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
             }
           }
         },
+        "requires": [
+          [
+            "company_domain",
+            "company_name"
+          ]
+        ],
         "category": "Search"
       },
       {
@@ -8624,6 +8656,12 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
             }
           }
         },
+        "requires": [
+          [
+            "company_domain",
+            "company_name"
+          ]
+        ],
         "category": "Search"
       },
       {
@@ -8825,6 +8863,12 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
             }
           }
         },
+        "requires": [
+          [
+            "company_domain",
+            "company_name"
+          ]
+        ],
         "category": "Ads"
       },
       {
@@ -8847,6 +8891,12 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
             }
           }
         },
+        "requires": [
+          [
+            "company_domain",
+            "company_name"
+          ]
+        ],
         "category": "Ads"
       },
       {
@@ -8869,6 +8919,12 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
             }
           }
         },
+        "requires": [
+          [
+            "company_domain",
+            "company_name"
+          ]
+        ],
         "category": "Ads"
       },
       {
@@ -9036,6 +9092,13 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
             }
           }
         },
+        "requires": [
+          [
+            "company_domain",
+            "company_url",
+            "company_name"
+          ]
+        ],
         "category": "Search"
       },
       {
