@@ -208,6 +208,7 @@ html, body, #root {
   padding: 0 4px; display: inline-flex; align-items: center; justify-content: center;
   font: 600 9.5px var(--font-mono); line-height: 1; color: #fff; background: var(--accent);
   border-radius: var(--r-pill); border: 1.5px solid var(--surface);
+  font-variant-numeric: tabular-nums;
 }
 .notif-pop {
   position: absolute; top: calc(100% + 6px); right: 0; left: auto; bottom: auto;
@@ -424,6 +425,7 @@ html, body, #root {
   font-size: 11px;
   color: var(--text-3);
   font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 /* TRI-3313-C: trailing cloud glyph on cloud-backed (synced) rows in the unified
    Tables list, so cloud vs local is clear at a glance (green accent). */
@@ -474,6 +476,7 @@ html, body, #root {
   background: var(--surface-2);
   padding: 1px 6px;
   border-radius: 10px;
+  font-variant-numeric: tabular-nums;
 }
 
 .connector-methods {
@@ -602,6 +605,7 @@ html, body, #root {
   font-size: 12px;
   color: var(--text-3);
   font-weight: 400;
+  font-variant-numeric: tabular-nums;
 }
 
 .toolbar-sep {
@@ -626,9 +630,13 @@ html, body, #root {
   font-size: 12.5px;
   font-weight: 500;
   font-family: var(--font-sans);
-  transition: background 0.1s, color 0.1s, opacity 0.1s, box-shadow 0.1s;
+  transition: background 0.1s, color 0.1s, opacity 0.1s, box-shadow 0.1s, scale 0.1s;
   white-space: nowrap;
 }
+
+/* Tactile press feedback — a subtle 0.96 squeeze on click. Never below 0.95,
+   which reads as exaggerated. Skipped under prefers-reduced-motion below. */
+.btn:active:not(:disabled) { scale: 0.96; }
 
 .btn-ghost {
   color: var(--text-2);
@@ -1112,6 +1120,7 @@ html, body, #root {
 @media (prefers-reduced-motion: reduce) {
   .brand-loader-mark { animation: none; }
   .brand-loader-chevron { animation: none; opacity: 1; }
+  .btn:active:not(:disabled) { scale: 1; }
 }
 
 /* Visually-hidden text for screen readers. */
@@ -1255,6 +1264,7 @@ html, body, #root {
   font-size: 13px;
   color: var(--text-3);
   max-width: 280px;
+  text-wrap: pretty;
 }
 
 /* ── Overlay / Modal ──────────────────────── */
@@ -2001,7 +2011,12 @@ body.resizing-agent .agent-panel { transition: none; }
 .agent-md a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 .agent-md blockquote { margin: 6px 0; padding-left: 10px; border-left: 2px solid var(--border-2); color: var(--text-2); }
 .agent-md hr { border: 0; border-top: 1px solid var(--border); margin: 9px 0; }
-.agent-md img { max-width: 100%; border-radius: var(--r-sm); }
+/* Subtle edge so images read with consistent depth on any surface — pure black
+   at low opacity (light) / pure white (dark); a tinted neutral would pick up the
+   surface and read as dirt on the image edge. box-shadow (not outline) so it
+   tracks the border-radius. */
+.agent-md img { max-width: 100%; border-radius: var(--r-sm); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1); }
+[data-theme="dark"] .agent-md img { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1); }
 
 /* Inline code */
 .agent-md :not(pre) > code {
@@ -2485,6 +2500,7 @@ body.resizing-agent .agent-panel { transition: none; }
   font-weight: 600;
   color: var(--accent);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Connections design (extension / AI provider panels) ─── */
@@ -2708,7 +2724,7 @@ body.resizing-agent .agent-panel { transition: none; }
 
 /* Header */
 .tp-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 22px 28px 16px; flex-shrink: 0; }
-.tp-title { margin: 0 0 3px; font: 700 22px var(--font-sans); letter-spacing: -0.025em; color: var(--text); }
+.tp-title { margin: 0 0 3px; font: 700 22px var(--font-sans); letter-spacing: -0.025em; color: var(--text); text-wrap: balance; }
 .tp-sub { margin: 0; font: 400 13px var(--font-sans); color: var(--text-3); }
 .tp-sub strong { color: var(--text-2); font-weight: 600; }
 .tp-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
@@ -2750,7 +2766,7 @@ body.resizing-agent .agent-panel { transition: none; }
 
 /* Bulk action bar */
 .tp-bulk { display: flex; align-items: center; gap: 8px; margin: 0 28px 12px; padding: 8px 12px; background: color-mix(in srgb, var(--accent) 8%, transparent); border: 1px solid var(--accent-soft); border-radius: var(--r-md); flex-shrink: 0; animation: tp-fade 0.12s cubic-bezier(.4,0,.2,1); }
-.tp-bulk-count { font: 400 12.5px var(--font-sans); color: var(--text); }
+.tp-bulk-count { font: 400 12.5px var(--font-sans); color: var(--text); font-variant-numeric: tabular-nums; }
 .tp-bulk-count strong { color: var(--accent); font-weight: 700; }
 .tp-bulk-confirm { font: 500 12.5px var(--font-sans); color: var(--text); }
 .tp-bulk-btn { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: var(--r-sm); font: 500 12px var(--font-sans); color: var(--text); background: var(--surface); border: 1px solid var(--border); }
@@ -3239,7 +3255,8 @@ body.resizing-agent .agent-panel { transition: none; }
 .sig-schedule { display: flex; gap: 6px; }
 .sig-sched-btn {
   all: unset; cursor: pointer; flex: 1; text-align: center; font: 600 12px var(--font-sans); color: var(--text-2);
-  padding: 7px 0; border: 1px solid var(--border); border-radius: var(--r-sm); transition: all 0.12s;
+  padding: 7px 0; border: 1px solid var(--border); border-radius: var(--r-sm);
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
 .sig-sched-btn:hover { border-color: var(--border-2); }
 .sig-sched-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -3648,7 +3665,7 @@ body.resizing-agent .agent-panel { transition: none; }
   font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
   color: var(--text-3); margin-bottom: 10px;
 }
-.import-title { font: 700 26px/1.15 var(--font-sans); letter-spacing: -.02em; color: var(--text); margin: 0 0 8px; }
+.import-title { font: 700 26px/1.15 var(--font-sans); letter-spacing: -.02em; color: var(--text); margin: 0 0 8px; text-wrap: balance; }
 .import-sub { font-size: 14px; line-height: 1.5; color: var(--text-2); margin: 0 0 22px; max-width: 600px; }
 .import-error {
   margin: 14px 0 0; padding: 9px 12px; border-radius: var(--r-sm);
@@ -4072,7 +4089,8 @@ button.import-type:hover { background: var(--surface-3); }
 .fx-type {
   display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px;
   border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface);
-  color: var(--text-2); font-size: 12.5px; cursor: pointer; transition: all 0.12s;
+  color: var(--text-2); font-size: 12.5px; cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
 .fx-type:hover { border-color: var(--border-2); color: var(--text-1); }
 .fx-type.active { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
@@ -4162,7 +4180,8 @@ button.import-type:hover { background: var(--surface-3); }
 .formula-gen-btn {
   display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px;
   border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface);
-  color: var(--accent); font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.12s;
+  color: var(--accent); font-size: 12px; font-weight: 500; cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
 }
 .formula-gen-btn:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-bg); }
 .formula-gen-btn:disabled { opacity: 0.6; cursor: default; }
