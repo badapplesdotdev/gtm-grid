@@ -68,6 +68,8 @@ function toTrpcError(tag: string | undefined, message: string): TRPCError {
     case "InvalidMappingError":
     case "InvalidConfigError":
     case "InvalidCellError":
+    // Grid domain: a column edit that would create a circular {{column}} reference.
+    case "ColumnCycleError":
     // Social Signals domain: bad source id, missing Trigify key, Trigify API error.
     case "SignalError":
       return new TRPCError({ code: "BAD_REQUEST", message });

@@ -34,6 +34,13 @@ import {
 } from "@gtmgrid/cloud";
 import { Data, Effect } from "effect";
 import {
+  type MinimalColumn,
+  buildColumnDeps,
+  columnInCycle,
+  directDependencyIds,
+  stableTopoOrder,
+} from "../columns/index.js";
+import {
   type Cell,
   CellRepo,
   type CellRepoError,
@@ -92,6 +99,30 @@ export class CloudActionsLimitError extends Data.TaggedError(
 )<{
   readonly message: string;
 }> {}
+
+/**
+ * Raised when a column edit would create a circular `{{Name}}` reference (e.g. A
+ * reads B while B reads A). The change is rejected before it is persisted so the
+ * grid never enters a cyclic dependency state.
+ */
+export class ColumnCycleError extends Data.TaggedError("ColumnCycleError")<{
+  readonly message: string;
+}> {}
+
+/**
+ * Project a stored {@link Column} (whose `params` is `unknown`) onto the
+ * {@link MinimalColumn} shape the dependency analysis consumes. `params` is a
+ * jsonb blob; `paramStrings` walks it defensively, so coercing a non-object to
+ * `{}` is safe.
+ */
+const toMinimalColumn = (c: Column): MinimalColumn => ({
+  id: c.id,
+  name: c.name,
+  kind: c.kind,
+  provider: c.provider,
+  params: (c.params ?? {}) as Record<string, unknown>,
+  condition: c.condition,
+});
 
 /**
  * The full grid `getTable` returns, shaped to match what desktop
@@ -570,7 +601,40 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       Effect.gen(function* () {
         const table = yield* requireTable(args.tableId);
         yield* requireCloudMember(table.workspaceId);
-        const position = yield* columns.nextPosition(args.tableId);
+
+        // DAG-aware placement: slot the new column to the RIGHT of every existing
+        // column it references via `{{Name}}` (in params/condition), so the table
+        // reads left-to-right in dependency order. A brand-new column can't be a
+        // cycle (nothing references its name yet), so no cycle check is needed here.
+        const ordered = yield* columns.listByTable(args.tableId);
+        const depIds = directDependencyIds(
+          {
+            id: "",
+            name: args.name,
+            kind: args.kind,
+            provider: args.provider ?? null,
+            params: (args.params ?? {}) as Record<string, unknown>,
+            condition: args.condition ?? null,
+          },
+          ordered.map(toMinimalColumn),
+        );
+        // Rightmost dependency index; -1 when the column depends on nothing.
+        let depIdx = -1;
+        for (let k = 0; k < ordered.length; k++) {
+          if (depIds.has(ordered[k]!.id)) depIdx = k;
+        }
+        // Independent → append to the tail (unchanged behavior). Otherwise take a
+        // FRACTIONAL slot just after the rightmost dependency, so only the new
+        // column's position is written and unrelated columns never move.
+        let position: number;
+        if (depIdx === -1) {
+          position = yield* columns.nextPosition(args.tableId);
+        } else if (depIdx === ordered.length - 1) {
+          position = ordered[depIdx]!.position + 1;
+        } else {
+          position = (ordered[depIdx]!.position + ordered[depIdx + 1]!.position) / 2;
+        }
+
         const id = yield* columns.insert({
           ...(args.id !== undefined ? { id: args.id } : {}),
           workspaceId: table.workspaceId,
@@ -601,6 +665,19 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
             condition: args.condition ?? null,
           },
         });
+        // Placed BEFORE the tail (a column exists after the rightmost dependency)
+        // → broadcast the full new id order so every viewer splices the column into
+        // the right slot (the reducer appends inserts to the end; this reorder
+        // corrects placement without a refetch). When the rightmost dependency is
+        // the last column the insert naturally lands at the tail, so no reorder.
+        if (depIdx !== -1 && depIdx < ordered.length - 1) {
+          const columnIds = ordered.map((c) => c.id);
+          columnIds.splice(depIdx + 1, 0, id);
+          yield* publish(table.workspaceId, args.tableId, {
+            type: "column.reorder",
+            columnIds,
+          });
+        }
         return id;
       });
 
@@ -903,6 +980,31 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
      * FULL new id order so every viewer's grid splices identically. Returns the
      * new column-id order.
      */
+    /**
+     * Reindex columns to a contiguous 0..N-1 order, writing ONLY the columns whose
+     * slot actually changed vs `currentOrdered`, then broadcast a `column.reorder`
+     * carrying the FULL new id order so every viewer splices identically. Shared by
+     * `reorderColumn` (manual drag) and `updateColumn` (dependency repair). Does NOT
+     * meter — the caller meters its single action.
+     */
+    const applyColumnOrder = (
+      workspaceId: string,
+      tableId: string,
+      currentOrdered: readonly Column[],
+      desiredIds: readonly string[],
+    ) =>
+      Effect.gen(function* () {
+        for (let i = 0; i < desiredIds.length; i++) {
+          if (currentOrdered[i]?.id !== desiredIds[i]) {
+            yield* columns.setPosition(desiredIds[i]!, i);
+          }
+        }
+        yield* publish(workspaceId, tableId, {
+          type: "column.reorder",
+          columnIds: [...desiredIds],
+        });
+      });
+
     const reorderColumn = (columnId: string, toIndex: number) =>
       Effect.gen(function* () {
         const col = yield* requireColumn(columnId);
@@ -915,16 +1017,8 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
           const [moved] = next.splice(from, 1);
           next.splice(dest, 0, moved!);
         }
-        for (let i = 0; i < next.length; i++) {
-          if (ordered[i]?.id !== next[i]) {
-            yield* columns.setPosition(next[i]!, i);
-          }
-        }
         yield* meter.meterActions(col.workspaceId, 1);
-        yield* publish(col.workspaceId, col.tableId, {
-          type: "column.reorder",
-          columnIds: next,
-        });
+        yield* applyColumnOrder(col.workspaceId, col.tableId, ordered, next);
         return { columnIds: next };
       });
 
@@ -965,11 +1059,51 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
      * code-params-condition). Members-only. Metered ONE. Broadcasts a
      * `column.update` with the full updated projection so every viewer's grid
      * reflects the change live. Returns the updated column.
+     *
+     * DAG upkeep: a patch to `params`/`condition` can change which columns this one
+     * references via `{{Name}}`. We (1) REJECT a change that would create a circular
+     * dependency BEFORE persisting it (`ColumnCycleError`), and (2) after the write,
+     * reposition the column — and any dependents now out of order — so every column
+     * still sits to the right of everything it reads (minimal-movement repair).
      */
     const updateColumn = (columnId: string, patch: ColumnPatch) =>
       Effect.gen(function* () {
         const existing = yield* requireColumn(columnId);
         yield* requireCloudMember(existing.workspaceId);
+
+        // Only params/condition carry `{{Name}}` refs, so only those can change the
+        // dependency graph; renames/type changes skip the extra reads entirely.
+        const touchesRefs =
+          patch.params !== undefined || patch.condition !== undefined;
+
+        if (touchesRefs) {
+          // Cycle guard: build the graph with the patch applied IN-MEMORY and reject
+          // before writing if the edited column would transitively depend on itself.
+          const current = yield* columns.listByTable(existing.tableId);
+          const projected = current.map((c) => {
+            const m = toMinimalColumn(c);
+            if (c.id !== columnId) return m;
+            return {
+              ...m,
+              params:
+                patch.params !== undefined
+                  ? ((patch.params ?? {}) as Record<string, unknown>)
+                  : m.params,
+              condition:
+                patch.condition !== undefined ? patch.condition : m.condition,
+            };
+          });
+          if (columnInCycle(columnId, buildColumnDeps(projected))) {
+            return yield* Effect.fail(
+              new ColumnCycleError({
+                message:
+                  "This change creates a circular dependency between columns. " +
+                  "Remove the conflicting {{column}} reference and try again.",
+              }),
+            );
+          }
+        }
+
         const updated = yield* columns.update(columnId, patch);
         const col = updated._tag === "Some" ? updated.value : existing;
         yield* meter.meterActions(existing.workspaceId, 1);
@@ -987,6 +1121,25 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
             condition: col.condition,
           },
         });
+
+        if (touchesRefs) {
+          // Reposition: stable topo order moves only the columns whose dependency
+          // order is now violated; unrelated columns keep their slots.
+          const ordered = yield* columns.listByTable(existing.tableId);
+          const desired = stableTopoOrder(
+            ordered.map((c) => c.id),
+            buildColumnDeps(ordered.map(toMinimalColumn)),
+          );
+          const changed = desired.some((id, i) => ordered[i]?.id !== id);
+          if (changed) {
+            yield* applyColumnOrder(
+              existing.workspaceId,
+              existing.tableId,
+              ordered,
+              desired,
+            );
+          }
+        }
         return col;
       });
 
