@@ -2,6 +2,7 @@ import {
   CloudSchemaMapping,
   Engine,
   aiConfigFromEnv,
+  bundledConnectors,
   cloudGridStoreShape,
   connectorFromManifest,
   defaultRegistry,
@@ -122,17 +123,26 @@ function engineConfig(): EngineConfig {
  * connector secrets. Mirrors `cloud-run.ts` `buildCloudStore`.
  */
 /**
- * The engine registry for a workspace: the built-in connectors PLUS the
- * workspace's installed manifest connectors. A connector column with no custom
- * code runs `sdk[provider][method](inputs)` in the sandbox (execute.ts), so the
- * provider MUST be registered or `sdk[provider]` is undefined and the run throws
- * "cannot read property <method>". The desktop sidecar registers manifests at
- * startup; the cloud worker has to fetch them per workspace.
+ * The engine registry for a workspace, layered so a connector column ALWAYS
+ * resolves `sdk[provider][method](inputs)` in the sandbox (execute.ts) — a
+ * missing provider leaves `sdk[provider]` undefined and the run fails with
+ * "sandbox: cannot read property <method>". Layers (later overrides earlier):
+ *
+ *   1. {@link defaultRegistry} — the code-defined built-ins (ai/formula/http/…).
+ *   2. {@link bundledConnectors} — the manifests SHIPPED with the app
+ *      (`extensions/*.json`: trigify, leadmagic, apollo, …). The desktop sidecar
+ *      seeds these from disk at startup; the cloud worker has no `extensions/`
+ *      directory, so it MUST register them here. Without this layer a webhook
+ *      auto-enrich of any bundled-connector column throws in the sandbox even
+ *      though the same column runs fine when triggered from the desktop.
+ *   3. The workspace's installed manifest connectors fetched per workspace
+ *      (custom/uploaded connectors, which can also override a bundled one).
  *
  * Cached per workspace with a short TTL so a newly-installed connector becomes
  * available within ~a minute without a DB round-trip on every column run. A fetch
- * failure falls back to the built-ins (the run still works for built-in/formula
- * columns rather than failing wholesale).
+ * failure for layer 3 still leaves layers 1+2 intact (built-ins + every bundled
+ * connector), so the run no longer degrades to built-ins-only on a transient
+ * extensions-endpoint failure.
  */
 const REGISTRY_TTL_MS = 60_000;
 const registryCache = new Map<string, { reg: Promise<Registry>; at: number }>();
@@ -143,7 +153,10 @@ export function workspaceRegistry(workspaceId: string): Promise<Registry> {
   if (cached && now - cached.at < REGISTRY_TTL_MS) return cached.reg;
   const reg = (async (): Promise<Registry> => {
     const registry = defaultRegistry();
+    // Layer 2: the app's bundled connectors, available in every environment.
+    for (const connector of bundledConnectors()) registry.add(connector);
     try {
+      // Layer 3: the workspace's installed (custom) manifest connectors.
       const manifests = (await workerClient.query("/api/worker/getExtensions", {
         workspaceId,
       })) as unknown[];
@@ -155,7 +168,7 @@ export function workspaceRegistry(workspaceId: string): Promise<Registry> {
         }
       }
     } catch {
-      /* extensions unavailable — fall back to the built-in connectors */
+      /* extensions endpoint unavailable — keep the built-ins + bundled connectors */
     }
     return registry;
   })();

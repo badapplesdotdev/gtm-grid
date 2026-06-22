@@ -8,7 +8,8 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "gen:formula-libs": "node scripts/gen-formula-libs.mjs"
+    "gen:formula-libs": "node scripts/gen-formula-libs.mjs",
+    "gen:bundled-manifests": "node scripts/gen-bundled-manifests.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",

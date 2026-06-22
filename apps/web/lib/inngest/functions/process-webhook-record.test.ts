@@ -310,6 +310,46 @@ describe("workspaceRegistry", () => {
     const providers = (await workspaceRegistry("ws-reg-fail")).providerMap();
     expect(Object.keys(providers)).toContain("formula"); // built-ins still present
   });
+
+  // The core regression behind "X is not available in sandbox" on webhook
+  // auto-enrich: the cloud worker had ONLY the built-ins + the workspace DB's
+  // extensions, and nothing seeds the app's bundled connectors cloud-side. So a
+  // column calling a bundled connector (trigify/leadmagic/apollo/…) hit an
+  // undefined `sdk[provider]`. The worker now also registers `bundledConnectors()`,
+  // so they are present regardless of what the extensions endpoint returns.
+  it("registers the app's BUNDLED connectors even when getExtensions returns []", async () => {
+    // The empty-table case: a workspace that never synced any custom extension.
+    vi.stubGlobal("fetch", fetchReturning(200, JSON.stringify([])));
+    const providers = (await workspaceRegistry("ws-reg-bundled-empty")).providerMap();
+    for (const bundled of ["trigify", "leadmagic", "apollo", "smuggler", "avtrz"]) {
+      expect(Object.keys(providers), `missing bundled connector ${bundled}`).toContain(bundled);
+    }
+    expect(providers.leadmagic).toContain("emailFinder");
+  });
+
+  it("keeps the BUNDLED connectors when the extensions fetch FAILS", async () => {
+    // A transient extensions-endpoint failure must NOT degrade the run to
+    // built-ins-only — bundled connectors are local to the worker, not the DB.
+    vi.stubGlobal("fetch", fetchReturning(500, "boom"));
+    const providers = (await workspaceRegistry("ws-reg-bundled-fail")).providerMap();
+    expect(Object.keys(providers)).toContain("formula"); // built-in
+    expect(Object.keys(providers)).toContain("trigify"); // bundled, still present
+    expect(Object.keys(providers)).toContain("leadmagic");
+  });
+
+  it("registers a workspace's CUSTOM manifest alongside the bundled connectors", async () => {
+    const custom = {
+      id: "mycustomtool",
+      name: "My Custom Tool",
+      baseUrl: "https://api.custom.test",
+      methods: [{ id: "doThing", description: "Do a thing", verb: "POST", path: "/v1/thing" }],
+    };
+    vi.stubGlobal("fetch", fetchReturning(200, JSON.stringify([custom])));
+    const providers = (await workspaceRegistry("ws-reg-custom-plus-bundled")).providerMap();
+    expect(Object.keys(providers)).toContain("mycustomtool"); // the custom one
+    expect(providers.mycustomtool).toContain("doThing");
+    expect(Object.keys(providers)).toContain("trigify"); // and the bundled ones
+  });
 });
 
 describe("fetchGrid", () => {
