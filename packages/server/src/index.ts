@@ -35,10 +35,11 @@ import {
 } from "@gtmgrid/engine";
 import { Effect } from "effect";
 import type { RunErrorContext } from "@gtmgrid/engine";
-import { detectAgents, streamClaude, streamCodex, streamHermes, setAgentPath, rescanAgents, generateWithAgent, parseAgentCloud, type AgentKind } from "./agent.js";
+import { detectAgents, streamClaude, streamCodex, streamCursor, setAgentPath, rescanAgents, generateWithAgent, parseAgentCloud, type AgentKind } from "./agent.js";
 import { localProviderEnv, resolveCloudProviderEnv } from "./provider-env.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, previewCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
+import { requiredInputKeys, resolveOptionArgs } from "./option-args.js";
 import { corsHeadersFor, isLoopbackHost, isOriginAllowed } from "./cors.js";
 import { Semaphore } from "./semaphore.js";
 import { captureException, flushObservability, installProcessHandlers, log } from "./observability.js";
@@ -738,7 +739,14 @@ route("POST", "/api/options", async (_p, body) => {
   const m = registry.method(provider, ownerMethod);
   const source = m?.options?.[field];
   if (!source) return { error: `no option source for ${provider}.${ownerMethod}.${field}` };
-  const args: Record<string, unknown> = { ...source.args };
+  // Dependent dropdowns: inject any sibling value the SOURCE method (e.g.
+  // listCampaigns) declares required (e.g. workspace_id) from the in-progress
+  // field values the column editor sends. See ./option-args for the rules.
+  const srcRequired = requiredInputKeys(registry.method(provider, source.method)?.inputSchema);
+  const values = (body?.values ?? {}) as Record<string, unknown>;
+  const { args, missing } = resolveOptionArgs(source.args ?? {}, srcRequired, values);
+  // Surface a clear prompt instead of letting the upstream API reject with a raw 400.
+  if (missing.length) return { error: `Select ${missing.join(", ")} first to load options` };
   const search = typeof body?.search === "string" ? body.search.trim() : "";
   // Best-effort search passthrough: forward under whichever filter key the
   // source endpoint exposes (its input schema tells us). Harmless if unused.
@@ -852,7 +860,7 @@ route("GET", "/api/agent/sessions/:agent/:id", (p) => ({
 // Manually connect a CLI (set its path) and/or rescan after install.
 route("POST", "/api/agents/connect", (_p, body) => {
   const agent = body?.agent as AgentKind;
-  if ((agent === "claude" || agent === "codex" || agent === "hermes") && typeof body?.path === "string" && body.path.trim()) {
+  if ((agent === "claude" || agent === "codex" || agent === "cursor") && typeof body?.path === "string" && body.path.trim()) {
     setAgentPath(agent, body.path.trim());
   }
   rescanAgents();
@@ -976,9 +984,8 @@ const server = createServer(async (req, res) => {
             registry.list().map((c) => c.id),
             (id) => globalDb.getCredential(id)?.secrets ?? null,
           );
-      // Hermes is a LOCAL ACP coding agent and is never threaded the cloud context.
       const newChat = body?.newChat === true;
-      if (agent === "hermes") streamHermes(res, { message, project: PROJECT_NAME, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model, mode, approval });
+      if (agent === "cursor") streamCursor(res, { message, project: PROJECT_NAME, repoRoot: REPO_ROOT, sessionId: body?.sessionId, newChat, context, origin, model, mode, cloud, providerEnv, approval });
       else if (agent === "codex") streamCodex(res, { message, project: PROJECT_NAME, repoRoot: REPO_ROOT, threadId: body?.sessionId, newChat, context, origin, model, mode, cloud, providerEnv, approval });
       else streamClaude(res, { message, project: PROJECT_NAME, repoRoot: REPO_ROOT, sessionId: body?.sessionId, newChat, context, origin, model, mode, cloud, providerEnv, approval });
     } catch (e) {

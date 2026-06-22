@@ -43,10 +43,13 @@ import {
   type Webhook,
   type WebhookMappingEntry,
   type WebhookMode,
+  type GridCell,
+  type GridRow,
   WebhookRepo,
   type WebhookRepoError,
+  type WorkerRowCursor,
 } from "../repositories/webhook-repo.js";
-import { ColumnRepo } from "../repositories/column-repo.js";
+import { type Column, ColumnRepo } from "../repositories/column-repo.js";
 import type { GridChangeEvent, GridEventCell } from "../realtime/events.js";
 import { RealtimePublisher } from "./realtime-publisher.js";
 
@@ -163,6 +166,24 @@ export interface WorkerGrid {
     readonly value: unknown;
   }[];
 }
+
+/**
+ * One keyset PAGE of the worker grid — the {@link WorkerGrid} shape (columns +
+ * this page's rows + their cells) plus the cursor to fetch the next page
+ * (`null` on the last). Powers the engine's paged full-column run so a 50k-row
+ * table is read one bounded page at a time, never the whole grid at once.
+ */
+export interface WorkerGridPage extends WorkerGrid {
+  readonly nextCursor: WorkerRowCursor | null;
+}
+
+/**
+ * Soft ceiling above which the UNPAGED full-grid worker `getTable` logs a
+ * warning — a full-grid read at this size means a caller bypassed the scoped
+ * (`getTableForRows`) / paged (`getTablePage`) reads. Surfaces the regression
+ * without breaking the (still-served) response.
+ */
+export const FULL_GRID_ROW_WARN_CAP = 20_000;
 
 /**
  * Webhook domain service. CRUD methods assert membership first; worker methods
@@ -817,6 +838,48 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           return { rowId };
         });
 
+      /**
+       * Project repo columns/rows/cells into the worker grid shape. Shared by
+       * {@link getTable} (whole grid), {@link getTableForRows} (scoped), and
+       * {@link getTablePage} (one keyset page) so every consumer sees the SAME
+       * doc shape — `_id` (engine/MCP/Inngest) + `id` (legacy readers).
+       */
+      const buildWorkerGrid = (
+        table: { id: string; workspaceId: string },
+        columns: readonly Column[],
+        rows: readonly GridRow[],
+        cells: readonly GridCell[],
+      ): WorkerGrid => ({
+        table: { _id: table.id, id: table.id, workspaceId: table.workspaceId },
+        // FULL column projection: the engine's cloud store, the MCP cloud source,
+        // and the Inngest enricher all consume this as Convex-shaped docs
+        // (`_id`, name, kind, code, params…). A narrower projection makes every
+        // cloud column run fail closed (lookup by `_id` never matches).
+        columns: columns.map((c) => ({
+          _id: c.id,
+          id: c.id,
+          tableId: c.tableId,
+          name: c.name,
+          type: c.type,
+          kind: c.kind,
+          provider: c.provider,
+          method: c.method,
+          code: c.code,
+          params: (c.params ?? {}) as Record<string, unknown>,
+          condition: c.condition,
+          position: c.position,
+          createdAt: c.createdAt,
+        })),
+        rows: rows.map((r) => ({
+          _id: r.id,
+          id: r.id,
+          tableId: r.tableId,
+          position: r.position,
+          createdAt: r.createdAt ?? 0,
+        })),
+        cells,
+      });
+
       /** Full grid for a table (worker getTable shape). */
       const getTable = (tableId: string) =>
         Effect.gen(function* () {
@@ -827,49 +890,77 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             );
           }
           yield* assertMemberIfIdentified(table.value.workspaceId);
-          const [columns, rows, cells] = [
-            // FULL column projection via ColumnRepo: the engine's cloud store,
-            // the MCP cloud source, and the Inngest enricher all consume this
-            // payload as Convex-shaped docs (`_id`, name, kind, code, params…).
-            // The previous {id}-only projection made every cloud column run
-            // fail closed (column lookup by `_id` never matched) and left the
-            // enricher seeing zero function columns.
-            yield* columnRepo.listByTable(tableId),
-            yield* repo.listRows(tableId),
-            yield* repo.listCellsByTable(tableId),
-          ];
+          const columns = yield* columnRepo.listByTable(tableId);
+          const rows = yield* repo.listRows(tableId);
+          const cells = yield* repo.listCellsByTable(tableId);
+          // Guard: a full-grid worker read at scale means a caller bypassed the
+          // scoped/paged reads (getTableForRows / getTablePage). Warn but serve.
+          if (rows.length > FULL_GRID_ROW_WARN_CAP) {
+            yield* Effect.logWarning(
+              `WebhookService.getTable loaded ${rows.length} rows for table ${tableId} — full-grid read above ${FULL_GRID_ROW_WARN_CAP}; prefer getTableForRows / getTablePage at scale.`,
+            );
+          }
+          return buildWorkerGrid(table.value, columns, rows, cells);
+        });
+
+      /**
+       * The grid scoped to a SPECIFIC set of rows (worker getTable shape, no
+       * cursor). All columns, plus only the requested rows and their cells —
+       * bounded by `rowIds.length`, never the whole table. Used by the engine's
+       * row-scoped run (cascade / run-cell / run-rows) and the webhook
+       * single-row enricher, so neither loads a 50k-row grid to touch a handful
+       * of rows. Same membership/ownership gate as {@link getTable}.
+       */
+      const getTableForRows = (tableId: string, rowIds: readonly string[]) =>
+        Effect.gen(function* () {
+          const table = yield* repo.findTable(tableId);
+          if (table._tag === "None") {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({ message: `Table ${tableId} not found.` }),
+            );
+          }
+          yield* assertMemberIfIdentified(table.value.workspaceId);
+          const columns = yield* columnRepo.listByTable(tableId);
+          const rows = yield* repo.listRowsByIds(rowIds);
+          const cells = yield* repo.listCellsByRowIds(rowIds);
+          return buildWorkerGrid(table.value, columns, rows, cells);
+        });
+
+      /**
+       * One keyset PAGE of the grid (worker getTable shape + `nextCursor`). All
+       * columns plus ONLY this page's rows and their cells; `nextCursor` is
+       * `null` on the last page. The engine walks these pages for a full-column
+       * run so resident memory stays bounded to one page. Same gate as
+       * {@link getTable}.
+       */
+      const getTablePage = (args: {
+        readonly tableId: string;
+        readonly cursor: WorkerRowCursor | null;
+        readonly limit: number;
+      }) =>
+        Effect.gen(function* () {
+          const table = yield* repo.findTable(args.tableId);
+          if (table._tag === "None") {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({
+                message: `Table ${args.tableId} not found.`,
+              }),
+            );
+          }
+          yield* assertMemberIfIdentified(table.value.workspaceId);
+          const columns = yield* columnRepo.listByTable(args.tableId);
+          const page = yield* repo.listRowsKeyset({
+            tableId: args.tableId,
+            limit: args.limit,
+            cursor: args.cursor,
+          });
+          const cells = yield* repo.listCellsByRowIds(
+            page.rows.map((r) => r.id),
+          );
           return {
-            table: {
-              _id: table.value.id,
-              id: table.value.id,
-              workspaceId: table.value.workspaceId,
-            },
-            // Both `_id` (engine/MCP/Inngest doc shape) and `id` (legacy
-            // worker-grid consumers) — additive, never breaking either reader.
-            columns: columns.map((c) => ({
-              _id: c.id,
-              id: c.id,
-              tableId: c.tableId,
-              name: c.name,
-              type: c.type,
-              kind: c.kind,
-              provider: c.provider,
-              method: c.method,
-              code: c.code,
-              params: (c.params ?? {}) as Record<string, unknown>,
-              condition: c.condition,
-              position: c.position,
-              createdAt: c.createdAt,
-            })),
-            rows: rows.map((r) => ({
-              _id: r.id,
-              id: r.id,
-              tableId: r.tableId,
-              position: r.position,
-              createdAt: r.createdAt ?? 0,
-            })),
-            cells,
-          } satisfies WorkerGrid;
+            ...buildWorkerGrid(table.value, columns, page.rows, cells),
+            nextCursor: page.nextCursor,
+          } satisfies WorkerGridPage;
         });
 
       /**
@@ -939,7 +1030,13 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           let cellsToRun = candidateRowIds.length;
           if (args.force !== true && candidateRowIds.length > 0) {
             const candidateSet = new Set(candidateRowIds);
-            const cells = yield* repo.listCellsByTable(args.tableId);
+            // Only the RUN column's cells are inspected, so read just that column
+            // (rides `cells_by_table_column`) — never the whole rows×columns grid.
+            // For a scoped run, the bounded by-row read is tighter still.
+            const cells =
+              args.rowIds !== undefined
+                ? yield* repo.listCellsByRowIds(candidateRowIds)
+                : yield* repo.listCellsByTableColumn(args.tableId, args.columnId);
             const doneRows = new Set<string>();
             for (const cell of cells) {
               if (
@@ -1154,6 +1251,8 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         insertRow,
         upsertRow,
         getTable,
+        getTableForRows,
+        getTablePage,
         getTableMeta,
         assertColumnRunQuota,
         setCell,

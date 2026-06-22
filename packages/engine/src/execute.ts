@@ -14,6 +14,7 @@ import { Registry, defaultRegistry } from "./registry.js";
 import { runFunction, type SandboxDispatch } from "./sandbox.js";
 import {
   type GridStoreError,
+  type GridStorePage,
   type GridStoreShape,
 } from "./store.js";
 import type { AiConfig, AiFallbackRequest, Column, ConnectorMethod, RateLimit } from "./types.js";
@@ -291,23 +292,33 @@ export class Engine {
     columnId: string,
     opts: RunColumnOptions = {},
   ): Promise<{ ran: number; errors: number; firstError?: string }> {
-    // Take one read snapshot for the whole run. For stores whose granular reads
-    // are expensive to repeat (ConvexGridStore re-fetches the full grid on every
-    // read), `snapshot()` fetches the grid ONCE and serves every per-row read
-    // from memory, so a run over N rows is O(N) store reads instead of O(N^2).
-    // Local SQLite has no `snapshot` (reads are cheap, synchronous) and falls
-    // back to the live store, preserving its exact behaviour. Writes still go to
-    // the live store so cell status streams to clients during the run.
-    const reads = this.store.snapshot
-      ? await Effect.runPromise(this.store.snapshot())
-      : this.store;
+    // Resolve how this run reads the grid. A `snapshot()` fetches the grid once
+    // and serves every per-row read from memory (O(N) reads, not O(N^2)); the
+    // writes still go to the LIVE store so cell status streams during the run.
+    //   • Row-scoped run (opts.rowIds): snapshot ONLY those rows, so a cascade /
+    //     run-cell / run-rows never loads a 50k-row grid to touch a few rows.
+    //   • Full run + the store can page (`snapshotPage`): stream the grid one
+    //     bounded keyset page at a time so resident memory stays per-page.
+    //   • Full run, no paging: a single whole-grid snapshot (legacy behaviour).
+    //   • No snapshot at all (local SQLite): read live, exact prior behaviour.
+    const wantsPaging =
+      opts.rowIds === undefined && this.store.snapshotPage !== undefined;
+
+    let firstPage: GridStorePage | undefined;
+    let reads: GridStoreShape;
+    if (wantsPaging && this.store.snapshotPage) {
+      firstPage = await Effect.runPromise(this.store.snapshotPage(null));
+      reads = firstPage.reads;
+    } else if (this.store.snapshot) {
+      reads = await Effect.runPromise(this.store.snapshot(opts.rowIds));
+    } else {
+      reads = this.store;
+    }
 
     const col = await Effect.runPromise(reads.getColumn(columnId));
     if (!col) throw new Error(`column ${columnId} not found`);
     if (col.kind !== "function") return { ran: 0, errors: 0 };
 
-    const rowIds =
-      opts.rowIds ?? (await Effect.runPromise(reads.listRows(col.table_id))).map((r) => r.id);
     const providers = this.registry.providerMap();
 
     // Precompile the formula body and the "only run if" condition ONCE (same for every
@@ -434,6 +445,13 @@ export class Engine {
       }
     };
 
+    // Run one segment (a scoped snapshot, a single full snapshot, or one keyset
+    // page) over its rows. The cumulative counters / firstError close over the
+    // whole run, so totals accumulate correctly across pages.
+    const processSegment = async (
+      reads: GridStoreShape,
+      rowIds: readonly string[],
+    ): Promise<void> => {
     if (batchMethod) {
       // Skip already-done cells up front so chunking groups only the rows we'll
       // actually call for, keeping the call count ~= pending-rows / batchSize.
@@ -521,6 +539,25 @@ export class Engine {
         }
       });
     }
+    };
+
+    // Drive the segments. A paged full run walks keyset pages (bounded memory);
+    // everything else is a single segment over the scoped/full snapshot.
+    if (wantsPaging && firstPage && this.store.snapshotPage) {
+      await processSegment(firstPage.reads, firstPage.rowIds);
+      let cursor = firstPage.nextCursor;
+      while (cursor !== null && cursor !== undefined) {
+        const page = await Effect.runPromise(this.store.snapshotPage(cursor));
+        await processSegment(page.reads, page.rowIds);
+        cursor = page.nextCursor;
+      }
+    } else {
+      const rowIds =
+        opts.rowIds ??
+        (await Effect.runPromise(reads.listRows(col.table_id))).map((r) => r.id);
+      await processSegment(reads, rowIds);
+    }
+
     // Flush the final partial batch + await all in-flight writes (no-op for
     // synchronous stores).
     if (this.store.drain) await Effect.runPromise(this.store.drain());
@@ -693,7 +730,7 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 
 /** Bounded-concurrency map (Revcode's `mapConcurrent`). */
 export async function mapConcurrent<T>(
-  items: T[],
+  items: readonly T[],
   limit: number,
   fn: (item: T, index: number) => Promise<void>,
 ): Promise<void> {

@@ -66,6 +66,7 @@ function MappingField({
   provider,
   method,
   optionSource,
+  allValues,
 }: {
   paramKey: string;
   required: boolean;
@@ -77,6 +78,9 @@ function MappingField({
   method?: string | null;
   /** When set, this field can be picked from a live connector list. */
   optionSource?: FieldOptionSource | null;
+  /** Current values of the sibling fields, so a dependent dropdown (e.g.
+   *  campaign_id) can pass a required parent value (e.g. workspace_id). */
+  allValues?: Record<string, string>;
 }) {
   const ref = pureColumnRef(value);
   const matched = ref ? columns.find((c) => c.name === ref) : undefined;
@@ -114,7 +118,7 @@ function MappingField({
     setOptLoading(true);
     setOptErr("");
     try {
-      const r = await api.fieldOptions({ provider: provider!, method: method!, field: paramKey, search: q });
+      const r = await api.fieldOptions({ provider: provider!, method: method!, field: paramKey, search: q, values: allValues });
       if (r.error) throw new Error(r.error);
       setOptions(r.options ?? []);
     } catch (e) {
@@ -124,6 +128,17 @@ function MappingField({
       setOptLoading(false);
     }
   };
+  // Drop the cached option list when a sibling value this dropdown depends on
+  // changes (e.g. workspace_id), so the next open — or the current one — re-fetches
+  // against the new parent value instead of showing stale/empty results.
+  const siblingSig = useMemo(
+    () => JSON.stringify(Object.entries(allValues ?? {}).filter(([k]) => k !== paramKey).sort()),
+    [allValues, paramKey],
+  );
+  useEffect(() => {
+    setOptions(null);
+    setOptErr("");
+  }, [siblingSig]);
   // Load when the pick dropdown opens for the first time.
   useEffect(() => {
     if (mode === "pick" && open && options === null && !optLoading) void loadOptions(search);
@@ -316,6 +331,7 @@ export function ColumnEditPanel({
   rows,
   onClose,
   onSaved,
+  onError,
   onOpenExtension,
 }: {
   column: Column;
@@ -328,6 +344,8 @@ export function ColumnEditPanel({
   /** Fired after a successful save; `run` asks the parent to run the column
    *  with that scope (the Save split-button's choice). */
   onSaved: (run?: { force?: boolean; rowIds?: string[] }) => void;
+  /** Surface a background save failure after the rail has already closed. */
+  onError?: (message: string) => void;
   /** Open the provider's extension panel (local only — manage the API key). */
   onOpenExtension?: (providerId: string) => void;
 }) {
@@ -402,7 +420,9 @@ export function ColumnEditPanel({
     return out;
   });
   const [aiProviderList, setAiProviderList] = useState<AiProviderInfo[]>([]);
-  const [saving, setSaving] = useState(false);
+  // The rail now closes instantly on save (persist + run happen in the
+  // background), so there's no in-rail "Saving…" state to track.
+  const saving = false;
   const [err, setErr] = useState("");
 
   // ── Account / credential status (connector columns with auth) ──
@@ -461,25 +481,32 @@ export function ColumnEditPanel({
     return patch;
   };
 
-  const save = async (run?: { force?: boolean; rowIds?: "first10" | "all" }) => {
+  const save = (run?: { force?: boolean; rowIds?: "first10" | "all" }) => {
     if (!name.trim()) { setErr("Column name is required"); return; }
-    setSaving(true);
-    setErr("");
-    try {
-      await gridApi.updateColumn(column.id, buildPatch());
-      onSaved(
-        run
-          ? {
-              force: run.force,
-              rowIds: run.rowIds === "first10" ? rows.slice(0, 10).map((r) => r.id) : undefined,
-            }
-          : undefined,
-      );
-      onClose();
-    } catch (e) {
-      setErr((e as Error)?.message ?? "Failed to save");
-      setSaving(false);
-    }
+    const patch = buildPatch();
+    const runScope = run
+      ? {
+          force: run.force,
+          rowIds: run.rowIds === "first10" ? rows.slice(0, 10).map((r) => r.id) : undefined,
+        }
+      : undefined;
+    // Dismiss the rail IMMEDIATELY. The column already exists in the grid and its
+    // cells render a loading state while the run fills them, so the user never
+    // waits on the rail: persist the config + kick off the run in the background.
+    onClose();
+    void (async () => {
+      try {
+        await gridApi.updateColumn(column.id, patch);
+        onSaved(runScope);
+      } catch (e) {
+        // The rail is already closed, so route the failure to the grid's inline
+        // error banner (not just the console) — otherwise a rejected save looks
+        // like it succeeded.
+        const message = e instanceof Error ? e.message : "Failed to save column";
+        console.error("Failed to save column:", e);
+        onError?.(message);
+      }
+    })();
   };
 
   const TypePicker = (
@@ -569,6 +596,7 @@ export function ColumnEditPanel({
                 provider={column.provider}
                 method={column.method}
                 optionSource={methodInfo?.options?.[k] ?? null}
+                allValues={params}
               />
             ))}
             {orderedSchemaKeys.some((k) => !requiredKeys.has(k)) && (
@@ -589,6 +617,7 @@ export function ColumnEditPanel({
                     provider={column.provider}
                     method={column.method}
                     optionSource={methodInfo?.options?.[k] ?? null}
+                    allValues={params}
                   />
                 ))}
               </HttpField>

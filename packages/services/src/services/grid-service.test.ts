@@ -37,7 +37,9 @@ import {
 } from "../repositories/workspace-repo.js";
 import { EntitlementService } from "./entitlement-service.js";
 import { GridService } from "./grid-service.js";
+import type { GridSnapshot } from "../realtime/events.js";
 import { WORKSPACE_ROOM_TABLE_ID } from "../realtime/events.js";
+import { applyGridEvent } from "../realtime/reducer.js";
 import { type MeterQuota, meterServiceLayer } from "./meter-service.js";
 import {
   RealtimePublisher,
@@ -201,6 +203,28 @@ describe("GridService.dedupe (cloud parity with the local engine)", () => {
     const { run } = harness({ store });
     await run(Effect.flatMap(GridService, (s) => s.dedupeTable("t1")));
     expect(store.rows.map((r) => r.id).sort()).toEqual(["r2", "r3"]);
+  });
+
+  it("reads ONLY the dedupe column (a sibling column's dup never affects grouping)", async () => {
+    // Proves the narrowed `listByTableColumn` read didn't change semantics: the
+    // sweep groups by the dedupe column alone, ignoring another column's cells.
+    const store = makeGridStore({
+      tables: [table({ dedupeColumn: "c1", dedupeKeep: "oldest" })],
+      columns: [column(), column({ id: "c2", name: "Other", position: 1 })],
+      rows: [row({ id: "r1", position: 0 }), row({ id: "r2", position: 1 })],
+      cells: [
+        // Dedupe column c1: DISTINCT values → no duplicates.
+        { id: "a1", workspaceId: WS, tableId: "t1", rowId: "r1", columnId: "c1", value: "x", status: "done", error: null, updatedAt: 1 },
+        { id: "a2", workspaceId: WS, tableId: "t1", rowId: "r2", columnId: "c1", value: "y", status: "done", error: null, updatedAt: 1 },
+        // Sibling column c2: SAME value on both rows — must NOT cause a delete.
+        { id: "b1", workspaceId: WS, tableId: "t1", rowId: "r1", columnId: "c2", value: "same", status: "done", error: null, updatedAt: 1 },
+        { id: "b2", workspaceId: WS, tableId: "t1", rowId: "r2", columnId: "c2", value: "same", status: "done", error: null, updatedAt: 1 },
+      ],
+    });
+    const { run } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.dedupeTable("t1")));
+    expect(Exit.isSuccess(exit) && exit.value).toEqual({ deleted: 0 });
+    expect(store.rows).toHaveLength(2);
   });
 
   it("setDedupe persists config and sweeps immediately", async () => {
@@ -947,6 +971,418 @@ describe("GridService.reorderColumn / reorderRow", () => {
     if (Exit.isSuccess(exit)) expect(exit.value).toEqual({ rowIds: ["r3", "r1", "r2"] });
     const reorder = events.find((e) => e.event.type === "row.reorder");
     expect(reorder?.event).toEqual({ type: "row.reorder", rowIds: ["r3", "r1", "r2"] });
+  });
+});
+
+describe("GridService DAG-aware column placement", () => {
+  const threeColStore = () =>
+    makeGridStore({
+      tables: [table()],
+      columns: [
+        column({ id: "c1", name: "A", position: 0 }),
+        column({ id: "c2", name: "B", position: 1 }),
+        column({ id: "c3", name: "C", position: 2 }),
+      ],
+    });
+
+  const orderedIds = (store: GridStore) =>
+    [...store.columns]
+      .filter((c) => c.tableId === "t1")
+      .sort((a, b) => a.position - b.position)
+      .map((c) => c.id);
+
+  it("addColumn slots a dependent column right after the column it references", async () => {
+    const store = threeColStore();
+    const { run, events } = harness({ store });
+    // New column D reads {{A}} (c1) — must land immediately after A, before B/C.
+    const exit = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({
+          tableId: "t1",
+          name: "D",
+          type: "text",
+          kind: "function",
+          provider: "formula",
+          params: { expression: "{{A}}" },
+          id: "cD",
+        }),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(orderedIds(store)).toEqual(["c1", "cD", "c2", "c3"]);
+    // Viewers are told the full new order via column.reorder.
+    const reorder = events.find((e) => e.event.type === "column.reorder");
+    expect(reorder?.event).toEqual({
+      type: "column.reorder",
+      columnIds: ["c1", "cD", "c2", "c3"],
+    });
+  });
+
+  it("addColumn with no references still appends to the tail (no reorder)", async () => {
+    const store = threeColStore();
+    const { run, events } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({ tableId: "t1", name: "D", type: "text", kind: "manual", id: "cD" }),
+      ),
+    );
+    expect(orderedIds(store)).toEqual(["c1", "c2", "c3", "cD"]);
+    expect(events.find((e) => e.event.type === "column.reorder")).toBeUndefined();
+  });
+
+  it("addColumn referencing the last column appends without a reorder event", async () => {
+    const store = threeColStore();
+    const { run, events } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({
+          tableId: "t1",
+          name: "D",
+          type: "text",
+          kind: "function",
+          provider: "formula",
+          params: { expression: "{{C}}" },
+          id: "cD",
+        }),
+      ),
+    );
+    expect(orderedIds(store)).toEqual(["c1", "c2", "c3", "cD"]);
+    expect(events.find((e) => e.event.type === "column.reorder")).toBeUndefined();
+  });
+
+  it("updateColumn repositions a column after a reference it gains to its right", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [
+        column({ id: "c1", name: "A", kind: "function", provider: "formula", position: 0 }),
+        column({ id: "c2", name: "B", position: 1 }),
+      ],
+    });
+    const { run, events } = harness({ store });
+    // A now reads {{B}}, which sits to its right → A must move after B.
+    const exit = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.updateColumn("c1", { params: { expression: "{{B}}" } }),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(orderedIds(store)).toEqual(["c2", "c1"]);
+    const reorder = events.find((e) => e.event.type === "column.reorder");
+    expect(reorder?.event).toEqual({ type: "column.reorder", columnIds: ["c2", "c1"] });
+  });
+
+  it("updateColumn rejects a circular dependency and leaves the column unchanged", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [
+        // A already reads B; making B read A would close the cycle.
+        column({ id: "c1", name: "A", kind: "function", provider: "formula", position: 0, params: { expression: "{{B}}" } }),
+        column({ id: "c2", name: "B", kind: "function", provider: "formula", position: 1, params: {} }),
+      ],
+    });
+    const { run, events } = harness({ store });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.updateColumn("c2", { params: { expression: "{{A}}" } }),
+      ),
+    );
+    expect(failTag(exit)).toBe("ColumnCycleError");
+    // Not persisted: B's params are untouched and no events were published.
+    expect(store.columns.find((c) => c.id === "c2")!.params).toEqual({});
+    expect(events.find((e) => e.event.type === "column.update")).toBeUndefined();
+    expect(events.find((e) => e.event.type === "column.reorder")).toBeUndefined();
+  });
+
+  it("updateColumn that only renames does not reposition columns", async () => {
+    const store = threeColStore();
+    const { run, events } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.updateColumn("c2", { name: "Bee" })));
+    expect(orderedIds(store)).toEqual(["c1", "c2", "c3"]);
+    expect(events.find((e) => e.event.type === "column.reorder")).toBeUndefined();
+  });
+
+  it("addColumn slots after the RIGHTMOST of several dependencies", async () => {
+    const store = threeColStore();
+    const { run } = harness({ store });
+    // D reads {{A}} and {{B}}; rightmost dep is B (idx 1) → lands between B and C.
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({
+          tableId: "t1",
+          name: "D",
+          type: "text",
+          kind: "function",
+          provider: "formula",
+          params: { expression: "{{A}} + {{B}}" },
+          id: "cD",
+        }),
+      ),
+    );
+    expect(orderedIds(store)).toEqual(["c1", "c2", "cD", "c3"]);
+  });
+
+  it("addColumn detects a dependency that lives in the run condition", async () => {
+    const store = threeColStore();
+    const { run } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({
+          tableId: "t1",
+          name: "D",
+          type: "text",
+          kind: "function",
+          provider: "leadmagic",
+          method: "enrich",
+          params: {},
+          condition: "{{A}} != ''",
+          id: "cD",
+        }),
+      ),
+    );
+    expect(orderedIds(store)).toEqual(["c1", "cD", "c2", "c3"]);
+  });
+
+  it("addColumn gives the dependent column a fractional position between its neighbours", async () => {
+    const store = threeColStore();
+    const { run } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({
+          tableId: "t1",
+          name: "D",
+          type: "text",
+          kind: "function",
+          provider: "formula",
+          params: { expression: "{{A}}" },
+          id: "cD",
+        }),
+      ),
+    );
+    const posOf = (id: string) => store.columns.find((c) => c.id === id)!.position;
+    // Strictly between A (0) and B (1); A/B/C positions are untouched.
+    expect(posOf("cD")).toBeGreaterThan(posOf("c1"));
+    expect(posOf("cD")).toBeLessThan(posOf("c2"));
+    expect([posOf("c1"), posOf("c2"), posOf("c3")]).toEqual([0, 1, 2]);
+  });
+
+  it("addColumn meters exactly ONE action even when it also broadcasts a reorder", async () => {
+    const store = threeColStore();
+    const { run, quotas } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({
+          tableId: "t1",
+          name: "D",
+          type: "text",
+          kind: "function",
+          provider: "formula",
+          params: { expression: "{{A}}" },
+          id: "cD",
+        }),
+      ),
+    );
+    expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
+  });
+
+  it("addColumn ignores a {{ref}} to a non-existent column and appends", async () => {
+    const store = threeColStore();
+    const { run, events } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({
+          tableId: "t1",
+          name: "D",
+          type: "text",
+          kind: "function",
+          provider: "formula",
+          params: { expression: "{{Nonexistent}}" },
+          id: "cD",
+        }),
+      ),
+    );
+    expect(orderedIds(store)).toEqual(["c1", "c2", "c3", "cD"]);
+    expect(events.find((e) => e.event.type === "column.reorder")).toBeUndefined();
+  });
+
+  it("updateColumn cascades: a moved column drags its dependents to stay ordered", async () => {
+    // Layout [X, Z, Y]; Z reads X (valid). X then reads Y (to its right) → the
+    // dependency-correct order is [Y, X, Z].
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [
+        column({ id: "cx", name: "X", kind: "function", provider: "formula", position: 0 }),
+        column({ id: "cz", name: "Z", kind: "function", provider: "formula", position: 1, params: { expression: "{{X}}" } }),
+        column({ id: "cy", name: "Y", position: 2 }),
+      ],
+    });
+    const { run, events } = harness({ store });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.updateColumn("cx", { params: { expression: "{{Y}}" } }),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(orderedIds(store)).toEqual(["cy", "cx", "cz"]);
+    const reorder = events.find((e) => e.event.type === "column.reorder");
+    expect(reorder?.event).toEqual({ type: "column.reorder", columnIds: ["cy", "cx", "cz"] });
+  });
+
+  it("updateColumn gaining a ref already to its LEFT does not reorder", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [
+        column({ id: "c1", name: "A", position: 0 }),
+        column({ id: "c2", name: "B", kind: "function", provider: "formula", position: 1 }),
+      ],
+    });
+    const { run, events } = harness({ store });
+    // B reads {{A}}; A is already to B's left, so the order is already valid.
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.updateColumn("c2", { params: { expression: "{{A}}" } }),
+      ),
+    );
+    expect(orderedIds(store)).toEqual(["c1", "c2"]);
+    expect(events.find((e) => e.event.type === "column.reorder")).toBeUndefined();
+  });
+
+  it("updateColumn repositions on a condition-only dependency change", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [
+        column({ id: "c1", name: "A", kind: "function", provider: "leadmagic", method: "enrich", position: 0 }),
+        column({ id: "c2", name: "B", position: 1 }),
+      ],
+    });
+    const { run } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.updateColumn("c1", { condition: "{{B}} != ''" }),
+      ),
+    );
+    expect(orderedIds(store)).toEqual(["c2", "c1"]);
+  });
+
+  it("updateColumn blocks a longer cycle (A->B->C, then C->A)", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [
+        column({ id: "ca", name: "A", kind: "function", provider: "formula", position: 0, params: { expression: "{{B}}" } }),
+        column({ id: "cb", name: "B", kind: "function", provider: "formula", position: 1, params: { expression: "{{C}}" } }),
+        column({ id: "cc", name: "C", kind: "function", provider: "formula", position: 2, params: {} }),
+      ],
+    });
+    const { run } = harness({ store });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.updateColumn("cc", { params: { expression: "{{A}}" } }),
+      ),
+    );
+    expect(failTag(exit)).toBe("ColumnCycleError");
+    expect(store.columns.find((c) => c.id === "cc")!.params).toEqual({});
+  });
+
+  it("updateColumn cycle rejection does NOT meter or move any column", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [
+        column({ id: "c1", name: "A", kind: "function", provider: "formula", position: 0, params: { expression: "{{B}}" } }),
+        column({ id: "c2", name: "B", kind: "function", provider: "formula", position: 1, params: {} }),
+      ],
+    });
+    const { run, quotas } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.updateColumn("c2", { params: { expression: "{{A}}" } }),
+      ),
+    );
+    expect(orderedIds(store)).toEqual(["c1", "c2"]);
+    expect(quotas.get(WS)?.cloudActionsUsed ?? 0).toBe(0);
+  });
+
+  it("updateColumn meters exactly one action on a successful reposition", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [
+        column({ id: "c1", name: "A", kind: "function", provider: "formula", position: 0 }),
+        column({ id: "c2", name: "B", position: 1 }),
+      ],
+    });
+    const { run, quotas } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.updateColumn("c1", { params: { expression: "{{B}}" } }),
+      ),
+    );
+    expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
+  });
+
+  // End-to-end proof: replaying the events the service emits through the realtime
+  // reducer leaves a remote viewer's column order IDENTICAL to the server's.
+  it("a viewer converges to the dependency-correct order via the broadcast events", async () => {
+    const store = threeColStore();
+    const { run, events } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({
+          tableId: "t1",
+          name: "D",
+          type: "text",
+          kind: "function",
+          provider: "formula",
+          params: { expression: "{{A}}" },
+          id: "cD",
+        }),
+      ),
+    );
+    // A viewer's snapshot before the events arrive: A, B, C in order.
+    let snap: GridSnapshot | null = {
+      table: { _id: "t1", name: "T1" },
+      columns: [
+        { _id: "c1", name: "A", type: "text", kind: "manual", provider: null, method: null, code: null, params: {} },
+        { _id: "c2", name: "B", type: "text", kind: "manual", provider: null, method: null, code: null, params: {} },
+        { _id: "c3", name: "C", type: "text", kind: "manual", provider: null, method: null, code: null, params: {} },
+      ],
+      rows: [],
+      cells: [],
+    };
+    // Apply the recorded grid events in broadcast order (insert, then reorder).
+    for (const e of events) snap = applyGridEvent(snap, e.event);
+    expect(snap?.columns.map((c) => c._id)).toEqual(["c1", "cD", "c2", "c3"]);
+  });
+
+  it("a viewer converges even if the reorder is delivered BEFORE the insert", async () => {
+    const store = threeColStore();
+    const { run, events } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({
+          tableId: "t1",
+          name: "D",
+          type: "text",
+          kind: "function",
+          provider: "formula",
+          params: { expression: "{{A}}" },
+          id: "cD",
+        }),
+      ),
+    );
+    let snap: GridSnapshot | null = {
+      table: { _id: "t1", name: "T1" },
+      columns: [
+        { _id: "c1", name: "A", type: "text", kind: "manual", provider: null, method: null, code: null, params: {} },
+        { _id: "c2", name: "B", type: "text", kind: "manual", provider: null, method: null, code: null, params: {} },
+        { _id: "c3", name: "C", type: "text", kind: "manual", provider: null, method: null, code: null, params: {} },
+      ],
+      rows: [],
+      cells: [],
+    };
+    // Out-of-order delivery: reorder first (cD unknown → ignored), then insert
+    // appends cD, then a duplicate reorder splices it into place. Converges.
+    const insert = events.find((e) => e.event.type === "column.insert")!;
+    const reorder = events.find((e) => e.event.type === "column.reorder")!;
+    for (const e of [reorder, insert, reorder]) snap = applyGridEvent(snap, e.event);
+    expect(snap?.columns.map((c) => c._id)).toEqual(["c1", "cD", "c2", "c3"]);
   });
 });
 

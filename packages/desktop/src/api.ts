@@ -196,7 +196,7 @@ export const api = {
   // (e.g. listCampaigns) using the connector's stored key and returns the
   // name→id choices for the column-editor dropdown. `search` filters server-side
   // when the source endpoint supports it.
-  fieldOptions: (body: { provider: string; method: string; field: string; search?: string }) =>
+  fieldOptions: (body: { provider: string; method: string; field: string; search?: string; values?: Record<string, string> }) =>
     http<{ options?: FieldOption[]; error?: string }>("/api/options", {
       method: "POST",
       body: JSON.stringify(body),
@@ -209,9 +209,9 @@ export const api = {
   connect: (extId: string, secrets: Record<string, string>, scope?: CredentialScope) =>
     http<{ ok: boolean }>(`/api/extensions/${extId}/connect`, { method: "POST", body: JSON.stringify({ secrets, scope }) }),
   agents: () =>
-    http<{ claude: AgentStatus; codex: AgentStatus; hermes: AgentStatus }>("/api/agents"),
-  connectAgent: (agent: "claude" | "codex" | "hermes", path?: string) =>
-    http<{ claude: AgentStatus; codex: AgentStatus; hermes: AgentStatus }>("/api/agents/connect", {
+    http<{ claude: AgentStatus; codex: AgentStatus; cursor: AgentStatus }>("/api/agents"),
+  connectAgent: (agent: "claude" | "codex" | "cursor", path?: string) =>
+    http<{ claude: AgentStatus; codex: AgentStatus; cursor: AgentStatus }>("/api/agents/connect", {
       method: "POST",
       body: JSON.stringify({ agent, path }),
     }),

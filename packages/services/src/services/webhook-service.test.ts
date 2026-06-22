@@ -17,7 +17,7 @@ import {
   type Membership,
   MembershipService,
 } from "@gtmgrid/cloud";
-import { Cause, Effect, Exit, Layer } from "effect";
+import { Cause, Effect, Exit, Layer, Logger } from "effect";
 import { describe, expect, it } from "vitest";
 import { WebhookRepo } from "../repositories/webhook-repo.js";
 import { credentialCryptoTest } from "../credential-crypto-test.js";
@@ -42,7 +42,7 @@ import {
   type RecordedGridEvent,
 } from "./realtime-publisher.js";
 import { EntitlementService } from "./entitlement-service.js";
-import { WebhookService } from "./webhook-service.js";
+import { FULL_GRID_ROW_WARN_CAP, WebhookService } from "./webhook-service.js";
 
 const WS = "ws-1";
 const TABLE = "table-1";
@@ -1222,5 +1222,125 @@ describe("WebhookService config CRUD (member-gated)", () => {
     expect(webhooks[0].enabled).toBe(false);
     await run(svc.pipe(Effect.flatMap((s) => s.deleteWebhook("wh-1"))));
     expect(webhooks).toHaveLength(0);
+  });
+});
+
+describe("WebhookService bounded grid reads (scale)", () => {
+  const storeColumns: StoreColumn[] = [
+    {
+      id: COL_EMAIL, workspaceId: WS, tableId: TABLE, name: "Email",
+      type: "text", kind: "manual", provider: null, method: null, code: null,
+      params: {}, condition: null, position: 0, createdAt: 1,
+    },
+    {
+      id: COL_NAME, workspaceId: WS, tableId: TABLE, name: "Name",
+      type: "text", kind: "manual", provider: null, method: null, code: null,
+      params: {}, condition: null, position: 1, createdAt: 2,
+    },
+  ];
+  const threeRows: GridRow[] = [
+    { id: "r1", tableId: TABLE, position: 0, createdAt: 10 },
+    { id: "r2", tableId: TABLE, position: 1, createdAt: 11 },
+    { id: "r3", tableId: TABLE, position: 2, createdAt: 12 },
+  ];
+  const threeCells: GridCell[] = [
+    { id: "c1", rowId: "r1", columnId: COL_EMAIL, value: "a@x.com", status: "done", error: null },
+    { id: "c2", rowId: "r2", columnId: COL_EMAIL, value: "b@x.com", status: "done", error: null },
+    { id: "c3", rowId: "r3", columnId: COL_EMAIL, value: "c@x.com", status: "done", error: null },
+  ];
+
+  it("getTableForRows: all columns + ONLY the requested rows and their cells", async () => {
+    const { run } = harness({
+      gridColumns: storeColumns, rows: threeRows, cells: threeCells, currentUserId: null,
+    });
+    const exit = await run(
+      svc.pipe(Effect.flatMap((s) => s.getTableForRows(TABLE, ["r1", "r3"]))),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      const g = exit.value;
+      expect(g.columns.map((c) => c._id).sort()).toEqual([COL_EMAIL, COL_NAME].sort());
+      expect(g.rows.map((r) => r._id)).toEqual(["r1", "r3"]);
+      expect(g.cells.map((c) => c.rowId).sort()).toEqual(["r1", "r3"]);
+      // The unrequested row never appears in rows OR cells (bounded read).
+      expect(g.rows.some((r) => r._id === "r2")).toBe(false);
+      expect(g.cells.some((c) => c.rowId === "r2")).toBe(false);
+    }
+  });
+
+  it("getTableForRows: empty rowIds → columns only, zero rows/cells", async () => {
+    const { run } = harness({
+      gridColumns: storeColumns, rows: threeRows, cells: threeCells, currentUserId: null,
+    });
+    const exit = await run(
+      svc.pipe(Effect.flatMap((s) => s.getTableForRows(TABLE, []))),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.columns.length).toBe(2);
+      expect(exit.value.rows).toEqual([]);
+      expect(exit.value.cells).toEqual([]);
+    }
+  });
+
+  it("getTablePage: walks keyset pages in position order with a nextCursor", async () => {
+    const { run } = harness({
+      gridColumns: storeColumns, rows: threeRows, cells: threeCells, currentUserId: null,
+    });
+    const p1 = await run(
+      svc.pipe(Effect.flatMap((s) => s.getTablePage({ tableId: TABLE, cursor: null, limit: 2 }))),
+    );
+    expect(Exit.isSuccess(p1)).toBe(true);
+    if (!Exit.isSuccess(p1)) return;
+    expect(p1.value.rows.map((r) => r._id)).toEqual(["r1", "r2"]);
+    expect(p1.value.cells.map((c) => c.rowId).sort()).toEqual(["r1", "r2"]);
+    expect(p1.value.nextCursor).not.toBeNull();
+
+    const p2 = await run(
+      svc.pipe(Effect.flatMap((s) => s.getTablePage({ tableId: TABLE, cursor: p1.value.nextCursor, limit: 2 }))),
+    );
+    expect(Exit.isSuccess(p2)).toBe(true);
+    if (!Exit.isSuccess(p2)) return;
+    expect(p2.value.rows.map((r) => r._id)).toEqual(["r3"]);
+    expect(p2.value.nextCursor).toBeNull(); // last page
+  });
+
+  it("getTable still SERVES but WARNS (telemetry) above the full-grid row cap", async () => {
+    const many: GridRow[] = Array.from(
+      { length: FULL_GRID_ROW_WARN_CAP + 1 },
+      (_, i) => ({ id: `r${i}`, tableId: TABLE, position: i, createdAt: i }),
+    );
+    const logs: string[] = [];
+    const testLogger = Logger.make(({ message }) => {
+      logs.push(Array.isArray(message) ? message.join(" ") : String(message));
+    });
+    const { run } = harness({ gridColumns: storeColumns, rows: many, cells: [], currentUserId: null });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) => s.getTable(TABLE)),
+        Effect.provide(Logger.replace(Logger.defaultLogger, testLogger)),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      // Still served every row (never breaks).
+      expect(exit.value.rows.length).toBe(FULL_GRID_ROW_WARN_CAP + 1);
+    }
+    expect(logs.some((m) => m.includes("full-grid read above"))).toBe(true);
+  });
+
+  it("getTable is SILENT below the cap", async () => {
+    const logs: string[] = [];
+    const testLogger = Logger.make(({ message }) => {
+      logs.push(Array.isArray(message) ? message.join(" ") : String(message));
+    });
+    const { run } = harness({ gridColumns: storeColumns, rows: threeRows, cells: threeCells, currentUserId: null });
+    await run(
+      svc.pipe(
+        Effect.flatMap((s) => s.getTable(TABLE)),
+        Effect.provide(Logger.replace(Logger.defaultLogger, testLogger)),
+      ),
+    );
+    expect(logs.some((m) => m.includes("full-grid read above"))).toBe(false);
   });
 });

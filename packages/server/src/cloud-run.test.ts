@@ -6,7 +6,8 @@
  * back to Postgres through the cloud GridStore (the `/api/worker/*` routes) —
  * without any real backend. We inject a FAKE cloud client (a `CloudClientLike`)
  * that:
- *   - serves `/api/worker/getTable` from an in-memory grid, and
+ *   - serves `/api/worker/getTable` (+ the bounded `getTablePage` / row-scoped
+ *     `getTableForRows` reads, #134) from an in-memory grid, and
  *   - records `/api/worker/setCell` / `/api/worker/setCellStatus` / batched
  *     `/api/worker/setCells` mutations.
  * Then we assert the engine produced the right `{ ran, errors }` and that the
@@ -137,6 +138,30 @@ function fakeConvex(
           columns: grid.columns,
           rows: grid.rows,
           cells: grid.cells,
+        };
+      }
+      if (name === "/api/worker/getTablePage") {
+        // Bounded keyset page (#134): a full-column run now streams the grid
+        // page-by-page instead of one unbounded getTable. The in-memory grid is
+        // small, so serve it as a SINGLE page (every row + cell) with no further
+        // cursor (`nextCursor: null` = last page).
+        return {
+          table: { workspaceId: "wks_1" },
+          columns: grid.columns,
+          rows: grid.rows,
+          cells: grid.cells,
+          nextCursor: null,
+        };
+      }
+      if (name === "/api/worker/getTableForRows") {
+        // Row-scoped read (#134): the grid restricted to the requested row ids,
+        // used by a row-subset run so it never loads the whole table.
+        const rowIds = new Set(((args?.rowIds ?? []) as string[]).map(String));
+        return {
+          table: { workspaceId: "wks_1" },
+          columns: grid.columns,
+          rows: grid.rows.filter((r) => rowIds.has(String(r._id))),
+          cells: grid.cells.filter((c) => rowIds.has(String(c.rowId))),
         };
       }
       throw new Error(`unexpected query ${name}`);

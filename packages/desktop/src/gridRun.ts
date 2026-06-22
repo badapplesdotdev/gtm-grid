@@ -26,6 +26,26 @@ export type RunOne = (
 ) => Promise<void>;
 
 /**
+ * Whether a cell should render the loading spinner. True if a per-cell run is in
+ * flight (`runningCells`) OR a COLUMN-level run is in flight for this cell's
+ * column and the cell isn't already resolved — so unrun/queued cells show loading
+ * immediately (before the per-cell `status:"running"` realtime patch arrives),
+ * while `done`/`error` cells keep showing their result (a re-run never flickers a
+ * finished cell back to a spinner). Pure; exported for tests.
+ */
+export function cellIsRunning(
+  runningCells: ReadonlySet<string>,
+  runningColId: string | null,
+  rowId: string,
+  colId: string,
+  cellStatus: string | undefined,
+): boolean {
+  if (runningCells.has(`${rowId}:${colId}`)) return true;
+  if (runningColId !== colId) return false;
+  return cellStatus !== "done" && cellStatus !== "error";
+}
+
+/**
  * The data cascade: after `seedColumnIds` produced data for `rowIds`, run every
  * column DOWNSTREAM of them (their transitive dependents) for the SAME rows, with
  * `force: true` because their input just changed. Dependency-ordered — independent

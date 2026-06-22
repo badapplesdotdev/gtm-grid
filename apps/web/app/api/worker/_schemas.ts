@@ -50,6 +50,22 @@ export const DeleteTableSchema = z.object({ tableId: id });
 export const GetCredentialSchema = z.object({ workspaceId: id, extensionId: id });
 export const GetExtensionsSchema = z.object({ workspaceId: id });
 export const GetTableSchema = z.object({ tableId: id });
+// Scoped grid read: all columns + only these rows' cells (bounded by rowIds).
+export const GetTableForRowsSchema = z.object({
+  tableId: id,
+  rowIds: z.array(id),
+});
+// Keyset grid page: cursor over the row (position, createdAt, id) total order.
+const workerRowCursor = z.object({
+  position: z.number(),
+  createdAt: z.number(),
+  id: id,
+});
+export const GetTablePageSchema = z.object({
+  tableId: id,
+  cursor: workerRowCursor.nullish(),
+  limit: z.number().int().positive().max(1000).optional(),
+});
 export const ListTablesSchema = z.object({ projectId: id });
 export const RenameTableSchema = z.object({ tableId: id, name: z.string() });
 export const ReorderColumnSchema = z.object({ columnId: id, toIndex: z.number().int() });

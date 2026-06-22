@@ -1,5 +1,53 @@
 # @gtmgrid/web
 
+## 0.20.1
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.20.1
+- @gtmgrid/auth@0.20.1
+- @gtmgrid/cloud@0.20.1
+- @gtmgrid/db@0.20.1
+- @gtmgrid/email@0.20.1
+- @gtmgrid/engine@0.20.1
+- @gtmgrid/services@0.20.1
+
+## 0.20.0
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.20.0
+- @gtmgrid/auth@0.20.0
+- @gtmgrid/cloud@0.20.0
+- @gtmgrid/db@0.20.0
+- @gtmgrid/email@0.20.0
+- @gtmgrid/engine@0.20.0
+- @gtmgrid/services@0.20.0
+
+## 0.19.1
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.19.1
+- @gtmgrid/auth@0.19.1
+- @gtmgrid/cloud@0.19.1
+- @gtmgrid/db@0.19.1
+- @gtmgrid/email@0.19.1
+- @gtmgrid/engine@0.19.1
+- @gtmgrid/services@0.19.1
+
+## 0.19.0
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.19.0
+- @gtmgrid/auth@0.19.0
+- @gtmgrid/cloud@0.19.0
+- @gtmgrid/db@0.19.0
+- @gtmgrid/email@0.19.0
+- @gtmgrid/engine@0.19.0
+- @gtmgrid/services@0.19.0
+
 ## 0.18.0
 
 ### Patch Changes

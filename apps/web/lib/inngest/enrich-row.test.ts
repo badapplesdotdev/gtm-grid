@@ -52,7 +52,21 @@ describe("enrichRowInDepOrder", () => {
       rows: [{ _id: "row-9" }],
       cells: [],
     };
-    vi.stubGlobal("fetch", fetchReturning(200, JSON.stringify(grid)));
+    // Record the worker endpoints hit so we can prove the read is BOUNDED.
+    const calls: { url: string; body: Record<string, unknown> | undefined }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({
+          url: String(url),
+          body: init?.body ? JSON.parse(String(init.body)) : undefined,
+        });
+        return new Response(JSON.stringify(grid), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
 
     const step = new OrderStep("sig:row-9");
     const ran = await enrichRowInDepOrder(step, {
@@ -64,6 +78,13 @@ describe("enrichRowInDepOrder", () => {
 
     expect(step.order).toEqual(["A", "B", "C"]);
     expect(ran).toBe(3); // each intercepted column reports ran=1
+
+    // The column list is read via the COLUMNS-ONLY bounded endpoint
+    // (getTableForRows with an empty row set), never the full-grid getTable.
+    const colsCall = calls.find((c) => c.url.includes("/api/worker/getTableForRows"));
+    expect(colsCall).toBeDefined();
+    expect(colsCall?.body?.rowIds).toEqual([]);
+    expect(calls.some((c) => c.url.endsWith("/api/worker/getTable"))).toBe(false);
   });
 });
 

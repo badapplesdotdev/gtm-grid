@@ -1,5 +1,102 @@
 # @gtmgrid/desktop
 
+## 0.20.1
+
+### Patch Changes
+
+- 5e613d7: polish(desktop): interface detail pass across the grid app
+
+  Small craft fixes that compound into a more polished feel, all in the
+  hand-rolled CSS design system (`styles.css` + onboarding `onboarding.css`):
+
+  - **Tactile buttons**: `.btn` now gives a subtle `scale(0.96)` press feedback,
+    guarded by `prefers-reduced-motion`.
+  - **Tabular numbers**: live-updating counts (row/col meta, selection count,
+    sidebar table counts, connector method counts, notification badge, bulk-select
+    count) use `font-variant-numeric: tabular-nums` so they no longer shift width
+    as digits change.
+  - **Specific transitions**: replaced four `transition: all` declarations
+    (schedule buttons, output-type picker, formula generate button, onboarding
+    step dots) with explicit property lists.
+  - **Image edges**: rendered markdown images in the agent panel get a subtle 1px
+    ring (pure black/white at low opacity, light/dark aware) via `box-shadow` so it
+    tracks the border radius.
+  - **Text wrapping**: large display headings (onboarding screen title, CSV import
+    title, perks title) use `text-wrap: balance`; descriptive subtext uses
+    `text-wrap: pretty` to avoid orphans.
+  - @gtmgrid/analytics@0.20.1
+  - @gtmgrid/cloud@0.20.1
+  - @gtmgrid/services@0.20.1
+
+## 0.20.0
+
+### Minor Changes
+
+- dd2bfd5: feat(grid): place dependent columns in dependency (DAG) order
+
+  Columns reference other columns by `{{Column Name}}` in their params or run
+  condition. New and edited columns are now positioned to the RIGHT of every
+  column they reference, so a table reads left-to-right in dependency order
+  instead of always appending to the end.
+
+  - **Create**: a new column with references takes a fractional slot immediately
+    after its rightmost dependency; independent columns still append to the tail.
+  - **Edit**: when a column's references change, it (and any dependents now out of
+    order) reposition via a minimal-movement topological sort — unrelated columns
+    and manual arrangements are left untouched.
+  - **Circular references are blocked**: an edit that would make columns depend on
+    each other (A↔B) is rejected before it is saved, with a clear error.
+
+  Placement is computed server-side in `GridService`, so it applies uniformly
+  across the desktop app, the agent, and MCP, and reuses the existing realtime
+  reorder path so every viewer converges on the same order.
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.20.0
+- @gtmgrid/cloud@0.20.0
+- @gtmgrid/services@0.20.0
+
+## 0.19.1
+
+### Patch Changes
+
+- bfd358c: perf(grid): bound every server-side grid read so large tables (50k+ rows) stay fast
+
+  The desktop render path was already keyset-paginated, but the server-side compute
+  paths still loaded the whole grid per operation. This eliminates the unbounded
+  full-grid `getTable` from those paths and adds the index that keeps row loads
+  sort-free:
+
+  - **Index**: new `rows(table_id, position, created_at, id)` composite so the
+    ordered + keyset row loads are index-ordered scans (no in-memory sort of 50k rows).
+  - **Engine column runs** now scope to the run's rows (`getTableForRows`) and stream
+    full-column runs one keyset page at a time (`getTablePage`) — bounded memory.
+  - **Webhook enrichment** reads columns-only, and the per-run **quota pre-flight**
+    reads just the run column's cells instead of the whole grid.
+  - **Dedupe** reads only the dedupe column's cells (rides `cells_by_table_column`).
+  - **MCP `get_table`** is now genuinely server-paged (walks keyset pages) instead of
+    fetching the whole grid and slicing in memory.
+  - The legacy unbounded `getTable` remains only behind a guarded, telemetry-logged
+    fallback.
+  - @gtmgrid/analytics@0.19.1
+  - @gtmgrid/cloud@0.19.1
+  - @gtmgrid/services@0.19.1
+
+## 0.19.0
+
+### Minor Changes
+
+- 4a710f2: feat(agent): replace the Hermes coding agent with Cursor (`cursor-agent`) as the third side-panel AI agent, alongside Claude and Codex. It drives the grid over MCP using your Cursor subscription (`cursor-agent login` once). Hermes is retained as an AI model provider for AI columns. The cloud member token cursor-agent needs is written to an owner-only (0600) MCP config that is deleted after each turn.
+
+### Patch Changes
+
+- f8125f0: fix(connectors): pass sibling field values to dependent dropdowns. A connector dropdown whose option source requires a parent field (e.g. a PlusVibe campaign list that needs `workspace_id`) now receives the in-progress sibling values from the column editor, so it loads instead of failing with a raw upstream 400. The injection is generic — keyed off each source method's own required schema — and surfaces a clear "Select <field> first" prompt when a required parent is still unset.
+- dcaba83: perf(grid): make cloud column save/map feel instant. Saving or mapping a column no longer blocks on a full multi-page refetch (the optimistic patch + realtime echo already reflect it; reconcile happens in the background without an immediate refetch that could clobber a just-started run's cells), the Autumn usage flush is bounded to 2s so a slow billing call can't stall a grid write, and the edit rail / cell-details drawer close immediately. A column run now renders its unresolved cells as loading right away (done/error cells keep their result, so a re-run never flickers finished cells). A background save failure now surfaces in the grid's error banner instead of failing silently.
+  - @gtmgrid/analytics@0.19.0
+  - @gtmgrid/cloud@0.19.0
+  - @gtmgrid/services@0.19.0
+
 ## 0.18.0
 
 ### Minor Changes

@@ -42,6 +42,17 @@ export interface CellPatch {
 }
 
 /**
+ * One keyset page of a paged full-column run: a read-only {@link GridStoreShape}
+ * scoped to this page's rows, the page's `rowIds` (in run order), and the opaque
+ * `nextCursor` to fetch the following page (`null` on the last).
+ */
+export interface GridStorePage {
+  readonly reads: GridStoreShape;
+  readonly rowIds: readonly string[];
+  readonly nextCursor: unknown;
+}
+
+/**
  * The async CRUD surface the engine needs during a run. Every method the
  * engine previously called on the concrete `Db` (plus the credential lookup
  * `dispatch` made on `credsDb`) lives here, returning Effects so the cloud
@@ -88,8 +99,27 @@ export interface GridStoreShape {
    * the column/rows/cells through the returned shape, while still WRITING
    * through the live store. Cheap synchronous stores (SQLite) omit it and the
    * engine reads directly, preserving their exact behaviour.
+   *
+   * When `rowIds` is supplied (a row-scoped run — cascade / run-cell /
+   * run-rows), the snapshot may fetch ONLY those rows' data instead of the whole
+   * grid, so a scoped run never loads a 50k-row table to touch a handful of
+   * rows. A store that can't scope ignores the arg and snapshots the full grid.
    */
-  readonly snapshot?: () => Effect.Effect<GridStoreShape, GridStoreError>;
+  readonly snapshot?: (
+    rowIds?: readonly string[],
+  ) => Effect.Effect<GridStoreShape, GridStoreError>;
+  /**
+   * Optional: fetch ONE keyset page of the grid for a FULL-column run, so a
+   * store that would otherwise load every row at once streams the grid
+   * page-by-page with bounded resident memory. `cursor` is `null` for the first
+   * page; the returned `nextCursor` (opaque to the engine) seeks the next page,
+   * and `null` marks the last. `reads` is a snapshot scoped to that page's rows.
+   * When present, the engine pages a full run; when omitted, it falls back to a
+   * single {@link snapshot}. Cheap synchronous stores omit it.
+   */
+  readonly snapshotPage?: (
+    cursor: unknown,
+  ) => Effect.Effect<GridStorePage, GridStoreError>;
   /**
    * Optional: when `true`, the engine SKIPS the interim `running` cell write at
    * the start of each row (`runColumn`), writing only the terminal `done`/

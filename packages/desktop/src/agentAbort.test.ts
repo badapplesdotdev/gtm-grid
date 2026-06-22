@@ -13,7 +13,7 @@ import {
 describe("abortRun — abort ONE agent's in-flight turn", () => {
   it("aborts that agent's controller and clears its slot", () => {
     const controller = new AbortController();
-    const map: AbortControllers = { claude: controller, codex: null, hermes: null };
+    const map: AbortControllers = { claude: controller, codex: null, cursor: null };
 
     abortRun(map, "claude");
 
@@ -24,7 +24,7 @@ describe("abortRun — abort ONE agent's in-flight turn", () => {
   it("leaves OTHER agents' runs untouched (the agent-switch regression)", () => {
     const claude = new AbortController();
     const codex = new AbortController();
-    const map: AbortControllers = { claude, codex, hermes: null };
+    const map: AbortControllers = { claude, codex, cursor: null };
 
     // Switching away from Claude must not abort Codex's live turn (or vice versa).
     abortRun(map, "claude");
@@ -35,13 +35,13 @@ describe("abortRun — abort ONE agent's in-flight turn", () => {
   });
 
   it("is a no-op when the agent has no live turn", () => {
-    const map: AbortControllers = { claude: null, codex: null, hermes: null };
+    const map: AbortControllers = { claude: null, codex: null, cursor: null };
     expect(() => abortRun(map, "claude")).not.toThrow();
   });
 
   it("does not abort a controller swapped in after the slot was cleared", () => {
     const first = new AbortController();
-    const map: AbortControllers = { claude: first, codex: null, hermes: null };
+    const map: AbortControllers = { claude: first, codex: null, cursor: null };
     abortRun(map, "claude"); // first turn torn down, slot cleared
 
     const second = new AbortController();
@@ -54,7 +54,7 @@ describe("abortAllRuns — abort EVERY agent (unmount / table switch)", () => {
   it("aborts all live controllers and clears every slot", () => {
     const claude = new AbortController();
     const codex = new AbortController();
-    const map: AbortControllers = { claude, codex, hermes: null };
+    const map: AbortControllers = { claude, codex, cursor: null };
 
     abortAllRuns(map);
 

@@ -638,6 +638,7 @@ export function DataGrid({
       presenceByCell: c.presence?.byCell,
       flashCell,
       runningCells: c.runningCells,
+      runningColId: c.runningColId,
       waitingByCol,
     }),
     [
@@ -649,6 +650,7 @@ export function DataGrid({
       kbd.getEditSeed,
       c.presence,
       c.runningCells,
+      c.runningColId,
       flashCell,
       waitingByCol,
     ],

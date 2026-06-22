@@ -207,6 +207,23 @@ export async function fetchGrid(tableId: string): Promise<WorkerGrid> {
 }
 
 /**
+ * The COLUMNS-ONLY worker read: all columns plus ZERO rows/cells, via
+ * `getTableForRows` with an empty row set. Enrichment only needs the column list
+ * to order columns by their `{{ref}}` dependency graph, so this never loads the
+ * table's rows/cells — a 50k-row webhook table no longer ships its whole grid
+ * just to topo-sort a handful of columns.
+ */
+export async function fetchGridColumns(
+  tableId: string,
+): Promise<WorkerGrid["columns"]> {
+  const grid = (await workerClient.query(WORKER_REFS.getTableForRows, {
+    tableId,
+    rowIds: [],
+  })) as WorkerGrid;
+  return grid.columns;
+}
+
+/**
  * Resolve the row this record targets, honouring `mode`. Both paths write the
  * row + cells in ONE server-side worker mutation that meters EXACTLY ONCE per
  * record (never per cell), returning the resolved `rowId`.
@@ -356,12 +373,12 @@ export async function processWebhookRecordHandler(
   const functionColumns = await step.run(
     `enrich-columns:${data.recordId}`,
     async () => {
-      const grid = await fetchGrid(data.tableId);
+      const columns = await fetchGridColumns(data.tableId);
       // Order by the {{ref}} DEPENDENCY graph, not authored position, so a column
       // that maps/computes off another column's output always enriches AFTER its
       // source (Get API data → map field → compute value cascades correctly even
       // when the author placed the columns out of order). Cycle-tolerant.
-      const fnCols = grid.columns
+      const fnCols = columns
         .filter((c) => c.kind === "function")
         .map((c) => ({
           id: c._id,

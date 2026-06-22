@@ -1,6 +1,6 @@
 import { buildColumnDeps, topoSortColumnIds } from "@gtmgrid/services/columns";
 import {
-  fetchGrid,
+  fetchGridColumns,
   runEnrichColumn,
   type StepRunner,
 } from "./functions/process-webhook-record";
@@ -26,8 +26,8 @@ export async function enrichRowInDepOrder(
   },
 ): Promise<number> {
   const orderedColumnIds = await step.run(`${args.keyPrefix}:columns`, async () => {
-    const grid = await fetchGrid(args.tableId);
-    const fnCols = grid.columns
+    const columns = await fetchGridColumns(args.tableId);
+    const fnCols = columns
       .filter((c) => c.kind === "function")
       .map((c) => ({
         id: c._id,
