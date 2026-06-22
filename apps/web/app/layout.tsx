@@ -43,7 +43,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Grid — the headless GTM engine",
     description:
-      "The headless GTM engine — programmable, local-first, every column a function. Drive it from Claude Code, MCP, the CLI, or a REST call.",
+      "The headless GTM engine — programmable, source-available, every column a function. Drive it from Claude Code, MCP, the CLI, or a REST call.",
     siteName: "Grid",
     type: "website",
     images: [
@@ -54,7 +54,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Grid — the headless GTM engine",
     description:
-      "The headless GTM engine — programmable, local-first, every column a function. Drive it from Claude Code, MCP, the CLI, or a REST call.",
+      "The headless GTM engine — programmable, source-available, every column a function. Drive it from Claude Code, MCP, the CLI, or a REST call.",
     images: ["/brand/og-cover.jpg"],
   },
 };

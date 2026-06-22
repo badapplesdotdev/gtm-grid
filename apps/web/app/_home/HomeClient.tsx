@@ -153,33 +153,31 @@ function initCtaCopy(): Teardown {
 
 /* ───────── Quick start — tabs + platform toggle + copy ───────── */
 function initQuickStart(): Teardown {
-  const QS: Record<string, Record<string, { c: string; cmd: string }>> = {
-    "one-liner": {
-      mac: { c: "# Works everywhere. Installs Node + everything. You're welcome.", cmd: "curl -fsSL https://grid.dev/install.sh | bash" },
-      win: { c: "# PowerShell 7+. Installs everything.", cmd: "irm https://grid.dev/install.ps1 | iex" },
+  // Real distribution paths (verified against README): run from source, drive
+  // it from Claude Code over MCP, or grab the signed desktop build. No
+  // fabricated brew/curl/npm one-liners — those don't exist for this project.
+  const QS: Record<string, { c: string; cmd: string }> = {
+    source: {
+      c: "# Clone and run from source. Needs Node 20+ and pnpm.",
+      cmd: "git clone https://github.com/badapplesdotdev/gtm-grid.git && cd gtm-grid && pnpm install && pnpm tauri:dev",
     },
-    npm: {
-      mac: { c: "# Requires Node 18+.", cmd: "npm install -g @grid/cli" },
-      win: { c: "# Requires Node 18+.", cmd: "npm install -g @grid/cli" },
+    claude: {
+      c: "# Drive the grid from your terminal Claude Code over MCP.",
+      cmd: 'claude mcp add gtmgrid -s user -e GTMGRID_PROJECT=default -- "$HOME/dev/gtmgrid/bin/gtmgrid-mcp"',
     },
-    hackable: {
-      mac: { c: "# Clone and run from source.", cmd: "git clone https://github.com/maxtrigify/gtm-grid && pnpm i && pnpm dev" },
-      win: { c: "# Clone and run from source.", cmd: "git clone https://github.com/maxtrigify/gtm-grid && pnpm i && pnpm dev" },
-    },
-    apps: {
-      mac: { c: "# Signed universal desktop build.", cmd: "brew install --cask grid" },
-      win: { c: "# Windows installer.", cmd: "winget install grid" },
+    app: {
+      c: "# Prefer a click? Grab the signed build for macOS, Windows or Linux.",
+      cmd: "open https://gtmgrid.com/download",
     },
   };
   const tabs = document.getElementById("qs-tabs");
-  const plat = document.getElementById("qs-plat");
   const cEl = document.getElementById("qs-comment");
   const cmdEl = document.getElementById("qs-cmd");
   const copy = document.getElementById("qs-copy");
-  if (!tabs || !plat || !cEl || !cmdEl || !copy) return () => {};
-  const state = { tab: "one-liner", plat: "mac" };
+  if (!tabs || !cEl || !cmdEl || !copy) return () => {};
+  const state = { tab: "source" };
   const render = () => {
-    const d = QS[state.tab][state.plat];
+    const d = QS[state.tab] ?? QS.source;
     cEl.textContent = d.c;
     cmdEl.textContent = d.cmd;
   };
@@ -188,13 +186,6 @@ function initQuickStart(): Teardown {
     if (!b) return;
     state.tab = b.dataset.tab as string;
     tabs.querySelectorAll(".qs-tab").forEach((x) => x.classList.toggle("active", x === b));
-    render();
-  };
-  const onPlat = (e: Event) => {
-    const b = (e.target as Element).closest<HTMLElement>(".qs-pill");
-    if (!b) return;
-    state.plat = b.dataset.plat as string;
-    plat.querySelectorAll(".qs-pill").forEach((x) => x.classList.toggle("active", x === b));
     render();
   };
   const onCopy = () => {
@@ -206,11 +197,9 @@ function initQuickStart(): Teardown {
     }, 1400);
   };
   tabs.addEventListener("click", onTabs);
-  plat.addEventListener("click", onPlat);
   copy.addEventListener("click", onCopy);
   return () => {
     tabs.removeEventListener("click", onTabs);
-    plat.removeEventListener("click", onPlat);
     copy.removeEventListener("click", onCopy);
   };
 }

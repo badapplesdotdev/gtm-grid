@@ -19,14 +19,13 @@ export const PAGE_HTML = String.raw`<div class="page">
       <a class="nav-link" href="#surfaces">Surfaces</a>
       <a class="nav-link" href="#connectors">Connectors</a>
       <a class="nav-link" href="#agent">Agent</a>
-      <a class="nav-link" href="#local">Open source</a>
+      <a class="nav-link" href="#local">Source</a>
       <a class="nav-link" href="#pricing">Pricing</a>
     </div>
     <div class="nav-actions">
-      <a class="btn btn-ghost" href="https://github.com/maxtrigify/gtm-grid">
+      <a class="btn btn-ghost" href="https://github.com/badapplesdotdev/gtm-grid">
         <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.58 2 12.26c0 4.55 2.87 8.4 6.84 9.76.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.9 1.57 2.34 1.12 2.91.86.09-.66.35-1.12.63-1.38-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.7 0 0 .84-.28 2.75 1.05A9.36 9.36 0 0 1 12 6.84c.85 0 1.71.12 2.51.34 1.91-1.33 2.75-1.05 2.75-1.05.55 1.4.2 2.44.1 2.7.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.26C22 6.58 17.52 2 12 2Z"></path></svg>
-        15.2k
-        <span class="star-count">Open source</span>
+        GitHub
       </a>
       <a class="btn btn-primary" href="#download">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg>
@@ -64,8 +63,8 @@ export const PAGE_HTML = String.raw`<div class="page">
   </div>
   <div class="wrap">
     <span class="hero-badge">
-      <span class="pill">v0.4 · macOS</span>
-      Local-first. Open source. No pricing gate.
+      <span class="pill">v0.20 · macOS</span>
+      Source-available. Self-host free. Bring your own keys.
     </span>
     <h1 id="hero-headline">The headless GTM <span class="accent">engine.</span></h1>
     <p class="hero-lead">
@@ -76,10 +75,9 @@ export const PAGE_HTML = String.raw`<div class="page">
         <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.5 12.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9s-1.8-.8-3-.8c-1.5 0-3 .9-3.8 2.3-1.6 2.8-.4 7 1.2 9.3.8 1.1 1.7 2.4 2.9 2.3 1.2 0 1.6-.7 3-.7s1.8.7 3 .7 2-1.1 2.7-2.1c.9-1.2 1.2-2.4 1.3-2.5-.1 0-2.4-1-2.4-3.6zM14.3 5.4c.6-.8 1.1-1.9 1-3-1 0-2.1.6-2.8 1.4-.6.7-1.1 1.8-1 2.9 1.1.1 2.2-.5 2.8-1.3z"/></svg>
         Download for macOS
       </a>
-      <a class="btn btn-outline btn-lg" href="https://github.com/maxtrigify/gtm-grid">
+      <a class="btn btn-outline btn-lg" href="https://github.com/badapplesdotdev/gtm-grid">
         <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.58 2 12.26c0 4.55 2.87 8.4 6.84 9.76.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.9 1.57 2.34 1.12 2.91.86.09-.66.35-1.12.63-1.38-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.7 0 0 .84-.28 2.75 1.05A9.36 9.36 0 0 1 12 6.84c.85 0 1.71.12 2.51.34 1.91-1.33 2.75-1.05 2.75-1.05.55 1.4.2 2.44.1 2.7.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.26C22 6.58 17.52 2 12 2Z"></path></svg>
-        15.2k
-        <span class="star-count">Open source</span>
+        GitHub
       </a>
     </div>
     <div class="hero-sub">
@@ -165,7 +163,7 @@ export const PAGE_HTML = String.raw`<div class="page">
       <article class="surf-card">
         <div class="surf-visual surf-connectors" id="surf-conn"></div>
         <div class="surf-body">
-          <h3>Pre-mapped, or anything <span class="surf-badge">22 connectors</span></h3>
+          <h3>Pre-mapped, or anything <span class="surf-badge">20+ connectors</span></h3>
           <p>Use the tools we've already mapped, or connect anything with one JSON manifest — it becomes an SDK call, an MCP tool, and a UI form.</p>
         </div>
       </article>
@@ -250,7 +248,7 @@ export const PAGE_HTML = String.raw`<div class="page">
   <div class="wrap">
     <div class="sec-head center">
       <span class="eyebrow"><span class="dot"></span>Extensions</span>
-      <h2>22 connectors. Zero glue code.</h2>
+      <h2>20+ connectors. Zero glue code.</h2>
       <p>Every connector is one JSON manifest — a <span class="tok">baseUrl</span>, <span class="tok">auth</span>, and <span class="tok">methods</span>. That single file becomes an <span class="mono" style="color:var(--text)">sdk</span> call, an MCP tool, and a UI form. Bring your own keys; credentials are encrypted and scoped.</p>
     </div>
     <div class="conn-grid" id="conn-grid"></div>
@@ -322,41 +320,36 @@ export const PAGE_HTML = String.raw`<div class="page">
       <div class="qs-bar">
         <div class="traffic"><i></i><i></i><i></i></div>
         <div class="qs-tabs" id="qs-tabs">
-          <button class="qs-tab active" data-tab="one-liner">One-liner</button>
-          <button class="qs-tab" data-tab="npm">npm</button>
-          <button class="qs-tab" data-tab="hackable">Hackable</button>
-          <button class="qs-tab" data-tab="apps">Apps</button>
+          <button class="qs-tab active" data-tab="source">From source</button>
+          <button class="qs-tab" data-tab="claude">Claude Code</button>
+          <button class="qs-tab" data-tab="app">Desktop app</button>
         </div>
         <div class="qs-bar-right">
-          <div class="qs-plat" id="qs-plat">
-            <button class="qs-pill active" data-plat="mac">macOS &amp; Linux</button>
-            <button class="qs-pill" data-plat="win">Windows</button>
-          </div>
           <span class="qs-beta">&beta; BETA</span>
         </div>
       </div>
       <div class="qs-body">
-        <div class="qs-comment" id="qs-comment"># Works everywhere. Installs everything. You're welcome.</div>
+        <div class="qs-comment" id="qs-comment"># Clone and run from source. Needs Node 20+ and pnpm.</div>
         <div class="qs-cmd-row">
           <span class="qs-prompt">$</span>
-          <code class="qs-cmd" id="qs-cmd">curl -fsSL https://grid.dev/install.sh | bash</code>
+          <code class="qs-cmd" id="qs-cmd">git clone https://github.com/badapplesdotdev/gtm-grid.git &amp;&amp; cd gtm-grid &amp;&amp; pnpm install &amp;&amp; pnpm tauri:dev</code>
           <button class="qs-copy" id="qs-copy" title="Copy" aria-label="Copy command">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
         </div>
       </div>
     </div>
-    <p class="qs-caption">Works on macOS, Linux, and Windows. The one-liner installs Node.js and everything else for you. Switch versions later with <code>grid update</code>.</p>
+    <p class="qs-caption">Signed desktop builds for macOS, Windows, and Linux — or run it from source. The CLI and MCP server run anywhere Node does. <a href="/download">All platforms &amp; versions →</a></p>
   </div>
 </section>
 
-<!-- ───────────────────────── Open source / Local vs Cloud ───────────────────────── -->
+<!-- ───────────────────────── Source-available / Self-host vs Cloud ───────────────────────── -->
 <section class="band" id="local">
   <div class="wrap">
     <div class="sec-head center">
-      <span class="eyebrow"><span class="dot"></span>Open source</span>
-      <h2>Free on your machine. <span class="accent">Cloud only when you need it.</span></h2>
-      <p>The desktop app is open source and free forever — run it offline, ship your own connectors, send the good ones back as a PR. Cloud is where it gets serious: put your whole team on the data and keep every grid running while you're away.</p>
+      <span class="eyebrow"><span class="dot"></span>Source-available</span>
+      <h2>Free to self-host. <span class="accent">Cloud when you need it.</span></h2>
+      <p>Grid is source-available and free to self-host — point it at your own Postgres, ship your own connectors, send the good ones back as a PR. Cloud is where it gets serious: managed Postgres, your whole team on the data, and every grid running while you're away.</p>
     </div>
 
     <div class="lc-grid">
@@ -366,10 +359,10 @@ export const PAGE_HTML = String.raw`<div class="page">
           <span class="lc-ico">
             <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.58 2 12.26c0 4.55 2.87 8.4 6.84 9.76.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.9 1.57 2.34 1.12 2.91.86.09-.66.35-1.12.63-1.38-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.7 0 0 .84-.28 2.75 1.05A9.36 9.36 0 0 1 12 6.84c.85 0 1.71.12 2.51.34 1.91-1.33 2.75-1.05 2.75-1.05.55 1.4.2 2.44.1 2.7.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.26C22 6.58 17.52 2 12 2Z"></path></svg>
           </span>
-          <span class="lc-tag">Free forever · MIT</span>
+          <span class="lc-tag">Self-host · FSL-1.1-MIT</span>
         </div>
-        <h3>The open-source desktop app</h3>
-        <p class="lc-sub">Everything runs on your machine. No account, no caps, no pricing gate — and the full source is yours to read, fork, and extend.</p>
+        <h3>Self-host on your own Postgres</h3>
+        <p class="lc-sub">Run the backend against a Postgres you control — a local Docker image or your own server. Your keys and execution stay on your machine, and the full source is yours to read, fork, and extend.</p>
         <ul class="lc-list">
           <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> <span><b>Unlimited</b> rows, tables &amp; function columns</span></li>
           <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> <span>Every connector — bring your own keys</span></li>
@@ -381,9 +374,9 @@ export const PAGE_HTML = String.raw`<div class="page">
             <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.5 12.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9s-1.8-.8-3-.8c-1.5 0-3 .9-3.8 2.3-1.6 2.8-.4 7 1.2 9.3.8 1.1 1.7 2.4 2.9 2.3 1.2 0 1.6-.7 3-.7s1.8.7 3 .7 2-1.1 2.7-2.1c.9-1.2 1.2-2.4 1.3-2.5-.1 0-2.4-1-2.4-3.6zM14.3 5.4c.6-.8 1.1-1.9 1-3-1 0-2.1.6-2.8 1.4-.6.7-1.1 1.8-1 2.9 1.1.1 2.2-.5 2.8-1.3z"/></svg>
             Download free
           </a>
-          <a class="btn btn-outline" href="https://github.com/maxtrigify/gtm-grid">
+          <a class="btn btn-outline" href="https://github.com/badapplesdotdev/gtm-grid">
             <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.58 2 12.26c0 4.55 2.87 8.4 6.84 9.76.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.9 1.57 2.34 1.12 2.91.86.09-.66.35-1.12.63-1.38-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.7 0 0 .84-.28 2.75 1.05A9.36 9.36 0 0 1 12 6.84c.85 0 1.71.12 2.51.34 1.91-1.33 2.75-1.05 2.75-1.05.55 1.4.2 2.44.1 2.7.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.26C22 6.58 17.52 2 12 2Z"></path></svg>
-            15.2k<span class="star-count">GitHub</span>
+            Browse the source
           </a>
         </div>
       </div>
@@ -394,7 +387,7 @@ export const PAGE_HTML = String.raw`<div class="page">
           <span class="lc-ico">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19a4.5 4.5 0 0 0 .9-8.91 6 6 0 0 0-11.64-1.6A4 4 0 0 0 6 19Z"/></svg>
           </span>
-          <span class="lc-tag">Optional · from $0</span>
+          <span class="lc-tag">Hosted · from $20</span>
         </div>
         <h3>Cloud, for when you step away</h3>
         <p class="lc-sub">The same grid, hosted — so it keeps running with your laptop closed, fires on incoming events, and opens up to your whole team.</p>
@@ -406,22 +399,22 @@ export const PAGE_HTML = String.raw`<div class="page">
         </ul>
         <div class="lc-cta">
           <a class="btn btn-primary" href="#pricing">See cloud plans</a>
-          <a class="btn btn-ghost" href="#pricing">Starts free →</a>
+          <a class="btn btn-ghost" href="#pricing">From $20 / seat →</a>
         </div>
       </div>
     </div>
 
-    <div class="lc-detail-lab">Under the hood — how local-first works</div>
+    <div class="lc-detail-lab">Under the hood — how it works</div>
     <div class="feat-grid">
       <div class="feat-card">
         <div class="feat-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></svg></div>
-        <h3>SQLite on disk</h3>
-        <p>Tables, columns, and cell history live in a local <code>.db</code> file. Close the laptop lid — it's still yours.</p>
+        <h3>Postgres source of truth</h3>
+        <p>Tables, columns, and cell history live in <code>Postgres</code> — your own self-hosted instance, or our managed cloud.</p>
       </div>
       <div class="feat-card">
         <div class="feat-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
-        <h3>Encrypted credentials</h3>
-        <p>Every key is <code>AES-256-GCM</code> encrypted and scoped <span class="mono" style="color:var(--text)">Personal&nbsp;/&nbsp;Team&nbsp;/&nbsp;Local</span>. Nothing is synced to a server.</p>
+        <h3>Keys stay on your machine</h3>
+        <p>Your connector &amp; AI keys live in a local vault, <code>AES-256-GCM</code> encrypted on disk. Execution runs locally — keys never leave your machine.</p>
       </div>
       <div class="feat-card">
         <div class="feat-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></div>
@@ -437,13 +430,13 @@ export const PAGE_HTML = String.raw`<div class="page">
   <div class="wrap">
     <div class="sec-head center">
       <span class="eyebrow"><span class="dot"></span>Cloud pricing</span>
-      <h2>The app is free. <span class="accent">Cloud is metered.</span></h2>
-      <p>Cloud plans are billed per seat and metered by <b>cloud actions</b> — runs that happen on our infrastructure instead of your machine. No row, table, or connector caps, ever. The desktop app stays free no matter what.</p>
+      <h2>Self-host free. <span class="accent">Cloud is metered.</span></h2>
+      <p>Self-host on your own Postgres for free. Cloud plans are billed per seat and metered by <b>cloud actions</b> — runs that happen on our infrastructure instead of your machine. No row, table, or connector caps, ever.</p>
     </div>
 
     <div class="local-strip">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
-      <span class="ls-tx"><b>Desktop app — $0, open source, unlimited.</b> Cloud only covers runs that happen off your machine.</span>
+      <span class="ls-tx"><b>Self-host — $0, source-available, unlimited.</b> Cloud only covers runs on our infrastructure.</span>
       <a href="#download">Download free <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
     </div>
 
@@ -457,23 +450,23 @@ export const PAGE_HTML = String.raw`<div class="page">
       <div class="price-card">
         <div class="price-head">
           <span class="plan-name">Free</span>
-          <p class="plan-tagline">Cloud basics, hard-capped.</p>
+          <p class="plan-tagline">Local &amp; solo, forever.</p>
         </div>
         <div class="price-tag"><span class="price-amt">$0</span><span class="price-per">/ forever</span></div>
-        <p class="price-bill">No card required</p>
+        <p class="price-bill">Self-host · no card</p>
         <div class="price-quota">
           <div class="price-meter">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0-6 6c0 7-3 9-3 9h18s-3-2-3-9a6 6 0 0 0-6-6Z"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
-            <span><b style="color:var(--text);font-weight:600">2,000</b> cloud actions / mo</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/></svg>
+            <span><b style="color:var(--text);font-weight:600">Runs 100% on your machine</b></span>
           </div>
-          <p class="price-over"><b>Overage</b> — hard cap, no overage</p>
+          <p class="price-over"><b>Cloud actions</b> — paid plans only</p>
         </div>
         <a class="btn btn-outline" href="#download" style="width:100%;justify-content:center">Start free</a>
         <ul class="price-list">
-          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> <span class="li-strong">Everything in the free desktop app</span></li>
-          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Webhooks &amp; scheduled runs</li>
-          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Cloud sync for 1 workspace</li>
-          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> 2,000 cloud actions every month</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> <span class="li-strong">The full source-available desktop app</span></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Unlimited rows, tables &amp; functions</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Every connector — bring your own keys</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Local-only — cloud needs a paid plan</li>
         </ul>
       </div>
 
@@ -494,7 +487,7 @@ export const PAGE_HTML = String.raw`<div class="page">
         </div>
         <a class="btn btn-outline" href="#download" style="width:100%;justify-content:center">Start 7-day trial</a>
         <ul class="price-list">
-          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> <span class="li-strong">Everything in Free</span></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> <span class="li-strong">Everything in Free, in the cloud</span></li>
           <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Team workspaces &amp; shared credentials</li>
           <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Realtime multiplayer on shared grids</li>
           <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> 50,000 cloud actions / seat / mo</li>
@@ -562,7 +555,7 @@ export const PAGE_HTML = String.raw`<div class="page">
       </div>
       <div class="bill-note">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C6.48 2 2 6.58 2 12.26c0 4.55 2.87 8.4 6.84 9.76.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.9 1.57 2.34 1.12 2.91.86.09-.66.35-1.12.63-1.38-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.7 0 0 .84-.28 2.75 1.05A9.36 9.36 0 0 1 12 6.84c.85 0 1.71.12 2.51.34 1.91-1.33 2.75-1.05 2.75-1.05.55 1.4.2 2.44.1 2.7.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.26C22 6.58 17.52 2 12 2Z"/></svg>
-        <div><h5>The desktop app is always free</h5><p>Open source and MIT-licensed, unlimited on your own machine. Cloud is purely additive — for when grids need to run without you.</p></div>
+        <div><h5>Self-hosting is always free</h5><p>Source-available under FSL-1.1-MIT, unlimited on your own Postgres. Cloud is purely additive — for when grids need to run without you.</p></div>
       </div>
     </div>
   </div>
@@ -581,12 +574,12 @@ export const PAGE_HTML = String.raw`<div class="page">
         <div class="faq-a"><div class="faq-a-inner">The engine isn’t tied to a dashboard. The same tables, function columns, and connectors are driven from Claude Code, an MCP client, the CLI, a REST call, or a webhook — and the desktop grid is just one head on top, so you can watch every row fill as it runs.</div></div>
       </div>
       <div class="faq-item">
-        <button class="faq-q">Is my data really local?<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
-        <div class="faq-a"><div class="faq-a-inner">Yes. Storage is SQLite in a file on your disk, column logic runs in a local QuickJS sandbox, and credentials are encrypted at rest. The only outbound traffic is the connector and AI calls <em>you</em> trigger, sent directly to those providers.</div></div>
+        <button class="faq-q">Where does my data live?<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+        <div class="faq-a"><div class="faq-a-inner">In Postgres — your own self-hosted instance (a local Docker image or your own server) for free, or our managed cloud. Either way your connector and AI keys stay in a local encrypted vault, column logic runs in a local QuickJS sandbox, and the only outbound traffic is the connector and AI calls <em>you</em> trigger, sent directly to those providers.</div></div>
       </div>
       <div class="faq-item">
         <button class="faq-q">Do I have to use the cloud?<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
-        <div class="faq-a"><div class="faq-a-inner">No. The desktop app is fully open source and free forever — local, solo, unlimited. Cloud is an optional layer you turn on only when a grid needs to run without you: scheduled refreshes while your laptop's closed, webhook triggers, team workspaces, and shared credentials. If you never need those, you never pay.</div></div>
+        <div class="faq-a"><div class="faq-a-inner">No. Grid is source-available (FSL-1.1-MIT) and free to self-host — point it at your own Postgres and you're unlimited, local and solo. Cloud is an optional layer you turn on only when a grid needs to run without you: scheduled refreshes while your laptop's closed, webhook triggers, team workspaces, and shared credentials. If you never need those, you never pay.</div></div>
       </div>
       <div class="faq-item">
         <button class="faq-q">What does "bring your own key" mean for cost?<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
@@ -602,7 +595,7 @@ export const PAGE_HTML = String.raw`<div class="page">
       </div>
       <div class="faq-item">
         <button class="faq-q">Which platforms are supported?<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
-        <div class="faq-a"><div class="faq-a-inner">It's a Tauri v2 desktop app. macOS is available now; Windows and Linux builds are next. The CLI and MCP server run anywhere Node does.</div></div>
+        <div class="faq-a"><div class="faq-a-inner">It's a Tauri v2 desktop app. Signed builds ship for macOS, Windows, and Linux; the CLI and MCP server run anywhere Node does.</div></div>
       </div>
     </div>
   </div>
@@ -615,7 +608,7 @@ export const PAGE_HTML = String.raw`<div class="page">
     <p>Install Grid, point it at your keys, and drive your first grid from Claude Code, the CLI, or an API call in minutes.</p>
     <div class="cta-cmd">
       <span class="prompt">$</span>
-      <span id="cta-cmd-text">brew install --cask grid</span>
+      <span id="cta-cmd-text">git clone https://github.com/badapplesdotdev/gtm-grid.git</span>
       <span class="copy" id="cta-copy" title="Copy">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
       </span>
@@ -625,7 +618,7 @@ export const PAGE_HTML = String.raw`<div class="page">
         <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.5 12.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9s-1.8-.8-3-.8c-1.5 0-3 .9-3.8 2.3-1.6 2.8-.4 7 1.2 9.3.8 1.1 1.7 2.4 2.9 2.3 1.2 0 1.6-.7 3-.7s1.8.7 3 .7 2-1.1 2.7-2.1c.9-1.2 1.2-2.4 1.3-2.5-.1 0-2.4-1-2.4-3.6zM14.3 5.4c.6-.8 1.1-1.9 1-3-1 0-2.1.6-2.8 1.4-.6.7-1.1 1.8-1 2.9 1.1.1 2.2-.5 2.8-1.3z"/></svg>
         Download for macOS
       </a>
-      <a class="btn btn-outline btn-lg" href="https://github.com/maxtrigify/gtm-grid">Read the docs</a>
+      <a class="btn btn-outline btn-lg" href="https://github.com/badapplesdotdev/gtm-grid">Read the docs</a>
     </div>
   </div>
 </section>
@@ -637,7 +630,7 @@ export const PAGE_HTML = String.raw`<div class="page">
       <a class="brand" href="#top" aria-label="GTM Grid — home">
         <img class="brand-logo" src="/brand/logo.svg" alt="GTM Grid" style="height:24px;width:auto;display:block">
       </a>
-      <p class="footer-tag">The headless GTM engine — programmable, local-first, every column a function.</p>
+      <p class="footer-tag">The headless GTM engine — programmable, source-available, every column a function.</p>
     </div>
     <div class="foot-col">
       <h5>Product</h5>
@@ -648,22 +641,22 @@ export const PAGE_HTML = String.raw`<div class="page">
     </div>
     <div class="foot-col">
       <h5>Developers</h5>
-      <a href="https://github.com/maxtrigify/gtm-grid">GitHub</a>
-      <a href="#">CLI</a>
-      <a href="#">MCP server</a>
-      <a href="#">Manifest spec</a>
+      <a href="https://github.com/badapplesdotdev/gtm-grid">GitHub</a>
+      <a href="https://github.com/badapplesdotdev/gtm-grid/tree/main/packages/cli">CLI</a>
+      <a href="https://github.com/badapplesdotdev/gtm-grid/tree/main/packages/mcp">MCP server</a>
+      <a href="https://github.com/badapplesdotdev/gtm-grid/tree/main/extensions">Connector manifests</a>
     </div>
     <div class="foot-col">
       <h5>Company</h5>
-      <a href="#">Changelog</a>
-      <a href="#">Privacy</a>
-      <a href="#">License</a>
+      <a href="https://github.com/badapplesdotdev/gtm-grid/releases">Changelog</a>
+      <a href="/download">Download</a>
+      <a href="https://github.com/badapplesdotdev/gtm-grid/blob/main/LICENSE">License</a>
     </div>
   </div>
   <div class="footer-bottom">
     <div class="wrap">
       <span>© 2026 Grid</span>
-      <span class="mono">v0.4.1 · MIT</span>
+      <span class="mono">v0.20.1 · FSL-1.1-MIT</span>
     </div>
   </div>
 </footer>
