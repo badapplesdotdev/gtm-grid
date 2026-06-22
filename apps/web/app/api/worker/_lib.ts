@@ -298,6 +298,8 @@ function workerErrorStatus(tag: string | undefined): number {
     case "InvalidMappingError":
     case "InvalidConfigError":
     case "InvalidCellError":
+    // A column edit that would create a circular {{column}} reference.
+    case "ColumnCycleError":
       return 400;
     // No/invalid member bearer (fail-closed): the X-Gtmgrid-Member token did not
     // resolve to an authenticated user, so the member-authz routes reject 401.

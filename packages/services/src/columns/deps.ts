@@ -81,6 +81,89 @@ export function buildColumnDeps(cols: readonly MinimalColumn[]): Map<string, Set
 }
 
 /**
+ * The ids of columns in `others` that `col` directly references via `{{Name}}`.
+ * Convenience wrapper over {@link columnDependsOn} for placement: when a column is
+ * created/edited we want the set of existing columns it now depends on, so it can be
+ * slotted to their right. `col` itself is skipped if present in `others`.
+ */
+export function directDependencyIds(
+  col: MinimalColumn,
+  others: readonly MinimalColumn[],
+): Set<string> {
+  const ids = new Set<string>();
+  for (const other of others) {
+    if (other.id === col.id) continue;
+    if (columnDependsOn(col, other.name)) ids.add(other.id);
+  }
+  return ids;
+}
+
+/**
+ * True if `startId` transitively depends on itself — i.e. it participates in a
+ * dependency cycle (incl. a self-reference). DFS over the forward dependency edges
+ * in `deps` (`colId → ids it reads`). Used to BLOCK a column edit that would create a
+ * circular `{{Name}}` reference (A reads B while B reads A).
+ */
+export function columnInCycle(startId: string, deps: Map<string, Set<string>>): boolean {
+  const stack = [...(deps.get(startId) ?? [])];
+  const visited = new Set<string>();
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (id === startId) return true;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    for (const dep of deps.get(id) ?? []) stack.push(dep);
+  }
+  return false;
+}
+
+/**
+ * Reorder `currentOrderIds` so every column appears after the in-set columns it
+ * depends on, while moving as FEW columns as possible: Kahn's algorithm whose ready
+ * frontier is always drained in CURRENT order. A column not involved in any
+ * dependency violation keeps its existing slot, so manual column arrangement and
+ * unrelated columns are preserved ("incremental" placement). Cycle-tolerant: any
+ * columns left in a cycle are appended in their current order. Returns a permutation
+ * of `currentOrderIds`.
+ */
+export function stableTopoOrder(
+  currentOrderIds: readonly string[],
+  deps: Map<string, Set<string>>,
+): string[] {
+  const inSet = new Set(currentOrderIds);
+  const indeg = new Map<string, number>();
+  for (const id of currentOrderIds) {
+    let n = 0;
+    for (const dep of deps.get(id) ?? []) if (inSet.has(dep)) n++;
+    indeg.set(id, n);
+  }
+  // Ready frontier kept in current order; pick the earliest-positioned ready column
+  // each step so nothing moves unless a dependency forces it.
+  const pos = new Map(currentOrderIds.map((id, i) => [id, i]));
+  const ready = currentOrderIds.filter((id) => (indeg.get(id) ?? 0) === 0);
+  const out: string[] = [];
+  const emitted = new Set<string>();
+  while (ready.length > 0) {
+    ready.sort((a, b) => pos.get(a)! - pos.get(b)!);
+    const id = ready.shift()!;
+    if (emitted.has(id)) continue;
+    emitted.add(id);
+    out.push(id);
+    for (const other of currentOrderIds) {
+      if (emitted.has(other)) continue;
+      if ((deps.get(other) ?? new Set()).has(id)) {
+        const next = (indeg.get(other) ?? 1) - 1;
+        indeg.set(other, next);
+        if (next <= 0) ready.push(other);
+      }
+    }
+  }
+  // Cycle stragglers — never reach in-degree 0; emit in current order, exactly once.
+  for (const id of currentOrderIds) if (!emitted.has(id)) out.push(id);
+  return out;
+}
+
+/**
  * The transitive set of columns that must (re)run after `seedIds` produced data —
  * everything downstream of the seeds in the dependency graph, the seeds themselves
  * excluded. Used by the manual-run cascade: run a column, then run its dependents.

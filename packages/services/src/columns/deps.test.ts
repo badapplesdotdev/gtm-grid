@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   type MinimalColumn,
   buildColumnDeps,
+  columnInCycle,
+  directDependencyIds,
   isFreeColumn,
   runColumnsWithDeps,
+  stableTopoOrder,
   topoSortColumnIds,
   transitiveDependents,
 } from "./deps.js";
@@ -46,6 +49,205 @@ describe("columnDependsOn / buildColumnDeps", () => {
   it("ignores references to columns outside the run set", () => {
     const cols = [col("a", "Alpha", { src: "needs {{Gamma}}" })];
     expect([...buildColumnDeps(cols).get("a")!]).toEqual([]);
+  });
+});
+
+describe("directDependencyIds", () => {
+  it("returns the ids of existing columns the column references", () => {
+    const others = [col("a", "Alpha"), col("b", "Beta")];
+    const newCol = col("c", "Gamma", { src: "{{Alpha}} and {{Beta}}" });
+    expect([...directDependencyIds(newCol, others)].sort()).toEqual(["a", "b"]);
+  });
+
+  it("returns empty when the column references nothing in the set", () => {
+    const others = [col("a", "Alpha")];
+    expect([...directDependencyIds(col("b", "Beta", { src: "plain" }), others)]).toEqual([]);
+  });
+
+  it("skips the column itself if present in the set", () => {
+    const cols = [col("a", "Alpha", { src: "{{Alpha}}" })];
+    expect([...directDependencyIds(cols[0]!, cols)]).toEqual([]);
+  });
+
+  it("detects a reference that lives only in the run condition", () => {
+    const others = [col("a", "Alpha")];
+    const newCol = col("c", "Gamma", {}, { condition: "{{Alpha}} != ''" });
+    expect([...directDependencyIds(newCol, others)]).toEqual(["a"]);
+  });
+
+  it("detects a reference nested deep inside params", () => {
+    const others = [col("a", "Alpha")];
+    const newCol = col("c", "Gamma", { cfg: { items: ["x", "{{Alpha}}"] } });
+    expect([...directDependencyIds(newCol, others)]).toEqual(["a"]);
+  });
+
+  it("matches a column name containing regex-special characters literally", () => {
+    const others = [col("a", "Price ($)"), col("b", "Other")];
+    const newCol = col("c", "Gamma", { src: "{{Price ($)}}" });
+    expect([...directDependencyIds(newCol, others)]).toEqual(["a"]);
+  });
+
+  it("records only DIRECT references, not transitive ones", () => {
+    // new col reads B; B reads A. directDependencyIds returns only B.
+    const others = [col("a", "Alpha"), col("b", "Beta", { src: "{{Alpha}}" })];
+    const newCol = col("c", "Gamma", { src: "{{Beta}}" });
+    expect([...directDependencyIds(newCol, others)]).toEqual(["b"]);
+  });
+});
+
+describe("columnInCycle", () => {
+  it("is false for an acyclic chain", () => {
+    const cols = [
+      col("a", "A"),
+      col("b", "B", { src: "{{A}}" }),
+      col("c", "C", { src: "{{B}}" }),
+    ];
+    const deps = buildColumnDeps(cols);
+    expect(columnInCycle("c", deps)).toBe(false);
+    expect(columnInCycle("a", deps)).toBe(false);
+  });
+
+  it("detects a two-column cycle (A reads B, B reads A)", () => {
+    const cols = [col("a", "A", { src: "{{B}}" }), col("b", "B", { src: "{{A}}" })];
+    const deps = buildColumnDeps(cols);
+    expect(columnInCycle("a", deps)).toBe(true);
+    expect(columnInCycle("b", deps)).toBe(true);
+  });
+
+  it("ignores a pure self-reference (buildColumnDeps excludes self-edges)", () => {
+    // A column reading its own {{Name}} imposes no ordering and is not a cycle in
+    // the dependency graph — buildColumnDeps never records a self-edge.
+    const cols = [col("a", "A", { src: "{{A}}" })];
+    expect(columnInCycle("a", buildColumnDeps(cols))).toBe(false);
+  });
+
+  it("detects a longer cycle (A->B->C->A) for every node in it", () => {
+    const cols = [
+      col("a", "A", { src: "{{C}}" }),
+      col("b", "B", { src: "{{A}}" }),
+      col("c", "C", { src: "{{B}}" }),
+    ];
+    const deps = buildColumnDeps(cols);
+    expect(columnInCycle("a", deps)).toBe(true);
+    expect(columnInCycle("b", deps)).toBe(true);
+    expect(columnInCycle("c", deps)).toBe(true);
+  });
+
+  it("does not flag a diamond (shared dependency is not a cycle)", () => {
+    // d reads b and c; both read a. No back-edge → acyclic.
+    const cols = [
+      col("a", "A"),
+      col("b", "B", { src: "{{A}}" }),
+      col("c", "C", { src: "{{A}}" }),
+      col("d", "D", { src: "{{B}} {{C}}" }),
+    ];
+    const deps = buildColumnDeps(cols);
+    for (const id of ["a", "b", "c", "d"]) expect(columnInCycle(id, deps)).toBe(false);
+  });
+
+  it("does not flag a node that merely points INTO a cycle without being part of it", () => {
+    // b<->c is a cycle; a reads b but nothing reads a, so a is not in the cycle.
+    const cols = [
+      col("a", "A", { src: "{{B}}" }),
+      col("b", "B", { src: "{{C}}" }),
+      col("c", "C", { src: "{{B}}" }),
+    ];
+    const deps = buildColumnDeps(cols);
+    expect(columnInCycle("a", deps)).toBe(false);
+    expect(columnInCycle("b", deps)).toBe(true);
+    expect(columnInCycle("c", deps)).toBe(true);
+  });
+});
+
+describe("stableTopoOrder", () => {
+  it("leaves an already-valid order untouched", () => {
+    const cols = [col("a", "A"), col("b", "B", { src: "{{A}}" }), col("c", "C")];
+    const ids = cols.map((c) => c.id);
+    expect(stableTopoOrder(ids, buildColumnDeps(cols))).toEqual(ids);
+  });
+
+  it("moves a column to just after its dependency, minimally", () => {
+    // current order [b, a, c]; b reads a, so b must move after a. c is unrelated.
+    const cols = [col("b", "B", { src: "{{A}}" }), col("a", "A"), col("c", "C")];
+    const order = stableTopoOrder(["b", "a", "c"], buildColumnDeps(cols));
+    expect(order.indexOf("a")).toBeLessThan(order.indexOf("b"));
+    // c stays last (unrelated, not dragged around).
+    expect(order[order.length - 1]).toBe("c");
+  });
+
+  it("preserves unrelated columns' relative order", () => {
+    const cols = [
+      col("x", "X"),
+      col("c", "C", { src: "{{A}}" }),
+      col("a", "A"),
+      col("y", "Y"),
+    ];
+    const order = stableTopoOrder(["x", "c", "a", "y"], buildColumnDeps(cols));
+    expect(order.indexOf("a")).toBeLessThan(order.indexOf("c"));
+    expect(order.indexOf("x")).toBeLessThan(order.indexOf("y"));
+  });
+
+  it("emits every column exactly once even with a cycle", () => {
+    const cols = [col("a", "A", { src: "{{B}}" }), col("b", "B", { src: "{{A}}" })];
+    expect(stableTopoOrder(["a", "b"], buildColumnDeps(cols)).sort()).toEqual(["a", "b"]);
+  });
+
+  it("returns a permutation of the input (no drops, no dupes)", () => {
+    const cols = [
+      col("c", "C", { src: "{{A}}" }),
+      col("a", "A"),
+      col("b", "B", { src: "{{C}}" }),
+      col("d", "D"),
+    ];
+    const ids = ["c", "a", "b", "d"];
+    expect(stableTopoOrder(ids, buildColumnDeps(cols)).sort()).toEqual([...ids].sort());
+  });
+
+  it("handles empty and single-column inputs", () => {
+    expect(stableTopoOrder([], new Map())).toEqual([]);
+    const one = [col("a", "A")];
+    expect(stableTopoOrder(["a"], buildColumnDeps(one))).toEqual(["a"]);
+  });
+
+  it("orders a diamond so both sources precede the sink", () => {
+    const cols = [
+      col("d", "D", { src: "{{B}} {{C}}" }),
+      col("b", "B", { src: "{{A}}" }),
+      col("c", "C", { src: "{{A}}" }),
+      col("a", "A"),
+    ];
+    const order = stableTopoOrder(["d", "b", "c", "a"], buildColumnDeps(cols));
+    expect(order.indexOf("a")).toBeLessThan(order.indexOf("b"));
+    expect(order.indexOf("a")).toBeLessThan(order.indexOf("c"));
+    expect(order.indexOf("b")).toBeLessThan(order.indexOf("d"));
+    expect(order.indexOf("c")).toBeLessThan(order.indexOf("d"));
+  });
+
+  it("cascades: moving a column drags its dependents to stay in order", () => {
+    // current [x, z, y]; z reads x (valid). x now reads y → x must follow y, and
+    // z must still follow x. Correct order is [y, x, z].
+    const cols = [
+      col("x", "X", { src: "{{Y}}" }),
+      col("z", "Z", { src: "{{X}}" }),
+      col("y", "Y"),
+    ];
+    expect(stableTopoOrder(["x", "z", "y"], buildColumnDeps(cols))).toEqual(["y", "x", "z"]);
+  });
+
+  it("repairs two independent violations without touching unrelated columns", () => {
+    // [b, a, u, d, c] where b reads a and d reads c. u is unrelated and central.
+    const cols = [
+      col("b", "B", { src: "{{A}}" }),
+      col("a", "A"),
+      col("u", "U"),
+      col("d", "D", { src: "{{C}}" }),
+      col("c", "C"),
+    ];
+    const order = stableTopoOrder(["b", "a", "u", "d", "c"], buildColumnDeps(cols));
+    expect(order.indexOf("a")).toBeLessThan(order.indexOf("b"));
+    expect(order.indexOf("c")).toBeLessThan(order.indexOf("d"));
+    // u keeps its relative place ahead of the second cluster.
+    expect(order.indexOf("u")).toBeLessThan(order.indexOf("d"));
   });
 });
 
