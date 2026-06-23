@@ -915,7 +915,10 @@ export function streamClaude(
   });
 
   let stderr = "";
-  child.stderr.on("data", (d) => (stderr = appendCapped(stderr, d.toString())));
+  child.stderr.on("data", (d) => {
+    lifecycle.touch(); // stderr output is also a sign of life — only TRUE silence (no stdout AND no stderr) is "idle"
+    stderr = appendCapped(stderr, d.toString());
+  });
 
   child.on("error", (err) => {
     lifecycle.dispose();
@@ -1057,7 +1060,10 @@ export function streamCodex(
   });
 
   let stderr = "";
-  child.stderr.on("data", (d) => (stderr = appendCapped(stderr, d.toString())));
+  child.stderr.on("data", (d) => {
+    lifecycle.touch(); // stderr output is also a sign of life — only TRUE silence (no stdout AND no stderr) is "idle"
+    stderr = appendCapped(stderr, d.toString());
+  });
   child.on("error", (err) => {
     lifecycle.dispose();
     sse.write({ type: "error", message: `Failed to launch codex: ${err.message}` });
@@ -1346,7 +1352,10 @@ export function streamCursor(
   });
 
   let stderr = "";
-  child.stderr.on("data", (d) => (stderr = appendCapped(stderr, d.toString())));
+  child.stderr.on("data", (d) => {
+    lifecycle.touch(); // stderr output is also a sign of life — only TRUE silence (no stdout AND no stderr) is "idle"
+    stderr = appendCapped(stderr, d.toString());
+  });
 
   child.on("error", (err) => {
     lifecycle.dispose();
