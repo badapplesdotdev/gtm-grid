@@ -462,10 +462,31 @@ interface SseClient {
 
 /** How long to wait after SIGTERM before escalating to SIGKILL. */
 export const KILL_GRACE_MS = 3000;
-/** Hard ceiling on a single turn; a hung agent is terminated and surfaced. */
-export const MAX_RUN_MS = 5 * 60_000;
+/**
+ * IDLE timeout: terminate a turn only after this long with NO output from the
+ * CLI. Reset on every chunk the child streams (see `manageChildLifecycle.touch`),
+ * so a task that's actively streaming tool calls is never killed — only a
+ * genuinely STALLED/hung process (which is what leaks the multi-GB process tree)
+ * trips it. This is the fix for "the agent stops mid-task": a long cloud table
+ * build streams continuously and so never goes idle, where the old fixed
+ * wall-clock cap (5 min since spawn) killed it routinely (TRI-3305).
+ */
+export const MAX_IDLE_MS = 5 * 60_000;
+/**
+ * Absolute ceiling on a single turn regardless of activity — a backstop against
+ * a child that streams forever (e.g. a runaway loop that never goes idle). Armed
+ * once at spawn and never reset.
+ */
+export const MAX_RUN_MS = 60 * 60_000;
 /** Keep only the last ~32KB of stderr so a chatty/looping child can't grow the heap. */
 export const STDERR_CAP = 32 * 1024;
+
+/** User-facing SSE error text when a turn is force-terminated by a timeout. */
+export function turnTimeoutMessage(agent: string, reason: "idle" | "ceiling"): string {
+  return reason === "idle"
+    ? `${agent} turn was terminated after ${Math.round(MAX_IDLE_MS / 1000)}s with no output (it looked hung)`
+    : `${agent} turn hit the ${Math.round(MAX_RUN_MS / 60_000)}-minute limit and was terminated`;
+}
 
 /** Minimal slice of a spawned child the lifecycle manager needs (so tests can fake it). */
 export interface ManagedChild {
@@ -487,34 +508,48 @@ const defaultProcessControl: ProcessControl = {
 };
 
 /**
- * Wire group-kill cleanup + a max-run timeout to a detached child. Returns a
- * `terminate()` to invoke on `res.on("close")` (panel unmount / Stop / new send)
- * and a `dispose()` the `child.on("close")` handler calls so timers are cleared.
+ * Wire group-kill cleanup + two turn timeouts to a detached child. Returns a
+ * `terminate()` to invoke on `res.on("close")` (panel unmount / Stop / new send),
+ * a `dispose()` the `child.on("close")` handler calls so timers are cleared, and
+ * a `touch()` to call on every chunk of child output so the IDLE timer resets.
+ *
+ * Two independent timeouts protect against two different failures:
+ *  - IDLE ({@link MAX_IDLE_MS}): re-armed on each `touch()`. Fires only after the
+ *    child has produced NO output for the whole window — i.e. it's genuinely
+ *    hung (and leaking its process tree). A turn that streams continuously, like
+ *    a long cloud table build, keeps touching it and so is never killed. This is
+ *    the fix for turns dying mid-task.
+ *  - CEILING ({@link MAX_RUN_MS}): armed once at spawn, never reset. A backstop
+ *    for a child that streams forever without ever going idle.
  *
  * Guarantees (the regression-test contract):
  *  - `terminate()` signals the whole GROUP: `kill(-pid, "SIGTERM")`, then
  *    `kill(-pid, "SIGKILL")` after {@link KILL_GRACE_MS} if the child hasn't closed.
  *  - Once the child closes, `exited` is set and the escalation timer is cleared —
  *    so NO signal is ever sent after exit (avoids killing a recycled pid).
- *  - The max-run timeout terminates the group and invokes `onTimeout` (to emit an
- *    SSE error+end) exactly once.
+ *  - Whichever turn timeout fires first cancels the other, terminates the group,
+ *    and invokes `onTimeout(reason)` (to emit an SSE error+end) exactly once.
  *  - Every `kill` is wrapped so an already-dead group (`ESRCH`) is a no-op.
  */
 export function manageChildLifecycle(
   child: ManagedChild,
-  opts: { onTimeout: () => void; control?: ProcessControl; graceMs?: number; maxRunMs?: number },
-): { terminate: () => void; dispose: () => void } {
+  opts: {
+    onTimeout: (reason: "idle" | "ceiling") => void;
+    control?: ProcessControl;
+    graceMs?: number;
+    idleMs?: number;
+    maxRunMs?: number;
+  },
+): { terminate: () => void; dispose: () => void; touch: () => void } {
   const ctrl = opts.control ?? defaultProcessControl;
   const graceMs = opts.graceMs ?? KILL_GRACE_MS;
+  const idleMs = opts.idleMs ?? MAX_IDLE_MS;
   const maxRunMs = opts.maxRunMs ?? MAX_RUN_MS;
 
   let exited = false;
   let killTimer: ReturnType<typeof setTimeout> | null = null;
-  let runTimer: ReturnType<typeof setTimeout> | null = ctrl.setTimeout(() => {
-    runTimer = null;
-    terminate();
-    opts.onTimeout();
-  }, maxRunMs);
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  let ceilingTimer: ReturnType<typeof setTimeout> | null = null;
 
   const signalGroup = (signal: NodeJS.Signals): void => {
     const pid = child.pid;
@@ -538,20 +573,59 @@ export function manageChildLifecycle(
     }
   }
 
+  // A turn timeout tripped: cancel BOTH turn timers so the sibling can't also
+  // fire, then terminate the group and surface it exactly once.
+  function fireTimeout(reason: "idle" | "ceiling"): void {
+    if (idleTimer !== null) {
+      ctrl.clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+    if (ceilingTimer !== null) {
+      ctrl.clearTimeout(ceilingTimer);
+      ceilingTimer = null;
+    }
+    terminate();
+    opts.onTimeout(reason);
+  }
+
+  const armIdle = (): void => {
+    idleTimer = ctrl.setTimeout(() => {
+      idleTimer = null;
+      fireTimeout("idle");
+    }, idleMs);
+  };
+
+  /** Reset the idle countdown — call on every sign of life from the child. */
+  function touch(): void {
+    if (exited || idleTimer === null) return;
+    ctrl.clearTimeout(idleTimer);
+    armIdle();
+  }
+
+  ceilingTimer = ctrl.setTimeout(() => {
+    ceilingTimer = null;
+    fireTimeout("ceiling");
+  }, maxRunMs);
+  armIdle();
+
   function dispose(): void {
     exited = true;
     if (killTimer !== null) {
       ctrl.clearTimeout(killTimer);
       killTimer = null;
     }
-    if (runTimer !== null) {
-      ctrl.clearTimeout(runTimer);
-      runTimer = null;
+    if (idleTimer !== null) {
+      ctrl.clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+    if (ceilingTimer !== null) {
+      ctrl.clearTimeout(ceilingTimer);
+      ceilingTimer = null;
     }
   }
 
   child.on("close", dispose);
-  return { terminate, dispose };
+  return { terminate, dispose, touch };
 }
 
 /** Append `chunk` to `buf` but keep only the trailing {@link STDERR_CAP} bytes. */
@@ -763,14 +837,15 @@ export function streamClaude(
   let buf = "";
   let gridDirty = false;
   const lifecycle = manageChildLifecycle(child, {
-    onTimeout: () => {
-      sse.write({ type: "error", message: `claude turn exceeded ${Math.round(MAX_RUN_MS / 1000)}s and was terminated` });
+    onTimeout: (reason) => {
+      sse.write({ type: "error", message: turnTimeoutMessage("claude", reason) });
       sse.write({ type: "end", sessionId });
       sse.end();
     },
   });
 
   child.stdout.on("data", (chunk) => {
+    lifecycle.touch(); // the child is alive and streaming — defer the idle timeout
     buf += chunk.toString();
     let nl: number;
     while ((nl = buf.indexOf("\n")) >= 0) {
@@ -840,7 +915,10 @@ export function streamClaude(
   });
 
   let stderr = "";
-  child.stderr.on("data", (d) => (stderr = appendCapped(stderr, d.toString())));
+  child.stderr.on("data", (d) => {
+    lifecycle.touch(); // stderr output is also a sign of life — only TRUE silence (no stdout AND no stderr) is "idle"
+    stderr = appendCapped(stderr, d.toString());
+  });
 
   child.on("error", (err) => {
     lifecycle.dispose();
@@ -937,13 +1015,14 @@ export function streamCodex(
   let threadId = resumeThread ?? null;
   let buf = "";
   const lifecycle = manageChildLifecycle(child, {
-    onTimeout: () => {
-      sse.write({ type: "error", message: `codex turn exceeded ${Math.round(MAX_RUN_MS / 1000)}s and was terminated` });
+    onTimeout: (reason) => {
+      sse.write({ type: "error", message: turnTimeoutMessage("codex", reason) });
       sse.write({ type: "end", sessionId: threadId });
       sse.end();
     },
   });
   child.stdout.on("data", (chunk) => {
+    lifecycle.touch(); // the child is alive and streaming — defer the idle timeout
     buf += chunk.toString();
     let nl: number;
     while ((nl = buf.indexOf("\n")) >= 0) {
@@ -981,7 +1060,10 @@ export function streamCodex(
   });
 
   let stderr = "";
-  child.stderr.on("data", (d) => (stderr = appendCapped(stderr, d.toString())));
+  child.stderr.on("data", (d) => {
+    lifecycle.touch(); // stderr output is also a sign of life — only TRUE silence (no stdout AND no stderr) is "idle"
+    stderr = appendCapped(stderr, d.toString());
+  });
   child.on("error", (err) => {
     lifecycle.dispose();
     sse.write({ type: "error", message: `Failed to launch codex: ${err.message}` });
@@ -1200,14 +1282,15 @@ export function streamCursor(
   let buf = "";
   let gridDirty = false;
   const lifecycle = manageChildLifecycle(child, {
-    onTimeout: () => {
-      sse.write({ type: "error", message: `cursor turn exceeded ${Math.round(MAX_RUN_MS / 1000)}s and was terminated` });
+    onTimeout: (reason) => {
+      sse.write({ type: "error", message: turnTimeoutMessage("cursor", reason) });
       sse.write({ type: "end", sessionId });
       sse.end();
     },
   });
 
   child.stdout.on("data", (chunk) => {
+    lifecycle.touch(); // the child is alive and streaming — defer the idle timeout
     buf += chunk.toString();
     let nl: number;
     while ((nl = buf.indexOf("\n")) >= 0) {
@@ -1269,7 +1352,10 @@ export function streamCursor(
   });
 
   let stderr = "";
-  child.stderr.on("data", (d) => (stderr = appendCapped(stderr, d.toString())));
+  child.stderr.on("data", (d) => {
+    lifecycle.touch(); // stderr output is also a sign of life — only TRUE silence (no stdout AND no stderr) is "idle"
+    stderr = appendCapped(stderr, d.toString());
+  });
 
   child.on("error", (err) => {
     lifecycle.dispose();

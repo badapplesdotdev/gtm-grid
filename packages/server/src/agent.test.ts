@@ -312,6 +312,79 @@ describe("manageChildLifecycle — group-kill cleanup (TRI-3305)", () => {
   });
 });
 
+describe("manageChildLifecycle — idle vs ceiling turn timeouts", () => {
+  const OPTS = { graceMs: 3000, idleMs: 60_000, maxRunMs: 600_000 } as const;
+
+  it("idle timeout terminates the group and reports reason 'idle' when the child goes quiet", () => {
+    const child = fakeChild(4242);
+    const control = fakeControl();
+    const onTimeout = vi.fn();
+    manageChildLifecycle(child, { onTimeout, control, ...OPTS });
+
+    control.runTimer(60_000); // idle window elapses with no output
+
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+    expect(onTimeout).toHaveBeenCalledWith("idle");
+    expect(control.kills).toEqual([{ pid: -4242, signal: "SIGTERM" }]);
+  });
+
+  it("touch() keeps exactly one idle timer armed (no leak) and doesn't fire while streaming", () => {
+    const child = fakeChild(4242);
+    const control = fakeControl();
+    const onTimeout = vi.fn();
+    const { touch } = manageChildLifecycle(child, { onTimeout, control, ...OPTS });
+
+    touch();
+    touch();
+    touch();
+
+    // One idle (60s) timer, not three — touch must clear before re-arming.
+    expect(control.pending().filter((ms) => ms === 60_000)).toHaveLength(1);
+    expect(onTimeout).not.toHaveBeenCalled();
+  });
+
+  it("ceiling timeout still fires while the child keeps streaming (touch resets idle only)", () => {
+    const child = fakeChild(4242);
+    const control = fakeControl();
+    const onTimeout = vi.fn();
+    const { touch } = manageChildLifecycle(child, { onTimeout, control, ...OPTS });
+
+    touch(); // resets idle but never the ceiling
+    control.runTimer(600_000); // absolute ceiling elapses
+
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+    expect(onTimeout).toHaveBeenCalledWith("ceiling");
+    expect(control.kills).toEqual([{ pid: -4242, signal: "SIGTERM" }]);
+  });
+
+  it("the first turn timeout cancels its sibling so onTimeout fires exactly once", () => {
+    const child = fakeChild(4242);
+    const control = fakeControl();
+    const onTimeout = vi.fn();
+    manageChildLifecycle(child, { onTimeout, control, ...OPTS });
+
+    control.runTimer(60_000); // idle fires first
+    control.runTimer(600_000); // ceiling was cancelled — must be a no-op
+
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+    expect(onTimeout).toHaveBeenCalledWith("idle");
+  });
+
+  it("touch() after the child closes does not re-arm the idle timer", () => {
+    const child = fakeChild(4242);
+    const control = fakeControl();
+    const onTimeout = vi.fn();
+    const { touch } = manageChildLifecycle(child, { onTimeout, control, ...OPTS });
+
+    child.close(); // dispose clears both turn timers
+    touch(); // must be a no-op now that the child has exited
+
+    expect(control.pending().filter((ms) => ms === 60_000)).toHaveLength(0);
+    control.runTimer(60_000);
+    expect(onTimeout).not.toHaveBeenCalled();
+  });
+});
+
 describe("appendCapped — bound the stderr buffer (TRI-3305)", () => {
   it("returns the concatenation while under the cap", () => {
     expect(appendCapped("ab", "cd", 8)).toBe("abcd");
