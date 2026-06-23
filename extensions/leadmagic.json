@@ -113,10 +113,6 @@
           "profile_url": {
             "type": "string",
             "description": "LinkedIn profile URL or username"
-          },
-          "extended_response": {
-            "type": "boolean",
-            "description": "Include profile image URL in the response (default false)"
           }
         }
       },

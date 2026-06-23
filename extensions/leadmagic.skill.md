@@ -38,7 +38,7 @@
 - `leadmagic.mobileFinder` — mobile from `profile_url`, `work_email`, or `personal_email`. 5 credits on hit.
 
 ### Profile & identity
-- `leadmagic.profileSearch` — enrich `profile_url`; optional `extended_response` for profile image. 1 credit.
+- `leadmagic.profileSearch` — enrich `profile_url`. 1 credit.
 - `leadmagic.b2bProfile` — LinkedIn profile from `work_email` or `personal_email`. 10 credits.
 - `leadmagic.jobChangeDetector` — `profile_url` + expected company. 3 credits.
 
