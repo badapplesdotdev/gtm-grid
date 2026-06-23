@@ -19,21 +19,30 @@ export function Hero({ version }: { version: string }) {
   return (
     <header className="hero">
       <div className="hero-bg" aria-hidden="true">
-        <div className="gl-grid" />
+        {/* Grid + circuit share ONE coordinate space (the 1440×560 viewBox, sliced
+            to fill) so the traces always sit exactly on the grid lines. The grid is
+            a 48-unit pattern; every rail/trace/signal bend lands on a multiple of
+            48, so the circuit reads as etched onto the graph paper at any size. */}
         <svg className="circuit" viewBox="0 0 1440 560" preserveAspectRatio="xMidYMid slice">
-          <path className="rail" d="M-40 64 H1480" />
-          <path className="rail" d="M-40 498 H1480" />
-          <path className="trace" d="M-30 92 H250 V220 H392" />
-          <path className="trace" d="M-30 300 H150 V410 H330 V540" />
-          <path className="trace" d="M250 -20 V140 H430" />
-          <path className="trace" d="M1470 110 H1200 V250 H1060" />
-          <path className="trace" d="M1470 330 H1300 V450 H1110 V540" />
-          <path className="trace" d="M1190 -20 V170 H1010" />
+          <defs>
+            <pattern id="gl-grid" width="48" height="48" patternUnits="userSpaceOnUse">
+              <path className="gl-line" d="M48 0H0V48" />
+            </pattern>
+          </defs>
+          <rect className="gl-grid-fill" x="0" y="0" width="1440" height="560" fill="url(#gl-grid)" />
+          <path className="rail" d="M0 96 H1440" />
+          <path className="rail" d="M0 480 H1440" />
+          <path className="trace" d="M0 144 H240 V288 H432" />
+          <path className="trace" d="M0 336 H144 V432 H336 V528" />
+          <path className="trace" d="M240 0 V144 H432" />
+          <path className="trace" d="M1440 144 H1200 V288 H1056" />
+          <path className="trace" d="M1440 384 H1296 V480 H1104 V528" />
+          <path className="trace" d="M1200 0 V192 H1008" />
           <g className="signals">
-            <path className="signal" pathLength={1000} d="M-40 64 H1480" style={{ animationDuration: "9s" }} />
-            <path className="signal" pathLength={1000} d="M1480 498 H-40" style={{ animationDuration: "11s", animationDelay: "-4s" }} />
-            <path className="signal" pathLength={1000} d="M-30 92 H250 V220 H392" style={{ animationDuration: "6.5s", animationDelay: "-2s" }} />
-            <path className="signal" pathLength={1000} d="M1470 110 H1200 V250 H1060" style={{ animationDuration: "7.5s", animationDelay: "-3s" }} />
+            <path className="signal" pathLength={1000} d="M0 96 H1440" style={{ animationDuration: "9s" }} />
+            <path className="signal" pathLength={1000} d="M1440 480 H0" style={{ animationDuration: "11s", animationDelay: "-4s" }} />
+            <path className="signal" pathLength={1000} d="M0 144 H240 V288 H432" style={{ animationDuration: "6.5s", animationDelay: "-2s" }} />
+            <path className="signal" pathLength={1000} d="M1440 144 H1200 V288 H1056" style={{ animationDuration: "7.5s", animationDelay: "-3s" }} />
           </g>
         </svg>
       </div>
