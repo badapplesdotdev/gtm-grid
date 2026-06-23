@@ -1,9 +1,10 @@
 {
   "id": "leadmagic",
   "name": "LeadMagic",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "category": "enrichment",
-  "description": "B2B data enrichment — email finder, mobile finder, and profile & company search.",
+  "description": "B2B data enrichment — email finder, validation, mobile numbers, profiles, company intelligence, jobs, ads, and search.",
+  "logo": "https://www.google.com/s2/favicons?domain=leadmagic.io&sz=128",
   "baseUrl": "https://api.leadmagic.io",
   "auth": {
     "type": "apiKey",
@@ -55,7 +56,7 @@
       "description": "Validate an email address and return deliverability + company data. Returns { email, email_status, is_domain_catch_all, company_name, company_industry }. 0.25 credit for definitive valid/invalid.",
       "verb": "POST",
       "path": "/v1/people/email-validation",
-      "credits": 1,
+      "credits": 0.25,
       "input": {
         "type": "object",
         "required": [
@@ -112,10 +113,6 @@
           "profile_url": {
             "type": "string",
             "description": "LinkedIn profile URL or username"
-          },
-          "extended_response": {
-            "type": "boolean",
-            "description": "Return extended fields (default false)"
           }
         }
       },
@@ -190,8 +187,8 @@
     },
     {
       "id": "companySearch",
-      "label": "Enrich Company",
-      "description": "Enrich a company from its domain, name, or LinkedIn URL. Returns camelCase fields: { companyName, industry, employeeCount, employeeRange, founded, headquarters, revenue, description, specialties[] }. 1 credit on success.",
+      "label": "Enrich Company (V1)",
+      "description": "Legacy single-company enrichment from domain, name, or LinkedIn URL. Prefer companySearchV3 for new workflows. Returns firmographics, funding, and social metrics. 1 credit on success.",
       "verb": "POST",
       "path": "/v1/companies/company-search",
       "credits": 1,
@@ -242,12 +239,15 @@
     {
       "id": "roleFinder",
       "label": "Find Person by Role",
-      "description": "Find a person holding a given job title at a company. Requires company_domain OR company_name; job_title is optional (partial match). Returns { first_name, last_name, full_name, job_title, company_name, company_website, profile_url, credits_consumed, message }. 2 credits if found; free if no match.",
+      "description": "Find a person holding a given job title at a company. Requires job_title AND (company_domain OR company_name). Partial title match supported. Returns { first_name, last_name, full_name, job_title, company_name, company_website, profile_url, credits_consumed, message }. 2 credits if found; free if no match.",
       "verb": "POST",
       "path": "/v1/people/role-finder",
       "credits": 2,
       "input": {
         "type": "object",
+        "required": [
+          "job_title"
+        ],
         "properties": {
           "company_domain": {
             "type": "string",
@@ -268,10 +268,10 @@
     {
       "id": "employeeFinder",
       "label": "Find Company Employees",
-      "description": "List employees at a company. Requires company_domain OR company_name; optional limit (default 10). Returns { employees[]{ first_name, last_name, full_name, job_title, location, profile_url }, total_count, credits_consumed, message }. 0.05 credit per employee returned.",
+      "description": "List employees at a company. Requires company_domain OR company_name; optional limit (default 10). Returns { employees[]{ first_name, last_name, full_name, job_title, location, profile_url }, total_count, credits_consumed, message }. 0.05 credit per employee returned; free when none found.",
       "verb": "POST",
       "path": "/v1/people/employee-finder",
-      "credits": 2,
+      "credits": 1,
       "input": {
         "type": "object",
         "properties": {
@@ -326,7 +326,7 @@
       "description": "Search live job postings with company, role, location and date filters (intent/hiring signal). All params optional. Returns { total_count, page, per_page, total_pages, credits_consumed, results[]{ title, company info, location, types, experience level, remote status, publish date, description, application URL } }. 1 credit per job returned. Use jobCountries/jobTypes to resolve filter IDs first.",
       "verb": "POST",
       "path": "/v1/jobs/jobs-finder",
-      "credits": 2,
+      "credits": 1,
       "input": {
         "type": "object",
         "properties": {
@@ -473,7 +473,7 @@
     {
       "id": "googleAdsSearch",
       "label": "Search Google Ads",
-      "description": "Find a company's active Google Ads creatives (ad-spend / GTM intel). Requires company_domain (preferred) OR company_name. Returns { ads_count, ads[]{ advertiser_id, creative_id, original_url, variants[], start, last_seen, advertiser_name, format }, credits_consumed, message }. 0.2 credit per search; free if no results.",
+      "description": "Find a company's active Google Ads creatives. Requires company_domain (preferred) OR company_name. Returns { ads_count, ads[], credits_consumed, message }. 1 credit per ad returned; free if no ads found.",
       "verb": "POST",
       "path": "/v1/ads/google-ads-search",
       "credits": 1,
@@ -495,7 +495,7 @@
     {
       "id": "metaAdsSearch",
       "label": "Search Meta Ads",
-      "description": "Find a company's active Meta (Facebook/Instagram) Ads from the Facebook Ad Library. Requires company_domain OR company_name. Returns { ads_count, ads[], credits_consumed, message }. 0.2 credit per search; free if no results.",
+      "description": "Find a company's active Meta (Facebook/Instagram) ads from the Ad Library. Requires company_domain OR company_name. Returns { ads_count, ads[], credits_consumed, message }. 1 credit per ad returned; free if no ads found.",
       "verb": "POST",
       "path": "/v1/ads/meta-ads-search",
       "credits": 1,
@@ -517,7 +517,7 @@
     {
       "id": "b2bAdsSearch",
       "label": "Search B2B (LinkedIn) Ads",
-      "description": "Find a company's B2B / LinkedIn ad creatives. Requires company_domain OR company_name. Returns { ads_count, ads[]{ content, link, image_url }, credits_consumed, message }. Use b2bAdDetails with an ad link/ID for full creative copy.",
+      "description": "Find a company's B2B / LinkedIn ad creatives. Requires company_domain OR company_name. Returns { ads_count, ads[], credits_consumed, message }. Charged 1 base credit plus 1 credit per ad returned (minimum 1). Use b2bAdDetails for full creative copy.",
       "verb": "POST",
       "path": "/v1/ads/b2b-ads-search",
       "credits": 1,
@@ -567,27 +567,29 @@
       "input": {
         "type": "object",
         "properties": {}
-      }
+      },
+      "category": "Account"
     },
     {
       "id": "analytics",
       "label": "Analytics Dashboard",
-      "description": "Free real-time account snapshot: current credit balance, rate-limit utilization, concurrency metrics, and request/credit usage stats for today/this week/this month. Returns { user, credits, rate_limit, concurrency, stats }. GET, no parameters, 0 credits.",
+      "description": "Free account snapshot: credit balance, rate-limit utilization, concurrency metrics, and request/credit usage for today, this week, and this month. Returns { user, credits, rate_limit, concurrency, stats }. GET, no parameters.",
       "verb": "GET",
       "path": "/v1/analytics/dashboard",
       "credits": 0,
       "input": {
         "type": "object",
         "properties": {}
-      }
+      },
+      "category": "Account"
     },
     {
       "id": "companyLookalike",
       "label": "Find Lookalike Companies",
-      "description": "Find companies semantically similar to a seed for ICP expansion. Provide exactly one seed: company_domain (or domain), website, company_name, or description. Optionally narrow with company_filters (geo, headcount, industry, tech stack, funding) and paginate with limit/offset; set preview=true for a free count-only run. Returns per-match { similarity, company_domain, company_name, employee_range, revenue_range, founded_year, industry, hq_country/city/state, total_funding, last_funding_date, lead_investors, crm_tech/marketing_automation_tech/analytics_tech, total_contacts, contacts_with_email, valid_email_count } plus source_seed_domain. 1 credit per lookalike returned; free when zero matches or preview=true.",
+      "description": "Find companies similar to a seed for ICP expansion. Provide one seed: company_domain, domain, website, company_name, or description. Optional company_filters, limit (1–2000, default 25), offset, and preview=true for a free count-only run. Returns { companies[], count, credits_consumed, message }. 5 credits per successful search; free when preview=true or no matches.",
       "verb": "POST",
       "path": "/v3/companies/lookalike",
-      "credits": 1,
+      "credits": 5,
       "input": {
         "type": "object",
         "properties": {
@@ -727,7 +729,7 @@
     {
       "id": "peopleSearch",
       "label": "People Search",
-      "description": "Unified V3 people lookup: find people by company (company_domain OR company_name OR linkedin_url OR company_filters) plus optional people_filters (name, title, function, level, location, industry, follower/seniority ranges, email/mobile availability) and title/role intent. Returns { message, people[] (with nested company + domain_intel), count, returned_count, credits_consumed }. 1 credit per returned person, free if no results; +1/raw email and +5/raw mobile when include_contact_details:true (needs confirm_credit_charge).",
+      "description": "V3 people discovery at a company or across filters. Provide a company identifier (company_domain, company_name, or linkedin_url) or company_filters, plus optional title/job filters and people_filters. Returns { people[], count, returned_count, credits_consumed }. 1 credit per person returned; optional include_contact_details unlocks emails/mobiles for extra credits when confirm_credit_charge is true.",
       "verb": "POST",
       "path": "/v3/people/search",
       "credits": 1,
@@ -970,10 +972,6 @@
           "autoResolve": {
             "type": "boolean",
             "description": "Resolve friendly strings (domains, names) into filter IDs before search"
-          },
-          "_query_budget_ms": {
-            "type": "integer",
-            "description": "Internal query budget hint in milliseconds"
           }
         }
       },
@@ -1168,7 +1166,7 @@
     {
       "id": "searchStats",
       "label": "Search Stats",
-      "description": "Free helper endpoint summarizing what's available across Jobs, Company, and People Search. Powers filter builders, capability cards, and onboarding/\"what can I target?\" UIs. Requires products[] (jobs|company|people) and sections[] (coverage|top|capabilities); optional limit (top values per dimension, default 3, max 25). Returns cached high-level metrics: per-product coverage, top, capabilities blocks plus cache status. credits_consumed always 0.",
+      "description": "Free helper summarizing coverage and capabilities for Jobs, Company, and People Search. Requires products[] (jobs|company|people) and sections[] (coverage|top|capabilities); optional limit (default 3, max 25). Returns cached metrics for filter builders and onboarding UIs. 0 credits.",
       "verb": "POST",
       "path": "/v3/search/stats",
       "credits": 0,
@@ -1192,7 +1190,8 @@
             "description": "Optional. Number of top values per dimension (default 3, max 25)"
           }
         }
-      }
+      },
+      "category": "Search"
     }
   ]
 }
