@@ -1,5 +1,17 @@
 # @gtmgrid/desktop
 
+## 0.22.0
+
+### Minor Changes
+
+- 8951841: Cell details ("map it out") now treats array fields as first-class: each element is mappable on its own (`email[0]`, `email[1]`, …), arrays of objects drill all the way in (`phones[0].number`), and the whole array can still be mapped as a single value. Element drill-in is capped at 100 with the array container as the escape hatch.
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.22.0
+- @gtmgrid/cloud@0.22.0
+- @gtmgrid/services@0.22.0
+
 ## 0.21.0
 
 ### Patch Changes
