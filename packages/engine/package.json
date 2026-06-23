@@ -1,6 +1,6 @@
 {
   "name": "@gtmgrid/engine",
-  "version": "0.20.1",
+  "version": "0.21.0",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -8,7 +8,8 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "gen:formula-libs": "node scripts/gen-formula-libs.mjs"
+    "gen:formula-libs": "node scripts/gen-formula-libs.mjs",
+    "gen:bundled-manifests": "node scripts/gen-bundled-manifests.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",

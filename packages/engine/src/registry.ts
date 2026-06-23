@@ -7,6 +7,8 @@ import { githubConnector } from "./connectors/github.js";
 import { formattingConnector } from "./connectors/formatting.js";
 import { formulaConnector } from "./connectors/formula.js";
 import { httpRequestConnector } from "./connectors/http-request.js";
+import { connectorFromManifest, parseManifest } from "./connectors/manifest.js";
+import { BUNDLED_MANIFESTS } from "./bundled-manifests.generated.js";
 
 export class Registry {
   private connectors = new Map<string, Connector>();
@@ -47,4 +49,31 @@ export function defaultRegistry(): Registry {
     githubConnector,
     httpRequestConnector,
   ]);
+}
+
+/**
+ * The connectors built from the manifests bundled with the app
+ * (`extensions/*.json`, inlined as {@link BUNDLED_MANIFESTS}). These ship with
+ * every build and must be available WHEREVER columns run.
+ *
+ * The desktop sidecar seeds them from disk at startup
+ * (`packages/server/src/index.ts`); the cloud webhook worker (apps/web Inngest)
+ * has no disk access to `extensions/`, so it calls this to register the same
+ * connectors before a run — without it, a column calling `sdk["trigify"][…]`
+ * (or any bundled connector) hits an undefined `sdk[provider]` in the QuickJS
+ * guest and the run fails with "sandbox: cannot read property …".
+ *
+ * A malformed bundled manifest is SKIPPED rather than throwing, so one bad entry
+ * can never strip every other connector from the registry.
+ */
+export function bundledConnectors(): Connector[] {
+  const out: Connector[] = [];
+  for (const manifest of BUNDLED_MANIFESTS) {
+    try {
+      out.push(connectorFromManifest(parseManifest(manifest)));
+    } catch {
+      /* skip a single malformed bundled manifest — never fail the whole set */
+    }
+  }
+  return out;
 }

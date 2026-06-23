@@ -1,5 +1,13 @@
 # @gtmgrid/server
 
+## 0.21.0
+
+### Patch Changes
+
+- Updated dependencies [ea53611]
+  - @gtmgrid/engine@0.21.0
+  - @gtmgrid/observability@0.21.0
+
 ## 0.20.1
 
 ### Patch Changes
