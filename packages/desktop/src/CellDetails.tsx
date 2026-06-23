@@ -32,11 +32,25 @@ function typeOf(v: unknown): string {
 function typeIcon(t: string): string {
   return t === "number" ? "#" : t === "boolean" ? "☑" : t === "array" ? "[ ]" : t === "object" ? "{ }" : "T";
 }
-function flatten(value: unknown, prefix: string[] = [], out: FlatField[] = [], depth = 0): FlatField[] {
+/** Cap on how many array elements we drill into, so a giant list can't spawn
+ *  thousands of pills. The array container pill is always kept as the escape
+ *  hatch for "map the whole list", so nothing is truly hidden past the cap. */
+const ARRAY_EXPAND_CAP = 100;
+export function flatten(value: unknown, prefix: string[] = [], out: FlatField[] = [], depth = 0): FlatField[] {
   if (value && typeof value === "object" && !Array.isArray(value) && depth < 6) {
     const entries = Object.entries(value as Record<string, unknown>);
     if (!entries.length) out.push({ path: prefix, value, type: "object" });
     else for (const [k, v] of entries) flatten(v, [...prefix, k], out, depth + 1);
+  } else if (Array.isArray(value) && depth < 6) {
+    // Surface the array itself (so the whole list can still be mapped) AND drill
+    // into each element, so an array maps exactly like any other field — element
+    // by element. The element index becomes a path segment ("0", "1", …); since
+    // JS reads `arr["0"]` as `arr[0]`, extractCode resolves it with no special
+    // casing. An empty array has nothing to drill into, so the container is all.
+    out.push({ path: prefix, value, type: "array" });
+    value
+      .slice(0, ARRAY_EXPAND_CAP)
+      .forEach((v, i) => flatten(v, [...prefix, String(i)], out, depth + 1));
   } else {
     out.push({ path: prefix, value, type: typeOf(value) });
   }
@@ -49,7 +63,20 @@ function preview(v: unknown): string {
   const s = String(v);
   return s.length > 60 ? s.slice(0, 60) + "…" : s;
 }
-const leafName = (f: FlatField) => f.path[f.path.length - 1] ?? "value";
+const isIndexSeg = (s: string) => /^(0|[1-9]\d*)$/.test(s);
+/** Display/column name for a field. An array element's leaf is a numeric index,
+ *  which alone ("0") is a poor name — fold it back into the parent key as
+ *  `parent[0]` so the default reads like `email[0]`, not `0`. */
+const leafName = (f: FlatField): string => {
+  const p = f.path;
+  if (!p.length) return "value";
+  const last = p[p.length - 1];
+  if (isIndexSeg(last)) {
+    const parent = p[p.length - 2];
+    return parent ? `${parent}[${last}]` : `[${last}]`;
+  }
+  return last;
+};
 
 export default function CellDetails({
   source,
