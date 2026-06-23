@@ -113,6 +113,10 @@
           "profile_url": {
             "type": "string",
             "description": "LinkedIn profile URL or username"
+          },
+          "extended_response": {
+            "type": "boolean",
+            "description": "Include profile image URL in the response (default false)"
           }
         }
       },
@@ -586,10 +590,10 @@
     {
       "id": "companyLookalike",
       "label": "Find Lookalike Companies",
-      "description": "Find companies similar to a seed for ICP expansion. Provide one seed: company_domain, domain, website, company_name, or description. Optional company_filters, limit (1–2000, default 25), offset, and preview=true for a free count-only run. Returns { companies[], count, credits_consumed, message }. 5 credits per successful search; free when preview=true or no matches.",
+      "description": "Find companies similar to a seed for ICP expansion. Provide one seed: company_domain, domain, website, company_name, or description. Optional company_filters, limit (1–2000, default 25), offset, and preview=true for a free count-only run. Returns { companies[], count, credits_consumed, message }. 1 credit per lookalike returned; free when preview=true or no matches.",
       "verb": "POST",
       "path": "/v3/companies/lookalike",
-      "credits": 5,
+      "credits": 1,
       "input": {
         "type": "object",
         "properties": {
@@ -631,7 +635,10 @@
           }
         }
       },
-      "category": "Search"
+      "category": "Search",
+      "rateLimit": {
+        "rpm": 100
+      }
     },
     {
       "id": "companySearchV3",
@@ -677,7 +684,10 @@
           }
         }
       },
-      "category": "Search"
+      "category": "Search",
+      "rateLimit": {
+        "rpm": 100
+      }
     },
     {
       "id": "competitorsSearch",
@@ -810,7 +820,10 @@
           }
         }
       },
-      "category": "Search"
+      "category": "Search",
+      "rateLimit": {
+        "rpm": 100
+      }
     },
     {
       "id": "jobCompanyTypes",
@@ -854,7 +867,7 @@
     {
       "id": "jobSearch",
       "label": "Search Jobs",
-      "description": "Search live job postings with frontend-friendly filters; resolves company domains, country codes, tags, occupation taxonomy, and title terms into normalized filter IDs before running a bounded query. All filters optional. Returns { signals[] (title, company, location, salary, posted_at, has_remote, application_url, occupation_taxonomy), total, pagination.next_cursor, credits_consumed }. 1 credit per returned job; free if none returned; dryRun validates without charging.",
+      "description": "Search live job postings with structured filters. All filters optional; set autoResolve to map friendly names/domains to filter IDs. Returns { signals[], total, pagination.next_cursor, credits_consumed }. 1 credit per job returned; free if none returned; dryRun validates without charging.",
       "verb": "POST",
       "path": "/v3/jobs/search",
       "credits": 1,
