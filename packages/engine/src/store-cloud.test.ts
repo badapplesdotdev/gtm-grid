@@ -11,7 +11,7 @@
  */
 
 import { Cause, Effect, Exit } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CloudSchemaMapping } from "./cloud-schema.js";
 import { Engine } from "./execute.js";
 import { Registry } from "./registry.js";
@@ -221,6 +221,45 @@ describe("ConvexGridStore — batched writes (setCells)", () => {
     // No per-cell setCell/setCellStatus writes on the batched path.
     expect(calls.some((c) => c.ref === REFS_BATCHED.setCell)).toBe(false);
     expect(calls.some((c) => c.ref === REFS_BATCHED.setCellStatus)).toBe(false);
+  });
+
+  it("streams a sub-chunk buffer on the idle timer WITHOUT an explicit drain", async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, calls } = fakeClient({});
+      const store = await buildStore({
+        client,
+        refs: REFS_BATCHED,
+        tableId: TABLE_ID,
+      });
+
+      // Two terminal writes — well under FLUSH_CHUNK, so the size threshold never
+      // fires. Pre-timer this would buffer until drainAll at run end (the grid
+      // stuck on spinners); the idle timer must flush them in a tranche instead.
+      await Effect.runPromise(
+        store.setCell("row_1", "col_1", { value: { text: "a" }, status: "done", error: null }),
+      );
+      await Effect.runPromise(
+        store.setCell("row_2", "col_1", { value: { text: "b" }, status: "done", error: null }),
+      );
+      expect(calls.some((c) => c.ref === REFS_BATCHED.setCells)).toBe(false);
+
+      // Advancing past the idle interval flushes the buffered tranche — no drain.
+      await vi.advanceTimersByTimeAsync(600);
+
+      const batches = calls.filter((c) => c.ref === REFS_BATCHED.setCells);
+      expect(batches).toHaveLength(1);
+      expect(batches[0]?.args.cells).toEqual([
+        { rowId: "row_1", columnId: "col_1", value: { text: "a" }, status: "done", error: null },
+        { rowId: "row_2", columnId: "col_1", value: { text: "b" }, status: "done", error: null },
+      ]);
+
+      // Buffer is empty, so the timer self-stops: no further flushes accumulate.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(calls.filter((c) => c.ref === REFS_BATCHED.setCells)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("signals coalesceRunningWrites + drain when batching is wired", async () => {

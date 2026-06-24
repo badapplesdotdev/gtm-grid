@@ -168,6 +168,21 @@ interface BatchedCellWrite {
 const FLUSH_CHUNK = 100;
 /** Max concurrent in-flight `setCells` POSTs (bounds memory + pooler load). */
 const MAX_IN_FLIGHT = 4;
+/**
+ * Idle flush cadence (ms). A column run completes rows in a trickle — fan-out is
+ * bounded and each row carries per-row network/sandbox latency — so the
+ * {@link FLUSH_CHUNK} threshold is rarely hit mid-run. Without a timer the
+ * trailing sub-chunk (and the ENTIRETY of any run under FLUSH_CHUNK cells) would
+ * sit buffered until `drainAll` runs at the very END of the row loop, so the
+ * grid only paints once the whole run finishes — the user sees nothing but
+ * spinners and has to refresh. A periodic flush drains whatever has accumulated
+ * every interval, so terminal results stream to the worker (and broadcast live)
+ * in tranches as rows land, top-to-bottom, instead of in one end-of-run lump.
+ * Each timed flush is still ONE `setCells` POST coalescing every cell completed
+ * in the window, so a fast bulk run (which hits FLUSH_CHUNK first) never
+ * regresses to a POST-per-cell, and a slow run streams at most ~1 POST / interval.
+ */
+const FLUSH_INTERVAL_MS = 500;
 
 /** A Convex column doc as returned by `getTable` (camelCase, string ids). */
 interface ConvexColumnDoc {
@@ -354,6 +369,14 @@ export const cloudGridStoreShape = (
      */
     const pending: BatchedCellWrite[] = [];
     const inFlight = new Set<Promise<unknown>>();
+    // Idle flush timer (see {@link FLUSH_INTERVAL_MS}). Armed by `enqueue` while a
+    // sub-{@link FLUSH_CHUNK} remainder is buffered; self-stopping once `pending`
+    // drains; cleared by `drainAll`. Holds a closure over `pending`/`inFlight`,
+    // so it MUST stop on its own when idle: `drainAll` (the only guaranteed
+    // cleanup) runs at end-of-run but is not wrapped in a finally, so on the
+    // error path the timer's self-stop is what keeps the run's store from
+    // retaining a live timer after its writes have drained.
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
     /** POST one chunk; track it as in-flight, removing it on settle. */
     const startFlush = (chunk: readonly BatchedCellWrite[]): void => {
@@ -371,10 +394,36 @@ export const cloudGridStoreShape = (
     };
 
     /**
+     * Flush one chunk on the idle tick when a slot is free, then re-arm while any
+     * work remains. Self-stopping: once `pending` is empty it does not reschedule
+     * (the next `enqueue` re-arms it), so the timer never lingers past the run's
+     * writes. `unref` (below) means a still-armed timer never keeps the sidecar
+     * process alive.
+     */
+    const onFlushTick = (): void => {
+      flushTimer = null;
+      if (pending.length > 0 && inFlight.size < MAX_IN_FLIGHT) {
+        startFlush(pending.splice(0, FLUSH_CHUNK));
+      }
+      if (pending.length > 0) armFlushTimer();
+    };
+
+    /** Arm the idle flush timer (no-op when already armed). */
+    const armFlushTimer = (): void => {
+      if (flushTimer !== null) return;
+      flushTimer = setTimeout(onFlushTick, FLUSH_INTERVAL_MS);
+      // Node `Timeout` exposes `unref`; guard for non-Node hosts where setTimeout
+      // returns a number, so a pending tranche flush can't pin the event loop.
+      (flushTimer as { unref?: () => void }).unref?.();
+    };
+
+    /**
      * Buffer a write; once a full chunk has accumulated, flush it. Backpressure:
      * when the in-flight set is at its cap, await the soonest-settling POST
      * before scheduling another — so the engine's per-row `await setCell` blocks
-     * here, throttling how fast rows are scheduled.
+     * here, throttling how fast rows are scheduled. A sub-{@link FLUSH_CHUNK}
+     * remainder arms the idle timer so it still streams in tranches (see
+     * {@link FLUSH_INTERVAL_MS}) rather than waiting for `drainAll` at run end.
      */
     const enqueue = async (write: BatchedCellWrite): Promise<void> => {
       pending.push(write);
@@ -384,10 +433,17 @@ export const cloudGridStoreShape = (
         }
         startFlush(pending.splice(0, FLUSH_CHUNK));
       }
+      if (pending.length > 0) armFlushTimer();
     };
 
     /** Flush the final partial chunk and await every in-flight POST. */
     const drainAll = async (): Promise<void> => {
+      // Cancel the idle timer: drainAll flushes everything below, so a pending
+      // tick would be a redundant (and post-run) flush.
+      if (flushTimer !== null) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
       while (pending.length > 0) {
         if (inFlight.size >= MAX_IN_FLIGHT) {
           await Promise.race(inFlight);
