@@ -973,6 +973,30 @@ export function codexSandboxFlags(_mode?: string): string[] {
   return ["--dangerously-bypass-approvals-and-sandbox"];
 }
 
+/**
+ * The user's default `model` and `model_reasoning_effort` from
+ * `~/.codex/config.toml` (top-level keys only).
+ *
+ * `streamCodex` passes `--ignore-user-config` to stop Codex auto-loading the
+ * user's other MCP servers (see there) — but that same flag also drops these
+ * model defaults, so we read and re-inject them. Only the region BEFORE the first
+ * `[table]` header is scanned, since `model` also appears under `[profiles.*]` /
+ * `[model_providers.*]` and must not be picked up. Returns `{}` when the file is
+ * absent/unreadable. Custom `[model_providers]` are NOT restored — those rare
+ * setups aren't supported by the embedded agent.
+ */
+export function codexUserModelDefaults(
+  home = process.env.CODEX_HOME ?? join(homedir(), ".codex"),
+): { model?: string; reasoningEffort?: string } {
+  try {
+    const top = readFileSync(join(home, "config.toml"), "utf8").split(/^\s*\[/m)[0];
+    const grab = (k: string) => top.match(new RegExp(`^\\s*${k}\\s*=\\s*"([^"]*)"`, "m"))?.[1]?.trim() || undefined;
+    return { model: grab("model"), reasoningEffort: grab("model_reasoning_effort") };
+  } catch {
+    return {};
+  }
+}
+
 export function streamCodex(
   res: ServerResponse,
   opts: { message: string; project: string; repoRoot: string; threadId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; mode?: string; cloud?: AgentCloud; providerEnv?: Record<string, string>; approval?: AgentApproval },
@@ -981,17 +1005,33 @@ export function streamCodex(
   const launcher = mcpLauncher(opts.repoRoot);
   const preamble = contextPreamble(opts.context, opts.mode, !!opts.cloud);
   const message = preamble ? `${preamble}\n\n${opts.message}` : opts.message;
+  // Isolate Codex to ONLY the gtmgrid MCP server. `-c mcp_servers={…}` on its own
+  // is NOT enough: Codex deep-merges `-c` overrides into the loaded config, so the
+  // user's own servers stay live — both the `[mcp_servers.*]` from config.toml
+  // (Trigify/exa/…) AND the bundled plugin servers (linear/computer-use). Codex
+  // then connects to all of them at exec startup, and any OAuth-walled HTTP server
+  // makes rmcp's transport worker quit fatally ("Transport channel closed, when
+  // AuthRequired"), taking the whole turn down. Codex has no --strict-mcp-config
+  // flag; --ignore-user-config is the only switch that drops BOTH the config.toml
+  // servers and the plugin servers — we then re-add only gtmgrid. (The Claude
+  // bridge gets the same isolation from --strict-mcp-config.)
+  //
+  // --ignore-user-config also drops the user's model + reasoning-effort defaults
+  // (auth still rides CODEX_HOME, and `exec resume` still accepts the flag), so we
+  // re-inject them from config.toml. Without this the panel's "Default" model picks
+  // nothing and Codex falls back to its built-in gpt-5.x-codex, which 400s on
+  // ChatGPT-auth accounts. A panel-picked model (opts.model) still wins.
+  const userDefaults = codexUserModelDefaults();
+  const resolvedModel = opts.model || userDefaults.model;
   const flags = [
     "--json",
     "--skip-git-repo-check",
     ...codexSandboxFlags(opts.mode),
-    // Replace Codex's whole MCP table with ONLY gtmgrid, so it ignores the user's
-    // other registered servers (Trigify/exa/etc.) and drives gtmgrid. The gtmgrid
-    // env (incl. cloud context in cloud mode) is rendered as TOML with every value
-    // safely quoted — see `codexEnvToml`.
+    "--ignore-user-config",
     "-c",
     `mcp_servers={ gtmgrid = { command = "${launcher}", env = ${codexEnvToml(mcpEnv(opts.project, opts.cloud, opts.mode, opts.approval))} } }`,
-    ...(opts.model ? ["-m", opts.model] : []),
+    ...(userDefaults.reasoningEffort ? ["-c", `model_reasoning_effort="${userDefaults.reasoningEffort}"`] : []),
+    ...(resolvedModel ? ["-m", resolvedModel] : []),
   ];
   // Same binding as Claude: an explicit threadId (History pick) wins, else resume
   // the latest native Codex thread for this project unless a New chat was asked for.
