@@ -47,6 +47,10 @@
           }
         }
       },
+      "requires": [
+        [["first_name", "last_name"], "full_name"],
+        ["domain", "company_name"]
+      ],
       "category": "Find email"
     },
     {
@@ -212,6 +216,7 @@
           }
         }
       },
+      "requires": [["company_domain", "company_name", "profile_url"]],
       "category": "Enrich company",
       "rateLimit": {
         "rpm": 100
@@ -237,6 +242,7 @@
           }
         }
       },
+      "requires": [["company_domain", "company_name"]],
       "category": "Enrich company"
     },
     {
@@ -263,6 +269,7 @@
           }
         }
       },
+      "requires": [["company_domain", "company_name"]],
       "category": "Search"
     },
     {
@@ -289,6 +296,7 @@
           }
         }
       },
+      "requires": [["company_domain", "company_name"]],
       "category": "Search"
     },
     {
@@ -490,6 +498,7 @@
           }
         }
       },
+      "requires": [["company_domain", "company_name"]],
       "category": "Ads"
     },
     {
@@ -512,6 +521,7 @@
           }
         }
       },
+      "requires": [["company_domain", "company_name"]],
       "category": "Ads"
     },
     {
@@ -534,6 +544,7 @@
           }
         }
       },
+      "requires": [["company_domain", "company_name"]],
       "category": "Ads"
     },
     {
@@ -701,6 +712,7 @@
           }
         }
       },
+      "requires": [["company_domain", "company_url", "company_name"]],
       "category": "Search"
     },
     {

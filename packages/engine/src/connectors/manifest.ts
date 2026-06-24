@@ -4,6 +4,7 @@
 
 import { z } from "zod";
 import { fetchWithRetry } from "../http-retry.js";
+import { SkipCellError } from "../skip.js";
 import type { Connector, ConnectorMethod, MethodContext, RateLimit } from "../types.js";
 
 /** A live-options source for one input field (pick by name → store the id). */
@@ -42,6 +43,21 @@ const methodSchema = z.object({
   path: z.string(),
   /** JSON Schema for inputs (object). Surfaced to agents + UI as-is. */
   input: z.record(z.string(), z.any()).optional(),
+  /**
+   * "One-of" input guard, checked HOST-SIDE before the request is built. Each
+   * entry is a requirement GROUP; ALL groups must be satisfied. Within a group,
+   * the alternatives are OR'd — an alternative is a single field name (present)
+   * or an array of field names (all present). A row that fails any group is
+   * SKIPPED (clean "empty" cell, no credits, no error-tracking noise) instead of
+   * firing a call the upstream API is guaranteed to reject. JSON-Schema `required`
+   * can only express "all of these"; this expresses "at least one of these", which
+   * the API's "provide domain OR company_name" contracts need. Example for
+   * LeadMagic emailFinder: `[["first_name","last_name"],"full_name"]` (a name) and
+   * `["domain","company_name"]` (a company).
+   */
+  requires: z
+    .array(z.array(z.union([z.string(), z.array(z.string())])).min(1))
+    .optional(),
   /**
    * Fields whose value is PICKED from a live list the connector can fetch
    * (field id → option source). The UI renders a searchable name-dropdown that
@@ -149,6 +165,39 @@ function coerceInputTypes(input: Record<string, unknown>, schema: unknown): Reco
   return out;
 }
 
+/** A required input is "present" when it is a non-null, non-empty(-string) value. */
+function inputPresent(input: Record<string, unknown>, field: string): boolean {
+  const v = input[field];
+  if (v === undefined || v === null) return false;
+  return typeof v === "string" ? v.trim() !== "" : true;
+}
+
+/** A single alternative's human label: a combo renders as "a+b", a field as "a". */
+function describeAlternative(alt: string | string[]): string {
+  return Array.isArray(alt) ? alt.join("+") : alt;
+}
+
+/**
+ * Check a method's `requires` guard against the resolved input. Returns the
+ * description of the FIRST unsatisfied group (e.g. "domain or company_name") for
+ * the skip note, or null when every group passes. Within a group an alternative
+ * is satisfied when its field (or every field of a combo) is present.
+ */
+function firstUnmetRequirement(
+  input: Record<string, unknown>,
+  requires: ReadonlyArray<ReadonlyArray<string | string[]>>,
+): string | null {
+  for (const group of requires) {
+    const satisfied = group.some((alt) =>
+      Array.isArray(alt)
+        ? alt.every((f) => inputPresent(input, f))
+        : inputPresent(input, alt),
+    );
+    if (!satisfied) return group.map(describeAlternative).join(" or ");
+  }
+  return null;
+}
+
 async function httpCall(
   man: ExtensionManifest,
   m: ManifestMethod,
@@ -156,6 +205,19 @@ async function httpCall(
   ctx: MethodContext,
 ): Promise<unknown> {
   const input = coerceInputTypes(rawInput, m.input);
+
+  // Pre-flight the "one-of" input guard: a row missing a required identifier
+  // (e.g. no company for LeadMagic's email-finder) is SKIPPED before any network
+  // call — the upstream API would only answer 4xx, so firing it would waste the
+  // request and surface as a failed cell + error-tracking noise. The engine turns
+  // this throw into a clean "empty" skip cell (see SkipCellError handling in
+  // execute.ts), not an error.
+  if (m.requires && m.requires.length > 0) {
+    const unmet = firstUnmetRequirement(input, m.requires);
+    if (unmet !== null) {
+      throw new SkipCellError(`Missing required input — provide ${unmet}`);
+    }
+  }
   const secretKey = man.auth?.secretKey ?? "apiKey";
   const pathParams = new Set<string>();
   const path = m.path.replace(/\{(\w+)\}/g, (_, k: string) => {
