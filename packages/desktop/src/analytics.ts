@@ -43,6 +43,19 @@ export function initAnalytics(): void {
     // React error-boundary catches are reported explicitly from ErrorBoundary.
     capture_exceptions: true,
     defaults: "2026-01-30",
+    // Session Replay. Whether recording actually runs is gated by the project's
+    // "Record user sessions" toggle (PostHog remote config), so this stays off
+    // for OSS/local builds with their own project. The Tauri webview has no CSP
+    // (tauri.conf.json `security.csp: null`) and an absolute `api_host`, so the
+    // recorder script loads and uploads without extra config.
+    //
+    // `maskAllInputs` (PostHog default, set explicitly here) masks values typed
+    // into inputs/textareas. Displayed text — including prospect data shown in
+    // the grid — IS captured, so replays stay maximally useful for debugging UX.
+    // To hide a specific element from replay, add the `ph-no-capture` class.
+    session_recording: {
+      maskAllInputs: true,
+    },
   });
 }
 

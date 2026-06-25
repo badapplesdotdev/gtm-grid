@@ -35,6 +35,7 @@ import {
 import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { bearer, emailOTP } from "better-auth/plugins";
+import { captureUserSignedUp } from "./analytics.js";
 import { generateOtp, OTP_EXPIRY_SECONDS, OTP_LENGTH } from "./otp.js";
 import { githubEnabled, googleEnabled } from "./providers.js";
 
@@ -153,6 +154,25 @@ export function createAuth(db: Db): ReturnType<typeof betterAuth> {
     },
     socialProviders: socialProviders(),
     trustedOrigins: trustedOrigins(),
+    // Record every new account as an identified PostHog person, server-side.
+    // `user.create.after` fires exactly once per new user (password OR OAuth),
+    // and the `user.id` here is the same distinct id the desktop later identifies
+    // with — so signups are captured with name/email even if the client identify
+    // never runs. Awaited so the serverless function doesn't suspend before the
+    // event flushes; the helper guards itself so this can't break sign-up.
+    databaseHooks: {
+      user: {
+        create: {
+          after: async (user) => {
+            await captureUserSignedUp({
+              id: user.id,
+              email: user.email,
+              name: user.name,
+            });
+          },
+        },
+      },
+    },
     // `bearer` lets the desktop carry its session via `Authorization: Bearer
     // <token>` instead of a cookie (WKWebview blocks third-party cookies). The
     // client reads the `set-auth-token` response header on sign-in and replays it.
