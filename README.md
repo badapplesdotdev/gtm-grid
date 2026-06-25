@@ -359,6 +359,32 @@ unchanged local tool) and tracked for later:
 - ✅ CSV import → table (drop / review / done) + new-table chooser (blank / CSV / webhook)
 - ✅ Cloud-actions usage metering (Autumn) + in-app **Plan & billing** settings; Better Auth with native deep-link OAuth
 
+## Production Deployment
+
+When deploying `apps/web` to production (Vercel or any Node host), the following
+environment variables MUST be configured. The app validates these at runtime and
+**fails closed** (refuses to start) when critical secrets are missing.
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | yes | Supabase pooled Postgres connection string |
+| `SITE_URL` | yes | Public base URL (trusted origin for OAuth redirects) |
+| `BETTER_AUTH_SECRET` | **yes** | Session encryption + CSRF protection. Generate with `openssl rand -hex 32` |
+| `AUTUMN_SECRET_KEY` | **yes** | Autumn billing gateway (seats, cloud-actions metering). Without it entitlements fail closed and the server refuses to start |
+| `CREDENTIALS_MASTER_KEY` | yes | AES-256-GCM master key for workspace credential encryption (32 bytes hex). Generate with `openssl rand -hex 32` |
+| `SUPABASE_JWT_SECRET` | yes | HS256 secret for minting Supabase-compatible realtime JWTs |
+| `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` | yes | Server-side Supabase Realtime broadcast publisher |
+| `WEBHOOK_WORKER_SECRET` | **yes** | Shared bearer for `/api/worker/*` routes — the Inngest webhook processor and desktop sidecar cloud-run path both depend on it |
+| `AUTH_RESEND_KEY` | recommended | Transactional email (Resend). Enables sign-up email verification + password reset |
+| `AUTH_REQUIRE_EMAIL_VERIFICATION` | recommended | Set to `"true"` to require verified email before sign-in |
+
+Variables not listed here (`AUTH_GITHUB_ID`, `AUTH_GOOGLE_ID`, AI provider keys,
+etc.) are optional and the app degrades gracefully when they are absent.
+
+The production env guard (`@gtmgrid/services` `validateProductionSecrets`) runs
+at worker init and logs warnings for non-fatal gaps (e.g., unset
+`WEBHOOK_WORKER_SECRET`, `AUTH_REQUIRE_EMAIL_VERIFICATION` not set to `"true"`).
+
 ## License
 
 [**FSL-1.1-MIT**](./LICENSE) — the [Functional Source License](https://fsl.software).

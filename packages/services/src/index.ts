@@ -368,3 +368,9 @@ export {
 export * from "./signals/catalog.js";
 export { SignalRepo, SignalRepoLive, signalRepoLayer, SignalRepoError, type SignalBinding, type SignalBindingColumn, type SignalBindingInsert, type SignalBindingPatch, type SignalDueCursor, type DueBinding, type DueBindingPage } from "./repositories/signal-repo.js";
 export { SignalService, SignalError } from "./services/signal-service.js";
+
+// --- Production env guard ----------------------------------------------------
+export {
+  validateProductionSecrets,
+  type EnvGuardResult,
+} from "./services/env-guard.js";

@@ -18,7 +18,7 @@
  */
 
 import { getAuth, getSessionUserId } from "@gtmgrid/auth";
-import { type AppServices, appLayer, isAuthorizedWorker } from "@gtmgrid/services";
+import { type AppServices, appLayer, isAuthorizedWorker, validateProductionSecrets } from "@gtmgrid/services";
 import { Cause, type Effect, Exit, ManagedRuntime } from "effect";
 import { z } from "zod";
 import { captureServerException } from "../../../lib/posthog-server";
@@ -54,6 +54,15 @@ export function workerRuntime(): Promise<
   ManagedRuntime.ManagedRuntime<AppServices, never>
 > {
   if (sharedRuntimePromise === undefined) {
+    // Fail-closed on missing production secrets — called once at first request.
+    const guard = validateProductionSecrets();
+    if (!guard.ok) {
+      const msg = `[env-guard] refusing to start: ${guard.errors.join("; ")}`;
+      console.error(msg);
+      throw new Error(msg);
+    }
+    for (const w of guard.warnings) console.warn("[env-guard]", w);
+
     sharedRuntimePromise = import("@gtmgrid/db/client").then(({ db }) =>
       ManagedRuntime.make(appLayer({ db, userId: null })),
     );
