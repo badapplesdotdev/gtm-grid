@@ -1,5 +1,19 @@
 # @gtmgrid/desktop
 
+## 0.22.2
+
+### Patch Changes
+
+- 325e90b: Enable PostHog Session Replay in the desktop app. `posthog-js` now initializes
+  with `session_recording` (inputs masked, displayed grid text captured), so
+  sessions record once the project's "Record user sessions" toggle is on. The
+  Tauri webview already permits the recorder (no CSP, absolute `api_host`); add the
+  `ph-no-capture` class to hide a specific element from replays.
+- Updated dependencies [325e90b]
+  - @gtmgrid/analytics@0.22.2
+  - @gtmgrid/cloud@0.22.2
+  - @gtmgrid/services@0.22.2
+
 ## 0.22.1
 
 ### Patch Changes

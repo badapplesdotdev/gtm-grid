@@ -1,5 +1,12 @@
 # @gtmgrid/party
 
+## 0.22.2
+
+### Patch Changes
+
+- Updated dependencies [325e90b]
+  - @gtmgrid/auth@0.22.2
+
 ## 0.22.1
 
 ### Patch Changes
