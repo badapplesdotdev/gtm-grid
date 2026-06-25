@@ -20,7 +20,7 @@ export async function GET(): Promise<Response> {
     return Response.json({ ok: true, db: "up" });
   } catch (error) {
     return Response.json(
-      { ok: false, db: "down", error: error instanceof Error ? error.message : String(error) },
+      { ok: false, db: "down" },
       { status: 503 },
     );
   }

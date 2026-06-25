@@ -12,11 +12,13 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 
+const DEV_ORIGINS =
+  process.env.NODE_ENV !== "production" ? ["http://localhost:5173"] : [];
 const ALLOWED_ORIGINS = new Set([
   "tauri://localhost", // macOS / iOS Tauri webview
   "http://tauri.localhost", // Windows / Linux / Android Tauri webview
   "https://tauri.localhost",
-  "http://localhost:5173", // desktop dev (vite)
+  ...DEV_ORIGINS,
 ]);
 
 function corsHeaders(origin: string): Record<string, string> {
@@ -46,5 +48,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/api/auth/:path*", "/api/trpc/:path*", "/api/worker/:path*"],
+  matcher: ["/api/auth/:path*", "/api/trpc/:path*"],
 };
