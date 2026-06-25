@@ -1,11 +1,11 @@
 /**
- * Dependency-free fixed-window rate limiter.
+ * In-memory fixed-window rate limiter.
  *
- * IMPORTANT: serverless functions don't share memory across instances, so this is
- * a per-warm-instance SOFT limit — a baseline that blunts bursts and cheap abuse
- * from a single hot instance, not a hard distributed guarantee. For a strict
- * cross-instance limit, swap the store for `@upstash/ratelimit` (Redis). The call
- * sites stay the same.
+ * WARNING: This is a per-warm-instance SOFT limit in serverless environments
+ * (Vercel). It blunts bursts from a single instance but does NOT provide
+ * cross-instance guarantees. For strict distributed rate limiting in
+ * production, swap for @upstash/ratelimit (Redis) or similar. The function
+ * signatures are designed to be a drop-in replacement.
  */
 const buckets = new Map<string, { count: number; resetAt: number }>();
 

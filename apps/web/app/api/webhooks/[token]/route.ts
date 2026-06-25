@@ -10,23 +10,32 @@ import { signatureCheckPasses } from "../../../../lib/webhook-signature";
  * The public webhook receiver. A third party POSTs JSON to
  * `/api/webhooks/<token>`; this route:
  *
- *  1. Resolves the token via the worker endpoint `/api/worker/resolveToken`
+ *  1. Rejects oversized payloads (>1 MB) before reading the body into memory.
+ *  2. Resolves the token via the worker endpoint `/api/worker/resolveToken`
  *     (secret-gated with `WEBHOOK_WORKER_SECRET`). Unknown OR disabled tokens
  *     resolve to `null` and are rejected with 404 WITHOUT leaking which (no
  *     per-reason message).
- *  2. When the webhook has OPTED IN to signature auth (a `signingSecret` is
+ *  3. When the webhook has OPTED IN to signature auth (a `signingSecret` is
  *     set), verifies the `X-GTMGrid-Signature` header —
  *     `hex(HMAC-SHA256(signingSecret, rawBody))` — in constant time; a
  *     missing/invalid signature → 401. Without a secret the endpoint accepts
  *     unsigned posts: the unguessable token IS the credential, which is what
  *     most third-party senders (no custom HMAC support) can work with.
- *  3. Applies the stored field mapping (`[{ path, columnId }]`) to the parsed
+ *
+ *     ⚠️ SECURITY NOTE — Unsigned webhooks trust the token alone as the
+ *     only credential. If the token is leaked or intercepted, anyone can
+ *     POST arbitrary data. For production deployments where senders support
+ *     custom HTTP headers, configure a signing secret to enable HMAC
+ *     verification. This is strongly recommended for any webhook carrying
+ *     sensitive data or affecting production tables.
+ *
+ *  4. Applies the stored field mapping (`[{ path, columnId }]`) to the parsed
  *     JSON, producing a `{ columnId: value }` map.
- *  4. Computes an idempotent `recordId` (an inbound idempotency header, else
+ *  5. Computes an idempotent `recordId` (an inbound idempotency header, else
  *     `sha256(token + ':' + stableStringify(body))`) and enqueues
  *     `webhook/record.received` with `id: recordId` so retries / duplicate posts
  *     don't double-insert.
- *  5. Returns 202 Accepted (the row insert + enrichment happen durably in the
+ *  6. Returns 202 Accepted (the row insert + enrichment happen durably in the
  *     Inngest worker).
  *
  * Node runtime: uses `node:crypto` for HMAC verification + hashing.
@@ -135,6 +144,14 @@ export async function POST(
     return json({ error: "Too many requests" }, 429, { "Retry-After": String(limit.retryAfter) });
   }
 
+  // Reject oversized payloads before reading the body into memory.
+  const contentLength = req.headers.get("content-length");
+  if (contentLength) {
+    const len = parseInt(contentLength, 10);
+    if (!isNaN(len) && len > 1_000_000) {
+      return json({ error: "Payload too large" }, 413);
+    }
+  }
   // Read the RAW body once — HMAC is computed over the exact bytes received.
   const rawBody = await req.text();
 
