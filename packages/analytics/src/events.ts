@@ -17,6 +17,17 @@ export interface AnalyticsEventMap {
   invite_code_copied: Record<string, never>;
   clone_command_copied: Record<string, never>;
 
+  // ── Auth lifecycle (server-side, Better Auth hooks) ──────────────────────────
+  /**
+   * A brand-new account was created. Emitted server-side from the Better Auth
+   * `user.create.after` hook (packages/auth) keyed on the user id, which is the
+   * SAME distinct id the desktop client later passes to `posthog.identify` — so
+   * the signup and all later product events resolve to one identified person.
+   * Capturing this server-side means a signup is recorded with name/email even if
+   * the client never fires identify (wrong build, analytics disabled, crash).
+   */
+  user_signed_up: { method: "password" | "oauth" | "unknown" };
+
   // ── Server-side (web tRPC / webhook / Inngest) ───────────────────────────────
   billing_checkout_initiated: { workspace_id: string; plan_id: string };
   webhook_received: {
