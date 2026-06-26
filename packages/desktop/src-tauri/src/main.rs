@@ -155,6 +155,13 @@ fn spawn_sidecar(app: &tauri::App) -> Boot {
             return Boot { child: None, tail, facts };
         }
     };
+    // On Windows, Tauri's resource_dir() is a `\\?\C:\…` verbatim path. Node's
+    // main-module resolver can't parse that prefix and crashes with
+    // `EISDIR: lstat 'C:'` before loading server.mjs — so the engine never starts
+    // and reads as "unreachable". Simplify to a plain `C:\…` path; every path we
+    // derive from `dir` (script arg, cwd, launcher, ext dir) inherits the fix.
+    // No-op on non-Windows / when the prefix can't be safely removed.
+    let dir = dunce::simplified(&dir).to_path_buf();
     let node = dir.join(node_binary_name());
     let server = dir.join("server.mjs");
     let launcher = dir.join("gtmgrid-mcp");

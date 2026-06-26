@@ -1471,6 +1471,7 @@ dependencies = [
 name = "gtmgrid"
 version = "0.22.7"
 dependencies = [
+ "dunce",
  "serde_json",
  "tauri",
  "tauri-build",

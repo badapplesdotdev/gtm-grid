@@ -27,6 +27,11 @@ serde_json = "1"
 # `$exception` to PostHog Error Tracking (when the shell panics during startup
 # there's no Node sidecar to defer to). Default rustls TLS; never on the hot path.
 ureq = "2"
+# Strip Windows `\\?\` verbatim/extended-length prefixes. Tauri's resource_dir()
+# returns a `\\?\C:\…` path on Windows; passed to node.exe as the script arg,
+# Node's main-module resolver can't parse the prefix and dies with
+# `EISDIR: lstat 'C:'` before it ever loads server.mjs. No-op on non-Windows.
+dunce = "1"
 
 [[bin]]
 name = "gtmgrid"
