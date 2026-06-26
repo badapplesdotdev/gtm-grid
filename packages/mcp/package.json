@@ -1,6 +1,6 @@
 {
   "name": "@gtmgrid/mcp",
-  "version": "0.22.2",
+  "version": "0.22.3",
   "private": true,
   "type": "module",
   "bin": {

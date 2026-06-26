@@ -1,5 +1,14 @@
 # @gtmgrid/auth
 
+## 0.22.3
+
+### Patch Changes
+
+- Updated dependencies [fbcb535]
+  - @gtmgrid/analytics@0.22.3
+  - @gtmgrid/db@0.22.3
+  - @gtmgrid/email@0.22.3
+
 ## 0.22.2
 
 ### Patch Changes
