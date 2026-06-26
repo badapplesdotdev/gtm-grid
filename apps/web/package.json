@@ -1,6 +1,6 @@
 {
   "name": "@gtmgrid/web",
-  "version": "0.22.8",
+  "version": "0.22.9",
   "private": true,
   "type": "module",
   "description": "GTM Grid — marketing site + Inngest webhook worker (unified Next.js app).",
