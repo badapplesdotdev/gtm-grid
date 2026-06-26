@@ -2391,6 +2391,26 @@ body.resizing-agent .agent-panel { transition: none; }
 }
 .cep-map-none { color: var(--text-3); font-style: italic; }
 .cep-map-missing .ai-select-btn { border-color: var(--danger); }
+/* Structured (nested) input mapping — a lead object / custom-variable map built
+   from columns. Nested objects indent under a labelled rail. */
+.cep-struct { margin-bottom: 12px; }
+.cep-struct-nested {
+  margin-left: 2px; padding-left: 10px; border-left: 2px solid var(--border-2);
+}
+.cep-struct-head { display: flex; align-items: baseline; gap: 4px; margin-bottom: 4px; }
+.cep-struct-name { font: 600 12px var(--font-sans); color: var(--text-2); }
+.cep-struct-hint { font: 400 11px var(--font-sans); color: var(--text-3); margin: 2px 0 4px; }
+/* Custom-variable rows: a name input + a mappable value + a remove button. */
+.cep-cvars { display: flex; flex-direction: column; gap: 6px; }
+.cep-cvar-row { display: flex; align-items: flex-start; gap: 6px; }
+.cep-cvar-key { flex: 0 0 38%; min-width: 0; }
+.cep-cvar-val { flex: 1 1 auto; min-width: 0; }
+.cep-cvar-del { flex: 0 0 auto; margin-top: 3px; }
+.cep-cvar-add {
+  align-self: flex-start; border: none; background: none; padding: 2px 0; cursor: pointer;
+  font: 500 11.5px var(--font-sans); color: var(--accent);
+}
+.cep-cvar-add:hover { text-decoration: underline; }
 /* Live-options pick dropdown: a search box pinned at the top of the menu, and a
    muted secondary line on each option (e.g. a campaign's status/count). */
 .cep-pick-search {

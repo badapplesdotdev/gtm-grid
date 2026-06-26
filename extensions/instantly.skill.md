@@ -16,8 +16,8 @@
 ## Endpoints by job
 
 ### Enroll leads into a campaign (the core grid job)
-- `instantly.createLead` — add ONE contact to a campaign or list. Only `email` required; pass `campaign` (the campaign **UUID** — the field is `campaign`, NOT `campaign_id`). Set `skip_if_in_campaign:true` to dedupe. Returns the created lead. Use this for per-row enrollment.
-- `instantly.bulkAddLeads` — add MANY leads in one call (`leads[]` + target `campaign` or `list_id`). Returns a **background-job handle** — poll `getBackgroundJob`. Use for bulk loads, not row-by-row.
+- `instantly.createLead` — add ONE contact to a campaign or list. Only `email` required; pass `campaign` (the campaign **UUID** — the field is `campaign`, NOT `campaign_id`). Map any standard fields (first_name/last_name/company_name/phone/website) plus `custom_variables` (a `{ key: value }` map) for personalization tags beyond the standard set. Set `skip_if_in_campaign:true` to dedupe. Returns the created lead. Use this for per-row enrollment.
+- `instantly.bulkAddLeads` — add MANY leads in one call (`leads[]`, each `{ email, first_name?, …, custom_variables? }`, + target `campaign` or `list_id`). Returns a **background-job handle** — poll `getBackgroundJob`. Use for bulk loads, not row-by-row.
 - `instantly.searchCampaignsByContact` — find which campaigns an `email` is already in. Call before enrolling to avoid duplicates.
 - `instantly.moveLeads` — move leads between campaigns/lists (source filter → `to_campaign_id`/`to_list_id`). Async job; poll `getBackgroundJob`.
 

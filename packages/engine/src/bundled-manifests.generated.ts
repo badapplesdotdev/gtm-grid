@@ -4012,6 +4012,34 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
                       },
                       "emailAddress": {
                         "type": "string"
+                      },
+                      "location": {
+                        "type": "string"
+                      },
+                      "summary": {
+                        "type": "string",
+                        "description": "Headline/summary text"
+                      },
+                      "customUserFields": {
+                        "type": "array",
+                        "description": "Custom personalization variables sent alongside the standard fields — each { name, value }. Map a grid column into each value to reference it as a merge tag in your sequence. The API accepts as many as you add.",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "name",
+                            "value"
+                          ],
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "description": "Variable name (the merge tag used in your sequence)"
+                            },
+                            "value": {
+                              "type": "string",
+                              "description": "Variable value (map a column)"
+                            }
+                          }
+                        }
                       }
                     }
                   }
@@ -4097,6 +4125,33 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
                   },
                   "position": {
                     "type": "string"
+                  },
+                  "emailAddress": {
+                    "type": "string"
+                  },
+                  "location": {
+                    "type": "string"
+                  },
+                  "customUserFields": {
+                    "type": "array",
+                    "description": "Custom personalization variables sent alongside the standard fields — each { name, value }. Map a grid column into each value. The API accepts as many as you add.",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "name",
+                        "value"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "Variable name (the merge tag used in your sequence)"
+                        },
+                        "value": {
+                          "type": "string",
+                          "description": "Variable value (map a column)"
+                        }
+                      }
+                    }
                   }
                 }
               }
@@ -7289,6 +7344,10 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
             "website": {
               "type": "string"
             },
+            "custom_variables": {
+              "type": "object",
+              "description": "Custom personalization variables as a { key: value } map (e.g. { \"icebreaker\": \"{{Opener}}\", \"industry\": \"{{Industry}}\" }). Map a grid column into each value to reference it as {{key}} in your sequence. Add as many as you need. Note: a new key propagates to every lead in the campaign."
+            },
             "skip_if_in_campaign": {
               "type": "boolean",
               "description": "Skip if already in the campaign"
@@ -7461,9 +7520,36 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
           "properties": {
             "leads": {
               "type": "array",
-              "description": "Array of lead objects (each needs at least `email`)",
+              "description": "Array of lead objects (each needs at least `email`). Run per-row, one lead is built from the mapped columns.",
               "items": {
-                "type": "object"
+                "type": "object",
+                "required": [
+                  "email"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string"
+                  },
+                  "first_name": {
+                    "type": "string"
+                  },
+                  "last_name": {
+                    "type": "string"
+                  },
+                  "company_name": {
+                    "type": "string"
+                  },
+                  "phone": {
+                    "type": "string"
+                  },
+                  "website": {
+                    "type": "string"
+                  },
+                  "custom_variables": {
+                    "type": "object",
+                    "description": "Custom personalization variables as a { key: value } map. Map a grid column into each value to reference it as {{key}} in your sequence. Add as many as you need."
+                  }
+                }
               }
             },
             "campaign": {
@@ -9797,9 +9883,57 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
             },
             "leads": {
               "type": "array",
-              "description": "Array of leads. Each: { email, first_name, last_name, notes, address_line, city, country, country_code, phone_number, company_name, company_website, linkedin_person_url, linkedin_company_url, custom_variables }",
+              "description": "Array of leads. Run per-row, one lead is built from the mapped columns.",
               "items": {
-                "type": "object"
+                "type": "object",
+                "required": [
+                  "email"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string"
+                  },
+                  "first_name": {
+                    "type": "string"
+                  },
+                  "last_name": {
+                    "type": "string"
+                  },
+                  "company_name": {
+                    "type": "string"
+                  },
+                  "company_website": {
+                    "type": "string"
+                  },
+                  "phone_number": {
+                    "type": "string"
+                  },
+                  "linkedin_person_url": {
+                    "type": "string"
+                  },
+                  "linkedin_company_url": {
+                    "type": "string"
+                  },
+                  "address_line": {
+                    "type": "string"
+                  },
+                  "city": {
+                    "type": "string"
+                  },
+                  "country": {
+                    "type": "string"
+                  },
+                  "country_code": {
+                    "type": "string"
+                  },
+                  "notes": {
+                    "type": "string"
+                  },
+                  "custom_variables": {
+                    "type": "object",
+                    "description": "Custom personalization variables as a { key: value } map. Map a grid column into each value to reference it as a merge tag in your sequence. Add as many as you need."
+                  }
+                }
               }
             },
             "skip_if_in_workspace": {
