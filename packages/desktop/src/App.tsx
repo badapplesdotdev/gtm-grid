@@ -3,6 +3,7 @@ import { api, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillI
 import { onActivateKey } from "./lib/utils";
 import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
+import { AppError } from "./AppError";
 import { CommandPalette, type PaletteAction } from "./CommandPalette";
 import { resolveEditTrigger } from "./useGridKeyboardNav";
 import { Dialog, DialogContent } from "./components/ui/dialog";
@@ -888,6 +889,12 @@ export default function App() {
   // window — i.e. a real problem, not a transient boot delay. Drives the banner's
   // escalation from a calm "starting…" note to an actionable recovery message.
   const [serverStuck, setServerStuck] = useState(false);
+  // One-way latch: set the first time the engine answers. Gates the full-screen
+  // boot loader/error on the INITIAL connect only — a later mid-session drop must
+  // keep the shell up (handled by the topbar banner), not yank back to a splash.
+  const [engineEverConnected, setEngineEverConnected] = useState(false);
+  // Bumped by the error screen's Retry to re-run the boot effect immediately.
+  const [bootNonce, setBootNonce] = useState(0);
   const [copiedDiagnostics, setCopiedDiagnostics] = useState(false);
 
   // Tables (cloud-backed). Inline-rename draft state for the sidebar rows.
@@ -1452,6 +1459,7 @@ export default function App() {
         if (cancelled) return;
         setHealthStatus("connected");
         setServerStuck(false);
+        setEngineEverConnected(true);
         if (!readyReported) {
           readyReported = true;
           capture("server_ready", {
@@ -1496,7 +1504,8 @@ export default function App() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, []);
+    // Re-runs when the error screen's Retry bumps `bootNonce` (fresh poll loop).
+  }, [bootNonce]);
 
   // Copy a small diagnostics blob a stuck user can paste into a support thread.
   // The renderer can't see sidecar stderr (the shell captures that to PostHog),
@@ -2095,8 +2104,34 @@ export default function App() {
   const cloudUser = !cloudLocked && isAuthenticated;
   const bootingCloud =
     cloudUser && !bootTimedOut && (cloudProject === null || !bootMinElapsed);
-  if (bootingCloud) {
-    return <AppLoader inShell label="Loading your workspace…" />;
+
+  // Engine (sidecar) boot gate. Hold the branded loader until the engine is
+  // reachable so the offline topbar banner never flashes during a normal cold
+  // start; if it fails to come up within the grace window, show a full-screen
+  // error instead of the shell. Gated on `engineEverConnected` so a LATER
+  // mid-session drop keeps the shell up (the topbar banner owns that case) rather
+  // than throwing the user back to a splash.
+  // Only active (authed, non-trial-locked) users are gated on the engine; a
+  // trial-locked user must still reach their upgrade panel even if it's down.
+  const engineReady = healthStatus === "connected" || engineEverConnected;
+  const engineInitFailed = cloudUser && !engineEverConnected && serverStuck;
+  if (engineInitFailed) {
+    return (
+      <AppError
+        dev={import.meta.env.DEV}
+        onRetry={() => {
+          setServerStuck(false);
+          setBootNonce((n) => n + 1);
+        }}
+        onCopyDiagnostics={copyDiagnostics}
+        copied={copiedDiagnostics}
+      />
+    );
+  }
+  if (bootingCloud || (cloudUser && !engineReady)) {
+    return (
+      <AppLoader inShell label={bootingCloud ? "Loading your workspace…" : "Starting GTM Grid…"} />
+    );
   }
 
   return (
