@@ -131,6 +131,10 @@ jobs:
       # Lets the signing steps skip cleanly (producing an unsigned build) until
       # the secrets exist, instead of failing the macOS job.
       HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_API_KEY_P8 != '' }}
+      # True only when the Azure Trusted Signing service-principal secrets exist.
+      # Same idea: the Windows signing step skips cleanly (unsigned build) until
+      # they're configured, so releases keep working in the meantime.
+      HAS_WINDOWS_SIGNING: ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_CLIENT_SECRET != '' && secrets.AZURE_TENANT_ID != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -194,6 +198,37 @@ jobs:
           printf '%s' "${{ secrets.APPLE_API_KEY_P8 }}" | base64 -D > "$RUNNER_TEMP/asc/AuthKey.p8"
           echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/asc/AuthKey.p8" >> "$GITHUB_ENV"
 
+      # Windows code signing via Azure Trusted Signing (cloud HSM — since June 2023
+      # all code-signing certs must live on FIPS hardware, so a .pfx-in-secrets
+      # approach is no longer possible). Install the signing CLI and inject a Tauri
+      # `signCommand`, so Tauri Authenticode-signs the app .exe AND the NSIS
+      # installer during the build (Azure applies an RFC3161 timestamp). Skipped
+      # cleanly when the Azure secrets are absent, so unsigned Windows builds keep
+      # shipping until Trusted Signing is set up. Endpoint/account/profile are not
+      # secret (repo Variables); auth is the service principal (AZURE_* secrets,
+      # passed to tauri-action's env below and inherited by the signCommand child).
+      - name: Configure Windows signing (Azure Trusted Signing)
+        if: ${{ matrix.os == 'windows' && env.HAS_WINDOWS_SIGNING == 'true' }}
+        shell: bash
+        env:
+          TS_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          TS_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          TS_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_PROFILE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TS_ENDPOINT}" ] || [ -z "${TS_ACCOUNT}" ] || [ -z "${TS_PROFILE}" ]; then
+            echo "::error::AZURE_TRUSTED_SIGNING_ENDPOINT/ACCOUNT/PROFILE repo Variables must be set when the Azure signing secrets exist."
+            exit 1
+          fi
+          cargo install trusted-signing-cli --locked
+          conf=packages/desktop/src-tauri/tauri.conf.json
+          tmp="$(mktemp)"
+          # Tauri replaces %1 with the path of each file it signs.
+          jq --arg cmd "trusted-signing-cli -e ${TS_ENDPOINT} -a ${TS_ACCOUNT} -c ${TS_PROFILE} %1" \
+            '.bundle.windows.signCommand = $cmd' "$conf" > "$tmp"
+          mv "$tmp" "$conf"
+          echo "Injected Windows signCommand (Azure Trusted Signing)."
+
       # tauri-action runs the Tauri build (which runs beforeBuildCommand: build
       # the frontend + bundle the sidecar — including this runner's native node +
       # better-sqlite3), then uploads the installers to the release for this tag.
@@ -230,6 +265,12 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          # Azure Trusted Signing auth (service principal). Consumed by the
+          # `trusted-signing-cli` invoked through Tauri's injected signCommand on
+          # the Windows runner via DefaultAzureCredential; empty/unused elsewhere.
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         with:
           projectPath: packages/desktop
           tagName: ${{ needs.version.outputs.tag }}
