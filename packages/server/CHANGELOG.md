@@ -1,5 +1,12 @@
 # @gtmgrid/server
 
+## 0.22.6
+
+### Patch Changes
+
+- @gtmgrid/engine@0.22.6
+- @gtmgrid/observability@0.22.6
+
 ## 0.22.5
 
 ### Patch Changes
