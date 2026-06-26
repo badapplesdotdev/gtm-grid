@@ -136,20 +136,42 @@ fn spawn_sidecar(app: &tauri::App) -> Option<(Child, Arc<Mutex<VecDeque<String>>
     // panic hook). Empty key when unconfigured — the sidecar no-ops on a falsy key.
     let (posthog_key, posthog_host) = posthog_config();
 
-    let mut child = match Command::new(&node)
+    let mut command = Command::new(&node);
+    command
         .arg(&server)
+        // Run with the sidecar dir as cwd (matches the smoke harness) so any
+        // relative resolution behaves identically to a direct boot.
+        .current_dir(&dir)
         .env("GTMGRID_PROJECT", std::env::var("GTMGRID_PROJECT").unwrap_or_else(|_| "default".into()))
         .env("GTMGRID_MCP_LAUNCHER", &launcher)
         .env("GTMGRID_EXT_DIR", dir.join("extensions"))
         .env("GTMGRID_POSTHOG_KEY", posthog_key)
         .env("GTMGRID_POSTHOG_HOST", posthog_host)
         .env("PATH", sidecar_path())
+        // stdin MUST be an explicit valid handle, not the default inherit: this
+        // shell is `windows_subsystem = "windows"`, so it has NO console and its
+        // STD_INPUT_HANDLE is null. The moment stdout/stderr are piped, Windows
+        // uses STARTF_USESTDHANDLES and CreateProcessW requires a valid handle for
+        // ALL THREE streams; inheriting the null stdin makes the spawn fail
+        // outright (ERROR_INVALID_HANDLE) — node never launches and the engine
+        // is "unreachable". Pointing stdin at the null device gives it a real
+        // handle. The server never reads stdin, so /dev/null (NUL) is correct.
+        .stdin(Stdio::null())
         // Pipe both streams: stderr feeds the crash-report tail, and draining
         // stdout stops a full pipe buffer from blocking the child.
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped());
+
+    // CREATE_NO_WINDOW: spawning a console app (node.exe) from this console-less
+    // GUI shell would otherwise pop a transient console window. No effect on unix.
+    #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = match command.spawn() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("gtmgrid: failed to spawn sidecar: {e}");
