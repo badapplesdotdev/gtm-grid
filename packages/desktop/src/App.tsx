@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, memo, lazy, Suspense, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { api, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource } from "./api";
+import { api, API_BASE, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource } from "./api";
 import { onActivateKey } from "./lib/utils";
 import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
@@ -1507,21 +1507,51 @@ export default function App() {
     // Re-runs when the error screen's Retry bumps `bootNonce` (fresh poll loop).
   }, [bootNonce]);
 
-  // Copy a small diagnostics blob a stuck user can paste into a support thread.
-  // The renderer can't see sidecar stderr (the shell captures that to PostHog),
-  // but app version + OS/UA + reachability state is enough to triage most reports.
-  const copyDiagnostics = useCallback(() => {
-    const blob = [
-      `GTM Grid ${(import.meta.env.VITE_APP_VERSION as string | undefined) ?? "(dev)"}`,
+  // Copy a diagnostics blob a stuck user can paste into a support thread. Beyond
+  // the renderer-visible facts (real version via __APP_VERSION__ — NOT the
+  // long-broken import.meta.env.VITE_APP_VERSION, which always read "(dev)"; OS/UA;
+  // reachability), it pulls the Tauri shell's `sidecar_diagnostics`: the engine's
+  // spawn outcome, resolved paths, exit code and its OWN captured stderr — i.e. the
+  // actual crash. That's the part telemetry never delivered from some Windows
+  // boxes, so this turns the next paste into a root cause instead of a guess.
+  const copyDiagnostics = useCallback(async () => {
+    const lines: (string | null)[] = [
+      `GTM Grid ${__APP_VERSION__}`,
       `platform: ${navigator.platform}`,
       `userAgent: ${navigator.userAgent}`,
-      `engine: unreachable (http://127.0.0.1:8787)`,
+      `engine: ${healthStatus === "connected" ? "connected" : `unreachable (${API_BASE})`}`,
       `time: ${new Date().toISOString()}`,
-    ].join("\n");
+    ];
+    // Best-effort — absent on web/dev (no Tauri) or if the command isn't present
+    // in an older shell; the blob above still copies.
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const d = await invoke<Record<string, unknown>>("sidecar_diagnostics");
+      if (d && typeof d === "object") {
+        const s = (k: string) => (d[k] == null ? "" : String(d[k]));
+        const tail = s("stderrTail").trim();
+        lines.push(
+          "",
+          "── engine boot ──",
+          `os/arch: ${s("os")}/${s("arch")}`,
+          `spawn: ${s("spawnStatus")}`,
+          d.spawnError ? `spawnError: ${s("spawnError")}` : null,
+          d.exitCode != null || d.exitedAfterMs != null
+            ? `exit: code ${s("exitCode") || "?"} after ${s("exitedAfterMs") || "?"}ms`
+            : null,
+          d.nodePath ? `node: ${s("nodePath")} (exists=${s("nodeExists")})` : null,
+          d.serverPath ? `server: ${s("serverPath")} (exists=${s("serverExists")})` : null,
+          tail ? `engine stderr:\n${tail}` : "engine stderr: (none captured)",
+        );
+      }
+    } catch {
+      /* not Tauri / command unavailable — renderer-only diagnostics still copy */
+    }
+    const blob = lines.filter((l): l is string => l != null).join("\n");
     void navigator.clipboard?.writeText(blob);
     setCopiedDiagnostics(true);
     window.setTimeout(() => setCopiedDiagnostics(false), 2000);
-  }, []);
+  }, [healthStatus]);
 
   // ── Cloud project selection ──────────────
   // Open a cloud project and default to its first table once the tables load.

@@ -23,6 +23,27 @@ struct Sidecar {
     shutting_down: AtomicBool,
 }
 
+/// Self-reporting boot diagnostics the webview reads back via the
+/// `sidecar_diagnostics` command. `facts` is a JSON blob assembled during the
+/// spawn attempt (real app version, OS/arch, resolved node/server paths + whether
+/// they exist, the spawn outcome, and any early-exit code); `stderr_tail` is the
+/// engine's own captured stderr — i.e. the ACTUAL crash. Telemetry is silent on
+/// some Windows machines, so this lets a stuck user paste the real failure from
+/// "Copy diagnostics" instead of leaving us to guess.
+struct Diagnostics {
+    facts: Mutex<serde_json::Value>,
+    stderr_tail: Arc<Mutex<VecDeque<String>>>,
+}
+
+/// The result of a spawn attempt: the child (None on any failure), the live
+/// stderr tail, and the JSON facts blob — returned in EVERY branch (including
+/// failures) so the diagnostics command can explain a dead engine.
+struct Boot {
+    child: Option<Child>,
+    tail: Arc<Mutex<VecDeque<String>>>,
+    facts: serde_json::Value,
+}
+
 /// How many trailing stderr lines of the sidecar to keep for a crash report.
 const MAX_STDERR_LINES: usize = 40;
 /// A sidecar exit within this window of launch is "unexpected" (e.g. a native
@@ -113,21 +134,40 @@ fn sidecar_path() -> String {
 /// reports `sidecar_spawn_failed` to PostHog — previously they only `eprintln!`d
 /// to a stderr the packaged app (`windows_subsystem = "windows"`) discards, which
 /// is exactly why a Windows user's dead engine was invisible until they spoke up.
-fn spawn_sidecar(app: &tauri::App) -> Option<(Child, Arc<Mutex<VecDeque<String>>>)> {
+fn spawn_sidecar(app: &tauri::App) -> Boot {
+    // An empty tail exists from the start so every (incl. failure) branch can
+    // return one; the reader thread fills it once the child is spawned.
+    let tail = Arc::new(Mutex::new(VecDeque::<String>::with_capacity(MAX_STDERR_LINES)));
+    // Base facts every branch carries: the REAL installed version (authoritative,
+    // unlike the renderer's build-time define) + the OS/arch the engine must run on.
+    let mut facts = serde_json::json!({
+        "appVersion": app.package_info().version.to_string(),
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "spawnStatus": "pending",
+    });
+
     let dir = match sidecar_dir(app) {
         Some(d) => d,
         None => {
+            facts["spawnStatus"] = "dir_missing".into();
             report_sidecar_failure("dir_missing", "resource dir unavailable");
-            return None;
+            return Boot { child: None, tail, facts };
         }
     };
     let node = dir.join(node_binary_name());
     let server = dir.join("server.mjs");
     let launcher = dir.join("gtmgrid-mcp");
+    facts["sidecarDir"] = dir.to_string_lossy().into_owned().into();
+    facts["nodePath"] = node.to_string_lossy().into_owned().into();
+    facts["nodeExists"] = node.exists().into();
+    facts["serverPath"] = server.to_string_lossy().into_owned().into();
+    facts["serverExists"] = server.exists().into();
     if !node.exists() || !server.exists() {
         eprintln!("gtmgrid: bundled sidecar not found at {:?}", dir);
+        facts["spawnStatus"] = "binary_missing".into();
         report_sidecar_failure("binary_missing", &format!("missing node/server in {dir:?}"));
-        return None;
+        return Boot { child: None, tail, facts };
     }
     make_executable(&node);
     make_executable(&launcher);
@@ -175,12 +215,14 @@ fn spawn_sidecar(app: &tauri::App) -> Option<(Child, Arc<Mutex<VecDeque<String>>
         Ok(c) => c,
         Err(e) => {
             eprintln!("gtmgrid: failed to spawn sidecar: {e}");
+            facts["spawnStatus"] = "spawn_error".into();
+            facts["spawnError"] = e.to_string().into();
             report_sidecar_failure("spawn_error", &e.to_string());
-            return None;
+            return Boot { child: None, tail, facts };
         }
     };
+    facts["spawnStatus"] = "spawned".into();
 
-    let tail = Arc::new(Mutex::new(VecDeque::<String>::with_capacity(MAX_STDERR_LINES)));
     if let Some(stderr) = child.stderr.take() {
         let tail = tail.clone();
         std::thread::spawn(move || {
@@ -203,7 +245,7 @@ fn spawn_sidecar(app: &tauri::App) -> Option<(Child, Arc<Mutex<VecDeque<String>>
         });
     }
 
-    Some((child, tail))
+    Boot { child: Some(child), tail, facts }
 }
 
 /// Watch the sidecar for an unexpected early exit (e.g. a native module that
@@ -211,7 +253,7 @@ fn spawn_sidecar(app: &tauri::App) -> Option<(Child, Arc<Mutex<VecDeque<String>>
 /// the UI just spins on "Server not reachable". Reports `sidecar_exited` with the
 /// exit code + stderr tail, but only for exits inside `EARLY_EXIT_WINDOW` and not
 /// during shutdown, so normal teardown is never reported as a crash.
-fn monitor_sidecar(handle: tauri::AppHandle, tail: Arc<Mutex<VecDeque<String>>>) {
+fn monitor_sidecar(handle: tauri::AppHandle) {
     let started = Instant::now();
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_millis(750));
@@ -237,7 +279,19 @@ fn monitor_sidecar(handle: tauri::AppHandle, tail: Arc<Mutex<VecDeque<String>>>)
             if uptime < EARLY_EXIT_WINDOW && !state.shutting_down.load(Ordering::SeqCst) {
                 // Give the stderr reader a beat to drain the final lines.
                 std::thread::sleep(Duration::from_millis(250));
-                let stderr_tail = state_stderr_tail(&tail);
+                let stderr_tail = handle
+                    .try_state::<Diagnostics>()
+                    .map(|d| state_stderr_tail(&d.stderr_tail))
+                    .unwrap_or_default();
+                // Record the crash in the diagnostics facts so "Copy diagnostics"
+                // shows the engine exited (and with what code), not just "spawned".
+                if let Some(diag) = handle.try_state::<Diagnostics>() {
+                    if let Ok(mut facts) = diag.facts.lock() {
+                        facts["spawnStatus"] = "exited".into();
+                        facts["exitCode"] = serde_json::json!(status.code());
+                        facts["exitedAfterMs"] = serde_json::json!(uptime.as_millis() as u64);
+                    }
+                }
                 report_sidecar_exit(status.code(), uptime, &stderr_tail);
             }
             return;
@@ -366,6 +420,20 @@ fn install_panic_hook() {
     }));
 }
 
+/// Hand the webview the engine's boot facts + captured stderr so "Copy
+/// diagnostics" self-reports a dead engine (the renderer can't otherwise see any
+/// of this). Read live so a crash that lands after launch is still reflected.
+#[tauri::command]
+fn sidecar_diagnostics(diag: tauri::State<Diagnostics>) -> serde_json::Value {
+    let mut out = diag
+        .facts
+        .lock()
+        .map(|f| f.clone())
+        .unwrap_or_else(|_| serde_json::json!({ "spawnStatus": "unknown" }));
+    out["stderrTail"] = state_stderr_tail(&diag.stderr_tail).into();
+    out
+}
+
 fn main() {
     // Surface shell panics to PostHog before anything else can crash.
     install_panic_hook();
@@ -389,19 +457,25 @@ fn main() {
         // process plugin so the frontend can relaunch after installing.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .invoke_handler(tauri::generate_handler![sidecar_diagnostics])
         .setup(|app| {
-            let (child, stderr_tail) = match spawn_sidecar(app) {
-                Some((c, t)) => (Some(c), Some(t)),
-                None => (None, None),
-            };
+            let boot = spawn_sidecar(app);
+            let has_child = boot.child.is_some();
             app.manage(Sidecar {
-                child: Mutex::new(child),
+                child: Mutex::new(boot.child),
                 shutting_down: AtomicBool::new(false),
+            });
+            // Keep the boot facts + live stderr tail reachable from the
+            // `sidecar_diagnostics` command (managed even on spawn failure, so the
+            // failure reason is itself reportable).
+            app.manage(Diagnostics {
+                facts: Mutex::new(boot.facts),
+                stderr_tail: boot.tail,
             });
             // Watch for an unexpected early exit so a crashing engine is reported,
             // not just left spinning behind the "Server not reachable" banner.
-            if let Some(tail) = stderr_tail {
-                monitor_sidecar(app.handle().clone(), tail);
+            if has_child {
+                monitor_sidecar(app.handle().clone());
             }
 
             // Warm deep links (app already running): emit each incoming URL to
