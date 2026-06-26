@@ -31,6 +31,7 @@ import {
 import { fireConfetti } from "./cloud/confetti";
 import { useUpdateCheck } from "./useUpdateCheck";
 import { changelogNotes } from "./changelog";
+import { capture } from "./analytics";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./components/ui/tooltip";
 import {
   buildNotifications,
@@ -883,6 +884,11 @@ function ChangelogDialog({
 export default function App() {
   // Health (the execution sidecar liveness).
   const [healthStatus, setHealthStatus] = useState<"loading" | "connected" | "offline">("loading");
+  // `true` once the engine has stayed unreachable past the normal cold-start
+  // window — i.e. a real problem, not a transient boot delay. Drives the banner's
+  // escalation from a calm "starting…" note to an actionable recovery message.
+  const [serverStuck, setServerStuck] = useState(false);
+  const [copiedDiagnostics, setCopiedDiagnostics] = useState(false);
 
   // Tables (cloud-backed). Inline-rename draft state for the sidebar rows.
   const [renamingTableId, setRenamingTableId] = useState<string | null>(null);
@@ -1431,12 +1437,28 @@ export default function App() {
     let timer: ReturnType<typeof setTimeout>;
     // The sidecar has a cold-start delay when the app launches, so poll until
     // it's reachable instead of giving up on the first failed check.
+    const bootStart = performance.now();
+    let attempts = 0;
+    let unreachableReported = false; // emit `server_unreachable` at most once/boot
+    let readyReported = false;
+    // Grace period before a still-offline engine is treated as a real failure
+    // (vs. a normal cold start). Comfortably exceeds the sidecar's boot time.
+    const STUCK_AFTER_MS = 8000;
     const boot = async () => {
+      attempts += 1;
       try {
         // `health` is the liveness contract — gate connected/offline on it ALONE.
         await api.health();
         if (cancelled) return;
         setHealthStatus("connected");
+        setServerStuck(false);
+        if (!readyReported) {
+          readyReported = true;
+          capture("server_ready", {
+            cold_start_ms: Math.round(performance.now() - bootStart),
+            attempts,
+          });
+        }
         // Load engine metadata resiliently: a single missing/failed route (e.g. a
         // version-skewed sidecar lacking a newer endpoint) must degrade that one
         // feature, never blank the whole app with "server not reachable". (Tables
@@ -1455,6 +1477,17 @@ export default function App() {
       } catch {
         if (cancelled) return;
         setHealthStatus("offline");
+        const waited = performance.now() - bootStart;
+        // Past the grace period this is a genuine failure, not a cold start:
+        // escalate the banner and emit ONE remote signal so a sidecar that never
+        // comes up is visible in PostHog (and alertable) without a Discord report.
+        if (waited >= STUCK_AFTER_MS) {
+          setServerStuck(true);
+          if (!unreachableReported) {
+            unreachableReported = true;
+            capture("server_unreachable", { waited_ms: Math.round(waited), attempts });
+          }
+        }
         timer = setTimeout(boot, 1500); // retry — server is probably still booting
       }
     };
@@ -1463,6 +1496,22 @@ export default function App() {
       cancelled = true;
       clearTimeout(timer);
     };
+  }, []);
+
+  // Copy a small diagnostics blob a stuck user can paste into a support thread.
+  // The renderer can't see sidecar stderr (the shell captures that to PostHog),
+  // but app version + OS/UA + reachability state is enough to triage most reports.
+  const copyDiagnostics = useCallback(() => {
+    const blob = [
+      `GTM Grid ${(import.meta.env.VITE_APP_VERSION as string | undefined) ?? "(dev)"}`,
+      `platform: ${navigator.platform}`,
+      `userAgent: ${navigator.userAgent}`,
+      `engine: unreachable (http://localhost:8787)`,
+      `time: ${new Date().toISOString()}`,
+    ].join("\n");
+    void navigator.clipboard?.writeText(blob);
+    setCopiedDiagnostics(true);
+    window.setTimeout(() => setCopiedDiagnostics(false), 2000);
   }, []);
 
   // ── Cloud project selection ──────────────
@@ -2537,10 +2586,32 @@ export default function App() {
       <div className="main" id="main-content" tabIndex={-1}>
 
         {healthStatus === "offline" && (
-          <div className="offline-banner">
+          <div className={`offline-banner${serverStuck ? "" : " offline-banner--starting"}`}>
             <Icon.Zap />
-            Server not reachable — start it with{" "}
-            <code>pnpm --filter @gtmgrid/server dev</code>
+            {import.meta.env.DEV ? (
+              // Dev builds run the engine as a separate `pnpm` process, so the
+              // command is the actual fix. Packaged builds bundle + auto-spawn it.
+              <>
+                Server not reachable — start it with{" "}
+                <code>pnpm --filter @gtmgrid/server dev</code>
+              </>
+            ) : !serverStuck ? (
+              // Normal cold start: the bundled engine spawns + reconnects on its
+              // own, so just reassure rather than alarm. Usually clears in ~1–2s.
+              <>Starting the local engine…</>
+            ) : (
+              // Sustained failure: the engine genuinely isn't coming up. Give a
+              // real, non-technical recovery path — never a dev command.
+              <>
+                <span style={{ flex: 1 }}>
+                  Can’t reach the local engine. Restarting GTM Grid usually fixes
+                  this — if it keeps happening, send us the diagnostics.
+                </span>
+                <button type="button" className="offline-banner-action" onClick={copyDiagnostics}>
+                  {copiedDiagnostics ? "Copied ✓" : "Copy diagnostics"}
+                </button>
+              </>
+            )}
           </div>
         )}
 

@@ -5,13 +5,29 @@
 // runs without any dev toolchain installed.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::collections::VecDeque;
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
-use std::process::{Child, Command};
-use std::sync::Mutex;
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
 
-struct Sidecar(Mutex<Option<Child>>);
+/// The bundled engine child + the flag the window-destroy handler sets before it
+/// kills the child, so the liveness monitor can tell a deliberate shutdown apart
+/// from an unexpected crash and not report the former as an error.
+struct Sidecar {
+    child: Mutex<Option<Child>>,
+    shutting_down: AtomicBool,
+}
+
+/// How many trailing stderr lines of the sidecar to keep for a crash report.
+const MAX_STDERR_LINES: usize = 40;
+/// A sidecar exit within this window of launch is "unexpected" (e.g. a native
+/// module failing to load); a later exit is normal app-shutdown teardown.
+const EARLY_EXIT_WINDOW: Duration = Duration::from_secs(30);
 
 /// Tauri event the webview listens for to complete the desktop OAuth flow: the
 /// payload is the incoming `gtmgrid://auth/callback?code=…` URL string. Emitted
@@ -92,13 +108,25 @@ fn sidecar_path() -> String {
     std::env::var("PATH").unwrap_or_default()
 }
 
-fn spawn_sidecar(app: &tauri::App) -> Option<Child> {
-    let dir = sidecar_dir(app)?;
+/// Spawn the bundled engine. Returns the child plus a rolling tail of its stderr
+/// (so an early crash can be reported with the actual error). Every failure path
+/// reports `sidecar_spawn_failed` to PostHog — previously they only `eprintln!`d
+/// to a stderr the packaged app (`windows_subsystem = "windows"`) discards, which
+/// is exactly why a Windows user's dead engine was invisible until they spoke up.
+fn spawn_sidecar(app: &tauri::App) -> Option<(Child, Arc<Mutex<VecDeque<String>>>)> {
+    let dir = match sidecar_dir(app) {
+        Some(d) => d,
+        None => {
+            report_sidecar_failure("dir_missing", "resource dir unavailable");
+            return None;
+        }
+    };
     let node = dir.join(node_binary_name());
     let server = dir.join("server.mjs");
     let launcher = dir.join("gtmgrid-mcp");
     if !node.exists() || !server.exists() {
         eprintln!("gtmgrid: bundled sidecar not found at {:?}", dir);
+        report_sidecar_failure("binary_missing", &format!("missing node/server in {dir:?}"));
         return None;
     }
     make_executable(&node);
@@ -108,7 +136,7 @@ fn spawn_sidecar(app: &tauri::App) -> Option<Child> {
     // panic hook). Empty key when unconfigured — the sidecar no-ops on a falsy key.
     let (posthog_key, posthog_host) = posthog_config();
 
-    Command::new(&node)
+    let mut child = match Command::new(&node)
         .arg(&server)
         .env("GTMGRID_PROJECT", std::env::var("GTMGRID_PROJECT").unwrap_or_else(|_| "default".into()))
         .env("GTMGRID_MCP_LAUNCHER", &launcher)
@@ -116,9 +144,90 @@ fn spawn_sidecar(app: &tauri::App) -> Option<Child> {
         .env("GTMGRID_POSTHOG_KEY", posthog_key)
         .env("GTMGRID_POSTHOG_HOST", posthog_host)
         .env("PATH", sidecar_path())
+        // Pipe both streams: stderr feeds the crash-report tail, and draining
+        // stdout stops a full pipe buffer from blocking the child.
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| eprintln!("gtmgrid: failed to spawn sidecar: {e}"))
-        .ok()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("gtmgrid: failed to spawn sidecar: {e}");
+            report_sidecar_failure("spawn_error", &e.to_string());
+            return None;
+        }
+    };
+
+    let tail = Arc::new(Mutex::new(VecDeque::<String>::with_capacity(MAX_STDERR_LINES)));
+    if let Some(stderr) = child.stderr.take() {
+        let tail = tail.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                eprintln!("[sidecar] {line}");
+                if let Ok(mut buf) = tail.lock() {
+                    if buf.len() == MAX_STDERR_LINES {
+                        buf.pop_front();
+                    }
+                    buf.push_back(line);
+                }
+            }
+        });
+    }
+    if let Some(stdout) = child.stdout.take() {
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                eprintln!("[sidecar] {line}");
+            }
+        });
+    }
+
+    Some((child, tail))
+}
+
+/// Watch the sidecar for an unexpected early exit (e.g. a native module that
+/// won't load on the user's OS/arch). Without this the child dies silently and
+/// the UI just spins on "Server not reachable". Reports `sidecar_exited` with the
+/// exit code + stderr tail, but only for exits inside `EARLY_EXIT_WINDOW` and not
+/// during shutdown, so normal teardown is never reported as a crash.
+fn monitor_sidecar(handle: tauri::AppHandle, tail: Arc<Mutex<VecDeque<String>>>) {
+    let started = Instant::now();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(750));
+        let state = match handle.try_state::<Sidecar>() {
+            Some(s) => s,
+            None => return,
+        };
+        if state.shutting_down.load(Ordering::SeqCst) {
+            return;
+        }
+        let status = {
+            let mut guard = match state.child.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            match guard.as_mut() {
+                Some(child) => child.try_wait().ok().flatten(),
+                None => return,
+            }
+        };
+        if let Some(status) = status {
+            let uptime = started.elapsed();
+            if uptime < EARLY_EXIT_WINDOW && !state.shutting_down.load(Ordering::SeqCst) {
+                // Give the stderr reader a beat to drain the final lines.
+                std::thread::sleep(Duration::from_millis(250));
+                let stderr_tail = state_stderr_tail(&tail);
+                report_sidecar_exit(status.code(), uptime, &stderr_tail);
+            }
+            return;
+        }
+    });
+}
+
+/// Join the captured stderr tail into a single string for a crash report.
+fn state_stderr_tail(tail: &Arc<Mutex<VecDeque<String>>>) -> String {
+    tail.lock()
+        .map(|buf| buf.iter().cloned().collect::<Vec<_>>().join("\n"))
+        .unwrap_or_default()
 }
 
 /// Resolve the PostHog key + host for the desktop shell + sidecar: a runtime
@@ -135,6 +244,68 @@ fn posthog_config() -> (String, String) {
         .or_else(|| option_env!("GTMGRID_POSTHOG_HOST").map(str::to_string))
         .unwrap_or_else(|| "https://us.i.posthog.com".into());
     (key, host)
+}
+
+/// Blocking POST of one event envelope to PostHog's ingest endpoint. Best-effort:
+/// a network error / missing key is swallowed. Shared by the panic hook (which
+/// must post synchronously before the process unwinds) and `posthog_capture`.
+fn post_event(key: &str, host: &str, body: &serde_json::Value) {
+    if key.is_empty() {
+        return;
+    }
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(3))
+        .build();
+    let _ = agent
+        .post(&format!("{}/i/v0/e/", host.trim_end_matches('/')))
+        .set("Content-Type", "application/json")
+        .send_string(&body.to_string());
+}
+
+/// Fire-and-forget capture of a shell lifecycle event, enriched with the common
+/// triage context (OS / arch / app version) so a failure is filterable by platform
+/// — the whole point of this instrumentation. Runs on a detached thread so it
+/// never blocks startup. `distinct_id` is the shared "desktop-shell" pseudo-person
+/// (the shell has no signed-in user; the renderer emits user-scoped health events).
+fn posthog_capture(event: &'static str, mut properties: serde_json::Value) {
+    let (key, host) = posthog_config();
+    if key.is_empty() {
+        return;
+    }
+    if let Some(obj) = properties.as_object_mut() {
+        obj.insert("platform".into(), serde_json::json!(std::env::consts::OS));
+        obj.insert("arch".into(), serde_json::json!(std::env::consts::ARCH));
+        obj.insert("version".into(), serde_json::json!(env!("CARGO_PKG_VERSION")));
+        obj.insert("source".into(), serde_json::json!("tauri-shell"));
+    }
+    let body = serde_json::json!({
+        "api_key": key,
+        "event": event,
+        "distinct_id": "desktop-shell",
+        "properties": properties,
+    });
+    std::thread::spawn(move || post_event(&key, &host, &body));
+}
+
+/// The shell could not spawn the engine at all. `reason` is one of `dir_missing`,
+/// `binary_missing`, `spawn_error`.
+fn report_sidecar_failure(reason: &'static str, detail: &str) {
+    posthog_capture(
+        "sidecar_spawn_failed",
+        serde_json::json!({ "reason": reason, "detail": detail }),
+    );
+}
+
+/// The engine exited unexpectedly soon after launch (carries the stderr tail).
+fn report_sidecar_exit(code: Option<i32>, uptime: Duration, stderr_tail: &str) {
+    posthog_capture(
+        "sidecar_exited",
+        serde_json::json!({
+            "code": code,
+            "uptime_ms": uptime.as_millis() as u64,
+            "stderr_tail": stderr_tail,
+        }),
+    );
 }
 
 /// Report shell panics to PostHog Error Tracking, then delegate to the default
@@ -167,13 +338,9 @@ fn install_panic_hook() {
                 "location": location,
             }
         });
-        let agent = ureq::AgentBuilder::new()
-            .timeout(std::time::Duration::from_secs(3))
-            .build();
-        let _ = agent
-            .post(&format!("{}/i/v0/e/", host.trim_end_matches('/')))
-            .set("Content-Type", "application/json")
-            .send_string(&body.to_string());
+        // Synchronous: the process is unwinding, so a detached thread might not
+        // get scheduled before it exits.
+        post_event(&key, &host, &body);
     }));
 }
 
@@ -201,8 +368,19 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            let child = spawn_sidecar(app);
-            app.manage(Sidecar(Mutex::new(child)));
+            let (child, stderr_tail) = match spawn_sidecar(app) {
+                Some((c, t)) => (Some(c), Some(t)),
+                None => (None, None),
+            };
+            app.manage(Sidecar {
+                child: Mutex::new(child),
+                shutting_down: AtomicBool::new(false),
+            });
+            // Watch for an unexpected early exit so a crashing engine is reported,
+            // not just left spinning behind the "Server not reachable" banner.
+            if let Some(tail) = stderr_tail {
+                monitor_sidecar(app.handle().clone(), tail);
+            }
 
             // Warm deep links (app already running): emit each incoming URL to
             // the webview so the OAuth listener can complete the session.
@@ -226,7 +404,10 @@ fn main() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 if let Some(state) = window.app_handle().try_state::<Sidecar>() {
-                    if let Ok(mut guard) = state.0.lock() {
+                    // Flag shutdown FIRST so the liveness monitor treats the kill
+                    // below as intentional, not a crash to report.
+                    state.shutting_down.store(true, Ordering::SeqCst);
+                    if let Ok(mut guard) = state.child.lock() {
                         if let Some(child) = guard.as_mut() {
                             let _ = child.kill();
                         }

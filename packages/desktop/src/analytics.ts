@@ -57,6 +57,15 @@ export function initAnalytics(): void {
       maskAllInputs: true,
     },
   });
+  // Super-properties attached to EVERY desktop event. There is no built-in
+  // discriminator between the desktop (Tauri) and web (`apps/web`) surfaces —
+  // they share one PostHog project and one identified person — so register an
+  // explicit `platform` + `app_version` to make desktop-only filtering, the
+  // desktop health dashboard, and version-scoped regression alerts possible.
+  posthog.register({
+    platform: "desktop",
+    app_version: (import.meta.env.VITE_APP_VERSION as string | undefined) ?? null,
+  });
 }
 
 /** Typed product-event capture against the shared catalog. No-ops when disabled. */
