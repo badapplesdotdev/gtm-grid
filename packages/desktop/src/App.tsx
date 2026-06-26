@@ -1515,7 +1515,7 @@ export default function App() {
       `GTM Grid ${(import.meta.env.VITE_APP_VERSION as string | undefined) ?? "(dev)"}`,
       `platform: ${navigator.platform}`,
       `userAgent: ${navigator.userAgent}`,
-      `engine: unreachable (http://localhost:8787)`,
+      `engine: unreachable (http://127.0.0.1:8787)`,
       `time: ${new Date().toISOString()}`,
     ].join("\n");
     void navigator.clipboard?.writeText(blob);

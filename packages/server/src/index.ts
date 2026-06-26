@@ -42,7 +42,7 @@ import { runCloudColumn, previewCloudColumn, defaultCloudRunDeps } from "./cloud
 import { requiredInputKeys, resolveOptionArgs } from "./option-args.js";
 import { corsHeadersFor, isLoopbackHost, isOriginAllowed } from "./cors.js";
 import { Semaphore } from "./semaphore.js";
-import { captureException, flushObservability, installProcessHandlers, log } from "./observability.js";
+import { captureException, captureServerEvent, flushObservability, installProcessHandlers, log } from "./observability.js";
 
 // Install last-gasp crash handlers ASAP so an error during boot/init is reported.
 installProcessHandlers();
@@ -1056,6 +1056,17 @@ server.on("error", (err: NodeJS.ErrnoException) => {
 
 server.listen(PORT, HOST, () => {
   console.error(`gtmgrid server on http://${HOST}:${PORT} (project: )`);
+  // Boot-success signal over posthog-node — the only desktop telemetry channel
+  // that delivers from packaged builds (the renderer's posthog-js is blocked by
+  // the Tauri webview origin, and the Rust shell only reports failures). Tagged
+  // with platform/arch so we can see whether the sidecar actually boots per OS —
+  // the missing signal that left a Windows "engine unreachable" invisible.
+  captureServerEvent("sidecar_listening", {
+    platform: process.platform,
+    arch: process.arch,
+    node: process.versions.node,
+    port: PORT,
+  });
 });
 
 // NOTE: the LOCAL desktop does NOT run a recurring poller — a social-signal table
