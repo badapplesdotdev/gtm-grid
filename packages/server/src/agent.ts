@@ -4,11 +4,11 @@
 // This is the Revcode "connect your Claude Code / Codex" mechanism: no OAuth,
 // no key storage — the app drives the CLI the user already logged into.
 
-import { spawn, execFile, execFileSync } from "node:child_process";
+import { spawn, execFile, execFileSync, execSync, type SpawnOptions, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, chmodSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import type { ServerResponse } from "node:http";
-import { join, dirname } from "node:path";
+import { join, dirname, delimiter, extname } from "node:path";
 import { corsHeadersFor } from "./cors.js";
 import { latestSessionId } from "./agent-history.js";
 
@@ -320,6 +320,31 @@ export type AgentKind = "claude" | "codex" | "cursor";
 // probing and scanning all go through this so a kind never has to equal its bin.
 const AGENT_BIN: Record<AgentKind, string> = { claude: "claude", codex: "codex", cursor: "cursor-agent" };
 
+const isWindows = process.platform === "win32";
+
+// On Windows a CLI on PATH is one of several files. The native installers (the
+// recommended path for all three: claude.exe in %USERPROFILE%\.local\bin, the
+// codex.exe Rust binary, cursor-agent) ship a real `.exe` that Node can spawn
+// directly. An `npm i -g` install instead drops cmd-shims (`<bin>.cmd`/`.ps1`)
+// in %APPDATA%\npm. We must (a) try every extension and (b) PREFER the `.exe`,
+// because a `.cmd`/`.bat` shim cannot be launched by spawn/execFile without a
+// shell (EINVAL since the CVE-2024-27980 patch in Node ≥18.20.2). `.ps1` is
+// never selected over `.cmd` since cmd.exe can't run it.
+function binCandidates(kind: AgentKind): string[] {
+  const base = AGENT_BIN[kind];
+  if (!isWindows) return [base];
+  return [".exe", ".cmd", ".bat", ""].map((ext) => base + ext);
+}
+
+// A resolved `.cmd`/`.bat` shim needs a shell to run (see above); a bare `.exe`
+// (or any POSIX binary) is spawned directly. `.ps1` would need PowerShell, which
+// we avoid by never preferring it over `.cmd`.
+function needsShell(binPath: string): boolean {
+  if (!isWindows) return false;
+  const ext = extname(binPath).toLowerCase();
+  return ext === ".cmd" || ext === ".bat";
+}
+
 // ── Locating the user's CLIs ──────────────────────────────────────────────
 // GUI apps launch with a minimal PATH and version managers (nvm) only set up
 // their PATH in *interactive* shells. So we resolve the binary three ways:
@@ -349,6 +374,10 @@ export function setAgentPath(kind: AgentKind, path: string | null): void {
 
 let cachedLoginPath: string | null | undefined;
 function loginPath(): string {
+  // Windows GUI apps inherit the full user+system PATH (no interactive-shell
+  // dance like nvm on macOS), and there's no POSIX login shell to query — so the
+  // sniff below is macOS/Linux only.
+  if (isWindows) return "";
   if (cachedLoginPath === undefined) {
     const shell = process.env.SHELL || "/bin/zsh";
     cachedLoginPath = (() => {
@@ -370,6 +399,18 @@ function loginPath(): string {
 /** Common install locations, including all nvm node versions. */
 function candidateDirs(): string[] {
   const home = homedir();
+  if (isWindows) {
+    // Documented Windows install targets:
+    //  - %USERPROFILE%\.local\bin → native installers (claude.exe, cursor-agent)
+    //  - %APPDATA%\npm            → `npm i -g` cmd-shims (claude.cmd, codex.cmd…)
+    //  - %LOCALAPPDATA%\Microsoft\WinGet\Links → winget shims (codex via winget)
+    // The native-installer dir is frequently NOT on PATH (a known claude-code
+    // issue), which is exactly why the `where` lookup alone misses it.
+    const dirs = [join(home, ".local", "bin")];
+    if (process.env.APPDATA) dirs.push(join(process.env.APPDATA, "npm"));
+    if (process.env.LOCALAPPDATA) dirs.push(join(process.env.LOCALAPPDATA, "Microsoft", "WinGet", "Links"));
+    return dirs;
+  }
   const dirs = ["/opt/homebrew/bin", "/usr/local/bin", join(home, ".local/bin"), join(home, ".npm-global/bin"), join(home, "Library/pnpm")];
   const nvm = join(home, ".nvm/versions/node");
   try {
@@ -380,7 +421,45 @@ function candidateDirs(): string[] {
   return dirs;
 }
 
-/** Resolve a CLI's absolute path (override → login shell → common dirs). */
+/** macOS/Linux: resolve via the user's interactive login shell (picks up nvm &
+ *  friends, whose PATH only exists in interactive shells). */
+function whichPosix(bin: string): string | null {
+  const shell = process.env.SHELL || "/bin/zsh";
+  try {
+    const out = execFileSync(shell, ["-lic", `command -v ${bin} 2>/dev/null`], {
+      encoding: "utf8",
+      timeout: 6000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return out.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("/") && existsSync(l))[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Windows: resolve via `where.exe`, which searches PATH (and applies PATHEXT).
+ *  We probe each ext-qualified name in preference order so an `.exe` wins over a
+ *  `.cmd` shim. `windowsHide` keeps a console window from flashing. */
+function whichWindows(names: string[]): string | null {
+  for (const name of names) {
+    if (!name) continue; // skip the bare "" entry; PATHEXT handles extensionless lookup
+    try {
+      const out = execFileSync("where", [name], {
+        encoding: "utf8",
+        timeout: 6000,
+        stdio: ["ignore", "pipe", "ignore"],
+        windowsHide: true,
+      });
+      const hit = out.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && existsSync(l))[0];
+      if (hit) return hit;
+    } catch {
+      /* not on PATH under this name — try the next */
+    }
+  }
+  return null;
+}
+
+/** Resolve a CLI's absolute path (override → PATH lookup → common dirs). */
 export function resolveAgentPath(kind: AgentKind): string | null {
   if (resolveCache[kind] !== undefined) return resolveCache[kind]!;
   let found: string | null = null;
@@ -388,26 +467,17 @@ export function resolveAgentPath(kind: AgentKind): string | null {
   if (override && existsSync(override)) {
     found = override;
   } else {
-    const bin = AGENT_BIN[kind];
-    // interactive login shell (matches the user's terminal)
-    const shell = process.env.SHELL || "/bin/zsh";
-    try {
-      const out = execFileSync(shell, ["-lic", `command -v ${bin} 2>/dev/null`], {
-        encoding: "utf8",
-        timeout: 6000,
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      const p = out.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("/") && existsSync(l))[0];
-      if (p) found = p;
-    } catch {
-      /* fall through to scan */
-    }
+    const names = binCandidates(kind);
+    found = isWindows ? whichWindows(names) : whichPosix(AGENT_BIN[kind]);
     if (!found) {
-      for (const dir of candidateDirs()) {
-        const p = join(dir, bin);
-        if (existsSync(p)) {
-          found = p;
-          break;
+      scan: for (const dir of candidateDirs()) {
+        for (const name of names) {
+          if (!name) continue;
+          const p = join(dir, name);
+          if (existsSync(p)) {
+            found = p;
+            break scan;
+          }
         }
       }
     }
@@ -416,11 +486,31 @@ export function resolveAgentPath(kind: AgentKind): string | null {
   return found;
 }
 
+/** The PATH env-var key. Windows env names are case-insensitive but a plain
+ *  object spread is NOT, so reuse the existing key (usually `Path`) to avoid
+ *  ending up with both `Path` and `PATH` (ambiguous for the child). */
+const PATH_KEY = isWindows
+  ? (Object.keys(process.env).find((k) => k.toUpperCase() === "PATH") ?? "Path")
+  : "PATH";
+
 /** Environment for spawning an agent: PATH includes the binary's dir (so its
  *  sibling `node` is found) plus the user's login PATH. */
 function agentSpawnEnv(binPath: string): NodeJS.ProcessEnv {
-  const parts = [dirname(binPath), loginPath(), process.env.PATH ?? ""].filter(Boolean);
-  return { ...process.env, PATH: parts.join(":") };
+  const parts = [dirname(binPath), loginPath(), process.env[PATH_KEY] ?? ""].filter(Boolean);
+  return { ...process.env, [PATH_KEY]: parts.join(delimiter) };
+}
+
+/** Spawn an agent CLI cross-platform. A Windows `.cmd`/`.bat` shim cannot be
+ *  launched without a shell (EINVAL), so route those through one; native `.exe`
+ *  / POSIX binaries spawn directly. `windowsHide` suppresses a console flash. */
+function spawnAgent(binPath: string, args: string[], opts: SpawnOptions): ChildProcessWithoutNullStreams {
+  // We never override stdio, so stdout/stderr/stdin are always piped (non-null);
+  // the cast restores the precise type `spawn` infers from a literal options arg.
+  if (needsShell(binPath)) {
+    // shell:true runs `cmd.exe /c "<bin>" <args>`; quote the path for spaces.
+    return spawn(`"${binPath}"`, args, { ...opts, shell: true, windowsHide: true }) as ChildProcessWithoutNullStreams;
+  }
+  return spawn(binPath, args, { ...opts, windowsHide: true }) as ChildProcessWithoutNullStreams;
 }
 
 function versionOf(kind: AgentKind): { installed: boolean; version: string | null; path: string | null } {
@@ -428,7 +518,12 @@ function versionOf(kind: AgentKind): { installed: boolean; version: string | nul
   if (!path) return { installed: false, version: null, path: null };
   try {
     // First line only — some CLIs print a multi-line report; claude/codex/cursor are single-line.
-    const v = execFileSync(path, ["--version"], { encoding: "utf8", timeout: 5000, env: agentSpawnEnv(path) }).split("\n")[0].trim();
+    const opts = { encoding: "utf8" as const, timeout: 5000, env: agentSpawnEnv(path), windowsHide: true };
+    // A `.cmd`/`.bat` shim needs a shell; `--version` has no spaces so quoting the path is enough.
+    const out = needsShell(path)
+      ? execSync(`"${path}" --version`, opts)
+      : execFileSync(path, ["--version"], opts);
+    const v = out.toString().split("\n")[0].trim();
     return { installed: true, version: v || null, path };
   } catch {
     return { installed: false, version: null, path };
@@ -831,7 +926,7 @@ export function streamClaude(
   // signal the WHOLE tree (CLI + MCP server + grandchildren) via `-pid` (TRI-3305).
   // Saved provider keys (TRIGIFY_API_KEY etc.) fill in UNDER process.env so an
   // explicitly exported var still wins; values never appear in args or logs.
-  const child = spawn(bin, args, { env: { ...opts.providerEnv, ...agentSpawnEnv(bin) }, cwd: opts.repoRoot, detached: true });
+  const child = spawnAgent(bin, args, { env: { ...opts.providerEnv, ...agentSpawnEnv(bin) }, cwd: opts.repoRoot, detached: true });
   child.stdin?.end(); // we pass the prompt via `-p`; close stdin so claude doesn't wait on it (the "no stdin data in 3s" warning)
   let sessionId = resumeId ?? null;
   let buf = "";
@@ -1009,7 +1104,7 @@ export function streamCodex(
   // `detached` → own process group, so cleanup can kill the CLI + the gtmgrid
   // MCP server + their subprocesses as one group, not just the codex parent.
   // Saved provider keys fill in UNDER process.env — an exported var still wins.
-  const child = spawn(bin, args, { env: { ...opts.providerEnv, ...agentSpawnEnv(bin) }, cwd: opts.repoRoot, detached: true });
+  const child = spawnAgent(bin, args, { env: { ...opts.providerEnv, ...agentSpawnEnv(bin) }, cwd: opts.repoRoot, detached: true });
   child.stdin?.end(); // codex exec otherwise waits on stdin
 
   let threadId = resumeThread ?? null;
@@ -1114,7 +1209,8 @@ function runClaudeOneShot(bin: string, prompt: string, system: string): Promise<
       "--mcp-config",
       '{"mcpServers":{}}',
     ];
-    execFile(bin, args, { env: agentSpawnEnv(bin), timeout: 90_000, maxBuffer: 8 << 20 }, (err, stdout, stderr) => {
+    // shell:true for a Windows .cmd/.bat shim (EINVAL otherwise); native .exe runs direct.
+    execFile(bin, args, { env: agentSpawnEnv(bin), timeout: 90_000, maxBuffer: 8 << 20, shell: needsShell(bin), windowsHide: true }, (err, stdout, stderr) => {
       const out = (stdout || "").trim();
       if (!out) {
         resolve({ error: `claude: ${(stderr || err?.message || "no output").trim().slice(0, 300)}` });
@@ -1138,7 +1234,7 @@ function runClaudeOneShot(bin: string, prompt: string, system: string): Promise<
 function runCodexOneShot(bin: string, prompt: string, system: string): Promise<{ text: string } | { error: string }> {
   return new Promise((resolve) => {
     const message = system ? `${system}\n\n${prompt}` : prompt;
-    const child = spawn(bin, ["exec", "--json", "--skip-git-repo-check", message], { env: agentSpawnEnv(bin) });
+    const child = spawnAgent(bin, ["exec", "--json", "--skip-git-repo-check", message], { env: agentSpawnEnv(bin) });
     child.stdin?.end();
     let buf = "";
     let last = "";
@@ -1275,7 +1371,7 @@ export function streamCursor(
   // `detached` → own process group, so cleanup can kill the CLI + the gtmgrid MCP
   // server + their subprocesses as one group (TRI-3305). Saved provider keys fill in
   // UNDER process.env so an explicitly exported var still wins.
-  const child = spawn(bin, args, { env: { ...opts.providerEnv, ...agentSpawnEnv(bin) }, cwd, detached: true });
+  const child = spawnAgent(bin, args, { env: { ...opts.providerEnv, ...agentSpawnEnv(bin) }, cwd, detached: true });
   child.stdin?.end(); // prompt is passed via `-p`; close stdin so it doesn't wait on it.
 
   let sessionId = resumeId ?? null;
