@@ -48,6 +48,53 @@ In the repo → Settings → Secrets and variables → Actions:
 
 Once all three **secrets** are present, the next release signs automatically.
 
+## Getting the values (fast path)
+
+### A. Signing resources → gives you the 3 **Variables** (portal)
+Identity validation is portal-only, so do this part in the portal.
+
+1. Portal → search **Trusted Signing** → **Create**.
+   - Resource group: `gtmgrid-signing` (new). Region: pick one near you, e.g.
+     **East US** or **West Europe**. Name: `gtmgrid-signing`. SKU: **Basic** is fine.
+   - → this name is **`AZURE_TRUSTED_SIGNING_ACCOUNT`**.
+2. Open the account → **Overview**. The **Account URI** (e.g.
+   `https://eus.codesigning.azure.net/`) is **`AZURE_TRUSTED_SIGNING_ENDPOINT`**.
+3. Left nav → **Identity validation** → start it.
+   - **Individual**: government-ID based, usually fast.
+   - **Organization**: requires the org to be 3+ years old; slower.
+4. Once validation succeeds → **Certificate profiles** → **Create**. Type
+   **Public Trust**. Give it a name, e.g. `gtmgrid-profile`.
+   - → this name is **`AZURE_TRUSTED_SIGNING_PROFILE`**.
+
+### B. CI credentials → gives you the 3 **Secrets** (one CLI command)
+```bash
+# Scope the signer role to the account you just made.
+SUB=$(az account show --query id -o tsv)
+az ad sp create-for-rbac \
+  --name "gtmgrid-trusted-signing-ci" \
+  --role "Trusted Signing Certificate Profile Signer" \
+  --scopes "/subscriptions/$SUB/resourceGroups/gtmgrid-signing/providers/Microsoft.CodeSigning/codeSigningAccounts/gtmgrid-signing"
+```
+The JSON it prints maps directly:
+- `tenant`   → **`AZURE_TENANT_ID`**
+- `appId`    → **`AZURE_CLIENT_ID`**
+- `password` → **`AZURE_CLIENT_SECRET`**  (shown once — copy it now)
+
+> No `az`? Install: `brew install azure-cli`, then `az login`.
+
+### C. Load all six into GitHub (run from the repo)
+```bash
+# Secrets
+gh secret set AZURE_TENANT_ID     --body "<tenant>"
+gh secret set AZURE_CLIENT_ID     --body "<appId>"
+gh secret set AZURE_CLIENT_SECRET --body "<password>"
+# Variables
+gh variable set AZURE_TRUSTED_SIGNING_ENDPOINT --body "https://eus.codesigning.azure.net/"
+gh variable set AZURE_TRUSTED_SIGNING_ACCOUNT  --body "gtmgrid-signing"
+gh variable set AZURE_TRUSTED_SIGNING_PROFILE  --body "gtmgrid-profile"
+```
+After this, the next release signs automatically (`HAS_WINDOWS_SIGNING` flips true).
+
 ## How it works in `release.yml`
 - `HAS_WINDOWS_SIGNING` is true only when the three Azure secrets exist.
 - On the Windows build job (and only then), the **Configure Windows signing** step
