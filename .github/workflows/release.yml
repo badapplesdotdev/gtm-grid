@@ -239,6 +239,19 @@ jobs:
           prerelease: false
           args: ${{ matrix.args }}
 
+      # Platform smoke test: boot the freshly-bundled sidecar (its copied node +
+      # server.mjs) and require /api/health. Guards against the bundled engine
+      # failing to load on a given OS/arch — e.g. the better-sqlite3 native binding
+      # — which is what left a Windows user stuck on "Server not reachable". Runs
+      # on the natively-built, ephemeral GitHub runners (Windows + Linux x64). A
+      # failure fails the build job, so `publish` (needs: build) never runs and the
+      # release stays a draft. macOS is excluded: the Intel target is cross-compiled
+      # to x64 (can't execute on the arm64 self-hosted runner) and the persistent
+      # mini risks port/state bleed between runs.
+      - name: Smoke-test bundled sidecar
+        if: ${{ matrix.os == 'windows' || matrix.os == 'linux' }}
+        run: node packages/desktop/scripts/smoke-sidecar.mjs
+
       # Package the DMG with hdiutil (NO Finder/AppleScript, unlike Tauri's
       # bundle_dmg.sh which times out on the self-hosted runner). The .app built
       # above is already signed + notarized + stapled; we wrap it in a compressed
