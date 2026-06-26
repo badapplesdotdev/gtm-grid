@@ -1,5 +1,13 @@
 # @gtmgrid/desktop
 
+## 0.22.7
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.22.7
+- @gtmgrid/cloud@0.22.7
+- @gtmgrid/services@0.22.7
+
 ## 0.22.6
 
 ### Patch Changes
