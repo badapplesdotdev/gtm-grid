@@ -75,9 +75,12 @@ const mb = (bytes: number): string => `${Math.round(bytes / 1_000_000)} MB`;
 
 /**
  * Fetch the latest GitHub release and resolve each platform's asset URL + size.
- * Cached for an hour (`revalidate`) so we don't hit the unauthenticated API
- * rate limit. Returns `null` if the release can't be fetched — callers fall back
- * to {@link ALL_RELEASES_URL}.
+ * Cached for a few minutes (`revalidate`) so a freshly-cut release reflects on the
+ * site within minutes WITHOUT a redeploy — the previous 1h window meant the download
+ * page lagged a full hour behind every release. The fetch is server-side and shared
+ * (Next dedupes by URL), so this is ~12 GitHub calls/hour — well under the 60/hr
+ * unauthenticated limit. Returns `null` if the release can't be fetched — callers
+ * fall back to {@link ALL_RELEASES_URL}.
  */
 export async function getLatestRelease(): Promise<LatestRelease | null> {
   try {
@@ -85,7 +88,7 @@ export async function getLatestRelease(): Promise<LatestRelease | null> {
       `https://api.github.com/repos/${RELEASE_REPO}/releases/latest`,
       {
         headers: { Accept: "application/vnd.github+json" },
-        next: { revalidate: 3600 },
+        next: { revalidate: 300 },
       },
     );
     if (!res.ok) return null;
