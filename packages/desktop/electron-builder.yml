@@ -60,12 +60,13 @@ mac:
   entitlements: build-resources/entitlements.mac.plist
   entitlementsInherit: build-resources/entitlements.mac.plist
   # electron-updater needs the zip target on macOS (the dmg is for first install).
+  # Arch is selected per-runner in CI (--arm64 / --x64); local builds use the host.
   target:
-    - target: dmg
-      arch: [arm64, x64]
-    - target: zip
-      arch: [arm64, x64]
-  notarize: false # toggled on in CI via env when signing creds are present
+    - dmg
+    - zip
+  # Notarization runs automatically when the app is code-signed AND the App Store
+  # Connect API key env (APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER) is
+  # present (CI). Local/unsigned builds skip it.
 
 win:
   icon: build-resources/icon.ico
@@ -78,7 +79,14 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: true
   deleteAppDataOnUninstall: false
-  # Custom installer styling (logo/fonts) is wired here once the design lands (task).
+  # Branded assisted installer (from the claude.ai/design "Windows Installer" design):
+  # navy welcome/finish sidebar + green-mark header, rendered to 24-bit BMP from the
+  # SVG sources (scripts/build-installer-assets.mjs — committed since sips is mac-only).
+  installerSidebar: build-resources/installerSidebar.bmp
+  installerHeader: build-resources/installerHeader.bmp
+  installerIcon: build-resources/icon.ico
+  uninstallerIcon: build-resources/icon.ico
+  uninstallDisplayName: GTM Grid
 
 linux:
   icon: build-resources/icon.png
