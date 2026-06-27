@@ -11,7 +11,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import {
   Db,
   Engine,
@@ -49,7 +49,21 @@ installProcessHandlers();
 
 const PORT = Number(process.env.GTMGRID_PORT ?? 8787);
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = join(SERVER_DIR, "..", "..", "..");
+// The working directory the agent CLIs (claude/codex/cursor) are spawned in.
+// MUST be a stable, real, user-writable dir that is identical across launches AND
+// byte-identical on the spawn side (agent.ts) and the history-read side
+// (agent-history.ts) — the agents key their transcripts by encoded cwd, so any
+// drift silently breaks "Resume". The desktop shell passes GTMGRID_AGENT_CWD (a
+// per-user ~/.gtmgrid/workspace). The old `join(SERVER_DIR, "../../..")` pointed
+// INTO the install bundle: read-only on Windows, and a different (possibly `\\?\`
+// verbatim) path than the read side — the Windows resume bug. Falls back to the
+// repo root only for dev/non-packaged runs.
+const REPO_ROOT = process.env.GTMGRID_AGENT_CWD ?? join(SERVER_DIR, "..", "..", "..");
+try {
+  mkdirSync(REPO_ROOT, { recursive: true });
+} catch {
+  /* best-effort — the agents will surface a clearer error if cwd is unusable */
+}
 
 // ── Process-wide run limiter (M6). The engine's per-run `mapConcurrent` only
 // bounds ONE column run's row fan-out; it does NOT cap how many runs execute at

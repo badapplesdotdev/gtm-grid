@@ -142,6 +142,9 @@ function startEngine(): void {
       // onto the MCP's OWN spawn env — never here (it would crash this utilityProcess).
       GTMGRID_MCP_NODE: process.execPath,
       GTMGRID_MCP_SCRIPT: join(dir, "mcp.mjs"),
+      // Tells the engine's mcpEnv() to add ELECTRON_RUN_AS_NODE=1 to the MCP's own
+      // spawn env (the MCP launcher is this Electron binary, run as Node).
+      GTMGRID_MCP_ELECTRON_NODE: "1",
       GTMGRID_EXT_DIR: join(dir, "extensions"),
       GTMGRID_AGENT_CWD: agentCwd(),
       // The packaged renderer's origin — the engine CORS allow-lists this so the

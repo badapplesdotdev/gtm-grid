@@ -874,6 +874,11 @@ export function mcpEnv(
   const obs: Record<string, string> = {};
   if (process.env.GTMGRID_POSTHOG_KEY) obs.GTMGRID_POSTHOG_KEY = process.env.GTMGRID_POSTHOG_KEY;
   if (process.env.GTMGRID_POSTHOG_HOST) obs.GTMGRID_POSTHOG_HOST = process.env.GTMGRID_POSTHOG_HOST;
+  // Under Electron the MCP launcher is the Electron binary (GTMGRID_MCP_NODE =
+  // process.execPath); ELECTRON_RUN_AS_NODE makes it run `mcp.mjs` as plain Node.
+  // It is set ONLY here (the MCP's own spawn env), never on the engine — the engine
+  // is an Electron utilityProcess that crashes if ELECTRON_RUN_AS_NODE is present.
+  if (process.env.GTMGRID_MCP_ELECTRON_NODE) obs.ELECTRON_RUN_AS_NODE = "1";
   if (!cloud) return { GTMGRID_PROJECT: project, GTMGRID_PORT: port, ...obs, ...perm };
   return {
     GTMGRID_PROJECT: project,
