@@ -9,6 +9,7 @@
 //     options, health) off the shared `global.db` secrets vault.
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
@@ -1048,16 +1049,28 @@ const server = createServer(async (req, res) => {
 
 // Parent-death watchdog. The desktop app spawns this sidecar as a child; if the
 // app dies WITHOUT killing us — notably an auto-update `relaunch()`, which
-// hard-exits and never fires the window-destroyed handler — we'd otherwise linger
-// as an orphan holding the port. The NEW app's sidecar would then hit EADDRINUSE
-// and the stale (older) process would keep serving outdated routes, so the
-// refreshed UI sees 404s and reports "server not reachable". When orphaned we get
-// reparented to init/launchd (ppid 1), so exit on that transition. (Skipped when
-// launched directly from a shell in dev, where there is no parent app to outlive.)
+// hard-exits and never fires the window-destroyed handler, or a crash / Task
+// Manager kill / reinstall — we'd otherwise linger as an orphan holding the port.
+// The NEW app's sidecar would then hit EADDRINUSE and the stale (older) process
+// would keep serving outdated routes, so the refreshed UI sees 404s / "server not
+// reachable".
+//
+// CROSS-PLATFORM liveness: the old check relied on Unix reparent-to-init (ppid → 1),
+// which NEVER happens on Windows — there the orphan's ppid keeps pointing at the
+// dead parent, so the watchdog never fired and engines lived forever (the Windows
+// "engine unreachable / port in use" bug). `process.kill(pid, 0)` throws when the
+// parent is gone — on Windows too — so probe THAT instead. (Skipped in dev, where
+// there is no parent app to outlive.)
 const PARENT_PID = process.ppid;
 if (PARENT_PID > 1) {
   setInterval(() => {
-    if (process.ppid !== PARENT_PID || process.ppid <= 1) {
+    let parentAlive = true;
+    try {
+      process.kill(PARENT_PID, 0); // signal 0 = existence check; throws ESRCH if gone
+    } catch {
+      parentAlive = false;
+    }
+    if (!parentAlive || process.ppid <= 1) {
       log.info("parent app exited — shutting down sidecar");
       void flushObservability().finally(() => process.exit(0));
     }
@@ -1069,15 +1082,63 @@ if (PARENT_PID > 1) {
 // so it must be reachable only from this machine — not exposed on the LAN.
 const HOST = "127.0.0.1";
 
+// Find and kill whatever LISTENS on `port` (loopback). On this private port it is
+// almost certainly our OWN orphaned engine from a prior session (esp. a Windows
+// orphan the watchdog couldn't reach). Best-effort + cross-platform; netstat/lsof
+// may be absent, and we never kill our own pid. This is what lets a machine that
+// already has a stuck 1.0.0 orphan self-heal once the new engine starts.
+function reclaimPort(port: number): void {
+  try {
+    if (process.platform === "win32") {
+      const out = execFileSync("netstat", ["-ano", "-p", "tcp"], { encoding: "utf8", timeout: 5000, windowsHide: true });
+      const pids = new Set<string>();
+      for (const line of out.split("\n")) {
+        if (!/LISTENING/i.test(line) || !line.includes(`:${port} `)) continue;
+        const pid = line.trim().split(/\s+/).pop();
+        if (pid && pid !== "0" && pid !== String(process.pid)) pids.add(pid);
+      }
+      for (const pid of pids) {
+        try {
+          execFileSync("taskkill", ["/F", "/PID", pid], { stdio: "ignore", timeout: 5000, windowsHide: true });
+          log.info(`reclaimed port ${port}: killed stale pid ${pid}`);
+        } catch {
+          /* already gone / access denied */
+        }
+      }
+    } else {
+      const out = execFileSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf8", timeout: 5000 });
+      for (const s of out.split("\n").map((x) => x.trim()).filter(Boolean)) {
+        if (s === String(process.pid)) continue;
+        try {
+          process.kill(Number(s), "SIGKILL");
+          log.info(`reclaimed port ${port}: killed stale pid ${s}`);
+        } catch {
+          /* already gone */
+        }
+      }
+    }
+  } catch {
+    /* netstat/lsof unavailable — fall back to plain retry */
+  }
+}
+
 // On EADDRINUSE, RETRY rather than give up: right after an app relaunch the
 // previous sidecar may still be releasing the port (its watchdog is exiting), so
-// brief contention is expected. Retry for a few seconds before failing, so the
-// new (current-version) sidecar reliably wins the port.
+// brief contention is expected. After a few failed retries the holder is NOT
+// transiently releasing — it's a stale orphan — so reclaim the port once, then
+// keep retrying, so the new (current-version) sidecar reliably wins.
 let bindAttempts = 0;
+let reclaimAttempted = false;
 const MAX_BIND_ATTEMPTS = 15;
+const RECLAIM_AFTER_ATTEMPTS = 5;
 server.on("error", (err: NodeJS.ErrnoException) => {
   if (err.code === "EADDRINUSE") {
     bindAttempts += 1;
+    if (bindAttempts >= RECLAIM_AFTER_ATTEMPTS && !reclaimAttempted) {
+      reclaimAttempted = true;
+      console.error(`gtmgrid server: port ${PORT} held after ${bindAttempts} attempts — reclaiming from stale holder`);
+      reclaimPort(PORT);
+    }
     if (bindAttempts >= MAX_BIND_ATTEMPTS) {
       console.error(`gtmgrid server: port ${PORT} still in use after ${bindAttempts} attempts — giving up.`);
       process.exit(0);
