@@ -1,6 +1,6 @@
 {
   "name": "@gtmgrid/desktop",
-  "version": "0.22.12",
+  "version": "1.0.0",
   "private": true,
   "description": "GTM Grid desktop app",
   "author": "GTM Grid",
