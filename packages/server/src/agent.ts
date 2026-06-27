@@ -848,6 +848,30 @@ export interface AgentApproval {
   readonly argsHash: string;
 }
 
+/**
+ * The essential Windows OS env vars forwarded to the spawned MCP server. The agent
+ * CLI (claude) hands the MCP an EXPLICIT env map; if it does NOT merge the OS
+ * defaults, the Electron-as-Node MCP child can't even start on Windows — without
+ * `SystemRoot`/`PATH` the process fails to load its DLLs before `mcp.mjs` ever runs
+ * (the telemetry shows the MCP process never starts there, while macOS is fine).
+ * No-op off Windows; never overrides our `GTMGRID_*` keys (no collisions).
+ */
+function windowsBaseEnv(): Record<string, string> {
+  if (process.platform !== "win32") return {};
+  const keys = [
+    "SystemRoot", "SYSTEMROOT", "windir", "PATH", "Path", "PATHEXT", "TEMP", "TMP",
+    "SystemDrive", "HOMEDRIVE", "HOMEPATH", "USERPROFILE", "USERNAME", "APPDATA",
+    "LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "COMSPEC",
+    "PROCESSOR_ARCHITECTURE", "NUMBER_OF_PROCESSORS",
+  ];
+  const out: Record<string, string> = {};
+  for (const k of keys) {
+    const v = process.env[k];
+    if (v) out[k] = v;
+  }
+  return out;
+}
+
 export function mcpEnv(
   project: string,
   cloud?: AgentCloud,
@@ -879,8 +903,9 @@ export function mcpEnv(
   // It is set ONLY here (the MCP's own spawn env), never on the engine — the engine
   // is an Electron utilityProcess that crashes if ELECTRON_RUN_AS_NODE is present.
   if (process.env.GTMGRID_MCP_ELECTRON_NODE) obs.ELECTRON_RUN_AS_NODE = "1";
-  if (!cloud) return { GTMGRID_PROJECT: project, GTMGRID_PORT: port, ...obs, ...perm };
+  if (!cloud) return { ...windowsBaseEnv(), GTMGRID_PROJECT: project, GTMGRID_PORT: port, ...obs, ...perm };
   return {
+    ...windowsBaseEnv(),
     GTMGRID_PROJECT: project,
     GTMGRID_PORT: port,
     GTMGRID_MODE: "cloud",
@@ -923,7 +948,7 @@ export function mcpConfig(
  *  null for any other event. Pure; exported for tests. */
 export function parseClaudeInit(
   e: unknown,
-): { mcpConnected: boolean; gtmgridTools: number } | null {
+): { mcpConnected: boolean; gtmgridTools: number; mcpServersRaw: string } | null {
   if (!e || typeof e !== "object") return null;
   const ev = e as { type?: string; subtype?: string; mcp_servers?: unknown; tools?: unknown };
   if (ev.type !== "system" || ev.subtype !== "init") return null;
@@ -935,7 +960,15 @@ export function parseClaudeInit(
   const gtmgridTools = tools.filter(
     (t) => typeof t === "string" && t.startsWith("mcp__gtmgrid__"),
   ).length;
-  return { mcpConnected: gtm?.status === "connected", gtmgridTools };
+  // Capture EXACTLY what Claude reported about the MCP servers (status, and any
+  // error/reason fields it includes) so a remote "tools not connected" turn — esp.
+  // on Windows, where the MCP process never even starts — tells us WHY, not just
+  // that it failed. Capped to keep the event small.
+  return {
+    mcpConnected: gtm?.status === "connected",
+    gtmgridTools,
+    mcpServersRaw: JSON.stringify(servers).slice(0, 800),
+  };
 }
 
 /** Per-turn observability accumulator (one per agent stream). */
@@ -944,6 +977,8 @@ interface AgentTurnStats {
   toolCalls: number;
   mcpConnected?: boolean;
   gtmgridTools?: number;
+  /** Raw `mcp_servers` from Claude's init — the "why didn't it connect" detail. */
+  mcpServersRaw?: string;
 }
 
 /**
@@ -960,8 +995,14 @@ function captureAgentTurn(
   stats: AgentTurnStats,
   exitCode: number | null,
   cwd: string,
+  stderrTail?: string,
 ): void {
   try {
+    // When the MCP DIDN'T connect, attach the why: Claude's raw mcp_servers status
+    // + the agent CLI's stderr tail (where a spawn failure — ENOENT, the spaced
+    // 'C:\Program Files\GTM Grid' path, an ELECTRON_RUN_AS_NODE issue — surfaces).
+    // Only on failure, to keep healthy turns small and avoid shipping stderr noise.
+    const mcpFailed = stats.mcpConnected === false;
     captureServerEvent("agent_turn_completed", {
       provider,
       model: opts.model ?? null,
@@ -978,6 +1019,8 @@ function captureAgentTurn(
       cwd,
       mcp_connected: stats.mcpConnected ?? null,
       gtmgrid_tools: stats.gtmgridTools ?? null,
+      mcp_servers_raw: mcpFailed ? (stats.mcpServersRaw ?? null) : null,
+      mcp_stderr_tail: mcpFailed && stderrTail ? stderrTail.slice(-1200) : null,
       tool_calls: stats.toolCalls,
       exit_code: exitCode,
       is_error: exitCode !== 0 && exitCode !== null,
@@ -1079,6 +1122,7 @@ export function streamClaude(
       if (init) {
         stats.mcpConnected = init.mcpConnected;
         stats.gtmgridTools = init.gtmgridTools;
+        stats.mcpServersRaw = init.mcpServersRaw;
       }
 
       if (e.type === "assistant") {
@@ -1142,7 +1186,7 @@ export function streamClaude(
     sse.end();
   });
   child.on("close", (code) => {
-    captureAgentTurn("claude", opts, stats, code, opts.repoRoot);
+    captureAgentTurn("claude", opts, stats, code, opts.repoRoot, stderr);
     if (code !== 0 && code !== null) {
       sse.write({ type: "error", message: stderr.slice(-400) || `claude exited ${code}` });
     }

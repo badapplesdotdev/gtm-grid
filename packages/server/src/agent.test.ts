@@ -434,23 +434,33 @@ describe("parseClaudeInit — read MCP connection status from Claude's init even
       mcp_servers: [{ name: "gtmgrid", status: "connected" }],
       tools: ["Bash", "mcp__gtmgrid__get_table", "mcp__gtmgrid__add_rows", "Read"],
     };
-    expect(parseClaudeInit(e)).toEqual({ mcpConnected: true, gtmgridTools: 2 });
+    expect(parseClaudeInit(e)).toEqual({
+      mcpConnected: true,
+      gtmgridTools: 2,
+      mcpServersRaw: '[{"name":"gtmgrid","status":"connected"}]',
+    });
   });
 
-  it("reports NOT connected when gtmgrid failed to mount (the Windows failure)", () => {
+  it("reports NOT connected + captures the raw status when gtmgrid failed (the Windows failure)", () => {
     const e = {
       type: "system",
       subtype: "init",
       mcp_servers: [{ name: "gtmgrid", status: "failed" }],
       tools: ["Bash", "Read"],
     };
-    expect(parseClaudeInit(e)).toEqual({ mcpConnected: false, gtmgridTools: 0 });
+    // mcpServersRaw is the "why" payload — it preserves whatever Claude reported.
+    expect(parseClaudeInit(e)).toEqual({
+      mcpConnected: false,
+      gtmgridTools: 0,
+      mcpServersRaw: '[{"name":"gtmgrid","status":"failed"}]',
+    });
   });
 
   it("reports NOT connected when gtmgrid is absent from mcp_servers", () => {
     expect(parseClaudeInit({ type: "system", subtype: "init", mcp_servers: [], tools: [] })).toEqual({
       mcpConnected: false,
       gtmgridTools: 0,
+      mcpServersRaw: "[]",
     });
   });
 
@@ -465,6 +475,7 @@ describe("parseClaudeInit — read MCP connection status from Claude's init even
     expect(parseClaudeInit({ type: "system", subtype: "init" })).toEqual({
       mcpConnected: false,
       gtmgridTools: 0,
+      mcpServersRaw: "[]",
     });
   });
 });
