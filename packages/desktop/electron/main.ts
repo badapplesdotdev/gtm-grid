@@ -7,7 +7,7 @@
 // those services. The Node engine runs as an Electron utilityProcess (no separate
 // node binary), which removes the Rust↔Node boundary bug class entirely.
 
-import { app, BrowserWindow, ipcMain, Menu, net, protocol, shell, Tray } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, net, protocol, shell, Tray } from "electron";
 import { Effect } from "effect";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -82,8 +82,13 @@ function quitApp(): void {
 
 function createTray(): void {
   try {
-    const p = iconPath("trayTemplate.png");
-    tray = new Tray(existsSync(p) ? p : iconPath("icon.png"));
+    // The green brand hexagon — a COLORED icon, not a macOS template image, so it
+    // shows in brand green in the mac menu bar / Windows tray (Electron auto-loads
+    // the sibling trayIcon@2x.png for retina menu bars).
+    const p = iconPath("trayIcon.png");
+    const img = nativeImage.createFromPath(existsSync(p) ? p : iconPath("icon.png"));
+    img.setTemplateImage(false);
+    tray = new Tray(img);
   } catch {
     return;
   }

@@ -17,6 +17,13 @@ const assets = [
   { svg: "installer-header.svg", bmp: "installerHeader.bmp", w: 150, h: 57 },
 ];
 
+// Colored (NON-template) tray/menu-bar icon rendered straight to PNG; @2x for retina
+// menu bars. The base path stays trayIcon.png so Electron auto-resolves the @2x rep.
+const trayIcons = [
+  { svg: "tray-icon.svg", png: "trayIcon.png", size: 18 },
+  { svg: "tray-icon.svg", png: "trayIcon@2x.png", size: 36 },
+];
+
 try {
   for (const a of assets) {
     const png = join(tmp, a.bmp.replace(/\.bmp$/, ".png"));
@@ -24,6 +31,11 @@ try {
     execFileSync("sips", ["-s", "format", "bmp", png, "--out", join(res, a.bmp)], { stdio: "ignore" });
     if (!existsSync(join(res, a.bmp))) throw new Error(`failed to produce ${a.bmp}`);
     console.log(`installer asset: ${a.bmp} (${a.w}x${a.h})`);
+  }
+  for (const t of trayIcons) {
+    execFileSync("rsvg-convert", ["-w", String(t.size), "-h", String(t.size), join(res, t.svg), "-o", join(res, t.png)]);
+    if (!existsSync(join(res, t.png))) throw new Error(`failed to produce ${t.png}`);
+    console.log(`tray asset: ${t.png} (${t.size}x${t.size})`);
   }
 } finally {
   rmSync(tmp, { recursive: true, force: true });
