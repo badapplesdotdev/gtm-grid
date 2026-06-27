@@ -1,5 +1,23 @@
 # @gtmgrid/desktop
 
+## 0.22.12
+
+### Patch Changes
+
+- 018b623: Fix the loading screen no longer being centered (logo stuck at the top, label
+  floating in the middle). The previous release made `.app-shell` a CSS grid for the
+  Windows layout fix, but the loader and error screens borrow `.app-shell` for their
+  full-viewport sizing — so they inherited the grid and their centered content got
+  unstacked. They now keep their own flex centering.
+- 018b623: Make the `/start` onboarding command actually work, and drop `/help`. Previously
+  both were forwarded to the agent CLI, which intercepted them as its OWN built-in
+  slash commands ("Unknown command: /start", "/help isn't available"). GTM Grid now
+  answers `/start` itself with a local onboarding tour and never forwards it to the
+  CLI. The dead onboarding instructions are removed from the agent system preamble.
+  - @gtmgrid/analytics@0.22.12
+  - @gtmgrid/cloud@0.22.12
+  - @gtmgrid/services@0.22.12
+
 ## 0.22.11
 
 ### Patch Changes

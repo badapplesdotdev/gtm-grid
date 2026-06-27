@@ -1,5 +1,17 @@
 # @gtmgrid/server
 
+## 0.22.12
+
+### Patch Changes
+
+- 018b623: Make the `/start` onboarding command actually work, and drop `/help`. Previously
+  both were forwarded to the agent CLI, which intercepted them as its OWN built-in
+  slash commands ("Unknown command: /start", "/help isn't available"). GTM Grid now
+  answers `/start` itself with a local onboarding tour and never forwards it to the
+  CLI. The dead onboarding instructions are removed from the agent system preamble.
+  - @gtmgrid/engine@0.22.12
+  - @gtmgrid/observability@0.22.12
+
 ## 0.22.11
 
 ### Patch Changes
