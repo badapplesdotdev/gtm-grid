@@ -2,6 +2,8 @@
   "name": "@gtmgrid/desktop",
   "version": "0.22.12",
   "private": true,
+  "description": "GTM Grid desktop app",
+  "author": "GTM Grid",
   "type": "module",
   "main": "build/electron/main.cjs",
   "scripts": {

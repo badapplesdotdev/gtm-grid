@@ -6,6 +6,17 @@ directories:
   output: release
   buildResources: build-resources
 
+# We rebuild the only native module (better-sqlite3) ourselves in the sidecar
+# (extraResources) via `pnpm electron:bundle`, so electron-builder must NOT try to
+# rebuild app deps — its native-rebuild step chokes on the pnpm workspace symlinks
+# (@gtmgrid/*) and there is no native module in the app asar anyway.
+npmRebuild: false
+buildDependenciesFromSource: false
+# The renderer is fully bundled into dist/ by Vite and the main into
+# build/electron/main.cjs by esbuild (electron-updater kept external), so the
+# packaged app needs only electron-updater from node_modules.
+includeSubNodeModules: false
+
 # What goes INTO the app (asar). The forked engine + native deps ship as
 # extraResources (outside asar) so the native better_sqlite3.node loads cleanly.
 files:
