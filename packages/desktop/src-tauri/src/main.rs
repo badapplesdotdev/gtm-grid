@@ -473,6 +473,28 @@ fn shutdown_sidecar(app: &tauri::AppHandle) {
     }
 }
 
+/// Stop the engine and BLOCK until the process is fully reaped, so its files
+/// (`node.exe`, `better_sqlite3.node`) are released. On Windows the updater's NSIS
+/// installer cannot overwrite the bundled sidecar while node.exe holds those
+/// handles open ("Error opening file for writing"), so the frontend `await`s this
+/// command BEFORE it downloads + installs an update. The relaunched app re-spawns
+/// the engine in `setup`. Idempotent / no-op if the engine is already gone.
+#[tauri::command]
+fn stop_sidecar(app: tauri::AppHandle) {
+    let Some(state) = app.try_state::<Sidecar>() else {
+        return;
+    };
+    state.shutting_down.store(true, Ordering::SeqCst);
+    // Take the child OUT of the shared state (then drop the lock immediately) so we
+    // never hold the mutex while blocking on wait() — the liveness monitor also
+    // locks it, and it already bails on `shutting_down`.
+    let taken = state.child.lock().ok().and_then(|mut guard| guard.take());
+    if let Some(mut child) = taken {
+        let _ = child.kill();
+        let _ = child.wait(); // block until reaped → Windows releases the file locks
+    }
+}
+
 fn main() {
     // Surface shell panics to PostHog before anything else can crash.
     install_panic_hook();
@@ -499,7 +521,7 @@ fn main() {
         // process plugin so the frontend can relaunch after installing.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![sidecar_diagnostics])
+        .invoke_handler(tauri::generate_handler![sidecar_diagnostics, stop_sidecar])
         .setup(|app| {
             let boot = spawn_sidecar(app);
             let has_child = boot.child.is_some();

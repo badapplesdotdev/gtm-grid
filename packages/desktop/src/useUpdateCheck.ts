@@ -19,6 +19,7 @@
  * yet, signature mismatch) resolves to `null` — no banner, never a crash.
  */
 
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { isTauri } from "./cloud/desktop-oauth";
 
@@ -85,6 +86,16 @@ export function useUpdateCheck(): AvailableUpdate | null {
           version: result.version,
           notes: result.body ?? null,
           install: async () => {
+            // Stop the bundled engine FIRST and wait for it to fully exit. On
+            // Windows the NSIS installer can't overwrite `sidecar\node.exe` or
+            // `better_sqlite3.node` while the sidecar process holds them open
+            // ("Error opening file for writing"); killing it releases the locks.
+            // No-op when not running under Tauri (the command won't resolve).
+            try {
+              await invoke("stop_sidecar");
+            } catch {
+              /* not Tauri / engine already stopped — proceed with the install */
+            }
             await result.downloadAndInstall();
             const { relaunch } = await import("@tauri-apps/plugin-process");
             await relaunch();
