@@ -3,8 +3,9 @@
  * download experience. The cross-platform installers are built in GitHub Actions
  * (`.github/workflows/release.yml`) and published as assets on each GitHub
  * release of the PUBLIC repo {@link RELEASE_REPO}; the asset names embed the
- * version (e.g. `GTM.Grid_0.2.0_aarch64.dmg`), so we resolve the right file from
- * the LATEST release at request time rather than hard-coding a version.
+ * version (electron-builder names, e.g. `GTM-Grid-1.0.0-arm64.dmg`,
+ * `GTM-Grid-Setup-1.0.0.exe`, `GTM-Grid-1.0.0-amd64.deb`), so we resolve the right
+ * file from the LATEST release at request time rather than hard-coding a version.
  *
  * Consumed by:
  *   - `app/api/download/[platform]/route.ts` — 302s to the matching asset.
@@ -30,10 +31,10 @@ export interface Platform {
  * unreliable (persistent 504s), so the `linux` key resolves to the `.deb`.
  */
 export const PLATFORMS: readonly Platform[] = [
-  { key: "mac-arm", label: "macOS (Apple Silicon)", match: /aarch64\.dmg$/ },
-  { key: "mac-intel", label: "macOS (Intel)", match: /x64\.dmg$/ },
-  { key: "windows", label: "Windows", match: /x64-setup\.exe$/ },
-  { key: "linux", label: "Linux (.deb)", match: /amd64\.deb$/ },
+  { key: "mac-arm", label: "macOS (Apple Silicon)", match: /-arm64\.dmg$/ },
+  { key: "mac-intel", label: "macOS (Intel)", match: /-x64\.dmg$/ },
+  { key: "windows", label: "Windows", match: /-Setup-[^/]*\.exe$/ },
+  { key: "linux", label: "Linux (.deb)", match: /-amd64\.deb$/ },
 ];
 
 export const platformByKey = (key: string): Platform | undefined =>
