@@ -36,3 +36,6 @@ packages/desktop/release/
 .playwright-mcp/
 .env.local
 .vercel
+
+# Stray root-level screenshots (testing artifacts)
+/*.png
