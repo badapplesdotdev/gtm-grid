@@ -64,7 +64,9 @@ export function initAnalytics(): void {
   // desktop health dashboard, and version-scoped regression alerts possible.
   posthog.register({
     platform: "desktop",
-    app_version: (import.meta.env.VITE_APP_VERSION as string | undefined) ?? null,
+    // `__APP_VERSION__` is the reliable build-time version (vite define); the old
+    // `VITE_APP_VERSION` was never set and always reported "(dev)".
+    app_version: __APP_VERSION__,
   });
 }
 

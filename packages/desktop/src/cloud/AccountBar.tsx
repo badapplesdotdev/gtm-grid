@@ -23,14 +23,14 @@ import { type BillingCycle, resolvePlanId } from "@gtmgrid/cloud";
 import { Dialog, DialogContent } from "../components/ui/dialog";
 import type { Id } from "./ids";
 import { cloudEnabled, syncWorkspacePlan } from "./client";
-import { isTauri } from "./desktop-oauth";
+import { electron } from "../electron";
 
-/** Open a URL in the system browser (Tauri opener when packaged, else a new tab). */
+/** Open a URL in the system browser (Electron when packaged, else a new tab). */
 async function openExternalUrl(url: string): Promise<void> {
   try {
-    if (isTauri()) {
-      const { openUrl } = await import("@tauri-apps/plugin-opener");
-      await openUrl(url);
+    const api = electron();
+    if (api) {
+      await api.openExternal(url);
       return;
     }
   } catch {

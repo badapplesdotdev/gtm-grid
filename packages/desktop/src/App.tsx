@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, memo, lazy, Suspense, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { api, API_BASE, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource } from "./api";
-import { invoke } from "@tauri-apps/api/core";
+import { electron } from "./electron";
 import { onActivateKey } from "./lib/utils";
 import { firstCsvFile, dragHasFiles } from "./csvDrop";
 import { LogoMark } from "./Logo";
@@ -1564,10 +1564,9 @@ export default function App() {
       `engine: ${healthStatus === "connected" ? "connected" : `unreachable (${API_BASE})`}`,
       `time: ${new Date().toISOString()}`,
     ];
-    // Best-effort — absent on web/dev (no Tauri) or if the command isn't present
-    // in an older shell; the blob above still copies.
+    // Best-effort — absent on web/dev (no Electron); the blob above still copies.
     try {
-      const d = await invoke<Record<string, unknown>>("sidecar_diagnostics");
+      const d = await electron()?.sidecarDiagnostics();
       if (d && typeof d === "object") {
         const s = (k: string) => (d[k] == null ? "" : String(d[k]));
         const tail = s("stderrTail").trim();
