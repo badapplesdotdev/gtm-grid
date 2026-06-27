@@ -3490,6 +3490,12 @@ body.resizing-agent .agent-panel { transition: none; }
    collapsed to content size on Windows (filled fine on macOS/WKWebView). */
 .app-shell { display: grid; grid-template-rows: auto 1fr; height: 100vh; width: 100vw; overflow: hidden; }
 .app-shell .app { grid-row: 2; min-height: 0; height: auto; width: 100%; }
+/* The loader + error screens borrow .app-shell only for its full-viewport sizing
+   box — they must NOT inherit the app grid, which would unstack their centered
+   content (logo into the top `auto` row, label into the `1fr` row). Keep their own
+   flex centering (set on .app-loader / .app-error above). */
+.app-loader.app-shell,
+.app-error.app-shell { display: flex; grid-template-rows: none; }
 
 .topbar {
   height: 44px; flex-shrink: 0; display: flex; align-items: center; gap: 10px;

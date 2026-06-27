@@ -418,15 +418,10 @@ describe("contextPreamble — bakes in the /goal slash-command protocol", () => 
     expect(p).toContain('viewing **"Leads"**');
   });
 
-  it("teaches the /help + /start onboarding protocol (no tools, friendly tour)", () => {
+  it("does NOT teach /help or /start in the preamble (handled client-side; they collide with CLI built-ins)", () => {
     const p = contextPreamble();
-    expect(p).toContain("/help");
-    expect(p).toContain("/start");
-    // It's an orientation, not a tool-driven action.
-    expect(p).toMatch(/onboarding/i);
-    expect(p).toMatch(/do NOT call any tools/i);
-    // Points new users at the two ways to get data in + an example prompt.
-    expect(p).toMatch(/Import CSV|drag a CSV/i);
+    expect(p).not.toContain("/help");
+    expect(p).not.toContain("/start");
   });
 });
 
