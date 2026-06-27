@@ -14,6 +14,11 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const ALLOWED_ORIGINS = new Set([
   "app://gtmgrid", // packaged Electron desktop (custom app:// renderer scheme)
+  // Legacy Tauri webview origins — kept so already-installed Tauri builds keep
+  // working through the Electron cut-over (remove once Tauri installs age out).
+  "tauri://localhost", // macOS / iOS Tauri webview
+  "http://tauri.localhost", // Windows / Linux / Android Tauri webview
+  "https://tauri.localhost",
   "http://localhost:5173", // desktop dev (vite)
 ]);
 
