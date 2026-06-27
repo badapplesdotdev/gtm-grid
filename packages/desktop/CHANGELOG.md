@@ -1,5 +1,34 @@
 # @gtmgrid/desktop
 
+## 0.22.11
+
+### Patch Changes
+
+- fff9a21: Show the signed-in user's profile picture in the account menu (sidebar footer and
+  the open-menu header) when one is available, falling back to the initial letter.
+- fff9a21: Add `/help` and `/start` onboarding commands to the agent chat. New users get a
+  short, friendly orientation — what GTM Grid is, how to get data in (create a table
+  or import/drag a CSV), what the agent can do, and a few example prompts to try.
+  Both appear in the `/` command menu.
+- fff9a21: Drag a CSV file anywhere onto the app to import it. A drop overlay appears while
+  dragging a file, and releasing opens the import flow straight on the "Map your
+  columns" review. Non-CSV files are ignored.
+- fff9a21: Closing the window now hides GTM Grid to the system tray instead of quitting, so
+  the engine and any in-flight agent runs keep going in the background. A tray icon
+  with **Show GTM Grid** / **Quit** is the deliberate exit path (Quit tears down the
+  sidecar). Relaunching while hidden re-shows the window. Previously closing the
+  window killed the engine and lost all session state.
+- fff9a21: Fix the center content pane collapsing to content size on Windows. The "No table
+  selected" empty state and the CSV "Map your columns" review sat in a small band
+  with large empty gaps instead of filling the pane (macOS was fine). The app shell
+  now uses a CSS grid (`grid-template-rows: auto 1fr`) so the main row gets a
+  definite height that WebView2 propagates to the nested `flex:1` panes — plain
+  flex-column stretch did not. The optional invite banner still takes its own row,
+  so the pane correctly fills the remaining height when it shows.
+  - @gtmgrid/analytics@0.22.11
+  - @gtmgrid/cloud@0.22.11
+  - @gtmgrid/services@0.22.11
+
 ## 0.22.10
 
 ### Patch Changes

@@ -1,5 +1,16 @@
 # @gtmgrid/server
 
+## 0.22.11
+
+### Patch Changes
+
+- fff9a21: Add `/help` and `/start` onboarding commands to the agent chat. New users get a
+  short, friendly orientation — what GTM Grid is, how to get data in (create a table
+  or import/drag a CSV), what the agent can do, and a few example prompts to try.
+  Both appear in the `/` command menu.
+  - @gtmgrid/engine@0.22.11
+  - @gtmgrid/observability@0.22.11
+
 ## 0.22.10
 
 ### Patch Changes
