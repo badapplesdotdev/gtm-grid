@@ -9,8 +9,11 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "electron:main": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --format=cjs --target=node20 --external:electron --external:electron-updater --outdir=build/electron --out-extension:.js=.cjs",
+    "electron:main": "node scripts/build-electron.mjs",
     "electron:dev": "pnpm electron:main && cross-env GTMGRID_ELECTRON_DEV=1 electron build/electron/main.cjs",
+    "electron:bundle": "node scripts/bundle-sidecar.mjs && electron-rebuild -f -w better-sqlite3 -m sidecar",
+    "electron:pack": "pnpm build && pnpm electron:bundle && pnpm electron:main && electron-builder",
+    "electron:publish": "pnpm build && pnpm electron:bundle && pnpm electron:main && electron-builder --publish always",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
