@@ -959,6 +959,7 @@ function captureAgentTurn(
   opts: { model?: string; mode?: string; cloud?: AgentCloud },
   stats: AgentTurnStats,
   exitCode: number | null,
+  cwd: string,
 ): void {
   try {
     captureServerEvent("agent_turn_completed", {
@@ -971,6 +972,10 @@ function captureAgentTurn(
       table_id: opts.cloud?.tableId ?? null,
       platform: process.platform,
       arch: process.arch,
+      // The ACTUAL spawn cwd the agent ran from — so a remote (esp. Windows) user's
+      // turn shows whether it ran inside our defined ~/.gtmgrid/workspace or drifted
+      // into some other dir (the old "agent working out of a random repo" bug).
+      cwd,
       mcp_connected: stats.mcpConnected ?? null,
       gtmgrid_tools: stats.gtmgridTools ?? null,
       tool_calls: stats.toolCalls,
@@ -1137,7 +1142,7 @@ export function streamClaude(
     sse.end();
   });
   child.on("close", (code) => {
-    captureAgentTurn("claude", opts, stats, code);
+    captureAgentTurn("claude", opts, stats, code, opts.repoRoot);
     if (code !== 0 && code !== null) {
       sse.write({ type: "error", message: stderr.slice(-400) || `claude exited ${code}` });
     }
@@ -1296,7 +1301,7 @@ export function streamCodex(
     sse.end();
   });
   child.on("close", (code) => {
-    captureAgentTurn("codex", opts, stats, code);
+    captureAgentTurn("codex", opts, stats, code, opts.repoRoot);
     if (code !== 0 && code !== null) {
       sse.write({ type: "error", message: stderr.split("\n").filter((l) => /error|fatal/i.test(l)).slice(-1)[0] || `codex exited ${code}` });
     }
@@ -1594,7 +1599,7 @@ export function streamCursor(
     sse.end();
   });
   child.on("close", (code) => {
-    captureAgentTurn("cursor", opts, stats, code);
+    captureAgentTurn("cursor", opts, stats, code, cwd);
     cleanupCursorMcpConfig(); // remove the on-disk token now the child has exited
     if (code !== 0 && code !== null) {
       sse.write({ type: "error", message: stderr.slice(-400) || `cursor-agent exited ${code}` });

@@ -1100,6 +1100,12 @@ server.listen(PORT, HOST, () => {
     arch: process.arch,
     node: process.versions.node,
     port: PORT,
+    // The resolved agent working directory + whether it came from the desktop
+    // shell's GTMGRID_AGENT_CWD (the defined ~/.gtmgrid/workspace) or fell back to
+    // the install-relative dir — surfaces the old Windows "agent ran out of a random
+    // repo" drift directly in PostHog, on every boot.
+    repo_root: REPO_ROOT,
+    agent_cwd_source: process.env.GTMGRID_AGENT_CWD ? "env" : "fallback",
   });
 });
 
