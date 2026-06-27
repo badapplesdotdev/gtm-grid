@@ -9,7 +9,7 @@
 //     options, health) off the shared `global.db` secrets vault.
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { execFileSync } from "node:child_process";
+import { isProcessAlive, reclaimPort } from "./port.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
@@ -1064,13 +1064,7 @@ const server = createServer(async (req, res) => {
 const PARENT_PID = process.ppid;
 if (PARENT_PID > 1) {
   setInterval(() => {
-    let parentAlive = true;
-    try {
-      process.kill(PARENT_PID, 0); // signal 0 = existence check; throws ESRCH if gone
-    } catch {
-      parentAlive = false;
-    }
-    if (!parentAlive || process.ppid <= 1) {
+    if (!isProcessAlive(PARENT_PID) || process.ppid <= 1) {
       log.info("parent app exited — shutting down sidecar");
       void flushObservability().finally(() => process.exit(0));
     }
@@ -1081,46 +1075,6 @@ if (PARENT_PID > 1) {
 // connectors with the user's credentials and spawns their authenticated CLIs,
 // so it must be reachable only from this machine — not exposed on the LAN.
 const HOST = "127.0.0.1";
-
-// Find and kill whatever LISTENS on `port` (loopback). On this private port it is
-// almost certainly our OWN orphaned engine from a prior session (esp. a Windows
-// orphan the watchdog couldn't reach). Best-effort + cross-platform; netstat/lsof
-// may be absent, and we never kill our own pid. This is what lets a machine that
-// already has a stuck 1.0.0 orphan self-heal once the new engine starts.
-function reclaimPort(port: number): void {
-  try {
-    if (process.platform === "win32") {
-      const out = execFileSync("netstat", ["-ano", "-p", "tcp"], { encoding: "utf8", timeout: 5000, windowsHide: true });
-      const pids = new Set<string>();
-      for (const line of out.split("\n")) {
-        if (!/LISTENING/i.test(line) || !line.includes(`:${port} `)) continue;
-        const pid = line.trim().split(/\s+/).pop();
-        if (pid && pid !== "0" && pid !== String(process.pid)) pids.add(pid);
-      }
-      for (const pid of pids) {
-        try {
-          execFileSync("taskkill", ["/F", "/PID", pid], { stdio: "ignore", timeout: 5000, windowsHide: true });
-          log.info(`reclaimed port ${port}: killed stale pid ${pid}`);
-        } catch {
-          /* already gone / access denied */
-        }
-      }
-    } else {
-      const out = execFileSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], { encoding: "utf8", timeout: 5000 });
-      for (const s of out.split("\n").map((x) => x.trim()).filter(Boolean)) {
-        if (s === String(process.pid)) continue;
-        try {
-          process.kill(Number(s), "SIGKILL");
-          log.info(`reclaimed port ${port}: killed stale pid ${s}`);
-        } catch {
-          /* already gone */
-        }
-      }
-    }
-  } catch {
-    /* netstat/lsof unavailable — fall back to plain retry */
-  }
-}
 
 // On EADDRINUSE, RETRY rather than give up: right after an app relaunch the
 // previous sidecar may still be releasing the port (its watchdog is exiting), so
@@ -1137,7 +1091,7 @@ server.on("error", (err: NodeJS.ErrnoException) => {
     if (bindAttempts >= RECLAIM_AFTER_ATTEMPTS && !reclaimAttempted) {
       reclaimAttempted = true;
       console.error(`gtmgrid server: port ${PORT} held after ${bindAttempts} attempts — reclaiming from stale holder`);
-      reclaimPort(PORT);
+      reclaimPort(PORT, log);
     }
     if (bindAttempts >= MAX_BIND_ATTEMPTS) {
       console.error(`gtmgrid server: port ${PORT} still in use after ${bindAttempts} attempts — giving up.`);
