@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "GTM Grid desktop app",
+  "homepage": "https://www.gtmgrid.dev",
   "author": {
     "name": "GTM Grid",
     "email": "morgan@gtmgrid.dev"

@@ -94,6 +94,10 @@ nsis:
 linux:
   icon: build-resources/icon.png
   category: Office
+  # Default deb/AppImage artifactName uses the package name (@gtmgrid/desktop); the
+  # '/' makes fpm try to write into a non-existent release/@gtmgrid/ dir. Use the
+  # productName-based name (matching the mac/win convention) so there's no slash.
+  artifactName: ${productName}-${version}-${arch}.${ext}
   target:
     - AppImage
     - deb
