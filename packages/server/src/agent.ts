@@ -501,6 +501,22 @@ function agentSpawnEnv(binPath: string): NodeJS.ProcessEnv {
   return { ...process.env, [PATH_KEY]: parts.join(delimiter) };
 }
 
+// ── Agent isolation ───────────────────────────────────────────────────────────
+// The gtmgrid agent must run in a CLEAN agent environment, NOT the user's personal
+// one. Without isolation the spawned CLI loads everything in the user's home config
+// — global skills, plugins, hooks, and CLAUDE.md/AGENTS instructions (e.g. a
+// `deepline` plugin whose startup hook fired inside our turns, pulled the agent off
+// gtmgrid's tools, and imposed approvals despite bypass mode). Each CLI exposes a
+// per-invocation flag that drops the user's personal config WHILE KEEPING AUTH +
+// model, so we use those rather than fragile config-dir/credential juggling:
+//   - claude: `--setting-sources project` (loads only project-scope settings — our
+//     app-owned workspace has none — so no user skills/plugins/hooks/CLAUDE.md).
+//   - codex:  `--ignore-user-config` (skips ~/.codex/config.toml; auth still works).
+//   - cursor: no such flag — isolated via its workspace cwd ({@link CURSOR_WORKSPACE});
+//     the operating-manual preamble steers it to gtmgrid's tools.
+const CLAUDE_ISOLATION_ARGS = ["--setting-sources", "project"];
+const CODEX_ISOLATION_ARGS = ["--ignore-user-config"];
+
 /** Spawn an agent CLI cross-platform. A Windows `.cmd`/`.bat` shim cannot be
  *  launched without a shell (EINVAL), so route those through one; native `.exe`
  *  / POSIX binaries spawn directly. `windowsHide` suppresses a console flash. */
@@ -1050,6 +1066,9 @@ export function streamClaude(
     // of reaching for an external MCP (auth walls). The gtmgrid server's env
     // carries cloud context (TRI-3296) when in cloud mode.
     "--strict-mcp-config",
+    // Isolate from the user's personal Claude config (skills/plugins/hooks/CLAUDE.md)
+    // while keeping their login — see CLAUDE_ISOLATION_ARGS.
+    ...CLAUDE_ISOLATION_ARGS,
     "--allowedTools",
     ...GTM_TOOLS.map((t) => `mcp__gtmgrid__${t}`),
   ];
@@ -1257,6 +1276,9 @@ export function streamCodex(
   const flags = [
     "--json",
     "--skip-git-repo-check",
+    // Isolate from the user's personal Codex config (~/.codex/config.toml: global
+    // instructions + MCP servers) while keeping their login — see CODEX_ISOLATION_ARGS.
+    ...CODEX_ISOLATION_ARGS,
     ...codexSandboxFlags(opts.mode),
     // Replace Codex's whole MCP table with ONLY gtmgrid, so it ignores the user's
     // other registered servers (Trigify/exa/etc.) and drives gtmgrid. The gtmgrid
@@ -1389,6 +1411,8 @@ function runClaudeOneShot(bin: string, prompt: string, system: string): Promise<
       "--strict-mcp-config",
       "--mcp-config",
       '{"mcpServers":{}}',
+      // Isolate from the user's personal config (skills/plugins/hooks) here too.
+      ...CLAUDE_ISOLATION_ARGS,
     ];
     // shell:true for a Windows .cmd/.bat shim (EINVAL otherwise); native .exe runs direct.
     execFile(bin, args, { env: agentSpawnEnv(bin), timeout: 90_000, maxBuffer: 8 << 20, shell: needsShell(bin), windowsHide: true }, (err, stdout, stderr) => {
@@ -1415,7 +1439,7 @@ function runClaudeOneShot(bin: string, prompt: string, system: string): Promise<
 function runCodexOneShot(bin: string, prompt: string, system: string): Promise<{ text: string } | { error: string }> {
   return new Promise((resolve) => {
     const message = system ? `${system}\n\n${prompt}` : prompt;
-    const child = spawnAgent(bin, ["exec", "--json", "--skip-git-repo-check", message], { env: agentSpawnEnv(bin) });
+    const child = spawnAgent(bin, ["exec", "--json", "--skip-git-repo-check", ...CODEX_ISOLATION_ARGS, message], { env: agentSpawnEnv(bin) });
     child.stdin?.end();
     let buf = "";
     let last = "";
