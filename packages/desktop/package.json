@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "description": "GTM Grid desktop app",
-  "author": "GTM Grid",
+  "author": {
+    "name": "GTM Grid",
+    "email": "morgan@gtmgrid.dev"
+  },
   "type": "module",
   "main": "build/electron/main.cjs",
   "scripts": {
