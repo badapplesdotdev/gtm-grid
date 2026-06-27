@@ -21,15 +21,22 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: release
-  cancel-in-progress: false
+# NOTE: concurrency is scoped to the VERSION job only (below), NOT the whole
+# workflow. A workflow-level group serialized entire runs — and because the
+# non-blocking macOS Intel job keeps a run "in progress" until its scarce macos-13
+# runner frees, a stuck Intel job would block the NEXT release indefinitely. We only
+# need to serialize the version cut (changeset bump + tag push must not race); the
+# build jobs are keyed to their own tag and are safe to overlap.
 
 jobs:
   # ── 1. Version cut: consume changesets, bump, tag, push ──────────────────
   version:
     name: Cut version
     runs-on: ubuntu-latest
+    # Serialize ONLY the version cut so two releases can't race the tag/push.
+    concurrency:
+      group: release-version
+      cancel-in-progress: false
     outputs:
       version: ${{ steps.cut.outputs.version }}
       tag: ${{ steps.cut.outputs.tag }}
