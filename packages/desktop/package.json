@@ -15,7 +15,7 @@
     "electron:bundle": "node scripts/bundle-sidecar.mjs && electron-rebuild -f -w better-sqlite3 -m sidecar",
     "electron:pack": "pnpm build && pnpm electron:bundle && pnpm electron:main && electron-builder",
     "electron:publish": "pnpm build && pnpm electron:bundle && pnpm electron:main && electron-builder --publish always",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p electron/tsconfig.json"
   },
   "dependencies": {
     "electron-updater": "^6.3.9",
