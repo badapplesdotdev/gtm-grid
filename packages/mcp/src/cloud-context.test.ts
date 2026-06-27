@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   cloudContextFromEnv,
   describeGridEnv,
+  optionalGridEnv,
   selectGridEnv,
   type McpEnv,
 } from "./cloud-context.js";
@@ -80,6 +81,25 @@ describe("selectGridEnv — cloud is the only data source", () => {
 
   it("throws when the cloud context is incomplete (token missing)", () => {
     expect(() => selectGridEnv({ ...FULL_CLOUD, GTMGRID_TOKEN: undefined })).toThrow();
+  });
+});
+
+describe("optionalGridEnv — non-throwing resolver (server connects context-less)", () => {
+  it("resolves the cloud env when a complete context is present", () => {
+    const env = optionalGridEnv(FULL_CLOUD);
+    expect(env?.mode).toBe("cloud");
+    expect(env?.context.tableId).toBe("tbl_1");
+  });
+
+  it("returns undefined (NOT a throw) when no cloud context is present", () => {
+    // The MCP module-load path relies on this: an incomplete spawn env must
+    // degrade gracefully, never crash the process before connect.
+    expect(() => optionalGridEnv({})).not.toThrow();
+    expect(optionalGridEnv({})).toBeUndefined();
+  });
+
+  it("returns undefined when the cloud context is incomplete (token missing)", () => {
+    expect(optionalGridEnv({ ...FULL_CLOUD, GTMGRID_TOKEN: undefined })).toBeUndefined();
   });
 });
 

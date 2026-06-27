@@ -96,6 +96,19 @@ export function selectGridEnv(env: McpEnv): GridEnv {
 }
 
 /**
+ * Like {@link selectGridEnv} but NON-throwing: returns the cloud {@link GridEnv}
+ * when a complete context is present, or `undefined` when it isn't. The MCP
+ * server's module-load path uses this so an incomplete/absent spawn env does NOT
+ * crash the process at import (which would kill the server before it connects —
+ * a "tools not connected" turn plus an uncaught $exception). Instead the server
+ * still connects and the grid tools report the missing context per call.
+ */
+export function optionalGridEnv(env: McpEnv): GridEnv | undefined {
+  const context = cloudContextFromEnv(env);
+  return context === undefined ? undefined : { mode: "cloud", context };
+}
+
+/**
  * A one-line, token-free description of the resolved environment for the
  * connected banner (printed to stderr). The bearer token is deliberately
  * excluded so it never lands in a log line.

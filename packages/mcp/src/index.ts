@@ -25,7 +25,7 @@ import {
   flushObservability,
   installProcessHandlers,
 } from "@gtmgrid/observability";
-import { describeGridEnv, selectGridEnv } from "./cloud-context.js";
+import { describeGridEnv, optionalGridEnv } from "./cloud-context.js";
 import {
   decide,
   hashArgs,
@@ -38,6 +38,7 @@ import {
   CloudToolUnsupportedError,
   defaultCloudSourceDeps,
   makeCloudSource,
+  missingCloudSource,
   registryWithExtensions,
 } from "./cloud-source.js";
 
@@ -50,7 +51,15 @@ installProcessHandlers("mcp");
 const reportEngineError = (error: unknown, ctx: RunErrorContext): void =>
   captureException(error, { source: "engine-run", ...ctx });
 
-const gridEnv = selectGridEnv(process.env);
+// Resolve the CLOUD context WITHOUT crashing the process when it's absent. A
+// top-level throw here would kill the MCP at module load — BEFORE it connects —
+// surfacing as a "tools not connected" turn PLUS an uncaught $exception (the
+// worst failure mode). Instead, when an incomplete/absent spawn env threads no
+// complete cloud context, we still connect the server (so the agent gets a live
+// handshake and the local-registry discovery tools keep working) and every grid
+// tool returns an actionable "open a project" error per call (see
+// missingCloudSource). `undefined` here means "no cloud context".
+const gridEnv = optionalGridEnv(process.env);
 
 /**
  * Build the CLOUD registry: the built-in connectors PLUS every JSON-manifest
@@ -109,7 +118,9 @@ const cloudDeps = defaultCloudSourceDeps(cloudRegistry(), {
   aiFallback: mcpAiFallback,
   reportError: reportEngineError,
 });
-const cloudSource = makeCloudSource(gridEnv.context, cloudDeps);
+const cloudSource = gridEnv
+  ? makeCloudSource(gridEnv.context, cloudDeps)
+  : missingCloudSource();
 
 // The registry the discovery + run_function tools read from — the default
 // registry on the cloud deps (with uploaded extensions loaded).
@@ -710,8 +721,14 @@ server.tool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-// Token-free banner: report the cloud project/table only — never the bearer token.
-console.error(`gtmgrid MCP server connected (${describeGridEnv(gridEnv)})`);
+// Token-free banner: report the cloud project/table only — never the bearer
+// token. With no cloud context the server still connects (grid tools then report
+// the missing project), so the banner says so instead of describing a context.
+console.error(
+  gridEnv
+    ? `gtmgrid MCP server connected (${describeGridEnv(gridEnv)})`
+    : "gtmgrid MCP server connected (no cloud context — grid tools will report it until a project is opened)",
+);
 
 // Observability beacon: prove the MCP server actually launched + connected on the
 // user's machine. This is the missing half of the Windows "tools not connected"
@@ -725,8 +742,13 @@ try {
     platform: process.platform,
     arch: process.arch,
     node: process.versions.node,
-    mode: gridEnv.mode,
-    workspace_id: gridEnv.context.workspaceId,
+    // `cloud_context=false` flags a context-less (degraded) start — the spawn
+    // env was incomplete, so grid tools will report the missing project. This is
+    // the beacon side of the same signal the old module-load throw used to fire
+    // as an $exception.
+    mode: gridEnv?.mode ?? "none",
+    workspace_id: gridEnv?.context.workspaceId,
+    cloud_context: gridEnv !== undefined,
   });
   await flushObservability();
 } catch {

@@ -11,8 +11,10 @@ import { describe, expect, it } from "vitest";
 import type { CloudContext } from "./cloud-context.js";
 import {
   CloudToolUnsupportedError,
+  NO_CLOUD_CONTEXT_MESSAGE,
   defaultCloudSourceDeps,
   makeCloudSource,
+  missingCloudSource,
   registryWithExtensions,
   type CloudSourceDeps,
 } from "./cloud-source.js";
@@ -876,5 +878,22 @@ describe("makeCloudSource — reorder tools return the new id order", () => {
   it("reorderRow rejects a row id not in the table", async () => {
     const { deps } = depsFor(gapGrid());
     await expect(makeCloudSource(CTX, deps).reorderRow("t1", "nope", 0)).rejects.toThrow(/not in this table/);
+  });
+});
+
+describe("missingCloudSource — context-less spawn degrades gracefully", () => {
+  it("every grid method rejects with the actionable 'open a project' message", async () => {
+    const src = missingCloudSource();
+    // A representative read, write, run and destructive op — all must reject,
+    // never crash the process (the whole point: tool error, not module-load throw).
+    await expect(src.listTables()).rejects.toThrow(NO_CLOUD_CONTEXT_MESSAGE);
+    await expect(src.getTable("t1")).rejects.toThrow(NO_CLOUD_CONTEXT_MESSAGE);
+    await expect(src.addRows("t1", [{ a: 1 }])).rejects.toThrow(/open a project/i);
+    await expect(src.runColumn("t1", "c1", {})).rejects.toThrow(/open a project/i);
+    await expect(src.deleteTable("t1")).rejects.toThrow(/open a project/i);
+  });
+
+  it("constructing it does NOT throw (the server must still connect)", () => {
+    expect(() => missingCloudSource()).not.toThrow();
   });
 });
