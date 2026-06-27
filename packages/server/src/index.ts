@@ -34,7 +34,8 @@ import {
   type GridStoreShape,
 } from "@gtmgrid/engine";
 import { Effect } from "effect";
-import type { RunErrorContext } from "@gtmgrid/engine";
+import type { RunErrorContext, AiGenerationEvent } from "@gtmgrid/engine";
+import { randomUUID } from "node:crypto";
 import { detectAgents, streamClaude, streamCodex, streamCursor, setAgentPath, rescanAgents, generateWithAgent, parseAgentCloud, type AgentKind } from "./agent.js";
 import { localProviderEnv, resolveCloudProviderEnv } from "./provider-env.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
@@ -167,11 +168,30 @@ async function aiAgentFallback(req: { prompt: string; system?: string }): Promis
 
 // AI config resolved from the global db (env wins for the active provider); the
 // agent fallback covers the no-key case in-process.
+/** Emit a PostHog LLM-observability `$ai_generation` event for an ai.generate run.
+ *  Server-side delivery (the reliable path); one trace id per generation. */
+function emitAiGeneration(e: AiGenerationEvent): void {
+  captureServerEvent("$ai_generation", {
+    // Run-scoped when inside a column run (groups the run's generations into one
+    // trace); a fresh id for a standalone generation (preview / one-off).
+    $ai_trace_id: e.traceId ?? randomUUID(),
+    $ai_provider: e.provider,
+    $ai_model: e.model,
+    $ai_input_tokens: e.inputTokens,
+    $ai_output_tokens: e.outputTokens,
+    $ai_latency: e.latencyMs / 1000, // PostHog expects seconds
+    $ai_is_error: e.isError,
+    ...(e.error ? { $ai_error: e.error } : {}),
+    platform: process.platform,
+  });
+}
+
 function aiConfig(): EngineConfig {
   return {
     ai: aiConfigFromEnv() ?? storedAiConfig(globalDb),
     aiProviders: storedAiProviders(globalDb),
     aiFallback: aiAgentFallback,
+    onAiGeneration: emitAiGeneration,
     // Surface systemic run failures (connector/AI bugs) to PostHog Error Tracking,
     // deduped per run by the engine. Per-cell errors still land as cell status.
     reportError: (error: unknown, ctx: RunErrorContext) =>
