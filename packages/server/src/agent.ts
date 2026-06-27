@@ -11,6 +11,7 @@ import type { ServerResponse } from "node:http";
 import { join, dirname, delimiter, extname } from "node:path";
 import { corsHeadersFor } from "./cors.js";
 import { latestSessionId } from "./agent-history.js";
+import { captureServerEvent } from "./observability.js";
 
 const GTM_TOOLS = [
   "list_functions",
@@ -865,7 +866,15 @@ export function mcpEnv(
     perm.GTMGRID_APPROVED_TOOL = approval.tool;
     perm.GTMGRID_APPROVED_ARGS_HASH = approval.argsHash;
   }
-  if (!cloud) return { GTMGRID_PROJECT: project, GTMGRID_PORT: port, ...perm };
+  // Forward the PostHog config so the spawned MCP can deliver its own startup
+  // beacon (mcp_started). The CLI gives the MCP an EXPLICIT env map (Codex even
+  // replaces it wholesale), so without this the child has no key and silently
+  // no-ops. (The MCP tags itself "mcp" via installProcessHandlers, so no source
+  // var needed.) Conditional on the keys being set — absent in tests / unconfigured.
+  const obs: Record<string, string> = {};
+  if (process.env.GTMGRID_POSTHOG_KEY) obs.GTMGRID_POSTHOG_KEY = process.env.GTMGRID_POSTHOG_KEY;
+  if (process.env.GTMGRID_POSTHOG_HOST) obs.GTMGRID_POSTHOG_HOST = process.env.GTMGRID_POSTHOG_HOST;
+  if (!cloud) return { GTMGRID_PROJECT: project, GTMGRID_PORT: port, ...obs, ...perm };
   return {
     GTMGRID_PROJECT: project,
     GTMGRID_PORT: port,
@@ -875,6 +884,7 @@ export function mcpEnv(
     GTMGRID_WORKSPACE_ID: cloud.workspaceId,
     GTMGRID_CLOUD_PROJECT: cloud.projectId,
     GTMGRID_CLOUD_TABLE: cloud.tableId,
+    ...obs,
     ...perm,
   };
 }
@@ -900,6 +910,72 @@ export function mcpConfig(
       ...extra,
     },
   });
+}
+
+/** What we read off Claude Code's `{type:"system", subtype:"init", mcp_servers,
+ *  tools}` event to tell whether gtmgrid's MCP server actually connected for this
+ *  turn — the key signal for debugging "tools not connected" on Windows. Returns
+ *  null for any other event. Pure; exported for tests. */
+export function parseClaudeInit(
+  e: unknown,
+): { mcpConnected: boolean; gtmgridTools: number } | null {
+  if (!e || typeof e !== "object") return null;
+  const ev = e as { type?: string; subtype?: string; mcp_servers?: unknown; tools?: unknown };
+  if (ev.type !== "system" || ev.subtype !== "init") return null;
+  const servers = Array.isArray(ev.mcp_servers) ? ev.mcp_servers : [];
+  const gtm = servers.find((s) => (s as { name?: string } | null)?.name === "gtmgrid") as
+    | { status?: string }
+    | undefined;
+  const tools = Array.isArray(ev.tools) ? ev.tools : [];
+  const gtmgridTools = tools.filter(
+    (t) => typeof t === "string" && t.startsWith("mcp__gtmgrid__"),
+  ).length;
+  return { mcpConnected: gtm?.status === "connected", gtmgridTools };
+}
+
+/** Per-turn observability accumulator (one per agent stream). */
+interface AgentTurnStats {
+  startedAt: number;
+  toolCalls: number;
+  mcpConnected?: boolean;
+  gtmgridTools?: number;
+}
+
+/**
+ * Emit one `agent_turn_completed` event to PostHog — server-side, the only path
+ * that reliably delivers (the Tauri webview blocks posthog-js in packaged builds).
+ * Records which provider/model/mode ran, WHETHER gtmgrid's MCP tools connected and
+ * how many, the tool-call count, exit status, platform/arch and cloud identity — so
+ * a remote Windows user's "tools not connected" turn is visible and filterable in
+ * PostHog. Best-effort: never throws into a turn.
+ */
+function captureAgentTurn(
+  provider: AgentKind,
+  opts: { model?: string; mode?: string; cloud?: AgentCloud },
+  stats: AgentTurnStats,
+  exitCode: number | null,
+): void {
+  try {
+    captureServerEvent("agent_turn_completed", {
+      provider,
+      model: opts.model ?? null,
+      mode: opts.mode ?? null,
+      cloud: !!opts.cloud,
+      workspace_id: opts.cloud?.workspaceId ?? null,
+      project_id: opts.cloud?.projectId ?? null,
+      table_id: opts.cloud?.tableId ?? null,
+      platform: process.platform,
+      arch: process.arch,
+      mcp_connected: stats.mcpConnected ?? null,
+      gtmgrid_tools: stats.gtmgridTools ?? null,
+      tool_calls: stats.toolCalls,
+      exit_code: exitCode,
+      is_error: exitCode !== 0 && exitCode !== null,
+      duration_ms: Date.now() - stats.startedAt,
+    });
+  } catch {
+    /* observability is best-effort — never break a turn */
+  }
 }
 
 /** Stream a Claude Code turn over SSE, driving gtmgrid via MCP. */
@@ -956,6 +1032,7 @@ export function streamClaude(
   let sessionId = resumeId ?? null;
   let buf = "";
   let gridDirty = false;
+  const stats: AgentTurnStats = { startedAt: Date.now(), toolCalls: 0 };
   const lifecycle = manageChildLifecycle(child, {
     onTimeout: (reason) => {
       sse.write({ type: "error", message: turnTimeoutMessage("claude", reason) });
@@ -986,10 +1063,19 @@ export function streamClaude(
       // the on-disk latest-session fallback above, which is always a real
       // resumable transcript.
 
+      // Observability: read the init event to learn whether gtmgrid's MCP server
+      // connected this turn + how many tools it exposed (the Windows debug signal).
+      const init = parseClaudeInit(e);
+      if (init) {
+        stats.mcpConnected = init.mcpConnected;
+        stats.gtmgridTools = init.gtmgridTools;
+      }
+
       if (e.type === "assistant") {
         for (const block of e.message?.content ?? []) {
           if (block.type === "text" && block.text) sse.write({ type: "text", text: block.text });
           else if (block.type === "tool_use") {
+            stats.toolCalls++;
             const short = String(block.name).replace(/^mcp__gtmgrid__/, "");
             sse.write({ type: "tool", name: short, raw: block.name, input: block.input ?? {} });
             // Claude's NATIVE AskUserQuestion: in headless `-p` the CLI stubs the
@@ -1046,6 +1132,7 @@ export function streamClaude(
     sse.end();
   });
   child.on("close", (code) => {
+    captureAgentTurn("claude", opts, stats, code);
     if (code !== 0 && code !== null) {
       sse.write({ type: "error", message: stderr.slice(-400) || `claude exited ${code}` });
     }
@@ -1146,6 +1233,7 @@ export function streamCodex(
 
   let threadId = resumeThread ?? null;
   let buf = "";
+  const stats: AgentTurnStats = { startedAt: Date.now(), toolCalls: 0 };
   const lifecycle = manageChildLifecycle(child, {
     onTimeout: (reason) => {
       sse.write({ type: "error", message: turnTimeoutMessage("codex", reason) });
@@ -1173,6 +1261,7 @@ export function streamCodex(
       } else if (e.type === "item.completed") {
         const item = e.item ?? {};
         if (item.type === "mcp_tool_call") {
+          stats.toolCalls++;
           const short = String(item.tool ?? "");
           sse.write({ type: "tool", name: short, raw: `mcp__${item.server}__${short}`, input: item.arguments ?? {} });
           if (!item.error && item.result) {
@@ -1202,6 +1291,7 @@ export function streamCodex(
     sse.end();
   });
   child.on("close", (code) => {
+    captureAgentTurn("codex", opts, stats, code);
     if (code !== 0 && code !== null) {
       sse.write({ type: "error", message: stderr.split("\n").filter((l) => /error|fatal/i.test(l)).slice(-1)[0] || `codex exited ${code}` });
     }
@@ -1414,6 +1504,7 @@ export function streamCursor(
   let sessionId = resumeId ?? null;
   let buf = "";
   let gridDirty = false;
+  const stats: AgentTurnStats = { startedAt: Date.now(), toolCalls: 0 };
   const lifecycle = manageChildLifecycle(child, {
     onTimeout: (reason) => {
       sse.write({ type: "error", message: turnTimeoutMessage("cursor", reason) });
@@ -1446,6 +1537,7 @@ export function streamCursor(
         for (const block of e.message?.content ?? []) {
           if (block.type === "text" && block.text) sse.write({ type: "text", text: block.text });
           else if (block.type === "tool_use") {
+            stats.toolCalls++;
             const short = cursorToolShort(block.name);
             sse.write({ type: "tool", name: short, raw: block.name, input: block.input ?? {} });
             // Only a gtmgrid MUTATING tool dirties the grid — mirror claude's
@@ -1497,6 +1589,7 @@ export function streamCursor(
     sse.end();
   });
   child.on("close", (code) => {
+    captureAgentTurn("cursor", opts, stats, code);
     cleanupCursorMcpConfig(); // remove the on-disk token now the child has exited
     if (code !== 0 && code !== null) {
       sse.write({ type: "error", message: stderr.slice(-400) || `cursor-agent exited ${code}` });

@@ -8,6 +8,7 @@ import {
   manageChildLifecycle,
   mcpEnv,
   parseAgentCloud,
+  parseClaudeInit,
   permissionEventFromToolResult,
   questionEventFromToolResult,
   STDERR_CAP,
@@ -422,6 +423,49 @@ describe("contextPreamble — bakes in the /goal slash-command protocol", () => 
     const p = contextPreamble();
     expect(p).not.toContain("/help");
     expect(p).not.toContain("/start");
+  });
+});
+
+describe("parseClaudeInit — read MCP connection status from Claude's init event (Windows debug signal)", () => {
+  it("reports gtmgrid connected + counts only its tools", () => {
+    const e = {
+      type: "system",
+      subtype: "init",
+      mcp_servers: [{ name: "gtmgrid", status: "connected" }],
+      tools: ["Bash", "mcp__gtmgrid__get_table", "mcp__gtmgrid__add_rows", "Read"],
+    };
+    expect(parseClaudeInit(e)).toEqual({ mcpConnected: true, gtmgridTools: 2 });
+  });
+
+  it("reports NOT connected when gtmgrid failed to mount (the Windows failure)", () => {
+    const e = {
+      type: "system",
+      subtype: "init",
+      mcp_servers: [{ name: "gtmgrid", status: "failed" }],
+      tools: ["Bash", "Read"],
+    };
+    expect(parseClaudeInit(e)).toEqual({ mcpConnected: false, gtmgridTools: 0 });
+  });
+
+  it("reports NOT connected when gtmgrid is absent from mcp_servers", () => {
+    expect(parseClaudeInit({ type: "system", subtype: "init", mcp_servers: [], tools: [] })).toEqual({
+      mcpConnected: false,
+      gtmgridTools: 0,
+    });
+  });
+
+  it("returns null for any non-init event (so the turn loop ignores it)", () => {
+    expect(parseClaudeInit({ type: "assistant" })).toBeNull();
+    expect(parseClaudeInit({ type: "system", subtype: "other" })).toBeNull();
+    expect(parseClaudeInit(null)).toBeNull();
+    expect(parseClaudeInit("not an object")).toBeNull();
+  });
+
+  it("is defensive about missing/malformed fields", () => {
+    expect(parseClaudeInit({ type: "system", subtype: "init" })).toEqual({
+      mcpConnected: false,
+      gtmgridTools: 0,
+    });
   });
 });
 
