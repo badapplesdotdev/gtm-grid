@@ -244,11 +244,18 @@ function showWindow(): void {
   win.focus();
 }
 
+/** Resolve a shipped runtime icon, platform-agnostically (join, never string
+ *  concat): packaged → `<resources>/<name>`, dev → the repo's build-resources. */
+function iconPath(name: string): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, name)
+    : join(__dirname, "..", "..", "build-resources", name);
+}
+
 function createTray(): void {
-  // Reuse the app icon; a dedicated template icon is a later polish item.
-  const iconPath = join(__dirname, "..", "..", "src-tauri", "icons", "32x32.png");
   try {
-    tray = new Tray(existsSync(iconPath) ? iconPath : join(process.resourcesPath, "icon.png"));
+    const p = iconPath("trayTemplate.png");
+    tray = new Tray(existsSync(p) ? p : iconPath("icon.png"));
   } catch {
     return; // tray is best-effort; never block boot
   }

@@ -1,0 +1,77 @@
+appId: app.gtmgrid.desktop
+productName: GTM Grid
+copyright: © GTM Grid
+
+directories:
+  output: release
+  buildResources: build-resources
+
+# What goes INTO the app (asar). The forked engine + native deps ship as
+# extraResources (outside asar) so the native better_sqlite3.node loads cleanly.
+files:
+  - build/electron/**/*
+  - dist/**/*
+  - package.json
+
+# The bundled engine (server.mjs + mcp.mjs + extensions + native node_modules,
+# better-sqlite3 already rebuilt for Electron's ABI by `pnpm electron:bundle`).
+# Exclude the copied stock-node binary — Electron runs the engine via its own Node.
+extraResources:
+  - from: sidecar
+    to: sidecar
+    filter:
+      - "**/*"
+      - "!node"
+      - "!node.exe"
+      - "!package-lock.json"
+  # Runtime icons (tray + window) — shipped so the main process can load them.
+  - from: build-resources/trayTemplate.png
+    to: trayTemplate.png
+  - from: build-resources/icon.png
+    to: icon.png
+
+# gtmgrid:// deep-link scheme (mac CFBundleURLTypes + win registry via NSIS).
+protocols:
+  - name: GTM Grid
+    schemes:
+      - gtmgrid
+
+publish:
+  provider: github
+  owner: badapplesdotdev
+  repo: gtm-grid
+
+mac:
+  category: public.app-category.productivity
+  icon: build-resources/icon.icns
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build-resources/entitlements.mac.plist
+  entitlementsInherit: build-resources/entitlements.mac.plist
+  # electron-updater needs the zip target on macOS (the dmg is for first install).
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  notarize: false # toggled on in CI via env when signing creds are present
+
+win:
+  icon: build-resources/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+  # Custom installer styling (logo/fonts) is wired here once the design lands (task).
+
+linux:
+  icon: build-resources/icon.png
+  category: Office
+  target:
+    - AppImage
+    - deb
