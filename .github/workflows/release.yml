@@ -129,10 +129,14 @@ jobs:
           VITE_POSTHOG_HOST: ${{ vars.VITE_POSTHOG_HOST || 'https://us.i.posthog.com' }}
           # macOS code signing (Developer ID) — electron-builder reads CSC_LINK /
           # CSC_KEY_PASSWORD. The APPLE_API_* trio (key path staged above) drives
-          # notarization. All empty on non-mac runners.
-          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
-          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ env.HAS_APPLE_SIGNING == 'true' && 'true' || 'false' }}
+          # notarization. MUST be gated on the mac runners: these are repo secrets
+          # present on EVERY runner, so handing the Apple .p12 to electron-builder on
+          # Windows makes it sign the NSIS installer with the Apple Developer ID cert
+          # — which Windows doesn't trust, so electron-updater rejects the download
+          # and Windows auto-update breaks for everyone. Keep them empty off-mac.
+          CSC_LINK: ${{ matrix.os == 'macos' && secrets.APPLE_CERTIFICATE || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.os == 'macos' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.os == 'macos' && env.HAS_APPLE_SIGNING == 'true' && 'true' || 'false' }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
