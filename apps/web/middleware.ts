@@ -13,9 +13,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 const ALLOWED_ORIGINS = new Set([
-  "tauri://localhost", // macOS / iOS Tauri webview
-  "http://tauri.localhost", // Windows / Linux / Android Tauri webview
-  "https://tauri.localhost",
+  "app://gtmgrid", // packaged Electron desktop (custom app:// renderer scheme)
   "http://localhost:5173", // desktop dev (vite)
 ]);
 
