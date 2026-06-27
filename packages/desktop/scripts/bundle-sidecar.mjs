@@ -85,17 +85,11 @@ const extDst = resolve(out, "extensions");
 rmSync(extDst, { recursive: true, force: true });
 if (existsSync(extSrc)) cpSync(extSrc, extDst, { recursive: true });
 
-// Bundled MCP launcher: runs the bundled node + mcp.mjs (used by the agent panel
-// so Claude Code / Codex connect to gtmgrid's MCP server inside the packaged app).
-// Unix only — a bash script; the agent panel's CLI integration is unix-focused.
-if (!isWin) {
-  const launcher = resolve(out, "gtmgrid-mcp");
-  writeFileSync(
-    launcher,
-    `#!/bin/bash\nDIR="$(cd "$(dirname "$0")" && pwd)"\nexec "$DIR/node" "$DIR/mcp.mjs" "$@"\n`,
-    { mode: 0o755 },
-  );
-}
+// No MCP launcher script is written: the agent panel mounts gtmgrid's MCP server
+// by spawning the bundled `node` directly with `mcp.mjs` (above) as a script arg
+// — see `mcpLaunch` in agent.ts and GTMGRID_MCP_NODE/GTMGRID_MCP_SCRIPT in the
+// Rust shell. A `#!/bin/bash` launcher couldn't run on Windows, so the grid tools
+// never loaded there; spawning node directly works on every platform.
 
 // Install native/wasm deps (better-sqlite3 builds/fetches prebuilt, quickjs ships
 // wasm) — only the first time, so incremental builds stay fast. When cross-

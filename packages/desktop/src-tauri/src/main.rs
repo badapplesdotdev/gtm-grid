@@ -164,7 +164,11 @@ fn spawn_sidecar(app: &tauri::App) -> Boot {
     let dir = dunce::simplified(&dir).to_path_buf();
     let node = dir.join(node_binary_name());
     let server = dir.join("server.mjs");
-    let launcher = dir.join("gtmgrid-mcp");
+    // The agent panel mounts gtmgrid's MCP server by spawning this bundled node
+    // directly with mcp.mjs as a script arg (see `mcpLaunch` in agent.ts) — NOT a
+    // shell-script launcher, which Windows cannot execute. Both paths are already
+    // de-verbatim'd above, so the spawned agent CLI gets plain `C:\…` paths.
+    let mcp_script = dir.join("mcp.mjs");
     facts["sidecarDir"] = dir.to_string_lossy().into_owned().into();
     facts["nodePath"] = node.to_string_lossy().into_owned().into();
     facts["nodeExists"] = node.exists().into();
@@ -177,7 +181,6 @@ fn spawn_sidecar(app: &tauri::App) -> Boot {
         return Boot { child: None, tail, facts };
     }
     make_executable(&node);
-    make_executable(&launcher);
 
     // PostHog config for the sidecar's error tracking (shared with the shell's
     // panic hook). Empty key when unconfigured — the sidecar no-ops on a falsy key.
@@ -190,7 +193,8 @@ fn spawn_sidecar(app: &tauri::App) -> Boot {
         // relative resolution behaves identically to a direct boot.
         .current_dir(&dir)
         .env("GTMGRID_PROJECT", std::env::var("GTMGRID_PROJECT").unwrap_or_else(|_| "default".into()))
-        .env("GTMGRID_MCP_LAUNCHER", &launcher)
+        .env("GTMGRID_MCP_NODE", &node)
+        .env("GTMGRID_MCP_SCRIPT", &mcp_script)
         .env("GTMGRID_EXT_DIR", dir.join("extensions"))
         .env("GTMGRID_POSTHOG_KEY", posthog_key)
         .env("GTMGRID_POSTHOG_HOST", posthog_host)

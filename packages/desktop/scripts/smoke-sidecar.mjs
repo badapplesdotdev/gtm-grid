@@ -47,7 +47,8 @@ const child = spawn(nodeBin, [server], {
     GTMGRID_PROJECT: "smoke",
     GTMGRID_PORT: String(PORT),
     GTMGRID_EXT_DIR: join(sidecarDir, "extensions"),
-    GTMGRID_MCP_LAUNCHER: join(sidecarDir, "gtmgrid-mcp"),
+    GTMGRID_MCP_NODE: nodeBin,
+    GTMGRID_MCP_SCRIPT: join(sidecarDir, "mcp.mjs"),
     // Never phone PostHog home from a CI smoke run.
     GTMGRID_POSTHOG_KEY: "",
   },

@@ -751,9 +751,33 @@ function sseClient(res: ServerResponse, origin?: string): SseClient {
  *  rather than a reconstruction. Not used by the server itself. */
 export const __sseClientForTest = sseClient;
 
-/** Path to the gtmgrid MCP launcher — bundled in the packaged app, repo/bin in dev. */
-export function mcpLauncher(repoRoot: string): string {
-  return process.env.GTMGRID_MCP_LAUNCHER ?? join(repoRoot, "bin", "gtmgrid-mcp");
+/**
+ * How to launch the gtmgrid MCP server for a spawned agent CLI: the bundled
+ * `node` binary run directly with `mcp.mjs` as a script argument.
+ *
+ * This is deliberately NOT a shell-script launcher. A `#!/bin/bash` launcher
+ * (or an extensionless one) cannot be executed on Windows, and a `.cmd`/`.bat`
+ * shim would need per-CLI shell handling that claude/codex/cursor do not all
+ * provide — so on Windows the grid tools silently never load. Spawning
+ * `node <script>` directly is the one shape every MCP client launches the same
+ * way on macOS, Linux AND Windows.
+ *
+ * - Packaged: the Rust shell exports `GTMGRID_MCP_NODE` + `GTMGRID_MCP_SCRIPT`
+ *   (both absolute and de-verbatim'd — see the `dunce::simplified` fix).
+ * - Dev: run the TS entry through `tsx` with the server's own `node`.
+ * - Legacy: an explicit `GTMGRID_MCP_LAUNCHER` (a single command, no args) is
+ *   still honoured for back-compat / manual override.
+ */
+export function mcpLaunch(repoRoot: string): { command: string; args: string[] } {
+  const node = process.env.GTMGRID_MCP_NODE;
+  const script = process.env.GTMGRID_MCP_SCRIPT;
+  if (node && script) return { command: node, args: [script] };
+  const legacy = process.env.GTMGRID_MCP_LAUNCHER;
+  if (legacy) return { command: legacy, args: [] };
+  return {
+    command: process.execPath,
+    args: ["--import", "tsx", join(repoRoot, "packages", "mcp", "src", "index.ts")],
+  };
 }
 
 type ExtraMcpServer = { command: string; args?: string[]; env?: Record<string, string> };
@@ -869,9 +893,10 @@ export function mcpConfig(
   mode?: string,
   approval?: AgentApproval,
 ): string {
+  const { command, args } = mcpLaunch(repoRoot);
   return JSON.stringify({
     mcpServers: {
-      gtmgrid: { command: mcpLauncher(repoRoot), env: mcpEnv(project, cloud, mode, approval) },
+      gtmgrid: { command, args, env: mcpEnv(project, cloud, mode, approval) },
       ...extra,
     },
   });
@@ -1046,9 +1071,21 @@ function resultText(result: any): string {
  * those characters cannot break out of the string or inject extra TOML. Keys are
  * fixed `GTMGRID_*` identifiers, so only the values need escaping.
  */
+/** A single TOML basic-string value, with backslashes and quotes escaped. This
+ *  matters on Windows, where the MCP `command`/`args` are absolute paths full of
+ *  `\` separators (`C:\…\node.exe`) — emitting them unescaped produces invalid
+ *  TOML and Codex fails to mount the gtmgrid server. */
+export function tomlString(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+/** A TOML array of basic strings (each escaped via {@link tomlString}). */
+export function tomlStringArray(values: string[]): string {
+  return `[${values.map(tomlString).join(", ")}]`;
+}
+
 export function codexEnvToml(env: Record<string, string>): string {
-  const esc = (v: string) => v.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  const entries = Object.entries(env).map(([k, v]) => `${k} = "${esc(v)}"`);
+  const entries = Object.entries(env).map(([k, v]) => `${k} = ${tomlString(v)}`);
   return `{ ${entries.join(", ")} }`;
 }
 
@@ -1073,7 +1110,7 @@ export function streamCodex(
   opts: { message: string; project: string; repoRoot: string; threadId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; mode?: string; cloud?: AgentCloud; providerEnv?: Record<string, string>; approval?: AgentApproval },
 ): void {
   const sse = sseClient(res, opts.origin);
-  const launcher = mcpLauncher(opts.repoRoot);
+  const { command: mcpCommand, args: mcpArgs } = mcpLaunch(opts.repoRoot);
   const preamble = contextPreamble(opts.context, opts.mode, !!opts.cloud);
   const message = preamble ? `${preamble}\n\n${opts.message}` : opts.message;
   const flags = [
@@ -1085,7 +1122,7 @@ export function streamCodex(
     // env (incl. cloud context in cloud mode) is rendered as TOML with every value
     // safely quoted — see `codexEnvToml`.
     "-c",
-    `mcp_servers={ gtmgrid = { command = "${launcher}", env = ${codexEnvToml(mcpEnv(opts.project, opts.cloud, opts.mode, opts.approval))} } }`,
+    `mcp_servers={ gtmgrid = { command = ${tomlString(mcpCommand)}, args = ${tomlStringArray(mcpArgs)}, env = ${codexEnvToml(mcpEnv(opts.project, opts.cloud, opts.mode, opts.approval))} } }`,
     ...(opts.model ? ["-m", opts.model] : []),
   ];
   // Same binding as Claude: an explicit threadId (History pick) wins, else resume
