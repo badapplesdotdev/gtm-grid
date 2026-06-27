@@ -3,14 +3,18 @@
   "version": "0.22.12",
   "private": true,
   "type": "module",
+  "main": "build/electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "electron:main": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --format=cjs --target=node20 --external:electron --external:electron-updater --outdir=build/electron --out-extension:.js=.cjs",
+    "electron:dev": "pnpm electron:main && cross-env GTMGRID_ELECTRON_DEV=1 electron build/electron/main.cjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "electron-updater": "^6.3.9",
     "@gtmgrid/analytics": "workspace:*",
     "@gtmgrid/cloud": "workspace:*",
     "@gtmgrid/services": "workspace:*",
@@ -45,6 +49,10 @@
     "vaul": "^1.1.2"
   },
   "devDependencies": {
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8",
+    "@electron/rebuild": "^3.7.1",
+    "cross-env": "^7.0.3",
     "@tauri-apps/cli": "^2.11.2",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",

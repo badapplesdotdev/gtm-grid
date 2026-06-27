@@ -25,7 +25,7 @@ import { execSync } from "node:child_process";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "..", "..", ".."); // packages/desktop/scripts -> repo root
-const out = resolve(here, "..", "src-tauri", "sidecar");
+const out = resolve(here, "..", "sidecar");
 
 const isWin = process.platform === "win32";
 const targetArch = process.env.GTMGRID_SIDECAR_ARCH || process.arch; // "arm64" | "x64"

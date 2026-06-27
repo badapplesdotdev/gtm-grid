@@ -13,6 +13,10 @@ dist/
 packages/desktop/src-tauri/target/
 packages/desktop/src-tauri/sidecar/
 packages/desktop/src-tauri/gen/
+# Electron build artifacts
+packages/desktop/sidecar/
+packages/desktop/build/
+packages/desktop/release/
 
 # Local environment + secrets (DATABASE_URL, Autumn/Resend keys, the Tauri
 # updater signing key, etc.). Ignore every .env variant except the checked-in

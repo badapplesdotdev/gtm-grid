@@ -49,7 +49,10 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "better-sqlite3",
-      "esbuild"
+      "esbuild",
+      "electron",
+      "electron-builder",
+      "@electron/rebuild"
     ],
     "overrides": {
       "kysely": "0.29.2"
