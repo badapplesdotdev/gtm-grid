@@ -8,7 +8,10 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `tray-icon` enables the system-tray API (TrayIconBuilder). We hide the window
+# to the tray on close instead of quitting, so the engine + agent runs keep going
+# in the background. Linux CI already installs libappindicator3-dev.
+tauri = { version = "2", features = ["tray-icon"] }
 # Deep-link OAuth callback (C29). single-instance MUST be initialised before the
 # deep-link plugin on desktop; the "deep-link" feature wires the two together so a
 # `gtmgrid://` URL handed to a second instance is forwarded to the running app.

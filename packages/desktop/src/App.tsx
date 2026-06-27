@@ -1,6 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, memo, lazy, Suspense, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { api, API_BASE, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource } from "./api";
 import { onActivateKey } from "./lib/utils";
+import { firstCsvFile, dragHasFiles } from "./csvDrop";
 import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import { AppError } from "./AppError";
@@ -1230,6 +1231,14 @@ export default function App() {
   // writes go via the metered Convex mutations (writer built below).
   const [importMode, setImportMode] = useState<null | "cloud">(null);
 
+  // Window drag-and-drop CSV: a CSV dropped anywhere on the app opens the import
+  // flow straight on the review stage. `fileDragging` toggles the drop overlay;
+  // `dragDepth` counts enter/leave across child elements so the overlay doesn't
+  // flicker as the cursor moves between them.
+  const [droppedCsv, setDroppedCsv] = useState<File | null>(null);
+  const [fileDragging, setFileDragging] = useState(false);
+  const dragDepth = useRef(0);
+
   // Cloud import writer — Convex mutations (metered; quota-guarded). Null until a
   // cloud project is open. Branded Convex ids are strings at runtime.
   const cloudImportWriter = useMemo<ImportWriter | null>(() => {
@@ -1243,6 +1252,38 @@ export default function App() {
       },
     };
   }, [cloudProject, createCloudTable, cloudAddColumn, cloudAddRowsWithCells]);
+
+  // Window drag-and-drop handlers. Only engage for OS file drags, and only when a
+  // cloud import writer exists (same gate as the sidebar "Import CSV…" button).
+  // Mirrors that button: opens the import flow; the dropped file lands on review.
+  const canDropCsv = cloudImportWriter != null;
+  const onWindowDragEnter = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+    if (!canDropCsv || !dragHasFiles(e.dataTransfer?.types)) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setFileDragging(true);
+  }, [canDropCsv]);
+  const onWindowDragOver = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+    if (!canDropCsv || !dragHasFiles(e.dataTransfer?.types)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }, [canDropCsv]);
+  const onWindowDragLeave = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+    if (!canDropCsv || !dragHasFiles(e.dataTransfer?.types)) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setFileDragging(false);
+  }, [canDropCsv]);
+  const onWindowDrop = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+    if (!canDropCsv || !dragHasFiles(e.dataTransfer?.types)) return;
+    e.preventDefault();
+    dragDepth.current = 0;
+    setFileDragging(false);
+    const csv = firstCsvFile(e.dataTransfer?.files);
+    if (!csv) return; // non-CSV drop: ignore (the overlay already cleared)
+    setDroppedCsv(csv);
+    setImportMode("cloud");
+  }, [canDropCsv]);
+
   // Cloud "From Social Signals" adapter — loads sources via tRPC + creates the
   // cloud table/columns/binding (the recurring poll runs in the Inngest worker).
   const signalsCloud = useMemo<SignalsCloud | undefined>(() => {
@@ -2165,7 +2206,23 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell" style={{ ["--sidebar-w"]: `${sidebarWidth}px`, ["--agent-w"]: `${agentWidth}px` } as CSSProperties}>
+    <div
+      className="app-shell"
+      style={{ ["--sidebar-w"]: `${sidebarWidth}px`, ["--agent-w"]: `${agentWidth}px` } as CSSProperties}
+      onDragEnter={onWindowDragEnter}
+      onDragOver={onWindowDragOver}
+      onDragLeave={onWindowDragLeave}
+      onDrop={onWindowDrop}
+    >
+      {fileDragging && (
+        <div className="app-dropzone-overlay">
+          <div className="app-dropzone-card">
+            <Icon.Table />
+            <div className="app-dropzone-title">Drop a CSV to import</div>
+            <div className="app-dropzone-sub">Release to map columns and create a table</div>
+          </div>
+        </div>
+      )}
       {/* Workspace-invite accept banner (email-matched + ?invite= URL token).
           Self-gates: renders nothing when signed out / no pending invites. The
           trial / auto-sync nudge / update alerts that used to stack here now live
@@ -2688,10 +2745,12 @@ export default function App() {
             <ImportCsvModal
               inline
               writer={cloudImportWriter}
-              onClose={() => setImportMode(null)}
+              initialFile={droppedCsv}
+              onClose={() => { setImportMode(null); setDroppedCsv(null); }}
               onOpenTable={id => {
                 setCloudTableId(id as Id<"tables">);
                 setImportMode(null);
+                setDroppedCsv(null);
               }}
             />
           </Suspense>

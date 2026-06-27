@@ -417,6 +417,17 @@ describe("contextPreamble — bakes in the /goal slash-command protocol", () => 
     expect(p).toContain("/goal");
     expect(p).toContain('viewing **"Leads"**');
   });
+
+  it("teaches the /help + /start onboarding protocol (no tools, friendly tour)", () => {
+    const p = contextPreamble();
+    expect(p).toContain("/help");
+    expect(p).toContain("/start");
+    // It's an orientation, not a tool-driven action.
+    expect(p).toMatch(/onboarding/i);
+    expect(p).toMatch(/do NOT call any tools/i);
+    // Points new users at the two ways to get data in + an example prompt.
+    expect(p).toMatch(/Import CSV|drag a CSV/i);
+  });
 });
 
 describe("codexSandboxFlags — codex exec uses the resume-compatible bypass for every mode", () => {

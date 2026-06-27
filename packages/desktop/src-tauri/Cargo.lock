@@ -1469,7 +1469,7 @@ dependencies = [
 
 [[package]]
 name = "gtmgrid"
-version = "0.22.8"
+version = "0.22.9"
 dependencies = [
  "dunce",
  "serde_json",

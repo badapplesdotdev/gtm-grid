@@ -12,6 +12,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
 
@@ -445,6 +447,32 @@ fn sidecar_diagnostics(diag: tauri::State<Diagnostics>) -> serde_json::Value {
     out
 }
 
+/// Show + focus the main window (used by the tray "Show" item, a tray left-click,
+/// and a second-launch via single-instance). No-op if the window is gone.
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// Flag an intentional shutdown and kill the Node sidecar. Shared by the tray
+/// "Quit" item and the window `Destroyed` event so the engine is always torn down
+/// on a real quit (but NOT when the window merely hides to the tray). Setting
+/// `shutting_down` FIRST stops the liveness monitor from reporting the kill as a
+/// crash.
+fn shutdown_sidecar(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<Sidecar>() {
+        state.shutting_down.store(true, Ordering::SeqCst);
+        if let Ok(mut guard) = state.child.lock() {
+            if let Some(child) = guard.as_mut() {
+                let _ = child.kill();
+            }
+        }
+    }
+}
+
 fn main() {
     // Surface shell panics to PostHog before anything else can crash.
     install_panic_hook();
@@ -454,6 +482,9 @@ fn main() {
         // routed into the already-running instance, whose handler forwards the
         // deep-link argv to the webview instead of opening a new window.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // A second launch while we're hidden in the tray should bring us back —
+            // show + focus the window in addition to forwarding any deep link.
+            show_main_window(app);
             for arg in argv.iter().skip(1) {
                 if arg.starts_with("gtmgrid://") {
                     emit_oauth_callback(app, arg);
@@ -489,6 +520,39 @@ fn main() {
                 monitor_sidecar(app.handle().clone());
             }
 
+            // System tray — the app hides here on window close (keeping the engine
+            // running) instead of quitting. The menu is the deliberate exit path.
+            let show_item = MenuItem::with_id(app, "show", "Show GTM Grid", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+            let mut tray = TrayIconBuilder::with_id("main")
+                .tooltip("GTM Grid")
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => show_main_window(app),
+                    "quit" => {
+                        shutdown_sidecar(app);
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    // Left-click the tray icon → restore the window.
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                });
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            }
+            tray.build(app)?;
+
             // Warm deep links (app already running): emit each incoming URL to
             // the webview so the OAuth listener can complete the session.
             let handle = app.handle().clone();
@@ -508,19 +572,20 @@ fn main() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                if let Some(state) = window.app_handle().try_state::<Sidecar>() {
-                    // Flag shutdown FIRST so the liveness monitor treats the kill
-                    // below as intentional, not a crash to report.
-                    state.shutting_down.store(true, Ordering::SeqCst);
-                    if let Ok(mut guard) = state.child.lock() {
-                        if let Some(child) = guard.as_mut() {
-                            let _ = child.kill();
-                        }
-                    }
-                }
+        .on_window_event(|window, event| match event {
+            // Close (X) → hide to the tray instead of quitting, so the engine and
+            // any in-flight agent runs keep going. The user expected a background
+            // app, not a hard exit. Quit is reachable from the tray menu.
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                api.prevent_close();
+                let _ = window.hide();
             }
+            // Real teardown (tray "Quit" / app.exit): kill the sidecar. Reached only
+            // on an actual quit now, since close is intercepted above.
+            tauri::WindowEvent::Destroyed => {
+                shutdown_sidecar(window.app_handle());
+            }
+            _ => {}
         })
         .run(tauri::generate_context!())
         .expect("error while running gtmgrid");

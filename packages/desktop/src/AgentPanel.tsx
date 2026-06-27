@@ -129,11 +129,21 @@ interface SlashCommand {
   hint: string;
   description: string;
 }
-const SLASH_COMMANDS: SlashCommand[] = [
+export const SLASH_COMMANDS: SlashCommand[] = [
   {
     name: "goal",
     hint: "<objective>",
     description: "Hand the agent an objective — it plans, then works it end-to-end",
+  },
+  {
+    name: "help",
+    hint: "",
+    description: "New here? A quick tour of GTM Grid and what to try first",
+  },
+  {
+    name: "start",
+    hint: "",
+    description: "New here? A quick tour of GTM Grid and what to try first",
   },
 ];
 

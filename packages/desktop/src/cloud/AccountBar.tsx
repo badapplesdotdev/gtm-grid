@@ -115,6 +115,33 @@ interface AccountBarProps {
 }
 
 /**
+ * The account avatar: the signed-in user's profile picture when available
+ * (`me.user.image`, an OAuth/profile URL), otherwise the initial letter. The
+ * `.account-avatar` class supplies the circle; the image fills it. `no-referrer`
+ * is required for Google/GitHub avatar hotlinking (same as PresenceAvatars). On
+ * a broken image URL we fall back to the letter.
+ */
+export function AccountAvatar({ image, letter }: { image: string | null; letter: string }) {
+  const [failed, setFailed] = useState(false);
+  const showImage = image != null && image !== "" && !failed;
+  return (
+    <span className="account-avatar">
+      {showImage ? (
+        <img
+          className="account-avatar-img"
+          src={image}
+          alt=""
+          referrerPolicy="no-referrer"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        letter
+      )}
+    </span>
+  );
+}
+
+/**
  * The sidebar-footer account control + dropdown menu. Shows local project info
  * always; layers cloud auth + workspace switching on top when signed in.
  */
@@ -149,7 +176,7 @@ export function AccountBar(props: AccountBarProps) {
         className="account-btn"
         onClick={() => (open ? setOpen(false) : openMenu())}
       >
-        <span className="account-avatar">{avatarLetter}</span>
+        <AccountAvatar image={signedIn ? me!.user.image : null} letter={avatarLetter} />
         <span className="account-text">
           <span className="account-name">
             {signedIn
@@ -195,7 +222,7 @@ export function AccountBar(props: AccountBarProps) {
           <div className="account-backdrop" onClick={() => setOpen(false)} />
           <div className="account-menu">
             <div className="account-menu-head">
-              <span className="account-avatar">{avatarLetter}</span>
+              <AccountAvatar image={signedIn ? me!.user.image : null} letter={avatarLetter} />
               <div className="account-menu-head-text">
                 <strong>
                   {signedIn
