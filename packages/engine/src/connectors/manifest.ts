@@ -170,9 +170,14 @@ async function httpCall(
     ...man.headers,
   };
 
-  // Credential injection.
+  // Credential injection. Pre-flight: when the manifest declares apiKey auth but
+  // no secret is resolved (no credential connected, or the wrong key), fail fast
+  // with a clear, actionable message instead of firing an unauthenticated request
+  // and surfacing the upstream's cryptic 401 body. Applies to every apiKey
+  // connector, not just one.
   const token = ctx.secrets[secretKey];
-  if (token && man.auth?.type === "apiKey") {
+  if (man.auth?.type === "apiKey") {
+    if (!token) throw new Error(missingKeyMessage(man));
     if (man.auth.header) {
       const isAuthz = man.auth.header.toLowerCase() === "authorization";
       headers[man.auth.header] = isAuthz ? `${man.auth.scheme ?? "Bearer "}${token}` : token;
@@ -220,10 +225,26 @@ async function httpCall(
     data = text;
   }
   if (!resp.ok) {
+    // A 401 on an apiKey connector almost always means the configured key is
+    // invalid/expired (a missing key is already caught pre-flight) — turn the raw
+    // upstream "Unauthenticated" body into the same actionable guidance.
+    if (resp.status === 401 && man.auth?.type === "apiKey") {
+      throw new Error(invalidKeyMessage(man));
+    }
     const detail = typeof data === "string" ? data.slice(0, 300) : JSON.stringify(data).slice(0, 300);
     throw new Error(`${man.name} ${m.id} HTTP ${resp.status}: ${detail}`);
   }
   return data;
+}
+
+/** Actionable message for an apiKey connector invoked with no resolved secret. */
+function missingKeyMessage(man: ExtensionManifest): string {
+  return `${man.name} API key not configured — connect a ${man.name} credential to run this function.`;
+}
+
+/** Actionable message for an apiKey connector rejected with a 401. */
+function invalidKeyMessage(man: ExtensionManifest): string {
+  return `${man.name} API key invalid or expired (HTTP 401) — check the ${man.name} credential and update the key.`;
 }
 
 /** One resolved choice for a pick-field dropdown. */
