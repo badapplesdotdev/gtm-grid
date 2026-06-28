@@ -505,16 +505,20 @@ function agentSpawnEnv(binPath: string): NodeJS.ProcessEnv {
 // The gtmgrid agent must run in a CLEAN agent environment, NOT the user's personal
 // one. Without isolation the spawned CLI loads everything in the user's home config
 // — global skills, plugins, hooks, and CLAUDE.md/AGENTS instructions (e.g. a
-// `deepline` plugin whose startup hook fired inside our turns, pulled the agent off
-// gtmgrid's tools, and imposed approvals despite bypass mode). Each CLI exposes a
-// per-invocation flag that drops the user's personal config WHILE KEEPING AUTH +
-// model, so we use those rather than fragile config-dir/credential juggling:
-//   - claude: `--setting-sources project` (loads only project-scope settings — our
-//     app-owned workspace has none — so no user skills/plugins/hooks/CLAUDE.md).
+// `deepline-gtm` Claude skill the agent kept invoking instead of gtmgrid's tools,
+// whose startup refresh fired inside our turns and imposed approvals). Each CLI
+// exposes per-invocation flags that drop the user's personal config WHILE KEEPING
+// AUTH + model, so we use those rather than fragile config-dir/credential juggling:
+//   - claude: `--setting-sources project` drops user CLAUDE.md/plugins/hooks/settings
+//     (our app-owned workspace has no project scope), but it does NOT disable skills
+//     — VERIFIED: it only thinned them 113→29, leaving the user's skills invokable.
+//     `--disable-slash-commands` is what actually zeroes them (113→0). Our own skills
+//     ride the `--append-system-prompt` preamble + the gtmgrid MCP, so neither flag
+//     touches them.
 //   - codex:  `--ignore-user-config` (skips ~/.codex/config.toml; auth still works).
 //   - cursor: no such flag — isolated via its workspace cwd ({@link CURSOR_WORKSPACE});
 //     the operating-manual preamble steers it to gtmgrid's tools.
-const CLAUDE_ISOLATION_ARGS = ["--setting-sources", "project"];
+const CLAUDE_ISOLATION_ARGS = ["--setting-sources", "project", "--disable-slash-commands"];
 const CODEX_ISOLATION_ARGS = ["--ignore-user-config"];
 
 /** Spawn an agent CLI cross-platform. A Windows `.cmd`/`.bat` shim cannot be
