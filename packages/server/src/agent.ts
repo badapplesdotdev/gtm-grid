@@ -140,6 +140,9 @@ export function contextPreamble(ctx?: AgentContext, mode?: string, isCloud?: boo
 
 You are operating **GTM Grid**, a Clay-style ${isCloud ? "cloud" : "local"} spreadsheet where every column is a function. ${where} The user runs you to build GTM pipelines: source prospects, enrich them, score/personalize, push to outreach tools.
 
+## Ground rule — use ONLY the GTM Grid tools
+Source, enrich, and write data ONLY through the GTM Grid tools (\`list_tables\`, \`get_table\`, \`add_rows\`, \`add_column\`, \`run_column\`, \`run_function\`, the connectors). You do **not** need a table open to start — call \`list_tables\` to see the project's tables or \`create_table\` to make one, then operate by id. **NEVER** shell out (Bash), read/write local files, or invoke an external CLI or skill (e.g. \`deepline\`, \`npx\`) to find or enrich data — there is no useful local filesystem, those bypass the grid, and their output never reaches the user's tables. If the GTM Grid tools are genuinely unavailable to you this turn, STOP and tell the user to sign in and open their cloud project — do not improvise with other tools.
+
 ## Core model
 - **Tables** = sheets. **Rows** = records. **Columns** = either MANUAL (user types values) or FUNCTION (runs an enrichment / AI / HTTP call per row).
 - A function column is wired to one connector method: \`provider.method\` (e.g. \`trigify.enrichProfile\`, \`leadmagic.emailFinder\`, \`ai.generate\`, \`formatting.normalizeDomain\`).
@@ -501,25 +504,22 @@ function agentSpawnEnv(binPath: string): NodeJS.ProcessEnv {
   return { ...process.env, [PATH_KEY]: parts.join(delimiter) };
 }
 
-// ── Agent isolation ───────────────────────────────────────────────────────────
-// The gtmgrid agent must run in a CLEAN agent environment, NOT the user's personal
-// one. Without isolation the spawned CLI loads everything in the user's home config
-// — global skills, plugins, hooks, and CLAUDE.md/AGENTS instructions (e.g. a
-// `deepline-gtm` Claude skill the agent kept invoking instead of gtmgrid's tools,
-// whose startup refresh fired inside our turns and imposed approvals). Each CLI
-// exposes per-invocation flags that drop the user's personal config WHILE KEEPING
-// AUTH + model, so we use those rather than fragile config-dir/credential juggling:
-//   - claude: `--setting-sources project` drops user CLAUDE.md/plugins/hooks/settings
-//     (our app-owned workspace has no project scope), but it does NOT disable skills
-//     — VERIFIED: it only thinned them 113→29, leaving the user's skills invokable.
-//     `--disable-slash-commands` is what actually zeroes them (113→0). Our own skills
-//     ride the `--append-system-prompt` preamble + the gtmgrid MCP, so neither flag
-//     touches them.
-//   - codex:  `--ignore-user-config` (skips ~/.codex/config.toml; auth still works).
-//   - cursor: no such flag — isolated via its workspace cwd ({@link CURSOR_WORKSPACE});
-//     the operating-manual preamble steers it to gtmgrid's tools.
-const CLAUDE_ISOLATION_ARGS = ["--setting-sources", "project", "--disable-slash-commands"];
-const CODEX_ISOLATION_ARGS = ["--ignore-user-config"];
+// ── Agent isolation (intentionally OFF) ────────────────────────────────────────
+// We previously isolated the agent from the user's personal Claude/Codex config
+// (claude `--setting-sources project --disable-slash-commands`, codex
+// `--ignore-user-config`) to stop a `deepline-gtm` skill from being used instead of
+// gtmgrid's tools. But that treated a SYMPTOM. The ROOT cause was that the agent had
+// NO gtmgrid tools when no table was open — the cloud context required an active
+// tableId, so the MCP failed to start and the agent improvised with whatever skill
+// was lying around. Now that tableId is optional (the MCP connects on sign-in +
+// cloud project alone — see packages/mcp/cloud-context.ts), the gtmgrid tools are
+// ALWAYS available, so the agent uses THEM. We therefore RE-ENABLE the user's +
+// built-in skills — notably the native `/goal`, whose Stop-hook loop runs a goal to
+// completion (which `--disable-slash-commands` had broken). The "use ONLY GTM Grid
+// tools" ground rule in the preamble keeps it on the grid. Re-add a flag here only
+// if the deepline fallback ever returns despite tools being available.
+const CLAUDE_ISOLATION_ARGS: string[] = [];
+const CODEX_ISOLATION_ARGS: string[] = [];
 
 /** Spawn an agent CLI cross-platform. A Windows `.cmd`/`.bat` shim cannot be
  *  launched without a shell (EINVAL), so route those through one; native `.exe`
@@ -816,15 +816,18 @@ export interface AgentCloud {
   readonly token: string;
   readonly workspaceId: string;
   readonly projectId: string;
-  readonly tableId: string;
+  /** The active table — OPTIONAL: the agent works with no table loaded. */
+  readonly tableId?: string;
 }
 
 /**
  * Validate the `cloud` block of an `/api/agent/chat` body into an
  * {@link AgentCloud}, or `undefined` when it is absent/incomplete. A cloud
- * context requires EVERY field (apiUrl/token/workspaceId/projectId/tableId) to
- * be a non-empty string; any missing/blank field falls back to local mode (so a
- * half-populated block never half-activates cloud routing). Trims each value.
+ * context requires apiUrl/token/workspaceId/projectId to be non-empty strings —
+ * the user must be signed in with a cloud project — but `tableId` is OPTIONAL, so
+ * the agent has its gtmgrid tools even with NO table loaded (it can list_tables /
+ * create_table / operate by id). Any missing required field falls back to local
+ * mode (so a half-populated block never half-activates cloud routing). Trims each value.
  */
 export function parseAgentCloud(raw: unknown): AgentCloud | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
@@ -840,14 +843,8 @@ export function parseAgentCloud(raw: unknown): AgentCloud | undefined {
   const token = read("token");
   const workspaceId = read("workspaceId");
   const projectId = read("projectId");
-  const tableId = read("tableId");
-  if (
-    apiUrl === undefined ||
-    token === undefined ||
-    workspaceId === undefined ||
-    projectId === undefined ||
-    tableId === undefined
-  ) {
+  const tableId = read("tableId"); // optional — may be absent when no table is open
+  if (apiUrl === undefined || token === undefined || workspaceId === undefined || projectId === undefined) {
     return undefined;
   }
   return { apiUrl, token, workspaceId, projectId, tableId };
@@ -933,7 +930,8 @@ export function mcpEnv(
     GTMGRID_TOKEN: cloud.token,
     GTMGRID_WORKSPACE_ID: cloud.workspaceId,
     GTMGRID_CLOUD_PROJECT: cloud.projectId,
-    GTMGRID_CLOUD_TABLE: cloud.tableId,
+    // Only when a table is actually open — the MCP treats it as optional.
+    ...(cloud.tableId ? { GTMGRID_CLOUD_TABLE: cloud.tableId } : {}),
     ...obs,
     ...perm,
   };

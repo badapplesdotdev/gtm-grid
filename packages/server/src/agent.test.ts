@@ -36,9 +36,13 @@ describe("parseAgentCloud — validate the chat body's cloud block (TRI-3296)", 
     );
   });
 
-  it("returns undefined for a missing/blank field (no half-activation)", () => {
+  it("returns undefined for a missing/blank REQUIRED field (no half-activation)", () => {
     expect(parseAgentCloud({ ...CLOUD, token: "" })).toBeUndefined();
-    expect(parseAgentCloud({ ...CLOUD, tableId: undefined })).toBeUndefined();
+    expect(parseAgentCloud({ ...CLOUD, projectId: undefined })).toBeUndefined();
+  });
+
+  it("tableId is OPTIONAL — a cloud context resolves with no active table loaded", () => {
+    expect(parseAgentCloud({ ...CLOUD, tableId: undefined })).toEqual({ ...CLOUD, tableId: undefined });
   });
 
   it("returns undefined for non-object / absent input (local mode)", () => {

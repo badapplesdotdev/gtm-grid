@@ -1327,7 +1327,11 @@ export default function App() {
   // we have a session).
   // (`cloudSession` is declared above, alongside the credential source.)
   const agentCloud = useMemo<AgentCloudContext | null>(() => {
-    if (!cloudSession || !activeWorkspace || !cloudProject || !cloudTableId) {
+    // The agent gets its gtmgrid tools as soon as the user is signed in with a
+    // cloud project — an ACTIVE TABLE is NOT required (it can list_tables /
+    // create_table / operate by id). Without this, no open table → no cloud
+    // context → the MCP fails to load and the agent improvises with shell tools.
+    if (!cloudSession || !activeWorkspace || !cloudProject) {
       return null;
     }
     return {
@@ -1335,7 +1339,7 @@ export default function App() {
       token: cloudSession.token,
       workspaceId: activeWorkspace._id,
       projectId: cloudProject._id,
-      tableId: cloudTableId,
+      tableId: cloudTableId ?? undefined,
     };
   }, [cloudSession, activeWorkspace, cloudProject, cloudTableId]);
   // Active CLOUD table's live view. Shares CloudGrid's paged query key, so this
@@ -1364,7 +1368,13 @@ export default function App() {
   // Agent presence (Co-Pilot cursor): the agent's gtmgrid tool calls — streamed
   // through the panel's SSE — light up the cell/column it's working on for
   // EVERYONE in the cloud table's room. Cloud-only; no-ops in local mode.
-  const onAgentEvent = useAgentPresence(agentCloud);
+  // Presence is per-table (it lights up cells in a table's room), so it only
+  // applies when a table is actually open — no-op otherwise.
+  const onAgentEvent = useAgentPresence(
+    agentCloud && agentCloud.tableId
+      ? { workspaceId: agentCloud.workspaceId, tableId: agentCloud.tableId }
+      : null,
+  );
   // Cloud-access lock: the active workspace's trial lapsed / it's on Free (no
   // plan id). Cloud tables/projects are shown but LOCKED — opening or editing
   // them prompts an upgrade; local tables are unaffected. The server enforces the

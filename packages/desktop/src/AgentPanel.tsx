@@ -570,7 +570,8 @@ export interface AgentCloudContext {
   readonly token: string;
   readonly workspaceId: string;
   readonly projectId: string;
-  readonly tableId: string;
+  /** The active table — OPTIONAL: the agent works with no table loaded. */
+  readonly tableId?: string;
 }
 
 /** Agent activity forwarded to the host (drives agent presence in the grid). */
