@@ -63,6 +63,7 @@ import {
   type CloudTableSummary,
 } from "./cloud/useCloudGrid";
 import { useAgentPresence } from "./cloud/agentPresence";
+import { resolveActiveTable } from "./cloud/active-table";
 import { type SignalsCloud } from "./SignalsModal";
 // Type-only import (erased at build) so the AgentPanel lazy chunk stays split.
 import type { AgentCloudContext } from "./AgentPanel";
@@ -1356,14 +1357,17 @@ export default function App() {
   // the prop identity only changes when the table name or column set actually
   // does. We source it from the cloud table so the hint follows `cloudTableId`.
   const activeTableSource = cloudActiveTable ?? null;
+  // `resolveActiveTable` falls back to the name from the already-loaded tables LIST
+  // when the paged fetch hasn't resolved yet, so the agent's "Active table" hint is
+  // populated the instant `cloudTableId` is set (auto-default-on-open OR manual
+  // click) — see active-table.ts for why (without it, a goal sent right after open
+  // makes the agent spin up a NEW table instead of using the one in view).
   const activeTableColumnNames = activeTableSource?.columns.map((c) => c.name).join("\n") ?? null;
+  const activeTableName = resolveActiveTable(cloudTableId, activeTableSource, cloudTables)?.name ?? null;
   const activeTable = useMemo(
-    () =>
-      activeTableSource
-        ? { name: activeTableSource.name, columns: activeTableSource.columns.map((c) => c.name) }
-        : null,
+    () => resolveActiveTable(cloudTableId, activeTableSource, cloudTables),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the table name + serialized column names, not the FullTable identity
-    [activeTableSource?.name, activeTableColumnNames],
+    [activeTableName, activeTableColumnNames],
   );
   // Agent presence (Co-Pilot cursor): the agent's gtmgrid tool calls — streamed
   // through the panel's SSE — light up the cell/column it's working on for
