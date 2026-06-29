@@ -33,6 +33,7 @@ import {
   WorkspaceRepo,
   type WorkspaceRepoError,
 } from "../repositories/workspace-repo.js";
+import { isSelfHost } from "../self-host.js";
 
 /**
  * Raised when a workspace without an active cloud plan attempts a cloud-tier
@@ -61,6 +62,12 @@ export class EntitlementService extends Effect.Service<EntitlementService>()(
         workspaceId: string,
       ): Effect.Effect<void, PlanRequiredError | WorkspaceRepoError> =>
         Effect.gen(function* () {
+          // SELF-HOST: the paid cloud-access gate does not apply. A self-hosted
+          // instance has no billing backend, so every workspace is Free (null
+          // plan) yet must retain full cloud-tier access indefinitely. Gated by
+          // `GTMGRID_SELF_HOST=1`; the hosted product leaves it unset and the
+          // entitlement check below applies as normal. See SELF-HOST.md.
+          if (isSelfHost()) return;
           const ws = yield* repo.findById(workspaceId);
           const planId = Option.match(ws, {
             onNone: () => null,

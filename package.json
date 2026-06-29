@@ -3,7 +3,7 @@
   "version": "1.1.1",
   "private": true,
   "type": "module",
-  "description": "Local-first programmable GTM spreadsheet. Columns are functions.",
+  "description": "Source-available, self-hostable programmable GTM spreadsheet. Columns are functions.",
   "license": "SEE LICENSE IN LICENSE",
   "packageManager": "pnpm@10.7.0",
   "engines": {

@@ -2,7 +2,7 @@
 
 A cloud-only, programmable GTM spreadsheet — a Clay/Revcode-style tool where **every column is a function**. Grid data lives in **Postgres** (the single source of truth); column **execution and your keys stay on your machine** via a local Node sidecar engine — a QuickJS sandbox for column logic, declarative HTTP connectors, bring-your-own AI key, and an MCP server so Claude Code / Codex can drive your grid. An account is **required**; the free path is **self-hosting** (run your own Postgres + the `apps/web` backend).
 
-No remote job queue. Self-host your own Postgres for free, or use our hosted cloud. Bring your own AI key and your own Claude Code subscription.
+**Self-host** the whole thing on your own Postgres — fully functional, no usage caps, source-available under [FSL-1.1-MIT](./LICENSE); you run and operate the infra. Or use our **managed cloud** for zero-ops hosting plus realtime team multiplayer. Either way, bring your own AI key and your own Claude Code subscription.
 
 ## Getting started
 
@@ -37,10 +37,16 @@ docker compose up -d          # Postgres on localhost:5432
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/postgres
 SITE_URL=http://localhost:3000
 INVITE_BASE_URL=http://localhost:3000
+GTMGRID_SELF_HOST=1                            # self-host: never expires/locks out
 BETTER_AUTH_SECRET=$(openssl rand -hex 32)     # paste the generated value
 WEBHOOK_WORKER_SECRET=$(openssl rand -hex 24)  # paste the generated value
 CREDENTIALS_MASTER_KEY=$(openssl rand -hex 32) # paste the generated value
 ```
+
+> `GTMGRID_SELF_HOST=1` is important: it bypasses the paid cloud-access gate and
+> usage cap, so a self-hosted instance keeps working indefinitely (without it, a
+> workspace falls to Free when its 7-day trial lapses and cloud writes start
+> failing). Billing only applies to the managed cloud.
 
 …and `packages/desktop/.env.local` (point the desktop at your local backend):
 
@@ -65,9 +71,10 @@ GTMGRID_PROJECT=default pnpm server
 pnpm desktop
 ```
 
-**Sign up** against your local backend — a new account gets a free trial, so you
-can create tables, add function columns, connect your AI key in-app, and run them
-right away. Connector/AI keys are stored encrypted on *your* machine.
+**Sign up** against your local backend and start building — create tables, add
+function columns, connect your AI key in-app, and run them right away. With
+`GTMGRID_SELF_HOST=1` your instance never expires or meters usage. Connector/AI
+keys are stored encrypted on *your* machine.
 
 > Live multiplayer + inbound webhooks need extra services (Supabase Realtime /
 > PartyKit, Inngest). This Postgres-only flow gives you a fully working
