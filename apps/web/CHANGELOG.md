@@ -1,5 +1,223 @@
 # @gtmgrid/web
 
+## 1.0.6
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.0.6
+- @gtmgrid/auth@1.0.6
+- @gtmgrid/cloud@1.0.6
+- @gtmgrid/db@1.0.6
+- @gtmgrid/email@1.0.6
+- @gtmgrid/engine@1.0.6
+- @gtmgrid/services@1.0.6
+
+## 1.0.5
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.0.5
+- @gtmgrid/auth@1.0.5
+- @gtmgrid/cloud@1.0.5
+- @gtmgrid/db@1.0.5
+- @gtmgrid/email@1.0.5
+- @gtmgrid/engine@1.0.5
+- @gtmgrid/services@1.0.5
+
+## 1.0.4
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.0.4
+- @gtmgrid/auth@1.0.4
+- @gtmgrid/cloud@1.0.4
+- @gtmgrid/db@1.0.4
+- @gtmgrid/email@1.0.4
+- @gtmgrid/engine@1.0.4
+- @gtmgrid/services@1.0.4
+
+## 1.0.3
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.0.3
+- @gtmgrid/auth@1.0.3
+- @gtmgrid/cloud@1.0.3
+- @gtmgrid/db@1.0.3
+- @gtmgrid/email@1.0.3
+- @gtmgrid/engine@1.0.3
+- @gtmgrid/services@1.0.3
+
+## 1.0.2
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.0.2
+- @gtmgrid/auth@1.0.2
+- @gtmgrid/cloud@1.0.2
+- @gtmgrid/db@1.0.2
+- @gtmgrid/email@1.0.2
+- @gtmgrid/engine@1.0.2
+- @gtmgrid/services@1.0.2
+
+## 1.0.1
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.0.1
+- @gtmgrid/auth@1.0.1
+- @gtmgrid/cloud@1.0.1
+- @gtmgrid/db@1.0.1
+- @gtmgrid/email@1.0.1
+- @gtmgrid/engine@1.0.1
+- @gtmgrid/services@1.0.1
+
+## 1.0.0
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.0.0
+- @gtmgrid/auth@1.0.0
+- @gtmgrid/cloud@1.0.0
+- @gtmgrid/db@1.0.0
+- @gtmgrid/email@1.0.0
+- @gtmgrid/engine@1.0.0
+- @gtmgrid/services@1.0.0
+
+## 0.22.12
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.22.12
+- @gtmgrid/auth@0.22.12
+- @gtmgrid/cloud@0.22.12
+- @gtmgrid/db@0.22.12
+- @gtmgrid/email@0.22.12
+- @gtmgrid/engine@0.22.12
+- @gtmgrid/services@0.22.12
+
+## 0.22.11
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.22.11
+- @gtmgrid/auth@0.22.11
+- @gtmgrid/cloud@0.22.11
+- @gtmgrid/db@0.22.11
+- @gtmgrid/email@0.22.11
+- @gtmgrid/engine@0.22.11
+- @gtmgrid/services@0.22.11
+
+## 0.22.10
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.22.10
+- @gtmgrid/auth@0.22.10
+- @gtmgrid/cloud@0.22.10
+- @gtmgrid/db@0.22.10
+- @gtmgrid/email@0.22.10
+- @gtmgrid/engine@0.22.10
+- @gtmgrid/services@0.22.10
+
+## 0.22.9
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.22.9
+- @gtmgrid/auth@0.22.9
+- @gtmgrid/cloud@0.22.9
+- @gtmgrid/db@0.22.9
+- @gtmgrid/email@0.22.9
+- @gtmgrid/engine@0.22.9
+- @gtmgrid/services@0.22.9
+
+## 0.22.8
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.22.8
+- @gtmgrid/auth@0.22.8
+- @gtmgrid/cloud@0.22.8
+- @gtmgrid/db@0.22.8
+- @gtmgrid/email@0.22.8
+- @gtmgrid/engine@0.22.8
+- @gtmgrid/services@0.22.8
+
+## 0.22.7
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.22.7
+- @gtmgrid/auth@0.22.7
+- @gtmgrid/cloud@0.22.7
+- @gtmgrid/db@0.22.7
+- @gtmgrid/email@0.22.7
+- @gtmgrid/engine@0.22.7
+- @gtmgrid/services@0.22.7
+
+## 0.22.6
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.22.6
+- @gtmgrid/auth@0.22.6
+- @gtmgrid/cloud@0.22.6
+- @gtmgrid/db@0.22.6
+- @gtmgrid/email@0.22.6
+- @gtmgrid/engine@0.22.6
+- @gtmgrid/services@0.22.6
+
+## 0.22.5
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.22.5
+- @gtmgrid/auth@0.22.5
+- @gtmgrid/cloud@0.22.5
+- @gtmgrid/db@0.22.5
+- @gtmgrid/email@0.22.5
+- @gtmgrid/engine@0.22.5
+- @gtmgrid/services@0.22.5
+
+## 0.22.4
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.22.4
+- @gtmgrid/auth@0.22.4
+- @gtmgrid/cloud@0.22.4
+- @gtmgrid/db@0.22.4
+- @gtmgrid/email@0.22.4
+- @gtmgrid/engine@0.22.4
+- @gtmgrid/services@0.22.4
+
+## 0.22.3
+
+### Patch Changes
+
+- Updated dependencies [fbcb535]
+  - @gtmgrid/analytics@0.22.3
+  - @gtmgrid/auth@0.22.3
+  - @gtmgrid/cloud@0.22.3
+  - @gtmgrid/db@0.22.3
+  - @gtmgrid/email@0.22.3
+  - @gtmgrid/engine@0.22.3
+  - @gtmgrid/services@0.22.3
+
+## 0.22.2
+
+### Patch Changes
+
+- Updated dependencies [325e90b]
+  - @gtmgrid/analytics@0.22.2
+  - @gtmgrid/auth@0.22.2
+  - @gtmgrid/cloud@0.22.2
+  - @gtmgrid/db@0.22.2
+  - @gtmgrid/email@0.22.2
+  - @gtmgrid/engine@0.22.2
+  - @gtmgrid/services@0.22.2
+
 ## 0.22.1
 
 ### Patch Changes

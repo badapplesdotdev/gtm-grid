@@ -1,6 +1,6 @@
 {
   "name": "@gtmgrid/auth",
-  "version": "0.22.1",
+  "version": "1.0.6",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -13,9 +13,11 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@gtmgrid/analytics": "workspace:*",
     "@gtmgrid/db": "workspace:*",
     "@gtmgrid/email": "workspace:*",
     "better-auth": "^1.6.14",
-    "jose": "^6.1.0"
+    "jose": "^6.1.0",
+    "posthog-node": "^5.37.0"
   }
 }

@@ -1,5 +1,72 @@
 # @gtmgrid/analytics
 
+## 1.0.6
+
+## 1.0.5
+
+## 1.0.4
+
+## 1.0.3
+
+## 1.0.2
+
+## 1.0.1
+
+## 1.0.0
+
+## 0.22.12
+
+## 0.22.11
+
+## 0.22.10
+
+## 0.22.9
+
+## 0.22.8
+
+## 0.22.7
+
+## 0.22.6
+
+## 0.22.5
+
+## 0.22.4
+
+## 0.22.3
+
+### Patch Changes
+
+- fbcb535: Make desktop engine (sidecar) failures observable, and stop the offline banner
+  from showing end users a dev command.
+
+  The desktop shell now reports the bundled engine's lifecycle to PostHog: every
+  `spawn_sidecar` failure path emits `sidecar_spawn_failed`, and a new liveness
+  monitor emits `sidecar_exited` (with exit code + a tail of the captured stderr)
+  when the engine dies unexpectedly soon after launch — e.g. a native module that
+  won't load on a user's OS/arch. Previously these only `eprintln!`d to a stderr
+  the packaged app discards, so a dead engine was invisible until a user reported
+  it. The renderer's boot poll now emits `server_ready` (with cold-start time) and
+  `server_unreachable` (once a sustained failure passes the cold-start grace), and
+  every desktop event carries a `platform: "desktop"` super-property so desktop
+  health is filterable/alertable.
+
+  The "Server not reachable" banner no longer tells packaged users to run
+  `pnpm --filter @gtmgrid/server dev` (that command only exists in a dev checkout).
+  Packaged builds show a calm "Starting the local engine…" during a normal cold
+  start, escalating to a real recovery message with a "Copy diagnostics" button
+  only if the engine stays down.
+
+## 0.22.2
+
+### Patch Changes
+
+- 325e90b: Track new signups server-side. Better Auth account creation now captures a
+  `user_signed_up` PostHog event from the `user.create.after` hook, keyed on the
+  user id (the same distinct id the desktop client identifies with) and `$set`ting
+  the person's email/name. Previously a signup only became an identified person if
+  and when the desktop client's identify bridge ran, so accounts created without
+  that (older build, analytics disabled, web/invite-only flows) stayed anonymous.
+
 ## 0.22.1
 
 ## 0.22.0

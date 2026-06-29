@@ -1,0 +1,25 @@
+<svg width="164" height="314" viewBox="0 0 164 314" xmlns="http://www.w3.org/2000/svg">
+  <!-- GTM Grid Windows-installer sidebar (welcome/finish). Navy brand gradient
+       (the design's desktop backdrop) + the green grid mark + wordmark. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.5" y2="1">
+      <stop offset="0" stop-color="#1d4f74"/>
+      <stop offset="0.55" stop-color="#14365a"/>
+      <stop offset="1" stop-color="#0d2440"/>
+    </linearGradient>
+    <radialGradient id="bloom" cx="0.3" cy="0.12" r="0.7">
+      <stop offset="0" stop-color="#2b6a8f" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#2b6a8f" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="164" height="314" fill="url(#bg)"/>
+  <rect width="164" height="314" fill="url(#bloom)"/>
+  <!-- grid mark (213x203 viewBox) scaled to ~58px, centered -->
+  <g transform="translate(53,46) scale(0.27)" fill="#22c55e">
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M62.9001 0.959961H171.36L140.37 54.6299H31.9102L62.9001 0.959961Z"/>
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M86.1399 148.56H181.1L150.11 202.24H55.1499L0.919922 108.31L31.9099 54.6299L86.1399 148.56Z"/>
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M212.09 94.8899L181.1 148.57L157.86 108.31H109.38L140.37 54.6299H188.85L212.09 94.8899Z"/>
+  </g>
+  <text x="82" y="142" font-family="'DM Sans','Segoe UI',sans-serif" font-size="21" font-weight="700" letter-spacing="-0.5" fill="#ffffff" text-anchor="middle">gtm grid</text>
+  <text x="82" y="164" font-family="'Courier New',monospace" font-size="9.5" fill="#9fb4c9" text-anchor="middle">a spreadsheet that runs itself</text>
+</svg>

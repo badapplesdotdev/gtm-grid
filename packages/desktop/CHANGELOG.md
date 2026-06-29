@@ -1,5 +1,391 @@
 # @gtmgrid/desktop
 
+## 1.0.6
+
+### Patch Changes
+
+- 2bd1835: Fix: a goal could spin up a brand-new table instead of using the one in view.
+
+  When the app auto-selects a table on open, the agent's "active table" hint was
+  sourced only from a paged fetch that lags the synchronously-set selection. A goal
+  sent in that window reached the agent with the MCP's table default but no table
+  NAME, so the preamble dropped its "Active table" section and the agent, not knowing
+  which table it was on, created a new one. The hint now falls back to the table name
+  from the already-loaded tables list, so it's populated the instant a table is
+  selected (auto-default on open or manual click). Covered by a unit suite on the
+  resolver and an end-to-end test that boots the app, lets it auto-default, and
+  asserts the goal request carries the active table.
+
+  - @gtmgrid/analytics@1.0.6
+  - @gtmgrid/cloud@1.0.6
+  - @gtmgrid/services@1.0.6
+
+## 1.0.5
+
+### Patch Changes
+
+- 93d0352: The agent now works with no table loaded, and the native `/goal` + skills are back.
+
+  Root cause of the "agent has no GTM Grid tools / falls back to other tools" reports:
+  the agent's cloud context required an active table, so with nothing open the MCP
+  failed to start and the agent had zero grid tools. The active table is now optional —
+  the agent gets its tools as soon as you're signed in with a cloud project, and can
+  `list_tables` / `create_table` / operate by id. With tools always available we also
+  re-enabled your Claude/Codex skills (including the looping `/goal`), with a "use only
+  GTM Grid tools" guardrail.
+
+  - @gtmgrid/analytics@1.0.5
+  - @gtmgrid/cloud@1.0.5
+  - @gtmgrid/services@1.0.5
+
+## 1.0.4
+
+### Patch Changes
+
+- 9cc6ff5: Fully disable the user's personal Claude skills in the agent (follow-up to the
+  isolation fix). `--setting-sources project` alone only thinned the user's skills, so
+  a third-party skill (e.g. `deepline-gtm`) was still invokable and kept running
+  instead of gtmgrid's tools. Add `--disable-slash-commands`, which disables all of the
+  user's skills; gtmgrid's own playbooks (injected via the system prompt) and tools
+  (via MCP) are unaffected, and the user's login is preserved.
+  - @gtmgrid/analytics@1.0.4
+  - @gtmgrid/cloud@1.0.4
+  - @gtmgrid/services@1.0.4
+
+## 1.0.3
+
+### Patch Changes
+
+- cf8144d: Isolate the spawned agent CLIs from the user's personal Claude/Codex setup.
+
+  The gtmgrid agent ran inside the user's own Claude/Codex config, so it loaded their
+  global skills, plugins, hooks, and instructions — e.g. a `deepline` Claude plugin
+  whose startup hook fired inside our turns, pulled the agent off gtmgrid's tools, and
+  forced approval prompts despite bypass mode. The agent now runs with each CLI's
+  isolation flag (`--setting-sources project` for claude, `--ignore-user-config` for
+  codex), which drops the personal config while keeping the user's login and model.
+  Cursor stays isolated via its app-owned workspace. This also removes a failing
+  third-party startup hook that may have been interfering with MCP connection.
+
+  - @gtmgrid/analytics@1.0.3
+  - @gtmgrid/cloud@1.0.3
+  - @gtmgrid/services@1.0.3
+
+## 1.0.2
+
+### Patch Changes
+
+- d908d79: Windows agents: forward the OS environment to the spawned GTM Grid MCP server so it
+  can start, and capture the exact reason when it can't.
+
+  Telemetry showed the MCP server process never starts on Windows (so the agent's tool
+  set has no `gtmgrid` tools and it falls back to shell/other skills), while macOS works
+  and the agent working directory is correct. The agent CLI hands the MCP child an
+  explicit env map; on Windows the Electron-as-Node child needs the OS vars
+  (`SystemRoot`, `PATH`, …) to even launch. We now forward those. Agent telemetry also
+  records the MCP server's raw status + stderr on any turn where it fails to connect, so
+  the precise failure is visible if more work is needed.
+
+  - @gtmgrid/analytics@1.0.2
+  - @gtmgrid/cloud@1.0.2
+  - @gtmgrid/services@1.0.2
+
+## 1.0.1
+
+### Patch Changes
+
+- 747c4ee: Fix the Windows "engine unreachable / port 8787 still in use" failure.
+
+  The engine's parent-death watchdog detected orphaning via a Unix-only signal
+  (reparent-to-init), which never happens on Windows — so a crashed, killed, or
+  reinstalled app left the engine orphaned, holding the port, and every later launch's
+  engine gave up. Now the watchdog uses a cross-platform liveness probe
+  (`process.kill(pid, 0)`), and on persistent port contention the new engine reclaims
+  the port from the stale holder (netstat+taskkill / lsof+kill), so a machine that
+  already has a stuck orphan self-heals on the next launch. Covered by a regression
+  test that reproduces the orphaned port-holder and verifies the reclaim.
+
+  - @gtmgrid/analytics@1.0.1
+  - @gtmgrid/cloud@1.0.1
+  - @gtmgrid/services@1.0.1
+
+## 1.0.0
+
+### Major Changes
+
+- 324520b: Migrate the desktop app from Tauri (Rust shell + bundled Node sidecar) to Electron
+  (the engine runs as Electron's own Node via `utilityProcess.fork`).
+
+  This is a major release: it replaces the entire app shell and updater. The new
+  installers carry a new app identity (`app.gtmgrid.desktop`) and a new update feed
+  (electron-updater `latest*.yml` replacing the Tauri `latest.json`), so **existing
+  Tauri installs do not auto-update across to Electron — a fresh install is required.**
+
+  Highlights:
+
+  - The Rust↔Node sidecar boundary (the source of most Windows bugs — the `\\?\`
+    path crash, console-less spawn failures, the NSIS "file in use" update lock) is
+    gone; the engine is Electron's own Node.
+  - First-class PostHog observability: the key is baked at build time as plain JS (no
+    more cargo-cache defeating `option_env!`), and `sidecar_listening`,
+    `agent_turn_completed` (with `mcp_connected`/`gtmgrid_tools`/`cwd`), `mcp_started`
+    and `$ai_generation` LLM traces all deliver server-side.
+  - The agent working directory is now a stable, user-writable `~/.gtmgrid/workspace`
+    (passed as `GTMGRID_AGENT_CWD`), fixing the Windows "agent ran out of a random
+    repo" + broken-Resume bug.
+  - Electron main-process logic is structured as composable Effect services
+    (Engine / Updater / Observability).
+  - Branded NSIS installer, green brand tray icon, and an `app://gtmgrid` renderer
+    origin (allow-listed for cloud auth/tRPC CORS, with legacy Tauri origins kept for
+    the cut-over).
+
+### Patch Changes
+
+- 46b6550: Fix the Windows updater failing with "Error opening file for writing" for
+  `sidecar\node.exe` and `better_sqlite3.node`. The bundled engine was still running
+  (holding those files open) when the NSIS installer tried to overwrite them. The
+  app now stops the engine and waits for it to fully exit before downloading and
+  installing an update, releasing the locks.
+  - @gtmgrid/analytics@1.0.0
+  - @gtmgrid/cloud@1.0.0
+  - @gtmgrid/services@1.0.0
+
+## 0.22.12
+
+### Patch Changes
+
+- 018b623: Fix the loading screen no longer being centered (logo stuck at the top, label
+  floating in the middle). The previous release made `.app-shell` a CSS grid for the
+  Windows layout fix, but the loader and error screens borrow `.app-shell` for their
+  full-viewport sizing — so they inherited the grid and their centered content got
+  unstacked. They now keep their own flex centering.
+- 018b623: Make the `/start` onboarding command actually work, and drop `/help`. Previously
+  both were forwarded to the agent CLI, which intercepted them as its OWN built-in
+  slash commands ("Unknown command: /start", "/help isn't available"). GTM Grid now
+  answers `/start` itself with a local onboarding tour and never forwards it to the
+  CLI. The dead onboarding instructions are removed from the agent system preamble.
+  - @gtmgrid/analytics@0.22.12
+  - @gtmgrid/cloud@0.22.12
+  - @gtmgrid/services@0.22.12
+
+## 0.22.11
+
+### Patch Changes
+
+- fff9a21: Show the signed-in user's profile picture in the account menu (sidebar footer and
+  the open-menu header) when one is available, falling back to the initial letter.
+- fff9a21: Add `/help` and `/start` onboarding commands to the agent chat. New users get a
+  short, friendly orientation — what GTM Grid is, how to get data in (create a table
+  or import/drag a CSV), what the agent can do, and a few example prompts to try.
+  Both appear in the `/` command menu.
+- fff9a21: Drag a CSV file anywhere onto the app to import it. A drop overlay appears while
+  dragging a file, and releasing opens the import flow straight on the "Map your
+  columns" review. Non-CSV files are ignored.
+- fff9a21: Closing the window now hides GTM Grid to the system tray instead of quitting, so
+  the engine and any in-flight agent runs keep going in the background. A tray icon
+  with **Show GTM Grid** / **Quit** is the deliberate exit path (Quit tears down the
+  sidecar). Relaunching while hidden re-shows the window. Previously closing the
+  window killed the engine and lost all session state.
+- fff9a21: Fix the center content pane collapsing to content size on Windows. The "No table
+  selected" empty state and the CSV "Map your columns" review sat in a small band
+  with large empty gaps instead of filling the pane (macOS was fine). The app shell
+  now uses a CSS grid (`grid-template-rows: auto 1fr`) so the main row gets a
+  definite height that WebView2 propagates to the nested `flex:1` panes — plain
+  flex-column stretch did not. The optional invite banner still takes its own row,
+  so the pane correctly fills the remaining height when it shows.
+  - @gtmgrid/analytics@0.22.11
+  - @gtmgrid/cloud@0.22.11
+  - @gtmgrid/services@0.22.11
+
+## 0.22.10
+
+### Patch Changes
+
+- 6c1e498: Fix the GTM Grid table tools (`get_table`, `add_rows`, `run_function`,
+  `list_providers`, …) never loading inside the agent panel on Windows.
+
+  Root cause: the spawned coding-agent CLI (claude / codex / cursor) was told to
+  launch gtmgrid's MCP server via an extensionless `#!/bin/bash` launcher script
+  (`gtmgrid-mcp`). That script was only ever written on macOS/Linux, and even when
+  present Windows cannot execute it — so the agent connected with **no** grid tools
+  while the app otherwise looked healthy.
+
+  Fix: spawn the bundled `node` binary directly with `mcp.mjs` as a script
+  argument — the one launch shape every MCP client starts identically on macOS,
+  Linux and Windows. The Rust shell now exports `GTMGRID_MCP_NODE` +
+  `GTMGRID_MCP_SCRIPT` (both already de-verbatim'd), `mcpConfig` emits
+  `command` + `args`, and the Codex `-c mcp_servers=…` TOML now escapes the
+  backslashes in Windows paths (the old inline form produced invalid TOML on
+  Windows). The unused bash launcher is no longer bundled.
+
+  - @gtmgrid/analytics@0.22.10
+  - @gtmgrid/cloud@0.22.10
+  - @gtmgrid/services@0.22.10
+
+## 0.22.9
+
+### Patch Changes
+
+- da602f1: Fix the Windows engine crash-on-launch (`EISDIR: lstat 'C:'`). The bundled Node
+  engine exited immediately on every affected Windows machine, so the app read as
+  `engine: unreachable` and never loaded.
+
+  Root cause (surfaced by the new boot diagnostics): Tauri's `resource_dir()`
+  returns a Windows **verbatim / extended-length path** (`\\?\C:\…`). We passed that
+  straight to `node.exe` as the script argument, and Node's main-module resolver
+  can't parse the `\\?\` prefix — it mis-splits the path and calls `lstat('C:')`,
+  which is a directory, so it dies with `EISDIR` before ever loading `server.mjs`.
+
+  Fix: simplify the resolved sidecar dir with `dunce::simplified` to a plain
+  `C:\…` path before spawning, so the script arg, cwd, MCP launcher and extension
+  dir are all non-verbatim. No-op on macOS/Linux.
+
+  - @gtmgrid/analytics@0.22.9
+  - @gtmgrid/cloud@0.22.9
+  - @gtmgrid/services@0.22.9
+
+## 0.22.8
+
+### Patch Changes
+
+- 7994258: Make "Copy diagnostics" self-report a dead engine. When the sidecar fails to
+  start, telemetry has been silent on some Windows machines, leaving us to guess at
+  the cause. The renderer previously had no visibility into the engine's boot at
+  all — and its version line read a never-set env var, so every build showed
+  "(dev)".
+
+  The Tauri shell now records boot facts in every spawn branch (including failures)
+  and exposes them via a new `sidecar_diagnostics` command: real installed version,
+  OS/arch, resolved node/server paths and whether they exist, the spawn outcome
+  (`spawned` / `dir_missing` / `binary_missing` / `spawn_error` / `exited`), any
+  early-exit code, and the engine's OWN captured stderr — i.e. the actual crash.
+  "Copy diagnostics" folds all of this in, so a stuck user's paste now contains the
+  root cause instead of just `engine: unreachable`. The version line is fixed to use
+  the real build version.
+
+  - @gtmgrid/analytics@0.22.8
+  - @gtmgrid/cloud@0.22.8
+  - @gtmgrid/services@0.22.8
+
+## 0.22.7
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.22.7
+- @gtmgrid/cloud@0.22.7
+- @gtmgrid/services@0.22.7
+
+## 0.22.6
+
+### Patch Changes
+
+- b31c8b7: Fix the Windows "couldn't start the engine" failure: the bundled Node sidecar
+  never spawned, leaving the app stuck on the engine-error screen.
+
+  The shell is built `windows_subsystem = "windows"` (no console), so its
+  `STD_INPUT_HANDLE` is null. `spawn_sidecar` piped stdout/stderr but left **stdin
+  as the default `inherit()`**. On Windows, piping any stream switches the child to
+  `STARTF_USESTDHANDLES`, and `CreateProcessW` then requires a valid handle for all
+  three streams — inheriting the null stdin makes the spawn fail with
+  `ERROR_INVALID_HANDLE`, so `node.exe` never launched and the engine read as
+  unreachable. (It worked from a console and in the CI smoke test because those have
+  a real stdin; only the console-less GUI spawn hit the null handle.)
+
+  Spawn the sidecar with `stdin(Stdio::null())` so it always gets a valid handle,
+  plus `CREATE_NO_WINDOW` (no transient console flash) and an explicit
+  `current_dir` matching the smoke harness.
+
+  - @gtmgrid/analytics@0.22.6
+  - @gtmgrid/cloud@0.22.6
+  - @gtmgrid/services@0.22.6
+
+## 0.22.5
+
+### Patch Changes
+
+- 8ddbed1: Fix the Windows "Server not reachable" / engine-unreachable failure: connect the
+  renderer to the sidecar over `127.0.0.1` instead of `localhost`.
+
+  The sidecar binds IPv4 loopback only (`server.listen(8787, "127.0.0.1")`), but the
+  renderer + cloud-run defaulted to `http://localhost:8787`. On Windows `localhost`
+  resolves to `::1` (IPv6) first, so the WebView2 fetch hit `[::1]:8787` where nothing
+  listens and the engine read as unreachable — even though the server was up and
+  healthy. macOS resolves `localhost`→`127.0.0.1`, which is why this only bit Windows.
+  Defaulting to `127.0.0.1` deterministically matches the bind on every platform.
+
+  Also adds a `sidecar_listening` server-side event (over the posthog-node channel,
+  the only desktop telemetry path that delivers from packaged builds) tagged with
+  platform/arch, so sidecar boot-health is finally visible per-OS — confirming the
+  engine actually starts on Windows rather than leaving that invisible.
+
+  - @gtmgrid/analytics@0.22.5
+  - @gtmgrid/cloud@0.22.5
+  - @gtmgrid/services@0.22.5
+
+## 0.22.4
+
+### Patch Changes
+
+- 6d42953: Hold the branded app loader until the local engine is reachable on launch, and
+  show a full-screen error if it fails to start — instead of briefly flashing the
+  "Server not reachable" topbar during the sidecar's normal cold start.
+
+  The render gates previously held the loader only on auth + cloud-project
+  resolution, not on engine health, so on a warm machine the shell (and its offline
+  banner) rendered for the ~1-2s gap before the sidecar answered `/api/health`. The
+  loader now also waits on the engine; if it stays unreachable past the cold-start
+  grace, a dedicated full-screen error screen (`AppError`) offers Retry + Copy
+  diagnostics and auto-recovers when the engine comes up. The lightweight topbar
+  banner is retained only for a mid-session engine drop (gated on having connected
+  at least once), so a working session is never thrown back to a splash.
+
+  - @gtmgrid/analytics@0.22.4
+  - @gtmgrid/cloud@0.22.4
+  - @gtmgrid/services@0.22.4
+
+## 0.22.3
+
+### Patch Changes
+
+- fbcb535: Make desktop engine (sidecar) failures observable, and stop the offline banner
+  from showing end users a dev command.
+
+  The desktop shell now reports the bundled engine's lifecycle to PostHog: every
+  `spawn_sidecar` failure path emits `sidecar_spawn_failed`, and a new liveness
+  monitor emits `sidecar_exited` (with exit code + a tail of the captured stderr)
+  when the engine dies unexpectedly soon after launch — e.g. a native module that
+  won't load on a user's OS/arch. Previously these only `eprintln!`d to a stderr
+  the packaged app discards, so a dead engine was invisible until a user reported
+  it. The renderer's boot poll now emits `server_ready` (with cold-start time) and
+  `server_unreachable` (once a sustained failure passes the cold-start grace), and
+  every desktop event carries a `platform: "desktop"` super-property so desktop
+  health is filterable/alertable.
+
+  The "Server not reachable" banner no longer tells packaged users to run
+  `pnpm --filter @gtmgrid/server dev` (that command only exists in a dev checkout).
+  Packaged builds show a calm "Starting the local engine…" during a normal cold
+  start, escalating to a real recovery message with a "Copy diagnostics" button
+  only if the engine stays down.
+
+- Updated dependencies [fbcb535]
+  - @gtmgrid/analytics@0.22.3
+  - @gtmgrid/cloud@0.22.3
+  - @gtmgrid/services@0.22.3
+
+## 0.22.2
+
+### Patch Changes
+
+- 325e90b: Enable PostHog Session Replay in the desktop app. `posthog-js` now initializes
+  with `session_recording` (inputs masked, displayed grid text captured), so
+  sessions record once the project's "Record user sessions" toggle is on. The
+  Tauri webview already permits the recorder (no CSP, absolute `api_host`); add the
+  `ph-no-capture` class to hide a specific element from replays.
+- Updated dependencies [325e90b]
+  - @gtmgrid/analytics@0.22.2
+  - @gtmgrid/cloud@0.22.2
+  - @gtmgrid/services@0.22.2
+
 ## 0.22.1
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 // Typed client for the gtmgrid HTTP server (the engine sidecar).
-export const API_BASE = (import.meta as any).env?.VITE_API ?? "http://localhost:8787";
+// Default to 127.0.0.1 (NOT "localhost"): the sidecar binds IPv4 loopback only
+// (server listens on 127.0.0.1), and on Windows "localhost" resolves to ::1
+// (IPv6) first — so a "localhost" fetch hits [::1]:8787 where nothing listens and
+// the engine reads as unreachable, even though the server is up. 127.0.0.1 is
+// deterministic across platforms. (macOS resolved localhost→127.0.0.1, which is
+// why this only bit Windows.)
+export const API_BASE = (import.meta as any).env?.VITE_API ?? "http://127.0.0.1:8787";
 const BASE = API_BASE;
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {

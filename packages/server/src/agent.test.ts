@@ -12,6 +12,7 @@ import {
   manageChildLifecycle,
   mcpEnv,
   parseAgentCloud,
+  parseClaudeInit,
   permissionEventFromToolResult,
   questionEventFromToolResult,
   STDERR_CAP,
@@ -39,9 +40,13 @@ describe("parseAgentCloud — validate the chat body's cloud block (TRI-3296)", 
     );
   });
 
-  it("returns undefined for a missing/blank field (no half-activation)", () => {
+  it("returns undefined for a missing/blank REQUIRED field (no half-activation)", () => {
     expect(parseAgentCloud({ ...CLOUD, token: "" })).toBeUndefined();
-    expect(parseAgentCloud({ ...CLOUD, tableId: undefined })).toBeUndefined();
+    expect(parseAgentCloud({ ...CLOUD, projectId: undefined })).toBeUndefined();
+  });
+
+  it("tableId is OPTIONAL — a cloud context resolves with no active table loaded", () => {
+    expect(parseAgentCloud({ ...CLOUD, tableId: undefined })).toEqual({ ...CLOUD, tableId: undefined });
   });
 
   it("returns undefined for non-object / absent input (local mode)", () => {
@@ -462,6 +467,66 @@ describe("contextPreamble — bakes in the /goal slash-command protocol", () => 
     const p = contextPreamble({ tableName: "Leads", columns: ["Email"] });
     expect(p).toContain("/goal");
     expect(p).toContain('viewing **"Leads"**');
+  });
+
+  it("does NOT teach /help or /start in the preamble (handled client-side; they collide with CLI built-ins)", () => {
+    const p = contextPreamble();
+    expect(p).not.toContain("/help");
+    expect(p).not.toContain("/start");
+  });
+});
+
+describe("parseClaudeInit — read MCP connection status from Claude's init event (Windows debug signal)", () => {
+  it("reports gtmgrid connected + counts only its tools", () => {
+    const e = {
+      type: "system",
+      subtype: "init",
+      mcp_servers: [{ name: "gtmgrid", status: "connected" }],
+      tools: ["Bash", "mcp__gtmgrid__get_table", "mcp__gtmgrid__add_rows", "Read"],
+    };
+    expect(parseClaudeInit(e)).toEqual({
+      mcpConnected: true,
+      gtmgridTools: 2,
+      mcpServersRaw: '[{"name":"gtmgrid","status":"connected"}]',
+    });
+  });
+
+  it("reports NOT connected + captures the raw status when gtmgrid failed (the Windows failure)", () => {
+    const e = {
+      type: "system",
+      subtype: "init",
+      mcp_servers: [{ name: "gtmgrid", status: "failed" }],
+      tools: ["Bash", "Read"],
+    };
+    // mcpServersRaw is the "why" payload — it preserves whatever Claude reported.
+    expect(parseClaudeInit(e)).toEqual({
+      mcpConnected: false,
+      gtmgridTools: 0,
+      mcpServersRaw: '[{"name":"gtmgrid","status":"failed"}]',
+    });
+  });
+
+  it("reports NOT connected when gtmgrid is absent from mcp_servers", () => {
+    expect(parseClaudeInit({ type: "system", subtype: "init", mcp_servers: [], tools: [] })).toEqual({
+      mcpConnected: false,
+      gtmgridTools: 0,
+      mcpServersRaw: "[]",
+    });
+  });
+
+  it("returns null for any non-init event (so the turn loop ignores it)", () => {
+    expect(parseClaudeInit({ type: "assistant" })).toBeNull();
+    expect(parseClaudeInit({ type: "system", subtype: "other" })).toBeNull();
+    expect(parseClaudeInit(null)).toBeNull();
+    expect(parseClaudeInit("not an object")).toBeNull();
+  });
+
+  it("is defensive about missing/malformed fields", () => {
+    expect(parseClaudeInit({ type: "system", subtype: "init" })).toEqual({
+      mcpConnected: false,
+      gtmgridTools: 0,
+      mcpServersRaw: "[]",
+    });
   });
 });
 

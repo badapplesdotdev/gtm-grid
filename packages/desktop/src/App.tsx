@@ -1,8 +1,11 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, memo, lazy, Suspense, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { api, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource } from "./api";
+import { api, API_BASE, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource } from "./api";
+import { electron } from "./electron";
 import { onActivateKey } from "./lib/utils";
+import { firstCsvFile, dragHasFiles } from "./csvDrop";
 import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
+import { AppError } from "./AppError";
 import { CommandPalette, type PaletteAction } from "./CommandPalette";
 import { resolveEditTrigger } from "./useGridKeyboardNav";
 import { Dialog, DialogContent } from "./components/ui/dialog";
@@ -31,6 +34,7 @@ import {
 import { fireConfetti } from "./cloud/confetti";
 import { useUpdateCheck } from "./useUpdateCheck";
 import { changelogNotes } from "./changelog";
+import { capture } from "./analytics";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./components/ui/tooltip";
 import {
   buildNotifications,
@@ -59,6 +63,7 @@ import {
   type CloudTableSummary,
 } from "./cloud/useCloudGrid";
 import { useAgentPresence } from "./cloud/agentPresence";
+import { resolveActiveTable } from "./cloud/active-table";
 import { type SignalsCloud } from "./SignalsModal";
 // Type-only import (erased at build) so the AgentPanel lazy chunk stays split.
 import type { AgentCloudContext } from "./AgentPanel";
@@ -883,6 +888,17 @@ function ChangelogDialog({
 export default function App() {
   // Health (the execution sidecar liveness).
   const [healthStatus, setHealthStatus] = useState<"loading" | "connected" | "offline">("loading");
+  // `true` once the engine has stayed unreachable past the normal cold-start
+  // window — i.e. a real problem, not a transient boot delay. Drives the banner's
+  // escalation from a calm "starting…" note to an actionable recovery message.
+  const [serverStuck, setServerStuck] = useState(false);
+  // One-way latch: set the first time the engine answers. Gates the full-screen
+  // boot loader/error on the INITIAL connect only — a later mid-session drop must
+  // keep the shell up (handled by the topbar banner), not yank back to a splash.
+  const [engineEverConnected, setEngineEverConnected] = useState(false);
+  // Bumped by the error screen's Retry to re-run the boot effect immediately.
+  const [bootNonce, setBootNonce] = useState(0);
+  const [copiedDiagnostics, setCopiedDiagnostics] = useState(false);
 
   // Tables (cloud-backed). Inline-rename draft state for the sidebar rows.
   const [renamingTableId, setRenamingTableId] = useState<string | null>(null);
@@ -1217,6 +1233,14 @@ export default function App() {
   // writes go via the metered Convex mutations (writer built below).
   const [importMode, setImportMode] = useState<null | "cloud">(null);
 
+  // Window drag-and-drop CSV: a CSV dropped anywhere on the app opens the import
+  // flow straight on the review stage. `fileDragging` toggles the drop overlay;
+  // `dragDepth` counts enter/leave across child elements so the overlay doesn't
+  // flicker as the cursor moves between them.
+  const [droppedCsv, setDroppedCsv] = useState<File | null>(null);
+  const [fileDragging, setFileDragging] = useState(false);
+  const dragDepth = useRef(0);
+
   // Cloud import writer — Convex mutations (metered; quota-guarded). Null until a
   // cloud project is open. Branded Convex ids are strings at runtime.
   const cloudImportWriter = useMemo<ImportWriter | null>(() => {
@@ -1230,6 +1254,38 @@ export default function App() {
       },
     };
   }, [cloudProject, createCloudTable, cloudAddColumn, cloudAddRowsWithCells]);
+
+  // Window drag-and-drop handlers. Only engage for OS file drags, and only when a
+  // cloud import writer exists (same gate as the sidebar "Import CSV…" button).
+  // Mirrors that button: opens the import flow; the dropped file lands on review.
+  const canDropCsv = cloudImportWriter != null;
+  const onWindowDragEnter = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+    if (!canDropCsv || !dragHasFiles(e.dataTransfer?.types)) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setFileDragging(true);
+  }, [canDropCsv]);
+  const onWindowDragOver = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+    if (!canDropCsv || !dragHasFiles(e.dataTransfer?.types)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }, [canDropCsv]);
+  const onWindowDragLeave = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+    if (!canDropCsv || !dragHasFiles(e.dataTransfer?.types)) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setFileDragging(false);
+  }, [canDropCsv]);
+  const onWindowDrop = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+    if (!canDropCsv || !dragHasFiles(e.dataTransfer?.types)) return;
+    e.preventDefault();
+    dragDepth.current = 0;
+    setFileDragging(false);
+    const csv = firstCsvFile(e.dataTransfer?.files);
+    if (!csv) return; // non-CSV drop: ignore (the overlay already cleared)
+    setDroppedCsv(csv);
+    setImportMode("cloud");
+  }, [canDropCsv]);
+
   // Cloud "From Social Signals" adapter — loads sources via tRPC + creates the
   // cloud table/columns/binding (the recurring poll runs in the Inngest worker).
   const signalsCloud = useMemo<SignalsCloud | undefined>(() => {
@@ -1272,7 +1328,11 @@ export default function App() {
   // we have a session).
   // (`cloudSession` is declared above, alongside the credential source.)
   const agentCloud = useMemo<AgentCloudContext | null>(() => {
-    if (!cloudSession || !activeWorkspace || !cloudProject || !cloudTableId) {
+    // The agent gets its gtmgrid tools as soon as the user is signed in with a
+    // cloud project — an ACTIVE TABLE is NOT required (it can list_tables /
+    // create_table / operate by id). Without this, no open table → no cloud
+    // context → the MCP fails to load and the agent improvises with shell tools.
+    if (!cloudSession || !activeWorkspace || !cloudProject) {
       return null;
     }
     return {
@@ -1280,7 +1340,7 @@ export default function App() {
       token: cloudSession.token,
       workspaceId: activeWorkspace._id,
       projectId: cloudProject._id,
-      tableId: cloudTableId,
+      tableId: cloudTableId ?? undefined,
     };
   }, [cloudSession, activeWorkspace, cloudProject, cloudTableId]);
   // Active CLOUD table's live view. Shares CloudGrid's paged query key, so this
@@ -1297,19 +1357,28 @@ export default function App() {
   // the prop identity only changes when the table name or column set actually
   // does. We source it from the cloud table so the hint follows `cloudTableId`.
   const activeTableSource = cloudActiveTable ?? null;
+  // `resolveActiveTable` falls back to the name from the already-loaded tables LIST
+  // when the paged fetch hasn't resolved yet, so the agent's "Active table" hint is
+  // populated the instant `cloudTableId` is set (auto-default-on-open OR manual
+  // click) — see active-table.ts for why (without it, a goal sent right after open
+  // makes the agent spin up a NEW table instead of using the one in view).
   const activeTableColumnNames = activeTableSource?.columns.map((c) => c.name).join("\n") ?? null;
+  const activeTableName = resolveActiveTable(cloudTableId, activeTableSource, cloudTables)?.name ?? null;
   const activeTable = useMemo(
-    () =>
-      activeTableSource
-        ? { name: activeTableSource.name, columns: activeTableSource.columns.map((c) => c.name) }
-        : null,
+    () => resolveActiveTable(cloudTableId, activeTableSource, cloudTables),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the table name + serialized column names, not the FullTable identity
-    [activeTableSource?.name, activeTableColumnNames],
+    [activeTableName, activeTableColumnNames],
   );
   // Agent presence (Co-Pilot cursor): the agent's gtmgrid tool calls — streamed
   // through the panel's SSE — light up the cell/column it's working on for
   // EVERYONE in the cloud table's room. Cloud-only; no-ops in local mode.
-  const onAgentEvent = useAgentPresence(agentCloud);
+  // Presence is per-table (it lights up cells in a table's room), so it only
+  // applies when a table is actually open — no-op otherwise.
+  const onAgentEvent = useAgentPresence(
+    agentCloud && agentCloud.tableId
+      ? { workspaceId: agentCloud.workspaceId, tableId: agentCloud.tableId }
+      : null,
+  );
   // Cloud-access lock: the active workspace's trial lapsed / it's on Free (no
   // plan id). Cloud tables/projects are shown but LOCKED — opening or editing
   // them prompts an upgrade; local tables are unaffected. The server enforces the
@@ -1431,12 +1500,29 @@ export default function App() {
     let timer: ReturnType<typeof setTimeout>;
     // The sidecar has a cold-start delay when the app launches, so poll until
     // it's reachable instead of giving up on the first failed check.
+    const bootStart = performance.now();
+    let attempts = 0;
+    let unreachableReported = false; // emit `server_unreachable` at most once/boot
+    let readyReported = false;
+    // Grace period before a still-offline engine is treated as a real failure
+    // (vs. a normal cold start). Comfortably exceeds the sidecar's boot time.
+    const STUCK_AFTER_MS = 8000;
     const boot = async () => {
+      attempts += 1;
       try {
         // `health` is the liveness contract — gate connected/offline on it ALONE.
         await api.health();
         if (cancelled) return;
         setHealthStatus("connected");
+        setServerStuck(false);
+        setEngineEverConnected(true);
+        if (!readyReported) {
+          readyReported = true;
+          capture("server_ready", {
+            cold_start_ms: Math.round(performance.now() - bootStart),
+            attempts,
+          });
+        }
         // Load engine metadata resiliently: a single missing/failed route (e.g. a
         // version-skewed sidecar lacking a newer endpoint) must degrade that one
         // feature, never blank the whole app with "server not reachable". (Tables
@@ -1455,6 +1541,17 @@ export default function App() {
       } catch {
         if (cancelled) return;
         setHealthStatus("offline");
+        const waited = performance.now() - bootStart;
+        // Past the grace period this is a genuine failure, not a cold start:
+        // escalate the banner and emit ONE remote signal so a sidecar that never
+        // comes up is visible in PostHog (and alertable) without a Discord report.
+        if (waited >= STUCK_AFTER_MS) {
+          setServerStuck(true);
+          if (!unreachableReported) {
+            unreachableReported = true;
+            capture("server_unreachable", { waited_ms: Math.round(waited), attempts });
+          }
+        }
         timer = setTimeout(boot, 1500); // retry — server is probably still booting
       }
     };
@@ -1463,7 +1560,52 @@ export default function App() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, []);
+    // Re-runs when the error screen's Retry bumps `bootNonce` (fresh poll loop).
+  }, [bootNonce]);
+
+  // Copy a diagnostics blob a stuck user can paste into a support thread. Beyond
+  // the renderer-visible facts (real version via __APP_VERSION__ — NOT the
+  // long-broken import.meta.env.VITE_APP_VERSION, which always read "(dev)"; OS/UA;
+  // reachability), it pulls the Tauri shell's `sidecar_diagnostics`: the engine's
+  // spawn outcome, resolved paths, exit code and its OWN captured stderr — i.e. the
+  // actual crash. That's the part telemetry never delivered from some Windows
+  // boxes, so this turns the next paste into a root cause instead of a guess.
+  const copyDiagnostics = useCallback(async () => {
+    const lines: (string | null)[] = [
+      `GTM Grid ${__APP_VERSION__}`,
+      `platform: ${navigator.platform}`,
+      `userAgent: ${navigator.userAgent}`,
+      `engine: ${healthStatus === "connected" ? "connected" : `unreachable (${API_BASE})`}`,
+      `time: ${new Date().toISOString()}`,
+    ];
+    // Best-effort — absent on web/dev (no Electron); the blob above still copies.
+    try {
+      const d = await electron()?.sidecarDiagnostics();
+      if (d && typeof d === "object") {
+        const s = (k: string) => (d[k] == null ? "" : String(d[k]));
+        const tail = s("stderrTail").trim();
+        lines.push(
+          "",
+          "── engine boot ──",
+          `os/arch: ${s("os")}/${s("arch")}`,
+          `spawn: ${s("spawnStatus")}`,
+          d.spawnError ? `spawnError: ${s("spawnError")}` : null,
+          d.exitCode != null || d.exitedAfterMs != null
+            ? `exit: code ${s("exitCode") || "?"} after ${s("exitedAfterMs") || "?"}ms`
+            : null,
+          d.nodePath ? `node: ${s("nodePath")} (exists=${s("nodeExists")})` : null,
+          d.serverPath ? `server: ${s("serverPath")} (exists=${s("serverExists")})` : null,
+          tail ? `engine stderr:\n${tail}` : "engine stderr: (none captured)",
+        );
+      }
+    } catch {
+      /* not Tauri / command unavailable — renderer-only diagnostics still copy */
+    }
+    const blob = lines.filter((l): l is string => l != null).join("\n");
+    void navigator.clipboard?.writeText(blob);
+    setCopiedDiagnostics(true);
+    window.setTimeout(() => setCopiedDiagnostics(false), 2000);
+  }, [healthStatus]);
 
   // ── Cloud project selection ──────────────
   // Open a cloud project and default to its first table once the tables load.
@@ -2046,12 +2188,54 @@ export default function App() {
   const cloudUser = !cloudLocked && isAuthenticated;
   const bootingCloud =
     cloudUser && !bootTimedOut && (cloudProject === null || !bootMinElapsed);
-  if (bootingCloud) {
-    return <AppLoader inShell label="Loading your workspace…" />;
+
+  // Engine (sidecar) boot gate. Hold the branded loader until the engine is
+  // reachable so the offline topbar banner never flashes during a normal cold
+  // start; if it fails to come up within the grace window, show a full-screen
+  // error instead of the shell. Gated on `engineEverConnected` so a LATER
+  // mid-session drop keeps the shell up (the topbar banner owns that case) rather
+  // than throwing the user back to a splash.
+  // Only active (authed, non-trial-locked) users are gated on the engine; a
+  // trial-locked user must still reach their upgrade panel even if it's down.
+  const engineReady = healthStatus === "connected" || engineEverConnected;
+  const engineInitFailed = cloudUser && !engineEverConnected && serverStuck;
+  if (engineInitFailed) {
+    return (
+      <AppError
+        dev={import.meta.env.DEV}
+        onRetry={() => {
+          setServerStuck(false);
+          setBootNonce((n) => n + 1);
+        }}
+        onCopyDiagnostics={copyDiagnostics}
+        copied={copiedDiagnostics}
+      />
+    );
+  }
+  if (bootingCloud || (cloudUser && !engineReady)) {
+    return (
+      <AppLoader inShell label={bootingCloud ? "Loading your workspace…" : "Starting GTM Grid…"} />
+    );
   }
 
   return (
-    <div className="app-shell" style={{ ["--sidebar-w"]: `${sidebarWidth}px`, ["--agent-w"]: `${agentWidth}px` } as CSSProperties}>
+    <div
+      className="app-shell"
+      style={{ ["--sidebar-w"]: `${sidebarWidth}px`, ["--agent-w"]: `${agentWidth}px` } as CSSProperties}
+      onDragEnter={onWindowDragEnter}
+      onDragOver={onWindowDragOver}
+      onDragLeave={onWindowDragLeave}
+      onDrop={onWindowDrop}
+    >
+      {fileDragging && (
+        <div className="app-dropzone-overlay">
+          <div className="app-dropzone-card">
+            <Icon.Table />
+            <div className="app-dropzone-title">Drop a CSV to import</div>
+            <div className="app-dropzone-sub">Release to map columns and create a table</div>
+          </div>
+        </div>
+      )}
       {/* Workspace-invite accept banner (email-matched + ?invite= URL token).
           Self-gates: renders nothing when signed out / no pending invites. The
           trial / auto-sync nudge / update alerts that used to stack here now live
@@ -2537,10 +2721,32 @@ export default function App() {
       <div className="main" id="main-content" tabIndex={-1}>
 
         {healthStatus === "offline" && (
-          <div className="offline-banner">
+          <div className={`offline-banner${serverStuck ? "" : " offline-banner--starting"}`}>
             <Icon.Zap />
-            Server not reachable — start it with{" "}
-            <code>pnpm --filter @gtmgrid/server dev</code>
+            {import.meta.env.DEV ? (
+              // Dev builds run the engine as a separate `pnpm` process, so the
+              // command is the actual fix. Packaged builds bundle + auto-spawn it.
+              <>
+                Server not reachable — start it with{" "}
+                <code>pnpm --filter @gtmgrid/server dev</code>
+              </>
+            ) : !serverStuck ? (
+              // Normal cold start: the bundled engine spawns + reconnects on its
+              // own, so just reassure rather than alarm. Usually clears in ~1–2s.
+              <>Starting the local engine…</>
+            ) : (
+              // Sustained failure: the engine genuinely isn't coming up. Give a
+              // real, non-technical recovery path — never a dev command.
+              <>
+                <span style={{ flex: 1 }}>
+                  Can’t reach the local engine. Restarting GTM Grid usually fixes
+                  this — if it keeps happening, send us the diagnostics.
+                </span>
+                <button type="button" className="offline-banner-action" onClick={copyDiagnostics}>
+                  {copiedDiagnostics ? "Copied ✓" : "Copy diagnostics"}
+                </button>
+              </>
+            )}
           </div>
         )}
 
@@ -2552,10 +2758,12 @@ export default function App() {
             <ImportCsvModal
               inline
               writer={cloudImportWriter}
-              onClose={() => setImportMode(null)}
+              initialFile={droppedCsv}
+              onClose={() => { setImportMode(null); setDroppedCsv(null); }}
               onOpenTable={id => {
                 setCloudTableId(id as Id<"tables">);
                 setImportMode(null);
+                setDroppedCsv(null);
               }}
             />
           </Suspense>

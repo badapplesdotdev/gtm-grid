@@ -4,13 +4,14 @@
 // This is the Revcode "connect your Claude Code / Codex" mechanism: no OAuth,
 // no key storage — the app drives the CLI the user already logged into.
 
-import { spawn, execFile, execFileSync } from "node:child_process";
+import { spawn, execFile, execFileSync, execSync, type SpawnOptions, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, chmodSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import type { ServerResponse } from "node:http";
-import { join, dirname } from "node:path";
+import { join, dirname, delimiter, extname } from "node:path";
 import { corsHeadersFor } from "./cors.js";
 import { latestSessionId } from "./agent-history.js";
+import { captureServerEvent } from "./observability.js";
 
 const GTM_TOOLS = [
   "list_functions",
@@ -138,6 +139,9 @@ export function contextPreamble(ctx?: AgentContext, mode?: string, isCloud?: boo
   const base = `# GTM Grid — operating manual
 
 You are operating **GTM Grid**, a Clay-style ${isCloud ? "cloud" : "local"} spreadsheet where every column is a function. ${where} The user runs you to build GTM pipelines: source prospects, enrich them, score/personalize, push to outreach tools.
+
+## Ground rule — use ONLY the GTM Grid tools
+Source, enrich, and write data ONLY through the GTM Grid tools (\`list_tables\`, \`get_table\`, \`add_rows\`, \`add_column\`, \`run_column\`, \`run_function\`, the connectors). You do **not** need a table open to start — call \`list_tables\` to see the project's tables or \`create_table\` to make one, then operate by id. **NEVER** shell out (Bash), read/write local files, or invoke an external CLI or skill (e.g. \`deepline\`, \`npx\`) to find or enrich data — there is no useful local filesystem, those bypass the grid, and their output never reaches the user's tables. If the GTM Grid tools are genuinely unavailable to you this turn, STOP and tell the user to sign in and open their cloud project — do not improvise with other tools.
 
 ## Core model
 - **Tables** = sheets. **Rows** = records. **Columns** = either MANUAL (user types values) or FUNCTION (runs an enrichment / AI / HTTP call per row).
@@ -320,6 +324,31 @@ export type AgentKind = "claude" | "codex" | "cursor";
 // probing and scanning all go through this so a kind never has to equal its bin.
 const AGENT_BIN: Record<AgentKind, string> = { claude: "claude", codex: "codex", cursor: "cursor-agent" };
 
+const isWindows = process.platform === "win32";
+
+// On Windows a CLI on PATH is one of several files. The native installers (the
+// recommended path for all three: claude.exe in %USERPROFILE%\.local\bin, the
+// codex.exe Rust binary, cursor-agent) ship a real `.exe` that Node can spawn
+// directly. An `npm i -g` install instead drops cmd-shims (`<bin>.cmd`/`.ps1`)
+// in %APPDATA%\npm. We must (a) try every extension and (b) PREFER the `.exe`,
+// because a `.cmd`/`.bat` shim cannot be launched by spawn/execFile without a
+// shell (EINVAL since the CVE-2024-27980 patch in Node ≥18.20.2). `.ps1` is
+// never selected over `.cmd` since cmd.exe can't run it.
+function binCandidates(kind: AgentKind): string[] {
+  const base = AGENT_BIN[kind];
+  if (!isWindows) return [base];
+  return [".exe", ".cmd", ".bat", ""].map((ext) => base + ext);
+}
+
+// A resolved `.cmd`/`.bat` shim needs a shell to run (see above); a bare `.exe`
+// (or any POSIX binary) is spawned directly. `.ps1` would need PowerShell, which
+// we avoid by never preferring it over `.cmd`.
+function needsShell(binPath: string): boolean {
+  if (!isWindows) return false;
+  const ext = extname(binPath).toLowerCase();
+  return ext === ".cmd" || ext === ".bat";
+}
+
 // ── Locating the user's CLIs ──────────────────────────────────────────────
 // GUI apps launch with a minimal PATH and version managers (nvm) only set up
 // their PATH in *interactive* shells. So we resolve the binary three ways:
@@ -349,6 +378,10 @@ export function setAgentPath(kind: AgentKind, path: string | null): void {
 
 let cachedLoginPath: string | null | undefined;
 function loginPath(): string {
+  // Windows GUI apps inherit the full user+system PATH (no interactive-shell
+  // dance like nvm on macOS), and there's no POSIX login shell to query — so the
+  // sniff below is macOS/Linux only.
+  if (isWindows) return "";
   if (cachedLoginPath === undefined) {
     const shell = process.env.SHELL || "/bin/zsh";
     cachedLoginPath = (() => {
@@ -370,6 +403,18 @@ function loginPath(): string {
 /** Common install locations, including all nvm node versions. */
 function candidateDirs(): string[] {
   const home = homedir();
+  if (isWindows) {
+    // Documented Windows install targets:
+    //  - %USERPROFILE%\.local\bin → native installers (claude.exe, cursor-agent)
+    //  - %APPDATA%\npm            → `npm i -g` cmd-shims (claude.cmd, codex.cmd…)
+    //  - %LOCALAPPDATA%\Microsoft\WinGet\Links → winget shims (codex via winget)
+    // The native-installer dir is frequently NOT on PATH (a known claude-code
+    // issue), which is exactly why the `where` lookup alone misses it.
+    const dirs = [join(home, ".local", "bin")];
+    if (process.env.APPDATA) dirs.push(join(process.env.APPDATA, "npm"));
+    if (process.env.LOCALAPPDATA) dirs.push(join(process.env.LOCALAPPDATA, "Microsoft", "WinGet", "Links"));
+    return dirs;
+  }
   const dirs = ["/opt/homebrew/bin", "/usr/local/bin", join(home, ".local/bin"), join(home, ".npm-global/bin"), join(home, "Library/pnpm")];
   const nvm = join(home, ".nvm/versions/node");
   try {
@@ -380,7 +425,45 @@ function candidateDirs(): string[] {
   return dirs;
 }
 
-/** Resolve a CLI's absolute path (override → login shell → common dirs). */
+/** macOS/Linux: resolve via the user's interactive login shell (picks up nvm &
+ *  friends, whose PATH only exists in interactive shells). */
+function whichPosix(bin: string): string | null {
+  const shell = process.env.SHELL || "/bin/zsh";
+  try {
+    const out = execFileSync(shell, ["-lic", `command -v ${bin} 2>/dev/null`], {
+      encoding: "utf8",
+      timeout: 6000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return out.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("/") && existsSync(l))[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Windows: resolve via `where.exe`, which searches PATH (and applies PATHEXT).
+ *  We probe each ext-qualified name in preference order so an `.exe` wins over a
+ *  `.cmd` shim. `windowsHide` keeps a console window from flashing. */
+function whichWindows(names: string[]): string | null {
+  for (const name of names) {
+    if (!name) continue; // skip the bare "" entry; PATHEXT handles extensionless lookup
+    try {
+      const out = execFileSync("where", [name], {
+        encoding: "utf8",
+        timeout: 6000,
+        stdio: ["ignore", "pipe", "ignore"],
+        windowsHide: true,
+      });
+      const hit = out.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && existsSync(l))[0];
+      if (hit) return hit;
+    } catch {
+      /* not on PATH under this name — try the next */
+    }
+  }
+  return null;
+}
+
+/** Resolve a CLI's absolute path (override → PATH lookup → common dirs). */
 export function resolveAgentPath(kind: AgentKind): string | null {
   if (resolveCache[kind] !== undefined) return resolveCache[kind]!;
   let found: string | null = null;
@@ -388,26 +471,17 @@ export function resolveAgentPath(kind: AgentKind): string | null {
   if (override && existsSync(override)) {
     found = override;
   } else {
-    const bin = AGENT_BIN[kind];
-    // interactive login shell (matches the user's terminal)
-    const shell = process.env.SHELL || "/bin/zsh";
-    try {
-      const out = execFileSync(shell, ["-lic", `command -v ${bin} 2>/dev/null`], {
-        encoding: "utf8",
-        timeout: 6000,
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      const p = out.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("/") && existsSync(l))[0];
-      if (p) found = p;
-    } catch {
-      /* fall through to scan */
-    }
+    const names = binCandidates(kind);
+    found = isWindows ? whichWindows(names) : whichPosix(AGENT_BIN[kind]);
     if (!found) {
-      for (const dir of candidateDirs()) {
-        const p = join(dir, bin);
-        if (existsSync(p)) {
-          found = p;
-          break;
+      scan: for (const dir of candidateDirs()) {
+        for (const name of names) {
+          if (!name) continue;
+          const p = join(dir, name);
+          if (existsSync(p)) {
+            found = p;
+            break scan;
+          }
         }
       }
     }
@@ -416,11 +490,48 @@ export function resolveAgentPath(kind: AgentKind): string | null {
   return found;
 }
 
+/** The PATH env-var key. Windows env names are case-insensitive but a plain
+ *  object spread is NOT, so reuse the existing key (usually `Path`) to avoid
+ *  ending up with both `Path` and `PATH` (ambiguous for the child). */
+const PATH_KEY = isWindows
+  ? (Object.keys(process.env).find((k) => k.toUpperCase() === "PATH") ?? "Path")
+  : "PATH";
+
 /** Environment for spawning an agent: PATH includes the binary's dir (so its
  *  sibling `node` is found) plus the user's login PATH. */
 function agentSpawnEnv(binPath: string): NodeJS.ProcessEnv {
-  const parts = [dirname(binPath), loginPath(), process.env.PATH ?? ""].filter(Boolean);
-  return { ...process.env, PATH: parts.join(":") };
+  const parts = [dirname(binPath), loginPath(), process.env[PATH_KEY] ?? ""].filter(Boolean);
+  return { ...process.env, [PATH_KEY]: parts.join(delimiter) };
+}
+
+// ── Agent isolation (intentionally OFF) ────────────────────────────────────────
+// We previously isolated the agent from the user's personal Claude/Codex config
+// (claude `--setting-sources project --disable-slash-commands`, codex
+// `--ignore-user-config`) to stop a `deepline-gtm` skill from being used instead of
+// gtmgrid's tools. But that treated a SYMPTOM. The ROOT cause was that the agent had
+// NO gtmgrid tools when no table was open — the cloud context required an active
+// tableId, so the MCP failed to start and the agent improvised with whatever skill
+// was lying around. Now that tableId is optional (the MCP connects on sign-in +
+// cloud project alone — see packages/mcp/cloud-context.ts), the gtmgrid tools are
+// ALWAYS available, so the agent uses THEM. We therefore RE-ENABLE the user's +
+// built-in skills — notably the native `/goal`, whose Stop-hook loop runs a goal to
+// completion (which `--disable-slash-commands` had broken). The "use ONLY GTM Grid
+// tools" ground rule in the preamble keeps it on the grid. Re-add a flag here only
+// if the deepline fallback ever returns despite tools being available.
+const CLAUDE_ISOLATION_ARGS: string[] = [];
+const CODEX_ISOLATION_ARGS: string[] = [];
+
+/** Spawn an agent CLI cross-platform. A Windows `.cmd`/`.bat` shim cannot be
+ *  launched without a shell (EINVAL), so route those through one; native `.exe`
+ *  / POSIX binaries spawn directly. `windowsHide` suppresses a console flash. */
+function spawnAgent(binPath: string, args: string[], opts: SpawnOptions): ChildProcessWithoutNullStreams {
+  // We never override stdio, so stdout/stderr/stdin are always piped (non-null);
+  // the cast restores the precise type `spawn` infers from a literal options arg.
+  if (needsShell(binPath)) {
+    // shell:true runs `cmd.exe /c "<bin>" <args>`; quote the path for spaces.
+    return spawn(`"${binPath}"`, args, { ...opts, shell: true, windowsHide: true }) as ChildProcessWithoutNullStreams;
+  }
+  return spawn(binPath, args, { ...opts, windowsHide: true }) as ChildProcessWithoutNullStreams;
 }
 
 function versionOf(kind: AgentKind): { installed: boolean; version: string | null; path: string | null } {
@@ -428,7 +539,12 @@ function versionOf(kind: AgentKind): { installed: boolean; version: string | nul
   if (!path) return { installed: false, version: null, path: null };
   try {
     // First line only — some CLIs print a multi-line report; claude/codex/cursor are single-line.
-    const v = execFileSync(path, ["--version"], { encoding: "utf8", timeout: 5000, env: agentSpawnEnv(path) }).split("\n")[0].trim();
+    const opts = { encoding: "utf8" as const, timeout: 5000, env: agentSpawnEnv(path), windowsHide: true };
+    // A `.cmd`/`.bat` shim needs a shell; `--version` has no spaces so quoting the path is enough.
+    const out = needsShell(path)
+      ? execSync(`"${path}" --version`, opts)
+      : execFileSync(path, ["--version"], opts);
+    const v = out.toString().split("\n")[0].trim();
     return { installed: true, version: v || null, path };
   } catch {
     return { installed: false, version: null, path };
@@ -656,9 +772,33 @@ function sseClient(res: ServerResponse, origin?: string): SseClient {
  *  rather than a reconstruction. Not used by the server itself. */
 export const __sseClientForTest = sseClient;
 
-/** Path to the gtmgrid MCP launcher — bundled in the packaged app, repo/bin in dev. */
-export function mcpLauncher(repoRoot: string): string {
-  return process.env.GTMGRID_MCP_LAUNCHER ?? join(repoRoot, "bin", "gtmgrid-mcp");
+/**
+ * How to launch the gtmgrid MCP server for a spawned agent CLI: the bundled
+ * `node` binary run directly with `mcp.mjs` as a script argument.
+ *
+ * This is deliberately NOT a shell-script launcher. A `#!/bin/bash` launcher
+ * (or an extensionless one) cannot be executed on Windows, and a `.cmd`/`.bat`
+ * shim would need per-CLI shell handling that claude/codex/cursor do not all
+ * provide — so on Windows the grid tools silently never load. Spawning
+ * `node <script>` directly is the one shape every MCP client launches the same
+ * way on macOS, Linux AND Windows.
+ *
+ * - Packaged: the Rust shell exports `GTMGRID_MCP_NODE` + `GTMGRID_MCP_SCRIPT`
+ *   (both absolute and de-verbatim'd — see the `dunce::simplified` fix).
+ * - Dev: run the TS entry through `tsx` with the server's own `node`.
+ * - Legacy: an explicit `GTMGRID_MCP_LAUNCHER` (a single command, no args) is
+ *   still honoured for back-compat / manual override.
+ */
+export function mcpLaunch(repoRoot: string): { command: string; args: string[] } {
+  const node = process.env.GTMGRID_MCP_NODE;
+  const script = process.env.GTMGRID_MCP_SCRIPT;
+  if (node && script) return { command: node, args: [script] };
+  const legacy = process.env.GTMGRID_MCP_LAUNCHER;
+  if (legacy) return { command: legacy, args: [] };
+  return {
+    command: process.execPath,
+    args: ["--import", "tsx", join(repoRoot, "packages", "mcp", "src", "index.ts")],
+  };
 }
 
 type ExtraMcpServer = { command: string; args?: string[]; env?: Record<string, string> };
@@ -676,15 +816,18 @@ export interface AgentCloud {
   readonly token: string;
   readonly workspaceId: string;
   readonly projectId: string;
-  readonly tableId: string;
+  /** The active table — OPTIONAL: the agent works with no table loaded. */
+  readonly tableId?: string;
 }
 
 /**
  * Validate the `cloud` block of an `/api/agent/chat` body into an
  * {@link AgentCloud}, or `undefined` when it is absent/incomplete. A cloud
- * context requires EVERY field (apiUrl/token/workspaceId/projectId/tableId) to
- * be a non-empty string; any missing/blank field falls back to local mode (so a
- * half-populated block never half-activates cloud routing). Trims each value.
+ * context requires apiUrl/token/workspaceId/projectId to be non-empty strings —
+ * the user must be signed in with a cloud project — but `tableId` is OPTIONAL, so
+ * the agent has its gtmgrid tools even with NO table loaded (it can list_tables /
+ * create_table / operate by id). Any missing required field falls back to local
+ * mode (so a half-populated block never half-activates cloud routing). Trims each value.
  */
 export function parseAgentCloud(raw: unknown): AgentCloud | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
@@ -700,14 +843,8 @@ export function parseAgentCloud(raw: unknown): AgentCloud | undefined {
   const token = read("token");
   const workspaceId = read("workspaceId");
   const projectId = read("projectId");
-  const tableId = read("tableId");
-  if (
-    apiUrl === undefined ||
-    token === undefined ||
-    workspaceId === undefined ||
-    projectId === undefined ||
-    tableId === undefined
-  ) {
+  const tableId = read("tableId"); // optional — may be absent when no table is open
+  if (apiUrl === undefined || token === undefined || workspaceId === undefined || projectId === undefined) {
     return undefined;
   }
   return { apiUrl, token, workspaceId, projectId, tableId };
@@ -728,6 +865,30 @@ export interface AgentApproval {
   readonly argsHash: string;
 }
 
+/**
+ * The essential Windows OS env vars forwarded to the spawned MCP server. The agent
+ * CLI (claude) hands the MCP an EXPLICIT env map; if it does NOT merge the OS
+ * defaults, the Electron-as-Node MCP child can't even start on Windows — without
+ * `SystemRoot`/`PATH` the process fails to load its DLLs before `mcp.mjs` ever runs
+ * (the telemetry shows the MCP process never starts there, while macOS is fine).
+ * No-op off Windows; never overrides our `GTMGRID_*` keys (no collisions).
+ */
+function windowsBaseEnv(): Record<string, string> {
+  if (process.platform !== "win32") return {};
+  const keys = [
+    "SystemRoot", "SYSTEMROOT", "windir", "PATH", "Path", "PATHEXT", "TEMP", "TMP",
+    "SystemDrive", "HOMEDRIVE", "HOMEPATH", "USERPROFILE", "USERNAME", "APPDATA",
+    "LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "COMSPEC",
+    "PROCESSOR_ARCHITECTURE", "NUMBER_OF_PROCESSORS",
+  ];
+  const out: Record<string, string> = {};
+  for (const k of keys) {
+    const v = process.env[k];
+    if (v) out[k] = v;
+  }
+  return out;
+}
+
 export function mcpEnv(
   project: string,
   cloud?: AgentCloud,
@@ -746,8 +907,22 @@ export function mcpEnv(
     perm.GTMGRID_APPROVED_TOOL = approval.tool;
     perm.GTMGRID_APPROVED_ARGS_HASH = approval.argsHash;
   }
-  if (!cloud) return { GTMGRID_PROJECT: project, GTMGRID_PORT: port, ...perm };
+  // Forward the PostHog config so the spawned MCP can deliver its own startup
+  // beacon (mcp_started). The CLI gives the MCP an EXPLICIT env map (Codex even
+  // replaces it wholesale), so without this the child has no key and silently
+  // no-ops. (The MCP tags itself "mcp" via installProcessHandlers, so no source
+  // var needed.) Conditional on the keys being set — absent in tests / unconfigured.
+  const obs: Record<string, string> = {};
+  if (process.env.GTMGRID_POSTHOG_KEY) obs.GTMGRID_POSTHOG_KEY = process.env.GTMGRID_POSTHOG_KEY;
+  if (process.env.GTMGRID_POSTHOG_HOST) obs.GTMGRID_POSTHOG_HOST = process.env.GTMGRID_POSTHOG_HOST;
+  // Under Electron the MCP launcher is the Electron binary (GTMGRID_MCP_NODE =
+  // process.execPath); ELECTRON_RUN_AS_NODE makes it run `mcp.mjs` as plain Node.
+  // It is set ONLY here (the MCP's own spawn env), never on the engine — the engine
+  // is an Electron utilityProcess that crashes if ELECTRON_RUN_AS_NODE is present.
+  if (process.env.GTMGRID_MCP_ELECTRON_NODE) obs.ELECTRON_RUN_AS_NODE = "1";
+  if (!cloud) return { ...windowsBaseEnv(), GTMGRID_PROJECT: project, GTMGRID_PORT: port, ...obs, ...perm };
   return {
+    ...windowsBaseEnv(),
     GTMGRID_PROJECT: project,
     GTMGRID_PORT: port,
     GTMGRID_MODE: "cloud",
@@ -755,7 +930,9 @@ export function mcpEnv(
     GTMGRID_TOKEN: cloud.token,
     GTMGRID_WORKSPACE_ID: cloud.workspaceId,
     GTMGRID_CLOUD_PROJECT: cloud.projectId,
-    GTMGRID_CLOUD_TABLE: cloud.tableId,
+    // Only when a table is actually open — the MCP treats it as optional.
+    ...(cloud.tableId ? { GTMGRID_CLOUD_TABLE: cloud.tableId } : {}),
+    ...obs,
     ...perm,
   };
 }
@@ -774,12 +951,102 @@ export function mcpConfig(
   mode?: string,
   approval?: AgentApproval,
 ): string {
+  const { command, args } = mcpLaunch(repoRoot);
   return JSON.stringify({
     mcpServers: {
-      gtmgrid: { command: mcpLauncher(repoRoot), env: mcpEnv(project, cloud, mode, approval) },
+      gtmgrid: { command, args, env: mcpEnv(project, cloud, mode, approval) },
       ...extra,
     },
   });
+}
+
+/** What we read off Claude Code's `{type:"system", subtype:"init", mcp_servers,
+ *  tools}` event to tell whether gtmgrid's MCP server actually connected for this
+ *  turn — the key signal for debugging "tools not connected" on Windows. Returns
+ *  null for any other event. Pure; exported for tests. */
+export function parseClaudeInit(
+  e: unknown,
+): { mcpConnected: boolean; gtmgridTools: number; mcpServersRaw: string } | null {
+  if (!e || typeof e !== "object") return null;
+  const ev = e as { type?: string; subtype?: string; mcp_servers?: unknown; tools?: unknown };
+  if (ev.type !== "system" || ev.subtype !== "init") return null;
+  const servers = Array.isArray(ev.mcp_servers) ? ev.mcp_servers : [];
+  const gtm = servers.find((s) => (s as { name?: string } | null)?.name === "gtmgrid") as
+    | { status?: string }
+    | undefined;
+  const tools = Array.isArray(ev.tools) ? ev.tools : [];
+  const gtmgridTools = tools.filter(
+    (t) => typeof t === "string" && t.startsWith("mcp__gtmgrid__"),
+  ).length;
+  // Capture EXACTLY what Claude reported about the MCP servers (status, and any
+  // error/reason fields it includes) so a remote "tools not connected" turn — esp.
+  // on Windows, where the MCP process never even starts — tells us WHY, not just
+  // that it failed. Capped to keep the event small.
+  return {
+    mcpConnected: gtm?.status === "connected",
+    gtmgridTools,
+    mcpServersRaw: JSON.stringify(servers).slice(0, 800),
+  };
+}
+
+/** Per-turn observability accumulator (one per agent stream). */
+interface AgentTurnStats {
+  startedAt: number;
+  toolCalls: number;
+  mcpConnected?: boolean;
+  gtmgridTools?: number;
+  /** Raw `mcp_servers` from Claude's init — the "why didn't it connect" detail. */
+  mcpServersRaw?: string;
+}
+
+/**
+ * Emit one `agent_turn_completed` event to PostHog — server-side, the only path
+ * that reliably delivers (the Tauri webview blocks posthog-js in packaged builds).
+ * Records which provider/model/mode ran, WHETHER gtmgrid's MCP tools connected and
+ * how many, the tool-call count, exit status, platform/arch and cloud identity — so
+ * a remote Windows user's "tools not connected" turn is visible and filterable in
+ * PostHog. Best-effort: never throws into a turn.
+ */
+function captureAgentTurn(
+  provider: AgentKind,
+  opts: { model?: string; mode?: string; cloud?: AgentCloud },
+  stats: AgentTurnStats,
+  exitCode: number | null,
+  cwd: string,
+  stderrTail?: string,
+): void {
+  try {
+    // When the MCP DIDN'T connect, attach the why: Claude's raw mcp_servers status
+    // + the agent CLI's stderr tail (where a spawn failure — ENOENT, the spaced
+    // 'C:\Program Files\GTM Grid' path, an ELECTRON_RUN_AS_NODE issue — surfaces).
+    // Only on failure, to keep healthy turns small and avoid shipping stderr noise.
+    const mcpFailed = stats.mcpConnected === false;
+    captureServerEvent("agent_turn_completed", {
+      provider,
+      model: opts.model ?? null,
+      mode: opts.mode ?? null,
+      cloud: !!opts.cloud,
+      workspace_id: opts.cloud?.workspaceId ?? null,
+      project_id: opts.cloud?.projectId ?? null,
+      table_id: opts.cloud?.tableId ?? null,
+      platform: process.platform,
+      arch: process.arch,
+      // The ACTUAL spawn cwd the agent ran from — so a remote (esp. Windows) user's
+      // turn shows whether it ran inside our defined ~/.gtmgrid/workspace or drifted
+      // into some other dir (the old "agent working out of a random repo" bug).
+      cwd,
+      mcp_connected: stats.mcpConnected ?? null,
+      gtmgrid_tools: stats.gtmgridTools ?? null,
+      mcp_servers_raw: mcpFailed ? (stats.mcpServersRaw ?? null) : null,
+      mcp_stderr_tail: mcpFailed && stderrTail ? stderrTail.slice(-1200) : null,
+      tool_calls: stats.toolCalls,
+      exit_code: exitCode,
+      is_error: exitCode !== 0 && exitCode !== null,
+      duration_ms: Date.now() - stats.startedAt,
+    });
+  } catch {
+    /* observability is best-effort — never break a turn */
+  }
 }
 
 /** Stream a Claude Code turn over SSE, driving gtmgrid via MCP. */
@@ -801,6 +1068,9 @@ export function streamClaude(
     // of reaching for an external MCP (auth walls). The gtmgrid server's env
     // carries cloud context (TRI-3296) when in cloud mode.
     "--strict-mcp-config",
+    // Isolate from the user's personal Claude config (skills/plugins/hooks/CLAUDE.md)
+    // while keeping their login — see CLAUDE_ISOLATION_ARGS.
+    ...CLAUDE_ISOLATION_ARGS,
     "--allowedTools",
     ...GTM_TOOLS.map((t) => `mcp__gtmgrid__${t}`),
   ];
@@ -831,11 +1101,12 @@ export function streamClaude(
   // signal the WHOLE tree (CLI + MCP server + grandchildren) via `-pid` (TRI-3305).
   // Saved provider keys (TRIGIFY_API_KEY etc.) fill in UNDER process.env so an
   // explicitly exported var still wins; values never appear in args or logs.
-  const child = spawn(bin, args, { env: { ...opts.providerEnv, ...agentSpawnEnv(bin) }, cwd: opts.repoRoot, detached: true });
+  const child = spawnAgent(bin, args, { env: { ...opts.providerEnv, ...agentSpawnEnv(bin) }, cwd: opts.repoRoot, detached: true });
   child.stdin?.end(); // we pass the prompt via `-p`; close stdin so claude doesn't wait on it (the "no stdin data in 3s" warning)
   let sessionId = resumeId ?? null;
   let buf = "";
   let gridDirty = false;
+  const stats: AgentTurnStats = { startedAt: Date.now(), toolCalls: 0 };
   const lifecycle = manageChildLifecycle(child, {
     onTimeout: (reason) => {
       sse.write({ type: "error", message: turnTimeoutMessage("claude", reason) });
@@ -866,10 +1137,20 @@ export function streamClaude(
       // the on-disk latest-session fallback above, which is always a real
       // resumable transcript.
 
+      // Observability: read the init event to learn whether gtmgrid's MCP server
+      // connected this turn + how many tools it exposed (the Windows debug signal).
+      const init = parseClaudeInit(e);
+      if (init) {
+        stats.mcpConnected = init.mcpConnected;
+        stats.gtmgridTools = init.gtmgridTools;
+        stats.mcpServersRaw = init.mcpServersRaw;
+      }
+
       if (e.type === "assistant") {
         for (const block of e.message?.content ?? []) {
           if (block.type === "text" && block.text) sse.write({ type: "text", text: block.text });
           else if (block.type === "tool_use") {
+            stats.toolCalls++;
             const short = String(block.name).replace(/^mcp__gtmgrid__/, "");
             sse.write({ type: "tool", name: short, raw: block.name, input: block.input ?? {} });
             // Claude's NATIVE AskUserQuestion: in headless `-p` the CLI stubs the
@@ -926,6 +1207,7 @@ export function streamClaude(
     sse.end();
   });
   child.on("close", (code) => {
+    captureAgentTurn("claude", opts, stats, code, opts.repoRoot, stderr);
     if (code !== 0 && code !== null) {
       sse.write({ type: "error", message: stderr.slice(-400) || `claude exited ${code}` });
     }
@@ -951,9 +1233,21 @@ function resultText(result: any): string {
  * those characters cannot break out of the string or inject extra TOML. Keys are
  * fixed `GTMGRID_*` identifiers, so only the values need escaping.
  */
+/** A single TOML basic-string value, with backslashes and quotes escaped. This
+ *  matters on Windows, where the MCP `command`/`args` are absolute paths full of
+ *  `\` separators (`C:\…\node.exe`) — emitting them unescaped produces invalid
+ *  TOML and Codex fails to mount the gtmgrid server. */
+export function tomlString(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+/** A TOML array of basic strings (each escaped via {@link tomlString}). */
+export function tomlStringArray(values: string[]): string {
+  return `[${values.map(tomlString).join(", ")}]`;
+}
+
 export function codexEnvToml(env: Record<string, string>): string {
-  const esc = (v: string) => v.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  const entries = Object.entries(env).map(([k, v]) => `${k} = "${esc(v)}"`);
+  const entries = Object.entries(env).map(([k, v]) => `${k} = ${tomlString(v)}`);
   return `{ ${entries.join(", ")} }`;
 }
 
@@ -1002,7 +1296,7 @@ export function streamCodex(
   opts: { message: string; project: string; repoRoot: string; threadId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; mode?: string; cloud?: AgentCloud; providerEnv?: Record<string, string>; approval?: AgentApproval },
 ): void {
   const sse = sseClient(res, opts.origin);
-  const launcher = mcpLauncher(opts.repoRoot);
+  const { command: mcpCommand, args: mcpArgs } = mcpLaunch(opts.repoRoot);
   const preamble = contextPreamble(opts.context, opts.mode, !!opts.cloud);
   const message = preamble ? `${preamble}\n\n${opts.message}` : opts.message;
   // Isolate Codex to ONLY the gtmgrid MCP server. `-c mcp_servers={…}` on its own
@@ -1026,10 +1320,13 @@ export function streamCodex(
   const flags = [
     "--json",
     "--skip-git-repo-check",
+    // Isolate from the user's personal Codex config (~/.codex/config.toml: global
+    // instructions + MCP servers) while keeping their login — see CODEX_ISOLATION_ARGS.
+    ...CODEX_ISOLATION_ARGS,
     ...codexSandboxFlags(opts.mode),
     "--ignore-user-config",
     "-c",
-    `mcp_servers={ gtmgrid = { command = "${launcher}", env = ${codexEnvToml(mcpEnv(opts.project, opts.cloud, opts.mode, opts.approval))} } }`,
+    `mcp_servers={ gtmgrid = { command = ${tomlString(mcpCommand)}, args = ${tomlStringArray(mcpArgs)}, env = ${codexEnvToml(mcpEnv(opts.project, opts.cloud, opts.mode, opts.approval))} } }`,
     ...(userDefaults.reasoningEffort ? ["-c", `model_reasoning_effort="${userDefaults.reasoningEffort}"`] : []),
     ...(resolvedModel ? ["-m", resolvedModel] : []),
   ];
@@ -1049,11 +1346,12 @@ export function streamCodex(
   // `detached` → own process group, so cleanup can kill the CLI + the gtmgrid
   // MCP server + their subprocesses as one group, not just the codex parent.
   // Saved provider keys fill in UNDER process.env — an exported var still wins.
-  const child = spawn(bin, args, { env: { ...opts.providerEnv, ...agentSpawnEnv(bin) }, cwd: opts.repoRoot, detached: true });
+  const child = spawnAgent(bin, args, { env: { ...opts.providerEnv, ...agentSpawnEnv(bin) }, cwd: opts.repoRoot, detached: true });
   child.stdin?.end(); // codex exec otherwise waits on stdin
 
   let threadId = resumeThread ?? null;
   let buf = "";
+  const stats: AgentTurnStats = { startedAt: Date.now(), toolCalls: 0 };
   const lifecycle = manageChildLifecycle(child, {
     onTimeout: (reason) => {
       sse.write({ type: "error", message: turnTimeoutMessage("codex", reason) });
@@ -1081,6 +1379,7 @@ export function streamCodex(
       } else if (e.type === "item.completed") {
         const item = e.item ?? {};
         if (item.type === "mcp_tool_call") {
+          stats.toolCalls++;
           const short = String(item.tool ?? "");
           sse.write({ type: "tool", name: short, raw: `mcp__${item.server}__${short}`, input: item.arguments ?? {} });
           if (!item.error && item.result) {
@@ -1110,6 +1409,7 @@ export function streamCodex(
     sse.end();
   });
   child.on("close", (code) => {
+    captureAgentTurn("codex", opts, stats, code, opts.repoRoot);
     if (code !== 0 && code !== null) {
       sse.write({ type: "error", message: stderr.split("\n").filter((l) => /error|fatal/i.test(l)).slice(-1)[0] || `codex exited ${code}` });
     }
@@ -1153,8 +1453,11 @@ function runClaudeOneShot(bin: string, prompt: string, system: string): Promise<
       "--strict-mcp-config",
       "--mcp-config",
       '{"mcpServers":{}}',
+      // Isolate from the user's personal config (skills/plugins/hooks) here too.
+      ...CLAUDE_ISOLATION_ARGS,
     ];
-    execFile(bin, args, { env: agentSpawnEnv(bin), timeout: 90_000, maxBuffer: 8 << 20 }, (err, stdout, stderr) => {
+    // shell:true for a Windows .cmd/.bat shim (EINVAL otherwise); native .exe runs direct.
+    execFile(bin, args, { env: agentSpawnEnv(bin), timeout: 90_000, maxBuffer: 8 << 20, shell: needsShell(bin), windowsHide: true }, (err, stdout, stderr) => {
       const out = (stdout || "").trim();
       if (!out) {
         resolve({ error: `claude: ${(stderr || err?.message || "no output").trim().slice(0, 300)}` });
@@ -1178,7 +1481,7 @@ function runClaudeOneShot(bin: string, prompt: string, system: string): Promise<
 function runCodexOneShot(bin: string, prompt: string, system: string): Promise<{ text: string } | { error: string }> {
   return new Promise((resolve) => {
     const message = system ? `${system}\n\n${prompt}` : prompt;
-    const child = spawn(bin, ["exec", "--json", "--skip-git-repo-check", message], { env: agentSpawnEnv(bin) });
+    const child = spawnAgent(bin, ["exec", "--json", "--skip-git-repo-check", ...CODEX_ISOLATION_ARGS, message], { env: agentSpawnEnv(bin) });
     child.stdin?.end();
     let buf = "";
     let last = "";
@@ -1315,12 +1618,13 @@ export function streamCursor(
   // `detached` → own process group, so cleanup can kill the CLI + the gtmgrid MCP
   // server + their subprocesses as one group (TRI-3305). Saved provider keys fill in
   // UNDER process.env so an explicitly exported var still wins.
-  const child = spawn(bin, args, { env: { ...opts.providerEnv, ...agentSpawnEnv(bin) }, cwd, detached: true });
+  const child = spawnAgent(bin, args, { env: { ...opts.providerEnv, ...agentSpawnEnv(bin) }, cwd, detached: true });
   child.stdin?.end(); // prompt is passed via `-p`; close stdin so it doesn't wait on it.
 
   let sessionId = resumeId ?? null;
   let buf = "";
   let gridDirty = false;
+  const stats: AgentTurnStats = { startedAt: Date.now(), toolCalls: 0 };
   const lifecycle = manageChildLifecycle(child, {
     onTimeout: (reason) => {
       sse.write({ type: "error", message: turnTimeoutMessage("cursor", reason) });
@@ -1353,6 +1657,7 @@ export function streamCursor(
         for (const block of e.message?.content ?? []) {
           if (block.type === "text" && block.text) sse.write({ type: "text", text: block.text });
           else if (block.type === "tool_use") {
+            stats.toolCalls++;
             const short = cursorToolShort(block.name);
             sse.write({ type: "tool", name: short, raw: block.name, input: block.input ?? {} });
             // Only a gtmgrid MUTATING tool dirties the grid — mirror claude's
@@ -1404,6 +1709,7 @@ export function streamCursor(
     sse.end();
   });
   child.on("close", (code) => {
+    captureAgentTurn("cursor", opts, stats, code, cwd);
     cleanupCursorMcpConfig(); // remove the on-disk token now the child has exited
     if (code !== 0 && code !== null) {
       sse.write({ type: "error", message: stderr.slice(-400) || `cursor-agent exited ${code}` });

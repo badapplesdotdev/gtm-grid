@@ -17,7 +17,16 @@ import {
   type GridStorePage,
   type GridStoreShape,
 } from "./store.js";
-import type { AiConfig, AiFallbackRequest, Column, ConnectorMethod, RateLimit } from "./types.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
+import type { AiConfig, AiFallbackRequest, AiGenerationEvent, Column, ConnectorMethod, RateLimit } from "./types.js";
+
+// One LLM-observability trace id per column run, propagated across the run's
+// concurrent rows so every `ai.generate` generation in a single "Run" shares a
+// trace (PostHog groups $ai_generation events by $ai_trace_id). A standalone
+// dispatch (preview / option resolution) outside a run has no store → the host
+// mints a per-generation id.
+const aiRunTrace = new AsyncLocalStorage<string>();
 
 /** Stored on a cell's `error` (with status "empty") when a run condition gates the
  *  row off, so the grid can show a muted "Run condition not met" note instead of a dash. */
@@ -34,6 +43,8 @@ export interface EngineConfig {
    * the sidecar). Absent ⇒ `ai.generate` throws "No AI provider connected".
    */
   aiFallback?: (req: AiFallbackRequest) => Promise<string>;
+  /** Per-host LLM-observability sink for `ai.generate` (emits `$ai_generation`). */
+  onAiGeneration?: (event: AiGenerationEvent) => void;
   /**
    * Enforce the SSRF guard on every connector HTTP call this engine makes. Set
    * true ONLY on server-side run paths (the Vercel webhook-enrichment worker),
@@ -213,6 +224,8 @@ export class Engine {
               aiProviders,
               guardSsrf: this.config.guardSsrf,
               aiFallback: this.config.aiFallback,
+              onAiGeneration: this.config.onAiGeneration,
+              aiTraceId: aiRunTrace.getStore(),
             }),
           ),
         );
@@ -292,6 +305,8 @@ export class Engine {
     columnId: string,
     opts: RunColumnOptions = {},
   ): Promise<{ ran: number; errors: number; firstError?: string }> {
+    // Open a trace for this run; every ai.generate row below shares it.
+    aiRunTrace.enterWith(randomUUID());
     // Resolve how this run reads the grid. A `snapshot()` fetches the grid once
     // and serves every per-row read from memory (O(N) reads, not O(N^2)); the
     // writes still go to the LIVE store so cell status streams during the run.

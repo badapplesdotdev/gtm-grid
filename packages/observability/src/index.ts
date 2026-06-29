@@ -40,6 +40,19 @@ function ph(): PostHog | null {
   return client;
 }
 
+/**
+ * Capture a server-side product event (e.g. `sidecar_listening`) over the
+ * posthog-node channel — the ONLY desktop telemetry path proven to deliver from
+ * packaged builds (the renderer's posthog-js is blocked by the Tauri webview
+ * origin). Use for boot/liveness signals the client can't reliably report.
+ * No-ops when unconfigured.
+ */
+export function captureServerEvent(event: string, properties?: Record<string, unknown>): void {
+  const c = ph();
+  if (!c) return;
+  c.capture({ distinctId, event, properties });
+}
+
 /** Report an exception to PostHog Error Tracking. No-ops when unconfigured. */
 export function captureException(error: unknown, properties?: Record<string, unknown>): void {
   const c = ph();
