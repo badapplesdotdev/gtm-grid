@@ -16,6 +16,14 @@ export function freshState() {
     // Whether the active workspace is on a paid plan. `plan.id === null` ⇒ the
     // renderer treats the workspace as Free (`cloudLocked`) and hides the grid.
     paid: true,
+    // Trial end (epoch ms) surfaced on `plan.trialEndsAt`; null = not trialing.
+    // A past value locks the cloud tier even while `paid` (the time-based
+    // backstop). See mePayload for the state matrix.
+    trialEndsAt: null,
+    // Cloud-actions usage that drives the low-credits warning (limit null =
+    // unmetered = no warning).
+    cloudActionsUsed: 0,
+    cloudActionsLimit: null,
 
     user: {
       id: "user_1",
@@ -93,8 +101,19 @@ export function cell(value, status = "done", error = null) {
   return { value, status, error };
 }
 
-/** The `Me` payload (tRPC `workspaces.me`) — drives `useMe` + workspace/plan. */
+/** The `Me` payload (tRPC `workspaces.me`) — drives `useMe` + workspace/plan.
+ *
+ * Trial/credit overrides (shallow-merged via `/__test/reset`):
+ *   - `trialEndsAt` (epoch ms) — surfaced on `plan.trialEndsAt`. Combine with
+ *     `paid` to model each state: `{ paid:true, trialEndsAt:<future> }` = active
+ *     trial; `{ paid:true, trialEndsAt:<past> }` = lapsed-by-date-but-not-synced
+ *     (plan id still "team"); `{ paid:false, trialEndsAt:<past> }` = lapsed +
+ *     synced (plan id null). The renderer locks on EITHER null id OR a past
+ *     trialEndsAt, so all three drive the right UI.
+ *   - `cloudActionsUsed` / `cloudActionsLimit` — drive the low-credits warning.
+ */
 export function mePayload(s) {
+  const trialEndsAt = typeof s.trialEndsAt === "number" ? s.trialEndsAt : null;
   return {
     user: { _id: s.user.id, name: s.user.name, email: s.user.email, image: s.user.image },
     workspaces: [
@@ -104,9 +123,12 @@ export function mePayload(s) {
         role: "owner",
         seatUsage: { used: 1, limit: null },
         plan: s.paid
-          ? { id: "team", name: "Team", trialEndsAt: null }
-          : { id: null, name: "Free", trialEndsAt: null },
-        cloudActions: { used: 0, limit: null },
+          ? { id: "team", name: "Team", trialEndsAt }
+          : { id: null, name: "Free", trialEndsAt },
+        cloudActions: {
+          used: typeof s.cloudActionsUsed === "number" ? s.cloudActionsUsed : 0,
+          limit: typeof s.cloudActionsLimit === "number" ? s.cloudActionsLimit : null,
+        },
       },
     ],
   };

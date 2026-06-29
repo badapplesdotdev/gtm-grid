@@ -35,6 +35,7 @@ import { fireConfetti } from "./cloud/confetti";
 import { useUpdateCheck } from "./useUpdateCheck";
 import { changelogNotes } from "./changelog";
 import { capture } from "./analytics";
+import { TRIAL_DURATION_DAYS } from "@gtmgrid/cloud";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./components/ui/tooltip";
 import {
   buildNotifications,
@@ -1379,22 +1380,48 @@ export default function App() {
       ? { workspaceId: agentCloud.workspaceId, tableId: agentCloud.tableId }
       : null,
   );
-  // Cloud-access lock: the active workspace's trial lapsed / it's on Free (no
-  // plan id). Cloud tables/projects are shown but LOCKED — opening or editing
-  // them prompts an upgrade; local tables are unaffected. The server enforces the
-  // same gate (EntitlementService) so this is a UX layer over a real lock.
-  const cloudLocked =
-    cloudEnabled && activeWorkspace != null && activeWorkspace.plan.id === null;
-  const [showUpgrade, setShowUpgrade] = useState(false);
   // Trial countdown: whole days left until the active workspace's trial ends
   // (null when not trialing). Drives the in-app "trial ends in N days" banner so
   // users add a card BEFORE the hard lock.
   const trialEndsAt = activeWorkspace?.plan.trialEndsAt ?? null;
+  // A trial that has lapsed BY DATE. The server's EntitlementService backstop
+  // blocks credited actions the instant `trialEndsAt` passes — even before Autumn
+  // syncs `plan.id` to null. We mirror that here so the UI locks immediately too:
+  // without it, a date-expired-but-unsynced workspace (still `plan.id === "team"`)
+  // would show enabled run/add buttons whose actions the server silently rejects.
+  const trialExpiredByDate =
+    trialEndsAt != null && trialEndsAt <= Date.now();
+  // Cloud-access lock: the active workspace's trial lapsed (by sync OR by date) /
+  // it's on Free (no plan id). Cloud tables/projects are shown but LOCKED —
+  // opening or editing them prompts an upgrade; local tables are unaffected. The
+  // server enforces the same gate (EntitlementService) so this is a UX layer over
+  // a real lock.
+  const cloudLocked =
+    cloudEnabled &&
+    activeWorkspace != null &&
+    (activeWorkspace.plan.id === null || trialExpiredByDate);
+  const [showUpgrade, setShowUpgrade] = useState(false);
   const trialDaysLeft =
     trialEndsAt != null
       ? Math.max(0, Math.ceil((trialEndsAt - Date.now()) / 86_400_000))
       : null;
   const showTrialBanner = cloudEnabled && !cloudLocked && trialDaysLeft != null;
+  // Welcome window: the first day of a fresh trial. `trialEndsAt - duration` is
+  // the trial start, so "started within the last day" == now is before
+  // start + 1 day. Only while genuinely trialing (not locked).
+  const trialStarted =
+    showTrialBanner &&
+    trialEndsAt != null &&
+    Date.now() <
+      trialEndsAt - (TRIAL_DURATION_DAYS - 1) * 86_400_000;
+  // "Trial expired" companion notification: locked specifically because a trial
+  // lapsed (a past `trialEndsAt`), distinct from a never-trialed Free workspace /
+  // cancelled paid plan (both have `trialEndsAt === null`). A4 preserves the past
+  // timestamp through the lapse sync so this stays true after `plan.id` → null.
+  const trialExpired =
+    cloudEnabled && activeWorkspace != null && trialExpiredByDate;
+  // Cloud-actions usage for the low-credits warning (null = unmetered/unknown).
+  const cloudActionsUsage = activeWorkspace?.cloudActions ?? null;
 
   // Reset the open cloud project when the active workspace changes: a project
   // belongs to exactly one workspace, so keeping it open across a switch would
@@ -1709,9 +1736,19 @@ export default function App() {
     () =>
       buildNotifications({
         trialDaysLeft: showTrialBanner ? trialDaysLeft : null,
+        trialStarted,
+        trialExpired,
+        cloudActions: cloudActionsUsage,
         persist: notifPersist,
       }),
-    [showTrialBanner, trialDaysLeft, notifPersist],
+    [
+      showTrialBanner,
+      trialDaysLeft,
+      trialStarted,
+      trialExpired,
+      cloudActionsUsage,
+      notifPersist,
+    ],
   );
   // Bell badge = active notifications not yet seen.
   const unreadNotifs = countUnread(notifications, notifPersist);

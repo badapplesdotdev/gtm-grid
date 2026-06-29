@@ -224,6 +224,21 @@ describe("BillingService.syncPlan", () => {
     expect(exit.value).toEqual({ id: null, name: "Free", trialEndsAt: null });
   });
 
+  it("preserves a lapsed trial's past trialEndsAt (expired-trial vs Free)", async () => {
+    // A workspace that WAS trialing keeps its now-past trialEndsAt when the sub
+    // lapses, so it reads as "trial expired" (not a never-trialed Free workspace).
+    const pastTrialEnd = 1_700_000_000_000;
+    const exit = await runSync({
+      workspaces: [{ id: WS_ID, name: "Alpha", ownerId: "user_owner", trialEndsAt: pastTrialEnd }],
+      users,
+      memberships: ownerMembership,
+      currentUserId: "user_owner",
+      autumn: { activePlanIds: ["free"] },
+    });
+    if (!Exit.isSuccess(exit)) throw new Error("expected success");
+    expect(exit.value).toEqual({ id: null, name: "Free", trialEndsAt: pastTrialEnd });
+  });
+
   it("allows any member (not only owner/admin) to refresh the plan", async () => {
     const exit = await runSync({
       workspaces,

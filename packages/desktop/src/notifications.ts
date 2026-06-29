@@ -14,14 +14,35 @@
  * `.update-banner`.
  */
 
-/** The notification kinds migrated from the stacked banners. Also the stable
- * item `id` (one of each is live at a time), so dismissed/seen sets key on the
- * kind. App-update alerts are NOT here — they live in the dedicated download
- * affordance next to the bell (UpdateDialog), not the notification center. */
-export type NotificationKind = "trial";
+/**
+ * The notification kinds the center can surface. Also the stable item `id` (one
+ * of each is live at a time), so dismissed/seen sets key on the kind:
+ *   - `trial.started`    — welcome, just after the 7-day trial begins.
+ *   - `trial`            — the countdown ("Trial ends in N days").
+ *   - `cloudActionsLow`  — nearing the plan's cloud-actions limit.
+ *   - `trial.expired`    — the trial lapsed and the cloud tier is locked.
+ * App-update alerts are NOT here — they live in the dedicated download affordance
+ * next to the bell (UpdateDialog), not the notification center.
+ */
+export type NotificationKind =
+  | "trial"
+  | "trial.started"
+  | "trial.expired"
+  | "cloudActionsLow";
 
-/** All kinds in newest-first display order. */
-export const NOTIFICATION_ORDER: readonly NotificationKind[] = ["trial"];
+/** All kinds in newest-first display order — most urgent first. */
+export const NOTIFICATION_ORDER: readonly NotificationKind[] = [
+  "trial.expired",
+  "cloudActionsLow",
+  "trial",
+  "trial.started",
+];
+
+/**
+ * Fraction of the cloud-actions limit at/above which the low-credits warning
+ * fires (e.g. 0.8 = warn once 80% is used). Below this the warning stays silent.
+ */
+export const CLOUD_ACTIONS_LOW_THRESHOLD = 0.8;
 
 /** Visual tone, mapped onto the app's existing accent/warn/danger tokens. */
 export type NotificationSeverity = "info" | "success" | "warning";
@@ -72,6 +93,20 @@ export interface NotificationInputs {
   /** Whole days left until the active workspace's trial ends, or null when not
    * trialing / cloud trial banner shouldn't show (mirrors `showTrialBanner`). */
   readonly trialDaysLeft: number | null;
+  /** True for the first ~24h of a fresh trial — drives the welcome item (and
+   * suppresses the redundant countdown while it shows). Defaults to false. */
+  readonly trialStarted?: boolean;
+  /** True when the cloud tier is locked because the trial has lapsed — drives the
+   * dismissible "trial expired" companion to the full-screen locked panel.
+   * Defaults to false. */
+  readonly trialExpired?: boolean;
+  /** The workspace's cloud-actions usage, or null when unmetered/unknown. The
+   * low-credits warning fires when `used / limit >= CLOUD_ACTIONS_LOW_THRESHOLD`
+   * and the limit is a positive number (a null limit = unlimited = no warning). */
+  readonly cloudActions?: {
+    readonly used: number;
+    readonly limit: number | null;
+  } | null;
   /** Persisted dismissed/seen kinds. */
   readonly persist: NotificationPersistState;
 }
@@ -94,10 +129,57 @@ function trialNotification(daysLeft: number): AppNotification {
   };
 }
 
+/** Welcome item shown just after a trial begins. Dismissible (it self-clears once
+ * the welcome window passes; dismissing hides it sooner). */
+function trialStartedNotification(): AppNotification {
+  return {
+    id: "trial.started",
+    kind: "trial.started",
+    title: "Your free trial is active",
+    body: "You're on a 7-day Team trial — cloud tables, realtime sync & shared credentials are unlocked. Add a card any time to keep them after the trial.",
+    severity: "success",
+    dismissible: true,
+    actions: [{ id: "trial.upgrade", label: "See plans", variant: "ghost" }],
+  };
+}
+
+/** Item shown once the trial has lapsed and the cloud tier is locked. The
+ * companion to the full-screen locked panel; dismissible so it can be cleared. */
+function trialExpiredNotification(): AppNotification {
+  return {
+    id: "trial.expired",
+    kind: "trial.expired",
+    title: "Your free trial has ended",
+    body: "Cloud tables, realtime sync & shared credentials are locked. Your data is safe — upgrade to unlock them again.",
+    severity: "warning",
+    dismissible: true,
+    actions: [{ id: "trial.upgrade", label: "Upgrade now", variant: "primary" }],
+  };
+}
+
+/** Low cloud-actions warning. `pct` is the whole-percent of the limit used. */
+function cloudActionsLowNotification(pct: number): AppNotification {
+  return {
+    id: "cloudActionsLow",
+    kind: "cloudActionsLow",
+    title: pct >= 100 ? "You're out of cloud actions" : "Cloud actions running low",
+    body:
+      pct >= 100
+        ? "You've used all your cloud actions for this period. Upgrade for more headroom on enrichment, webhooks & runs."
+        : `You've used ${pct}% of your cloud actions. Upgrade for more headroom before runs start failing.`,
+    severity: "warning",
+    dismissible: true,
+    actions: [{ id: "trial.upgrade", label: "Upgrade now", variant: "primary" }],
+  };
+}
+
 /**
- * Derive the active notification list (newest-first) from app state. Each kind's
- * eligibility matches the banner it replaces:
- *   - trial: a trial countdown is present (the trial banner is NOT dismissible).
+ * Derive the active notification list (newest-first) from app state:
+ *   - trial.expired: the trial lapsed and the cloud tier is locked.
+ *   - cloudActionsLow: at/over {@link CLOUD_ACTIONS_LOW_THRESHOLD} of the limit.
+ *   - trial: a trial countdown is present (NOT dismissible; suppressed while the
+ *     welcome shows and when the trial has already expired).
+ *   - trial.started: the first ~24h welcome.
  * Dismissed kinds are excluded so a dismissed item never reappears in-session or
  * across sessions (the caller backs `persist` with localStorage). App-update
  * alerts are intentionally absent — they surface via the bell-adjacent download
@@ -107,8 +189,35 @@ export function buildNotifications(input: NotificationInputs): readonly AppNotif
   const dismissed = new Set(input.persist.dismissed);
   const out: AppNotification[] = [];
 
-  if (input.trialDaysLeft !== null && !dismissed.has("trial")) {
+  if (input.trialExpired && !dismissed.has("trial.expired")) {
+    out.push(trialExpiredNotification());
+  }
+
+  const ca = input.cloudActions ?? null;
+  if (
+    ca !== null &&
+    typeof ca.limit === "number" &&
+    ca.limit > 0 &&
+    ca.used / ca.limit >= CLOUD_ACTIONS_LOW_THRESHOLD &&
+    !dismissed.has("cloudActionsLow")
+  ) {
+    const pct = Math.min(100, Math.floor((ca.used / ca.limit) * 100));
+    out.push(cloudActionsLowNotification(pct));
+  }
+
+  // The countdown is redundant while the welcome shows, and meaningless once the
+  // trial has expired — suppress it in both cases.
+  if (
+    input.trialDaysLeft !== null &&
+    !input.trialStarted &&
+    !input.trialExpired &&
+    !dismissed.has("trial")
+  ) {
     out.push(trialNotification(input.trialDaysLeft));
+  }
+
+  if (input.trialStarted && !input.trialExpired && !dismissed.has("trial.started")) {
+    out.push(trialStartedNotification());
   }
 
   // Stable newest-first ordering regardless of insertion order above.
@@ -176,7 +285,12 @@ function isKind(v: unknown): v is NotificationKind {
   // "update" / "autoSyncNudge" are intentionally excluded — legacy persisted
   // dismissals of those are dropped on parse now that updates live outside the
   // center and auto-sync (the local paradigm) is gone.
-  return v === "trial";
+  return (
+    v === "trial" ||
+    v === "trial.started" ||
+    v === "trial.expired" ||
+    v === "cloudActionsLow"
+  );
 }
 
 /** Coerce an unknown JSON value into a deduped array of valid kinds. */
