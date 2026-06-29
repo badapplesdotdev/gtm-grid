@@ -626,6 +626,13 @@ html, body, #root {
   font-weight: 600;
   color: var(--text);
   letter-spacing: -0.01em;
+  /* Truncate a long table name instead of wrapping it onto multiple lines
+     (which previously broke the fixed-height toolbar on narrow widths). */
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .toolbar-meta {
@@ -633,6 +640,17 @@ html, body, #root {
   color: var(--text-3);
   font-weight: 400;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Icon-only "⋯" overflow button shown when the toolbar collapses its actions. */
+.toolbar-overflow-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding-left: 8px;
+  padding-right: 8px;
 }
 
 .toolbar-sep {
