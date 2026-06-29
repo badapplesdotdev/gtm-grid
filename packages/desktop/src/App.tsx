@@ -1396,9 +1396,14 @@ export default function App() {
   // opening or editing them prompts an upgrade; local tables are unaffected. The
   // server enforces the same gate (EntitlementService) so this is a UX layer over
   // a real lock.
+  // Self-host (`GTMGRID_SELF_HOST=1`, surfaced on `me`) has no billing, so the
+  // server never enforces the entitlement gate — the UI must never lock either,
+  // regardless of plan/trial state. Otherwise a self-hoster's grid shows "Cloud
+  // is locked" while the backend happily serves every request.
   const cloudLocked =
     cloudEnabled &&
     activeWorkspace != null &&
+    activeWorkspace.selfHost !== true &&
     (activeWorkspace.plan.id === null || trialExpiredByDate);
   const [showUpgrade, setShowUpgrade] = useState(false);
   const trialDaysLeft =
