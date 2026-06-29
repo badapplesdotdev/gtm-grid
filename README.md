@@ -19,15 +19,60 @@ cd gtm-grid
 pnpm install          # one-time; builds better-sqlite3 natively
 ```
 
-**Run it (dev — two terminals, fastest for hacking):**
+### Run it locally
+
+Grid data lives in **Postgres**, so a local run needs three things: the database,
+the backend API the desktop talks to, and the desktop UI itself (plus the engine
+sidecar that runs your columns on your machine).
+
+**1. Start Postgres** (just the database — everything else runs from source):
 
 ```bash
-# terminal 1 — the engine sidecar (HTTP API on :8787)
+docker compose up -d          # Postgres on localhost:5432
+```
+
+**2. Configure env.** Create `apps/web/.env.local`:
+
+```bash
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/postgres
+SITE_URL=http://localhost:3000
+INVITE_BASE_URL=http://localhost:3000
+BETTER_AUTH_SECRET=$(openssl rand -hex 32)     # paste the generated value
+WEBHOOK_WORKER_SECRET=$(openssl rand -hex 24)  # paste the generated value
+CREDENTIALS_MASTER_KEY=$(openssl rand -hex 32) # paste the generated value
+```
+
+…and `packages/desktop/.env.local` (point the desktop at your local backend):
+
+```bash
+VITE_API_URL=http://localhost:3000
+```
+
+**3. Migrate, then run** (apply the schema once, then three terminals):
+
+```bash
+# one-time: create the schema in your local Postgres
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/postgres \
+  pnpm -F @gtmgrid/db db:migrate
+
+# terminal 1 — the backend API (tRPC + Better Auth) on :3000
+pnpm -F @gtmgrid/web dev
+
+# terminal 2 — the engine sidecar (:8787) — runs your columns on your machine
 GTMGRID_PROJECT=default pnpm server
 
-# terminal 2 — the React UI on http://localhost:5173
+# terminal 3 — the desktop UI
 pnpm desktop
 ```
+
+**Sign up** against your local backend — a new account gets a free trial, so you
+can create tables, add function columns, connect your AI key in-app, and run them
+right away. Connector/AI keys are stored encrypted on *your* machine.
+
+> Live multiplayer + inbound webhooks need extra services (Supabase Realtime /
+> PartyKit, Inngest). This Postgres-only flow gives you a fully working
+> single-window instance; see [`docs/local-dev.md`](./docs/local-dev.md) for the
+> complete setup.
 
 **Or run the native window** (spawns the sidecar for you):
 
