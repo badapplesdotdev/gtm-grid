@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   appendCapped,
   codexEnvToml,
   codexSandboxFlags,
+  codexUserModelDefaults,
   claudePermissionMode,
   contextPreamble,
   manageChildLifecycle,
@@ -142,6 +146,48 @@ describe("codexEnvToml — safe inline-TOML rendering for the codex -c flag", ()
     const toml = codexEnvToml(mcpEnv("p", CLOUD));
     expect(toml).toContain('GTMGRID_MODE = "cloud"');
     expect(toml).toContain('GTMGRID_CLOUD_TABLE = "tbl_1"');
+  });
+});
+
+// streamCodex passes --ignore-user-config (so Codex ignores the user's other MCP
+// servers, the cause of the rmcp AuthRequired crash) which also drops the user's
+// model defaults — these are read back from config.toml and re-injected.
+describe("codexUserModelDefaults — re-injecting the user's model after --ignore-user-config", () => {
+  const withConfig = (toml: string, fn: (home: string) => void) => {
+    const home = mkdtempSync(join(tmpdir(), "codex-cfg-"));
+    try {
+      writeFileSync(join(home, "config.toml"), toml);
+      fn(home);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  };
+
+  it("reads the top-level model and reasoning effort", () => {
+    withConfig('model = "gpt-5.5"\nmodel_reasoning_effort = "high"\n', (home) => {
+      expect(codexUserModelDefaults(home)).toEqual({ model: "gpt-5.5", reasoningEffort: "high" });
+    });
+  });
+
+  it("ignores `model` keys nested under a [table] (profiles / model_providers)", () => {
+    withConfig('model = "gpt-5.5"\n\n[profiles.fast]\nmodel = "gpt-5.1-codex"\n', (home) => {
+      expect(codexUserModelDefaults(home).model).toBe("gpt-5.5");
+    });
+  });
+
+  it("does not confuse model_reasoning_effort for model", () => {
+    withConfig('model_reasoning_effort = "high"\n', (home) => {
+      expect(codexUserModelDefaults(home)).toEqual({ model: undefined, reasoningEffort: "high" });
+    });
+  });
+
+  it("returns {} when no config.toml exists", () => {
+    const home = mkdtempSync(join(tmpdir(), "codex-empty-"));
+    try {
+      expect(codexUserModelDefaults(home)).toEqual({});
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 
