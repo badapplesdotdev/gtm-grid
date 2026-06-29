@@ -8,6 +8,7 @@ import {
   warmUpSignalBinding,
 } from "../../../lib/inngest/functions/poll-trigify-signals";
 import { sendTrialReminders } from "../../../lib/inngest/functions/send-trial-reminders";
+import { sendWorkspaceWelcome } from "../../../lib/inngest/functions/send-workspace-welcome";
 
 /**
  * The Inngest serve endpoint. Inngest invokes durable function steps by POSTing
@@ -22,6 +23,7 @@ export const { GET, POST, PUT } = serve({
   functions: [
     processWebhookRecord,
     sendTrialReminders,
+    sendWorkspaceWelcome,
     pollTrigifySignals,
     processSignalBinding,
     warmUpSignalBinding,
