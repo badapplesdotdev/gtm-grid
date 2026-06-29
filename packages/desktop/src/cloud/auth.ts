@@ -12,7 +12,7 @@
  * desktop app uses the native Tauri deep-link flow: `signInWithProvider` opens
  * the provider in the system browser and the session is completed from the
  * `gtmgrid://auth/callback` deep link (see ./useDeepLinkOAuth.ts). The runtime
- * branch is selected by `isTauri()` (see ./desktop-oauth.ts).
+ * branch is selected by `isDesktop()` (see ./desktop-oauth.ts).
  *
  * The desktop app is cloud-only: `apiClient` / `authClient` are always
  * constructed, so the hooks here always run (a signed-out user resolves to a
@@ -23,7 +23,8 @@ import { useQuery as useReactQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { Id } from "./ids";
 import { apiClient, authClient, setStoredAuthToken } from "./client";
-import { chooseOAuthFlow, isTauri } from "./desktop-oauth";
+import { electron } from "../electron";
+import { chooseOAuthFlow, isDesktop } from "./desktop-oauth";
 import { apiOAuthCallbackUrl, unwrapAuthResult } from "./api-auth";
 
 // ─── Shared types (mirror the tRPC `workspaces.me` query result) ────────────
@@ -450,7 +451,7 @@ export function useAccountActions(): AccountActions {
 
   const signInWithProvider = useCallback(
     async (provider: OAuthProvider): Promise<void> => {
-      if (chooseOAuthFlow(isTauri()) === "web") {
+      if (chooseOAuthFlow(isDesktop()) === "web") {
         // Web: same-window redirect to the provider, completed by Better Auth's
         // callback which sets the session cookie and returns to the app.
         unwrapAuthResult(await client.signIn.social({ provider }));
@@ -470,8 +471,7 @@ export function useAccountActions(): AccountActions {
       if (url == null || url.length === 0) {
         throw new Error("OAuth provider did not return a redirect URL.");
       }
-      const { openUrl } = await import("@tauri-apps/plugin-opener");
-      await openUrl(url);
+      await electron()?.openExternal(url);
     },
     [client],
   );

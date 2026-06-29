@@ -1,6 +1,8 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, memo, lazy, Suspense, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { api, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource } from "./api";
+import { api, API_BASE, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource } from "./api";
+import { electron } from "./electron";
 import { onActivateKey } from "./lib/utils";
+import { firstCsvFile, dragHasFiles } from "./csvDrop";
 import { LogoMark } from "./Logo";
 import { AppLoader } from "./AppLoader";
 import { AppError } from "./AppError";
@@ -33,6 +35,7 @@ import { fireConfetti } from "./cloud/confetti";
 import { useUpdateCheck } from "./useUpdateCheck";
 import { changelogNotes } from "./changelog";
 import { capture } from "./analytics";
+import { TRIAL_DURATION_DAYS } from "@gtmgrid/cloud";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./components/ui/tooltip";
 import {
   buildNotifications,
@@ -61,6 +64,7 @@ import {
   type CloudTableSummary,
 } from "./cloud/useCloudGrid";
 import { useAgentPresence } from "./cloud/agentPresence";
+import { resolveActiveTable } from "./cloud/active-table";
 import { type SignalsCloud } from "./SignalsModal";
 // Type-only import (erased at build) so the AgentPanel lazy chunk stays split.
 import type { AgentCloudContext } from "./AgentPanel";
@@ -1230,6 +1234,14 @@ export default function App() {
   // writes go via the metered Convex mutations (writer built below).
   const [importMode, setImportMode] = useState<null | "cloud">(null);
 
+  // Window drag-and-drop CSV: a CSV dropped anywhere on the app opens the import
+  // flow straight on the review stage. `fileDragging` toggles the drop overlay;
+  // `dragDepth` counts enter/leave across child elements so the overlay doesn't
+  // flicker as the cursor moves between them.
+  const [droppedCsv, setDroppedCsv] = useState<File | null>(null);
+  const [fileDragging, setFileDragging] = useState(false);
+  const dragDepth = useRef(0);
+
   // Cloud import writer — Convex mutations (metered; quota-guarded). Null until a
   // cloud project is open. Branded Convex ids are strings at runtime.
   const cloudImportWriter = useMemo<ImportWriter | null>(() => {
@@ -1243,6 +1255,38 @@ export default function App() {
       },
     };
   }, [cloudProject, createCloudTable, cloudAddColumn, cloudAddRowsWithCells]);
+
+  // Window drag-and-drop handlers. Only engage for OS file drags, and only when a
+  // cloud import writer exists (same gate as the sidebar "Import CSV…" button).
+  // Mirrors that button: opens the import flow; the dropped file lands on review.
+  const canDropCsv = cloudImportWriter != null;
+  const onWindowDragEnter = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+    if (!canDropCsv || !dragHasFiles(e.dataTransfer?.types)) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setFileDragging(true);
+  }, [canDropCsv]);
+  const onWindowDragOver = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+    if (!canDropCsv || !dragHasFiles(e.dataTransfer?.types)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }, [canDropCsv]);
+  const onWindowDragLeave = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+    if (!canDropCsv || !dragHasFiles(e.dataTransfer?.types)) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setFileDragging(false);
+  }, [canDropCsv]);
+  const onWindowDrop = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+    if (!canDropCsv || !dragHasFiles(e.dataTransfer?.types)) return;
+    e.preventDefault();
+    dragDepth.current = 0;
+    setFileDragging(false);
+    const csv = firstCsvFile(e.dataTransfer?.files);
+    if (!csv) return; // non-CSV drop: ignore (the overlay already cleared)
+    setDroppedCsv(csv);
+    setImportMode("cloud");
+  }, [canDropCsv]);
+
   // Cloud "From Social Signals" adapter — loads sources via tRPC + creates the
   // cloud table/columns/binding (the recurring poll runs in the Inngest worker).
   const signalsCloud = useMemo<SignalsCloud | undefined>(() => {
@@ -1285,7 +1329,11 @@ export default function App() {
   // we have a session).
   // (`cloudSession` is declared above, alongside the credential source.)
   const agentCloud = useMemo<AgentCloudContext | null>(() => {
-    if (!cloudSession || !activeWorkspace || !cloudProject || !cloudTableId) {
+    // The agent gets its gtmgrid tools as soon as the user is signed in with a
+    // cloud project — an ACTIVE TABLE is NOT required (it can list_tables /
+    // create_table / operate by id). Without this, no open table → no cloud
+    // context → the MCP fails to load and the agent improvises with shell tools.
+    if (!cloudSession || !activeWorkspace || !cloudProject) {
       return null;
     }
     return {
@@ -1293,7 +1341,7 @@ export default function App() {
       token: cloudSession.token,
       workspaceId: activeWorkspace._id,
       projectId: cloudProject._id,
-      tableId: cloudTableId,
+      tableId: cloudTableId ?? undefined,
     };
   }, [cloudSession, activeWorkspace, cloudProject, cloudTableId]);
   // Active CLOUD table's live view. Shares CloudGrid's paged query key, so this
@@ -1310,35 +1358,70 @@ export default function App() {
   // the prop identity only changes when the table name or column set actually
   // does. We source it from the cloud table so the hint follows `cloudTableId`.
   const activeTableSource = cloudActiveTable ?? null;
+  // `resolveActiveTable` falls back to the name from the already-loaded tables LIST
+  // when the paged fetch hasn't resolved yet, so the agent's "Active table" hint is
+  // populated the instant `cloudTableId` is set (auto-default-on-open OR manual
+  // click) — see active-table.ts for why (without it, a goal sent right after open
+  // makes the agent spin up a NEW table instead of using the one in view).
   const activeTableColumnNames = activeTableSource?.columns.map((c) => c.name).join("\n") ?? null;
+  const activeTableName = resolveActiveTable(cloudTableId, activeTableSource, cloudTables)?.name ?? null;
   const activeTable = useMemo(
-    () =>
-      activeTableSource
-        ? { name: activeTableSource.name, columns: activeTableSource.columns.map((c) => c.name) }
-        : null,
+    () => resolveActiveTable(cloudTableId, activeTableSource, cloudTables),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the table name + serialized column names, not the FullTable identity
-    [activeTableSource?.name, activeTableColumnNames],
+    [activeTableName, activeTableColumnNames],
   );
   // Agent presence (Co-Pilot cursor): the agent's gtmgrid tool calls — streamed
   // through the panel's SSE — light up the cell/column it's working on for
   // EVERYONE in the cloud table's room. Cloud-only; no-ops in local mode.
-  const onAgentEvent = useAgentPresence(agentCloud);
-  // Cloud-access lock: the active workspace's trial lapsed / it's on Free (no
-  // plan id). Cloud tables/projects are shown but LOCKED — opening or editing
-  // them prompts an upgrade; local tables are unaffected. The server enforces the
-  // same gate (EntitlementService) so this is a UX layer over a real lock.
-  const cloudLocked =
-    cloudEnabled && activeWorkspace != null && activeWorkspace.plan.id === null;
-  const [showUpgrade, setShowUpgrade] = useState(false);
+  // Presence is per-table (it lights up cells in a table's room), so it only
+  // applies when a table is actually open — no-op otherwise.
+  const onAgentEvent = useAgentPresence(
+    agentCloud && agentCloud.tableId
+      ? { workspaceId: agentCloud.workspaceId, tableId: agentCloud.tableId }
+      : null,
+  );
   // Trial countdown: whole days left until the active workspace's trial ends
   // (null when not trialing). Drives the in-app "trial ends in N days" banner so
   // users add a card BEFORE the hard lock.
   const trialEndsAt = activeWorkspace?.plan.trialEndsAt ?? null;
+  // A trial that has lapsed BY DATE. The server's EntitlementService backstop
+  // blocks credited actions the instant `trialEndsAt` passes — even before Autumn
+  // syncs `plan.id` to null. We mirror that here so the UI locks immediately too:
+  // without it, a date-expired-but-unsynced workspace (still `plan.id === "team"`)
+  // would show enabled run/add buttons whose actions the server silently rejects.
+  const trialExpiredByDate =
+    trialEndsAt != null && trialEndsAt <= Date.now();
+  // Cloud-access lock: the active workspace's trial lapsed (by sync OR by date) /
+  // it's on Free (no plan id). Cloud tables/projects are shown but LOCKED —
+  // opening or editing them prompts an upgrade; local tables are unaffected. The
+  // server enforces the same gate (EntitlementService) so this is a UX layer over
+  // a real lock.
+  const cloudLocked =
+    cloudEnabled &&
+    activeWorkspace != null &&
+    (activeWorkspace.plan.id === null || trialExpiredByDate);
+  const [showUpgrade, setShowUpgrade] = useState(false);
   const trialDaysLeft =
     trialEndsAt != null
       ? Math.max(0, Math.ceil((trialEndsAt - Date.now()) / 86_400_000))
       : null;
   const showTrialBanner = cloudEnabled && !cloudLocked && trialDaysLeft != null;
+  // Welcome window: the first day of a fresh trial. `trialEndsAt - duration` is
+  // the trial start, so "started within the last day" == now is before
+  // start + 1 day. Only while genuinely trialing (not locked).
+  const trialStarted =
+    showTrialBanner &&
+    trialEndsAt != null &&
+    Date.now() <
+      trialEndsAt - (TRIAL_DURATION_DAYS - 1) * 86_400_000;
+  // "Trial expired" companion notification: locked specifically because a trial
+  // lapsed (a past `trialEndsAt`), distinct from a never-trialed Free workspace /
+  // cancelled paid plan (both have `trialEndsAt === null`). A4 preserves the past
+  // timestamp through the lapse sync so this stays true after `plan.id` → null.
+  const trialExpired =
+    cloudEnabled && activeWorkspace != null && trialExpiredByDate;
+  // Cloud-actions usage for the low-credits warning (null = unmetered/unknown).
+  const cloudActionsUsage = activeWorkspace?.cloudActions ?? null;
 
   // Reset the open cloud project when the active workspace changes: a project
   // belongs to exactly one workspace, so keeping it open across a switch would
@@ -1507,21 +1590,49 @@ export default function App() {
     // Re-runs when the error screen's Retry bumps `bootNonce` (fresh poll loop).
   }, [bootNonce]);
 
-  // Copy a small diagnostics blob a stuck user can paste into a support thread.
-  // The renderer can't see sidecar stderr (the shell captures that to PostHog),
-  // but app version + OS/UA + reachability state is enough to triage most reports.
-  const copyDiagnostics = useCallback(() => {
-    const blob = [
-      `GTM Grid ${(import.meta.env.VITE_APP_VERSION as string | undefined) ?? "(dev)"}`,
+  // Copy a diagnostics blob a stuck user can paste into a support thread. Beyond
+  // the renderer-visible facts (real version via __APP_VERSION__ — NOT the
+  // long-broken import.meta.env.VITE_APP_VERSION, which always read "(dev)"; OS/UA;
+  // reachability), it pulls the Tauri shell's `sidecar_diagnostics`: the engine's
+  // spawn outcome, resolved paths, exit code and its OWN captured stderr — i.e. the
+  // actual crash. That's the part telemetry never delivered from some Windows
+  // boxes, so this turns the next paste into a root cause instead of a guess.
+  const copyDiagnostics = useCallback(async () => {
+    const lines: (string | null)[] = [
+      `GTM Grid ${__APP_VERSION__}`,
       `platform: ${navigator.platform}`,
       `userAgent: ${navigator.userAgent}`,
-      `engine: unreachable (http://127.0.0.1:8787)`,
+      `engine: ${healthStatus === "connected" ? "connected" : `unreachable (${API_BASE})`}`,
       `time: ${new Date().toISOString()}`,
-    ].join("\n");
+    ];
+    // Best-effort — absent on web/dev (no Electron); the blob above still copies.
+    try {
+      const d = await electron()?.sidecarDiagnostics();
+      if (d && typeof d === "object") {
+        const s = (k: string) => (d[k] == null ? "" : String(d[k]));
+        const tail = s("stderrTail").trim();
+        lines.push(
+          "",
+          "── engine boot ──",
+          `os/arch: ${s("os")}/${s("arch")}`,
+          `spawn: ${s("spawnStatus")}`,
+          d.spawnError ? `spawnError: ${s("spawnError")}` : null,
+          d.exitCode != null || d.exitedAfterMs != null
+            ? `exit: code ${s("exitCode") || "?"} after ${s("exitedAfterMs") || "?"}ms`
+            : null,
+          d.nodePath ? `node: ${s("nodePath")} (exists=${s("nodeExists")})` : null,
+          d.serverPath ? `server: ${s("serverPath")} (exists=${s("serverExists")})` : null,
+          tail ? `engine stderr:\n${tail}` : "engine stderr: (none captured)",
+        );
+      }
+    } catch {
+      /* not Tauri / command unavailable — renderer-only diagnostics still copy */
+    }
+    const blob = lines.filter((l): l is string => l != null).join("\n");
     void navigator.clipboard?.writeText(blob);
     setCopiedDiagnostics(true);
     window.setTimeout(() => setCopiedDiagnostics(false), 2000);
-  }, []);
+  }, [healthStatus]);
 
   // ── Cloud project selection ──────────────
   // Open a cloud project and default to its first table once the tables load.
@@ -1625,9 +1736,19 @@ export default function App() {
     () =>
       buildNotifications({
         trialDaysLeft: showTrialBanner ? trialDaysLeft : null,
+        trialStarted,
+        trialExpired,
+        cloudActions: cloudActionsUsage,
         persist: notifPersist,
       }),
-    [showTrialBanner, trialDaysLeft, notifPersist],
+    [
+      showTrialBanner,
+      trialDaysLeft,
+      trialStarted,
+      trialExpired,
+      cloudActionsUsage,
+      notifPersist,
+    ],
   );
   // Bell badge = active notifications not yet seen.
   const unreadNotifs = countUnread(notifications, notifPersist);
@@ -2135,7 +2256,23 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell" style={{ ["--sidebar-w"]: `${sidebarWidth}px`, ["--agent-w"]: `${agentWidth}px` } as CSSProperties}>
+    <div
+      className="app-shell"
+      style={{ ["--sidebar-w"]: `${sidebarWidth}px`, ["--agent-w"]: `${agentWidth}px` } as CSSProperties}
+      onDragEnter={onWindowDragEnter}
+      onDragOver={onWindowDragOver}
+      onDragLeave={onWindowDragLeave}
+      onDrop={onWindowDrop}
+    >
+      {fileDragging && (
+        <div className="app-dropzone-overlay">
+          <div className="app-dropzone-card">
+            <Icon.Table />
+            <div className="app-dropzone-title">Drop a CSV to import</div>
+            <div className="app-dropzone-sub">Release to map columns and create a table</div>
+          </div>
+        </div>
+      )}
       {/* Workspace-invite accept banner (email-matched + ?invite= URL token).
           Self-gates: renders nothing when signed out / no pending invites. The
           trial / auto-sync nudge / update alerts that used to stack here now live
@@ -2658,10 +2795,12 @@ export default function App() {
             <ImportCsvModal
               inline
               writer={cloudImportWriter}
-              onClose={() => setImportMode(null)}
+              initialFile={droppedCsv}
+              onClose={() => { setImportMode(null); setDroppedCsv(null); }}
               onOpenTable={id => {
                 setCloudTableId(id as Id<"tables">);
                 setImportMode(null);
+                setDroppedCsv(null);
               }}
             />
           </Suspense>

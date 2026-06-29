@@ -33,7 +33,7 @@
 import { Context, Data, Effect, Layer } from "effect";
 import { useMemo } from "react";
 import { apiClient } from "./client";
-import { isTauri } from "./desktop-oauth.js";
+import { electron } from "../electron";
 
 /** A workspace member role. */
 export type MemberRole = "owner" | "admin" | "member";
@@ -258,7 +258,7 @@ export const InviteServiceLive: Layer.Layer<
  * to an external origin doesn't reach the system browser at all. So we branch:
  *
  *   - PACKAGED TAURI app → hand the URL to the OS via the opener plugin
- *     (`@tauri-apps/plugin-opener`), imported lazily so the web bundle never
+ *     (Electron `shell.openExternal` via the preload bridge), so the web bundle never
  *     loads it. The webview itself must NOT navigate to the billing page.
  *   - WEB build → try a new tab first (preserves the app when popups are
  *     allowed); if it's blocked, fall back to a SAME-TAB redirect
@@ -271,9 +271,9 @@ export const UrlOpenerLive: Layer.Layer<UrlOpener> = Layer.succeed(UrlOpener, {
   open: (url) =>
     Effect.tryPromise({
       try: async () => {
-        if (isTauri()) {
-          const { openUrl } = await import("@tauri-apps/plugin-opener");
-          await openUrl(url);
+        const api = electron();
+        if (api) {
+          await api.openExternal(url);
           return;
         }
         const w = (globalThis as { window?: Window }).window;

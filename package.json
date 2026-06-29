@@ -1,6 +1,6 @@
 {
   "name": "gtmgrid",
-  "version": "0.22.5",
+  "version": "1.1.1",
   "private": true,
   "type": "module",
   "description": "Local-first programmable GTM spreadsheet. Columns are functions.",
@@ -14,8 +14,8 @@
     "server": "tsx packages/server/src/index.ts",
     "desktop": "pnpm --filter @gtmgrid/desktop dev",
     "sidecar:build": "node packages/desktop/scripts/bundle-sidecar.mjs",
-    "tauri:dev": "pnpm --filter @gtmgrid/desktop tauri dev",
-    "tauri:build": "pnpm --filter @gtmgrid/desktop tauri build",
+    "electron:dev": "pnpm --filter @gtmgrid/desktop electron:dev",
+    "electron:pack": "pnpm --filter @gtmgrid/desktop electron:pack",
     "db:generate": "pnpm --filter @gtmgrid/db db:generate",
     "db:migrate": "pnpm --filter @gtmgrid/db db:migrate",
     "build": "turbo run build",
@@ -49,7 +49,10 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "better-sqlite3",
-      "esbuild"
+      "esbuild",
+      "electron",
+      "electron-builder",
+      "@electron/rebuild"
     ],
     "overrides": {
       "kysely": "0.29.2"

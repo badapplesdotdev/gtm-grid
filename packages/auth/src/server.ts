@@ -54,10 +54,13 @@ export const DESKTOP_DEEP_LINK_PREFIX = "gtmgrid://";
  * apps/web/middleware.ts and Bearer-token sessions — WKWebview blocks 3p cookies).
  */
 export const DESKTOP_WEB_ORIGINS = [
+  "app://gtmgrid", // packaged Electron desktop (custom app:// renderer scheme)
+  // Legacy Tauri webview origins — kept so already-installed Tauri builds keep
+  // working through the Electron cut-over (remove once Tauri installs age out).
   "tauri://localhost",
   "http://tauri.localhost",
   "https://tauri.localhost",
-  "http://localhost:5173",
+  "http://localhost:5173", // desktop dev (vite)
 ];
 
 /**
