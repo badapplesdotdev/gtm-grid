@@ -32,6 +32,7 @@ import {
 } from "@gtmgrid/cloud";
 import { Data, Effect } from "effect";
 import { EntitlementService } from "./entitlement-service.js";
+import { isSelfHost } from "../self-host.js";
 import { mintSigningSecret, mintToken } from "../webhook-mint.js";
 import {
   type DeliveryCursor,
@@ -597,6 +598,8 @@ export class WebhookService extends Effect.Service<WebhookService>()(
        */
       const assertQuota = (workspaceId: string, n: number, message: string) =>
         Effect.gen(function* () {
+          // Self-host is never metered (no billing backend) — never cap it.
+          if (isSelfHost()) return;
           if (n <= 0) return;
           const q = yield* repo.findWorkspaceQuota(workspaceId);
           if (q._tag === "None") return;
@@ -703,6 +706,9 @@ export class WebhookService extends Effect.Service<WebhookService>()(
               }),
             );
           }
+          // Cloud-access gate (plan/trial) BEFORE the quota gate: a lapsed trial
+          // or Free workspace cannot ingest, even with quota headroom.
+          yield* entitlement.requireCloudAccess(table.value.workspaceId);
           yield* assertQuota(table.value.workspaceId, 1, WEBHOOK_QUOTA_MESSAGE);
 
           const validColumnIds = yield* tableColumnIds(webhook.tableId);
@@ -758,6 +764,9 @@ export class WebhookService extends Effect.Service<WebhookService>()(
               }),
             );
           }
+          // Cloud-access gate (plan/trial) BEFORE the quota gate: a lapsed trial
+          // or Free workspace cannot ingest, even with quota headroom.
+          yield* entitlement.requireCloudAccess(table.value.workspaceId);
           yield* assertQuota(table.value.workspaceId, 1, WEBHOOK_QUOTA_MESSAGE);
 
           const validColumnIds = yield* tableColumnIds(webhook.tableId);
@@ -1018,6 +1027,11 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           }
           const workspaceId = table.value.workspaceId;
           yield* assertMemberIfIdentified(workspaceId);
+          // Cloud-access gate (plan/trial): block the WHOLE run up-front for a
+          // lapsed trial / Free workspace, before any cell fans out — the run is
+          // the heaviest credit spender, so it must be gated on access, not just
+          // on remaining quota.
+          yield* entitlement.requireCloudAccess(workspaceId);
 
           const candidateRowIds =
             args.rowIds ??
@@ -1133,6 +1147,9 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             args.columnId,
           );
           yield* assertMemberIfIdentified(workspaceId);
+          // Defense-in-depth: even a run that cleared the pre-flight gate must not
+          // keep writing/metering cells after the trial lapses mid-run.
+          yield* entitlement.requireCloudAccess(workspaceId);
           const id = yield* repo.upsertCell({
             workspaceId,
             tableId,
@@ -1164,6 +1181,9 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             args.columnId,
           );
           yield* assertMemberIfIdentified(workspaceId);
+          // Defense-in-depth: even a run that cleared the pre-flight gate must not
+          // keep writing/metering cells after the trial lapses mid-run.
+          yield* entitlement.requireCloudAccess(workspaceId);
           const id = yield* repo.upsertCell({
             workspaceId,
             tableId,

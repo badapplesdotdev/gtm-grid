@@ -554,6 +554,10 @@ html, body, #root {
 .main {
   flex: 1;
   min-width: 0;
+  /* min-height:0 lets this column-flex container size its `flex:1` children
+     (tables page, grid, CSV import) against its resolved height instead of an
+     implicit content-based min — without it the children can collapse. */
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -581,6 +585,29 @@ html, body, #root {
   font-size: 11.5px;
 }
 
+/* Transient cold start: calm neutral tone, not the alarming danger red — the
+   engine reconnects on its own within a second or two. */
+.offline-banner--starting {
+  background: var(--muted, #6b7280);
+}
+
+.offline-banner-action {
+  margin-left: auto;
+  flex-shrink: 0;
+  background: rgba(0,0,0,.22);
+  color: white;
+  border: 1px solid rgba(255,255,255,.35);
+  padding: 2px 10px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.offline-banner-action:hover {
+  background: rgba(0,0,0,.34);
+}
+
 /* ── Toolbar ──────────────────────────────── */
 
 .toolbar {
@@ -599,6 +626,13 @@ html, body, #root {
   font-weight: 600;
   color: var(--text);
   letter-spacing: -0.01em;
+  /* Truncate a long table name instead of wrapping it onto multiple lines
+     (which previously broke the fixed-height toolbar on narrow widths). */
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .toolbar-meta {
@@ -606,6 +640,17 @@ html, body, #root {
   color: var(--text-3);
   font-weight: 400;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Icon-only "⋯" overflow button shown when the toolbar collapses its actions. */
+.toolbar-overflow-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding-left: 8px;
+  padding-right: 8px;
 }
 
 .toolbar-sep {
@@ -1121,6 +1166,70 @@ html, body, #root {
   .brand-loader-mark { animation: none; }
   .brand-loader-chevron { animation: none; opacity: 1; }
   .btn:active:not(:disabled) { scale: 1; }
+}
+
+/* ── Engine-failure screen (full page, shown when the engine won't start) ── */
+.app-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  width: 100vw;
+  background: var(--bg);
+  color: var(--text-2);
+  padding: 24px;
+}
+.app-error-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 14px;
+  max-width: 420px;
+}
+.app-error-title {
+  margin: 4px 0 0;
+  font: 600 17px var(--font-sans);
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.app-error-message {
+  margin: 0;
+  font: 400 13px var(--font-sans);
+  line-height: 1.5;
+  color: var(--text-3);
+}
+.app-error-message code {
+  background: var(--surface-2, rgba(0, 0, 0, 0.06));
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+.app-error-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+.app-error-btn {
+  background: var(--surface-2, rgba(0, 0, 0, 0.06));
+  color: var(--text);
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+  padding: 6px 14px;
+  border-radius: 6px;
+  font: 500 12.5px var(--font-sans);
+  cursor: pointer;
+}
+.app-error-btn:hover {
+  background: var(--surface-3, rgba(0, 0, 0, 0.1));
+}
+.app-error-btn--primary {
+  background: var(--brand, #22c55e);
+  border-color: var(--brand, #22c55e);
+  color: #fff;
+}
+.app-error-btn--primary:hover {
+  filter: brightness(0.96);
 }
 
 /* Visually-hidden text for screen readers. */
@@ -3391,8 +3500,20 @@ body.resizing-agent .agent-panel { transition: none; }
 .autorun-switch.on .autorun-knob { transform: translateX(14px); }
 
 /* ── App shell + top bar (project switcher) ──────────────── */
-.app-shell { display: flex; flex-direction: column; height: 100vh; width: 100vw; overflow: hidden; }
-.app-shell .app { flex: 1; min-height: 0; height: auto; width: 100%; }
+/* Grid (not flex-column) so the main row gets a DEFINITE height. The only in-flow
+   children are the optional <PendingInvites> banner (auto row) and `.app` (1fr row,
+   placed explicitly so it still fills when the banner is absent). A `1fr` track
+   resolves to a definite height that WebView2/Windows propagates to the nested
+   `flex:1` center pane — plain flex-column stretch did not, so the center column
+   collapsed to content size on Windows (filled fine on macOS/WKWebView). */
+.app-shell { display: grid; grid-template-rows: auto 1fr; height: 100vh; width: 100vw; overflow: hidden; }
+.app-shell .app { grid-row: 2; min-height: 0; height: auto; width: 100%; }
+/* The loader + error screens borrow .app-shell only for its full-viewport sizing
+   box — they must NOT inherit the app grid, which would unstack their centered
+   content (logo into the top `auto` row, label into the `1fr` row). Keep their own
+   flex centering (set on .app-loader / .app-error above). */
+.app-loader.app-shell,
+.app-error.app-shell { display: flex; grid-template-rows: none; }
 
 .topbar {
   height: 44px; flex-shrink: 0; display: flex; align-items: center; gap: 10px;
@@ -3467,7 +3588,9 @@ body.resizing-agent .agent-panel { transition: none; }
 .account-avatar {
   width: 28px; height: 28px; border-radius: var(--r-sm); flex-shrink: 0; display: flex; align-items: center; justify-content: center;
   background: var(--accent-soft); color: var(--accent); font: 700 13px var(--font-sans);
+  overflow: hidden; /* clip the profile image to the rounded square */
 }
+.account-avatar-img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; display: block; }
 /* ── Multiplayer presence — cell cursors ────────────────────────────────────
    The avatar stack + name tooltip now render via shadcn primitives
    (components/ui/avatar-stack, avatar, tooltip) styled with Tailwind. Only the
@@ -3621,6 +3744,26 @@ body.resizing-agent .agent-panel { transition: none; }
   background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s;
 }
 .appearance-switch.on .appearance-knob { transform: translateX(15px); }
+
+/* ── Window drag-and-drop CSV overlay ─────────────────────────────────────── */
+/* Shown while a file is dragged anywhere over the app. Covers the whole window
+   above all panes; `pointer-events:none` so it never swallows the drop event
+   (the .app-shell handler catches it). */
+.app-dropzone-overlay {
+  position: fixed; inset: 0; z-index: 500; pointer-events: none;
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  backdrop-filter: blur(1px); animation: fade-in .12s ease;
+}
+.app-dropzone-card {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 36px 52px; border-radius: var(--r-lg);
+  border: 2px dashed var(--accent); background: var(--surface);
+  color: var(--text-2); box-shadow: var(--shadow-lg);
+}
+.app-dropzone-card svg { width: 32px; height: 32px; color: var(--accent); }
+.app-dropzone-title { font: 700 16px var(--font-sans); color: var(--text); }
+.app-dropzone-sub { font-size: 13px; color: var(--text-3); }
 
 /* ── CSV import flow (full-screen: drop / review / done) ───────────────────── */
 .import-overlay {

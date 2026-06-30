@@ -19,7 +19,12 @@ import {
   type Registry,
 } from "@gtmgrid/engine";
 import type { RunErrorContext } from "@gtmgrid/engine";
-import { captureException, installProcessHandlers } from "@gtmgrid/observability";
+import {
+  captureException,
+  captureServerEvent,
+  flushObservability,
+  installProcessHandlers,
+} from "@gtmgrid/observability";
 import { describeGridEnv, selectGridEnv } from "./cloud-context.js";
 import {
   decide,
@@ -707,3 +712,23 @@ const transport = new StdioServerTransport();
 await server.connect(transport);
 // Token-free banner: report the cloud project/table only — never the bearer token.
 console.error(`gtmgrid MCP server connected (${describeGridEnv(gridEnv)})`);
+
+// Observability beacon: prove the MCP server actually launched + connected on the
+// user's machine. This is the missing half of the Windows "tools not connected"
+// debug picture — if `agent_turn_completed` shows mcp_connected=false but NO
+// `mcp_started` ever fires for that user, the MCP process died before connect (a
+// node/path/native-module failure); if it fires but the agent still sees no tools,
+// it's a CLI-side handshake/config issue. Flushed explicitly because the MCP is
+// killed when the agent turn ends. Best-effort (no-ops without a PostHog key).
+try {
+  captureServerEvent("mcp_started", {
+    platform: process.platform,
+    arch: process.arch,
+    node: process.versions.node,
+    mode: gridEnv.mode,
+    workspace_id: gridEnv.context.workspaceId,
+  });
+  await flushObservability();
+} catch {
+  /* observability is best-effort — never block the MCP from serving */
+}

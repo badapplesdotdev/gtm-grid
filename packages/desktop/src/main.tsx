@@ -14,7 +14,7 @@ import "streamdown/styles.css";
 
 // Start analytics before the first render so early events + exceptions are captured.
 initAnalytics();
-capture("app_opened", { version: import.meta.env.VITE_APP_VERSION as string | undefined });
+capture("app_opened", { version: __APP_VERSION__ });
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

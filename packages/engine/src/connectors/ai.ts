@@ -99,17 +99,39 @@ export const aiConnector: Connector = {
             maxRetries: AI_MAX_RETRIES,
             timeout: AI_TIMEOUT_MS,
           });
-          const msg = await client.messages.create({
-            model,
-            max_tokens: maxTokens,
-            system: input.system,
-            messages: [{ role: "user", content: input.prompt }],
-          });
-          const text = msg.content
-            .filter((b): b is Anthropic.TextBlock => b.type === "text")
-            .map((b) => b.text)
-            .join("");
-          return { text };
+          const startedAt = Date.now();
+          try {
+            const msg = await client.messages.create({
+              model,
+              max_tokens: maxTokens,
+              system: input.system,
+              messages: [{ role: "user", content: input.prompt }],
+            });
+            ctx.onAiGeneration?.({
+              provider: "anthropic",
+              model,
+              traceId: ctx.aiTraceId,
+              inputTokens: msg.usage?.input_tokens,
+              outputTokens: msg.usage?.output_tokens,
+              latencyMs: Date.now() - startedAt,
+              isError: false,
+            });
+            const text = msg.content
+              .filter((b): b is Anthropic.TextBlock => b.type === "text")
+              .map((b) => b.text)
+              .join("");
+            return { text };
+          } catch (e) {
+            ctx.onAiGeneration?.({
+              provider: "anthropic",
+              model,
+              traceId: ctx.aiTraceId,
+              latencyMs: Date.now() - startedAt,
+              isError: true,
+              error: e instanceof Error ? e.message : String(e),
+            });
+            throw e;
+          }
         }
 
         // OpenRouter and Hermes are OpenAI-API-compatible — same client, different
@@ -128,15 +150,37 @@ export const aiConnector: Connector = {
           timeout: AI_TIMEOUT_MS,
           ...(baseURL ? { baseURL } : {}),
         });
-        const r = await client.chat.completions.create({
-          model,
-          max_tokens: maxTokens,
-          messages: [
-            ...(input.system ? [{ role: "system" as const, content: input.system }] : []),
-            { role: "user" as const, content: input.prompt },
-          ],
-        });
-        return { text: r.choices[0]?.message?.content ?? "" };
+        const startedAt = Date.now();
+        try {
+          const r = await client.chat.completions.create({
+            model,
+            max_tokens: maxTokens,
+            messages: [
+              ...(input.system ? [{ role: "system" as const, content: input.system }] : []),
+              { role: "user" as const, content: input.prompt },
+            ],
+          });
+          ctx.onAiGeneration?.({
+            provider: ai.provider,
+            model,
+            traceId: ctx.aiTraceId,
+            inputTokens: r.usage?.prompt_tokens,
+            outputTokens: r.usage?.completion_tokens,
+            latencyMs: Date.now() - startedAt,
+            isError: false,
+          });
+          return { text: r.choices[0]?.message?.content ?? "" };
+        } catch (e) {
+          ctx.onAiGeneration?.({
+            provider: ai.provider,
+            model,
+            traceId: ctx.aiTraceId,
+            latencyMs: Date.now() - startedAt,
+            isError: true,
+            error: e instanceof Error ? e.message : String(e),
+          });
+          throw e;
+        }
       },
     },
   ],

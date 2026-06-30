@@ -111,6 +111,37 @@ export class BillingService extends Effect.Service<BillingService>()(
       const autumn = yield* AutumnClient;
 
       /**
+       * Persist the reconciled plan, PRESERVING a lapsed trial's `trialEndsAt`.
+       *
+       * When a paid/trialing sub is active we cache its own `trialEndsAt` (a future
+       * date while trialing, `null` once converted to paid). But when the sub
+       * lapses (`planId === null`, so the resolved `trialEndsAt` is `null` too) we
+       * must NOT blindly null the column: an EXPIRED TRIAL keeps its (now-past)
+       * `trialEndsAt` so both the server backstop (`EntitlementService` blocks on
+       * `trialEndsAt <= now`) and the desktop can tell "trial expired" apart from a
+       * cancelled paid plan / never-trialed Free workspace (both of which already
+       * have `trialEndsAt === null`). We therefore fall back to the workspace's
+       * existing `trialEndsAt` whenever the resolved one is null.
+       */
+      const persistResolvedPlan = (
+        workspaceId: string,
+        planId: string | null,
+        resolvedTrialEndsAt: number | null,
+      ): Effect.Effect<number | null, WorkspaceRepoError> =>
+        Effect.gen(function* () {
+          let trialEndsAt = resolvedTrialEndsAt;
+          if (trialEndsAt === null) {
+            const ws = yield* repo.findById(workspaceId);
+            trialEndsAt = Option.match(ws, {
+              onNone: () => null,
+              onSome: (w) => w.trialEndsAt ?? null,
+            });
+          }
+          yield* repo.updatePlan(workspaceId, planId, trialEndsAt);
+          return trialEndsAt;
+        });
+
+      /**
        * Begin a checkout/upgrade for `workspaceId` on the chosen `planId`,
        * returning the Autumn billing URL the UI opens. Owner/admin only. The
        * workspace id IS the Autumn customer id. `planId` is validated inside the
@@ -145,7 +176,8 @@ export class BillingService extends Effect.Service<BillingService>()(
        * view (billing CHANGES stay owner/admin in {@link checkout}). We pick the
        * first ACTIVE paid subscription (monthly or annual) from Autumn, cache its
        * plan id + trial end, and return `{ id, name, trialEndsAt }`; no active
-       * paid plan → `null` (Free, trialEndsAt null).
+       * paid plan → `null`. A lapsed trial keeps its (now-past) `trialEndsAt` (see
+       * {@link persistResolvedPlan}) so it reads as "trial expired", not Free.
        */
       const syncPlan = (
         workspaceId: string,
@@ -158,8 +190,11 @@ export class BillingService extends Effect.Service<BillingService>()(
           const paidPlanIds: readonly string[] = ALL_PAID_PLAN_IDS;
           const paid = subs.find((s) => paidPlanIds.includes(s.planId)) ?? null;
           const planId = paid?.planId ?? null;
-          const trialEndsAt = paid?.trialEndsAt ?? null;
-          yield* repo.updatePlan(workspaceId, planId, trialEndsAt);
+          const trialEndsAt = yield* persistResolvedPlan(
+            workspaceId,
+            planId,
+            paid?.trialEndsAt ?? null,
+          );
           return { id: planId, name: planName(planId), trialEndsAt };
         });
 
@@ -170,7 +205,8 @@ export class BillingService extends Effect.Service<BillingService>()(
        * to run `requireMember` against — exactly like the secret-trusted worker
        * routes that run with `userId: null`. This is what revokes cloud access when
        * a subscription is cancelled / lapses OUTSIDE the app (no active paid sub →
-       * `updatePlan(workspaceId, null, null)`).
+       * plan id `null`; a lapsed trial keeps its past `trialEndsAt`, a cancelled
+       * paid plan stays `null` — see {@link persistResolvedPlan}).
        */
       const syncPlanFromWebhook = (
         workspaceId: string,
@@ -182,8 +218,11 @@ export class BillingService extends Effect.Service<BillingService>()(
           const paidPlanIds: readonly string[] = ALL_PAID_PLAN_IDS;
           const paid = subs.find((s) => paidPlanIds.includes(s.planId)) ?? null;
           const planId = paid?.planId ?? null;
-          const trialEndsAt = paid?.trialEndsAt ?? null;
-          yield* repo.updatePlan(workspaceId, planId, trialEndsAt);
+          const trialEndsAt = yield* persistResolvedPlan(
+            workspaceId,
+            planId,
+            paid?.trialEndsAt ?? null,
+          );
           return { id: planId, name: planName(planId), trialEndsAt };
         });
 

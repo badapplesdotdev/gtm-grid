@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- GTM Grid menu-bar / system-tray icon: the green brand hexagon mark
+     (extracted from public/logo.svg), squared + padded. Rendered to the
+     colored trayIcon.png / trayIcon@2x.png by scripts/build-installer-assets.mjs.
+     NOT a macOS template image — we want it green in the menu bar, not monochrome. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-26 -31 265 265" width="265" height="265">
+  <g fill="#22c55e" fill-rule="evenodd" clip-rule="evenodd">
+    <path d="M62.9001 0.959961H171.36L140.37 54.6299H31.9102L62.9001 0.959961Z"/>
+    <path d="M86.1399 148.56H181.1L150.11 202.24H55.1499L0.919922 108.31L31.9099 54.6299L86.1399 148.56Z"/>
+    <path d="M212.09 94.8899L181.1 148.57L157.86 108.31H109.38L140.37 54.6299H188.85L212.09 94.8899Z"/>
+  </g>
+</svg>

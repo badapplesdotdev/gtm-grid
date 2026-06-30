@@ -25,7 +25,7 @@ import { execSync } from "node:child_process";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "..", "..", ".."); // packages/desktop/scripts -> repo root
-const out = resolve(here, "..", "src-tauri", "sidecar");
+const out = resolve(here, "..", "sidecar");
 
 const isWin = process.platform === "win32";
 const targetArch = process.env.GTMGRID_SIDECAR_ARCH || process.arch; // "arm64" | "x64"
@@ -85,17 +85,11 @@ const extDst = resolve(out, "extensions");
 rmSync(extDst, { recursive: true, force: true });
 if (existsSync(extSrc)) cpSync(extSrc, extDst, { recursive: true });
 
-// Bundled MCP launcher: runs the bundled node + mcp.mjs (used by the agent panel
-// so Claude Code / Codex connect to gtmgrid's MCP server inside the packaged app).
-// Unix only — a bash script; the agent panel's CLI integration is unix-focused.
-if (!isWin) {
-  const launcher = resolve(out, "gtmgrid-mcp");
-  writeFileSync(
-    launcher,
-    `#!/bin/bash\nDIR="$(cd "$(dirname "$0")" && pwd)"\nexec "$DIR/node" "$DIR/mcp.mjs" "$@"\n`,
-    { mode: 0o755 },
-  );
-}
+// No MCP launcher script is written: the agent panel mounts gtmgrid's MCP server
+// by spawning the bundled `node` directly with `mcp.mjs` (above) as a script arg
+// — see `mcpLaunch` in agent.ts and GTMGRID_MCP_NODE/GTMGRID_MCP_SCRIPT in the
+// Rust shell. A `#!/bin/bash` launcher couldn't run on Windows, so the grid tools
+// never loaded there; spawning node directly works on every platform.
 
 // Install native/wasm deps (better-sqlite3 builds/fetches prebuilt, quickjs ships
 // wasm) — only the first time, so incremental builds stay fast. When cross-
@@ -124,40 +118,10 @@ if (!existsSync(nodeDst)) {
 
 console.log(`Sidecar ready at ${out} (target arch: ${targetArch})`);
 
-signMacSidecar();
-
-/**
- * Codesign every Mach-O binary inside the sidecar (the bundled `node` runtime +
- * native `.node`/`.dylib` addons) BEFORE Tauri bundles the .app. macOS
- * notarization rejects any unsigned nested executable, so each must carry our
- * Developer ID signature + the Hardened Runtime + a secure timestamp, with the
- * JIT/library-validation entitlements Node needs to run (see sidecar.entitlements).
- * No-op unless we're on macOS with APPLE_SIGNING_IDENTITY set (i.e. signed CI
- * release builds) — local/dev and non-mac builds are untouched.
- */
-function signMacSidecar() {
-  if (process.platform !== "darwin") return;
-  const identity = process.env.APPLE_SIGNING_IDENTITY;
-  if (!identity) {
-    console.log("Sidecar codesigning skipped (no APPLE_SIGNING_IDENTITY).");
-    return;
-  }
-  const entitlements = resolve(here, "..", "src-tauri", "sidecar.entitlements");
-  const found = execSync(
-    `find "${out}" -type f \\( -name node -o -name '*.node' -o -name '*.dylib' \\)`,
-    { encoding: "utf8" },
-  )
-    .split("\n")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  for (const f of found) {
-    execSync(
-      `codesign --force --timestamp --options runtime --entitlements "${entitlements}" --sign "${identity}" "${f}"`,
-      { stdio: "inherit" },
-    );
-  }
-  console.log(`Codesigned ${found.length} sidecar binaries as "${identity}".`);
-}
+// Note: no per-binary codesigning here. Under Electron, electron-builder signs the
+// WHOLE app — including the sidecar shipped via `extraResources` and its native
+// better_sqlite3.node — with the mac entitlements (build-resources/entitlements.mac.plist),
+// so the old Tauri-era signMacSidecar() loop is gone.
 
 /** Download the official node binary for a platform+arch and place it at dest. */
 function downloadNode(platform, arch, version, dest) {

@@ -22,6 +22,7 @@
 import { type Me, WorkspaceService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { z } from "zod";
+import { inngest } from "../../inngest/client";
 import {
   protectedProcedure,
   publicProcedure,
@@ -75,7 +76,17 @@ export const workspacesRouter = router({
           // `protectedProcedure` already rejected signed-out callers, so this
           // never actually fails with UnauthenticatedError at runtime; the type
           // is satisfied by the service's declared channel.
-          return yield* svc.createWorkspace(input.name);
+          const workspaceId = yield* svc.createWorkspace(input.name);
+          // Fire the trial-welcome email out of band (best-effort): a delivery /
+          // queue hiccup must never fail workspace creation. The worker resolves
+          // the owner email + sends `trialWelcomeEmail` (send-workspace-welcome).
+          // `tryPromise` routes a rejected send (e.g. no INNGEST_EVENT_KEY in
+          // dev/tests) into the error channel so `ignore` can swallow it — a bare
+          // `Effect.promise` would surface the rejection as an uncatchable defect.
+          yield* Effect.tryPromise(() =>
+            inngest.send({ name: "workspace/created", data: { workspaceId } }),
+          ).pipe(Effect.ignore);
+          return workspaceId;
         }),
       ),
     ),

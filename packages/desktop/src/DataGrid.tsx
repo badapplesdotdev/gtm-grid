@@ -20,7 +20,7 @@
  * by each parent and opened via controller intents.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { Icon } from "./App";
 import { FnIcon, type ColumnMeta } from "./FnIcon";
 import { missingInputs } from "./columnInputs";
@@ -28,6 +28,7 @@ import type { Cell, Column, FullTable } from "./api";
 import { VirtualGridBody } from "./VirtualGridBody";
 import { useColumnWindow } from "./useColumnWindow";
 import { GridColSpacer } from "./GridColSpacer";
+import { useElementWidth } from "./useElementWidth";
 import { GridRow, type GridRowHandlers, type GridRowInteraction } from "./GridRow";
 import { csvFilename, downloadCsv, tableToCsv } from "./csvExport";
 import { PresenceAvatars } from "./PresenceAvatars";
@@ -79,8 +80,15 @@ export interface GridController {
   readonly autoRun?: { value: boolean; onToggle: () => void };
   /** Extra controls in the LEFT cluster, next to Auto-run (e.g. local Dedupe). */
   readonly toolbarLeftExtras?: ReactNode;
-  /** Extra toolbar controls rendered in the right cluster (e.g. cloud Webhook). */
+  /** Always-inline status content rendered in the right cluster (e.g. the cloud
+   *  LIVE badge). Unlike {@link toolbarActions} this is NOT folded into the
+   *  overflow menu — it stays visible, since it is status, not an action. */
   readonly toolbarExtras?: ReactNode;
+  /** Environment-specific toolbar ACTIONS (e.g. cloud Dedupe / Webhook). Rendered
+   *  inline as buttons when the toolbar is wide, and folded into a single "⋯"
+   *  overflow menu (alongside the built-in Export CSV / Add row) when it is too
+   *  narrow to fit them — so a squeezed toolbar (agent panel open) stays usable. */
+  readonly toolbarActions?: readonly ToolbarAction[];
 
   // ── Column presentation (provider identity) ────────────────────────────
   /** Resolve presentation metadata for a function column (provider logo/name,
@@ -171,6 +179,28 @@ export type CtxItem =
   | { separator: true }
   | { header: string };
 
+/**
+ * A toolbar action the environment injects (cloud Dedupe / Webhook). Rendered as
+ * an inline button when the toolbar is wide, or as an item in the "⋯" overflow
+ * menu when it is narrow. `side` controls the inline cluster (default "right");
+ * `active` shows a small status dot on the inline button (e.g. auto-dedupe on).
+ */
+export interface ToolbarAction {
+  readonly id: string;
+  readonly label: string;
+  readonly icon?: ReactNode;
+  readonly onClick: () => void;
+  readonly disabled?: boolean;
+  readonly title?: string;
+  readonly active?: boolean;
+  readonly side?: "left" | "right";
+}
+
+/** Below this toolbar width (px) the actions collapse into the overflow menu. */
+const COMPACT_TOOLBAR_PX = 760;
+/** Approx. overflow-menu width, used to right-align it under the "⋯" button. */
+const OVERFLOW_MENU_PX = 190;
+
 /** A rectangular cell-range selection over row/column INDICES (anchor + head). */
 export type Sel = {
   anchor: { r: number; c: number };
@@ -194,6 +224,13 @@ export function DataGrid({
 }) {
   const { table } = c;
   const gridScrollRef = useRef<HTMLDivElement>(null);
+  // Toolbar width drives the responsive collapse: below COMPACT_TOOLBAR_PX the
+  // action buttons fold into the "⋯" overflow menu. We measure the CONTAINER (not
+  // the window) so the agent side-panel squeezing the grid also triggers it.
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const toolbarWidth = useElementWidth(toolbarRef);
+  const compactToolbar =
+    toolbarWidth !== null && toolbarWidth < COMPACT_TOOLBAR_PX;
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; items: CtxItem[] } | null>(null);
   // The cell briefly flashed after a follow-jump, keyed `${rowId}:${colId}`.
   const [flashCell, setFlashCell] = useState<string | null>(null);
@@ -746,10 +783,64 @@ export function DataGrid({
     return items;
   };
 
+  // The full ordered toolbar-action set: the environment's actions (cloud Dedupe
+  // / Webhook) followed by the built-in Export CSV + Add row. Rendered inline when
+  // the toolbar is wide, or folded into the "⋯" overflow menu when it is narrow.
+  const toolbarActions: ToolbarAction[] = [
+    ...(c.toolbarActions ?? []),
+    {
+      id: "export-csv",
+      label: "Export CSV",
+      icon: <Icon.Download size={11} />,
+      onClick: exportCsv,
+      disabled: table.columns.length === 0 || table.rows.length === 0,
+      title:
+        "Export this table as CSV (mapped values only — JSON / multi-item cells export blank)",
+    },
+    {
+      id: "add-row",
+      label: "Add row",
+      icon: <Icon.Plus size={11} />,
+      onClick: c.addRow,
+      disabled: !c.canAddRow,
+    },
+  ];
+  const leftToolbarActions = toolbarActions.filter((a) => a.side === "left");
+  const rightToolbarActions = toolbarActions.filter((a) => a.side !== "left");
+
+  /** Render one toolbar action as an inline outline button (wide layout). */
+  const renderToolbarAction = (a: ToolbarAction) => (
+    <button
+      key={a.id}
+      className="btn btn-outline btn-sm"
+      onClick={a.onClick}
+      disabled={a.disabled}
+      title={a.title}
+    >
+      {a.icon}
+      {a.icon ? " " : null}
+      {a.label}
+      {a.active && <span className="dedupe-on-dot" title="On" />}
+    </button>
+  );
+
+  /** Open the "⋯" overflow menu (compact layout), reusing the ctx-menu surface.
+   *  Disabled actions are skipped so a no-op item never appears in the menu. */
+  const openToolbarMenu = (e: ReactMouseEvent<HTMLButtonElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    setCtxMenu({
+      x: Math.max(8, r.right - OVERFLOW_MENU_PX),
+      y: r.bottom + 4,
+      items: toolbarActions
+        .filter((a) => !a.disabled)
+        .map((a) => ({ label: a.label, onClick: a.onClick })),
+    });
+  };
+
   return (
     <>
       {/* Toolbar */}
-      <div className="toolbar">
+      <div className="toolbar" ref={toolbarRef}>
         <span className="toolbar-title">{table.name}</span>
         <span className="toolbar-meta">
           {table.rows.length} rows · {table.columns.length} cols
@@ -769,6 +860,9 @@ export function DataGrid({
         )}
 
         {c.toolbarLeftExtras}
+        {/* Left-cluster actions inline only when there's room; otherwise they
+            fold into the overflow menu below. */}
+        {!compactToolbar && leftToolbarActions.map(renderToolbarAction)}
 
         <div className="toolbar-spacer" />
 
@@ -813,17 +907,20 @@ export function DataGrid({
 
         {c.toolbarExtras}
 
-        <button
-          className="btn btn-outline btn-sm"
-          onClick={exportCsv}
-          disabled={table.columns.length === 0 || table.rows.length === 0}
-          title="Export this table as CSV (mapped values only — JSON / multi-item cells export blank)"
-        >
-          <Icon.Download size={11} /> Export CSV
-        </button>
-        <button className="btn btn-outline btn-sm" onClick={c.addRow} disabled={!c.canAddRow}>
-          <Icon.Plus size={11} /> Add row
-        </button>
+        {/* Wide: every action inline. Narrow: a single "⋯" menu so the toolbar
+            never crowds the primary Run button off-screen. */}
+        {compactToolbar ? (
+          <button
+            className="btn btn-outline btn-sm toolbar-overflow-btn"
+            onClick={openToolbarMenu}
+            title="More actions"
+            aria-label="More actions"
+          >
+            <Icon.More />
+          </button>
+        ) : (
+          rightToolbarActions.map(renderToolbarAction)
+        )}
         <div className="toolbar-sep" />
         <button
           className="btn btn-primary btn-sm"

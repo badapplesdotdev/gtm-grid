@@ -11,7 +11,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chooseOAuthFlow, extractOAuthCode, isTauri } from "./desktop-oauth";
+import { chooseOAuthFlow, extractOAuthCode, isDesktop } from "./desktop-oauth";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -45,7 +45,7 @@ describe("extractOAuthCode", () => {
 
 describe("chooseOAuthFlow", () => {
   it("selects the desktop flow inside Tauri", () => {
-    expect(chooseOAuthFlow(true)).toBe("tauri");
+    expect(chooseOAuthFlow(true)).toBe("desktop");
   });
 
   it("selects the web flow outside Tauri", () => {
@@ -53,19 +53,14 @@ describe("chooseOAuthFlow", () => {
   });
 });
 
-describe("isTauri", () => {
-  it("is false when no Tauri global is present", () => {
+describe("isDesktop", () => {
+  it("is false when no Electron bridge is present (web build)", () => {
     vi.stubGlobal("window", {});
-    expect(isTauri()).toBe(false);
+    expect(isDesktop()).toBe(false);
   });
 
-  it("is true when __TAURI_INTERNALS__ is injected (v2)", () => {
-    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
-    expect(isTauri()).toBe(true);
-  });
-
-  it("is true when the legacy __TAURI__ global is present", () => {
-    vi.stubGlobal("window", { __TAURI__: {} });
-    expect(isTauri()).toBe(true);
+  it("is true when the preload `electronAPI` bridge is exposed", () => {
+    vi.stubGlobal("window", { electronAPI: { isElectron: true } });
+    expect(isDesktop()).toBe(true);
   });
 });
