@@ -1,5 +1,70 @@
 # @gtmgrid/auth
 
+## 1.2.0
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.2.0
+- @gtmgrid/db@1.2.0
+- @gtmgrid/email@1.2.0
+
+## 1.1.1
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.1.1
+- @gtmgrid/db@1.1.1
+- @gtmgrid/email@1.1.1
+
+## 1.1.0
+
+### Patch Changes
+
+- Updated dependencies [3e33da9]
+  - @gtmgrid/email@1.1.0
+  - @gtmgrid/analytics@1.1.0
+  - @gtmgrid/db@1.1.0
+
+## 1.0.6
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.0.6
+- @gtmgrid/db@1.0.6
+- @gtmgrid/email@1.0.6
+
+## 1.0.5
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.0.5
+- @gtmgrid/db@1.0.5
+- @gtmgrid/email@1.0.5
+
+## 1.0.4
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.0.4
+- @gtmgrid/db@1.0.4
+- @gtmgrid/email@1.0.4
+
+## 1.0.3
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.0.3
+- @gtmgrid/db@1.0.3
+- @gtmgrid/email@1.0.3
+
+## 1.0.2
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.0.2
+- @gtmgrid/db@1.0.2
+- @gtmgrid/email@1.0.2
+
 ## 1.0.1
 
 ### Patch Changes

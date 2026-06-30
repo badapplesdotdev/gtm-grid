@@ -15,12 +15,18 @@ import {
 import { EntitlementService, PlanRequiredError } from "./entitlement-service.js";
 
 const WS = "ws-1";
-const ws = (currentPlanId: string | null): Workspace => ({
+const ws = (
+  currentPlanId: string | null,
+  trialEndsAt: number | null = null,
+): Workspace => ({
   id: WS,
   name: "WS",
   ownerId: "owner",
   currentPlanId,
+  trialEndsAt,
 });
+
+const DAY = 86_400_000;
 
 const run = (workspaces: readonly Workspace[], workspaceId = WS) =>
   Effect.runPromiseExit(
@@ -60,5 +66,52 @@ describe("EntitlementService.requireCloudAccess", () => {
   it("blocks a missing workspace with PlanRequiredError", async () => {
     const exit = await run([]);
     expect(failure(exit)).toBeInstanceOf(PlanRequiredError);
+  });
+
+  it("allows an active trial (trialEndsAt in the future)", async () => {
+    const exit = await run([ws("team", Date.now() + DAY)]);
+    expect(Exit.isSuccess(exit)).toBe(true);
+  });
+
+  it("BLOCKS a trial lapsed by date even when currentPlanId is still set", async () => {
+    // The core backstop: a workspace whose trial end has passed must be rejected
+    // immediately, before Autumn syncs `currentPlanId` to null.
+    const exit = await run([ws("team", Date.now() - DAY)]);
+    expect(failure(exit)).toBeInstanceOf(PlanRequiredError);
+  });
+
+  it("blocks a lapsed trial whose plan id also synced to null", async () => {
+    const exit = await run([ws(null, Date.now() - DAY)]);
+    expect(failure(exit)).toBeInstanceOf(PlanRequiredError);
+  });
+
+  describe("GTMGRID_SELF_HOST bypass", () => {
+    const withSelfHost = async (fn: () => Promise<void>) => {
+      const prev = process.env.GTMGRID_SELF_HOST;
+      process.env.GTMGRID_SELF_HOST = "1";
+      try {
+        await fn();
+      } finally {
+        if (prev === undefined) delete process.env.GTMGRID_SELF_HOST;
+        else process.env.GTMGRID_SELF_HOST = prev;
+      }
+    };
+
+    it("allows an otherwise-blocked Free workspace", async () =>
+      withSelfHost(async () => {
+        expect(Exit.isSuccess(await run([ws(null)]))).toBe(true);
+      }));
+
+    it("allows a lapsed trial (the hard-block does not apply to self-host)", async () =>
+      withSelfHost(async () => {
+        expect(Exit.isSuccess(await run([ws("team", Date.now() - DAY)]))).toBe(
+          true,
+        );
+      }));
+
+    it("allows even a missing workspace (gate fully bypassed)", async () =>
+      withSelfHost(async () => {
+        expect(Exit.isSuccess(await run([]))).toBe(true);
+      }));
   });
 });

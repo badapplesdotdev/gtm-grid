@@ -623,7 +623,13 @@ export function makeCloudSource(
    */
   const resolveTableId = async (tableRef?: string): Promise<string> => {
     const ref = (tableRef ?? "").trim();
-    if (ref === "" || ref === context.tableId) return context.tableId;
+    if (ref === "" || ref === context.tableId) {
+      if (context.tableId) return context.tableId;
+      // No active table loaded — force the agent to name one explicitly.
+      throw new Error(
+        "No active table loaded — pass an explicit `table` (id or name). Call list_tables to see this project's tables, or create_table to make one.",
+      );
+    }
     const match = (tables: { id: string; name: string }[]): string | undefined => {
       if (tables.some((t) => t.id === ref)) return ref;
       const exact = tables.filter((t) => t.name === ref);
@@ -938,8 +944,10 @@ export function makeCloudSource(
       // connector call then runs in-process here (the MCP sidecar), resolving the
       // workspace's shared credentials through the worker — no dedicated dispatch
       // route required.
-      const workspaceId = await deps.resolveWorkspaceId(client, context.tableId);
-      const store = await buildCloudStore(client, context.tableId, workspaceId);
+      // The store is workspace-scoped (shared credentials), so build it from the
+      // context workspace directly — no active table required for a function run.
+      const workspaceId = context.workspaceId;
+      const store = await buildCloudStore(client, context.tableId ?? "", workspaceId);
       const engine = new Engine(deps.config, deps.registry, {
         store,
         creds: store,

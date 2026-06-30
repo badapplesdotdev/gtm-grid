@@ -1,5 +1,185 @@
 # @gtmgrid/desktop
 
+## 1.2.0
+
+### Minor Changes
+
+- f2023a4: Self-host support + a one-command local-run flow.
+
+  A self-hosted instance (`GTMGRID_SELF_HOST=1`) now works indefinitely and is never
+  locked out: the env flag bypasses the paid cloud-access gate
+  (`EntitlementService.requireCloudAccess` — the plan/trial hard-block that otherwise
+  threw `PlanRequiredError` on every cloud path once a workspace fell to Free or its
+  trial lapsed) and the cloud-actions usage caps (the bulk-import and webhook
+  `assertQuota` pre-checks). The desktop UI honors it too — `workspaces.me` now
+  reports `selfHost` per workspace, and the renderer never shows the "Cloud is
+  locked" / upgrade prompts when it is set, so a self-hoster's grid stays fully
+  usable while the backend serves every request.
+
+  Running locally is now straightforward: a `docker-compose.yml` brings up just
+  Postgres, and the README documents the three-step flow (Postgres → migrate → run
+  backend + sidecar + desktop). Positioning is corrected to match reality
+  (source-available + self-hostable, with managed cloud as the zero-ops option)
+  rather than the previous "local-first" claim.
+
+  Covered by new unit tests (the `isSelfHost` helper, the entitlement bypass for
+  Free/lapsed/missing workspaces, the over-quota import/run bypasses, and
+  `workspaces.me` surfacing `selfHost`) and a new Electron E2E spec
+  (`self-host.spec.ts`) asserting Free, expired-by-date, and fully-lapsed workspaces
+  all stay unlocked under self-host — with the existing trial/boot lock specs still
+  passing when self-host is off.
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.2.0
+- @gtmgrid/cloud@1.2.0
+- @gtmgrid/services@1.2.0
+
+## 1.1.1
+
+### Patch Changes
+
+- 3a5fcb1: Grid toolbar: collapse action buttons into a "⋯" overflow menu on narrow widths.
+
+  When the toolbar is squeezed — e.g. the agent panel open beside the grid — the
+  action buttons (Dedupe, Webhook, Export CSV, Add row) used to crowd together and
+  the long table name wrapped onto multiple lines. The toolbar now measures its own
+  width (via a `ResizeObserver` `useElementWidth` hook) and, below a threshold,
+  folds those actions into a single overflow menu while keeping the primary Run
+  button and the LIVE/presence status inline. The table name also truncates with an
+  ellipsis instead of wrapping. Covered by unit tests for the hook and Electron E2E
+  tests for the wide/compact layouts and the overflow menu.
+
+  - @gtmgrid/analytics@1.1.1
+  - @gtmgrid/cloud@1.1.1
+  - @gtmgrid/services@1.1.1
+
+## 1.1.0
+
+### Minor Changes
+
+- 3e33da9: Hard-block credited actions when a trial expires, plus trial-status notifications.
+
+  Previously `EntitlementService.requireCloudAccess` only checked the cached
+  `currentPlanId`, so a trial that lapsed by date kept running credited actions until
+  Autumn's webhook/desktop sync flipped the plan to null. And the credit-heavy column
+  enrichment run path was gated by quota only, never by cloud access.
+
+  - **Time-based backstop:** `requireCloudAccess` now also fails the instant
+    `trialEndsAt` is in the past, regardless of the cached plan id — the server-side
+    guarantee that an expired trial cannot run any credited action.
+  - **Enrichment path gated:** `assertColumnRunQuota` and the `setCell` / `setCellStatus`
+    / `insertRow` / `upsertRow` worker writes now call `requireCloudAccess`, so a lapsed
+    workspace cannot complete runs server-side even with quota headroom. The worker
+    boundary maps `PlanRequiredError` → 403 (distinct from the 402 quota error) and the
+    sidecar re-raises it as a typed error so the run aborts cleanly with an upgrade prompt.
+  - **Expired stays distinguishable:** the plan sync preserves a lapsed trial's past
+    `trialEndsAt` so "trial expired" reads apart from a cancelled paid plan / Free.
+  - **Desktop locks by date too:** the cloud UI now locks the instant the trial expires
+    (not only after sync), closing the window where buttons looked enabled but the server
+    rejected the action.
+  - **Notifications along the way:** new bell items for trial started (welcome), trial
+    expired, and low cloud-actions — alongside the existing countdown — all routing to the
+    upgrade flow. New on-brand `trialWelcomeEmail` (on workspace creation) and
+    `trialExpiredEmail` (daily "just-ended" reminder window) reuse the existing email shell.
+
+### Patch Changes
+
+- Updated dependencies [3e33da9]
+  - @gtmgrid/services@1.1.0
+  - @gtmgrid/analytics@1.1.0
+  - @gtmgrid/cloud@1.1.0
+
+## 1.0.6
+
+### Patch Changes
+
+- 2bd1835: Fix: a goal could spin up a brand-new table instead of using the one in view.
+
+  When the app auto-selects a table on open, the agent's "active table" hint was
+  sourced only from a paged fetch that lags the synchronously-set selection. A goal
+  sent in that window reached the agent with the MCP's table default but no table
+  NAME, so the preamble dropped its "Active table" section and the agent, not knowing
+  which table it was on, created a new one. The hint now falls back to the table name
+  from the already-loaded tables list, so it's populated the instant a table is
+  selected (auto-default on open or manual click). Covered by a unit suite on the
+  resolver and an end-to-end test that boots the app, lets it auto-default, and
+  asserts the goal request carries the active table.
+
+  - @gtmgrid/analytics@1.0.6
+  - @gtmgrid/cloud@1.0.6
+  - @gtmgrid/services@1.0.6
+
+## 1.0.5
+
+### Patch Changes
+
+- 93d0352: The agent now works with no table loaded, and the native `/goal` + skills are back.
+
+  Root cause of the "agent has no GTM Grid tools / falls back to other tools" reports:
+  the agent's cloud context required an active table, so with nothing open the MCP
+  failed to start and the agent had zero grid tools. The active table is now optional —
+  the agent gets its tools as soon as you're signed in with a cloud project, and can
+  `list_tables` / `create_table` / operate by id. With tools always available we also
+  re-enabled your Claude/Codex skills (including the looping `/goal`), with a "use only
+  GTM Grid tools" guardrail.
+
+  - @gtmgrid/analytics@1.0.5
+  - @gtmgrid/cloud@1.0.5
+  - @gtmgrid/services@1.0.5
+
+## 1.0.4
+
+### Patch Changes
+
+- 9cc6ff5: Fully disable the user's personal Claude skills in the agent (follow-up to the
+  isolation fix). `--setting-sources project` alone only thinned the user's skills, so
+  a third-party skill (e.g. `deepline-gtm`) was still invokable and kept running
+  instead of gtmgrid's tools. Add `--disable-slash-commands`, which disables all of the
+  user's skills; gtmgrid's own playbooks (injected via the system prompt) and tools
+  (via MCP) are unaffected, and the user's login is preserved.
+  - @gtmgrid/analytics@1.0.4
+  - @gtmgrid/cloud@1.0.4
+  - @gtmgrid/services@1.0.4
+
+## 1.0.3
+
+### Patch Changes
+
+- cf8144d: Isolate the spawned agent CLIs from the user's personal Claude/Codex setup.
+
+  The gtmgrid agent ran inside the user's own Claude/Codex config, so it loaded their
+  global skills, plugins, hooks, and instructions — e.g. a `deepline` Claude plugin
+  whose startup hook fired inside our turns, pulled the agent off gtmgrid's tools, and
+  forced approval prompts despite bypass mode. The agent now runs with each CLI's
+  isolation flag (`--setting-sources project` for claude, `--ignore-user-config` for
+  codex), which drops the personal config while keeping the user's login and model.
+  Cursor stays isolated via its app-owned workspace. This also removes a failing
+  third-party startup hook that may have been interfering with MCP connection.
+
+  - @gtmgrid/analytics@1.0.3
+  - @gtmgrid/cloud@1.0.3
+  - @gtmgrid/services@1.0.3
+
+## 1.0.2
+
+### Patch Changes
+
+- d908d79: Windows agents: forward the OS environment to the spawned GTM Grid MCP server so it
+  can start, and capture the exact reason when it can't.
+
+  Telemetry showed the MCP server process never starts on Windows (so the agent's tool
+  set has no `gtmgrid` tools and it falls back to shell/other skills), while macOS works
+  and the agent working directory is correct. The agent CLI hands the MCP child an
+  explicit env map; on Windows the Electron-as-Node child needs the OS vars
+  (`SystemRoot`, `PATH`, …) to even launch. We now forward those. Agent telemetry also
+  records the MCP server's raw status + stderr on any turn where it fails to connect, so
+  the precise failure is visible if more work is needed.
+
+  - @gtmgrid/analytics@1.0.2
+  - @gtmgrid/cloud@1.0.2
+  - @gtmgrid/services@1.0.2
+
 ## 1.0.1
 
 ### Patch Changes

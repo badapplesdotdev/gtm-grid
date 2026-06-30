@@ -47,10 +47,16 @@ describe("cloudContextFromEnv — explicit, complete cloud context", () => {
     "GTMGRID_TOKEN",
     "GTMGRID_WORKSPACE_ID",
     "GTMGRID_CLOUD_PROJECT",
-    "GTMGRID_CLOUD_TABLE",
-  ] as const)("returns undefined when %s is missing (no half-activation)", (key) => {
+  ] as const)("returns undefined when REQUIRED %s is missing (no half-activation)", (key) => {
     const partial: McpEnv = { ...FULL_CLOUD, [key]: undefined };
     expect(cloudContextFromEnv(partial)).toBeUndefined();
+  });
+
+  it("resolves WITHOUT a table — GTMGRID_CLOUD_TABLE is optional (agent works with no table loaded)", () => {
+    const ctx = cloudContextFromEnv({ ...FULL_CLOUD, GTMGRID_CLOUD_TABLE: undefined });
+    expect(ctx).not.toBeUndefined();
+    expect(ctx?.tableId).toBeUndefined();
+    expect(ctx?.projectId).toBe("proj_1");
   });
 
   it("treats a blank/whitespace field as missing", () => {

@@ -86,6 +86,7 @@ describe("workspaces.me", () => {
           seatUsage: { used: 1, limit: null },
           cloudActions: { used: 7, limit: 2000 },
           plan: { id: "team", name: "Team", trialEndsAt: null },
+          selfHost: false,
         },
       ],
     });

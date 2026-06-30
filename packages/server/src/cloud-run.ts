@@ -21,7 +21,7 @@
  * headless Inngest webhook worker only.
  */
 
-import { Effect } from "effect";
+import { Data, Effect } from "effect";
 import {
   CloudSchemaMapping,
   Engine,
@@ -181,9 +181,16 @@ export function makeWorkerClient(
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      // The apps/web worker boundary maps CloudActionsLimitError → HTTP 402.
-      // Tag the thrown error so callers/engine can recognise the fatal stop.
-      const tag = res.status === 402 ? "CloudActionsLimitError: " : "";
+      // The apps/web worker boundary maps CloudActionsLimitError → 402 and
+      // PlanRequiredError (lapsed trial / Free plan) → 403. Tag the thrown error
+      // so callers/engine recognise each fatal stop and surface the right prompt
+      // (out-of-credits vs upgrade-required).
+      const tag =
+        res.status === 402
+          ? "CloudActionsLimitError: "
+          : res.status === 403
+            ? "PlanRequiredError: "
+            : "";
       throw new Error(
         `${tag}Worker route ${ref} failed: ${res.status} ${res.statusText} ${text}`.trim(),
       );
@@ -275,13 +282,20 @@ export async function buildCloudStore(
  * (TRI-3277). Surfaces the worker's 402 as a typed error so a caller can map it
  * back to a 402 for the desktop instead of treating it as a generic 5xx.
  */
-export class CloudActionsLimitError extends Error {
-  readonly _tag = "CloudActionsLimitError";
-  constructor(message: string) {
-    super(message);
-    this.name = "CloudActionsLimitError";
-  }
-}
+export class CloudActionsLimitError extends Data.TaggedError(
+  "CloudActionsLimitError",
+)<{ readonly message: string }> {}
+
+/**
+ * Raised when a cloud column run is rejected because the workspace has no active
+ * cloud plan — its trial has lapsed (by date or sync) or it is on Free. Surfaces
+ * the worker's 403 as a typed error so the desktop shows an UPGRADE prompt rather
+ * than a generic failure (distinct from {@link CloudActionsLimitError}, which is
+ * "out of cloud actions"). Both abort the run; this one means "add a plan".
+ */
+export class PlanRequiredError extends Data.TaggedError(
+  "PlanRequiredError",
+)<{ readonly message: string }> {}
 
 /**
  * Pre-flight quota gate (TRI-3277). POSTs the run shape to the server's
@@ -304,12 +318,19 @@ export async function assertColumnRunQuota(
       ...(req.force !== undefined ? { force: req.force } : {}),
     });
   } catch (e) {
-    if (e instanceof CloudActionsLimitError) throw e;
+    if (e instanceof CloudActionsLimitError || e instanceof PlanRequiredError) {
+      throw e;
+    }
     const message = e instanceof Error ? e.message : String(e);
-    // The worker boundary returns 402 for CloudActionsLimitError; the HTTP
-    // client folds the status into the thrown message.
+    // The worker boundary returns 402 for CloudActionsLimitError (out of cloud
+    // actions) and 403 for PlanRequiredError (lapsed trial / Free plan); the HTTP
+    // client folds the status + tag into the thrown message. Re-raise each as its
+    // typed error so the run aborts and the desktop shows the right prompt.
     if (message.includes("402") || message.includes("CloudActionsLimitError")) {
-      throw new CloudActionsLimitError(message);
+      throw new CloudActionsLimitError({ message });
+    }
+    if (message.includes("403") || message.includes("PlanRequiredError")) {
+      throw new PlanRequiredError({ message });
     }
     throw e;
   }

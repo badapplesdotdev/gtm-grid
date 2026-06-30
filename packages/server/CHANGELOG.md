@@ -1,5 +1,86 @@
 # @gtmgrid/server
 
+## 1.2.0
+
+### Patch Changes
+
+- @gtmgrid/engine@1.2.0
+- @gtmgrid/observability@1.2.0
+
+## 1.1.1
+
+### Patch Changes
+
+- @gtmgrid/engine@1.1.1
+- @gtmgrid/observability@1.1.1
+
+## 1.1.0
+
+### Patch Changes
+
+- 3dda979: The Codex side-panel agent no longer crashes mid-turn when the user has other MCP servers registered. Codex deep-merges `-c` config overrides, so passing `-c mcp_servers={ gtmgrid = … }` did not actually replace the user's servers — their `~/.codex/config.toml` entries (Trigify/exa/…) and bundled plugin servers (linear/computer-use) stayed live, and Codex connecting to any OAuth-walled one made its rmcp transport quit fatally ("Transport channel closed, when AuthRequired"), taking the turn down. The Codex bridge now passes `--ignore-user-config` (the only switch that drops both config and plugin servers, since Codex has no `--strict-mcp-config` equivalent) and re-injects the user's default model + reasoning effort so the panel's "Default" model option keeps working.
+- 3e33da9: Hard-block credited actions when a trial expires, plus trial-status notifications.
+
+  Previously `EntitlementService.requireCloudAccess` only checked the cached
+  `currentPlanId`, so a trial that lapsed by date kept running credited actions until
+  Autumn's webhook/desktop sync flipped the plan to null. And the credit-heavy column
+  enrichment run path was gated by quota only, never by cloud access.
+
+  - **Time-based backstop:** `requireCloudAccess` now also fails the instant
+    `trialEndsAt` is in the past, regardless of the cached plan id — the server-side
+    guarantee that an expired trial cannot run any credited action.
+  - **Enrichment path gated:** `assertColumnRunQuota` and the `setCell` / `setCellStatus`
+    / `insertRow` / `upsertRow` worker writes now call `requireCloudAccess`, so a lapsed
+    workspace cannot complete runs server-side even with quota headroom. The worker
+    boundary maps `PlanRequiredError` → 403 (distinct from the 402 quota error) and the
+    sidecar re-raises it as a typed error so the run aborts cleanly with an upgrade prompt.
+  - **Expired stays distinguishable:** the plan sync preserves a lapsed trial's past
+    `trialEndsAt` so "trial expired" reads apart from a cancelled paid plan / Free.
+  - **Desktop locks by date too:** the cloud UI now locks the instant the trial expires
+    (not only after sync), closing the window where buttons looked enabled but the server
+    rejected the action.
+  - **Notifications along the way:** new bell items for trial started (welcome), trial
+    expired, and low cloud-actions — alongside the existing countdown — all routing to the
+    upgrade flow. New on-brand `trialWelcomeEmail` (on workspace creation) and
+    `trialExpiredEmail` (daily "just-ended" reminder window) reuse the existing email shell.
+  - @gtmgrid/engine@1.1.0
+  - @gtmgrid/observability@1.1.0
+
+## 1.0.6
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.6
+- @gtmgrid/observability@1.0.6
+
+## 1.0.5
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.5
+- @gtmgrid/observability@1.0.5
+
+## 1.0.4
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.4
+- @gtmgrid/observability@1.0.4
+
+## 1.0.3
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.3
+- @gtmgrid/observability@1.0.3
+
+## 1.0.2
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.2
+- @gtmgrid/observability@1.0.2
+
 ## 1.0.1
 
 ### Patch Changes

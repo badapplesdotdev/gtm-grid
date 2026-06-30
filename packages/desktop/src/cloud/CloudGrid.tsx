@@ -672,29 +672,32 @@ export function CloudGrid({
     canRun: session !== null,
     runDisabledReason: session === null ? "Sign in to run cloud columns" : undefined,
     canAddRow: true,
-    toolbarLeftExtras: (
-      <button
-        className="autorun-toggle"
-        onClick={() => setDedupeOpen(true)}
-        title="Deduplicate rows on a column"
-      >
-        <span className="autorun-label">Dedupe</span>
-        {table.dedupe && <span className="dedupe-on-dot" title="Auto-dedupe is on" />}
-      </button>
-    ),
+    // LIVE is status, not an action — keep it always inline (never folded into
+    // the overflow menu). Dedupe + Webhook are actions (see toolbarActions).
     toolbarExtras: (
-      <>
-        <span className="free-badge" title="Live multiplayer">LIVE</span>
-        <button
-          className="btn btn-outline btn-sm"
-          onClick={() => setShowWebhook(true)}
-          title="Configure this table's inbound webhook"
-        >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17a4 4 0 0 1 3.6-3.98" /><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06" /><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8" /></svg>{" "}
-          Webhook
-        </button>
-      </>
+      <span className="free-badge" title="Live multiplayer">LIVE</span>
     ),
+    // Toolbar actions, rendered inline when wide and folded into the "⋯" overflow
+    // menu when the toolbar is narrow (e.g. the agent panel squeezing the grid).
+    toolbarActions: [
+      {
+        id: "dedupe",
+        label: "Dedupe",
+        side: "left",
+        active: !!table.dedupe,
+        onClick: () => setDedupeOpen(true),
+        title: "Deduplicate rows on a column",
+      },
+      {
+        id: "webhook",
+        label: "Webhook",
+        icon: (
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17a4 4 0 0 1 3.6-3.98" /><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06" /><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8" /></svg>
+        ),
+        onClick: () => setShowWebhook(true),
+        title: "Configure this table's inbound webhook",
+      },
+    ],
     columnMeta,
     addRow: () => void guard(() => addRow(tableId), "add row"),
     runAll: async () => {

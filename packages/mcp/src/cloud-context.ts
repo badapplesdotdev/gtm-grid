@@ -26,11 +26,12 @@ export interface CloudContext {
   /** The active cloud `projects.id` the agent operates within. */
   readonly projectId: string;
   /**
-   * The active cloud `tables.id` the agent operates on by default. The worker
-   * boundary is table-scoped (getTable / setCell / run), so the cloud source is
-   * built for ONE active table — the one the user is viewing.
+   * The active cloud `tables.id` the agent operates on BY DEFAULT — the one the
+   * user is viewing. OPTIONAL: the agent works with no active table too (it can
+   * `list_tables`, `create_table`, or operate on any table by id); when absent,
+   * table-scoped tools require an explicit `table` argument.
    */
-  readonly tableId: string;
+  readonly tableId?: string;
 }
 
 /** The resolved data environment for an MCP run — always CLOUD. */
@@ -57,9 +58,10 @@ function nonEmpty(value: string | undefined): string | undefined {
 
 /**
  * Resolve the cloud context from the MCP env, or `undefined` when it is not a
- * COMPLETE cloud context. A cloud context requires the mode to be explicitly
- * `cloud` AND all of apiUrl/token/workspaceId/projectId/tableId to be present.
- * The mode is read from `GTMGRID_MODE`, NOT guessed from the presence of an apiUrl.
+ * cloud context. Requires the mode to be explicitly `cloud` AND apiUrl + token +
+ * workspaceId + projectId — the agent must be signed in with a cloud project, but
+ * an active `tableId` is OPTIONAL (the agent works with no table loaded). The mode
+ * is read from `GTMGRID_MODE`, NOT guessed from the presence of an apiUrl.
  */
 export function cloudContextFromEnv(env: McpEnv): CloudContext | undefined {
   if (nonEmpty(env.GTMGRID_MODE)?.toLowerCase() !== "cloud") return undefined;
@@ -67,14 +69,8 @@ export function cloudContextFromEnv(env: McpEnv): CloudContext | undefined {
   const token = nonEmpty(env.GTMGRID_TOKEN);
   const workspaceId = nonEmpty(env.GTMGRID_WORKSPACE_ID);
   const projectId = nonEmpty(env.GTMGRID_CLOUD_PROJECT);
-  const tableId = nonEmpty(env.GTMGRID_CLOUD_TABLE);
-  if (
-    apiUrl === undefined ||
-    token === undefined ||
-    workspaceId === undefined ||
-    projectId === undefined ||
-    tableId === undefined
-  ) {
+  const tableId = nonEmpty(env.GTMGRID_CLOUD_TABLE); // optional — may be absent
+  if (apiUrl === undefined || token === undefined || workspaceId === undefined || projectId === undefined) {
     return undefined;
   }
   return { apiUrl, token, workspaceId, projectId, tableId };
@@ -89,7 +85,7 @@ export function selectGridEnv(env: McpEnv): GridEnv {
   const context = cloudContextFromEnv(env);
   if (context === undefined) {
     throw new Error(
-      "gtmgrid MCP requires a cloud context (GTMGRID_MODE=cloud + apiUrl/token/workspace/project/table). The local grid paradigm has been removed.",
+      "gtmgrid MCP requires a cloud context (GTMGRID_MODE=cloud + apiUrl/token/workspace/project; table optional). The local grid paradigm has been removed.",
     );
   }
   return { mode: "cloud", context };
@@ -114,5 +110,6 @@ export function optionalGridEnv(env: McpEnv): GridEnv | undefined {
  * excluded so it never lands in a log line.
  */
 export function describeGridEnv(env: GridEnv): string {
-  return `cloud project ${env.context.projectId} (table ${env.context.tableId})`;
+  const t = env.context.tableId;
+  return `cloud project ${env.context.projectId}${t ? ` (table ${t})` : " (no active table)"}`;
 }
