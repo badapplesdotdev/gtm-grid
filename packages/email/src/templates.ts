@@ -441,6 +441,79 @@ export function trialEndingEmail(opts: {
 }
 
 /**
+ * Trial-STARTED welcome. Sent once when a brand-new workspace's free Team trial
+ * begins (on workspace creation), so the owner knows the cloud tier is unlocked
+ * and for how long. Same branded shell as the other emails; "Trial" tag. The CTA
+ * opens the app.
+ */
+export function trialWelcomeEmail(opts: {
+  to: string;
+  workspaceName: string;
+  appUrl: string;
+  trialDays?: number;
+}): OutboundEmail {
+  const ws = escapeHtml(opts.workspaceName);
+  const days = opts.trialDays ?? 7;
+  const bodyRows =
+    bodyRow(
+      `<h1 style="margin:0 0 16px;font-family:${SANS};font-size:25px;line-height:1.2;font-weight:700;letter-spacing:-0.02em;color:${INK};">your free trial is live</h1>
+       <p style="margin:0;font-family:${SANS};font-size:15px;line-height:1.6;color:${INK_2};">The <strong style="color:${INK};font-weight:600;">${ws}</strong> workspace is on a <strong style="color:${INK};font-weight:600;">${days}-day Team trial</strong> — cloud tables, realtime multiplayer and shared credentials are unlocked. No card needed to start; add one any time to keep them after the trial. Local tables are always free.</p>`,
+      "38px 36px 6px",
+    ) +
+    bodyRow(
+      `${ctaButton(opts.appUrl, "open GTM Grid")}`,
+      "22px 36px 34px",
+    );
+  return {
+    to: opts.to,
+    subject: `Your ${days}-day ${APP_NAME} trial is live`,
+    html: shell({
+      title: `your trial is live — ${APP_NAME}`,
+      preheader: `${opts.workspaceName} is on a ${days}-day Team trial — cloud features are unlocked.`,
+      tag: "Trial",
+      bodyRows,
+      footerNote: `sent to ${opts.to} because you created the ${opts.workspaceName} workspace.`,
+    }),
+    text: `Your ${opts.workspaceName} workspace on ${APP_NAME} is on a ${days}-day Team trial — cloud tables, realtime sync and shared credentials are unlocked. Add a card any time to keep them: ${opts.appUrl}`,
+  };
+}
+
+/**
+ * Trial-ENDED notice. Sent once the free trial has lapsed and the cloud tier has
+ * locked, so the owner knows their data is safe and how to restore cloud access.
+ * Same branded shell; "Billing" tag. The CTA opens the app's upgrade/checkout.
+ */
+export function trialExpiredEmail(opts: {
+  to: string;
+  workspaceName: string;
+  appUrl: string;
+}): OutboundEmail {
+  const ws = escapeHtml(opts.workspaceName);
+  const bodyRows =
+    bodyRow(
+      `<h1 style="margin:0 0 16px;font-family:${SANS};font-size:25px;line-height:1.2;font-weight:700;letter-spacing:-0.02em;color:${INK};">Your ${APP_NAME} trial has ended</h1>
+       <p style="margin:0;font-family:${SANS};font-size:15px;line-height:1.6;color:${INK_2};">The <strong style="color:${INK};font-weight:600;">${ws}</strong> workspace's free trial is over, so cloud tables, realtime sync and shared credentials are now locked. <strong style="color:${INK};font-weight:600;">Your data is safe</strong> — upgrade to unlock cloud again. Local tables keep working free.</p>`,
+      "38px 36px 6px",
+    ) +
+    bodyRow(
+      `${ctaButton(opts.appUrl, "upgrade to unlock cloud")}`,
+      "22px 36px 34px",
+    );
+  return {
+    to: opts.to,
+    subject: `Your ${opts.workspaceName} trial has ended`,
+    html: shell({
+      title: `trial ended — ${APP_NAME}`,
+      preheader: `The ${opts.workspaceName} trial has ended — upgrade to unlock cloud features again.`,
+      tag: "Billing",
+      bodyRows,
+      footerNote: `sent to ${opts.to}. your data is safe; local features always stay free.`,
+    }),
+    text: `Your ${opts.workspaceName} trial on ${APP_NAME} has ended — cloud features are locked but your data is safe. Upgrade to unlock cloud again: ${opts.appUrl}`,
+  };
+}
+
+/**
  * Welcome email (the design's 3-step "every column is a function" onboarding).
  * Builder is ready for wiring (e.g. on first workspace creation); not yet sent
  * by any trigger. "Welcome" tag.

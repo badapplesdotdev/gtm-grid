@@ -110,10 +110,12 @@ export const CloudRunServiceLive: Layer.Layer<CloudRunService, never, CloudRunne
     }),
   );
 
-/** The sidecar base URL (matches packages/desktop/src/api.ts `API_BASE`). */
+/** The sidecar base URL (matches packages/desktop/src/api.ts `API_BASE`).
+ * 127.0.0.1, not "localhost": the sidecar binds IPv4 loopback only and Windows
+ * resolves "localhost" to ::1 first, which would read as unreachable. */
 const SIDECAR_BASE: string =
   (import.meta as unknown as { env?: { VITE_API?: string } }).env?.VITE_API ??
-  "http://localhost:8787";
+  "http://127.0.0.1:8787";
 
 /**
  * A {@link CloudRunner} that POSTs to the sidecar's `/api/cloud/columns/run`.

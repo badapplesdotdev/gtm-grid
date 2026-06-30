@@ -13,6 +13,16 @@ dist/
 packages/desktop/src-tauri/target/
 packages/desktop/src-tauri/sidecar/
 packages/desktop/src-tauri/gen/
+# Electron build artifacts
+packages/desktop/sidecar/
+packages/desktop/build/
+packages/desktop/release/
+
+# Playwright E2E artifacts (the E2E renderer build + reports)
+packages/desktop/dist-e2e/
+packages/desktop/test-results/
+packages/desktop/playwright-report/
+packages/desktop/.last-run.json
 
 # Local environment + secrets (DATABASE_URL, Autumn/Resend keys, the Tauri
 # updater signing key, etc.). Ignore every .env variant except the checked-in
@@ -32,3 +42,7 @@ packages/desktop/src-tauri/gen/
 .playwright-mcp/
 .env.local
 .vercel
+
+# Stray root-level screenshots (testing artifacts)
+/*.png
+packages/desktop/e2e/.mock.pid

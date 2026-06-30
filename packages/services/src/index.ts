@@ -15,6 +15,9 @@
 // --- The per-request DB seam -------------------------------------------------
 export { DbClient, DbClientLive, dbClientLayer } from "./db-client.js";
 
+// --- Self-host detection (GTMGRID_SELF_HOST) ---------------------------------
+export { isSelfHost } from "./self-host.js";
+
 // --- Repositories (Effect <-> Drizzle adapters) ------------------------------
 export {
   type NewWorkspace,

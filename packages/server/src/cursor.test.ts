@@ -6,12 +6,17 @@ import { describe, expect, it } from "vitest";
 import { mcpConfig, cursorToolShort } from "./agent.js";
 
 describe("mcpConfig — gtmgrid-only server (what cursor's .cursor/mcp.json gets)", () => {
-  it("emits a single gtmgrid MCP server with the launcher + project env", () => {
+  it("emits a single gtmgrid MCP server with a node command + script args + project env", () => {
     const cfg = JSON.parse(mcpConfig("/repo", "proj"));
     expect(Object.keys(cfg.mcpServers)).toEqual(["gtmgrid"]);
     expect(cfg.mcpServers.gtmgrid.env).toMatchObject({ GTMGRID_PROJECT: "proj" });
     // cursor-agent has no `--strict-mcp-config`; we still only register gtmgrid here.
-    expect(cfg.mcpServers.gtmgrid.command).toContain("gtmgrid-mcp");
+    // The server is launched by spawning node directly (cross-platform) — never a
+    // shell-script launcher — so `command` is a node binary and the mcp entry is an arg.
+    expect(typeof cfg.mcpServers.gtmgrid.command).toBe("string");
+    expect(cfg.mcpServers.gtmgrid.command.length).toBeGreaterThan(0);
+    expect(Array.isArray(cfg.mcpServers.gtmgrid.args)).toBe(true);
+    expect(cfg.mcpServers.gtmgrid.args.join(" ")).toContain("mcp");
   });
 
   it("threads cloud context into the gtmgrid env when cloud is set", () => {
