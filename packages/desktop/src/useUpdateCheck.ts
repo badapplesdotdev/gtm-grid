@@ -1,41 +1,25 @@
 /**
- * In-app auto-updater (Tauri `@tauri-apps/plugin-updater`).
+ * In-app auto-updater surface (electron-updater, driven by the Electron main).
  *
- * The app asks the updater to `check()` the configured endpoint (`latest.json`
- * on the latest GitHub release). The endpoint + the release's `.sig` files are
- * verified against the public key baked into `tauri.conf.json`, so only releases
- * signed with our private key are accepted. When a newer signed release exists,
- * {@link useUpdateCheck} returns it with an `install()` that downloads +
- * installs it and relaunches the app.
+ * The main process checks GitHub releases on launch + on an interval, auto-
+ * downloads a newer signed release, and forwards `update-downloaded` to the
+ * renderer over IPC. This hook surfaces that as an {@link AvailableUpdate}; the
+ * banner's "install" stops the engine and quits-and-installs (handled in main, so
+ * the Windows file-lock ordering is correct by construction).
  *
- * The updater is pull-based (no server push), so we re-check so a long-running
- * app surfaces the banner without a relaunch: once on launch, on a fixed
- * interval ({@link POLL_INTERVAL_MS}), and when the window regains focus
- * (throttled by {@link MIN_FOCUS_GAP_MS}). Polling stops as soon as an update is
- * found — the banner is sticky and re-checking would be wasted work.
- *
- * Tauri-only: outside Tauri (web/dev) `check()` isn't available, so the hook is a
- * no-op returning `null`. Best-effort: any failure (offline, no `latest.json`
- * yet, signature mismatch) resolves to `null` — no banner, never a crash.
+ * Desktop-only: outside the Electron app (the web/dev build) the hook is a no-op
+ * returning `null`, so the web flows are untouched.
  */
 
 import { useEffect, useState } from "react";
-import { isTauri } from "./cloud/desktop-oauth";
-
-/** How often a running app re-polls for a newer release (2 hours). */
-const POLL_INTERVAL_MS = 2 * 60 * 60 * 1000;
-/**
- * Minimum gap between focus-triggered re-checks, so rapid window switching
- * doesn't hammer the endpoint (15 minutes).
- */
-const MIN_FOCUS_GAP_MS = 15 * 60 * 1000;
+import { electron } from "./electron";
 
 export interface AvailableUpdate {
   /** The newer version available, e.g. "0.3.7". */
   readonly version: string;
-  /** Optional release notes from `latest.json`. */
+  /** Optional release notes. */
   readonly notes: string | null;
-  /** Download + install the signed update, then relaunch the app. */
+  /** Quit + install the already-downloaded update (stops the engine first). */
   readonly install: () => Promise<void>;
 }
 
@@ -45,10 +29,9 @@ const IS_DEV = Boolean((import.meta as unknown as { env?: { DEV?: boolean } }).e
 export function useUpdateCheck(): AvailableUpdate | null {
   const [update, setUpdate] = useState<AvailableUpdate | null>(null);
   useEffect(() => {
-    // DEV-only preview: outside Tauri the real updater is unavailable, so let a
-    // developer simulate an available update by setting
-    // localStorage["gtmgrid:mockUpdate"] to a version string (optionally
-    // "gtmgrid:mockUpdateNotes"). Never honored in production builds.
+    // DEV-only preview: outside the app the real updater is unavailable, so let a
+    // developer simulate an update via localStorage["gtmgrid:mockUpdate"]. Never
+    // honored in production.
     if (IS_DEV) {
       try {
         const mockVersion = localStorage.getItem("gtmgrid:mockUpdate");
@@ -58,59 +41,22 @@ export function useUpdateCheck(): AvailableUpdate | null {
             notes: localStorage.getItem("gtmgrid:mockUpdateNotes"),
             install: async () => {
               // eslint-disable-next-line no-console
-              console.info("[mock-update] would download + install + relaunch");
+              console.info("[mock-update] would stop engine + quit + install");
             },
           });
           return;
         }
-      } catch { /* ignore */ }
-    }
-    if (!isTauri()) return;
-    let cancelled = false;
-    let found = false;
-    let lastCheckAt = 0;
-    let timer: ReturnType<typeof setInterval> | null = null;
-
-    const runCheck = async () => {
-      // Stop once an update is in hand, or after teardown.
-      if (cancelled || found) return;
-      lastCheckAt = Date.now();
-      try {
-        const { check } = await import("@tauri-apps/plugin-updater");
-        const result = await check();
-        if (result === null || cancelled || found) return;
-        found = true;
-        if (timer) clearInterval(timer);
-        setUpdate({
-          version: result.version,
-          notes: result.body ?? null,
-          install: async () => {
-            await result.downloadAndInstall();
-            const { relaunch } = await import("@tauri-apps/plugin-process");
-            await relaunch();
-          },
-        });
       } catch {
-        /* no signed update available / offline / not Tauri — no banner */
+        /* ignore */
       }
-    };
+    }
 
-    // Launch check + steady interval poll while the app stays open.
-    void runCheck();
-    timer = setInterval(() => void runCheck(), POLL_INTERVAL_MS);
-
-    // Re-check when the user returns to the app (throttled), so coming back to a
-    // long-idle window picks up a release that landed in the meantime.
-    const onFocus = () => {
-      if (Date.now() - lastCheckAt >= MIN_FOCUS_GAP_MS) void runCheck();
-    };
-    window.addEventListener("focus", onFocus);
-
-    return () => {
-      cancelled = true;
-      if (timer) clearInterval(timer);
-      window.removeEventListener("focus", onFocus);
-    };
+    const api = electron();
+    if (!api) return;
+    // The main process auto-downloads; surface the banner once it's ready to apply.
+    return api.onUpdateDownloaded((version) => {
+      setUpdate({ version, notes: null, install: () => api.quitAndInstall() });
+    });
   }, []);
   return update;
 }

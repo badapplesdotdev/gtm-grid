@@ -1,15 +1,19 @@
 name: Release
 
 # Cut a release from main: apply pending changesets (semver bump + CHANGELOG),
-# tag v<version>, then build the downloadable cross-platform desktop binaries and
-# attach them to a published GitHub Release.
+# tag v<version>, then build the Electron desktop installers for every platform
+# and publish them (+ electron-updater latest*.yml) to a GitHub Release.
 #
-# Platforms (4): macOS arm64 + macOS Intel + Linux (.deb) + Windows.
-# macOS Intel is CROSS-COMPILED on the arm64 runner (macos-13 Intel runners are
-# scarce and hung a release): the Rust target is x86_64-apple-darwin and the
-# sidecar bundler downloads the x64 node + x64 better-sqlite3 (GTMGRID_SIDECAR_ARCH).
-# Windows builds natively (windows-latest); the Rust sidecar spawn + bundler are
-# node.exe-aware.
+# Platforms (4): macOS arm64 + macOS Intel + Linux (AppImage + deb) + Windows (nsis).
+# Each builds NATIVELY on its own runner (electron-builder can't cross-build NSIS or
+# Linux from macOS): macos-14 (arm64), macos-13 (x64), windows-latest, ubuntu.
+# Each runner bundles + rebuilds better-sqlite3 for Electron's ABI on its own arch.
+#
+# macOS Intel runs as a SEPARATE, NON-BLOCKING job (`build-intel`): the scarce
+# macos-13 runner pool can queue for a long time, so `publish` depends only on the
+# three fast platforms (`build`) and ships as soon as they're done. The Intel .dmg
+# uploads to the same release (`--publish always`) whenever its runner frees — even
+# if that's after the release is already public.
 
 on:
   workflow_dispatch:
@@ -17,15 +21,52 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: release
-  cancel-in-progress: false
+# NOTE: concurrency is scoped to the VERSION job only (below), NOT the whole
+# workflow. A workflow-level group serialized entire runs — and because the
+# non-blocking macOS Intel job keeps a run "in progress" until its scarce macos-13
+# runner frees, a stuck Intel job would block the NEXT release indefinitely. We only
+# need to serialize the version cut (changeset bump + tag push must not race); the
+# build jobs are keyed to their own tag and are safe to overlap.
 
 jobs:
+  # ── 0. Test gate: NOTHING is released unless lint + typecheck + the full unit
+  # suite AND the Electron E2E suite pass on main. Every other job depends on the
+  # version cut, which depends on this — so a failing test blocks the cut, the
+  # builds, and the publish.
+  gate:
+    name: Test gate (unit + Electron E2E)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Lint, typecheck & unit tests
+        run: |
+          pnpm lint
+          pnpm typecheck
+          pnpm test
+      # Electron opens a real window, so the E2E suite runs under a virtual display;
+      # global-setup builds the renderer + main and starts the mock cloud/engine.
+      - name: Install Electron system deps
+        run: pnpm --filter @gtmgrid/desktop exec playwright install-deps chromium
+      - name: Desktop E2E (Electron)
+        run: xvfb-run -a pnpm --filter @gtmgrid/desktop e2e
+
   # ── 1. Version cut: consume changesets, bump, tag, push ──────────────────
   version:
     name: Cut version
+    needs: gate
     runs-on: ubuntu-latest
+    # Serialize ONLY the version cut so two releases can't race the tag/push.
+    concurrency:
+      group: release-version
+      cancel-in-progress: false
     outputs:
       version: ${{ steps.cut.outputs.version }}
       tag: ${{ steps.cut.outputs.tag }}
@@ -35,257 +76,167 @@ jobs:
           ref: main
           fetch-depth: 0
           token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
-
       - run: pnpm install --frozen-lockfile
-
       - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
       - name: Cut release (changeset version + sync + tag)
         id: cut
         run: |
-          # Require at least one pending changeset (ignore README/config).
           pending=$(find .changeset -maxdepth 1 -name '*.md' ! -name 'README.md' | wc -l | tr -d ' ')
           if [ "$pending" = "0" ]; then
             echo "::error::No pending changesets — add one with 'pnpm changeset' before releasing."
             exit 1
           fi
-
           pnpm version-packages
-
           VERSION=$(node -p "require('./packages/desktop/package.json').version")
           TAG="v${VERSION}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-
           git add -A
           git commit -m "release: ${TAG}"
           git tag "${TAG}"
           git push origin main
           git push origin "${TAG}"
 
-  # ── 2. Build per-platform installers, upload to a draft release ──────────
+  # ── 2. Build + publish per-platform Electron installers ──────────────────
+  # The three RELIABLE platforms that `publish` waits on. macOS Intel is split into
+  # the separate non-blocking `build-intel` job below (scarce macos-13 runners).
   build:
     name: Build ${{ matrix.platform }}
     needs: version
     strategy:
       fail-fast: false
-      # Serialize the platform builds. tauri-action's "first job creates the
-      # release, the rest upload to it" model is a read-modify-write on both the
-      # release assets and `latest.json`: run concurrently, two jobs can clobber
-      # each other (e.g. v0.3.10 lost the macOS-Intel + Windows assets AND their
-      # `latest.json` entries while every job still reported success). One job at
-      # a time means each completes its fetch→merge→upload before the next starts.
-      max-parallel: 1
       matrix:
-        # `os` drives the per-platform conditionals; `runner` is the runs-on
-        # target. The two macOS targets build on the self-hosted Apple-silicon
-        # Mac mini (labels: self-hosted + macOS) so the long notarization waits
-        # don't consume GitHub-hosted macOS minutes; Linux + Windows stay on
-        # GitHub-hosted runners (the mini can't build them).
         include:
           - platform: macOS (Apple silicon)
             os: macos
-            runner: [self-hosted, macOS]
-            rust_target: aarch64-apple-darwin
-            sidecar_arch: ""
-            # No Tauri `dmg` target: its bundle_dmg.sh drives Finder via
-            # AppleScript, which times out on the self-hosted runner. We build the
-            # signed+notarized .app (+ updater) here and package the DMG with
-            # hdiutil in a later step (Finder-free).
-            args: "--bundles app,updater --target aarch64-apple-darwin"
-          - platform: macOS (Intel)
-            os: macos
-            runner: [self-hosted, macOS]
-            rust_target: x86_64-apple-darwin
-            sidecar_arch: "x64"
-            args: "--bundles app,updater --target x86_64-apple-darwin"
+            runner: macos-14
+            arch_flag: "--arm64"
           - platform: Linux
             os: linux
             runner: ubuntu-22.04
-            rust_target: x86_64-unknown-linux-gnu
-            sidecar_arch: ""
-            # `.deb` only. The AppImage bundler downloads `linuxdeploy-x86_64.AppImage`
-            # from tauri-apps/binary-releases at build time, which has been returning
-            # persistent HTTP 504s and failing the whole Linux job. The `.deb` needs no
-            # external tool download, so Linux ships reliably (re-add `,appimage` once
-            # that upstream download is stable).
-            args: "--bundles deb"
+            arch_flag: "--x64"
           - platform: Windows
             os: windows
             runner: windows-latest
-            rust_target: x86_64-pc-windows-msvc
-            sidecar_arch: ""
-            args: "--bundles nsis"
+            arch_flag: "--x64"
     runs-on: ${{ matrix.runner }}
     env:
-      # True only when the macOS signing + notarization secrets are configured.
-      # Lets the signing steps skip cleanly (producing an unsigned build) until
-      # the secrets exist, instead of failing the macOS job.
+      # True only when the macOS signing + notarization secrets are configured, so
+      # signing steps skip cleanly (unsigned build) until the secrets exist.
       HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_API_KEY_P8 != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.version.outputs.tag }}
-
-      - name: Install Linux build dependencies
-        if: matrix.os == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
-            build-essential curl wget file libxdo-dev libssl-dev libgtk-3-dev
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust_target }}
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: packages/desktop/src-tauri -> target
-          key: ${{ matrix.rust_target }}
-
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
-
       - run: pnpm install --frozen-lockfile
 
-      # The self-hosted Mac mini PERSISTS state between runs (unlike ephemeral
-      # GitHub-hosted runners), so a prior run's `signing_temp` keychain lingers
-      # and makes import-codesign-certs fail with `security ... exit code 48`
-      # (keychain already exists). It also lingers BETWEEN the two macOS jobs in
-      # one run (they share the runner). Delete it first so the import is always
-      # a clean create.
-      - name: Clean leftover signing keychain (self-hosted)
-        if: ${{ matrix.os == 'macos' && env.HAS_APPLE_SIGNING == 'true' }}
-        run: security delete-keychain signing_temp.keychain 2>/dev/null || true
-
-      # macOS code signing: import the Developer ID Application cert into a
-      # temporary keychain BEFORE the build, so BOTH our sidecar codesigning
-      # (scripts/bundle-sidecar.mjs, run inside beforeBuildCommand) and Tauri's
-      # own .app signing can find the identity. No-op on non-mac runners. The
-      # whole step is skipped when the secret is absent so unsigned dev releases
-      # still build.
-      - name: Import Apple Developer ID certificate
-        if: ${{ matrix.os == 'macos' && env.HAS_APPLE_SIGNING == 'true' }}
-        uses: apple-actions/import-codesign-certs@v3
-        with:
-          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
-          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-
-      # Notarization uses an App Store Connect API key. Write the .p8 to a file
-      # and expose its path to tauri-action via $GITHUB_ENV (APPLE_API_KEY_PATH).
+      # macOS notarization key → a file electron-builder/@electron/notarize reads.
       - name: Stage notarization API key
         if: ${{ matrix.os == 'macos' && env.HAS_APPLE_SIGNING == 'true' }}
         run: |
           mkdir -p "$RUNNER_TEMP/asc"
           printf '%s' "${{ secrets.APPLE_API_KEY_P8 }}" | base64 -D > "$RUNNER_TEMP/asc/AuthKey.p8"
-          echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/asc/AuthKey.p8" >> "$GITHUB_ENV"
+          echo "APPLE_API_KEY=$RUNNER_TEMP/asc/AuthKey.p8" >> "$GITHUB_ENV"
 
-      # tauri-action runs the Tauri build (which runs beforeBuildCommand: build
-      # the frontend + bundle the sidecar — including this runner's native node +
-      # better-sqlite3), then uploads the installers to the release for this tag.
-      # The first matrix job creates the draft release; the others upload to it.
-      - name: Build & upload Tauri bundles
-        uses: tauri-apps/tauri-action@v0
+      # Build: vite renderer → bundle sidecar (esbuild + better-sqlite3 rebuilt for
+      # this runner's Electron ABI/arch) → esbuild main → electron-builder publish.
+      - name: Build & publish Electron app
+        working-directory: packages/desktop
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Tells scripts/bundle-sidecar.mjs which cpu to bundle the node runtime +
-          # better-sqlite3 for. Empty = host arch (native); "x64" = cross-build.
-          GTMGRID_SIDECAR_ARCH: ${{ matrix.sidecar_arch }}
-          # Prod cloud endpoints baked into the desktop Vite build so the shipped
-          # app connects to the live tRPC API + PartyKit realtime + webhook host.
-          # Public URLs (not secrets); override via repo Variables if they change.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Prod cloud endpoints + PostHog key baked into BOTH the vite renderer and
+          # the electron main (plain-JS define — no cargo cache, unlike Tauri).
           VITE_API_URL: ${{ vars.VITE_API_URL || 'https://www.gtmgrid.dev' }}
           VITE_PARTY_URL: ${{ vars.VITE_PARTY_URL || 'https://gtmgrid-party.iammorganparry.partykit.dev' }}
           VITE_INNGEST_URL: ${{ vars.VITE_INNGEST_URL || 'https://www.gtmgrid.dev' }}
-          # PostHog (public client token) baked into the desktop build so the
-          # shipped app reports analytics + errors. Unset → analytics off.
           VITE_POSTHOG_KEY: ${{ vars.VITE_POSTHOG_KEY }}
           VITE_POSTHOG_HOST: ${{ vars.VITE_POSTHOG_HOST || 'https://us.i.posthog.com' }}
-          # Auto-updater signing: with the updater configured + createUpdaterArtifacts
-          # on, tauri-action signs each bundle's update archive with this key and
-          # publishes `latest.json` to the release. The matching PUBLIC key is in
-          # tauri.conf.json; the app verifies updates against it. No password set.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-          # macOS Developer ID signing + notarization. The cert is already in the
-          # keychain (import step above); APPLE_SIGNING_IDENTITY tells Tauri which
-          # identity to sign the .app with, and the App Store Connect API key trio
-          # (issuer + key id + APPLE_API_KEY_PATH, the last exported to $GITHUB_ENV
-          # by "Stage notarization API key") drives notarization. All empty/unused
-          # on non-mac runners, so Linux/Windows builds are unaffected.
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # macOS code signing (Developer ID) — electron-builder reads CSC_LINK /
+          # CSC_KEY_PASSWORD. The APPLE_API_* trio (key path staged above) drives
+          # notarization. MUST be gated on the mac runners: these are repo secrets
+          # present on EVERY runner, so handing the Apple .p12 to electron-builder on
+          # Windows makes it sign the NSIS installer with the Apple Developer ID cert
+          # — which Windows doesn't trust, so electron-updater rejects the download
+          # and Windows auto-update breaks for everyone. Keep them empty off-mac.
+          CSC_LINK: ${{ matrix.os == 'macos' && secrets.APPLE_CERTIFICATE || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.os == 'macos' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.os == 'macos' && env.HAS_APPLE_SIGNING == 'true' && 'true' || 'false' }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
-        with:
-          projectPath: packages/desktop
-          tagName: ${{ needs.version.outputs.tag }}
-          releaseName: GTM Grid ${{ needs.version.outputs.tag }}
-          releaseBody: "Download the installer for your platform from the assets below."
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }}
+        run: |
+          pnpm build
+          pnpm electron:bundle
+          pnpm electron:main
+          pnpm exec electron-builder --${{ matrix.os == 'windows' && 'win' || matrix.os == 'linux' && 'linux' || 'mac' }} ${{ matrix.arch_flag }} --publish always
 
-      # Package the DMG with hdiutil (NO Finder/AppleScript, unlike Tauri's
-      # bundle_dmg.sh which times out on the self-hosted runner). The .app built
-      # above is already signed + notarized + stapled; we wrap it in a compressed
-      # DMG with a drag-to-Applications symlink, then sign + notarize + staple the
-      # DMG itself so it opens clean on download, and upload it to the release.
-      - name: Package, notarize & upload DMG (Finder-free)
-        if: ${{ matrix.os == 'macos' && env.HAS_APPLE_SIGNING == 'true' }}
+  # ── 2b. macOS Intel — SEPARATE, NON-BLOCKING job. The scarce macos-13 runner can
+  # queue a long time, so `publish` does NOT depend on this: the release ships on the
+  # 3 fast platforms and the Intel .dmg/.zip attach whenever Intel finishes — even
+  # after the release is already public. Intel installers are uploaded MANUALLY
+  # (not `--publish always`) so they never clobber the arm64 `latest-mac.yml`
+  # auto-update feed (separate-runner mac builds each emit their own channel file;
+  # the arm64 majority's feed must win).
+  build-intel:
+    name: Build macOS (Intel)
+    needs: version
+    runs-on: macos-13
+    env:
+      HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_API_KEY_P8 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Stage notarization API key
+        if: ${{ env.HAS_APPLE_SIGNING == 'true' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/asc"
+          printf '%s' "${{ secrets.APPLE_API_KEY_P8 }}" | base64 -D > "$RUNNER_TEMP/asc/AuthKey.p8"
+          echo "APPLE_API_KEY=$RUNNER_TEMP/asc/AuthKey.p8" >> "$GITHUB_ENV"
+      - name: Build (signed + notarized) Intel app
+        working-directory: packages/desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          VITE_API_URL: ${{ vars.VITE_API_URL || 'https://www.gtmgrid.dev' }}
+          VITE_PARTY_URL: ${{ vars.VITE_PARTY_URL || 'https://gtmgrid-party.iammorganparry.partykit.dev' }}
+          VITE_INNGEST_URL: ${{ vars.VITE_INNGEST_URL || 'https://www.gtmgrid.dev' }}
+          VITE_POSTHOG_KEY: ${{ vars.VITE_POSTHOG_KEY }}
+          VITE_POSTHOG_HOST: ${{ vars.VITE_POSTHOG_HOST || 'https://us.i.posthog.com' }}
+          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ env.HAS_APPLE_SIGNING == 'true' && 'true' || 'false' }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
-          VERSION: ${{ needs.version.outputs.version }}
-          TAG: ${{ needs.version.outputs.tag }}
-          RUST_TARGET: ${{ matrix.rust_target }}
         run: |
-          set -euo pipefail
-          # The self-hosted runner's service PATH is minimal (/usr/bin:/bin); add
-          # Homebrew's bin so `gh` (at /opt/homebrew/bin/gh) is found for the
-          # upload below. hdiutil/codesign/xcrun/stapler all live in /usr/bin.
-          export PATH="/opt/homebrew/bin:$PATH"
-          bundle_dir="packages/desktop/src-tauri/target/${RUST_TARGET}/release/bundle"
-          app="$(/usr/bin/find "$bundle_dir/macos" -maxdepth 1 -name '*.app' | head -1)"
-          [ -n "$app" ] || { echo "::error::no .app found under $bundle_dir/macos"; exit 1; }
-          app_name="$(basename "$app" .app)"
-          case "$RUST_TARGET" in aarch64*) arch=aarch64 ;; *) arch=x64 ;; esac
-          dmg="$bundle_dir/dmg/${app_name}_${VERSION}_${arch}.dmg"
-          mkdir -p "$(dirname "$dmg")"
+          pnpm build
+          pnpm electron:bundle
+          pnpm electron:main
+          pnpm exec electron-builder --mac --x64 --publish never
+      - name: Attach Intel installers (no channel file — preserve the arm64 updater feed)
+        working-directory: packages/desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ needs.version.outputs.tag }}" release/*x64* --clobber
 
-          # Clean DMG layout — no Finder: the .app + an Applications symlink.
-          staging="$(mktemp -d)"
-          cp -R "$app" "$staging/"
-          ln -s /Applications "$staging/Applications"
-          rm -f "$dmg"
-          hdiutil create -volname "$app_name" -srcfolder "$staging" -fs HFS+ -format UDZO -ov "$dmg"
-          rm -rf "$staging"
-
-          # Sign + notarize + staple the DMG (free wall-clock on the mini).
-          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
-          xcrun notarytool submit "$dmg" \
-            --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" --wait
-          xcrun stapler staple "$dmg"
-
-          gh release upload "$TAG" "$dmg" --repo "$GITHUB_REPOSITORY" --clobber
-          echo "Uploaded $(basename "$dmg")"
-
-  # ── 3. Publish the release once all platforms succeed ───────────────────
+  # ── 3. Publish the release once the 3 fast platforms succeed (NOT Intel) ──
   publish:
     name: Publish release
     needs: [version, build]

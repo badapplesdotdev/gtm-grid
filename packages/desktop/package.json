@@ -1,14 +1,28 @@
 {
   "name": "@gtmgrid/desktop",
-  "version": "0.22.0",
+  "version": "1.2.0",
   "private": true,
+  "description": "GTM Grid desktop app",
+  "homepage": "https://www.gtmgrid.dev",
+  "author": {
+    "name": "GTM Grid",
+    "email": "morgan@gtmgrid.dev"
+  },
   "type": "module",
+  "main": "build/electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "tauri": "tauri",
-    "typecheck": "tsc --noEmit"
+    "electron:main": "node scripts/build-electron.mjs",
+    "electron:dev": "pnpm electron:main && cross-env GTMGRID_ELECTRON_DEV=1 electron build/electron/main.cjs",
+    "electron:bundle": "node scripts/bundle-sidecar.mjs && electron-rebuild -f -w better-sqlite3 -m sidecar",
+    "electron:pack": "pnpm build && pnpm electron:bundle && pnpm electron:main && electron-builder",
+    "electron:publish": "pnpm build && pnpm electron:bundle && pnpm electron:main && electron-builder --publish always",
+    "e2e": "playwright test",
+    "e2e:fast": "SKIP_E2E_BUILD=1 playwright test",
+    "e2e:report": "playwright show-report",
+    "typecheck": "tsc --noEmit && tsc -p electron/tsconfig.json"
   },
   "dependencies": {
     "@gtmgrid/analytics": "workspace:*",
@@ -22,11 +36,6 @@
     "@tailwindcss/vite": "^4.3.0",
     "@tanstack/react-query": "^5.62.0",
     "@tanstack/react-virtual": "^3.14.2",
-    "@tauri-apps/api": "^2.1.1",
-    "@tauri-apps/plugin-deep-link": "^2.2.0",
-    "@tauri-apps/plugin-opener": "^2.2.6",
-    "@tauri-apps/plugin-process": "^2",
-    "@tauri-apps/plugin-updater": "^2",
     "@trpc/client": "^11.0.0",
     "@trpc/react-query": "^11.0.0",
     "better-auth": "^1.6.14",
@@ -35,6 +44,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "effect": "^3.21.3",
+    "electron-updater": "^6.3.9",
     "posthog-js": "^1.386.6",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -45,7 +55,8 @@
     "vaul": "^1.1.2"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.11.2",
+    "@electron/rebuild": "^3.7.1",
+    "@playwright/test": "^1.61.1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
@@ -54,8 +65,12 @@
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
+    "cross-env": "^7.0.3",
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8",
     "esbuild": "^0.25.12",
     "jsdom": "^29.1.1",
+    "playwright": "^1.61.1",
     "typescript": "^5.7.2",
     "vite": "^6.0.7"
   }

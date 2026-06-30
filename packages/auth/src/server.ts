@@ -35,6 +35,7 @@ import {
 import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { bearer, emailOTP } from "better-auth/plugins";
+import { captureUserSignedUp } from "./analytics.js";
 import { generateOtp, OTP_EXPIRY_SECONDS, OTP_LENGTH } from "./otp.js";
 import { githubEnabled, googleEnabled } from "./providers.js";
 
@@ -53,10 +54,13 @@ export const DESKTOP_DEEP_LINK_PREFIX = "gtmgrid://";
  * apps/web/middleware.ts and Bearer-token sessions — WKWebview blocks 3p cookies).
  */
 export const DESKTOP_WEB_ORIGINS = [
+  "app://gtmgrid", // packaged Electron desktop (custom app:// renderer scheme)
+  // Legacy Tauri webview origins — kept so already-installed Tauri builds keep
+  // working through the Electron cut-over (remove once Tauri installs age out).
   "tauri://localhost",
   "http://tauri.localhost",
   "https://tauri.localhost",
-  "http://localhost:5173",
+  "http://localhost:5173", // desktop dev (vite)
 ];
 
 /**
@@ -153,6 +157,25 @@ export function createAuth(db: Db): ReturnType<typeof betterAuth> {
     },
     socialProviders: socialProviders(),
     trustedOrigins: trustedOrigins(),
+    // Record every new account as an identified PostHog person, server-side.
+    // `user.create.after` fires exactly once per new user (password OR OAuth),
+    // and the `user.id` here is the same distinct id the desktop later identifies
+    // with — so signups are captured with name/email even if the client identify
+    // never runs. Awaited so the serverless function doesn't suspend before the
+    // event flushes; the helper guards itself so this can't break sign-up.
+    databaseHooks: {
+      user: {
+        create: {
+          after: async (user) => {
+            await captureUserSignedUp({
+              id: user.id,
+              email: user.email,
+              name: user.name,
+            });
+          },
+        },
+      },
+    },
     // `bearer` lets the desktop carry its session via `Authorization: Bearer
     // <token>` instead of a cookie (WKWebview blocks third-party cookies). The
     // client reads the `set-auth-token` response header on sign-in and replays it.

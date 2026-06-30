@@ -11,6 +11,7 @@ setObservabilitySource("desktop-sidecar");
 
 export {
   captureException,
+  captureServerEvent,
   flushObservability,
   installProcessHandlers,
   log,

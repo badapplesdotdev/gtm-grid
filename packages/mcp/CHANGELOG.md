@@ -1,5 +1,160 @@
 # @gtmgrid/mcp
 
+## 1.2.0
+
+### Patch Changes
+
+- @gtmgrid/engine@1.2.0
+- @gtmgrid/observability@1.2.0
+
+## 1.1.1
+
+### Patch Changes
+
+- @gtmgrid/engine@1.1.1
+- @gtmgrid/observability@1.1.1
+
+## 1.1.0
+
+### Patch Changes
+
+- @gtmgrid/engine@1.1.0
+- @gtmgrid/observability@1.1.0
+
+## 1.0.6
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.6
+- @gtmgrid/observability@1.0.6
+
+## 1.0.5
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.5
+- @gtmgrid/observability@1.0.5
+
+## 1.0.4
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.4
+- @gtmgrid/observability@1.0.4
+
+## 1.0.3
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.3
+- @gtmgrid/observability@1.0.3
+
+## 1.0.2
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.2
+- @gtmgrid/observability@1.0.2
+
+## 1.0.1
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.1
+- @gtmgrid/observability@1.0.1
+
+## 1.0.0
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.0
+- @gtmgrid/observability@1.0.0
+
+## 0.22.12
+
+### Patch Changes
+
+- @gtmgrid/engine@0.22.12
+- @gtmgrid/observability@0.22.12
+
+## 0.22.11
+
+### Patch Changes
+
+- @gtmgrid/engine@0.22.11
+- @gtmgrid/observability@0.22.11
+
+## 0.22.10
+
+### Patch Changes
+
+- @gtmgrid/engine@0.22.10
+- @gtmgrid/observability@0.22.10
+
+## 0.22.9
+
+### Patch Changes
+
+- @gtmgrid/engine@0.22.9
+- @gtmgrid/observability@0.22.9
+
+## 0.22.8
+
+### Patch Changes
+
+- @gtmgrid/engine@0.22.8
+- @gtmgrid/observability@0.22.8
+
+## 0.22.7
+
+### Patch Changes
+
+- @gtmgrid/engine@0.22.7
+- @gtmgrid/observability@0.22.7
+
+## 0.22.6
+
+### Patch Changes
+
+- @gtmgrid/engine@0.22.6
+- @gtmgrid/observability@0.22.6
+
+## 0.22.5
+
+### Patch Changes
+
+- Updated dependencies [8ddbed1]
+  - @gtmgrid/observability@0.22.5
+  - @gtmgrid/engine@0.22.5
+
+## 0.22.4
+
+### Patch Changes
+
+- @gtmgrid/engine@0.22.4
+- @gtmgrid/observability@0.22.4
+
+## 0.22.3
+
+### Patch Changes
+
+- @gtmgrid/engine@0.22.3
+- @gtmgrid/observability@0.22.3
+
+## 0.22.2
+
+### Patch Changes
+
+- @gtmgrid/engine@0.22.2
+- @gtmgrid/observability@0.22.2
+
+## 0.22.1
+
+### Patch Changes
+
+- @gtmgrid/engine@0.22.1
+- @gtmgrid/observability@0.22.1
+
 ## 0.22.0
 
 ### Patch Changes

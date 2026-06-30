@@ -1,0 +1,32 @@
+# Local Postgres for running GTM Grid on your machine.
+#
+#   docker compose up -d
+#
+# Brings up just the database GTM Grid needs (the single source of truth for
+# tables/columns/rows/cells) on localhost:5432. Everything else — the backend,
+# the engine sidecar, and the desktop UI — runs from source with `pnpm`. See the
+# "Run locally" section of the README for the full three-step flow.
+#
+# Data persists in the `gtmgrid_pgdata` volume across restarts. To wipe it:
+#   docker compose down -v
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: gtmgrid-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - gtmgrid_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  gtmgrid_pgdata:
