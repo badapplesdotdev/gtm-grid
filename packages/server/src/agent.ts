@@ -140,6 +140,9 @@ export function contextPreamble(ctx?: AgentContext, mode?: string, isCloud?: boo
 
 You are operating **GTM Grid**, a Clay-style ${isCloud ? "cloud" : "local"} spreadsheet where every column is a function. ${where} The user runs you to build GTM pipelines: source prospects, enrich them, score/personalize, push to outreach tools.
 
+## Ground rule — use ONLY the GTM Grid tools
+Source, enrich, and write data ONLY through the GTM Grid tools (\`list_tables\`, \`get_table\`, \`add_rows\`, \`add_column\`, \`run_column\`, \`run_function\`, the connectors). You do **not** need a table open to start — call \`list_tables\` to see the project's tables or \`create_table\` to make one, then operate by id. **NEVER** shell out (Bash), read/write local files, or invoke an external CLI or skill (e.g. \`deepline\`, \`npx\`) to find or enrich data — there is no useful local filesystem, those bypass the grid, and their output never reaches the user's tables. If the GTM Grid tools are genuinely unavailable to you this turn, STOP and tell the user to sign in and open their cloud project — do not improvise with other tools.
+
 ## Core model
 - **Tables** = sheets. **Rows** = records. **Columns** = either MANUAL (user types values) or FUNCTION (runs an enrichment / AI / HTTP call per row).
 - A function column is wired to one connector method: \`provider.method\` (e.g. \`trigify.enrichProfile\`, \`leadmagic.emailFinder\`, \`ai.generate\`, \`formatting.normalizeDomain\`).
@@ -501,6 +504,23 @@ function agentSpawnEnv(binPath: string): NodeJS.ProcessEnv {
   return { ...process.env, [PATH_KEY]: parts.join(delimiter) };
 }
 
+// ── Agent isolation (intentionally OFF) ────────────────────────────────────────
+// We previously isolated the agent from the user's personal Claude/Codex config
+// (claude `--setting-sources project --disable-slash-commands`, codex
+// `--ignore-user-config`) to stop a `deepline-gtm` skill from being used instead of
+// gtmgrid's tools. But that treated a SYMPTOM. The ROOT cause was that the agent had
+// NO gtmgrid tools when no table was open — the cloud context required an active
+// tableId, so the MCP failed to start and the agent improvised with whatever skill
+// was lying around. Now that tableId is optional (the MCP connects on sign-in +
+// cloud project alone — see packages/mcp/cloud-context.ts), the gtmgrid tools are
+// ALWAYS available, so the agent uses THEM. We therefore RE-ENABLE the user's +
+// built-in skills — notably the native `/goal`, whose Stop-hook loop runs a goal to
+// completion (which `--disable-slash-commands` had broken). The "use ONLY GTM Grid
+// tools" ground rule in the preamble keeps it on the grid. Re-add a flag here only
+// if the deepline fallback ever returns despite tools being available.
+const CLAUDE_ISOLATION_ARGS: string[] = [];
+const CODEX_ISOLATION_ARGS: string[] = [];
+
 /** Spawn an agent CLI cross-platform. A Windows `.cmd`/`.bat` shim cannot be
  *  launched without a shell (EINVAL), so route those through one; native `.exe`
  *  / POSIX binaries spawn directly. `windowsHide` suppresses a console flash. */
@@ -796,15 +816,18 @@ export interface AgentCloud {
   readonly token: string;
   readonly workspaceId: string;
   readonly projectId: string;
-  readonly tableId: string;
+  /** The active table — OPTIONAL: the agent works with no table loaded. */
+  readonly tableId?: string;
 }
 
 /**
  * Validate the `cloud` block of an `/api/agent/chat` body into an
  * {@link AgentCloud}, or `undefined` when it is absent/incomplete. A cloud
- * context requires EVERY field (apiUrl/token/workspaceId/projectId/tableId) to
- * be a non-empty string; any missing/blank field falls back to local mode (so a
- * half-populated block never half-activates cloud routing). Trims each value.
+ * context requires apiUrl/token/workspaceId/projectId to be non-empty strings —
+ * the user must be signed in with a cloud project — but `tableId` is OPTIONAL, so
+ * the agent has its gtmgrid tools even with NO table loaded (it can list_tables /
+ * create_table / operate by id). Any missing required field falls back to local
+ * mode (so a half-populated block never half-activates cloud routing). Trims each value.
  */
 export function parseAgentCloud(raw: unknown): AgentCloud | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
@@ -820,14 +843,8 @@ export function parseAgentCloud(raw: unknown): AgentCloud | undefined {
   const token = read("token");
   const workspaceId = read("workspaceId");
   const projectId = read("projectId");
-  const tableId = read("tableId");
-  if (
-    apiUrl === undefined ||
-    token === undefined ||
-    workspaceId === undefined ||
-    projectId === undefined ||
-    tableId === undefined
-  ) {
+  const tableId = read("tableId"); // optional — may be absent when no table is open
+  if (apiUrl === undefined || token === undefined || workspaceId === undefined || projectId === undefined) {
     return undefined;
   }
   return { apiUrl, token, workspaceId, projectId, tableId };
@@ -846,6 +863,30 @@ export function parseAgentCloud(raw: unknown): AgentCloud | undefined {
 export interface AgentApproval {
   readonly tool: string;
   readonly argsHash: string;
+}
+
+/**
+ * The essential Windows OS env vars forwarded to the spawned MCP server. The agent
+ * CLI (claude) hands the MCP an EXPLICIT env map; if it does NOT merge the OS
+ * defaults, the Electron-as-Node MCP child can't even start on Windows — without
+ * `SystemRoot`/`PATH` the process fails to load its DLLs before `mcp.mjs` ever runs
+ * (the telemetry shows the MCP process never starts there, while macOS is fine).
+ * No-op off Windows; never overrides our `GTMGRID_*` keys (no collisions).
+ */
+function windowsBaseEnv(): Record<string, string> {
+  if (process.platform !== "win32") return {};
+  const keys = [
+    "SystemRoot", "SYSTEMROOT", "windir", "PATH", "Path", "PATHEXT", "TEMP", "TMP",
+    "SystemDrive", "HOMEDRIVE", "HOMEPATH", "USERPROFILE", "USERNAME", "APPDATA",
+    "LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "COMSPEC",
+    "PROCESSOR_ARCHITECTURE", "NUMBER_OF_PROCESSORS",
+  ];
+  const out: Record<string, string> = {};
+  for (const k of keys) {
+    const v = process.env[k];
+    if (v) out[k] = v;
+  }
+  return out;
 }
 
 export function mcpEnv(
@@ -879,8 +920,9 @@ export function mcpEnv(
   // It is set ONLY here (the MCP's own spawn env), never on the engine — the engine
   // is an Electron utilityProcess that crashes if ELECTRON_RUN_AS_NODE is present.
   if (process.env.GTMGRID_MCP_ELECTRON_NODE) obs.ELECTRON_RUN_AS_NODE = "1";
-  if (!cloud) return { GTMGRID_PROJECT: project, GTMGRID_PORT: port, ...obs, ...perm };
+  if (!cloud) return { ...windowsBaseEnv(), GTMGRID_PROJECT: project, GTMGRID_PORT: port, ...obs, ...perm };
   return {
+    ...windowsBaseEnv(),
     GTMGRID_PROJECT: project,
     GTMGRID_PORT: port,
     GTMGRID_MODE: "cloud",
@@ -888,7 +930,8 @@ export function mcpEnv(
     GTMGRID_TOKEN: cloud.token,
     GTMGRID_WORKSPACE_ID: cloud.workspaceId,
     GTMGRID_CLOUD_PROJECT: cloud.projectId,
-    GTMGRID_CLOUD_TABLE: cloud.tableId,
+    // Only when a table is actually open — the MCP treats it as optional.
+    ...(cloud.tableId ? { GTMGRID_CLOUD_TABLE: cloud.tableId } : {}),
     ...obs,
     ...perm,
   };
@@ -923,7 +966,7 @@ export function mcpConfig(
  *  null for any other event. Pure; exported for tests. */
 export function parseClaudeInit(
   e: unknown,
-): { mcpConnected: boolean; gtmgridTools: number } | null {
+): { mcpConnected: boolean; gtmgridTools: number; mcpServersRaw: string } | null {
   if (!e || typeof e !== "object") return null;
   const ev = e as { type?: string; subtype?: string; mcp_servers?: unknown; tools?: unknown };
   if (ev.type !== "system" || ev.subtype !== "init") return null;
@@ -935,7 +978,15 @@ export function parseClaudeInit(
   const gtmgridTools = tools.filter(
     (t) => typeof t === "string" && t.startsWith("mcp__gtmgrid__"),
   ).length;
-  return { mcpConnected: gtm?.status === "connected", gtmgridTools };
+  // Capture EXACTLY what Claude reported about the MCP servers (status, and any
+  // error/reason fields it includes) so a remote "tools not connected" turn — esp.
+  // on Windows, where the MCP process never even starts — tells us WHY, not just
+  // that it failed. Capped to keep the event small.
+  return {
+    mcpConnected: gtm?.status === "connected",
+    gtmgridTools,
+    mcpServersRaw: JSON.stringify(servers).slice(0, 800),
+  };
 }
 
 /** Per-turn observability accumulator (one per agent stream). */
@@ -944,6 +995,8 @@ interface AgentTurnStats {
   toolCalls: number;
   mcpConnected?: boolean;
   gtmgridTools?: number;
+  /** Raw `mcp_servers` from Claude's init — the "why didn't it connect" detail. */
+  mcpServersRaw?: string;
 }
 
 /**
@@ -960,8 +1013,14 @@ function captureAgentTurn(
   stats: AgentTurnStats,
   exitCode: number | null,
   cwd: string,
+  stderrTail?: string,
 ): void {
   try {
+    // When the MCP DIDN'T connect, attach the why: Claude's raw mcp_servers status
+    // + the agent CLI's stderr tail (where a spawn failure — ENOENT, the spaced
+    // 'C:\Program Files\GTM Grid' path, an ELECTRON_RUN_AS_NODE issue — surfaces).
+    // Only on failure, to keep healthy turns small and avoid shipping stderr noise.
+    const mcpFailed = stats.mcpConnected === false;
     captureServerEvent("agent_turn_completed", {
       provider,
       model: opts.model ?? null,
@@ -978,6 +1037,8 @@ function captureAgentTurn(
       cwd,
       mcp_connected: stats.mcpConnected ?? null,
       gtmgrid_tools: stats.gtmgridTools ?? null,
+      mcp_servers_raw: mcpFailed ? (stats.mcpServersRaw ?? null) : null,
+      mcp_stderr_tail: mcpFailed && stderrTail ? stderrTail.slice(-1200) : null,
       tool_calls: stats.toolCalls,
       exit_code: exitCode,
       is_error: exitCode !== 0 && exitCode !== null,
@@ -1007,6 +1068,9 @@ export function streamClaude(
     // of reaching for an external MCP (auth walls). The gtmgrid server's env
     // carries cloud context (TRI-3296) when in cloud mode.
     "--strict-mcp-config",
+    // Isolate from the user's personal Claude config (skills/plugins/hooks/CLAUDE.md)
+    // while keeping their login — see CLAUDE_ISOLATION_ARGS.
+    ...CLAUDE_ISOLATION_ARGS,
     "--allowedTools",
     ...GTM_TOOLS.map((t) => `mcp__gtmgrid__${t}`),
   ];
@@ -1079,6 +1143,7 @@ export function streamClaude(
       if (init) {
         stats.mcpConnected = init.mcpConnected;
         stats.gtmgridTools = init.gtmgridTools;
+        stats.mcpServersRaw = init.mcpServersRaw;
       }
 
       if (e.type === "assistant") {
@@ -1142,7 +1207,7 @@ export function streamClaude(
     sse.end();
   });
   child.on("close", (code) => {
-    captureAgentTurn("claude", opts, stats, code, opts.repoRoot);
+    captureAgentTurn("claude", opts, stats, code, opts.repoRoot, stderr);
     if (code !== 0 && code !== null) {
       sse.write({ type: "error", message: stderr.slice(-400) || `claude exited ${code}` });
     }
@@ -1202,6 +1267,30 @@ export function codexSandboxFlags(_mode?: string): string[] {
   return ["--dangerously-bypass-approvals-and-sandbox"];
 }
 
+/**
+ * The user's default `model` and `model_reasoning_effort` from
+ * `~/.codex/config.toml` (top-level keys only).
+ *
+ * `streamCodex` passes `--ignore-user-config` to stop Codex auto-loading the
+ * user's other MCP servers (see there) — but that same flag also drops these
+ * model defaults, so we read and re-inject them. Only the region BEFORE the first
+ * `[table]` header is scanned, since `model` also appears under `[profiles.*]` /
+ * `[model_providers.*]` and must not be picked up. Returns `{}` when the file is
+ * absent/unreadable. Custom `[model_providers]` are NOT restored — those rare
+ * setups aren't supported by the embedded agent.
+ */
+export function codexUserModelDefaults(
+  home = process.env.CODEX_HOME ?? join(homedir(), ".codex"),
+): { model?: string; reasoningEffort?: string } {
+  try {
+    const top = readFileSync(join(home, "config.toml"), "utf8").split(/^\s*\[/m)[0];
+    const grab = (k: string) => top.match(new RegExp(`^\\s*${k}\\s*=\\s*"([^"]*)"`, "m"))?.[1]?.trim() || undefined;
+    return { model: grab("model"), reasoningEffort: grab("model_reasoning_effort") };
+  } catch {
+    return {};
+  }
+}
+
 export function streamCodex(
   res: ServerResponse,
   opts: { message: string; project: string; repoRoot: string; threadId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; mode?: string; cloud?: AgentCloud; providerEnv?: Record<string, string>; approval?: AgentApproval },
@@ -1210,17 +1299,36 @@ export function streamCodex(
   const { command: mcpCommand, args: mcpArgs } = mcpLaunch(opts.repoRoot);
   const preamble = contextPreamble(opts.context, opts.mode, !!opts.cloud);
   const message = preamble ? `${preamble}\n\n${opts.message}` : opts.message;
+  // Isolate Codex to ONLY the gtmgrid MCP server. `-c mcp_servers={…}` on its own
+  // is NOT enough: Codex deep-merges `-c` overrides into the loaded config, so the
+  // user's own servers stay live — both the `[mcp_servers.*]` from config.toml
+  // (Trigify/exa/…) AND the bundled plugin servers (linear/computer-use). Codex
+  // then connects to all of them at exec startup, and any OAuth-walled HTTP server
+  // makes rmcp's transport worker quit fatally ("Transport channel closed, when
+  // AuthRequired"), taking the whole turn down. Codex has no --strict-mcp-config
+  // flag; --ignore-user-config is the only switch that drops BOTH the config.toml
+  // servers and the plugin servers — we then re-add only gtmgrid. (The Claude
+  // bridge gets the same isolation from --strict-mcp-config.)
+  //
+  // --ignore-user-config also drops the user's model + reasoning-effort defaults
+  // (auth still rides CODEX_HOME, and `exec resume` still accepts the flag), so we
+  // re-inject them from config.toml. Without this the panel's "Default" model picks
+  // nothing and Codex falls back to its built-in gpt-5.x-codex, which 400s on
+  // ChatGPT-auth accounts. A panel-picked model (opts.model) still wins.
+  const userDefaults = codexUserModelDefaults();
+  const resolvedModel = opts.model || userDefaults.model;
   const flags = [
     "--json",
     "--skip-git-repo-check",
+    // Isolate from the user's personal Codex config (~/.codex/config.toml: global
+    // instructions + MCP servers) while keeping their login — see CODEX_ISOLATION_ARGS.
+    ...CODEX_ISOLATION_ARGS,
     ...codexSandboxFlags(opts.mode),
-    // Replace Codex's whole MCP table with ONLY gtmgrid, so it ignores the user's
-    // other registered servers (Trigify/exa/etc.) and drives gtmgrid. The gtmgrid
-    // env (incl. cloud context in cloud mode) is rendered as TOML with every value
-    // safely quoted — see `codexEnvToml`.
+    "--ignore-user-config",
     "-c",
     `mcp_servers={ gtmgrid = { command = ${tomlString(mcpCommand)}, args = ${tomlStringArray(mcpArgs)}, env = ${codexEnvToml(mcpEnv(opts.project, opts.cloud, opts.mode, opts.approval))} } }`,
-    ...(opts.model ? ["-m", opts.model] : []),
+    ...(userDefaults.reasoningEffort ? ["-c", `model_reasoning_effort="${userDefaults.reasoningEffort}"`] : []),
+    ...(resolvedModel ? ["-m", resolvedModel] : []),
   ];
   // Same binding as Claude: an explicit threadId (History pick) wins, else resume
   // the latest native Codex thread for this project unless a New chat was asked for.
@@ -1345,6 +1453,8 @@ function runClaudeOneShot(bin: string, prompt: string, system: string): Promise<
       "--strict-mcp-config",
       "--mcp-config",
       '{"mcpServers":{}}',
+      // Isolate from the user's personal config (skills/plugins/hooks) here too.
+      ...CLAUDE_ISOLATION_ARGS,
     ];
     // shell:true for a Windows .cmd/.bat shim (EINVAL otherwise); native .exe runs direct.
     execFile(bin, args, { env: agentSpawnEnv(bin), timeout: 90_000, maxBuffer: 8 << 20, shell: needsShell(bin), windowsHide: true }, (err, stdout, stderr) => {
@@ -1371,7 +1481,7 @@ function runClaudeOneShot(bin: string, prompt: string, system: string): Promise<
 function runCodexOneShot(bin: string, prompt: string, system: string): Promise<{ text: string } | { error: string }> {
   return new Promise((resolve) => {
     const message = system ? `${system}\n\n${prompt}` : prompt;
-    const child = spawnAgent(bin, ["exec", "--json", "--skip-git-repo-check", message], { env: agentSpawnEnv(bin) });
+    const child = spawnAgent(bin, ["exec", "--json", "--skip-git-repo-check", ...CODEX_ISOLATION_ARGS, message], { env: agentSpawnEnv(bin) });
     child.stdin?.end();
     let buf = "";
     let last = "";

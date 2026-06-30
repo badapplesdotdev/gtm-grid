@@ -64,7 +64,13 @@ function createWindow(): void {
       win?.hide();
     }
   });
-  if (DEV) void win.loadURL(DEV_URL);
+  // GTMGRID_RENDERER_URL lets a harness (e.g. the Playwright E2E suite) point the
+  // window at a renderer it controls — a built `dist/` served locally with a
+  // mock cloud — instead of the dev server or the packaged app:// bundle. Unset
+  // in normal dev/prod runs, so the existing behaviour is unchanged.
+  const rendererUrl = process.env.GTMGRID_RENDERER_URL;
+  if (rendererUrl) void win.loadURL(rendererUrl);
+  else if (DEV) void win.loadURL(DEV_URL);
   else void win.loadURL(`${APP_ORIGIN}/index.html`);
 }
 

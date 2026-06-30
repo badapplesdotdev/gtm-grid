@@ -72,6 +72,56 @@ describe("buildNotifications — per-state items", () => {
     const out = buildNotifications(inputs({ trialDaysLeft: 3 }));
     expect(out.map((n) => n.kind)).not.toContain("update");
   });
+
+  it("shows the welcome item and suppresses the countdown during the welcome window", () => {
+    const out = buildNotifications(inputs({ trialDaysLeft: 7, trialStarted: true }));
+    expect(out.map((n) => n.kind)).toContain("trial.started");
+    expect(out.map((n) => n.kind)).not.toContain("trial");
+    const started = out.find((n) => n.kind === "trial.started")!;
+    expect(started.severity).toBe("success");
+    expect(started.dismissible).toBe(true);
+  });
+
+  it("shows the expired item and suppresses countdown/welcome once expired", () => {
+    const out = buildNotifications(
+      inputs({ trialDaysLeft: 0, trialStarted: true, trialExpired: true }),
+    );
+    expect(out.map((n) => n.kind)).toEqual(["trial.expired"]);
+    const expired = out[0];
+    expect(expired.dismissible).toBe(true);
+    expect(expired.actions.map((a) => a.id)).toEqual(["trial.upgrade"]);
+  });
+
+  it("fires the low cloud-actions warning at/over the threshold only", () => {
+    expect(
+      buildNotifications(inputs({ cloudActions: { used: 79, limit: 100 } })).map(
+        (n) => n.kind,
+      ),
+    ).not.toContain("cloudActionsLow");
+
+    const low = buildNotifications(inputs({ cloudActions: { used: 80, limit: 100 } }));
+    const item = low.find((n) => n.kind === "cloudActionsLow")!;
+    expect(item.body).toContain("80%");
+    expect(item.severity).toBe("warning");
+
+    const out = buildNotifications(inputs({ cloudActions: { used: 100, limit: 100 } }))
+      .find((n) => n.kind === "cloudActionsLow")!;
+    expect(out.title).toContain("out of cloud actions");
+  });
+
+  it("treats an unlimited (null) limit as no warning", () => {
+    const out = buildNotifications(
+      inputs({ cloudActions: { used: 9999, limit: null } }),
+    );
+    expect(out.map((n) => n.kind)).not.toContain("cloudActionsLow");
+  });
+
+  it("orders the most urgent kind first", () => {
+    const out = buildNotifications(
+      inputs({ trialExpired: true, cloudActions: { used: 90, limit: 100 } }),
+    );
+    expect(out[0].kind).toBe("trial.expired");
+  });
 });
 
 describe("unreadCount — active + unseen", () => {

@@ -11,7 +11,16 @@
  * reads the workspace's cached `currentPlanId`, which `BillingService.syncPlan`
  * keeps in step with Autumn (the desktop re-syncs on app open / window focus /
  * billing open). `currentPlanId` is only ever a PAID plan id (set on trial start
- * + by `syncPlan`) or `null` for Free — so "has a plan id" == "has cloud access".
+ * + by `syncPlan`) or `null` for Free.
+ *
+ * TIME-BASED BACKSTOP: the cached `currentPlanId` lags reality — a trial that has
+ * lapsed *by date* keeps `currentPlanId = "team"` until Autumn's webhook fires or
+ * the desktop re-syncs, and in that window credited actions would still run. So the
+ * gate ALSO fails the instant `trialEndsAt` is in the past, regardless of the
+ * cached plan id. A converted paid plan has `trialEndsAt = null` (cleared by
+ * `syncPlan`), so it is unaffected; a lapsed trial keeps its (now-past)
+ * `trialEndsAt` (see `BillingService` lapse branch) so this check closes
+ * immediately. Net: "has a non-null plan id AND not past a trial end" == access.
  *
  * `requireCloudAccess` is the single seam every cloud-data procedure / service
  * calls (alongside `requireMember`). Membership/billing/workspace-management
@@ -19,11 +28,12 @@
  * and upgrade.
  */
 
-import { Data, Effect, Option } from "effect";
+import { Clock, Data, Effect, Option } from "effect";
 import {
   WorkspaceRepo,
   type WorkspaceRepoError,
 } from "../repositories/workspace-repo.js";
+import { isSelfHost } from "../self-host.js";
 
 /**
  * Raised when a workspace without an active cloud plan attempts a cloud-tier
@@ -42,20 +52,37 @@ export class EntitlementService extends Effect.Service<EntitlementService>()(
       const repo = yield* WorkspaceRepo;
 
       /**
-       * Assert the workspace currently has cloud access (a paid plan or active
-       * trial). Fails with {@link PlanRequiredError} when it is on Free (no
-       * `currentPlanId`) so the caller rejects the cloud operation.
+       * Assert the workspace currently has cloud access (a paid plan or an
+       * UNEXPIRED trial). Fails with {@link PlanRequiredError} when it is on Free
+       * (no `currentPlanId`) OR when its trial has lapsed by date
+       * (`trialEndsAt <= now`), so the caller rejects the cloud operation — even
+       * before Autumn has synced the lapse into `currentPlanId`.
        */
       const requireCloudAccess = (
         workspaceId: string,
       ): Effect.Effect<void, PlanRequiredError | WorkspaceRepoError> =>
         Effect.gen(function* () {
+          // SELF-HOST: the paid cloud-access gate does not apply. A self-hosted
+          // instance has no billing backend, so every workspace is Free (null
+          // plan) yet must retain full cloud-tier access indefinitely. Gated by
+          // `GTMGRID_SELF_HOST=1`; the hosted product leaves it unset and the
+          // entitlement check below applies as normal. See SELF-HOST.md.
+          if (isSelfHost()) return;
           const ws = yield* repo.findById(workspaceId);
           const planId = Option.match(ws, {
             onNone: () => null,
             onSome: (w) => w.currentPlanId ?? null,
           });
-          if (planId !== null) return;
+          const trialEndsAt = Option.match(ws, {
+            onNone: () => null,
+            onSome: (w) => w.trialEndsAt ?? null,
+          });
+          // A lapsed trial blocks immediately, regardless of the cached plan id:
+          // the Autumn webhook/sync that flips `currentPlanId` to null lags the
+          // real trial end, and credited actions must stop the moment it passes.
+          const now = yield* Clock.currentTimeMillis;
+          const trialLapsed = trialEndsAt !== null && trialEndsAt <= now;
+          if (planId !== null && !trialLapsed) return;
           return yield* Effect.fail(
             new PlanRequiredError({
               message:

@@ -77,6 +77,7 @@ import {
   type TableRepoError,
 } from "../repositories/table-repo.js";
 import type { WorkspaceRepoError } from "../repositories/workspace-repo.js";
+import { isSelfHost } from "../self-host.js";
 import type { GridChangeEvent, GridDedupe } from "../realtime/events.js";
 import { WORKSPACE_ROOM_TABLE_ID } from "../realtime/events.js";
 import { EntitlementService, type PlanRequiredError } from "./entitlement-service.js";
@@ -724,8 +725,12 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         yield* requireCloudMember(table.workspaceId);
 
         // Atomic quota pre-check (free tier has a hard cap; unlimited passes).
-        const quota = yield* meter.readQuota(table.workspaceId);
-        if (quota._tag === "Some") {
+        // Self-host is never metered (no billing backend), so skip it entirely —
+        // a stray `cloud_actions_limit` value must not cap a self-hoster.
+        const quota = isSelfHost()
+          ? undefined
+          : yield* meter.readQuota(table.workspaceId);
+        if (quota !== undefined && quota._tag === "Some") {
           const limit = quota.value.cloudActionsLimit;
           if (typeof limit === "number") {
             const used = quota.value.cloudActionsUsed ?? 0;

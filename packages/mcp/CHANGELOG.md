@@ -1,5 +1,61 @@
 # @gtmgrid/mcp
 
+## 1.2.0
+
+### Patch Changes
+
+- @gtmgrid/engine@1.2.0
+- @gtmgrid/observability@1.2.0
+
+## 1.1.1
+
+### Patch Changes
+
+- @gtmgrid/engine@1.1.1
+- @gtmgrid/observability@1.1.1
+
+## 1.1.0
+
+### Patch Changes
+
+- @gtmgrid/engine@1.1.0
+- @gtmgrid/observability@1.1.0
+
+## 1.0.6
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.6
+- @gtmgrid/observability@1.0.6
+
+## 1.0.5
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.5
+- @gtmgrid/observability@1.0.5
+
+## 1.0.4
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.4
+- @gtmgrid/observability@1.0.4
+
+## 1.0.3
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.3
+- @gtmgrid/observability@1.0.3
+
+## 1.0.2
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.2
+- @gtmgrid/observability@1.0.2
+
 ## 1.0.1
 
 ### Patch Changes

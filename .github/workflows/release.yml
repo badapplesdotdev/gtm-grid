@@ -21,15 +21,52 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: release
-  cancel-in-progress: false
+# NOTE: concurrency is scoped to the VERSION job only (below), NOT the whole
+# workflow. A workflow-level group serialized entire runs — and because the
+# non-blocking macOS Intel job keeps a run "in progress" until its scarce macos-13
+# runner frees, a stuck Intel job would block the NEXT release indefinitely. We only
+# need to serialize the version cut (changeset bump + tag push must not race); the
+# build jobs are keyed to their own tag and are safe to overlap.
 
 jobs:
+  # ── 0. Test gate: NOTHING is released unless lint + typecheck + the full unit
+  # suite AND the Electron E2E suite pass on main. Every other job depends on the
+  # version cut, which depends on this — so a failing test blocks the cut, the
+  # builds, and the publish.
+  gate:
+    name: Test gate (unit + Electron E2E)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Lint, typecheck & unit tests
+        run: |
+          pnpm lint
+          pnpm typecheck
+          pnpm test
+      # Electron opens a real window, so the E2E suite runs under a virtual display;
+      # global-setup builds the renderer + main and starts the mock cloud/engine.
+      - name: Install Electron system deps
+        run: pnpm --filter @gtmgrid/desktop exec playwright install-deps chromium
+      - name: Desktop E2E (Electron)
+        run: xvfb-run -a pnpm --filter @gtmgrid/desktop e2e
+
   # ── 1. Version cut: consume changesets, bump, tag, push ──────────────────
   version:
     name: Cut version
+    needs: gate
     runs-on: ubuntu-latest
+    # Serialize ONLY the version cut so two releases can't race the tag/push.
+    concurrency:
+      group: release-version
+      cancel-in-progress: false
     outputs:
       version: ${{ steps.cut.outputs.version }}
       tag: ${{ steps.cut.outputs.tag }}
