@@ -84,4 +84,34 @@ describe("EntitlementService.requireCloudAccess", () => {
     const exit = await run([ws(null, Date.now() - DAY)]);
     expect(failure(exit)).toBeInstanceOf(PlanRequiredError);
   });
+
+  describe("GTMGRID_SELF_HOST bypass", () => {
+    const withSelfHost = async (fn: () => Promise<void>) => {
+      const prev = process.env.GTMGRID_SELF_HOST;
+      process.env.GTMGRID_SELF_HOST = "1";
+      try {
+        await fn();
+      } finally {
+        if (prev === undefined) delete process.env.GTMGRID_SELF_HOST;
+        else process.env.GTMGRID_SELF_HOST = prev;
+      }
+    };
+
+    it("allows an otherwise-blocked Free workspace", async () =>
+      withSelfHost(async () => {
+        expect(Exit.isSuccess(await run([ws(null)]))).toBe(true);
+      }));
+
+    it("allows a lapsed trial (the hard-block does not apply to self-host)", async () =>
+      withSelfHost(async () => {
+        expect(Exit.isSuccess(await run([ws("team", Date.now() - DAY)]))).toBe(
+          true,
+        );
+      }));
+
+    it("allows even a missing workspace (gate fully bypassed)", async () =>
+      withSelfHost(async () => {
+        expect(Exit.isSuccess(await run([]))).toBe(true);
+      }));
+  });
 });

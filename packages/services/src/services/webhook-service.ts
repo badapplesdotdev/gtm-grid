@@ -32,6 +32,7 @@ import {
 } from "@gtmgrid/cloud";
 import { Data, Effect } from "effect";
 import { EntitlementService } from "./entitlement-service.js";
+import { isSelfHost } from "../self-host.js";
 import { mintSigningSecret, mintToken } from "../webhook-mint.js";
 import {
   type DeliveryCursor,
@@ -597,6 +598,8 @@ export class WebhookService extends Effect.Service<WebhookService>()(
        */
       const assertQuota = (workspaceId: string, n: number, message: string) =>
         Effect.gen(function* () {
+          // Self-host is never metered (no billing backend) — never cap it.
+          if (isSelfHost()) return;
           if (n <= 0) return;
           const q = yield* repo.findWorkspaceQuota(workspaceId);
           if (q._tag === "None") return;
