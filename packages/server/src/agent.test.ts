@@ -1,13 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   appendCapped,
   codexEnvToml,
   codexSandboxFlags,
+  codexUserModelDefaults,
   claudePermissionMode,
   contextPreamble,
   manageChildLifecycle,
   mcpEnv,
   parseAgentCloud,
+  parseClaudeInit,
   permissionEventFromToolResult,
   questionEventFromToolResult,
   STDERR_CAP,
@@ -35,9 +40,13 @@ describe("parseAgentCloud — validate the chat body's cloud block (TRI-3296)", 
     );
   });
 
-  it("returns undefined for a missing/blank field (no half-activation)", () => {
+  it("returns undefined for a missing/blank REQUIRED field (no half-activation)", () => {
     expect(parseAgentCloud({ ...CLOUD, token: "" })).toBeUndefined();
-    expect(parseAgentCloud({ ...CLOUD, tableId: undefined })).toBeUndefined();
+    expect(parseAgentCloud({ ...CLOUD, projectId: undefined })).toBeUndefined();
+  });
+
+  it("tableId is OPTIONAL — a cloud context resolves with no active table loaded", () => {
+    expect(parseAgentCloud({ ...CLOUD, tableId: undefined })).toEqual({ ...CLOUD, tableId: undefined });
   });
 
   it("returns undefined for non-object / absent input (local mode)", () => {
@@ -137,6 +146,48 @@ describe("codexEnvToml — safe inline-TOML rendering for the codex -c flag", ()
     const toml = codexEnvToml(mcpEnv("p", CLOUD));
     expect(toml).toContain('GTMGRID_MODE = "cloud"');
     expect(toml).toContain('GTMGRID_CLOUD_TABLE = "tbl_1"');
+  });
+});
+
+// streamCodex passes --ignore-user-config (so Codex ignores the user's other MCP
+// servers, the cause of the rmcp AuthRequired crash) which also drops the user's
+// model defaults — these are read back from config.toml and re-injected.
+describe("codexUserModelDefaults — re-injecting the user's model after --ignore-user-config", () => {
+  const withConfig = (toml: string, fn: (home: string) => void) => {
+    const home = mkdtempSync(join(tmpdir(), "codex-cfg-"));
+    try {
+      writeFileSync(join(home, "config.toml"), toml);
+      fn(home);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  };
+
+  it("reads the top-level model and reasoning effort", () => {
+    withConfig('model = "gpt-5.5"\nmodel_reasoning_effort = "high"\n', (home) => {
+      expect(codexUserModelDefaults(home)).toEqual({ model: "gpt-5.5", reasoningEffort: "high" });
+    });
+  });
+
+  it("ignores `model` keys nested under a [table] (profiles / model_providers)", () => {
+    withConfig('model = "gpt-5.5"\n\n[profiles.fast]\nmodel = "gpt-5.1-codex"\n', (home) => {
+      expect(codexUserModelDefaults(home).model).toBe("gpt-5.5");
+    });
+  });
+
+  it("does not confuse model_reasoning_effort for model", () => {
+    withConfig('model_reasoning_effort = "high"\n', (home) => {
+      expect(codexUserModelDefaults(home)).toEqual({ model: undefined, reasoningEffort: "high" });
+    });
+  });
+
+  it("returns {} when no config.toml exists", () => {
+    const home = mkdtempSync(join(tmpdir(), "codex-empty-"));
+    try {
+      expect(codexUserModelDefaults(home)).toEqual({});
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 
@@ -416,6 +467,66 @@ describe("contextPreamble — bakes in the /goal slash-command protocol", () => 
     const p = contextPreamble({ tableName: "Leads", columns: ["Email"] });
     expect(p).toContain("/goal");
     expect(p).toContain('viewing **"Leads"**');
+  });
+
+  it("does NOT teach /help or /start in the preamble (handled client-side; they collide with CLI built-ins)", () => {
+    const p = contextPreamble();
+    expect(p).not.toContain("/help");
+    expect(p).not.toContain("/start");
+  });
+});
+
+describe("parseClaudeInit — read MCP connection status from Claude's init event (Windows debug signal)", () => {
+  it("reports gtmgrid connected + counts only its tools", () => {
+    const e = {
+      type: "system",
+      subtype: "init",
+      mcp_servers: [{ name: "gtmgrid", status: "connected" }],
+      tools: ["Bash", "mcp__gtmgrid__get_table", "mcp__gtmgrid__add_rows", "Read"],
+    };
+    expect(parseClaudeInit(e)).toEqual({
+      mcpConnected: true,
+      gtmgridTools: 2,
+      mcpServersRaw: '[{"name":"gtmgrid","status":"connected"}]',
+    });
+  });
+
+  it("reports NOT connected + captures the raw status when gtmgrid failed (the Windows failure)", () => {
+    const e = {
+      type: "system",
+      subtype: "init",
+      mcp_servers: [{ name: "gtmgrid", status: "failed" }],
+      tools: ["Bash", "Read"],
+    };
+    // mcpServersRaw is the "why" payload — it preserves whatever Claude reported.
+    expect(parseClaudeInit(e)).toEqual({
+      mcpConnected: false,
+      gtmgridTools: 0,
+      mcpServersRaw: '[{"name":"gtmgrid","status":"failed"}]',
+    });
+  });
+
+  it("reports NOT connected when gtmgrid is absent from mcp_servers", () => {
+    expect(parseClaudeInit({ type: "system", subtype: "init", mcp_servers: [], tools: [] })).toEqual({
+      mcpConnected: false,
+      gtmgridTools: 0,
+      mcpServersRaw: "[]",
+    });
+  });
+
+  it("returns null for any non-init event (so the turn loop ignores it)", () => {
+    expect(parseClaudeInit({ type: "assistant" })).toBeNull();
+    expect(parseClaudeInit({ type: "system", subtype: "other" })).toBeNull();
+    expect(parseClaudeInit(null)).toBeNull();
+    expect(parseClaudeInit("not an object")).toBeNull();
+  });
+
+  it("is defensive about missing/malformed fields", () => {
+    expect(parseClaudeInit({ type: "system", subtype: "init" })).toEqual({
+      mcpConnected: false,
+      gtmgridTools: 0,
+      mcpServersRaw: "[]",
+    });
   });
 });
 

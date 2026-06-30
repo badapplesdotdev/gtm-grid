@@ -9,9 +9,10 @@
 //     options, health) off the shared `global.db` secrets vault.
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { isProcessAlive, reclaimPort } from "./port.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import {
   Db,
   Engine,
@@ -34,7 +35,8 @@ import {
   type GridStoreShape,
 } from "@gtmgrid/engine";
 import { Effect } from "effect";
-import type { RunErrorContext } from "@gtmgrid/engine";
+import type { RunErrorContext, AiGenerationEvent } from "@gtmgrid/engine";
+import { randomUUID } from "node:crypto";
 import { detectAgents, streamClaude, streamCodex, streamCursor, setAgentPath, rescanAgents, generateWithAgent, parseAgentCloud, type AgentKind } from "./agent.js";
 import { localProviderEnv, resolveCloudProviderEnv } from "./provider-env.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
@@ -42,14 +44,28 @@ import { runCloudColumn, previewCloudColumn, defaultCloudRunDeps } from "./cloud
 import { requiredInputKeys, resolveOptionArgs } from "./option-args.js";
 import { corsHeadersFor, isLoopbackHost, isOriginAllowed } from "./cors.js";
 import { Semaphore } from "./semaphore.js";
-import { captureException, flushObservability, installProcessHandlers, log } from "./observability.js";
+import { captureException, captureServerEvent, flushObservability, installProcessHandlers, log } from "./observability.js";
 
 // Install last-gasp crash handlers ASAP so an error during boot/init is reported.
 installProcessHandlers();
 
 const PORT = Number(process.env.GTMGRID_PORT ?? 8787);
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = join(SERVER_DIR, "..", "..", "..");
+// The working directory the agent CLIs (claude/codex/cursor) are spawned in.
+// MUST be a stable, real, user-writable dir that is identical across launches AND
+// byte-identical on the spawn side (agent.ts) and the history-read side
+// (agent-history.ts) — the agents key their transcripts by encoded cwd, so any
+// drift silently breaks "Resume". The desktop shell passes GTMGRID_AGENT_CWD (a
+// per-user ~/.gtmgrid/workspace). The old `join(SERVER_DIR, "../../..")` pointed
+// INTO the install bundle: read-only on Windows, and a different (possibly `\\?\`
+// verbatim) path than the read side — the Windows resume bug. Falls back to the
+// repo root only for dev/non-packaged runs.
+const REPO_ROOT = process.env.GTMGRID_AGENT_CWD ?? join(SERVER_DIR, "..", "..", "..");
+try {
+  mkdirSync(REPO_ROOT, { recursive: true });
+} catch {
+  /* best-effort — the agents will surface a clearer error if cwd is unusable */
+}
 
 // ── Process-wide run limiter (M6). The engine's per-run `mapConcurrent` only
 // bounds ONE column run's row fan-out; it does NOT cap how many runs execute at
@@ -153,11 +169,30 @@ async function aiAgentFallback(req: { prompt: string; system?: string }): Promis
 
 // AI config resolved from the global db (env wins for the active provider); the
 // agent fallback covers the no-key case in-process.
+/** Emit a PostHog LLM-observability `$ai_generation` event for an ai.generate run.
+ *  Server-side delivery (the reliable path); one trace id per generation. */
+function emitAiGeneration(e: AiGenerationEvent): void {
+  captureServerEvent("$ai_generation", {
+    // Run-scoped when inside a column run (groups the run's generations into one
+    // trace); a fresh id for a standalone generation (preview / one-off).
+    $ai_trace_id: e.traceId ?? randomUUID(),
+    $ai_provider: e.provider,
+    $ai_model: e.model,
+    $ai_input_tokens: e.inputTokens,
+    $ai_output_tokens: e.outputTokens,
+    $ai_latency: e.latencyMs / 1000, // PostHog expects seconds
+    $ai_is_error: e.isError,
+    ...(e.error ? { $ai_error: e.error } : {}),
+    platform: process.platform,
+  });
+}
+
 function aiConfig(): EngineConfig {
   return {
     ai: aiConfigFromEnv() ?? storedAiConfig(globalDb),
     aiProviders: storedAiProviders(globalDb),
     aiFallback: aiAgentFallback,
+    onAiGeneration: emitAiGeneration,
     // Surface systemic run failures (connector/AI bugs) to PostHog Error Tracking,
     // deduped per run by the engine. Per-cell errors still land as cell status.
     reportError: (error: unknown, ctx: RunErrorContext) =>
@@ -1014,16 +1049,22 @@ const server = createServer(async (req, res) => {
 
 // Parent-death watchdog. The desktop app spawns this sidecar as a child; if the
 // app dies WITHOUT killing us — notably an auto-update `relaunch()`, which
-// hard-exits and never fires the window-destroyed handler — we'd otherwise linger
-// as an orphan holding the port. The NEW app's sidecar would then hit EADDRINUSE
-// and the stale (older) process would keep serving outdated routes, so the
-// refreshed UI sees 404s and reports "server not reachable". When orphaned we get
-// reparented to init/launchd (ppid 1), so exit on that transition. (Skipped when
-// launched directly from a shell in dev, where there is no parent app to outlive.)
+// hard-exits and never fires the window-destroyed handler, or a crash / Task
+// Manager kill / reinstall — we'd otherwise linger as an orphan holding the port.
+// The NEW app's sidecar would then hit EADDRINUSE and the stale (older) process
+// would keep serving outdated routes, so the refreshed UI sees 404s / "server not
+// reachable".
+//
+// CROSS-PLATFORM liveness: the old check relied on Unix reparent-to-init (ppid → 1),
+// which NEVER happens on Windows — there the orphan's ppid keeps pointing at the
+// dead parent, so the watchdog never fired and engines lived forever (the Windows
+// "engine unreachable / port in use" bug). `process.kill(pid, 0)` throws when the
+// parent is gone — on Windows too — so probe THAT instead. (Skipped in dev, where
+// there is no parent app to outlive.)
 const PARENT_PID = process.ppid;
 if (PARENT_PID > 1) {
   setInterval(() => {
-    if (process.ppid !== PARENT_PID || process.ppid <= 1) {
+    if (!isProcessAlive(PARENT_PID) || process.ppid <= 1) {
       log.info("parent app exited — shutting down sidecar");
       void flushObservability().finally(() => process.exit(0));
     }
@@ -1037,13 +1078,21 @@ const HOST = "127.0.0.1";
 
 // On EADDRINUSE, RETRY rather than give up: right after an app relaunch the
 // previous sidecar may still be releasing the port (its watchdog is exiting), so
-// brief contention is expected. Retry for a few seconds before failing, so the
-// new (current-version) sidecar reliably wins the port.
+// brief contention is expected. After a few failed retries the holder is NOT
+// transiently releasing — it's a stale orphan — so reclaim the port once, then
+// keep retrying, so the new (current-version) sidecar reliably wins.
 let bindAttempts = 0;
+let reclaimAttempted = false;
 const MAX_BIND_ATTEMPTS = 15;
+const RECLAIM_AFTER_ATTEMPTS = 5;
 server.on("error", (err: NodeJS.ErrnoException) => {
   if (err.code === "EADDRINUSE") {
     bindAttempts += 1;
+    if (bindAttempts >= RECLAIM_AFTER_ATTEMPTS && !reclaimAttempted) {
+      reclaimAttempted = true;
+      console.error(`gtmgrid server: port ${PORT} held after ${bindAttempts} attempts — reclaiming from stale holder`);
+      reclaimPort(PORT, log);
+    }
     if (bindAttempts >= MAX_BIND_ATTEMPTS) {
       console.error(`gtmgrid server: port ${PORT} still in use after ${bindAttempts} attempts — giving up.`);
       process.exit(0);
@@ -1056,6 +1105,23 @@ server.on("error", (err: NodeJS.ErrnoException) => {
 
 server.listen(PORT, HOST, () => {
   console.error(`gtmgrid server on http://${HOST}:${PORT} (project: )`);
+  // Boot-success signal over posthog-node — the only desktop telemetry channel
+  // that delivers from packaged builds (the renderer's posthog-js is blocked by
+  // the Tauri webview origin, and the Rust shell only reports failures). Tagged
+  // with platform/arch so we can see whether the sidecar actually boots per OS —
+  // the missing signal that left a Windows "engine unreachable" invisible.
+  captureServerEvent("sidecar_listening", {
+    platform: process.platform,
+    arch: process.arch,
+    node: process.versions.node,
+    port: PORT,
+    // The resolved agent working directory + whether it came from the desktop
+    // shell's GTMGRID_AGENT_CWD (the defined ~/.gtmgrid/workspace) or fell back to
+    // the install-relative dir — surfaces the old Windows "agent ran out of a random
+    // repo" drift directly in PostHog, on every boot.
+    repo_root: REPO_ROOT,
+    agent_cwd_source: process.env.GTMGRID_AGENT_CWD ? "env" : "fallback",
+  });
 });
 
 // NOTE: the LOCAL desktop does NOT run a recurring poller — a social-signal table

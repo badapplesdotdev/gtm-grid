@@ -129,13 +129,47 @@ interface SlashCommand {
   hint: string;
   description: string;
 }
-const SLASH_COMMANDS: SlashCommand[] = [
+export const SLASH_COMMANDS: SlashCommand[] = [
   {
     name: "goal",
     hint: "<objective>",
     description: "Hand the agent an objective — it plans, then works it end-to-end",
   },
+  {
+    name: "start",
+    hint: "",
+    description: "New here? A quick tour of GTM Grid and what to try first",
+  },
 ];
+
+/** The onboarding command GTM Grid answers ITSELF — never forwarded to the agent
+ *  CLI (claude/codex/cursor would intercept `/start` as their OWN built-in slash
+ *  command and reply "Unknown command: /start"). Matched on the leading word. */
+export const ONBOARDING_COMMAND = /^\/start\b/i;
+
+/** The canned onboarding reply rendered locally for `/help` and `/start`. Markdown
+ *  (assistant messages render through <Markdown/>). */
+const ONBOARDING_MESSAGE = [
+  "### Welcome to GTM Grid 👋",
+  "",
+  "GTM Grid is a spreadsheet where **every column is a function**. You tell me what you want, and I build and fill the grid for you — watch the rows populate live.",
+  "",
+  "**Get data in**",
+  "- Create a table from chat, or click **Import CSV…** in the left sidebar",
+  "- Or just **drag a CSV** anywhere onto the window",
+  "",
+  "**What I can do per row**",
+  "- Find work emails, enrich a LinkedIn profile or company, score & qualify leads, or draft personalized copy — using your connected providers and skills.",
+  "",
+  "**Try one of these**",
+  "- `Enrich every row with their Trigify profile and company`",
+  "- `Find a work email for each row, then draft a one-line opener`",
+  "- `Create a table of 25 SaaS founders in London and enrich them`",
+  "",
+  "**Tip:** hand me a whole objective with `/goal <objective>` and I'll plan it, then run it end-to-end.",
+  "",
+  "What would you like to build first?",
+].join("\n");
 
 /**
  * Permission modes the user picks in the composer — mapped to the CLI's
@@ -536,7 +570,8 @@ export interface AgentCloudContext {
   readonly token: string;
   readonly workspaceId: string;
   readonly projectId: string;
-  readonly tableId: string;
+  /** The active table — OPTIONAL: the agent works with no table loaded. */
+  readonly tableId?: string;
 }
 
 /** Agent activity forwarded to the host (drives agent presence in the grid). */
@@ -896,6 +931,20 @@ export default function AgentPanel({
     // a backgrounded tab lands in the right conversation.
     const setMsgs = (fn: (m: Message[]) => Message[]) =>
       setThreads((t) => ({ ...t, [a]: fn(t[a]) }));
+
+    // The onboarding command is answered locally by GTM Grid — NEVER sent to the
+    // agent CLI. `/start` collides with claude/codex/cursor BUILT-IN slash commands,
+    // so the CLI would intercept it ("Unknown command: /start") and our prompt would
+    // never reach the model. Render the canned tour and stop here.
+    if (ONBOARDING_COMMAND.test(text)) {
+      setMsgs((m) => [
+        ...m,
+        { role: "user", text, tools: [], parts: [{ kind: "text", text }] },
+        { role: "assistant", text: ONBOARDING_MESSAGE, tools: [], parts: [{ kind: "text", text: ONBOARDING_MESSAGE }] },
+      ]);
+      return;
+    }
+
     setMsgs((m) => [
       ...m,
       { role: "user", text, tools: [], parts: text ? [{ kind: "text", text }] : [] },

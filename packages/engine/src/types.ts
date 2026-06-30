@@ -184,6 +184,33 @@ export interface MethodContext {
    * agent is available either.
    */
   aiFallback?: (req: AiFallbackRequest) => Promise<string>;
+  /**
+   * Observability sink for an `ai.generate` LLM call — the engine stays
+   * telemetry-agnostic and just hands the host the raw generation data; the host
+   * (which owns a PostHog client) emits the `$ai_generation` LLM-observability
+   * event. Absent ⇒ no tracing.
+   */
+  onAiGeneration?: (event: AiGenerationEvent) => void;
+  /**
+   * The LLM-observability trace id for the current column run — set by the engine
+   * (one per `runColumn`, shared across its rows) so all `ai.generate` generations
+   * in one "Run" group into a single PostHog trace. Undefined for a standalone
+   * dispatch (preview / option resolution).
+   */
+  aiTraceId?: string;
+}
+
+/** Raw data for one LLM generation, handed to {@link MethodContext.onAiGeneration}. */
+export interface AiGenerationEvent {
+  readonly provider: AiConfig["provider"];
+  readonly model: string;
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly latencyMs: number;
+  readonly isError: boolean;
+  readonly error?: string;
+  /** The run-scoped trace id, when the generation runs inside a column run. */
+  readonly traceId?: string;
 }
 
 /** A one-shot generation request for {@link MethodContext.aiFallback}. */

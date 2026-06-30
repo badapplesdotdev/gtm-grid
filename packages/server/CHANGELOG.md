@@ -1,5 +1,236 @@
 # @gtmgrid/server
 
+## 1.2.0
+
+### Patch Changes
+
+- @gtmgrid/engine@1.2.0
+- @gtmgrid/observability@1.2.0
+
+## 1.1.1
+
+### Patch Changes
+
+- @gtmgrid/engine@1.1.1
+- @gtmgrid/observability@1.1.1
+
+## 1.1.0
+
+### Patch Changes
+
+- 3dda979: The Codex side-panel agent no longer crashes mid-turn when the user has other MCP servers registered. Codex deep-merges `-c` config overrides, so passing `-c mcp_servers={ gtmgrid = … }` did not actually replace the user's servers — their `~/.codex/config.toml` entries (Trigify/exa/…) and bundled plugin servers (linear/computer-use) stayed live, and Codex connecting to any OAuth-walled one made its rmcp transport quit fatally ("Transport channel closed, when AuthRequired"), taking the turn down. The Codex bridge now passes `--ignore-user-config` (the only switch that drops both config and plugin servers, since Codex has no `--strict-mcp-config` equivalent) and re-injects the user's default model + reasoning effort so the panel's "Default" model option keeps working.
+- 3e33da9: Hard-block credited actions when a trial expires, plus trial-status notifications.
+
+  Previously `EntitlementService.requireCloudAccess` only checked the cached
+  `currentPlanId`, so a trial that lapsed by date kept running credited actions until
+  Autumn's webhook/desktop sync flipped the plan to null. And the credit-heavy column
+  enrichment run path was gated by quota only, never by cloud access.
+
+  - **Time-based backstop:** `requireCloudAccess` now also fails the instant
+    `trialEndsAt` is in the past, regardless of the cached plan id — the server-side
+    guarantee that an expired trial cannot run any credited action.
+  - **Enrichment path gated:** `assertColumnRunQuota` and the `setCell` / `setCellStatus`
+    / `insertRow` / `upsertRow` worker writes now call `requireCloudAccess`, so a lapsed
+    workspace cannot complete runs server-side even with quota headroom. The worker
+    boundary maps `PlanRequiredError` → 403 (distinct from the 402 quota error) and the
+    sidecar re-raises it as a typed error so the run aborts cleanly with an upgrade prompt.
+  - **Expired stays distinguishable:** the plan sync preserves a lapsed trial's past
+    `trialEndsAt` so "trial expired" reads apart from a cancelled paid plan / Free.
+  - **Desktop locks by date too:** the cloud UI now locks the instant the trial expires
+    (not only after sync), closing the window where buttons looked enabled but the server
+    rejected the action.
+  - **Notifications along the way:** new bell items for trial started (welcome), trial
+    expired, and low cloud-actions — alongside the existing countdown — all routing to the
+    upgrade flow. New on-brand `trialWelcomeEmail` (on workspace creation) and
+    `trialExpiredEmail` (daily "just-ended" reminder window) reuse the existing email shell.
+  - @gtmgrid/engine@1.1.0
+  - @gtmgrid/observability@1.1.0
+
+## 1.0.6
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.6
+- @gtmgrid/observability@1.0.6
+
+## 1.0.5
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.5
+- @gtmgrid/observability@1.0.5
+
+## 1.0.4
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.4
+- @gtmgrid/observability@1.0.4
+
+## 1.0.3
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.3
+- @gtmgrid/observability@1.0.3
+
+## 1.0.2
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.2
+- @gtmgrid/observability@1.0.2
+
+## 1.0.1
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.1
+- @gtmgrid/observability@1.0.1
+
+## 1.0.0
+
+### Patch Changes
+
+- @gtmgrid/engine@1.0.0
+- @gtmgrid/observability@1.0.0
+
+## 0.22.12
+
+### Patch Changes
+
+- 018b623: Make the `/start` onboarding command actually work, and drop `/help`. Previously
+  both were forwarded to the agent CLI, which intercepted them as its OWN built-in
+  slash commands ("Unknown command: /start", "/help isn't available"). GTM Grid now
+  answers `/start` itself with a local onboarding tour and never forwards it to the
+  CLI. The dead onboarding instructions are removed from the agent system preamble.
+  - @gtmgrid/engine@0.22.12
+  - @gtmgrid/observability@0.22.12
+
+## 0.22.11
+
+### Patch Changes
+
+- fff9a21: Add `/help` and `/start` onboarding commands to the agent chat. New users get a
+  short, friendly orientation — what GTM Grid is, how to get data in (create a table
+  or import/drag a CSV), what the agent can do, and a few example prompts to try.
+  Both appear in the `/` command menu.
+  - @gtmgrid/engine@0.22.11
+  - @gtmgrid/observability@0.22.11
+
+## 0.22.10
+
+### Patch Changes
+
+- 6c1e498: Fix the GTM Grid table tools (`get_table`, `add_rows`, `run_function`,
+  `list_providers`, …) never loading inside the agent panel on Windows.
+
+  Root cause: the spawned coding-agent CLI (claude / codex / cursor) was told to
+  launch gtmgrid's MCP server via an extensionless `#!/bin/bash` launcher script
+  (`gtmgrid-mcp`). That script was only ever written on macOS/Linux, and even when
+  present Windows cannot execute it — so the agent connected with **no** grid tools
+  while the app otherwise looked healthy.
+
+  Fix: spawn the bundled `node` binary directly with `mcp.mjs` as a script
+  argument — the one launch shape every MCP client starts identically on macOS,
+  Linux and Windows. The Rust shell now exports `GTMGRID_MCP_NODE` +
+  `GTMGRID_MCP_SCRIPT` (both already de-verbatim'd), `mcpConfig` emits
+  `command` + `args`, and the Codex `-c mcp_servers=…` TOML now escapes the
+  backslashes in Windows paths (the old inline form produced invalid TOML on
+  Windows). The unused bash launcher is no longer bundled.
+
+  - @gtmgrid/engine@0.22.10
+  - @gtmgrid/observability@0.22.10
+
+## 0.22.9
+
+### Patch Changes
+
+- @gtmgrid/engine@0.22.9
+- @gtmgrid/observability@0.22.9
+
+## 0.22.8
+
+### Patch Changes
+
+- @gtmgrid/engine@0.22.8
+- @gtmgrid/observability@0.22.8
+
+## 0.22.7
+
+### Patch Changes
+
+- 6aec1d2: Discover the `claude` / `codex` / `cursor` CLIs on Windows. Agent detection was
+  macOS/Linux-only: it located binaries via `$SHELL -lic "command -v"` (which threw
+  on Windows, where there is no POSIX login shell), scanned only POSIX install dirs,
+  and used bare binary names — so on Windows the agents always read as not installed.
+
+  `packages/server/src/agent.ts` is now cross-platform:
+
+  - **Install locations.** On Windows it scans the documented targets —
+    `%USERPROFILE%\.local\bin` (native installers), `%APPDATA%\npm` (npm cmd-shims)
+    and `%LOCALAPPDATA%\Microsoft\WinGet\Links` (winget) — and resolves on `PATH`
+    via `where.exe`. The native-installer dir is frequently not on `PATH`, which is
+    exactly why the previous lookup missed it.
+  - **Executable names.** It tries `.exe → .cmd → .bat`, preferring the native
+    `.exe` so the resolved binary is directly spawnable.
+  - **`.cmd`/`.bat` shims.** Those cannot be launched by `spawn`/`execFile` without
+    a shell (`EINVAL` since the CVE-2024-27980 Node patch); detection, version
+    probing and every turn-run now route a shim through a shell, while a native
+    `.exe` still spawns directly.
+  - **Packaged-app polish.** `windowsHide` is set on every child process so no
+    console window flashes, and the spawn `PATH` is built with the platform
+    delimiter and the existing (case-insensitive) `Path` key.
+
+  macOS/Linux discovery is byte-for-byte unchanged.
+
+  - @gtmgrid/engine@0.22.7
+  - @gtmgrid/observability@0.22.7
+
+## 0.22.6
+
+### Patch Changes
+
+- @gtmgrid/engine@0.22.6
+- @gtmgrid/observability@0.22.6
+
+## 0.22.5
+
+### Patch Changes
+
+- 8ddbed1: Fix the Windows "Server not reachable" / engine-unreachable failure: connect the
+  renderer to the sidecar over `127.0.0.1` instead of `localhost`.
+
+  The sidecar binds IPv4 loopback only (`server.listen(8787, "127.0.0.1")`), but the
+  renderer + cloud-run defaulted to `http://localhost:8787`. On Windows `localhost`
+  resolves to `::1` (IPv6) first, so the WebView2 fetch hit `[::1]:8787` where nothing
+  listens and the engine read as unreachable — even though the server was up and
+  healthy. macOS resolves `localhost`→`127.0.0.1`, which is why this only bit Windows.
+  Defaulting to `127.0.0.1` deterministically matches the bind on every platform.
+
+  Also adds a `sidecar_listening` server-side event (over the posthog-node channel,
+  the only desktop telemetry path that delivers from packaged builds) tagged with
+  platform/arch, so sidecar boot-health is finally visible per-OS — confirming the
+  engine actually starts on Windows rather than leaving that invisible.
+
+- Updated dependencies [8ddbed1]
+  - @gtmgrid/observability@0.22.5
+  - @gtmgrid/engine@0.22.5
+
+## 0.22.4
+
+### Patch Changes
+
+- @gtmgrid/engine@0.22.4
+- @gtmgrid/observability@0.22.4
+
+## 0.22.3
+
+### Patch Changes
+
+- @gtmgrid/engine@0.22.3
+- @gtmgrid/observability@0.22.3
+
 ## 0.22.2
 
 ### Patch Changes

@@ -343,10 +343,13 @@ function workerErrorStatus(tag: string | undefined): number {
     // An authenticated member who does not belong to the target workspace.
     case "NotAMemberError":
     case "InsufficientRoleError":
+    // The workspace's cloud plan lapsed / trial expired / is Free — cloud access
+    // is required. Distinct from the 402 quota error so the desktop can show an
+    // "upgrade" prompt rather than a "ran out of cloud actions" message. Both are
+    // non-retryable 4xx, so either way the column run stops rather than retrying.
+    case "PlanRequiredError":
       return 403;
     case "CloudActionsLimitError":
-    // The workspace's cloud plan lapsed / is Free — cloud access is required.
-    case "PlanRequiredError":
       return 402;
     default:
       return 500;

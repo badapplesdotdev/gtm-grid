@@ -453,6 +453,32 @@ describe("GridService.addRowsWithCells — bulk quota + meter", () => {
     expect(Exit.isSuccess(exit)).toBe(true);
     expect(store.rows).toHaveLength(1);
   });
+
+  it("SELF-HOST: a Free workspace over its cloud-actions limit still imports (entitlement + quota gates bypassed)", async () => {
+    // The end-to-end self-host proof at the service boundary: a workspace that is
+    // BOTH Free (plan: null → requireCloudAccess would throw PlanRequiredError)
+    // AND over its cloud-actions limit (would throw CloudActionsLimitError) still
+    // succeeds when GTMGRID_SELF_HOST=1, writing every row.
+    const prev = process.env.GTMGRID_SELF_HOST;
+    process.env.GTMGRID_SELF_HOST = "1";
+    try {
+      const store = makeGridStore({ tables: [table()], columns: [column()] });
+      const quotas = new Map<string, MeterQuota>([
+        [WS, { cloudActionsUsed: 9, cloudActionsLimit: 10 }],
+      ]);
+      const { run } = harness({ store, quotas, plan: null });
+      const exit = await run(
+        Effect.flatMap(GridService, (s) =>
+          s.addRowsWithCells({ tableId: "t1", rows: [{ c1: "a" }, { c1: "b" }] }),
+        ),
+      );
+      expect(Exit.isSuccess(exit)).toBe(true);
+      expect(store.rows).toHaveLength(2);
+    } finally {
+      if (prev === undefined) delete process.env.GTMGRID_SELF_HOST;
+      else process.env.GTMGRID_SELF_HOST = prev;
+    }
+  });
 });
 
 describe("GridService deletes — cascade + meter", () => {
