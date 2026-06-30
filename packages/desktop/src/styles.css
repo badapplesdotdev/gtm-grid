@@ -3804,6 +3804,34 @@ body.resizing-agent .agent-panel { transition: none; }
 }
 .import-mono { font-family: var(--font-mono); color: var(--text-2); }
 
+/* "Create table" CTA — pulse + glow to make the next step obvious on the
+   review screen. Only applied while the button is actionable; pauses on hover
+   (the user has clearly noticed it) and disables under reduced-motion. */
+@keyframes import-cta-pulse {
+  0%   { box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 35%, transparent),
+                     0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); }
+  70%  { box-shadow: 0 3px 14px color-mix(in srgb, var(--accent) 60%, transparent),
+                     0 0 0 9px color-mix(in srgb, var(--accent) 0%, transparent); }
+  100% { box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 35%, transparent),
+                     0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent); }
+}
+.import-cta-glow { animation: import-cta-pulse 1.6s ease-out infinite; }
+.import-cta-glow:hover { animation-play-state: paused; }
+
+@keyframes import-cta-nudge {
+  0%, 100% { transform: translateX(-1px); opacity: .55; }
+  50%      { transform: translateX(5px);  opacity: 1; }
+}
+.import-cta-hint {
+  display: inline-flex; align-items: center; color: var(--accent);
+  margin-right: -2px; animation: import-cta-nudge 1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .import-cta-glow { animation: none; }
+  .import-cta-hint { animation: none; opacity: 1; transform: none; }
+}
+
 .import-eyebrow {
   font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
   color: var(--text-3); margin-bottom: 10px;
