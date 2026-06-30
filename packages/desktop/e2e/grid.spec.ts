@@ -48,6 +48,9 @@ test.describe("Grid functionality", () => {
     await expect(window.locator(".grid-table")).toBeVisible({ timeout: 20_000 });
     const before = (await mockState()).rows.length;
 
+    // Collapse the agent panel so the toolbar is wide enough to show the action
+    // buttons inline (with it open the toolbar collapses them into the "⋯" menu).
+    await window.locator(".agent-collapse").click();
     await window.getByRole("button", { name: /^add row$/i }).click();
 
     await expect.poll(async () => (await mockState()).rows.length).toBe(before + 1);

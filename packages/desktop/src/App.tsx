@@ -35,6 +35,7 @@ import { fireConfetti } from "./cloud/confetti";
 import { useUpdateCheck } from "./useUpdateCheck";
 import { changelogNotes } from "./changelog";
 import { capture } from "./analytics";
+import { TRIAL_DURATION_DAYS } from "@gtmgrid/cloud";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./components/ui/tooltip";
 import {
   buildNotifications,
@@ -63,6 +64,7 @@ import {
   type CloudTableSummary,
 } from "./cloud/useCloudGrid";
 import { useAgentPresence } from "./cloud/agentPresence";
+import { resolveActiveTable } from "./cloud/active-table";
 import { type SignalsCloud } from "./SignalsModal";
 // Type-only import (erased at build) so the AgentPanel lazy chunk stays split.
 import type { AgentCloudContext } from "./AgentPanel";
@@ -1356,14 +1358,17 @@ export default function App() {
   // the prop identity only changes when the table name or column set actually
   // does. We source it from the cloud table so the hint follows `cloudTableId`.
   const activeTableSource = cloudActiveTable ?? null;
+  // `resolveActiveTable` falls back to the name from the already-loaded tables LIST
+  // when the paged fetch hasn't resolved yet, so the agent's "Active table" hint is
+  // populated the instant `cloudTableId` is set (auto-default-on-open OR manual
+  // click) — see active-table.ts for why (without it, a goal sent right after open
+  // makes the agent spin up a NEW table instead of using the one in view).
   const activeTableColumnNames = activeTableSource?.columns.map((c) => c.name).join("\n") ?? null;
+  const activeTableName = resolveActiveTable(cloudTableId, activeTableSource, cloudTables)?.name ?? null;
   const activeTable = useMemo(
-    () =>
-      activeTableSource
-        ? { name: activeTableSource.name, columns: activeTableSource.columns.map((c) => c.name) }
-        : null,
+    () => resolveActiveTable(cloudTableId, activeTableSource, cloudTables),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the table name + serialized column names, not the FullTable identity
-    [activeTableSource?.name, activeTableColumnNames],
+    [activeTableName, activeTableColumnNames],
   );
   // Agent presence (Co-Pilot cursor): the agent's gtmgrid tool calls — streamed
   // through the panel's SSE — light up the cell/column it's working on for
@@ -1375,22 +1380,53 @@ export default function App() {
       ? { workspaceId: agentCloud.workspaceId, tableId: agentCloud.tableId }
       : null,
   );
-  // Cloud-access lock: the active workspace's trial lapsed / it's on Free (no
-  // plan id). Cloud tables/projects are shown but LOCKED — opening or editing
-  // them prompts an upgrade; local tables are unaffected. The server enforces the
-  // same gate (EntitlementService) so this is a UX layer over a real lock.
-  const cloudLocked =
-    cloudEnabled && activeWorkspace != null && activeWorkspace.plan.id === null;
-  const [showUpgrade, setShowUpgrade] = useState(false);
   // Trial countdown: whole days left until the active workspace's trial ends
   // (null when not trialing). Drives the in-app "trial ends in N days" banner so
   // users add a card BEFORE the hard lock.
   const trialEndsAt = activeWorkspace?.plan.trialEndsAt ?? null;
+  // A trial that has lapsed BY DATE. The server's EntitlementService backstop
+  // blocks credited actions the instant `trialEndsAt` passes — even before Autumn
+  // syncs `plan.id` to null. We mirror that here so the UI locks immediately too:
+  // without it, a date-expired-but-unsynced workspace (still `plan.id === "team"`)
+  // would show enabled run/add buttons whose actions the server silently rejects.
+  const trialExpiredByDate =
+    trialEndsAt != null && trialEndsAt <= Date.now();
+  // Cloud-access lock: the active workspace's trial lapsed (by sync OR by date) /
+  // it's on Free (no plan id). Cloud tables/projects are shown but LOCKED —
+  // opening or editing them prompts an upgrade; local tables are unaffected. The
+  // server enforces the same gate (EntitlementService) so this is a UX layer over
+  // a real lock.
+  // Self-host (`GTMGRID_SELF_HOST=1`, surfaced on `me`) has no billing, so the
+  // server never enforces the entitlement gate — the UI must never lock either,
+  // regardless of plan/trial state. Otherwise a self-hoster's grid shows "Cloud
+  // is locked" while the backend happily serves every request.
+  const cloudLocked =
+    cloudEnabled &&
+    activeWorkspace != null &&
+    activeWorkspace.selfHost !== true &&
+    (activeWorkspace.plan.id === null || trialExpiredByDate);
+  const [showUpgrade, setShowUpgrade] = useState(false);
   const trialDaysLeft =
     trialEndsAt != null
       ? Math.max(0, Math.ceil((trialEndsAt - Date.now()) / 86_400_000))
       : null;
   const showTrialBanner = cloudEnabled && !cloudLocked && trialDaysLeft != null;
+  // Welcome window: the first day of a fresh trial. `trialEndsAt - duration` is
+  // the trial start, so "started within the last day" == now is before
+  // start + 1 day. Only while genuinely trialing (not locked).
+  const trialStarted =
+    showTrialBanner &&
+    trialEndsAt != null &&
+    Date.now() <
+      trialEndsAt - (TRIAL_DURATION_DAYS - 1) * 86_400_000;
+  // "Trial expired" companion notification: locked specifically because a trial
+  // lapsed (a past `trialEndsAt`), distinct from a never-trialed Free workspace /
+  // cancelled paid plan (both have `trialEndsAt === null`). A4 preserves the past
+  // timestamp through the lapse sync so this stays true after `plan.id` → null.
+  const trialExpired =
+    cloudEnabled && activeWorkspace != null && trialExpiredByDate;
+  // Cloud-actions usage for the low-credits warning (null = unmetered/unknown).
+  const cloudActionsUsage = activeWorkspace?.cloudActions ?? null;
 
   // Reset the open cloud project when the active workspace changes: a project
   // belongs to exactly one workspace, so keeping it open across a switch would
@@ -1705,9 +1741,19 @@ export default function App() {
     () =>
       buildNotifications({
         trialDaysLeft: showTrialBanner ? trialDaysLeft : null,
+        trialStarted,
+        trialExpired,
+        cloudActions: cloudActionsUsage,
         persist: notifPersist,
       }),
-    [showTrialBanner, trialDaysLeft, notifPersist],
+    [
+      showTrialBanner,
+      trialDaysLeft,
+      trialStarted,
+      trialExpired,
+      cloudActionsUsage,
+      notifPersist,
+    ],
   );
   // Bell badge = active notifications not yet seen.
   const unreadNotifs = countUnread(notifications, notifPersist);

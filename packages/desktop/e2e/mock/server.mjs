@@ -172,6 +172,10 @@ const server = createServer(async (req, res) => {
     } catch {
       /* ignore */
     }
+    // Persist the request so tests can assert what the renderer sent — notably the
+    // active-table context (`context.tableName` + `cloud.tableId`), which proves the
+    // agent is scoped to the table in view rather than left to invent a new one.
+    state.lastChat = msg;
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
     const ev = (o) => res.write(`data: ${JSON.stringify(o)}\n\n`);
     ev({ type: "session", sessionId: "e2e-session" });

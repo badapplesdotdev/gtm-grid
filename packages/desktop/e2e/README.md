@@ -49,6 +49,7 @@ build at it:
 | `boot.spec.ts` | Boot gate: signed-out auth gate, signed-in paid shell, free-plan cloud-locked state, sign-in→shell transition |
 | `grid.spec.ts` | Grid render, sidebar/plan, **cell edit persists**, add row, add-column UI, command palette, agent panel |
 | `nav.spec.ts` | Account menu, notification center, project switcher, new-table chooser, **blank-table create end-to-end**, workspace settings |
+| `trial.spec.ts` | Trial lifecycle: active-trial shell + countdown, fresh-trial welcome, **expired-by-date hard lock (plan id still "team", not yet synced)**, expired+synced lock, low-cloud-actions warning, upgrade-prompt funnel → Plan & billing modal |
 
 The renderer's pure business logic (CSV import/export, grid run/dep-order,
 table tree, presence, keyboard nav, notifications, etc.) is covered separately by
