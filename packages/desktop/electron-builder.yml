@@ -73,6 +73,13 @@ mac:
 
 win:
   icon: build-resources/icon.ico
+  # We have no Windows Authenticode cert yet, so the NSIS installer ships unsigned
+  # (by Windows' trust model). Without this, electron-updater runs
+  # Get-AuthenticodeSignature on the downloaded installer and rejects anything that
+  # doesn't carry a trusted Windows publisher signature — which silently breaks
+  # auto-update for every Windows user. Re-enable (delete this line) once a real
+  # Windows code-signing certificate is wired into CI.
+  verifyUpdateCodeSignature: false
   target:
     - target: nsis
       arch: [x64]
