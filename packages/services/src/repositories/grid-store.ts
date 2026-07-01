@@ -47,6 +47,8 @@ export interface StoreFolder {
   name: string;
   position: number;
   createdAt: number;
+  /** The folder this folder nests under (null = top level). */
+  parentId: string | null;
 }
 
 /** An in-memory column row (the full projection getTable returns). */

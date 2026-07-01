@@ -4,7 +4,7 @@
 // that appears once the page is scrolled past 8px (`.scrolled`).
 
 import { useEffect, useState } from "react";
-import { BrandMark, GitHubMark, DownloadArrow } from "./icons";
+import { BrandMark, GitHubMark, DiscordMark, DownloadArrow } from "./icons";
 
 const LINKS = [
   ["#how", "How it works"],
@@ -16,6 +16,7 @@ const LINKS = [
 ] as const;
 
 const REPO = "https://github.com/badapplesdotdev/gtm-grid";
+const DISCORD = "https://discord.gg/xTEb65XQb";
 
 export function Nav() {
   const [scrolled, setScrolled] = useState(false);
@@ -44,6 +45,10 @@ export function Nav() {
           <a className="btn btn-ghost" href={REPO}>
             <GitHubMark />
             GitHub
+          </a>
+          <a className="btn btn-ghost" href={DISCORD}>
+            <DiscordMark />
+            Community
           </a>
           <a className="btn btn-primary" href="#download">
             <DownloadArrow />

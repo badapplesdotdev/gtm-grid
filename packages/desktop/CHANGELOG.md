@@ -1,5 +1,51 @@
 # @gtmgrid/desktop
 
+## 1.3.0
+
+### Minor Changes
+
+- 6f02489: Grid 1.3.0
+
+  - **Custom & multiple campaign variables** — connector pushes to campaigns/lead lists (HeyReach, Smartlead, Instantly, PlusVibe) now support custom variables and multiple variables per push. (#158)
+  - **Searchable model picker** — AI columns get a searchable model picker grouped by provider. (#165)
+  - **Nested sub-folders** — drag a folder into another folder to nest tables in the sidebar. (#169)
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.3.0
+- @gtmgrid/cloud@1.3.0
+- @gtmgrid/services@1.3.0
+
+## 1.2.1
+
+### Patch Changes
+
+- b4e687c: Draw the eye to the next step on CSV import. On the "Map your columns" review
+  screen, the primary **Create table** button now pulses with an accent glow and an
+  arrow nudges toward it while the button is actionable — making the action to
+  proceed obvious after a drop/upload. The effect pauses on hover, only shows while
+  the button is enabled (hidden mid-import), and is disabled under
+  `prefers-reduced-motion`. Covered by a new Electron E2E spec (`csv-import-cta`)
+  asserting the glow/arrow appear and animate on review, are scoped to that step,
+  and respect reduced-motion.
+- a7e740f: Fix broken Windows auto-update caused by mis-signing the NSIS installer.
+
+  The release workflow set `CSC_LINK` / `CSC_KEY_PASSWORD` / `CSC_IDENTITY_AUTO_DISCOVERY`
+  on every matrix runner, but these are repo secrets present everywhere — so on the
+  Windows runner electron-builder grabbed the Apple `.p12` and signed the NSIS installer
+  with the macOS "Developer ID Application" cert. Windows doesn't trust that cert, so
+  electron-updater's `verifySignature` (Get-AuthenticodeSignature) rejected every
+  download and silently stranded 100% of Windows users on their installed version.
+
+  The signing env vars are now gated on the mac runners (`matrix.os == 'macos'`) so the
+  Windows installer is no longer Apple-signed, and `win.verifyUpdateCodeSignature: false`
+  is set in electron-builder.yml until a real Windows Authenticode certificate is wired
+  into CI.
+
+  - @gtmgrid/analytics@1.2.1
+  - @gtmgrid/cloud@1.2.1
+  - @gtmgrid/services@1.2.1
+
 ## 1.2.0
 
 ### Minor Changes

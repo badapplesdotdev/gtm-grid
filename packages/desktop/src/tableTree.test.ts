@@ -6,11 +6,16 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  buildFolderTree,
+  canMoveFolderInto,
   dedupeTableRowsByName,
+  folderHasAncestor,
+  folderTailPosition,
   groupTableList,
   isCloudTableMissing,
   normalizeTableName,
   positionForMove,
+  type SidebarFolder,
   type TableListRow,
 } from "./tableTree";
 
@@ -66,7 +71,7 @@ describe("groupTableList (sidebar folder partitioning)", () => {
   const row = (id: string, folderId: string | null = null, position = 0): TableListRow => ({
     kind: "local", id, name: id, synced: false, favorite: false, rows: 0, folderId, position,
   });
-  const folder = (id: string, position = 0) => ({ id, name: id, position });
+  const folder = (id: string, position = 0): SidebarFolder => ({ id, name: id, position, parentId: null });
 
   it("partitions rows into folder sections and the root, preserving order", () => {
     const grouped = groupTableList(
@@ -127,6 +132,104 @@ describe("positionForMove (fractional drag-reorder positions)", () => {
     const rows = [row("a", 1), row("m", 2), row("b", 3)];
     // Moving m after a: its old position is excluded, so the midpoint is with b.
     expect(positionForMove(rows, "m", { folderId: null, afterId: "a" })).toBe(2);
+  });
+});
+
+describe("buildFolderTree (nested sub-folders)", () => {
+  const row = (id: string, folderId: string | null = null, position = 0): TableListRow => ({
+    kind: "local", id, name: id, synced: false, favorite: false, rows: 0, folderId, position,
+  });
+  const folder = (id: string, parentId: string | null = null, position = 0): SidebarFolder => ({
+    id, name: id, position, parentId,
+  });
+
+  it("nests child folders under their parent", () => {
+    const tree = buildFolderTree(
+      [row("t1", "parent"), row("t2", "child")],
+      [folder("parent"), folder("child", "parent")],
+    );
+    expect(tree.roots.map((n) => n.folder.id)).toEqual(["parent"]);
+    expect(tree.roots[0]?.children.map((n) => n.folder.id)).toEqual(["child"]);
+    expect(tree.roots[0]?.rows.map((r) => r.id)).toEqual(["t1"]);
+    expect(tree.roots[0]?.children[0]?.rows.map((r) => r.id)).toEqual(["t2"]);
+  });
+
+  it("orders sibling folders (root and nested) by position", () => {
+    const tree = buildFolderTree(
+      [],
+      [folder("b", null, 5), folder("a", null, 1), folder("a2", "a", 2), folder("a1", "a", 1)],
+    );
+    expect(tree.roots.map((n) => n.folder.id)).toEqual(["a", "b"]);
+    expect(tree.roots[0]?.children.map((n) => n.folder.id)).toEqual(["a1", "a2"]);
+  });
+
+  it("promotes a folder with an unknown parent to the top level", () => {
+    const tree = buildFolderTree([], [folder("orphan", "ghost")]);
+    expect(tree.roots.map((n) => n.folder.id)).toEqual(["orphan"]);
+  });
+
+  it("falls a row pointing at an unknown folder back to root rows", () => {
+    const tree = buildFolderTree([row("t", "ghost")], [folder("real")]);
+    expect(tree.rootRows.map((r) => r.id)).toEqual(["t"]);
+  });
+
+  it("is cycle-safe: a parent loop surfaces members without recursing forever", () => {
+    // f1 → f2 → f1 (malformed). The builder must not hang; it breaks the loop by
+    // surfacing one member at the top level and nesting the other under it, so
+    // BOTH stay reachable (nothing vanishes) and neither recurses forever.
+    const tree = buildFolderTree([], [folder("f1", "f2"), folder("f2", "f1")]);
+    const seen: string[] = [];
+    const walk = (nodes: typeof tree.roots) => {
+      for (const n of nodes) { seen.push(n.folder.id); walk(n.children); }
+    };
+    walk(tree.roots);
+    expect(seen.sort()).toEqual(["f1", "f2"]);
+  });
+});
+
+describe("folderHasAncestor / canMoveFolderInto (cycle guard)", () => {
+  const folder = (id: string, parentId: string | null = null): SidebarFolder => ({
+    id, name: id, position: 0, parentId,
+  });
+  // a → b → c (c nested under b nested under a)
+  const folders = [folder("a"), folder("b", "a"), folder("c", "b")];
+
+  it("detects an ancestor on the parent chain (inclusive)", () => {
+    expect(folderHasAncestor(folders, "c", "a")).toBe(true);
+    expect(folderHasAncestor(folders, "c", "c")).toBe(true);
+    expect(folderHasAncestor(folders, "a", "c")).toBe(false);
+  });
+
+  it("forbids moving a folder into itself or a descendant", () => {
+    expect(canMoveFolderInto(folders, "a", "a")).toBe(false); // into itself
+    expect(canMoveFolderInto(folders, "a", "c")).toBe(false); // into its descendant
+    expect(canMoveFolderInto(folders, "b", "c")).toBe(false);
+  });
+
+  it("allows moving to the top level or into an unrelated folder", () => {
+    expect(canMoveFolderInto(folders, "c", null)).toBe(true);
+    expect(canMoveFolderInto([...folders, folder("x")], "x", "c")).toBe(true);
+  });
+});
+
+describe("folderTailPosition", () => {
+  const folder = (id: string, parentId: string | null, position: number): SidebarFolder => ({
+    id, name: id, position, parentId,
+  });
+
+  it("returns max sibling position + 1 within the destination group", () => {
+    const folders = [folder("p", null, 0), folder("a", "p", 0), folder("b", "p", 3), folder("m", null, 9)];
+    expect(folderTailPosition(folders, "p", "m")).toBe(4);
+  });
+
+  it("returns 0 for an empty destination group", () => {
+    expect(folderTailPosition([folder("p", null, 0), folder("m", null, 9)], "p", "m")).toBe(0);
+  });
+
+  it("excludes the moved folder from its own sibling group", () => {
+    const folders = [folder("p", null, 0), folder("a", "p", 0), folder("m", "p", 5)];
+    // Re-filing m into p ignores m's own position → tail is a's position + 1.
+    expect(folderTailPosition(folders, "p", "m")).toBe(1);
   });
 });
 

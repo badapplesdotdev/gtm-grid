@@ -315,6 +315,10 @@
           "website": {
             "type": "string"
           },
+          "custom_variables": {
+            "type": "object",
+            "description": "Custom personalization variables as a { key: value } map (e.g. { \"icebreaker\": \"{{Opener}}\", \"industry\": \"{{Industry}}\" }). Map a grid column into each value to reference it as {{key}} in your sequence. Add as many as you need. Note: a new key propagates to every lead in the campaign."
+          },
           "skip_if_in_campaign": {
             "type": "boolean",
             "description": "Skip if already in the campaign"
@@ -487,9 +491,36 @@
         "properties": {
           "leads": {
             "type": "array",
-            "description": "Array of lead objects (each needs at least `email`)",
+            "description": "Array of lead objects (each needs at least `email`). Run per-row, one lead is built from the mapped columns.",
             "items": {
-              "type": "object"
+              "type": "object",
+              "required": [
+                "email"
+              ],
+              "properties": {
+                "email": {
+                  "type": "string"
+                },
+                "first_name": {
+                  "type": "string"
+                },
+                "last_name": {
+                  "type": "string"
+                },
+                "company_name": {
+                  "type": "string"
+                },
+                "phone": {
+                  "type": "string"
+                },
+                "website": {
+                  "type": "string"
+                },
+                "custom_variables": {
+                  "type": "object",
+                  "description": "Custom personalization variables as a { key: value } map. Map a grid column into each value to reference it as {{key}} in your sequence. Add as many as you need."
+                }
+              }
             }
           },
           "campaign": {

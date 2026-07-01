@@ -27,8 +27,8 @@ All list endpoints share the HeyReach envelope **`{ items[], totalCount }`** and
 ## Endpoints by job
 
 ### Enroll leads into a campaign (the core grid job)
-- `heyreach.addLeadsToCampaign` — push up to 100 leads into a campaign. Pick `campaignId` by name; pass `accountLeadPairs: [{ linkedInAccountId?, lead: { profileUrl, firstName, lastName, companyName?, position?, emailAddress? } }]`. **Map grid columns** into firstName/lastName/companyName/position. `profileUrl` is required — a row with no LinkedIn URL cannot be enrolled.
-- `heyreach.addLeadsToList` — stage leads in a list instead of a campaign (pick `listId` by name).
+- `heyreach.addLeadsToCampaign` — push up to 100 leads into a campaign. Pick `campaignId` by name; pass `accountLeadPairs: [{ linkedInAccountId?, lead: { profileUrl, firstName, lastName, companyName?, position?, emailAddress?, location?, summary?, customUserFields? } }]`. **Map grid columns** into firstName/lastName/companyName/position and any number of `customUserFields` (each `{ name, value }`) for personalization variables beyond the standard set. `profileUrl` is required — a row with no LinkedIn URL cannot be enrolled.
+- `heyreach.addLeadsToList` — stage leads in a list instead of a campaign (pick `listId` by name). Same lead shape, including `customUserFields`.
 
 ### Campaign lifecycle
 - `heyreach.listCampaigns` — page campaigns with stats (`keyword` filters by name; `offset`/`limit` paginate, max 100).
