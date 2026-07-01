@@ -4,7 +4,8 @@
 // that appears once the page is scrolled past 8px (`.scrolled`).
 
 import { useEffect, useState } from "react";
-import { BrandMark, GitHubMark, DownloadArrow } from "./icons";
+import { BrandMark, GitHubMark } from "./icons";
+import { DownloadCTA } from "./DownloadCTA";
 
 const LINKS = [
   ["#how", "How it works"],
@@ -45,10 +46,7 @@ export function Nav() {
             <GitHubMark />
             GitHub
           </a>
-          <a className="btn btn-primary" href="#download">
-            <DownloadArrow />
-            Download
-          </a>
+          <DownloadCTA label="Download" />
         </div>
       </div>
     </nav>
