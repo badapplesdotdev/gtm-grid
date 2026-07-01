@@ -871,6 +871,9 @@ code, .mono {
 .download__head { margin-bottom: var(--space-9); }
 .download__head h1 { font-size: var(--text-2xl); letter-spacing: var(--track-tight); margin: var(--space-3) 0; }
 .download__lede { color: var(--text-muted); font-size: var(--text-lg); line-height: var(--leading-body); max-width: 60ch; }
+.download__cloud { margin-bottom: var(--space-8); padding: var(--space-6) var(--space-7); border: 1px solid var(--accent); border-radius: var(--r-lg); background: color-mix(in srgb, var(--accent) 8%, var(--surface-card)); }
+.download__cloud-title { font-size: var(--text-lg); margin: 0 0 var(--space-2); }
+.download__cloud-body { color: var(--text-muted); line-height: var(--leading-body); margin: 0; max-width: 62ch; }
 .download__groups { display: grid; gap: var(--space-8); }
 .download__group { border: 1px solid var(--line); border-radius: var(--r-lg); padding: var(--space-7); background: var(--surface-card); }
 .download__group h2 { font-size: var(--text-xl); margin: 0; }

@@ -47,6 +47,7 @@ function InfinityIcon() {
 
 interface PaidPlan {
   readonly name: string;
+  readonly id: string; // Autumn plan id — carried to /download so it can name the trial
   readonly tagline: string;
   readonly monthly: number;
   readonly annualMonthly: number; // per-seat/mo when billed annually
@@ -63,6 +64,7 @@ interface PaidPlan {
 const PAID: readonly PaidPlan[] = [
   {
     name: "Team",
+    id: "team",
     tagline: "Shared cloud grids for small teams.",
     monthly: 20,
     annualMonthly: 17,
@@ -80,6 +82,7 @@ const PAID: readonly PaidPlan[] = [
   },
   {
     name: "Business",
+    id: "business",
     tagline: "5× the headroom, lower overage.",
     monthly: 40,
     annualMonthly: 33,
@@ -99,6 +102,7 @@ const PAID: readonly PaidPlan[] = [
   },
   {
     name: "Unlimited",
+    id: "unlimited",
     tagline: "No metering. No overage. Ever.",
     monthly: 99,
     annualMonthly: 83,
@@ -176,7 +180,7 @@ export function Pricing() {
             <li><Tick /> <span className="li-strong">The full source-available desktop app</span></li>
             <li><Tick /> Unlimited rows, tables &amp; functions</li>
             <li><Tick /> Every connector — bring your own keys</li>
-            <li><Tick /> Local-only — cloud needs a paid plan</li>
+            <li><Tick /> AI columns run on your own Claude Code or Codex</li>
           </ul>
         </div>
 
@@ -202,7 +206,7 @@ export function Pricing() {
             </div>
             <a
               className={`btn ${p.featured ? "btn-primary" : "btn-outline"}`}
-              href="/download"
+              href={`/download?plan=${p.id}`}
               onClick={() => posthog.capture("pricing_plan_cta_clicked", { plan: p.name, billing_period: billing, price_monthly: annual ? p.annualMonthly : p.monthly })}
             >{p.cta}</a>
             <ul className="price-list">

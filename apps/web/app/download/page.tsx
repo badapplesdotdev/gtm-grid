@@ -32,7 +32,24 @@ const GROUPS: ReadonlyArray<{
   { os: "Linux", keys: ["linux"], note: ".deb (Debian/Ubuntu)" },
 ];
 
-export default async function DownloadPage() {
+// Cloud plans are started from inside the desktop app — creating a workspace
+// auto-enrols it in a 7-day, no-card Team trial (see packages/cloud seats.ts).
+// There is no web signup, so when a visitor arrives from a cloud "Start 7-day
+// trial" CTA (`?plan=<id>`) we surface a short explainer connecting the download
+// to the in-app trial instead of dropping them on a bare installer list.
+const CLOUD_PLAN_NAMES: Record<string, string> = {
+  team: "Team",
+  business: "Business",
+  unlimited: "Unlimited",
+};
+
+export default async function DownloadPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ plan?: string }>;
+}) {
+  const { plan } = await searchParams;
+  const cloudPlan = plan ? CLOUD_PLAN_NAMES[plan] : undefined;
   const latest = await getLatestRelease();
 
   return (
@@ -51,6 +68,21 @@ export default async function DownloadPage() {
           your own AI key. {latest ? `Latest version ${latest.version}.` : ""}
         </p>
       </header>
+
+      {plan ? (
+        <aside className="download__cloud" aria-label="Starting a cloud trial">
+          <h2 className="download__cloud-title">
+            Starting {cloudPlan ? `your ${cloudPlan} trial` : "a cloud trial"}
+          </h2>
+          <p className="download__cloud-body">
+            Cloud runs inside the same app. Install Grid below, open it, and sign in — every new
+            workspace starts on a <b>7-day trial, no card required</b>.
+            {cloudPlan && cloudPlan !== "Team"
+              ? ` Upgrade to ${cloudPlan} from the in-app billing panel whenever you're ready.`
+              : ""}
+          </p>
+        </aside>
+      ) : null}
 
       {latest && latest.downloads.length > 0 ? (
         <div className="download__groups">
