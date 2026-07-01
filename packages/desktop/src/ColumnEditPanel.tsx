@@ -323,6 +323,104 @@ function SaveSplitButton({
   );
 }
 
+/** Searchable model dropdown grouped by connected provider. Replaces the
+ *  old plain text input + datalist — now the user picks from a real list of
+ *  models pulled live from each connected provider's API (Anthropic, OpenAI,
+ *  OpenRouter, Hermes), with a search box and provider group headers. */
+function ModelPicker({
+  model,
+  setModel,
+  providers,
+}: {
+  model: string;
+  setModel: (v: string) => void;
+  providers: AiProviderInfo[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  const connected = providers.filter((p) => p.connected && p.models.length > 0);
+  const q = search.trim().toLowerCase();
+  const groups = connected
+    .map((p) => ({
+      provider: p,
+      models: q ? p.models.filter((m) => m.toLowerCase().includes(q)) : p.models,
+    }))
+    .filter((g) => g.models.length > 0);
+  // If the typed search doesn't match any known model, offer it as a custom entry
+  // so the user can still pin a model id that hasn't shipped in the API list yet.
+  const customMatch =
+    q && !connected.some((p) => p.models.some((m) => m.toLowerCase() === q))
+      ? search.trim()
+      : null;
+
+  return (
+    <div className="ai-select" ref={wrapRef}>
+      <button type="button" className="form-input ai-select-btn" onClick={() => setOpen((o) => !o)}>
+        {model.trim() ? (
+          <span className="cep-map-sel">{model}</span>
+        ) : (
+          <span className="ai-select-placeholder">Select a model…</span>
+        )}
+        <span className={`ai-select-caret${open ? " open" : ""}`}>{Chevron}</span>
+      </button>
+      {open && (
+        <div className="ai-select-menu">
+          <input
+            className="form-input cep-pick-search"
+            placeholder="Search models…"
+            value={search}
+            autoFocus
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          {connected.length === 0 && (
+            <div className="ai-select-item cep-map-none">No AI provider connected — connect one in AI Providers</div>
+          )}
+          {groups.map((g) => (
+            <div key={g.provider.id} className="ai-select-group">
+              <div className="ai-select-group-label">{g.provider.name}</div>
+              {g.models.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={`ai-select-item${model === m ? " active" : ""}`}
+                  onClick={() => { setModel(m); setOpen(false); setSearch(""); }}
+                >
+                  <span className="ai-select-check">{model === m ? Check : null}</span>
+                  <span className="ai-select-item-label">{m}</span>
+                </button>
+              ))}
+            </div>
+          ))}
+          {customMatch && (
+            <div className="ai-select-group">
+              <div className="ai-select-group-label">Custom</div>
+              <button
+                type="button"
+                className={`ai-select-item${model === customMatch ? " active" : ""}`}
+                onClick={() => { setModel(customMatch); setOpen(false); setSearch(""); }}
+              >
+                <span className="ai-select-check">{model === customMatch ? Check : null}</span>
+                <span className="ai-select-item-label">Use "{customMatch}"</span>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 export function ColumnEditPanel({
   column,
   columns,
@@ -440,7 +538,6 @@ export function ColumnEditPanel({
     if (!isAi) return;
     gridApi.aiProviders().then(setAiProviderList).catch(() => {});
   }, [isAi, gridApi]);
-  const models = aiProviderList.filter((p) => p.connected).flatMap((p) => p.models);
   // The AI provider whose catalog contains the column's CURRENT model — its
   // identity (Anthropic, OpenAI, Hermes, OpenRouter…) brands the column.
   const aiModelProvider = isAi && model ? aiProviderList.find((p) => p.models.includes(model)) ?? null : null;
@@ -658,8 +755,7 @@ export function ColumnEditPanel({
             <label className="form-label">System prompt <span className="form-label-opt">(optional)</span></label>
             <textarea className="form-input ai-textarea" rows={2} value={system} onChange={(e) => setSystem(e.target.value)} placeholder="You are a helpful assistant…" />
             <label className="form-label">Model</label>
-            <input className="form-input" list="cep-models" value={model} onChange={(e) => setModel(e.target.value)} placeholder="e.g. claude-haiku-4-5" />
-            <datalist id="cep-models">{models.map((m) => <option key={m} value={m} />)}</datalist>
+            <ModelPicker model={model} setModel={setModel} providers={aiProviderList} />
             <label className="form-label">Max tokens <span className="form-label-opt">(optional)</span></label>
             <input className="form-input" type="number" min={1} value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} placeholder="512" />
           </>
