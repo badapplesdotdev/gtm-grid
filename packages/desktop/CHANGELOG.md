@@ -1,5 +1,70 @@
 # @gtmgrid/desktop
 
+## 1.2.1
+
+### Patch Changes
+
+- b4e687c: Draw the eye to the next step on CSV import. On the "Map your columns" review
+  screen, the primary **Create table** button now pulses with an accent glow and an
+  arrow nudges toward it while the button is actionable — making the action to
+  proceed obvious after a drop/upload. The effect pauses on hover, only shows while
+  the button is enabled (hidden mid-import), and is disabled under
+  `prefers-reduced-motion`. Covered by a new Electron E2E spec (`csv-import-cta`)
+  asserting the glow/arrow appear and animate on review, are scoped to that step,
+  and respect reduced-motion.
+- a7e740f: Fix broken Windows auto-update caused by mis-signing the NSIS installer.
+
+  The release workflow set `CSC_LINK` / `CSC_KEY_PASSWORD` / `CSC_IDENTITY_AUTO_DISCOVERY`
+  on every matrix runner, but these are repo secrets present everywhere — so on the
+  Windows runner electron-builder grabbed the Apple `.p12` and signed the NSIS installer
+  with the macOS "Developer ID Application" cert. Windows doesn't trust that cert, so
+  electron-updater's `verifySignature` (Get-AuthenticodeSignature) rejected every
+  download and silently stranded 100% of Windows users on their installed version.
+
+  The signing env vars are now gated on the mac runners (`matrix.os == 'macos'`) so the
+  Windows installer is no longer Apple-signed, and `win.verifyUpdateCodeSignature: false`
+  is set in electron-builder.yml until a real Windows Authenticode certificate is wired
+  into CI.
+
+  - @gtmgrid/analytics@1.2.1
+  - @gtmgrid/cloud@1.2.1
+  - @gtmgrid/services@1.2.1
+
+## 1.2.0
+
+### Minor Changes
+
+- f2023a4: Self-host support + a one-command local-run flow.
+
+  A self-hosted instance (`GTMGRID_SELF_HOST=1`) now works indefinitely and is never
+  locked out: the env flag bypasses the paid cloud-access gate
+  (`EntitlementService.requireCloudAccess` — the plan/trial hard-block that otherwise
+  threw `PlanRequiredError` on every cloud path once a workspace fell to Free or its
+  trial lapsed) and the cloud-actions usage caps (the bulk-import and webhook
+  `assertQuota` pre-checks). The desktop UI honors it too — `workspaces.me` now
+  reports `selfHost` per workspace, and the renderer never shows the "Cloud is
+  locked" / upgrade prompts when it is set, so a self-hoster's grid stays fully
+  usable while the backend serves every request.
+
+  Running locally is now straightforward: a `docker-compose.yml` brings up just
+  Postgres, and the README documents the three-step flow (Postgres → migrate → run
+  backend + sidecar + desktop). Positioning is corrected to match reality
+  (source-available + self-hostable, with managed cloud as the zero-ops option)
+  rather than the previous "local-first" claim.
+
+  Covered by new unit tests (the `isSelfHost` helper, the entitlement bypass for
+  Free/lapsed/missing workspaces, the over-quota import/run bypasses, and
+  `workspaces.me` surfacing `selfHost`) and a new Electron E2E spec
+  (`self-host.spec.ts`) asserting Free, expired-by-date, and fully-lapsed workspaces
+  all stay unlocked under self-host — with the existing trial/boot lock specs still
+  passing when self-host is off.
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.2.0
+- @gtmgrid/cloud@1.2.0
+- @gtmgrid/services@1.2.0
+
 ## 1.1.1
 
 ### Patch Changes

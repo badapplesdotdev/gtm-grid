@@ -185,13 +185,17 @@ export const gridRouter = router({
       ),
     ),
 
-  /** Create a sidebar folder in a project. Members-only. Not metered. */
+  /**
+   * Create a sidebar folder in a project, optionally nested under `parentId`
+   * (null/omitted = top level). Members-only. Not metered.
+   */
   createFolder: protectedProcedure
     .input(
       z.object({
         projectId: z.string().min(1),
         name: z.string(),
         id: z.string().min(1).optional(),
+        parentId: z.string().min(1).nullish(),
       }),
     )
     .mutation(({ ctx, input }) =>
@@ -203,6 +207,7 @@ export const gridRouter = router({
             projectId: input.projectId,
             name: input.name,
             ...(input.id !== undefined ? { id: input.id } : {}),
+            parentId: input.parentId ?? null,
           });
         }),
       ),
@@ -234,6 +239,34 @@ export const gridRouter = router({
         Effect.gen(function* () {
           const svc = yield* GridService;
           yield* svc.deleteFolder(input.folderId);
+          return { ok: true as const };
+        }),
+      ),
+    ),
+
+  /**
+   * Reparent a sidebar folder (`parentId: null` → top level), optionally with a
+   * new fractional sort position. Rejects moves that would create a cycle (a
+   * folder into its own sub-folder). Members-only. Not metered.
+   */
+  moveFolder: protectedProcedure
+    .input(
+      z.object({
+        folderId: z.string().min(1),
+        parentId: z.string().min(1).nullable(),
+        position: z.number().finite().optional(),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* GridService;
+          yield* svc.moveFolder({
+            folderId: input.folderId,
+            parentId: input.parentId,
+            ...(input.position !== undefined ? { position: input.position } : {}),
+          });
           return { ok: true as const };
         }),
       ),

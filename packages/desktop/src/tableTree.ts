@@ -94,6 +94,8 @@ export interface SidebarFolder {
   readonly id: string;
   readonly name: string;
   readonly position: number;
+  /** The folder this folder nests under (null = top level). */
+  readonly parentId: string | null;
 }
 
 /** The grouped sidebar view-model: folder sections first, then root rows. */
@@ -133,6 +135,157 @@ export function groupTableList(
     })),
     root,
   };
+}
+
+// ── Nested folders (sub-folders) ────────────────────────────────────────────
+//
+// Folders NEST: a folder may sit inside another folder (`SidebarFolder.parentId`).
+// The sidebar renders a TREE — each folder node carries its own table rows plus
+// its child folder nodes. The builder is pure + testable: it tolerates orphans
+// (a `parentId` pointing at a missing folder falls back to the top level) and is
+// cycle-safe (malformed parent loops can't recurse forever; the unreachable
+// members surface at the top level instead of vanishing).
+
+/** A folder node in the sidebar tree: its rows plus nested child folders. */
+export interface FolderTreeNode {
+  readonly folder: SidebarFolder;
+  readonly rows: TableListRow[];
+  readonly children: FolderTreeNode[];
+}
+
+/** The nested sidebar view-model: top-level folder nodes, then root rows. */
+export interface FolderTree {
+  readonly roots: FolderTreeNode[];
+  readonly rootRows: TableListRow[];
+}
+
+/**
+ * Build the nested sidebar folder tree. Each folder's child folders come in
+ * `position` order; each folder's rows (and the root rows) PRESERVE the input
+ * list order, so favourites-first / position ordering holds within every group.
+ * A folder whose `parentId` matches no known folder is treated as top-level, and
+ * a row whose `folderId` matches no known folder falls back to the root — neither
+ * vanishes. Cycle-safe: folders only reachable through a parent loop are surfaced
+ * at the top level rather than recursing forever.
+ */
+export function buildFolderTree(
+  rows: readonly TableListRow[],
+  folders: readonly SidebarFolder[],
+): FolderTree {
+  const known = new Set(folders.map((f) => f.id));
+
+  // Partition rows by their (known) folder; unknown / null folderId → root.
+  const rowsByFolder = new Map<string, TableListRow[]>();
+  const rootRows: TableListRow[] = [];
+  for (const row of rows) {
+    if (row.folderId !== null && known.has(row.folderId)) {
+      const bucket = rowsByFolder.get(row.folderId) ?? [];
+      bucket.push(row);
+      rowsByFolder.set(row.folderId, bucket);
+    } else {
+      rootRows.push(row);
+    }
+  }
+
+  // Group folders under their EFFECTIVE parent: a parentId pointing at a missing
+  // folder is treated as top-level (null), so orphans don't disappear.
+  const childrenOf = new Map<string | null, SidebarFolder[]>();
+  for (const folder of folders) {
+    const parent =
+      folder.parentId !== null && known.has(folder.parentId)
+        ? folder.parentId
+        : null;
+    const bucket = childrenOf.get(parent) ?? [];
+    bucket.push(folder);
+    childrenOf.set(parent, bucket);
+  }
+  for (const bucket of childrenOf.values()) {
+    bucket.sort((a, b) => a.position - b.position);
+  }
+
+  const visited = new Set<string>();
+  const build = (folder: SidebarFolder): FolderTreeNode => {
+    visited.add(folder.id);
+    // Skip already-visited children so a parent cycle can't recurse forever.
+    const kids = (childrenOf.get(folder.id) ?? []).filter(
+      (c) => !visited.has(c.id),
+    );
+    return {
+      folder,
+      rows: rowsByFolder.get(folder.id) ?? [],
+      children: kids.map(build),
+    };
+  };
+
+  const roots = (childrenOf.get(null) ?? []).map(build);
+  // Any folder unreachable from the top level is in a parent cycle — surface it
+  // at the top level (position-ordered) so it stays usable instead of vanishing.
+  const stranded = folders
+    .filter((f) => !visited.has(f.id))
+    .sort((a, b) => a.position - b.position);
+  for (const folder of stranded) {
+    if (!visited.has(folder.id)) roots.push(build(folder));
+  }
+  return { roots, rootRows };
+}
+
+/**
+ * Whether `folderId` has `possibleAncestorId` somewhere on its parent chain
+ * (inclusive of itself). Walks parents up to the top, guarding against malformed
+ * cycles. Pure + testable.
+ */
+export function folderHasAncestor(
+  folders: readonly SidebarFolder[],
+  folderId: string,
+  possibleAncestorId: string,
+): boolean {
+  const byId = new Map(folders.map((f) => [f.id, f]));
+  const seen = new Set<string>();
+  let cursor: string | null = folderId;
+  while (cursor !== null) {
+    if (cursor === possibleAncestorId) return true;
+    if (seen.has(cursor)) break; // defensive: pre-existing cycle
+    seen.add(cursor);
+    cursor = byId.get(cursor)?.parentId ?? null;
+  }
+  return false;
+}
+
+/**
+ * Whether the folder `movedId` may be reparented INTO `targetId` (null = top
+ * level). Illegal when the target is the folder itself or any of its
+ * descendants (that would create a cycle). Moving to the top level is always
+ * allowed. Pure + testable — the UI uses this to reject the drop.
+ */
+export function canMoveFolderInto(
+  folders: readonly SidebarFolder[],
+  movedId: string,
+  targetId: string | null,
+): boolean {
+  if (targetId === null) return true;
+  // Illegal if `movedId` is an ancestor of (or equal to) the target.
+  return !folderHasAncestor(folders, targetId, movedId);
+}
+
+/**
+ * The `position` a folder reparented under `parentId` (null = top level) should
+ * take: the tail of that destination sibling group (`max position + 1`), or 0
+ * when empty. Excludes `movedId` itself so re-dropping into the same group is a
+ * no-op tail. Pure + testable.
+ */
+export function folderTailPosition(
+  folders: readonly SidebarFolder[],
+  parentId: string | null,
+  movedId: string,
+): number {
+  const known = new Set(folders.map((f) => f.id));
+  const siblings = folders.filter((f) => {
+    if (f.id === movedId) return false;
+    const parent = f.parentId !== null && known.has(f.parentId) ? f.parentId : null;
+    return parent === parentId;
+  });
+  if (siblings.length === 0) return 0;
+  return Math.max(...siblings.map((f) => f.position)) + 1;
 }
 
 /**

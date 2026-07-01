@@ -59,6 +59,13 @@ export interface WorkspaceSummary {
    * billing view can show "actions used / limit".
    */
   readonly cloudActions: SeatUsage;
+  /**
+   * True on a SELF-HOSTED backend (`GTMGRID_SELF_HOST=1`). When set, the cloud UI
+   * is NEVER locked by plan/trial state — a self-host instance has no billing, so
+   * the server bypasses its entitlement gate and the desktop must not show the
+   * "Cloud is locked" / upgrade prompts. Omitted/false on the hosted product.
+   */
+  readonly selfHost?: boolean;
 }
 
 /** The authenticated user as returned by the `me` query. */

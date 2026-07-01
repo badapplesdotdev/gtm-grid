@@ -24,6 +24,9 @@ export function freshState() {
     // unmetered = no warning).
     cloudActionsUsed: 0,
     cloudActionsLimit: null,
+    // Self-hosted backend (GTMGRID_SELF_HOST=1). When true the renderer never
+    // locks the cloud UI regardless of paid/trial state. Default: hosted.
+    selfHost: false,
 
     user: {
       id: "user_1",
@@ -111,6 +114,9 @@ export function cell(value, status = "done", error = null) {
  *     synced (plan id null). The renderer locks on EITHER null id OR a past
  *     trialEndsAt, so all three drive the right UI.
  *   - `cloudActionsUsed` / `cloudActionsLimit` — drive the low-credits warning.
+ *   - `selfHost` (boolean) — a self-hosted backend (`GTMGRID_SELF_HOST=1`).
+ *     Surfaced on each workspace; the renderer then NEVER locks the cloud UI,
+ *     regardless of `paid`/`trialEndsAt`. Mirrors the server bypass.
  */
 export function mePayload(s) {
   const trialEndsAt = typeof s.trialEndsAt === "number" ? s.trialEndsAt : null;
@@ -129,6 +135,7 @@ export function mePayload(s) {
           used: typeof s.cloudActionsUsed === "number" ? s.cloudActionsUsed : 0,
           limit: typeof s.cloudActionsLimit === "number" ? s.cloudActionsLimit : null,
         },
+        selfHost: s.selfHost === true,
       },
     ],
   };

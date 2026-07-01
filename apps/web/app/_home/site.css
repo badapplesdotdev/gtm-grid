@@ -306,6 +306,8 @@ html { scroll-behavior: smooth; }
   transition: background .14s ease, border-color .14s ease, color .14s ease, box-shadow .14s ease, transform .14s ease;
 }
 .gtm-home .btn svg { width: 16px; height: 16px; }
+.gtm-home .dl-os-icons { display: inline-flex; align-items: center; gap: 5px; }
+.gtm-home .dl-os-icons svg { width: 14px; height: 14px; }
 .gtm-home .btn-primary {
   background: var(--accent); color: #fff;
   box-shadow: 0 1px 3px var(--tint-shadow);

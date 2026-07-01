@@ -77,6 +77,7 @@ import {
   type TableRepoError,
 } from "../repositories/table-repo.js";
 import type { WorkspaceRepoError } from "../repositories/workspace-repo.js";
+import { isSelfHost } from "../self-host.js";
 import type { GridChangeEvent, GridDedupe } from "../realtime/events.js";
 import { WORKSPACE_ROOM_TABLE_ID } from "../realtime/events.js";
 import { EntitlementService, type PlanRequiredError } from "./entitlement-service.js";
@@ -724,8 +725,12 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         yield* requireCloudMember(table.workspaceId);
 
         // Atomic quota pre-check (free tier has a hard cap; unlimited passes).
-        const quota = yield* meter.readQuota(table.workspaceId);
-        if (quota._tag === "Some") {
+        // Self-host is never metered (no billing backend), so skip it entirely —
+        // a stray `cloud_actions_limit` value must not cap a self-hoster.
+        const quota = isSelfHost()
+          ? undefined
+          : yield* meter.readQuota(table.workspaceId);
+        if (quota !== undefined && quota._tag === "Some") {
           const limit = quota.value.cloudActionsLimit;
           if (typeof limit === "number") {
             const used = quota.value.cloudActionsUsed ?? 0;
@@ -841,17 +846,34 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         return yield* folders.listByProject(projectId);
       });
 
-    /** Create a folder in a project. Members-only. NOT metered. */
+    /**
+     * Create a folder in a project, optionally nested under `parentId`
+     * (null/omitted = top level). The parent, when given, must live in the same
+     * project. Members-only. NOT metered.
+     */
     const createFolder = (args: {
       readonly projectId: string;
       readonly name: string;
       /** Client-supplied id (optimistic create); the DB generates one if omitted. */
       readonly id?: string;
+      /** Parent folder to nest under (null/omitted = top level). */
+      readonly parentId?: string | null;
     }) =>
       Effect.gen(function* () {
         const project = yield* requireProject(args.projectId);
         yield* requireCloudMember(project.workspaceId);
-        const position = yield* folders.nextPosition(args.projectId);
+        const parentId = args.parentId ?? null;
+        if (parentId !== null) {
+          const parent = yield* requireFolder(parentId);
+          if (parent.projectId !== args.projectId) {
+            return yield* Effect.fail(
+              new GridNotFoundError({
+                message: `Parent folder ${parentId} is not in project ${args.projectId}.`,
+              }),
+            );
+          }
+        }
+        const position = yield* folders.nextPosition(args.projectId, parentId);
         const id = yield* folders.insert({
           ...(args.id !== undefined ? { id: args.id } : {}),
           workspaceId: project.workspaceId,
@@ -859,6 +881,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
           name: args.name,
           position,
           createdAt: Date.now(),
+          parentId,
         });
         yield* publishWorkspaceTablesChanged(project.workspaceId, {
           type: "folders.changed",
@@ -892,6 +915,63 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         const folder = yield* requireFolder(folderId);
         yield* requireCloudMember(folder.workspaceId);
         yield* folders.remove(folderId);
+        yield* publishWorkspaceTablesChanged(folder.workspaceId, {
+          type: "folders.changed",
+          projectId: folder.projectId,
+        });
+      });
+
+    /**
+     * Reparent a folder (`parentId: null` → top level), optionally with a new
+     * sort position within the destination sibling group. Rejects a move that
+     * would create a cycle (a folder cannot become its own descendant) — the
+     * proposed parent must not be the folder itself nor any folder reachable by
+     * walking parents up from it. Members-only. NOT metered.
+     */
+    const moveFolder = (args: {
+      readonly folderId: string;
+      readonly parentId: string | null;
+      readonly position?: number;
+    }) =>
+      Effect.gen(function* () {
+        const folder = yield* requireFolder(args.folderId);
+        yield* requireCloudMember(folder.workspaceId);
+        if (args.parentId !== null) {
+          if (args.parentId === args.folderId) {
+            return yield* Effect.fail(
+              new GridNotFoundError({
+                message: `A folder cannot be moved into itself.`,
+              }),
+            );
+          }
+          const parent = yield* requireFolder(args.parentId);
+          if (parent.projectId !== folder.projectId) {
+            return yield* Effect.fail(
+              new GridNotFoundError({
+                message: `Folder ${args.parentId} is not in folder ${args.folderId}'s project.`,
+              }),
+            );
+          }
+          // Cycle guard: walk up from the proposed parent; if we reach the
+          // folder being moved, this move would nest it under its own subtree.
+          const all = yield* folders.listByProject(folder.projectId);
+          const byId = new Map(all.map((f) => [f.id, f]));
+          let cursor: string | null = args.parentId;
+          const seen = new Set<string>();
+          while (cursor !== null) {
+            if (cursor === args.folderId) {
+              return yield* Effect.fail(
+                new GridNotFoundError({
+                  message: `Cannot move a folder into one of its own sub-folders.`,
+                }),
+              );
+            }
+            if (seen.has(cursor)) break; // defensive: pre-existing cycle
+            seen.add(cursor);
+            cursor = byId.get(cursor)?.parentId ?? null;
+          }
+        }
+        yield* folders.setParent(args.folderId, args.parentId, args.position);
         yield* publishWorkspaceTablesChanged(folder.workspaceId, {
           type: "folders.changed",
           projectId: folder.projectId,
@@ -1412,6 +1492,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       createFolder,
       renameFolder,
       deleteFolder,
+      moveFolder,
       moveTable,
       updateColumn,
       deleteColumn,

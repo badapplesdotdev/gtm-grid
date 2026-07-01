@@ -107,6 +107,8 @@ export interface CloudFolderSummary {
   readonly name: string;
   readonly position: number;
   readonly createdAt: number;
+  /** The folder this folder nests under (null = top level). */
+  readonly parentId: string | null;
 }
 
 // ───────────────────────────── react-query keys ─────────────────────────────
@@ -251,6 +253,7 @@ export function useCloudFolders(
         name: f.name,
         position: f.position,
         createdAt: f.createdAt,
+        parentId: f.parentId ?? null,
       })),
     [q.data],
   );
@@ -429,9 +432,13 @@ export function useCloudProjectMutations() {
   );
 
   const createFolder = useCallback(
-    async (projectId: Id<"projects">, name: string): Promise<string> => {
+    async (
+      projectId: Id<"projects">,
+      name: string,
+      parentId: string | null = null,
+    ): Promise<string> => {
       const id = crypto.randomUUID();
-      await apiClient!.grid.createFolder.mutate({ projectId, name, id });
+      await apiClient!.grid.createFolder.mutate({ projectId, name, id, parentId });
       await invalidateFolderLists(projectId);
       return id;
     },
@@ -501,6 +508,32 @@ export function useCloudProjectMutations() {
     },
     [invalidateFolderLists, patchTablesLists],
   );
+  const moveFolder = useCallback(
+    async (
+      projectId: Id<"projects">,
+      folderId: string,
+      parentId: string | null,
+      position?: number,
+    ) => {
+      // Optimistic: reparent (and reposition) the folder in the sidebar instantly.
+      const rollback = patchFoldersList(projectId, (list) =>
+        list.map((f) =>
+          f.id === folderId
+            ? { ...f, parentId, ...(position !== undefined ? { position } : {}) }
+            : f,
+        ),
+      );
+      try {
+        await apiClient!.grid.moveFolder.mutate({ folderId, parentId, position });
+      } catch (e) {
+        rollback();
+        throw e;
+      } finally {
+        await invalidateFolderLists(projectId);
+      }
+    },
+    [invalidateFolderLists, patchFoldersList],
+  );
   return {
     createProject,
     createTable,
@@ -510,6 +543,7 @@ export function useCloudProjectMutations() {
     createFolder,
     renameFolder,
     deleteFolder,
+    moveFolder,
     moveTable,
   };
 }

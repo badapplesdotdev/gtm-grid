@@ -1,0 +1,145 @@
+name: Code Review Agent
+
+# Auto-review + risk-gated auto-merge. Runs on our self-hosted Mac mini AFTER the
+# `CI` workflow succeeds for a PR, so only green PRs are ever eligible. A Claude
+# Code agent judges regression risk (new features are treated as risky); low-risk,
+# non-feature changes are auto-squash-merged, everything else gets a "request
+# changes" review + a needs-human-review label.
+#
+# workflow_run always uses the workflow file + scripts from the DEFAULT branch, and
+# we run the reviewer from that trusted checkout (never from PR-authored code); the
+# PR diff is only ever read as data. The merge uses GITHUB_TOKEN (github-actions[bot]),
+# which can review PRs authored by anyone (including repo admins) and does not
+# re-trigger CI, avoiding loops.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  actions: read
+
+concurrency:
+  group: review-agent-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Risk review + auto-merge
+    # Only for successful CI runs that were triggered by a pull request.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request'
+    runs-on: [self-hosted, macos, review-agent]
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REVIEW_MODEL: claude-opus-4-8
+      HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      REPO: ${{ github.repository }}
+    steps:
+      # Trusted checkout of the DEFAULT branch — this is where the reviewer script
+      # + prompt come from. We deliberately do NOT check out the PR head for
+      # execution; the agent reads the PR strictly as data via `gh`.
+      - name: Checkout trusted base (default branch)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Resolve PR for this CI run
+        id: pr
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/bin:$PATH"
+          # Same-repo PRs: resolve by head branch. Pushes to main resolve to none.
+          NUM="$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --base main --state open \
+                   --json number --jq '.[0].number // empty')"
+          if [ -z "$NUM" ]; then
+            echo "No open PR for head '$HEAD_BRANCH' — nothing to review."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "pr=$NUM" >> "$GITHUB_OUTPUT"
+          # Guards: drafts and opt-out label are review-exempt.
+          INFO="$(gh pr view "$NUM" --repo "$REPO" --json isDraft,baseRefName,labels)"
+          if [ "$(jq -r .isDraft <<<"$INFO")" = "true" ]; then
+            echo "PR #$NUM is a draft — skipping."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$(jq -r .baseRefName <<<"$INFO")" != "main" ]; then
+            echo "PR #$NUM base is not main — skipping."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if jq -e '.labels[]?.name == "no-auto-merge"' <<<"$INFO" >/dev/null; then
+            echo "PR #$NUM has no-auto-merge label — skipping."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Run risk reviewer
+        if: steps.pr.outputs.skip != 'true'
+        id: review
+        env:
+          VERDICT_OUT: ${{ github.workspace }}/verdict.json
+          AGENT_LOG: ${{ github.workspace }}/agent.log
+          # Headless Claude auth. Prefer the subscription-backed OAuth token
+          # (`claude setup-token`, no API billing); fall back to an API key. One of
+          # these MUST be set as a repo secret — the runner's local login is not
+          # used (it expires and can't refresh unattended).
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          bash scripts/review-agent/run.sh "${{ steps.pr.outputs.pr }}"
+
+      - name: Enforce policy (auto-merge or request changes)
+        if: steps.pr.outputs.skip != 'true'
+        env:
+          PR: ${{ steps.pr.outputs.pr }}
+          VERDICT_OUT: ${{ github.workspace }}/verdict.json
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/bin:$PATH"
+
+          RISK="$(jq -r '.risk' "$VERDICT_OUT")"
+          NEWFEAT="$(jq -r '.is_new_feature' "$VERDICT_OUT")"
+          REC="$(jq -r '.recommendation' "$VERDICT_OUT")"
+          SUMMARY="$(jq -r '.summary // ""' "$VERDICT_OUT")"
+          REGR="$(jq -r '.regression_risk // ""' "$VERDICT_OUT")"
+          COVER="$(jq -r '.test_coverage // "unknown"' "$VERDICT_OUT")"
+          REASONS="$(jq -r '(.reasons // []) | map("- " + .) | join("\n")' "$VERDICT_OUT")"
+
+          # Deterministic gate — do NOT trust the agent's recommendation alone.
+          # Auto-merge requires low risk AND not a new feature AND agent concurrence.
+          if [ "$RISK" = "low" ] && [ "$NEWFEAT" = "false" ] && [ "$REC" = "auto_merge" ]; then
+            BODY="$(printf '🤖 **Auto-merge — low regression risk**\n\n%s\n\n**Regression risk:** %s\n**Test coverage:** %s\n\n%s\n\n_CI is green and this change is low-risk and not a new feature, so I am merging it automatically._' \
+              "$SUMMARY" "$REGR" "$COVER" "$REASONS")"
+            gh pr comment "$PR" --repo "$REPO" --body "$BODY" || true
+            echo "Auto-merging PR #$PR"
+            gh pr merge "$PR" --repo "$REPO" --squash --delete-branch \
+              || gh pr merge "$PR" --repo "$REPO" --squash --auto --delete-branch
+          else
+            gh label create needs-human-review --repo "$REPO" --color D93F0B \
+              --description "Flagged by the review agent as needing a human" 2>/dev/null || true
+            gh pr edit "$PR" --repo "$REPO" --add-label needs-human-review || true
+            BODY="$(printf '🤖 **Needs a human — merge not automatic**\n\n%s\n\n**Risk:** %s · **New feature:** %s · **Test coverage:** %s\n**Regression risk:** %s\n\n%s\n\n_CI is green, but this change is not low-risk enough to auto-merge. A maintainer should review and merge._' \
+              "$SUMMARY" "$RISK" "$NEWFEAT" "$COVER" "$REGR" "$REASONS")"
+            # request-changes as github-actions[bot]; fall back to a comment if the
+            # review can't be submitted for any reason.
+            gh pr review "$PR" --repo "$REPO" --request-changes --body "$BODY" \
+              || gh pr comment "$PR" --repo "$REPO" --body "$BODY" || true
+          fi
+
+      - name: Upload agent log
+        if: always() && steps.pr.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-agent-log-${{ steps.pr.outputs.pr }}
+          path: |
+            ${{ github.workspace }}/verdict.json
+            ${{ github.workspace }}/agent.log
+          if-no-files-found: ignore
+          retention-days: 7

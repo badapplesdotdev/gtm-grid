@@ -374,6 +374,32 @@ describe("WebhookService.assertColumnRunQuota (TRI-3277)", () => {
     }
   });
 
+  it("SELF-HOST: an over-limit run passes (cloud-actions quota bypassed)", async () => {
+    // Same over-limit setup as the rejecting case above, but GTMGRID_SELF_HOST=1
+    // skips the quota gate so a self-hoster is never capped.
+    const prev = process.env.GTMGRID_SELF_HOST;
+    process.env.GTMGRID_SELF_HOST = "1";
+    try {
+      const quotas = new Map<string, WorkspaceQuota>([
+        [WS, { cloudActionsUsed: 9, cloudActionsLimit: 10 }],
+      ]);
+      const { run } = harness({ rows, cells: [], quotas });
+      const exit = await run(
+        svc.pipe(
+          Effect.flatMap((s) =>
+            s.assertColumnRunQuota({ tableId: TABLE, columnId: COL_NAME }),
+          ),
+        ),
+      );
+      expect(Exit.isSuccess(exit)).toBe(true);
+      // 3 candidate cells still reported, just not capped.
+      if (Exit.isSuccess(exit)) expect(exit.value.cellsToRun).toBe(3);
+    } finally {
+      if (prev === undefined) delete process.env.GTMGRID_SELF_HOST;
+      else process.env.GTMGRID_SELF_HOST = prev;
+    }
+  });
+
   it("subtracts already-done cells (idempotency skips) so a re-run within quota passes", async () => {
     const quotas = new Map<string, WorkspaceQuota>([
       [WS, { cloudActionsUsed: 9, cloudActionsLimit: 10 }],
