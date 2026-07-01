@@ -34,6 +34,47 @@ const generateInput = z.object({
 const AI_MAX_RETRIES = 4;
 const AI_TIMEOUT_MS = 60_000;
 
+/**
+ * OpenRouter serves its `:free`-suffixed model ids under a tight account-wide
+ * `free-models-per-min` cap that sits far below the connector's default pace and
+ * can't be cleared by the SDK's per-request backoff (it's a per-minute, not
+ * per-request, limit). Detect those ids so a 429 on them can carry the specific
+ * "switch to a paid model" guidance.
+ */
+const isOpenRouterFreeModel = (provider: AiConfig["provider"], model: string): boolean =>
+  provider === "openrouter" && /:free$/i.test(model.trim());
+
+/** Best-effort HTTP status pulled off a vendor SDK error — both `openai` and
+ *  `@anthropic-ai/sdk` expose `.status` on their APIError types. */
+const errorStatus = (e: unknown): number | undefined => {
+  const s = (e as { status?: unknown } | null)?.status;
+  return typeof s === "number" ? s : undefined;
+};
+
+/**
+ * Translate a rate-limit (429) rejection from a vendor SDK into a clear,
+ * user-facing message. Without this the raw SDK error bubbles up through the
+ * engine's Effect runtime as an opaque `(FiberFailure) Error` — into both the
+ * cell and error tracking — telling the user nothing about what went wrong.
+ * Returns `undefined` for anything that isn't a 429 so the original error is
+ * preserved unchanged.
+ */
+const friendlyRateLimitError = (
+  e: unknown,
+  provider: AiConfig["provider"],
+  model: string,
+): Error | undefined => {
+  if (errorStatus(e) !== 429) return undefined;
+  const msg = isOpenRouterFreeModel(provider, model)
+    ? `Hit OpenRouter's free-tier rate limit for "${model}" (free-models-per-min cap). ` +
+      "Switch to a paid model or slow the run down, then re-run the failed cells."
+    : `Hit ${provider}'s rate limit${model ? ` for "${model}"` : ""}. ` +
+      "Slow the run down or use a higher-tier key, then re-run the failed cells.";
+  const err = new Error(msg);
+  (err as { cause?: unknown }).cause = e;
+  return err;
+};
+
 export const aiConnector: Connector = {
   id: "ai",
   name: "AI",
@@ -130,7 +171,7 @@ export const aiConnector: Connector = {
               isError: true,
               error: e instanceof Error ? e.message : String(e),
             });
-            throw e;
+            throw friendlyRateLimitError(e, "anthropic", model) ?? e;
           }
         }
 
@@ -179,7 +220,7 @@ export const aiConnector: Connector = {
             isError: true,
             error: e instanceof Error ? e.message : String(e),
           });
-          throw e;
+          throw friendlyRateLimitError(e, ai.provider, model) ?? e;
         }
       },
     },

@@ -73,6 +73,50 @@ describe("ai.generate — SDK resilience + connector throttle", () => {
   });
 });
 
+describe("ai.generate — rate-limit (429) surfacing", () => {
+  // Mimics a vendor SDK APIError: both `openai` and `@anthropic-ai/sdk` expose
+  // `.status` on their error types.
+  const rateLimit = () => Object.assign(new Error("Rate limit exceeded"), { status: 429 });
+
+  it("surfaces the OpenRouter free-tier limit with actionable guidance", async () => {
+    createMock.mockRejectedValueOnce(rateLimit());
+    const OPENROUTER: AiConfig = {
+      provider: "openrouter",
+      apiKey: "or-key",
+      model: "deepseek/deepseek-r1:free",
+    };
+    await expect(
+      generate.run({ prompt: "hi", model: "deepseek/deepseek-r1:free" }, ctx([OPENROUTER])),
+    ).rejects.toThrow(/free-tier rate limit.*free-models-per-min.*paid model/s);
+  });
+
+  it("gives a generic rate-limit message for a non-free OpenRouter 429", async () => {
+    createMock.mockRejectedValueOnce(rateLimit());
+    const OPENROUTER: AiConfig = {
+      provider: "openrouter",
+      apiKey: "or-key",
+      model: "anthropic/claude-3.5-sonnet",
+    };
+    await expect(
+      generate.run({ prompt: "hi", model: "anthropic/claude-3.5-sonnet" }, ctx([OPENROUTER])),
+    ).rejects.toThrow(/hit openrouter's rate limit/i);
+  });
+
+  it("keeps the free-tier hint out of an Anthropic 429", async () => {
+    anthropicCreate.mockRejectedValueOnce(rateLimit());
+    await expect(
+      generate.run({ prompt: "hi", model: "claude-haiku-4-5" }, ctx([ANTHROPIC])),
+    ).rejects.toThrow(/hit anthropic's rate limit/i);
+  });
+
+  it("preserves the original error for a non-429 failure", async () => {
+    createMock.mockRejectedValueOnce(Object.assign(new Error("boom"), { status: 500 }));
+    await expect(generate.run({ prompt: "hi", model: "gpt-4o" }, ctx([OPENAI]))).rejects.toThrow(
+      /^boom$/,
+    );
+  });
+});
+
 describe("ai.generate — Hermes routing", () => {
   it("routes a bare hermes-* model to the Hermes gateway base URL", async () => {
     const out = await generate.run({ prompt: "hi", model: "hermes-4" }, ctx([OPENAI, HERMES]));
