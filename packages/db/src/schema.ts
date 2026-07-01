@@ -354,9 +354,11 @@ export const projects = pgTable(
 );
 
 /**
- * A sidebar folder grouping a project's tables (organizational only — one level
- * deep, no folder nesting). Deleting a folder unfiles its tables back to the
- * root via the `tables.folder_id` ON DELETE SET NULL foreign key.
+ * A sidebar folder grouping a project's tables. Folders NEST: a folder may sit
+ * inside another folder via the self-referencing `parent_id`. Deleting a folder
+ * unfiles its tables back to the root (`tables.folder_id` ON DELETE SET NULL)
+ * and promotes its child folders to the root (`folders.parent_id` ON DELETE SET
+ * NULL) — neither tables nor sub-folders are ever cascade-deleted.
  */
 export const folders = pgTable(
   "folders",
@@ -371,10 +373,18 @@ export const folders = pgTable(
     name: text("name").notNull(),
     position: doublePrecision("position").notNull(),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    // The folder this folder is nested under (null = top level). SET NULL on
+    // parent delete so removing a folder promotes its children to the root
+    // rather than cascade-deleting the subtree. The `(): AnyPgColumn`
+    // annotation breaks the self-referential type cycle.
+    parentId: uuid("parent_id").references((): AnyPgColumn => folders.id, {
+      onDelete: "set null",
+    }),
   },
   (t) => [
     index("folders_by_project").on(t.projectId),
     index("folders_by_workspace").on(t.workspaceId),
+    index("folders_by_parent").on(t.parentId),
   ],
 );
 

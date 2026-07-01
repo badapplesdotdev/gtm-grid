@@ -1449,8 +1449,8 @@ describe("GridService folders (sidebar table groups)", () => {
       projects: [proj, { id: "p2", workspaceId: WS, name: "Q", createdAt: 1 }],
       tables: [table()],
       folders: [
-        { id: "f1", workspaceId: WS, projectId: "p1", name: "F", position: 0, createdAt: 1 },
-        { id: "f2", workspaceId: WS, projectId: "p2", name: "Other", position: 0, createdAt: 1 },
+        { id: "f1", workspaceId: WS, projectId: "p1", name: "F", position: 0, createdAt: 1, parentId: null },
+        { id: "f2", workspaceId: WS, projectId: "p2", name: "Other", position: 0, createdAt: 1, parentId: null },
       ],
     });
     const { run } = harness({ store });
@@ -1471,7 +1471,7 @@ describe("GridService folders (sidebar table groups)", () => {
   it("createTable files the new table under the given folder", async () => {
     const store = makeGridStore({
       projects: [proj],
-      folders: [{ id: "f1", workspaceId: WS, projectId: "p1", name: "F", position: 0, createdAt: 1 }],
+      folders: [{ id: "f1", workspaceId: WS, projectId: "p1", name: "F", position: 0, createdAt: 1, parentId: null }],
     });
     const { run } = harness({ store });
     const exit = await run(
@@ -1487,7 +1487,7 @@ describe("GridService folders (sidebar table groups)", () => {
     const store = makeGridStore({
       projects: [proj],
       tables: [table({ folderId: "f1" })],
-      folders: [{ id: "f1", workspaceId: WS, projectId: "p1", name: "F", position: 0, createdAt: 1 }],
+      folders: [{ id: "f1", workspaceId: WS, projectId: "p1", name: "F", position: 0, createdAt: 1, parentId: null }],
     });
     const { run, events } = harness({ store });
     const exit = await run(Effect.flatMap(GridService, (s) => s.deleteFolder("f1")));
@@ -1496,6 +1496,75 @@ describe("GridService folders (sidebar table groups)", () => {
     expect(store.tables[0]?.folderId).toBeNull();
     // The workspace room hears folders.changed so teammates' sidebars refetch.
     expect(events.some((e) => e.event.type === "folders.changed")).toBe(true);
+  });
+
+  it("createFolder nests a sub-folder under a parent (scoped position)", async () => {
+    const store = makeGridStore({
+      projects: [proj],
+      folders: [{ id: "f1", workspaceId: WS, projectId: "p1", name: "Parent", position: 0, createdAt: 1, parentId: null }],
+    });
+    const { run, events } = harness({ store });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.createFolder({ projectId: "p1", name: "Child", parentId: "f1" }),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    const child = store.folders.find((f) => f.name === "Child");
+    expect(child?.parentId).toBe("f1");
+    // Position is scoped to the (empty) child sibling group → starts at 0.
+    expect(child?.position).toBe(0);
+    expect(events.some((e) => e.event.type === "folders.changed")).toBe(true);
+  });
+
+  it("moveFolder reparents a folder and rejects cycles + cross-project parents", async () => {
+    const store = makeGridStore({
+      projects: [proj, { id: "p2", workspaceId: WS, name: "Q", createdAt: 1 }],
+      folders: [
+        { id: "a", workspaceId: WS, projectId: "p1", name: "A", position: 0, createdAt: 1, parentId: null },
+        { id: "b", workspaceId: WS, projectId: "p1", name: "B", position: 1, createdAt: 1, parentId: "a" },
+        { id: "other", workspaceId: WS, projectId: "p2", name: "Other", position: 0, createdAt: 1, parentId: null },
+      ],
+    });
+    const { run, events } = harness({ store });
+    // Reparent A under B → would create a cycle (B is A's descendant): rejected.
+    const cycle = await run(
+      Effect.flatMap(GridService, (s) => s.moveFolder({ folderId: "a", parentId: "b" })),
+    );
+    expect(failTag(cycle)).toBe("GridNotFoundError");
+    // Into itself: rejected.
+    const self = await run(
+      Effect.flatMap(GridService, (s) => s.moveFolder({ folderId: "a", parentId: "a" })),
+    );
+    expect(failTag(self)).toBe("GridNotFoundError");
+    // A parent in another project: rejected.
+    const cross = await run(
+      Effect.flatMap(GridService, (s) => s.moveFolder({ folderId: "b", parentId: "other" })),
+    );
+    expect(failTag(cross)).toBe("GridNotFoundError");
+    // Legal: move B to the top level with a new position.
+    const ok = await run(
+      Effect.flatMap(GridService, (s) => s.moveFolder({ folderId: "b", parentId: null, position: 5 })),
+    );
+    expect(Exit.isSuccess(ok)).toBe(true);
+    expect(store.folders.find((f) => f.id === "b")).toMatchObject({ parentId: null, position: 5 });
+    expect(events.some((e) => e.event.type === "folders.changed")).toBe(true);
+  });
+
+  it("deleteFolder promotes child folders to the root (SET NULL on parent_id)", async () => {
+    const store = makeGridStore({
+      projects: [proj],
+      folders: [
+        { id: "a", workspaceId: WS, projectId: "p1", name: "A", position: 0, createdAt: 1, parentId: null },
+        { id: "b", workspaceId: WS, projectId: "p1", name: "B", position: 0, createdAt: 1, parentId: "a" },
+      ],
+    });
+    const { run } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.deleteFolder("a")));
+    expect(Exit.isSuccess(exit)).toBe(true);
+    // A is gone; its child B survives, promoted to the top level (parentId null).
+    expect(store.folders.map((f) => f.id)).toEqual(["b"]);
+    expect(store.folders[0]?.parentId).toBeNull();
   });
 
   it("rejects a non-member's folder write (authz before data)", async () => {
