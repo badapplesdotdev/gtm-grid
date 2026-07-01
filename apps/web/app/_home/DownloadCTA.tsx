@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from "react";
 import posthog from "posthog-js";
+import { AppleMark, WindowsMark } from "./icons";
 
 type Detected = { readonly key: string; readonly os: string } | null;
 
@@ -21,11 +22,13 @@ function detectOS(): Detected {
   return null;
 }
 
-function DownloadIcon() {
+/** Apple + Windows glyphs, signalling the build ships for both desktops. */
+function PlatformIcons() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14" />
-    </svg>
+    <span className="dl-os-icons" aria-hidden="true">
+      <AppleMark />
+      <WindowsMark />
+    </span>
   );
 }
 
@@ -35,23 +38,19 @@ export function DownloadCTA({
   className,
 }: {
   size?: "lg";
-  /** Override the computed "Download for <OS>" label (e.g. "Download free"). */
+  /** Override the default "Download" label (e.g. "Download free"). */
   label?: string;
   className?: string;
 }) {
   const [detected, setDetected] = useState<Detected>(null);
-  const [ready, setReady] = useState(false);
   useEffect(() => {
     setDetected(detectOS());
-    setReady(true);
   }, []);
 
   const href = detected ? `/api/download/${detected.key}` : "/download";
-  const computed = !ready
-    ? "Download"
-    : detected
-      ? `Download for ${detected.os}`
-      : "Download the app";
+  // Cross-platform build — keep the label plain and let the Apple + Windows
+  // icons signal that it covers both desktops (href still routes per-OS).
+  const computed = "Download";
 
   function handleClick() {
     posthog.capture("download_initiated", {
@@ -67,7 +66,7 @@ export function DownloadCTA({
       data-detected={detected?.key ?? "none"}
       onClick={handleClick}
     >
-      <DownloadIcon />
+      <PlatformIcons />
       {label ?? computed}
     </a>
   );

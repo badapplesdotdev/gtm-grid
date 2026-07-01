@@ -1,5 +1,18 @@
 # @gtmgrid/web
 
+## 1.2.1
+
+### Patch Changes
+
+- Updated dependencies [5c11bbe]
+  - @gtmgrid/engine@1.2.1
+  - @gtmgrid/analytics@1.2.1
+  - @gtmgrid/auth@1.2.1
+  - @gtmgrid/cloud@1.2.1
+  - @gtmgrid/db@1.2.1
+  - @gtmgrid/email@1.2.1
+  - @gtmgrid/services@1.2.1
+
 ## 1.2.0
 
 ### Patch Changes

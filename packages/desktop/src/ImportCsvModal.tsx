@@ -400,7 +400,12 @@ export function ImportCsvModal({
               <span className="import-mono">{progress.done}/{progress.total}</span>
             </span>
           )}
-          <button className="btn btn-primary btn-lg" disabled={!includedCols.length || importing}
+          {includedCols.length > 0 && !importing && (
+            <span className="import-cta-hint" aria-hidden="true"><I.ArrowRight s={18} /></span>
+          )}
+          <button
+            className={`btn btn-primary btn-lg${includedCols.length > 0 && !importing ? " import-cta-glow" : ""}`}
+            disabled={!includedCols.length || importing}
             onClick={() => void runImport()}>
             {importing ? "Creating…" : <>Create table <I.ArrowRight s={15} /></>}
           </button>
