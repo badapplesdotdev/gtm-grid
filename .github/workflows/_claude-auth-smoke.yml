@@ -16,6 +16,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: claude headless auth check
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"
           echo "claude: $(command -v claude) ($(claude --version 2>/dev/null))"
