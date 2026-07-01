@@ -275,6 +275,217 @@ function MappingField({
   );
 }
 
+// ─── Structured (nested) input mapping ──────────────────────────────────────
+// Connector methods that push leads into a campaign / lead list take an ARRAY of
+// lead objects (e.g. HeyReach `accountLeadPairs`, Smartlead `lead_list`, Instantly
+// /PlusVibe `leads`). The grid runs one row at a time, so each run builds a
+// single-element array `[lead]` from the row's columns. The flat MappingField
+// can't express that, so these fields render a recursive editor: every per-lead
+// property gets its own column mapping, and a free-form "custom variables" slot
+// lets you send as many extra merge fields as the API accepts — which is exactly
+// what these APIs support and the flat one-field mapping didn't.
+
+type JsonSchema = {
+  type?: string;
+  description?: string;
+  properties?: Record<string, JsonSchema>;
+  items?: JsonSchema;
+  required?: string[];
+};
+
+/** An open `{ key: value }` map (object with no fixed properties) → custom vars. */
+function isCustomVarsObject(s: JsonSchema): boolean {
+  return s.type === "object" && (!s.properties || Object.keys(s.properties).length === 0);
+}
+/** A `[{ name, value }]` list (the only keys are name/value) → custom vars. */
+function isCustomVarsArray(s: JsonSchema): boolean {
+  const items = s.items;
+  if (s.type !== "array" || !items || items.type !== "object" || !items.properties) return false;
+  const keys = Object.keys(items.properties);
+  return keys.includes("name") && keys.includes("value") && keys.every((k) => k === "name" || k === "value");
+}
+/** Object/array fields that aren't a custom-vars slot need the recursive editor. */
+function isStructuredSchema(s: JsonSchema | undefined): boolean {
+  return !!s && (s.type === "object" || s.type === "array");
+}
+
+/** A free-form list of custom personalization variables: each row is a name + a
+ *  value (mappable to a column via the slash menu). Serializes to a `{ k: v }`
+ *  map ("object" mode) or a `[{ name, value }]` list ("array" mode) per the API. */
+function CustomVarsEditor({
+  value,
+  onChange,
+  mode,
+  columns,
+}: {
+  value: unknown;
+  onChange: (v: unknown) => void;
+  mode: "object" | "array";
+  columns: string[];
+}) {
+  type Row = { k: string; v: string };
+  const initial = useMemo<Row[]>(() => {
+    if (mode === "object" && value && typeof value === "object" && !Array.isArray(value)) {
+      return Object.entries(value as Record<string, unknown>).map(([k, v]) => ({ k, v: v == null ? "" : String(v) }));
+    }
+    if (mode === "array" && Array.isArray(value)) {
+      return (value as Array<Record<string, unknown>>).map((it) => ({
+        k: it?.name == null ? "" : String(it.name),
+        v: it?.value == null ? "" : String(it.value),
+      }));
+    }
+    return [];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const [rows, setRows] = useState<Row[]>(initial);
+
+  const emit = (next: Row[]) => {
+    setRows(next);
+    const clean = next.filter((r) => r.k.trim() !== "");
+    if (mode === "object") {
+      onChange(Object.fromEntries(clean.map((r) => [r.k.trim(), r.v])));
+    } else {
+      onChange(clean.map((r) => ({ name: r.k.trim(), value: r.v })));
+    }
+  };
+  const setRow = (i: number, patch: Partial<Row>) => emit(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const addRow = () => emit([...rows, { k: "", v: "" }]);
+  const removeRow = (i: number) => emit(rows.filter((_, j) => j !== i));
+
+  return (
+    <div className="cep-cvars">
+      {rows.map((r, i) => (
+        <div key={i} className="cep-cvar-row">
+          <input
+            className="form-input cep-cvar-key"
+            placeholder="Variable name"
+            value={r.k}
+            onChange={(e) => setRow(i, { k: e.target.value })}
+          />
+          <div className="cep-cvar-val">
+            <SlashTextarea
+              value={r.v}
+              onChange={(v) => setRow(i, { v })}
+              columns={columns}
+              rows={1}
+              placeholder="Value or {{Column}}"
+            />
+          </div>
+          <button type="button" className="cd-icon-btn cep-cvar-del" title="Remove" onClick={() => removeRow(i)}>{X}</button>
+        </div>
+      ))}
+      <button type="button" className="cep-cvar-add" onClick={addRow}>+ Add custom variable</button>
+    </div>
+  );
+}
+
+/** Recursive editor for a nested (object/array) connector input. Leaves render a
+ *  `MappingField`; objects render each property; arrays are "one item per row"
+ *  (built into a single-element array at run time); open maps render custom vars. */
+function StructuredField({
+  name,
+  schema,
+  required,
+  value,
+  onChange,
+  columns,
+  depth = 0,
+}: {
+  name: string;
+  schema: JsonSchema;
+  required: boolean;
+  value: unknown;
+  onChange: (v: unknown) => void;
+  columns: PanelColumnRef[];
+  depth?: number;
+}) {
+  // Custom-variable slots: a key/value editor regardless of object/array shape.
+  if (isCustomVarsObject(schema) || isCustomVarsArray(schema)) {
+    return (
+      <div className="cep-struct">
+        <div className="cep-struct-head">
+          <span className="cep-struct-name">{name}</span>
+          {required && <span className="fnx-param-req">*</span>}
+        </div>
+        {schema.description && <div className="cep-map-desc">{schema.description}</div>}
+        <CustomVarsEditor
+          mode={isCustomVarsArray(schema) ? "array" : "object"}
+          value={value}
+          onChange={onChange}
+          columns={columns.map((c) => c.name)}
+        />
+      </div>
+    );
+  }
+
+  // Object: a labelled group with each declared property (recursing).
+  if (schema.type === "object" && schema.properties) {
+    const props = schema.properties;
+    const req = new Set((schema.required ?? []).map(String));
+    const obj = (value && typeof value === "object" && !Array.isArray(value) ? value : {}) as Record<string, unknown>;
+    const keys = [...Object.keys(props).filter((k) => req.has(k)), ...Object.keys(props).filter((k) => !req.has(k))];
+    return (
+      <div className={`cep-struct${depth > 0 ? " cep-struct-nested" : ""}`}>
+        <div className="cep-struct-head">
+          <span className="cep-struct-name">{name}</span>
+          {required && <span className="fnx-param-req">*</span>}
+        </div>
+        {schema.description && <div className="cep-map-desc">{schema.description}</div>}
+        {keys.map((k) => (
+          <StructuredField
+            key={k}
+            name={k}
+            schema={props[k]}
+            required={req.has(k)}
+            value={obj[k]}
+            onChange={(cv) => {
+              const next = { ...obj };
+              if (cv === undefined || cv === "") delete next[k];
+              else next[k] = cv;
+              onChange(next);
+            }}
+            columns={columns}
+            depth={depth + 1}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  // Array: one entry per row → edit the single item, store as `[item]`.
+  if (schema.type === "array" && schema.items) {
+    const item = Array.isArray(value) ? value[0] : undefined;
+    return (
+      <div className="cep-struct">
+        <StructuredField
+          name={name}
+          schema={schema.items}
+          required={required}
+          value={item}
+          onChange={(iv) => onChange(iv === undefined ? [] : [iv])}
+          columns={columns}
+          depth={depth}
+        />
+        <div className="cep-struct-hint">Builds one entry per row from the columns mapped above.</div>
+      </div>
+    );
+  }
+
+  // Leaf scalar → a normal column mapping.
+  return (
+    <MappingField
+      paramKey={name}
+      required={required}
+      description={schema.description}
+      value={typeof value === "string" ? value : value == null ? "" : String(value)}
+      onChange={onChange}
+      columns={columns}
+      optionSource={null}
+      allValues={{}}
+    />
+  );
+}
+
 /** Clay-style save split-button: a primary action + a caret menu of run scopes. */
 function SaveSplitButton({
   saving,
@@ -488,6 +699,10 @@ export function ColumnEditPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [methodInfo]);
   const extraKeys = isEnrichment ? Object.keys(p).filter((k) => !(k in schemaProps)) : [];
+  // Object/array inputs (e.g. a campaign's lead array, custom-variable maps) get
+  // the recursive StructuredField editor; plain scalars stay flat MappingFields.
+  const complexKeys = isEnrichment ? orderedSchemaKeys.filter((k) => isStructuredSchema(schemaProps[k] as JsonSchema)) : [];
+  const scalarSchemaKeys = isEnrichment ? orderedSchemaKeys.filter((k) => !isStructuredSchema(schemaProps[k] as JsonSchema)) : [];
 
   const [name, setName] = useState(column.name);
   const [type, setType] = useState(column.type ?? "text");
@@ -506,7 +721,7 @@ export function ColumnEditPanel({
   const [params, setParams] = useState<Record<string, string>>(() => {
     const out: Record<string, string> = {};
     if (isEnrichment) {
-      for (const k of orderedSchemaKeys) {
+      for (const k of scalarSchemaKeys) {
         const v = p[k];
         out[k] = v == null ? "" : typeof v === "string" ? v : String(v);
       }
@@ -515,6 +730,13 @@ export function ColumnEditPanel({
         out[k] = v == null ? "" : typeof v === "string" ? v : JSON.stringify(v);
       }
     }
+    return out;
+  });
+  // Nested object/array inputs, kept as live structures (the engine resolves
+  // {{Column}} templates inside them per row).
+  const [structured, setStructured] = useState<Record<string, unknown>>(() => {
+    const out: Record<string, unknown> = {};
+    if (isEnrichment) for (const k of complexKeys) if (p[k] !== undefined) out[k] = p[k];
     return out;
   });
   const [aiProviderList, setAiProviderList] = useState<AiProviderInfo[]>([]);
@@ -546,6 +768,59 @@ export function ColumnEditPanel({
   const otherColumns = columns.filter((c) => c.id !== column.id);
   const otherColumnNames = otherColumns.map((c) => c.name);
 
+  // A structured value counts as "unset" when it bottoms out to nothing mappable
+  // — so an untouched lead array doesn't masquerade as a satisfied required input.
+  const isEmptyStructured = (v: unknown): boolean =>
+    v == null ||
+    (typeof v === "string" && v.trim() === "") ||
+    (Array.isArray(v) && v.every(isEmptyStructured)) ||
+    (typeof v === "object" && !Array.isArray(v) && Object.values(v as Record<string, unknown>).every(isEmptyStructured));
+
+  // The full params object the engine runs: flat scalar mappings + nested
+  // object/array structures, merged over the column's original params.
+  const buildEnrichmentParams = (): Record<string, unknown> => {
+    const np: Record<string, unknown> = { ...p };
+    for (const [k, v] of Object.entries(params)) {
+      if (v.trim()) np[k] = v;
+      else delete np[k];
+    }
+    for (const k of complexKeys) {
+      const v = structured[k];
+      if (isEmptyStructured(v)) delete np[k];
+      else np[k] = v;
+    }
+    return np;
+  };
+
+  // Render one connector input: a nested object/array gets the recursive
+  // StructuredField; a plain scalar gets the flat column-mapping dropdown.
+  const renderField = (k: string, required: boolean) =>
+    isStructuredSchema(schemaProps[k] as JsonSchema) ? (
+      <StructuredField
+        key={k}
+        name={k}
+        schema={schemaProps[k] as unknown as JsonSchema}
+        required={required}
+        value={structured[k]}
+        onChange={(v) => setStructured((prev) => ({ ...prev, [k]: v }))}
+        columns={otherColumns}
+      />
+    ) : (
+      <MappingField
+        key={k}
+        paramKey={k}
+        required={required}
+        description={schemaProps[k]?.description}
+        value={params[k] ?? ""}
+        onChange={(v) => setParams((prev) => ({ ...prev, [k]: v }))}
+        columns={otherColumns}
+        provider={column.provider}
+        method={column.method}
+        optionSource={methodInfo?.options?.[k] ?? null}
+        allValues={params}
+      />
+    );
+
   const buildPatch = () => {
     const patch: Parameters<typeof gridApi.updateColumn>[1] = {
       name: name.trim(),
@@ -565,13 +840,7 @@ export function ColumnEditPanel({
     } else if (isHttp) {
       patch.params = httpParams;
     } else if (isEnrichment) {
-      // Merge edited mappings over the original params; drop keys cleared to "".
-      const np: Record<string, unknown> = { ...p };
-      for (const [k, v] of Object.entries(params)) {
-        if (v.trim()) np[k] = v;
-        else delete np[k];
-      }
-      patch.params = np;
+      patch.params = buildEnrichmentParams();
     } else if (!isFunction) {
       patch.type = type; // manual column
     }
@@ -681,42 +950,20 @@ export function ColumnEditPanel({
         {isEnrichment && (orderedSchemaKeys.length > 0 || extraKeys.length > 0) && (
           <>
             <div className="fnx-cfg-section">Column mapping</div>
-            {orderedSchemaKeys.filter((k) => requiredKeys.has(k)).map((k) => (
-              <MappingField
-                key={k}
-                paramKey={k}
-                required
-                description={schemaProps[k]?.description}
-                value={params[k] ?? ""}
-                onChange={(v) => setParams((prev) => ({ ...prev, [k]: v }))}
-                columns={otherColumns}
-                provider={column.provider}
-                method={column.method}
-                optionSource={methodInfo?.options?.[k] ?? null}
-                allValues={params}
-              />
-            ))}
+            {orderedSchemaKeys.filter((k) => requiredKeys.has(k)).map((k) => renderField(k, true))}
             {orderedSchemaKeys.some((k) => !requiredKeys.has(k)) && (
               <HttpField
                 title="Optional inputs"
                 optional
-                defaultOpen={orderedSchemaKeys.some((k) => !requiredKeys.has(k) && (params[k] ?? "").trim() !== "")}
+                defaultOpen={orderedSchemaKeys.some(
+                  (k) =>
+                    !requiredKeys.has(k) &&
+                    (isStructuredSchema(schemaProps[k] as JsonSchema)
+                      ? !isEmptyStructured(structured[k])
+                      : (params[k] ?? "").trim() !== ""),
+                )}
               >
-                {orderedSchemaKeys.filter((k) => !requiredKeys.has(k)).map((k) => (
-                  <MappingField
-                    key={k}
-                    paramKey={k}
-                    required={false}
-                    description={schemaProps[k]?.description}
-                    value={params[k] ?? ""}
-                    onChange={(v) => setParams((prev) => ({ ...prev, [k]: v }))}
-                    columns={otherColumns}
-                    provider={column.provider}
-                    method={column.method}
-                    optionSource={methodInfo?.options?.[k] ?? null}
-                    allValues={params}
-                  />
-                ))}
+                {orderedSchemaKeys.filter((k) => !requiredKeys.has(k)).map((k) => renderField(k, false))}
               </HttpField>
             )}
             {extraKeys.length > 0 && (
@@ -787,7 +1034,7 @@ export function ColumnEditPanel({
             tableId={tableId}
             provider={column.provider}
             method={previewMethod}
-            params={isHttp ? httpParams : isEnrichment ? params : p}
+            params={isHttp ? httpParams : isEnrichment ? buildEnrichmentParams() : p}
             limit={5}
           />
         )}

@@ -202,6 +202,34 @@
                     },
                     "emailAddress": {
                       "type": "string"
+                    },
+                    "location": {
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "string",
+                      "description": "Headline/summary text"
+                    },
+                    "customUserFields": {
+                      "type": "array",
+                      "description": "Custom personalization variables sent alongside the standard fields — each { name, value }. Map a grid column into each value to reference it as a merge tag in your sequence. The API accepts as many as you add.",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "name",
+                          "value"
+                        ],
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "description": "Variable name (the merge tag used in your sequence)"
+                          },
+                          "value": {
+                            "type": "string",
+                            "description": "Variable value (map a column)"
+                          }
+                        }
+                      }
                     }
                   }
                 }
@@ -287,6 +315,33 @@
                 },
                 "position": {
                   "type": "string"
+                },
+                "emailAddress": {
+                  "type": "string"
+                },
+                "location": {
+                  "type": "string"
+                },
+                "customUserFields": {
+                  "type": "array",
+                  "description": "Custom personalization variables sent alongside the standard fields — each { name, value }. Map a grid column into each value. The API accepts as many as you add.",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "name",
+                      "value"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "description": "Variable name (the merge tag used in your sequence)"
+                      },
+                      "value": {
+                        "type": "string",
+                        "description": "Variable value (map a column)"
+                      }
+                    }
+                  }
                 }
               }
             }
