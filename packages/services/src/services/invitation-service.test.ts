@@ -161,6 +161,70 @@ describe("InvitationService.inviteByEmail", () => {
     }
   });
 
+  it("re-invites an email whose previous invite was revoked (overwrites the row)", async () => {
+    // A prior invite to this email exists but was revoked. Re-inviting must
+    // overwrite that row back to a live pending invite rather than colliding
+    // with the (workspace, email) unique index.
+    const fixtures: TestLayerFixtures = {
+      workspaces,
+      memberships: [ownerMembership],
+      users,
+      currentUserId: OWNER,
+      invitations: [liveInvite({ status: "revoked", token: "tok_old" })],
+    };
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const svc = yield* InvitationService;
+        const invited = yield* svc.inviteByEmail({
+          workspaceId: WS_ID,
+          email: INVITEE_EMAIL,
+          role: "member",
+        });
+        // The refreshed invite is now the single live pending row.
+        const listed = yield* svc.listInvitations(WS_ID);
+        return { invited, listed };
+      }).pipe(Effect.provide(TestLayer(fixtures))),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.invited.status).toBe("invited");
+      expect(exit.value.listed).toHaveLength(1);
+      expect(exit.value.listed[0].email).toBe(INVITEE_EMAIL);
+    }
+  });
+
+  it("re-invites an email with a lingering accepted invite from a removed member", async () => {
+    // The invitee accepted before but is no longer a member (only the accepted
+    // invite row lingers). Re-inviting must overwrite it to pending, not crash.
+    const exit = await run(
+      {
+        workspaces,
+        memberships: [ownerMembership],
+        users,
+        currentUserId: OWNER,
+        invitations: [
+          liveInvite({
+            status: "accepted",
+            acceptedBy: INVITEE,
+            acceptedAt: Date.now() - HOUR,
+          }),
+        ],
+      },
+      (svc) =>
+        svc.inviteByEmail({
+          workspaceId: WS_ID,
+          email: INVITEE_EMAIL,
+          role: "member",
+        }),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.status).toBe("invited");
+    } else {
+      throw new Error("expected invited");
+    }
+  });
+
   it("rejects a malformed email with InvalidEmailError", async () => {
     const exit = await run(
       { workspaces, memberships: [ownerMembership], users, currentUserId: OWNER },

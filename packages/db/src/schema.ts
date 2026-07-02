@@ -298,7 +298,10 @@ export const invitations = pgTable(
     index("invitations_by_workspace").on(t.workspaceId),
     index("invitations_by_token").on(t.token),
     index("invitations_by_email").on(t.email),
-    // by_workspace_email enforces one live invite per (workspace, email).
+    // by_workspace_email enforces one invite row per (workspace, email),
+    // regardless of status. Re-inviting the same address upserts this row back
+    // to pending (see `InvitationRepo.upsertPending`) rather than inserting a
+    // duplicate.
     uniqueIndex("invitations_by_workspace_email").on(t.workspaceId, t.email),
   ],
 );

@@ -478,33 +478,16 @@ export const InvitationRepoLive: Layer.Layer<InvitationRepo, never, DbClient> =
       const upsertPending: InvitationRepo["Type"]["upsertPending"] = (input) =>
         Effect.tryPromise({
           try: async () => {
-            const existing = await db
-              .select(INVITATION_COLUMNS)
-              .from(schema.invitations)
-              .where(
-                and(
-                  eq(schema.invitations.workspaceId, input.workspaceId),
-                  eq(schema.invitations.email, input.email),
-                ),
-              );
-            const pending = existing
-              .map(toInvitation)
-              .find((i) => i.status === "pending");
-            if (pending !== undefined) {
-              const updated = await db
-                .update(schema.invitations)
-                .set({
-                  role: input.role,
-                  token: input.token,
-                  expiresAt: input.expiresAt,
-                  invitedBy: input.invitedBy,
-                  createdAt: input.createdAt,
-                })
-                .where(eq(schema.invitations.id, pending.id))
-                .returning(INVITATION_COLUMNS);
-              return toInvitation(updated[0]);
-            }
-            const inserted = await db
+            // One row per (workspace, email) — enforced by the
+            // `invitations_by_workspace_email` unique index. A prior invite for
+            // the same pair may already exist in ANY status (pending, revoked,
+            // accepted after a member was removed), so we upsert on that index:
+            // insert a fresh pending invite, or overwrite the existing row back
+            // to a live pending invite with a new token/expiry. Doing this in a
+            // single statement makes the write agree with the constraint and is
+            // race-safe (no read-then-insert gap where a duplicate could slip
+            // in and trip the unique index).
+            const rows = await db
               .insert(schema.invitations)
               .values({
                 workspaceId: input.workspaceId,
@@ -516,8 +499,26 @@ export const InvitationRepoLive: Layer.Layer<InvitationRepo, never, DbClient> =
                 createdAt: input.createdAt,
                 expiresAt: input.expiresAt,
               })
+              .onConflictDoUpdate({
+                target: [
+                  schema.invitations.workspaceId,
+                  schema.invitations.email,
+                ],
+                set: {
+                  role: input.role,
+                  token: input.token,
+                  status: "pending",
+                  invitedBy: input.invitedBy,
+                  createdAt: input.createdAt,
+                  expiresAt: input.expiresAt,
+                  // Clear any accept bookkeeping from a prior lifecycle so the
+                  // refreshed row is a clean pending invite.
+                  acceptedBy: null,
+                  acceptedAt: null,
+                },
+              })
               .returning(INVITATION_COLUMNS);
-            return toInvitation(inserted[0]);
+            return toInvitation(rows[0]);
           },
           catch: fail("invitation upsert failed"),
         });
@@ -779,22 +780,26 @@ export const invitationRepoLayer = (
       ),
     upsertPending: (input) =>
       Effect.sync(() => {
-        const pending = invitations.find(
+        // Mirror the Live upsert on `invitations_by_workspace_email`: one row
+        // per (workspace, email), overwritten back to a live pending invite
+        // regardless of its prior status (pending/revoked/accepted).
+        const existing = invitations.find(
           (i) =>
-            i.workspaceId === input.workspaceId &&
-            i.email === input.email &&
-            i.status === "pending",
+            i.workspaceId === input.workspaceId && i.email === input.email,
         );
-        if (pending !== undefined) {
+        if (existing !== undefined) {
           const refreshed: Invitation = {
-            ...pending,
+            ...existing,
             role: input.role,
             token: input.token,
+            status: "pending",
             expiresAt: input.expiresAt,
             invitedBy: input.invitedBy,
             createdAt: input.createdAt,
+            acceptedBy: null,
+            acceptedAt: null,
           };
-          const idx = invitations.indexOf(pending);
+          const idx = invitations.indexOf(existing);
           invitations[idx] = refreshed;
           return refreshed;
         }
