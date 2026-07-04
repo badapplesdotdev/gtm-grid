@@ -1,5 +1,13 @@
 # @gtmgrid/services
 
+## 1.4.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.4.0
+- @gtmgrid/db@1.4.0
+- @gtmgrid/email@1.4.0
+
 ## 1.3.0
 
 ### Patch Changes
@@ -42,7 +50,6 @@
   `currentPlanId`, so a trial that lapsed by date kept running credited actions until
   Autumn's webhook/desktop sync flipped the plan to null. And the credit-heavy column
   enrichment run path was gated by quota only, never by cloud access.
-
   - **Time-based backstop:** `requireCloudAccess` now also fails the instant
     `trialEndsAt` is in the past, regardless of the cached plan id — the server-side
     guarantee that an expired trial cannot run any credited action.
@@ -315,7 +322,6 @@
 - b2fbbee: Remove the "local" paradigm — Postgres is now the only source of truth.
 
   GTM Grid was built local-first: each project was a `better-sqlite3` `.db` file served by the desktop sidecar, with cloud (Postgres) as an optional team tier. That produced two parallel data worlds and pervasive local-vs-cloud branching. This change removes the local paradigm entirely:
-
   - **Single data path.** The execution engine is always cloud-store-backed (`new Engine(config, registry, { store, creds })`); the SQLite `GridStore` layers, the engine's grid tables, the desktop's local `DataGrid`/`inCloud` fork, and the sidecar's local grid CRUD routes are gone. Every grid table operation goes through Postgres via tRPC. The one-way local→cloud push/sync apparatus and the `@gtmgrid/cli` package are deleted.
   - **The sidecar stays as the execution host.** It still runs connector/AI/formula columns locally and keeps a small **secrets-only** local vault (encrypted connector/AI keys, extension manifests) — but it no longer owns grid data; it proxies grid I/O to the `apps/web` worker endpoints. A new `/api/cloud/preview-function` route powers "Try on N rows" against cloud data.
   - **Login required.** `VITE_API_URL` is now mandatory (the build fails fast without it); the cloud/auth layer is always on; the "Continue locally — no account" escape hatches are removed; signed-out users hit a hard auth gate. Self-hosting = run your own Postgres + `apps/web`.
@@ -354,7 +360,6 @@
 - 735d94c: Full PostHog Error Tracking observability so bugs surface as they occur. All telemetry now points at the GTM Grid **US** project (`us.i.posthog.com`). New `@gtmgrid/observability` package shares one error-tracking + structured-logging convention across the sidecar, MCP server, and CLI (process-level crash handlers + exception capture).
 
   Closed the remaining blind spots:
-
   - **Engine run failures** — connector/AI/enrichment errors now feed Error Tracking via an injected, dependency-free `reportError` hook on the engine, **deduped per run** (a large run with one failure mode raises one exception, not thousands), plus a `column_run_failed` analytics event for failure-rate dashboards.
   - **tRPC** — non-typed defects keep their original stack (attached as the `TRPCError` cause) instead of being flattened to a string.
   - **Services** — a new injectable `ErrorReporter` port surfaces deliberately-swallowed best-effort failures (e.g. a failed invite email) without coupling the package to a telemetry client.
@@ -453,7 +458,6 @@
 ### Patch Changes
 
 - d2a41c5: Fix the Tables page showing duplicate tables and no row counts for cloud tables.
-
   - **Row counts**: `grid.listTables` now attaches each table's row count from a
     single grouped `countByTableIds` query (the efficient primitive existed but was
     never wired in; the in-memory repo was also missing it — a latent type error).
@@ -618,7 +622,6 @@
 
 - 67f3d44: Agent sessions can now use your saved provider keys, and webhook signature
   auth is opt-in:
-
   - Provider CLIs and skills the agent runs (trigify-cli, gh, …) authenticate
     automatically: saved credentials are injected as conventional env vars
     (`TRIGIFY_API_KEY`, `GITHUB_TOKEN`, …) at agent spawn — cloud workspace
@@ -708,7 +711,6 @@
 ### Patch Changes
 
 - a6d488d: Two cloud-parity improvements:
-
   - **Live sidebar** — when a teammate creates, syncs, or deletes a table in your
     workspace, your sidebar table list now updates in real time (no app restart).
     Table create/delete events are broadcast on a per-workspace realtime room that
@@ -730,7 +732,6 @@
 
 - c3eb12d: Add live multiplayer presence to the cloud grid. You can now see who else is in a
   table in real time:
-
   - **Live users avatar stack** in the grid toolbar — everyone currently viewing the
     table, with their profile photo (or initials), capped at 5 with a **"+N more"**
     overflow. Hover an avatar to see the member's name.
@@ -742,7 +743,6 @@
   Presence rides the existing per-table PartyKit channel (no extra connection) and
   each member's name/photo come from the workspace (the `me`/`listMembers` APIs now
   expose the user's avatar image). Built on shadcn/ui avatar + tooltip primitives.
-
   - @gtmgrid/cloud@0.8.0
   - @gtmgrid/db@0.8.0
   - @gtmgrid/email@0.8.0
@@ -832,7 +832,6 @@
 ### Minor Changes
 
 - ee40d02: One shared grid for local & cloud, with clear local/cloud separation.
-
   - **One grid, no divergence** — the local grid and the cloud grid now render the
     same `DataGrid` component, driven by an injected controller. Cloud no longer
     silently deletes a column on header right-click and no longer has a
@@ -1011,7 +1010,6 @@
   `tsc -b`, only by `apps/web`'s own typecheck / the Vercel build).
 
 - 1628165: Proactively prompt users to upgrade before the 7-day trial hard-locks the cloud:
-
   - **In-app countdown banner**: a new `workspaces.trialEndsAt` column is synced from
     Autumn (`getActiveSubscriptions`) by `syncPlan` and seeded on trial start; `me`
     surfaces it, and the desktop shows a "Your trial ends in N days — upgrade" banner
@@ -1042,7 +1040,6 @@
 - 63629aa: New-signup onboarding: auto-enrol every new workspace in a 7-day, no-card **Team
   free trial** so owners can invite teammates from day one (least-friction), and
   auto-enrol invited users instead of prompting them to create their own workspace.
-
   - `createWorkspace` now starts a Team trial in Autumn (`SeatsService.startTrial` →
     `attach` with `customize.freeTrial` (7 days, `cardRequired: false`) + a prepaid
     seat grant, since the Team plan's seats are prepaid). Best-effort: a billing
@@ -1074,7 +1071,6 @@
 ### Patch Changes
 
 - d8affce: Fix two cloud-state staleness bugs:
-
   - **Sign-up via the sidebar left the app "signed out".** The `me` query (user +
     workspaces + plan) was cached as `null` while signed out and never refetched
     when a bearer token appeared, so the UI stayed unauthenticated after an in-app

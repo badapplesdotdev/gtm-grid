@@ -1,5 +1,7 @@
 # @gtmgrid/email
 
+## 1.4.0
+
 ## 1.3.0
 
 ## 1.2.1
@@ -18,7 +20,6 @@
   `currentPlanId`, so a trial that lapsed by date kept running credited actions until
   Autumn's webhook/desktop sync flipped the plan to null. And the credit-heavy column
   enrichment run path was gated by quota only, never by cloud access.
-
   - **Time-based backstop:** `requireCloudAccess` now also fails the instant
     `trialEndsAt` is in the past, regardless of the cached plan id — the server-side
     guarantee that an expired trial cannot run any credited action.

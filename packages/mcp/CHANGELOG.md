@@ -1,5 +1,12 @@
 # @gtmgrid/mcp
 
+## 1.4.0
+
+### Patch Changes
+
+- @gtmgrid/engine@1.4.0
+- @gtmgrid/observability@1.4.0
+
 ## 1.3.0
 
 ### Patch Changes
@@ -255,7 +262,6 @@
 - b2fbbee: Remove the "local" paradigm — Postgres is now the only source of truth.
 
   GTM Grid was built local-first: each project was a `better-sqlite3` `.db` file served by the desktop sidecar, with cloud (Postgres) as an optional team tier. That produced two parallel data worlds and pervasive local-vs-cloud branching. This change removes the local paradigm entirely:
-
   - **Single data path.** The execution engine is always cloud-store-backed (`new Engine(config, registry, { store, creds })`); the SQLite `GridStore` layers, the engine's grid tables, the desktop's local `DataGrid`/`inCloud` fork, and the sidecar's local grid CRUD routes are gone. Every grid table operation goes through Postgres via tRPC. The one-way local→cloud push/sync apparatus and the `@gtmgrid/cli` package are deleted.
   - **The sidecar stays as the execution host.** It still runs connector/AI/formula columns locally and keeps a small **secrets-only** local vault (encrypted connector/AI keys, extension manifests) — but it no longer owns grid data; it proxies grid I/O to the `apps/web` worker endpoints. A new `/api/cloud/preview-function` route powers "Try on N rows" against cloud data.
   - **Login required.** `VITE_API_URL` is now mandatory (the build fails fast without it); the cloud/auth layer is always on; the "Continue locally — no account" escape hatches are removed; signed-out users hit a hard auth gate. Self-hosting = run your own Postgres + `apps/web`.
@@ -346,7 +352,6 @@
   pick with a click or hotkeys `1,2,3,4`, or choose "Other" to type a custom
   answer. Works across all three CLI providers (Claude / Codex / Hermes), reusing
   the existing permission-gate pattern.
-
   - **mcp**: new `ask_user_question` tool returning a non-blocking questions payload.
   - **server**: `questionEventFromToolResult` converts the payload into an `ask_user`
     SSE event, wired into the Claude, Codex, and Hermes bridges. Claude's _native_
@@ -364,7 +369,6 @@
 
 - 7c050a2: Make AI columns work without a separate AI key, and explain missing-key errors so
   the user can fix them.
-
   - **AI columns fall back to the agent's own model.** When no AI provider key is
     connected, `ai.generate` now routes the prompt through the user's already-
     authenticated coding agent (Claude Code / Codex) via a new `EngineConfig.aiFallback`
@@ -400,7 +404,6 @@
 
 - f464186: Make the 4 agent permission modes real and add enforced human-in-the-loop (HITL)
   approval, uniformly across all three providers (claude/codex/hermes).
-
   - **Modes are enforced at the MCP tool gate** (the one layer all providers share),
     driven by a per-tool risk class: `bypass` runs everything; `auto` asks for
     destructive ops and large/expensive runs; `acceptEdits` asks for every delete
@@ -430,7 +433,6 @@
   the single active table, so naming another table silently operated on the wrong
   one — and `add_rows` would throw, making agents stage data to `/tmp` instead of
   filling the grid.
-
   - Full multi-table addressing: the cloud source resolves a table name/id to the
     right cloud table (project-wide list, cached; defaults to the active table on
     the hot path) and threads it through every tool — `get_table`, `add_rows`,
@@ -650,7 +652,6 @@
 ### Minor Changes
 
 - accf1a9: Grid at scale: dedup + full agent control (bundles #53, #54, #55).
-
   - **Global-db credentials & extensions** (#53) — resolve credentials _and_
     extensions from the global db in `openProject`, fixing Exa/Firecrawl keys and
     the agent missing connectors (firecrawl/notion/supabase).

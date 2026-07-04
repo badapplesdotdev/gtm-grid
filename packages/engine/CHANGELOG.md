@@ -1,5 +1,7 @@
 # @gtmgrid/engine
 
+## 1.4.0
+
 ## 1.3.0
 
 ## 1.2.1
@@ -112,7 +114,6 @@
 - b2fbbee: Remove the "local" paradigm — Postgres is now the only source of truth.
 
   GTM Grid was built local-first: each project was a `better-sqlite3` `.db` file served by the desktop sidecar, with cloud (Postgres) as an optional team tier. That produced two parallel data worlds and pervasive local-vs-cloud branching. This change removes the local paradigm entirely:
-
   - **Single data path.** The execution engine is always cloud-store-backed (`new Engine(config, registry, { store, creds })`); the SQLite `GridStore` layers, the engine's grid tables, the desktop's local `DataGrid`/`inCloud` fork, and the sidecar's local grid CRUD routes are gone. Every grid table operation goes through Postgres via tRPC. The one-way local→cloud push/sync apparatus and the `@gtmgrid/cli` package are deleted.
   - **The sidecar stays as the execution host.** It still runs connector/AI/formula columns locally and keeps a small **secrets-only** local vault (encrypted connector/AI keys, extension manifests) — but it no longer owns grid data; it proxies grid I/O to the `apps/web` worker endpoints. A new `/api/cloud/preview-function` route powers "Try on N rows" against cloud data.
   - **Login required.** `VITE_API_URL` is now mandatory (the build fails fast without it); the cloud/auth layer is always on; the "Continue locally — no account" escape hatches are removed; signed-out users hit a hard auth gate. Self-hosting = run your own Postgres + `apps/web`.
@@ -131,7 +132,6 @@
 - 735d94c: Full PostHog Error Tracking observability so bugs surface as they occur. All telemetry now points at the GTM Grid **US** project (`us.i.posthog.com`). New `@gtmgrid/observability` package shares one error-tracking + structured-logging convention across the sidecar, MCP server, and CLI (process-level crash handlers + exception capture).
 
   Closed the remaining blind spots:
-
   - **Engine run failures** — connector/AI/enrichment errors now feed Error Tracking via an injected, dependency-free `reportError` hook on the engine, **deduped per run** (a large run with one failure mode raises one exception, not thousands), plus a `column_run_failed` analytics event for failure-rate dashboards.
   - **tRPC** — non-typed defects keep their original stack (attached as the `TRPCError` cause) instead of being flattened to a string.
   - **Services** — a new injectable `ErrorReporter` port surfaces deliberately-swallowed best-effort failures (e.g. a failed invite email) without coupling the package to a telemetry client.
@@ -169,7 +169,6 @@
 
 - 7c050a2: Make AI columns work without a separate AI key, and explain missing-key errors so
   the user can fix them.
-
   - **AI columns fall back to the agent's own model.** When no AI provider key is
     connected, `ai.generate` now routes the prompt through the user's already-
     authenticated coding agent (Claude Code / Codex) via a new `EngineConfig.aiFallback`
@@ -248,7 +247,6 @@
   and AI-provider panels previously showed up to four confusing tabs (Workspace,
   Personal, Team, Local) where three of them all saved to the same machine. They now
   show just two:
-
   - **Local** — the key is stored on this machine only.
   - **Cloud** — the key is encrypted server-side and **shared with the whole team**
     (everyone in the workspace uses it). Shown only when signed into a cloud workspace.
@@ -264,7 +262,6 @@
 ### Patch Changes
 
 - c64cbf5: Fix two desktop bugs:
-
   - **In-app updater / notification popover was unclickable.** The transparent
     full-viewport `.popover-scrim` (z-index 100) sat _above_ the bell notification
     popover (z-index 61), so clicking "Update & restart" (or any action) hit the
@@ -297,7 +294,6 @@
 ### Minor Changes
 
 - accf1a9: Grid at scale: dedup + full agent control (bundles #53, #54, #55).
-
   - **Global-db credentials & extensions** (#53) — resolve credentials _and_
     extensions from the global db in `openProject`, fixing Exa/Firecrawl keys and
     the agent missing connectors (firecrawl/notion/supabase).

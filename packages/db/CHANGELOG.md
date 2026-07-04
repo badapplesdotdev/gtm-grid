@@ -1,5 +1,7 @@
 # @gtmgrid/db
 
+## 1.4.0
+
 ## 1.3.0
 
 ## 1.2.1
@@ -154,7 +156,6 @@
 ### Patch Changes
 
 - a6d488d: Two cloud-parity improvements:
-
   - **Live sidebar** — when a teammate creates, syncs, or deletes a table in your
     workspace, your sidebar table list now updates in real time (no app restart).
     Table create/delete events are broadcast on a per-workspace realtime room that

@@ -1,5 +1,7 @@
 # @gtmgrid/cloud
 
+## 1.4.0
+
 ## 1.3.0
 
 ## 1.2.1
@@ -217,7 +219,6 @@
 - 63629aa: New-signup onboarding: auto-enrol every new workspace in a 7-day, no-card **Team
   free trial** so owners can invite teammates from day one (least-friction), and
   auto-enrol invited users instead of prompting them to create their own workspace.
-
   - `createWorkspace` now starts a Team trial in Autumn (`SeatsService.startTrial` →
     `attach` with `customize.freeTrial` (7 days, `cardRequired: false`) + a prepaid
     seat grant, since the Team plan's seats are prepaid). Best-effort: a billing

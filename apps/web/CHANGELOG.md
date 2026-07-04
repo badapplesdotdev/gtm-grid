@@ -1,5 +1,17 @@
 # @gtmgrid/web
 
+## 1.4.0
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.4.0
+- @gtmgrid/auth@1.4.0
+- @gtmgrid/cloud@1.4.0
+- @gtmgrid/db@1.4.0
+- @gtmgrid/email@1.4.0
+- @gtmgrid/engine@1.4.0
+- @gtmgrid/services@1.4.0
+
 ## 1.3.0
 
 ### Patch Changes
@@ -59,7 +71,6 @@
   `currentPlanId`, so a trial that lapsed by date kept running credited actions until
   Autumn's webhook/desktop sync flipped the plan to null. And the credit-heavy column
   enrichment run path was gated by quota only, never by cloud access.
-
   - **Time-based backstop:** `requireCloudAccess` now also fails the instant
     `trialEndsAt` is in the past, regardless of the cached plan id — the server-side
     guarantee that an expired trial cannot run any credited action.
@@ -463,7 +474,6 @@
 - b2fbbee: Remove the "local" paradigm — Postgres is now the only source of truth.
 
   GTM Grid was built local-first: each project was a `better-sqlite3` `.db` file served by the desktop sidecar, with cloud (Postgres) as an optional team tier. That produced two parallel data worlds and pervasive local-vs-cloud branching. This change removes the local paradigm entirely:
-
   - **Single data path.** The execution engine is always cloud-store-backed (`new Engine(config, registry, { store, creds })`); the SQLite `GridStore` layers, the engine's grid tables, the desktop's local `DataGrid`/`inCloud` fork, and the sidecar's local grid CRUD routes are gone. Every grid table operation goes through Postgres via tRPC. The one-way local→cloud push/sync apparatus and the `@gtmgrid/cli` package are deleted.
   - **The sidecar stays as the execution host.** It still runs connector/AI/formula columns locally and keeps a small **secrets-only** local vault (encrypted connector/AI keys, extension manifests) — but it no longer owns grid data; it proxies grid I/O to the `apps/web` worker endpoints. A new `/api/cloud/preview-function` route powers "Try on N rows" against cloud data.
   - **Login required.** `VITE_API_URL` is now mandatory (the build fails fast without it); the cloud/auth layer is always on; the "Continue locally — no account" escape hatches are removed; signed-out users hit a hard auth gate. Self-hosting = run your own Postgres + `apps/web`.
@@ -933,7 +943,6 @@
 ### Patch Changes
 
 - c64cbf5: Fix two desktop bugs:
-
   - **In-app updater / notification popover was unclickable.** The transparent
     full-viewport `.popover-scrim` (z-index 100) sat _above_ the bell notification
     popover (z-index 61), so clicking "Update & restart" (or any action) hit the
@@ -1051,7 +1060,6 @@
 ### Minor Changes
 
 - ee40d02: One shared grid for local & cloud, with clear local/cloud separation.
-
   - **One grid, no divergence** — the local grid and the cloud grid now render the
     same `DataGrid` component, driven by an injected controller. Cloud no longer
     silently deletes a column on header right-click and no longer has a
@@ -1275,7 +1283,6 @@
   `tsc -b`, only by `apps/web`'s own typecheck / the Vercel build).
 
 - 1628165: Proactively prompt users to upgrade before the 7-day trial hard-locks the cloud:
-
   - **In-app countdown banner**: a new `workspaces.trialEndsAt` column is synced from
     Autumn (`getActiveSubscriptions`) by `syncPlan` and seeded on trial start; `me`
     surfaces it, and the desktop shows a "Your trial ends in N days — upgrade" banner
@@ -1315,7 +1322,6 @@
 ### Patch Changes
 
 - d8affce: Fix two cloud-state staleness bugs:
-
   - **Sign-up via the sidebar left the app "signed out".** The `me` query (user +
     workspaces + plan) was cached as `null` while signed out and never refetched
     when a bearer token appeared, so the UI stayed unauthenticated after an in-app
