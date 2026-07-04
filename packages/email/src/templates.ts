@@ -123,6 +123,14 @@ export interface OutboundEmail {
    * inbox providers surface their native unsubscribe affordance).
    */
   readonly headers?: Readonly<Record<string, string>>;
+  /**
+   * Resend `Idempotency-Key`. Closes the delivered-but-errored ambiguity
+   * window: if our call times out AFTER Resend actually sent, the lifecycle
+   * guard releases its claim and the retry re-sends — with the same key Resend
+   * recognises the repeat and does NOT deliver twice. Lifecycle sends pass
+   * `user:template:dedupeKey`; transactional callers may omit it.
+   */
+  readonly idempotencyKey?: string;
 }
 
 /**
@@ -139,16 +147,19 @@ export async function sendEmail(email: OutboundEmail): Promise<void> {
     return;
   }
   const resend = new ResendAPI(key);
-  const { error } = await resend.emails.send({
-    from: fromAddress(),
-    to: [email.to],
-    subject: email.subject,
-    html: email.html,
-    text: email.text,
-    headers: email.headers ? { ...email.headers } : undefined,
-    // The brand icon ships inline (CID) so it renders with no external hosting.
-    attachments: BRAND_ATTACHMENTS,
-  });
+  const { error } = await resend.emails.send(
+    {
+      from: fromAddress(),
+      to: [email.to],
+      subject: email.subject,
+      html: email.html,
+      text: email.text,
+      headers: email.headers ? { ...email.headers } : undefined,
+      // The brand icon ships inline (CID) so it renders with no external hosting.
+      attachments: BRAND_ATTACHMENTS,
+    },
+    email.idempotencyKey ? { idempotencyKey: email.idempotencyKey } : undefined,
+  );
   if (error) {
     throw new Error(`Resend failed to send "${email.subject}": ${error.message}`);
   }

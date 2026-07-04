@@ -174,24 +174,31 @@ describe("routeSignals — #12 'run finished' vs #13 'signals waiting' + dedupe 
     expect(r.template).toBe("signals-waiting");
   });
 
-  it("dedupes 'run finished' PER LANDING — the raw landedAt is the key suffix", () => {
+  it("dedupes 'run finished' PER BINDING PER UTC DAY — the volume cap (a second same-day landing is dropped)", () => {
     const r = routeSignals({
       bindingId: "bind_1",
       added: 30,
       threshold: 25,
       landedAt: landedIso,
     });
-    expect(r.dedupeKey).toBe(`bind_1:${landedIso}`);
+    expect(r.dedupeKey).toBe(`bind_1:${landedIso.slice(0, 10)}`);
   });
 
-  it("keeps a numeric landedAt raw in the 'run finished' key (two landings a day stay distinct)", () => {
-    const r = routeSignals({
+  it("normalises a numeric landedAt to the same UTC-day key (two same-day landings collide by design)", () => {
+    const morning = routeSignals({
       bindingId: "bind_1",
       added: 30,
       threshold: 25,
-      landedAt: 1_751_670_600_000,
+      landedAt: Date.UTC(2026, 6, 4, 9, 0, 0),
     });
-    expect(r.dedupeKey).toBe("bind_1:1751670600000");
+    const evening = routeSignals({
+      bindingId: "bind_1",
+      added: 40,
+      threshold: 25,
+      landedAt: Date.UTC(2026, 6, 4, 21, 0, 0),
+    });
+    expect(morning.dedupeKey).toBe("bind_1:2026-07-04");
+    expect(evening.dedupeKey).toBe(morning.dedupeKey);
   });
 
   it("dedupes 'signals waiting' PER BINDING PER UTC DAY (YYYY-MM-DD of landedAt)", () => {

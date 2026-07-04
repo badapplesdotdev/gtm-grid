@@ -256,6 +256,25 @@ describe("runLifecycleSend — idempotency", () => {
   });
 });
 
+describe("runLifecycleSend — Resend idempotency key", () => {
+  it("attaches user:template:dedupeKey so a delivered-but-errored retry can't double-send", async () => {
+    const h = harness();
+    await runLifecycleSend(request(), h.deps);
+    expect(h.delivered[0]?.idempotencyKey).toBe(
+      "user_1:weekly-digest:2026-W27",
+    );
+  });
+
+  it("attaches the key on transactional sends too", async () => {
+    const h = harness();
+    await runLifecycleSend(
+      request({ category: "transactional", template: "teammate-joined", dedupeKey: "user_9" }),
+      h.deps,
+    );
+    expect(h.delivered[0]?.idempotencyKey).toBe("user_1:teammate-joined:user_9");
+  });
+});
+
 describe("runLifecycleSend — telemetry", () => {
   it("captures lifecycle_email_sent with template/category/workspace on success only", async () => {
     const h = harness();

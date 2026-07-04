@@ -150,7 +150,15 @@ export async function runLifecycleSend(
   try {
     const firstName = recipient.name?.trim().split(/\s+/)[0] ?? null;
     const email = await req.build({ to: recipient.email, firstName, links });
-    await deps.deliver(headers ? { ...email, headers } : email);
+    // Resend Idempotency-Key: even if OUR claim is released after a
+    // delivered-but-errored call, the retry reuses this key and Resend
+    // suppresses the duplicate delivery.
+    const idempotencyKey = `${req.userId}:${req.template}:${req.dedupeKey}`;
+    await deps.deliver({
+      ...email,
+      ...(headers ? { headers } : {}),
+      idempotencyKey,
+    });
   } catch (err) {
     // Release the claim so the Inngest retry can send.
     await deps.releaseSend({
