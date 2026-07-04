@@ -39,7 +39,7 @@ describe("/open — whitelisted destinations", () => {
   });
 
   it("each static destination round-trips", async () => {
-    for (const dest of ["new-table", "settings/ai-providers", "invite", "members", "billing"]) {
+    for (const dest of ["new-table", "settings/ai-providers", "invite", "members", "billing", "crm-connected"]) {
       expect(firedLink(await bounce(`?to=${encodeURIComponent(dest)}`))).toBe(
         `gtmgrid://open/${dest}`,
       );

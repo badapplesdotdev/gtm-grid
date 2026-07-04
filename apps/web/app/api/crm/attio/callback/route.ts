@@ -1,0 +1,225 @@
+/**
+ * `GET /api/crm/attio/callback?code=…&state=…` — the END of the Attio OAuth
+ * handshake (TRI: crm-sync). Attio redirects the browser here.
+ *
+ * Flow:
+ *   1. `?error=access_denied` (the user clicked "cancel" on Attio) → a friendly
+ *      "you canceled" page with a retry link.
+ *   2. verify `state` (signature + 15-min TTL). Invalid/expired ⇒ 400 page in
+ *      plain English — this is the CSRF gate; a bad state never exchanges a code.
+ *   3. exchange `code` → tokens, identify the connected Attio workspace, persist
+ *      the connection (the verified state is the trust boundary — no membership
+ *      re-check), and clear any `auth_revoked` pause so a reconnect resumes sync.
+ *   4. capture `crm_connected` server-side, then serve a self-contained page that
+ *      bounces into the desktop app via `gtmgrid://open/crm-connected` (exactly
+ *      how `/open` fires its deep link), with an "Open GTM Grid" fallback.
+ *
+ * As with `authorize`, the service logic lives in {@link callbackResponse} (takes
+ * a built runtime + the resolved session user) so it unit-tests offline against a
+ * `TestLayer` with a stubbed `fetch`; `GET` owns HTTP concerns only.
+ */
+
+import { getAuth, resolveSession } from "@gtmgrid/auth";
+import {
+  type AppServices,
+  type AttioSession,
+  AttioAuth,
+  AttioClient,
+  CrmBindingRepo,
+  CrmConnectionService,
+  WorkspaceRepo,
+  appLayer,
+} from "@gtmgrid/services";
+import { Effect, Exit, ManagedRuntime, Option } from "effect";
+import type { NextRequest } from "next/server";
+import { captureServer } from "../../../../../lib/posthog-server";
+import { type CrmPageLink, crmOAuthPage, htmlResponse } from "../../../../../lib/crm/oauth-html";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const ATTIO_PROVIDER = "attio";
+
+type ServicesRuntime = ManagedRuntime.ManagedRuntime<AppServices, never>;
+
+/** The signed-in browser user, resolved from the Better Auth session (for the
+ *  connection's display name); `null` when the cookie is gone. */
+export interface CallbackSessionUser {
+  readonly id: string;
+  readonly name: string | null;
+  readonly email: string;
+}
+
+/** The connection's display name: the signed-in user's name/email, but only when
+ *  they ARE the user the state was minted for; otherwise blank (cosmetic only). */
+function displayName(sessionUser: CallbackSessionUser | null, stateUserId: string): string {
+  if (sessionUser === null || sessionUser.id !== stateUserId) return "";
+  return sessionUser.name && sessionUser.name.trim() !== "" ? sessionUser.name : sessionUser.email;
+}
+
+/** Retry link back into the authorize route for a known workspace. */
+function retryLink(workspaceId: string): CrmPageLink {
+  return { href: `/api/crm/attio/authorize?workspace=${encodeURIComponent(workspaceId)}`, label: "Try connecting again" };
+}
+
+function canceledPage(retry: CrmPageLink | undefined): Response {
+  return htmlResponse(
+    crmOAuthPage({
+      title: "Connection canceled — gtm grid",
+      heading: "You canceled the connection",
+      message: "No problem — nothing was connected. You can start the Attio connection again whenever you're ready.",
+      primary: retry,
+    }),
+    200,
+  );
+}
+
+function expiredPage(): Response {
+  return htmlResponse(
+    crmOAuthPage({
+      title: "Link expired — gtm grid",
+      heading: "This connection link expired",
+      message: "This connection link expired — go back to the app and try again.",
+    }),
+    400,
+  );
+}
+
+function failurePage(retry: CrmPageLink): Response {
+  return htmlResponse(
+    crmOAuthPage({
+      title: "Couldn't finish — gtm grid",
+      heading: "We couldn't finish connecting Attio",
+      message: "Attio didn't complete the connection. This is usually temporary — please try again in a moment.",
+      primary: retry,
+    }),
+    502,
+  );
+}
+
+function successPage(attioWorkspaceName: string): Response {
+  const named = attioWorkspaceName.trim() !== "";
+  return htmlResponse(
+    crmOAuthPage({
+      title: "Attio connected — gtm grid",
+      heading: named ? `Connected to ${attioWorkspaceName}` : "Attio connected",
+      message: "Attio connected — returning to GTM Grid…",
+      // Fires the deep link instantly (same mechanism as /open); the CTA is the
+      // fallback when the browser doesn't hand off to the app.
+      redirectTo: "gtmgrid://open/crm-connected",
+      primary: { href: "/open?to=crm-connected", label: "Open GTM Grid" },
+    }),
+    200,
+  );
+}
+
+/**
+ * Complete the Attio OAuth handshake as a `Response`, given a built `runtime`
+ * and the resolved browser session user. Testable offline: pass a `TestLayer`
+ * runtime + a stubbed `fetch` for the token and `/v2/self` calls.
+ */
+export async function callbackResponse(params: {
+  readonly runtime: ServicesRuntime;
+  readonly code: string;
+  readonly state: string;
+  readonly error: string | null;
+  readonly sessionUser: CallbackSessionUser | null;
+}): Promise<Response> {
+  const verify = (token: string) => params.runtime.runPromise(Effect.flatMap(AttioAuth, (a) => a.verifyState(token)));
+
+  // 1. The user declined on Attio's consent screen.
+  if (params.error !== null && params.error !== "") {
+    const claims = params.state !== "" ? await verify(params.state) : null;
+    return canceledPage(claims ? retryLink(claims.workspaceId) : undefined);
+  }
+
+  // 2. CSRF/expiry gate — an invalid or aged state never exchanges a code.
+  const claims = params.state !== "" ? await verify(params.state) : null;
+  if (claims === null) return expiredPage();
+
+  if (params.code === "") return failurePage(retryLink(claims.workspaceId));
+
+  const connectedByName = displayName(params.sessionUser, claims.userId);
+
+  // 3. Exchange → identify → persist → un-pause, all against the same runtime.
+  const exit = await params.runtime.runPromiseExit(
+    Effect.gen(function* () {
+      const auth = yield* AttioAuth;
+      const client = yield* AttioClient;
+      const connection = yield* CrmConnectionService;
+      const bindings = yield* CrmBindingRepo;
+      const workspaces = yield* WorkspaceRepo;
+
+      // Desktop-initiated flows land here WITHOUT a browser session (the state
+      // was minted through the desktop's authenticated tRPC call) — resolve the
+      // display name from the state's user id so "connected by …" still renders.
+      const nameFromDb =
+        connectedByName === ""
+          ? yield* workspaces.findUser(claims.userId).pipe(
+              Effect.map((u) =>
+                Option.match(u, {
+                  onNone: () => "",
+                  onSome: (user) => (user.name && user.name.trim() !== "" ? user.name : (user.email ?? "")),
+                }),
+              ),
+              Effect.orElseSucceed(() => ""),
+            )
+          : connectedByName;
+
+      const tokens = yield* auth.exchangeCode(params.code);
+      const session: AttioSession = {
+        workspaceId: claims.workspaceId,
+        tokens,
+        persist: () => Effect.void,
+      };
+      const self = yield* client.identifySelf(session);
+      yield* connection.saveConnection({
+        workspaceId: claims.workspaceId,
+        tokens,
+        meta: {
+          connectedByUserId: claims.userId,
+          connectedByName: nameFromDb,
+          attioWorkspaceId: self.workspaceId,
+          attioWorkspaceName: self.workspaceName,
+        },
+      });
+      // Reconnecting resolves a revoked-auth pause (NOT source_gone — a deleted
+      // source isn't fixed by re-authing).
+      yield* bindings.clearPause({ workspaceId: claims.workspaceId, provider: ATTIO_PROVIDER, reason: "auth_revoked" });
+      return self.workspaceName;
+    }),
+  );
+
+  // Any failure (a bad/expired code, an Attio outage, a persist defect) becomes a
+  // retry page — defects are already routed to Error Tracking by the host
+  // `reportError` sink wired into `appLayer`.
+  if (Exit.isFailure(exit)) return failurePage(retryLink(claims.workspaceId));
+
+  // 4. Success → analytics + the bounce-into-app page.
+  captureServer("crm_connected", {
+    distinctId: claims.userId,
+    properties: { provider: ATTIO_PROVIDER, workspace_id: claims.workspaceId },
+    groups: { workspace: claims.workspaceId },
+  });
+  return successPage(exit.value);
+}
+
+export async function GET(req: NextRequest): Promise<Response> {
+  const code = req.nextUrl.searchParams.get("code") ?? "";
+  const state = req.nextUrl.searchParams.get("state") ?? "";
+  const error = req.nextUrl.searchParams.get("error");
+
+  const auth = await getAuth();
+  const session = await resolveSession(auth, req.headers);
+  const sessionUser: CallbackSessionUser | null = session
+    ? { id: session.user.id, name: session.user.name ?? null, email: session.user.email }
+    : null;
+
+  const { db } = await import("@gtmgrid/db/client");
+  const rt = ManagedRuntime.make(appLayer({ db, userId: sessionUser?.id ?? null }));
+  try {
+    return await callbackResponse({ runtime: rt, code, state, error, sessionUser });
+  } finally {
+    await rt.dispose();
+  }
+}

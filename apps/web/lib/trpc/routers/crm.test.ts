@@ -91,10 +91,44 @@ describe("crm.connectionStatus", () => {
 });
 
 describe("crm.authorizeUrl", () => {
-  it("builds the authorize entry URL for the workspace", async () => {
-    const caller = callerFor({ memberships, currentUserId: "member" });
-    const { url } = await caller.crm.authorizeUrl({ workspaceId: WS });
-    expect(url).toContain("/api/crm/attio/authorize?workspace=ws-1");
+  // Desktop auth is bearer-based, so the browser carries no session — the
+  // procedure mints the signed state HERE (member-gated) and returns the full
+  // Attio URL; the callback trusts the state alone.
+  it("mints a member-bound state and returns the full Attio authorize URL", async () => {
+    vi.stubEnv("ATTIO_CLIENT_ID", "client-123");
+    vi.stubEnv("ATTIO_CLIENT_SECRET", "secret-456");
+    vi.stubEnv("BETTER_AUTH_SECRET", "test-hmac-secret");
+    try {
+      const caller = callerFor({ memberships, currentUserId: "member" });
+      const { url } = await caller.crm.authorizeUrl({ workspaceId: WS });
+      const parsed = new URL(url);
+      expect(parsed.origin).toBe("https://app.attio.com");
+      expect(parsed.searchParams.get("client_id")).toBe("client-123");
+      expect(parsed.searchParams.get("redirect_uri")).toContain("/api/crm/attio/callback");
+      const state = parsed.searchParams.get("state") ?? "";
+      expect(state).not.toBe("");
+      // The state round-trips to the calling member + workspace.
+      const { AttioAuth } = await import("@gtmgrid/services");
+      const { Effect } = await import("effect");
+      const claims = await Effect.runPromise(
+        Effect.flatMap(AttioAuth, (a) => a.verifyState(state)).pipe(Effect.provide(AttioAuth.Default)),
+      );
+      expect(claims).toEqual({ workspaceId: WS, userId: "member" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("rejects a non-member (state minting is member-gated)", async () => {
+    vi.stubEnv("ATTIO_CLIENT_ID", "client-123");
+    vi.stubEnv("ATTIO_CLIENT_SECRET", "secret-456");
+    vi.stubEnv("BETTER_AUTH_SECRET", "test-hmac-secret");
+    try {
+      const caller = callerFor({ memberships, currentUserId: "stranger" });
+      await expect(caller.crm.authorizeUrl({ workspaceId: WS })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

@@ -14,11 +14,13 @@
  * (`NotAMemberError`, `PlanRequiredError`, …) to the shared `toTrpcError`.
  */
 
+import { MembershipService } from "@gtmgrid/cloud";
 import {
   type AppServices,
   AttioAuth,
   CrmConnectionService,
   CrmSyncService,
+  CrmSyncError,
   crmErrorCopy,
   type CrmError,
   FILTER_OPS,
@@ -137,13 +139,39 @@ export const crmRouter = router({
    * mints the signed state in the browser session; this only builds the entry
    * link (the authorize route itself gates access).
    */
+  /**
+   * The FULL Attio authorize URL with a state minted for the calling member.
+   * Minted here (not in the browser) because desktop auth is bearer-based: an
+   * `openExternal` browser navigation carries no gtmgrid.dev session, so the
+   * web authorize route's session gate would dead-end the flow. The signed
+   * state IS the trust for the callback; the browser needs no session at all.
+   */
   authorizeUrl: protectedProcedure
     .input(z.object({ workspaceId: z.string().min(1) }))
-    .query(({ input }) => ({
-      url: `${siteOrigin()}/api/crm/attio/authorize?workspace=${encodeURIComponent(
-        input.workspaceId,
-      )}`,
-    })),
+    .query(({ ctx, input }) =>
+      runCrm(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const membership = yield* MembershipService;
+          const member = yield* membership.requireMember(input.workspaceId);
+          const auth = yield* AttioAuth;
+          const state = yield* auth.mintState({ workspaceId: input.workspaceId, userId: member.userId });
+          if (state === null) {
+            return yield* Effect.fail(
+              new CrmSyncError({ message: "OAuth state signing unavailable (no BETTER_AUTH_SECRET)" }),
+            );
+          }
+          const url = yield* auth
+            .authorizeUrl(state)
+            .pipe(
+              Effect.catchTag("AttioOAuthNotConfigured", (e) =>
+                Effect.fail(new CrmSyncError({ message: `Attio OAuth env missing: ${e.missing}` })),
+              ),
+            );
+          return { url };
+        }),
+      ),
+    ),
 
   /** Attio objects + lists available to sync (member-gated). */
   listSources: protectedProcedure
