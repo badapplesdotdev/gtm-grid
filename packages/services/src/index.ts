@@ -392,4 +392,8 @@ export {
 
 export * from "./signals/catalog.js";
 export { SignalRepo, SignalRepoLive, signalRepoLayer, SignalRepoError, type SignalBinding, type SignalBindingColumn, type SignalBindingInsert, type SignalBindingPatch, type SignalDueCursor, type DueBinding, type DueBindingPage } from "./repositories/signal-repo.js";
+export { CrmBindingRepo, CrmBindingRepoLive, crmBindingRepoLayer, CrmSyncedRowRepo, CrmSyncedRowRepoLive, crmSyncedRowRepoLayer, CrmSyncRunRepo, CrmSyncRunRepoLive, crmSyncRunRepoLayer, CrmRepoError, CRM_DAILY_DUE_MS, type CrmBinding, type CrmBindingColumn, type CrmBindingInsert, type CrmBindingPatch, type CrmDueCursor, type CrmDueBinding, type CrmDueBindingPage, type CrmSyncedRow, type CrmSyncedRowUpsert, type CrmSyncRun, type CrmSyncRunFinish } from "./repositories/crm-repo.js";
+export { AttioRateLimitError, AttioServerError, AttioNetworkError, AttioAuthRevoked, CrmConnectionMissing, AttioSchemaDriftError, AttioSourceGoneError, RowCapReached, AttioRequestError, CrmSyncError, isTransientCrmError, type CrmError } from "./crm/errors.js";
+export { crmErrorCopy, type CrmErrorPresentation, type CrmRunStatus } from "./crm/error-copy.js";
+export { flattenAttrValue, toAttioFilter, toAttioFilterBody, matchesFilter, matchesAllFilters, isSupportedAttrType, SUPPORTED_ATTR_TYPES, FILTER_OPS, type AttioAttrType, type AttioValueEntry, type FlatValue, type CrmFilter, type FilterOp } from "./crm/attio-attributes.js";
 export { SignalService, SignalError } from "./services/signal-service.js";

@@ -464,6 +464,13 @@ export const columns = pgTable(
     params: jsonb("params"),
     /** Optional "only run if" boolean expression; null/empty means always run. */
     condition: text("condition"),
+    /**
+     * Column-level behaviour flags (jsonb, nullable). Today only CRM sync uses
+     * it: `{ synced: true, crmBindingId, attrSlug, attrType }` marks a column
+     * whose cells are owned by a CRM pull — read-only in the grid, written only
+     * by the sync worker. User manual/function columns leave this null.
+     */
+    config: jsonb("config"),
     position: doublePrecision("position").notNull(),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
   },
@@ -675,6 +682,130 @@ export const signalSeenKeys = pgTable(
   },
   (t) => [
     uniqueIndex("signal_seen_keys_by_binding_key").on(t.bindingId, t.key),
+  ],
+);
+
+/**
+ * A cloud table fed by a scheduled CRM pull (TRI: crm-sync). The daily Inngest
+ * cron (and manual "Sync now") pages records out of the provider (v1: Attio),
+ * maps attributes through `columns`, and inserts/updates rows — the CRM
+ * analogue of `signalBindings`. Pull-only: GTM Grid never writes back.
+ */
+export const crmBindings = pgTable(
+  "crm_bindings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    tableId: uuid("table_id")
+      .notNull()
+      .references(() => tables.id, { onDelete: "cascade" }),
+    /** CRM provider id, e.g. "attio" (matches the credentials extensionId). */
+    provider: text("provider").notNull(),
+    /** "object" | "list" — which Attio API surface the source lives on. */
+    sourceKind: text("source_kind").notNull(),
+    /** Attio object slug (e.g. "people") or list id. */
+    sourceId: text("source_id").notNull(),
+    /** Human label of the source at bind time, e.g. "People", "MQLs — Q3". */
+    sourceLabel: text("source_label").notNull(),
+    /** Synced attribute → column mapping: [{ attrSlug, attrType, columnId }] (jsonb). */
+    columns: jsonb("columns").notNull(),
+    /** { filters, dedupeMode: "update"|"skip"|"create", matchKeyAttr } (jsonb). */
+    config: jsonb("config").notNull(),
+    /** "daily" | "manual". */
+    schedule: text("schedule").notNull(),
+    enabled: boolean("enabled").notNull(),
+    /**
+     * Set when syncing is halted for a reason the USER must resolve
+     * ("auth_revoked" | "source_gone"); null while healthy. A paused binding is
+     * skipped by the cron and surfaces a reconnect/repair banner in the app.
+     */
+    pausedReason: text("paused_reason"),
+    lastSyncedAt: bigint("last_synced_at", { mode: "number" }),
+    /** Human-readable copy of the last failure (already user-safe), or null. */
+    lastError: text("last_error"),
+    rowsSynced: integer("rows_synced"),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  },
+  (t) => [
+    index("crm_bindings_by_workspace").on(t.workspaceId),
+    index("crm_bindings_by_table").on(t.tableId),
+  ],
+);
+
+/**
+ * CRM record → grid row identity map, one row per external record a binding
+ * has ever ingested. Richer than `signalSeenKeys` because CRM sync needs more
+ * than "have I seen this?": update-mode upserts must find WHICH row holds a
+ * record, and stale marking must find rows whose record vanished upstream
+ * (`lastSeenRunId` older than the completed run). Rows are never deleted by
+ * sync — a stale row keeps its user enrichment.
+ */
+export const crmSyncedRows = pgTable(
+  "crm_synced_rows",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    bindingId: uuid("binding_id")
+      .notNull()
+      .references(() => crmBindings.id, { onDelete: "cascade" }),
+    rowId: uuid("row_id")
+      .notNull()
+      .references(() => rows.id, { onDelete: "cascade" }),
+    /** The provider's record id (Attio record_id / list entry parent record). */
+    externalId: text("external_id").notNull(),
+    /** Flattened match-key value at last sync (e.g. the email), for upsert lookups. */
+    matchKey: text("match_key"),
+    /** syncRunId of the last run that saw this record upstream. */
+    lastSeenRunId: uuid("last_seen_run_id"),
+    /** True once a completed run no longer found the record upstream. */
+    stale: boolean("stale").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("crm_synced_rows_by_binding_external").on(t.bindingId, t.externalId),
+    index("crm_synced_rows_by_binding_match").on(t.bindingId, t.matchKey),
+    index("crm_synced_rows_by_row").on(t.rowId),
+  ],
+);
+
+/**
+ * Per-run CRM sync history (the user-visible "Sync log" panel; TRI: crm-sync).
+ * One row per sync attempt — cron, manual, or post-create warm-up. `error`
+ * holds ONLY pre-translated human copy (crm/error-copy.ts), never raw
+ * statuses/tags: this table renders directly in the desktop app.
+ */
+export const crmSyncRuns = pgTable(
+  "crm_sync_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    bindingId: uuid("binding_id")
+      .notNull()
+      .references(() => crmBindings.id, { onDelete: "cascade" }),
+    tableId: uuid("table_id")
+      .notNull()
+      .references(() => tables.id, { onDelete: "cascade" }),
+    /** "running" while in flight; finalized to "ok" | "partial" | "warn" | "failed". */
+    status: text("status").notNull(),
+    /** "cron" | "manual" | "warmup". */
+    trigger: text("trigger").notNull(),
+    rowsCreated: integer("rows_created").notNull(),
+    rowsUpdated: integer("rows_updated").notNull(),
+    rowsSkipped: integer("rows_skipped").notNull(),
+    rowsStaled: integer("rows_staled").notNull(),
+    /** Labels of mapped attributes missing upstream this run (jsonb string[]), or null. */
+    fieldsDropped: jsonb("fields_dropped"),
+    /** Human-readable failure copy (user-safe), or null on ok. */
+    error: text("error"),
+    startedAt: bigint("started_at", { mode: "number" }).notNull(),
+    finishedAt: bigint("finished_at", { mode: "number" }),
+  },
+  (t) => [
+    index("crm_sync_runs_by_binding").on(t.bindingId),
+    index("crm_sync_runs_by_workspace").on(t.workspaceId),
   ],
 );
 
