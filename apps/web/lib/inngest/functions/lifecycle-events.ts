@@ -143,10 +143,13 @@ export function routeSignals(args: {
   readonly landedAt: string | number;
 }): SignalsRoute {
   const { bindingId, added, threshold, landedAt } = args;
-  if (added >= threshold) {
-    return { template: "run-finished", dedupeKey: `${bindingId}:${landedAt}` };
-  }
+  // BOTH templates dedupe per binding per DAY: hourly signal syncs can land
+  // qualifying batches repeatedly, and one reward-loop email a day per binding
+  // is the volume ceiling (a second same-day landing is deliberately dropped).
   const dateKey = new Date(landedAt).toISOString().slice(0, 10);
+  if (added >= threshold) {
+    return { template: "run-finished", dedupeKey: `${bindingId}:${dateKey}` };
+  }
   return { template: "signals-waiting", dedupeKey: `${bindingId}:${dateKey}` };
 }
 
