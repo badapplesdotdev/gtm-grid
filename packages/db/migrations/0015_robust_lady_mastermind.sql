@@ -1,0 +1,1 @@
+ALTER TABLE "crm_synced_rows" ADD COLUMN "values_hash" text;

@@ -171,6 +171,7 @@ import { SignalService } from "./services/signal-service.js";
 import { AttioAuth } from "./services/attio-auth.js";
 import { AttioClient } from "./services/attio-client.js";
 import { CrmConnectionService } from "./services/crm-connection-service.js";
+import { CrmSyncService } from "./services/crm-sync-service.js";
 import {
   type CrmBinding,
   CrmBindingRepo,
@@ -338,6 +339,18 @@ export const appLayer = (params: {
     Layer.provide(credentialRepo),
     Layer.provide(CryptoServiceLive),
   );
+  const crmSyncService = CrmSyncService.Default.pipe(
+    Layer.provide(crmBindingRepo),
+    Layer.provide(crmSyncedRowRepo),
+    Layer.provide(crmSyncRunRepo),
+    Layer.provide(webhookRepo),
+    Layer.provide(columnRepo),
+    Layer.provide(attioClient),
+    Layer.provide(crmConnectionService),
+    Layer.provide(membershipService),
+    Layer.provide(entitlementService),
+    Layer.provide(workspaceRepo),
+  );
   const signalService = SignalService.Default.pipe(
     Layer.provide(signalRepo),
     Layer.provide(webhookRepo),
@@ -376,6 +389,7 @@ export const appLayer = (params: {
     attioAuth,
     attioClient,
     crmConnectionService,
+    crmSyncService,
     gridService,
     workspaceRepo,
     lifecycleEmailRepo,
@@ -685,6 +699,18 @@ export const TestLayer = (
   const crmSyncRunRepo = crmSyncRunRepoLayer({ runs: fixtures.crmSyncRuns });
   const attioAuth = AttioAuth.Default;
   const attioClient = AttioClient.Default.pipe(Layer.provide(attioAuth));
+  const crmSyncService = CrmSyncService.Default.pipe(
+    Layer.provide(crmBindingRepo),
+    Layer.provide(crmSyncedRowRepo),
+    Layer.provide(crmSyncRunRepo),
+    Layer.provide(webhookRepo),
+    Layer.provide(columnRepo),
+    Layer.provide(attioClient),
+    Layer.provide(crmConnectionService),
+    Layer.provide(membershipService),
+    Layer.provide(entitlementService),
+    Layer.provide(workspaceRepo),
+  );
   const lifecycleEmailRepo = lifecycleEmailRepoLayer({
     users: (fixtures.users ?? []).flatMap((u) =>
       u.email ? [{ id: u.id, email: u.email, name: u.name ?? null }] : [],
@@ -727,6 +753,7 @@ export const TestLayer = (
     attioAuth,
     attioClient,
     crmConnectionService,
+    crmSyncService,
     gridService,
     entitlementService,
     workspaceRepo,
@@ -778,6 +805,7 @@ export type AppServices =
   | AttioAuth
   | AttioClient
   | CrmConnectionService
+  | CrmSyncService
   | ExtensionService
   | ExtensionRepo
   | GridService

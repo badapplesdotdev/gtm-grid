@@ -29,6 +29,13 @@ export interface Column {
   readonly code: string | null;
   readonly params: unknown;
   readonly condition: string | null;
+  /**
+   * Column-level behaviour flags (nullable jsonb). CRM-synced columns carry
+   * `{ synced: true, crmBindingId, attrSlug, attrType }` — read-only in the
+   * grid, written only by the sync worker. Null/absent for user columns.
+   * Optional so pre-existing in-memory fixtures stay valid.
+   */
+  readonly config?: unknown;
   readonly position: number;
   readonly createdAt: number;
 }
@@ -51,6 +58,8 @@ export interface NewColumn {
   readonly code: string | null;
   readonly params: unknown;
   readonly condition: string | null;
+  /** Optional behaviour flags (see {@link Column.config}); defaults to null. */
+  readonly config?: unknown;
   readonly position: number;
   readonly createdAt: number;
 }
@@ -139,6 +148,7 @@ export const ColumnRepoLive: Layer.Layer<ColumnRepo, never, DbClient> =
         code: schema.columns.code,
         params: schema.columns.params,
         condition: schema.columns.condition,
+        config: schema.columns.config,
         position: schema.columns.position,
         createdAt: schema.columns.createdAt,
       } as const;
@@ -203,6 +213,7 @@ export const ColumnRepoLive: Layer.Layer<ColumnRepo, never, DbClient> =
                   code: values.code,
                   params: values.params,
                   condition: values.condition,
+                  config: values.config ?? null,
                   position: values.position,
                   createdAt: values.createdAt,
                 })

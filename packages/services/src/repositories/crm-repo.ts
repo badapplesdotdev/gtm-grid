@@ -6,7 +6,7 @@
  */
 
 import { schema } from "@gtmgrid/db";
-import { and, count, desc, eq, gt, inArray, isNull, lte, ne, or } from "drizzle-orm";
+import { and, count, desc, eq, gt, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
 
@@ -17,6 +17,8 @@ export interface CrmBindingColumn {
   readonly attrSlug: string;
   readonly attrType: string;
   readonly columnId: string;
+  /** The attribute's human title at bind time (drift reporting: "Twitter, Region"). */
+  readonly title: string;
 }
 
 /** A crm_bindings row projection. Mirrors `crmBindings`. */
@@ -89,6 +91,8 @@ export interface CrmSyncedRow {
   readonly rowId: string;
   readonly externalId: string;
   readonly matchKey: string | null;
+  /** Hash of flattened synced values at last write (unchanged → skip cell writes). */
+  readonly valuesHash: string | null;
   readonly lastSeenRunId: string | null;
   readonly stale: boolean;
 }
@@ -98,6 +102,7 @@ export interface CrmSyncedRowUpsert {
   readonly rowId: string;
   readonly externalId: string;
   readonly matchKey: string | null;
+  readonly valuesHash: string | null;
   readonly lastSeenRunId: string;
   readonly createdAt: number;
 }
@@ -253,7 +258,14 @@ function asBindingColumns(value: unknown): readonly CrmBindingColumn[] {
     if (e === null || typeof e !== "object") return [];
     const r = e as Record<string, unknown>;
     if (typeof r.attrSlug === "string" && typeof r.attrType === "string" && typeof r.columnId === "string") {
-      return [{ attrSlug: r.attrSlug, attrType: r.attrType, columnId: r.columnId }];
+      return [
+        {
+          attrSlug: r.attrSlug,
+          attrType: r.attrType,
+          columnId: r.columnId,
+          title: typeof r.title === "string" ? r.title : r.attrSlug,
+        },
+      ];
     }
     return [];
   });
@@ -464,6 +476,7 @@ export const CrmSyncedRowRepoLive: Layer.Layer<CrmSyncedRowRepo, never, DbClient
       rowId: sr.rowId,
       externalId: sr.externalId,
       matchKey: sr.matchKey,
+      valuesHash: sr.valuesHash,
       lastSeenRunId: sr.lastSeenRunId,
       stale: sr.stale,
     };
@@ -507,6 +520,7 @@ export const CrmSyncedRowRepoLive: Layer.Layer<CrmSyncedRowRepo, never, DbClient
                         rowId: e.rowId,
                         externalId: e.externalId,
                         matchKey: e.matchKey,
+                        valuesHash: e.valuesHash,
                         lastSeenRunId: e.lastSeenRunId,
                         stale: false,
                         createdAt: e.createdAt,
@@ -514,10 +528,13 @@ export const CrmSyncedRowRepoLive: Layer.Layer<CrmSyncedRowRepo, never, DbClient
                     )
                     .onConflictDoUpdate({
                       target: [sr.bindingId, sr.externalId],
+                      // `excluded.*` = the incoming values (plain column refs
+                      // would no-op the update against the row's own values).
                       set: {
-                        rowId: sr.rowId,
-                        matchKey: sr.matchKey,
-                        lastSeenRunId: sr.lastSeenRunId,
+                        rowId: sql`excluded.row_id`,
+                        matchKey: sql`excluded.match_key`,
+                        valuesHash: sql`excluded.values_hash`,
+                        lastSeenRunId: sql`excluded.last_seen_run_id`,
                         stale: false,
                       },
                     });
@@ -758,6 +775,7 @@ export const crmSyncedRowRepoLayer = (fixtures: {
               ...entries[i],
               rowId: u.rowId,
               matchKey: u.matchKey,
+              valuesHash: u.valuesHash,
               lastSeenRunId: u.lastSeenRunId,
               stale: false,
             };
@@ -768,6 +786,7 @@ export const crmSyncedRowRepoLayer = (fixtures: {
               rowId: u.rowId,
               externalId: u.externalId,
               matchKey: u.matchKey,
+              valuesHash: u.valuesHash,
               lastSeenRunId: u.lastSeenRunId,
               stale: false,
             });
@@ -800,14 +819,19 @@ export const crmSyncedRowRepoLayer = (fixtures: {
   });
 };
 
+// Module-scoped so run ids stay unique even when a test builds several layer
+// instances over the same fixtures — the stale pass compares lastSeenRunId
+// against the CURRENT run id, and a reset counter would collide them (live
+// runs use DB-generated uuids and can never collide).
+let runSeq = 0;
+
 /** In-memory {@link CrmSyncRunRepo} over a mutable run log. */
 export const crmSyncRunRepoLayer = (fixtures: { runs?: CrmSyncRun[] }): Layer.Layer<CrmSyncRunRepo> => {
   const runs = fixtures.runs ?? [];
-  let seq = 0;
   return Layer.succeed(CrmSyncRunRepo, {
     start: ({ workspaceId, bindingId, tableId, trigger, startedAt }) =>
       Effect.sync(() => {
-        const id = `crmrun_${++seq}`;
+        const id = `crmrun_${++runSeq}`;
         runs.push({
           id,
           workspaceId,

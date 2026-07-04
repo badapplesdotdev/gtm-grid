@@ -131,6 +131,62 @@ export interface AnalyticsEventMap {
   };
   /** A user opted a category out via the footer unsubscribe link. */
   lifecycle_email_unsubscribed: { category: string };
+
+  // ── CRM sync (TRI: crm-sync) — one event per sync run, worker-emitted ──────
+  /** A CRM→grid sync run began (cron, manual sync-now, or post-create warm-up). */
+  crm_sync_started: {
+    provider: string;
+    binding_id: string;
+    sync_run_id: string;
+    trigger: "cron" | "manual" | "warmup";
+    workspace_id: string;
+  };
+  /** A sync run finished clean. */
+  crm_sync_completed: {
+    provider: string;
+    binding_id: string;
+    sync_run_id: string;
+    trigger: "cron" | "manual" | "warmup";
+    rows_created: number;
+    rows_updated: number;
+    rows_skipped: number;
+    rows_staled: number;
+    workspace_id: string;
+  };
+  /** A sync run landed data but degraded (schema drift, row cap, page budget). */
+  crm_sync_partial: {
+    provider: string;
+    binding_id: string;
+    sync_run_id: string;
+    trigger: "cron" | "manual" | "warmup";
+    rows_created: number;
+    rows_updated: number;
+    fields_dropped: number;
+    /** The internal failure tag (e.g. "AttioSchemaDriftError") — never user-shown. */
+    error_tag: string | null;
+    workspace_id: string;
+  };
+  /** A sync run failed (auth revoked, source gone, hard request error). */
+  crm_sync_failed: {
+    provider: string;
+    binding_id: string;
+    sync_run_id: string;
+    trigger: "cron" | "manual" | "warmup";
+    error_tag: string | null;
+    workspace_id: string;
+  };
+  /** A workspace connected a CRM via OAuth (the wizard's step-2 completion). */
+  crm_connected: { provider: string; workspace_id: string };
+  /** A synced table binding was created (wizard completed end to end). */
+  crm_binding_created: {
+    provider: string;
+    binding_id: string;
+    source_kind: "object" | "list";
+    dedupe_mode: "update" | "skip" | "create";
+    columns: number;
+    filters: number;
+    workspace_id: string;
+  };
 }
 
 /** Every valid analytics event name. */

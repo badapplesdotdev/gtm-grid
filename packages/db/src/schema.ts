@@ -756,6 +756,12 @@ export const crmSyncedRows = pgTable(
     externalId: text("external_id").notNull(),
     /** Flattened match-key value at last sync (e.g. the email), for upsert lookups. */
     matchKey: text("match_key"),
+    /**
+     * Hash of the record's flattened synced values at last write. Update-mode
+     * re-syncs skip the cell writes when this is unchanged, so a daily sync of
+     * a mostly-static CRM costs reads, not tens of thousands of cell upserts.
+     */
+    valuesHash: text("values_hash"),
     /** syncRunId of the last run that saw this record upstream. */
     lastSeenRunId: uuid("last_seen_run_id"),
     /** True once a completed run no longer found the record upstream. */
