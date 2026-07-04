@@ -135,10 +135,18 @@ protocol.registerSchemesAsPrivileged([
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  if (process.defaultApp && process.argv.length >= 2) {
-    app.setAsDefaultProtocolClient("gtmgrid", process.execPath, [process.argv[1]]);
-  } else {
+  // Protocol registration is PACKAGED-ONLY on macOS: in a dev run,
+  // `setAsDefaultProtocolClient` points Launch Services at the bare
+  // node_modules Electron.app — hijacking `gtmgrid://` links system-wide from
+  // the installed app (clicking an email deep link then opens the generic
+  // Electron welcome window). The packaged app re-registers on every launch,
+  // and its Info.plist claims the scheme (electron-builder.yml `protocols`).
+  // Windows dev keeps the execPath+argv registry trick, which correctly routes
+  // to the dev instance and never affects the installed app's registration.
+  if (app.isPackaged) {
     app.setAsDefaultProtocolClient("gtmgrid");
+  } else if (process.platform === "win32" && process.defaultApp && process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient("gtmgrid", process.execPath, [process.argv[1]]);
   }
 
   app.on("second-instance", (_e, argv) => {
