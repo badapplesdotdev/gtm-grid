@@ -123,8 +123,11 @@ export async function runLifecycleSend(
   }
 
   // Compliance chrome before claiming, so a refusal never burns the claim.
+  // "Notification settings" routes through the /open bounce into the app —
+  // there is no web pref-center yet (follow-up); per-category unsubscribe links
+  // remain the working opt-out until then.
   let links: GuardLinks = {
-    settingsUrl: `${deps.siteOrigin}/account/notifications`,
+    settingsUrl: `${deps.siteOrigin}/open`,
   };
   let headers: Record<string, string> | undefined;
   if (req.category !== "transactional") {

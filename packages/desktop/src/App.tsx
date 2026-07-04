@@ -34,6 +34,10 @@ import {
   clearPendingInviteToken,
   usePendingInviteToken,
 } from "./cloud/pendingInvite";
+import {
+  clearPendingDestination,
+  usePendingDestination,
+} from "./cloud/deepLinkNav";
 import { fireConfetti } from "./cloud/confetti";
 import { useUpdateCheck } from "./useUpdateCheck";
 import { changelogNotes } from "./changelog";
@@ -1509,6 +1513,81 @@ export default function App() {
       setView({ kind: "table" });
     }
   }, [activeWorkspaceId, cloudProjects, cloudProject, activeWorkspace, createCloudProject]);
+
+  // ── Deep-link navigation (`gtmgrid://open/...`) ──────────────────────────
+  // A lifecycle-email CTA (via the web bounce page) can deep-link straight to an
+  // in-app destination. `useApiDeepLinkOAuth` parses the link and records the
+  // pending destination; this effect consumes it ONCE the signed-in workspace is
+  // ready, drives the matching UI, then clears it. A `focus` link is a no-op (the
+  // main process already surfaced the window). For a `table` link we optionally
+  // switch workspace first (only if a different one was given) and wait for that
+  // workspace's tables to load before opening; if the table isn't there we fall
+  // back to just showing the app. `attemptedWsSwitchRef` guards the switch so an
+  // unresolvable workspace id can't loop against the default-selection write-back.
+  const pendingDestination = usePendingDestination();
+  const attemptedWsSwitchRef = useRef(false);
+  useEffect(() => {
+    const dest = pendingDestination;
+    if (dest === null) {
+      attemptedWsSwitchRef.current = false;
+      return;
+    }
+    if (dest.kind === "focus") {
+      clearPendingDestination();
+      return;
+    }
+    // Every remaining destination opens cloud UI — wait for the workspace.
+    if (!activeWorkspace) return;
+
+    if (dest.kind === "table") {
+      // Switch workspace first if the link named a different one (once only).
+      if (
+        dest.workspaceId &&
+        dest.workspaceId !== activeWorkspace._id &&
+        !attemptedWsSwitchRef.current
+      ) {
+        attemptedWsSwitchRef.current = true;
+        setActiveWorkspaceId(dest.workspaceId);
+        return; // re-runs once the new workspace + its tables have loaded
+      }
+      // Wait until the tables belong to the (possibly just-switched) workspace and
+      // have finished loading, so a stale/loading list can't trigger a false miss.
+      if (cloudProject === null || cloudProject.workspaceId !== activeWorkspace._id) return;
+      if (cloudTables === undefined) return;
+      const match = cloudTables.find((t) => String(t._id) === dest.tableId);
+      if (match) {
+        setCloudTableId(match._id);
+        setView({ kind: "table" });
+      }
+      // Found → opened; not found → just show the app. Clear either way.
+      clearPendingDestination();
+      return;
+    }
+
+    switch (dest.kind) {
+      case "new-table":
+        setNewTableFolderId(null);
+        setShowNewTableChooser(true);
+        break;
+      case "ai-providers":
+        setView({ kind: "ai", id: aiProviders[0]?.id ?? "anthropic" });
+        break;
+      case "invite":
+        setShowWorkspaceSettings(true);
+        break;
+      case "billing":
+        setShowUpgrade(true);
+        break;
+    }
+    clearPendingDestination();
+  }, [
+    pendingDestination,
+    activeWorkspace,
+    cloudProject,
+    cloudTables,
+    aiProviders,
+    setActiveWorkspaceId,
+  ]);
 
   // Appearance: only the dark-mode toggle is user-controllable. Density and
   // accent are fixed (compact + green) by product decision.
