@@ -1922,11 +1922,15 @@ export default function App() {
   const activeCrmBindingsQ = useReactQuery({
     queryKey: ["crm", "bindings", cloudTableId ? String(cloudTableId) : ""],
     enabled: apiClient !== null && cloudTableId !== null && activeWorkspace != null,
-    queryFn: async (): Promise<readonly { id: string }[]> =>
-      (await apiClient.crm.listBindings.query({
+    queryFn: async (): Promise<readonly { id: string }[]> => {
+      // Older/mock servers without the crm router answer null — treat as "no
+      // bindings", never crash the shell.
+      const res: unknown = await apiClient.crm.listBindings.query({
         tableId: String(cloudTableId),
         workspaceId: activeWorkspace!._id,
-      })) as readonly { id: string }[],
+      });
+      return Array.isArray(res) ? (res as readonly { id: string }[]) : [];
+    },
     staleTime: 15_000,
   });
   useEffect(() => {

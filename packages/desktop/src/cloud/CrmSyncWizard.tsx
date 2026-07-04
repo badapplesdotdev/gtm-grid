@@ -130,6 +130,12 @@ export function CrmSyncWizard({
   const refetchConnection = useCallback(async () => {
     try {
       const s = await apiClient.crm.connectionStatus.query({ workspaceId });
+      if (s == null) {
+        // Older/mock server without the crm router: treat as unconfigured.
+        setConfigured(false);
+        setConnectedMeta(null);
+        return false;
+      }
       setConfigured(s.configured);
       if (s.connected) {
         setConnectedMeta({ connectedByName: s.connectedByName, attioWorkspaceName: s.attioWorkspaceName });

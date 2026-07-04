@@ -83,8 +83,11 @@ export function CrmStatusStrip({ tableId, workspaceId }: { tableId: string; work
   const q = useReactQuery({
     queryKey: ["crm", "bindings", tableId],
     enabled: apiClient !== null && workspaceId !== "",
-    queryFn: async (): Promise<readonly CrmBinding[]> =>
-      (await apiClient.crm.listBindings.query({ tableId, workspaceId })) as readonly CrmBinding[],
+    queryFn: async (): Promise<readonly CrmBinding[]> => {
+      // Null from an older/mock server = no bindings (never crash the grid).
+      const res: unknown = await apiClient.crm.listBindings.query({ tableId, workspaceId });
+      return Array.isArray(res) ? (res as readonly CrmBinding[]) : [];
+    },
     staleTime: 15_000,
   });
   const bindings = q.data ?? [];
@@ -121,8 +124,10 @@ function CrmBindingRow({ binding, tableId, workspaceId }: { binding: CrmBinding;
   const historyQ = useReactQuery({
     queryKey: ["crm", "history", binding.id],
     enabled: showLog || syncing,
-    queryFn: async (): Promise<readonly CrmRun[]> =>
-      (await apiClient.crm.history.query({ bindingId: binding.id })) as readonly CrmRun[],
+    queryFn: async (): Promise<readonly CrmRun[]> => {
+      const res: unknown = await apiClient.crm.history.query({ bindingId: binding.id });
+      return Array.isArray(res) ? (res as readonly CrmRun[]) : [];
+    },
     refetchInterval: syncing ? 3000 : false,
   });
   const runs = historyQ.data ?? [];
@@ -147,8 +152,8 @@ function CrmBindingRow({ binding, tableId, workspaceId }: { binding: CrmBinding;
     try {
       // Baseline the current newest run BEFORE enqueuing so completion detection
       // waits for the fresh run rather than reading the last finished one.
-      const current = (await apiClient.crm.history.query({ bindingId: binding.id })) as readonly CrmRun[];
-      baselineRunIdRef.current = current[0]?.id ?? null;
+      const current: unknown = await apiClient.crm.history.query({ bindingId: binding.id });
+      baselineRunIdRef.current = Array.isArray(current) ? ((current[0] as CrmRun | undefined)?.id ?? null) : null;
       setSyncing(true);
       await apiClient.crm.syncNow.mutate({ bindingId: binding.id });
       await qc.invalidateQueries({ queryKey: ["crm", "history", binding.id] });

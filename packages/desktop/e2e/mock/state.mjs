@@ -28,6 +28,13 @@ export function freshState() {
     // locks the cloud UI regardless of paid/trial state. Default: hosted.
     selfHost: false,
 
+    // ── CRM sync (Attio) ────────────────────────────────────────────────────
+    // Whether the workspace has an Attio OAuth connection (crm.connectionStatus).
+    crmConnected: false,
+    // Bindings + sync-run history, seedable per scenario (shallow overrides).
+    crmBindings: [],
+    crmRuns: [],
+
     user: {
       id: "user_1",
       _id: "user_1",
@@ -97,6 +104,8 @@ export function col(id, tableId, name, kind = "manual", extra = {}) {
     code: extra.code ?? null,
     params: extra.params ?? null,
     condition: extra.condition ?? null,
+    // CRM-synced columns carry { synced: true, ... } — read-only in the grid.
+    config: extra.config ?? null,
   };
 }
 
