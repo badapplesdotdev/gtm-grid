@@ -18,6 +18,12 @@ export interface TableListRow {
   readonly name: string;
   /** Whether this row is cloud-backed. */
   readonly synced: boolean;
+  /**
+   * Whether this table is backed by a CRM sync binding (Attio). Drives the
+   * sidebar icon (the Attio favicon instead of the grid glyph). Optional — the
+   * pure tree helpers don't require it; App populates it from crm.listBindings.
+   */
+  readonly crmSynced?: boolean;
   /** Favorite flag. */
   readonly favorite: boolean;
   /** Row count (for the trailing count badge). */

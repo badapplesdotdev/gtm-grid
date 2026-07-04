@@ -141,6 +141,12 @@ export interface GridColumn {
   readonly code: string | null;
   readonly params: unknown;
   readonly condition: string | null;
+  /**
+   * Optional behaviour flags (jsonb). Additive — CRM-synced columns carry
+   * `{ synced: true, crmBindingId, attrSlug, attrType }` so the desktop can
+   * render them read-only. `null`/absent for ordinary user columns.
+   */
+  readonly config: unknown;
 }
 
 /** A cell projection in the desktop `getTable` shape. */
@@ -209,6 +215,7 @@ const toGridColumn = (c: Column): GridColumn => ({
   code: c.code,
   params: c.params,
   condition: c.condition,
+  config: c.config ?? null,
 });
 
 /** Project a repo `Cell` onto the desktop `getTable` cell shape. */

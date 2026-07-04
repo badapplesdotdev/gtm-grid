@@ -45,6 +45,7 @@ import { buildPresenceView } from "../gridPresence";
 import { runCloudColumn, runCloudPreview } from "./cloud-run";
 import { cascadeDependents, runColumnsInDepOrder } from "../gridRun";
 import { WebhookModal } from "./WebhookModal";
+import { CrmStatusStrip } from "./CrmStatusStrip";
 import { useMe } from "./auth";
 import { gridPresenceStore, useGridPresenceRoster } from "./presenceStore";
 import {
@@ -165,6 +166,8 @@ function SignalStatusStrip({ tableId }: { tableId: string }) {
 interface CloudGridProps {
   /** The active cloud table to render, or `null` when none is selected. */
   tableId: Id<"tables"> | null;
+  /** The active workspace id (member-gates the CRM-sync status strip). */
+  workspaceId: string | null;
   /** The connector/function catalog for the Functions browser (shared with local). */
   connectors: ConnectorInfo[];
   /** Open the AI-provider settings (the Functions browser's "configure AI" link). */
@@ -183,6 +186,7 @@ interface CloudGridProps {
 
 export function CloudGrid({
   tableId,
+  workspaceId,
   connectors,
   onOpenAiSettings,
   openWebhookToken,
@@ -740,6 +744,7 @@ export function CloudGrid({
         </div>
       )}
       <SignalStatusStrip tableId={String(table.id)} />
+      {workspaceId && <CrmStatusStrip tableId={String(table.id)} workspaceId={workspaceId} />}
       <DataGrid controller={controller} />
 
       {detail && (

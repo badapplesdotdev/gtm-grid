@@ -31,6 +31,21 @@ export interface Column {
   params: Record<string, unknown>;
   /** Optional "only run if" expression gating per-row execution. */
   condition?: string | null;
+  /**
+   * Optional behaviour flags. CRM-synced columns carry
+   * `{ synced: true, crmBindingId, attrSlug, attrType }` — the desktop reads
+   * `synced` to render them read-only (updated automatically by the CRM sync).
+   */
+  config?: unknown;
+}
+/**
+ * Whether a column is filled by a CRM sync (its `config.synced` flag is set).
+ * Such columns are READ-ONLY in the grid — the sync owns their values, so inline
+ * editing is blocked (see CellContent / GridCell). User columns return false.
+ */
+export function isSyncedColumn(col: Pick<Column, "config">): boolean {
+  const c = col.config;
+  return !!c && typeof c === "object" && (c as { synced?: unknown }).synced === true;
 }
 export interface Cell {
   value: unknown;

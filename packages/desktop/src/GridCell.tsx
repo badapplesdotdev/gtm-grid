@@ -24,6 +24,7 @@
 
 import { memo, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import { CellContent } from "./App";
+import { isSyncedColumn } from "./api";
 import type { Cell, Column } from "./api";
 import type { CellActions, CtxItem, Sel } from "./DataGrid";
 import { BotGlyph } from "./PresenceAvatars";
@@ -207,7 +208,7 @@ function GridCellInner({
                   colId: col.id,
                   columnName: col.name,
                   value: cell?.value != null ? String(cell.value) : "",
-                  editable: col.kind === "manual",
+                  editable: col.kind === "manual" && !isSyncedColumn(col),
                   anchor,
                 })
             : undefined

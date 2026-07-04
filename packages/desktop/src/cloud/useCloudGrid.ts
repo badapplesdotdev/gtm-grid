@@ -605,6 +605,7 @@ function toColumn(c: {
   code: string | null;
   params?: unknown;
   condition?: string | null;
+  config?: unknown;
 }): Column {
   return {
     id: c._id,
@@ -618,6 +619,9 @@ function toColumn(c: {
     fn: c.provider ? `${c.provider}.${c.method}` : c.code ? "code" : null,
     params: (c.params ?? {}) as Record<string, unknown>,
     condition: c.condition ?? null,
+    // Behaviour flags (CRM-synced columns carry `{ synced: true, … }`), carried
+    // through so the grid can render synced columns read-only.
+    config: c.config ?? null,
   };
 }
 
@@ -651,6 +655,7 @@ type GetTableData = {
     code: string | null;
     params?: unknown;
     condition?: string | null;
+    config?: unknown;
   }[];
   rows: readonly { _id: string }[];
   cells: readonly {
