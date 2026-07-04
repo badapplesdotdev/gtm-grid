@@ -72,7 +72,9 @@ export function EmailShell(props: {
   children: ReactNode;
 }): ReactNode {
   const links = props.links ?? {};
-  const openApp = links.openAppUrl ?? `${webOrigin()}/download`;
+  // Default "Open app" rides the /open bounce (protocol redirect + download
+  // fallback) rather than the bare download page.
+  const openApp = links.openAppUrl ?? `${webOrigin()}/open`;
   const settings = links.settingsUrl ?? `${webOrigin()}/account/notifications`;
   return (
     <Html lang="en">

@@ -48,6 +48,7 @@ import {
   WorkspaceRepo,
 } from "@gtmgrid/services";
 import { Effect, ManagedRuntime, Option } from "effect";
+import { appOpenUrl } from "../../lifecycle-email/app-links";
 import { sendLifecycleEmail } from "../../lifecycle-email/send-guard";
 import { inngest } from "../client";
 import { onFailure } from "../on-failure";
@@ -259,7 +260,7 @@ export const lifecycleTeammateJoined = inngest.createFunction(
             teammateName: ctx.teammateName ?? ctx.teammateEmail ?? "A teammate",
             teammateEmail: ctx.teammateEmail ?? undefined,
             workspace: ctx.workspace ?? "your workspace",
-            openWorkspaceUrl: `${site()}/settings/members`,
+            openWorkspaceUrl: appOpenUrl({ kind: "members" }),
             links,
           }),
       }),
@@ -311,7 +312,7 @@ export const lifecycleSubscriptionConfirmed = inngest.createFunction(
             // Autumn) before this ships. Placeholders keep the template valid.
             seats: 1,
             amount: "—",
-            billingUrl: `${site()}/settings/billing`,
+            billingUrl: appOpenUrl({ kind: "billing" }),
             links,
           }),
       }),
@@ -349,7 +350,7 @@ export const lifecyclePaymentFailed = inngest.createFunction(
 
     const month = monthKey();
     const workspace = owner.name ?? "your workspace";
-    const updatePaymentUrl = `${site()}/settings/billing`;
+    const updatePaymentUrl = appOpenUrl({ kind: "billing" });
 
     const sendAttempt = (attempt: 0 | 3 | 7) =>
       sendLifecycleEmail({
@@ -449,7 +450,7 @@ export const lifecycleCredentialMissing = inngest.createFunction(
           connectAiKeyEmail({
             to,
             firstName: firstName ?? undefined,
-            ctaUrl: `${site()}/settings/ai-providers`,
+            ctaUrl: appOpenUrl({ kind: "ai-providers" }),
             links,
           }),
       }),
@@ -514,7 +515,9 @@ export const lifecycleSignalsLanded = inngest.createFunction(
 
     const ownerId = ctx.ownerId;
     const threshold = runEmailRowThreshold(process.env.RUN_EMAIL_ROW_THRESHOLD);
-    const viewUrl = tableId ? `${site()}/t/${tableId}` : `${site()}/download`;
+    const viewUrl = tableId
+      ? appOpenUrl({ kind: "table", tableId, workspaceId })
+      : appOpenUrl();
     const route = routeSignals({ bindingId, added, threshold, landedAt });
 
     if (route.template === "run-finished") {

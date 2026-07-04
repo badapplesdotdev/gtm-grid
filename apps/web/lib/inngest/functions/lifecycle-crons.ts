@@ -30,6 +30,7 @@ import {
 } from "@gtmgrid/email/lifecycle";
 import { appLayer, LifecycleCronRepo } from "@gtmgrid/services";
 import { Context, Effect, ManagedRuntime } from "effect";
+import { appOpenUrl } from "../../lifecycle-email/app-links";
 import { sendLifecycleEmail } from "../../lifecycle-email/send-guard";
 import { inngest } from "../client";
 import { onFailure } from "../on-failure";
@@ -220,7 +221,8 @@ export const lifecycleActivationStall = inngest.createFunction(
           template: "first-table",
           category: "activation",
           dedupeKey: ONCE,
-          build: ({ to, links }) => firstTableEmail({ to, ctaUrl: origin, links }),
+          build: ({ to, links }) =>
+            firstTableEmail({ to, ctaUrl: appOpenUrl({ kind: "new-table" }), links }),
         }),
       );
     }
@@ -243,7 +245,7 @@ export const lifecycleActivationStall = inngest.createFunction(
             columnsAreFunctionsEmail({
               to,
               table: t.firstTableName,
-              ctaUrl: origin,
+              ctaUrl: appOpenUrl({ kind: "ai-providers" }),
               links,
             }),
         }),
@@ -267,7 +269,7 @@ export const lifecycleActivationStall = inngest.createFunction(
               to,
               workspace: t.workspaceName,
               seatsOpen: INVITE_OPEN_SEATS,
-              ctaUrl: origin,
+              ctaUrl: appOpenUrl({ kind: "invite" }),
               links,
             }),
         }),
@@ -303,7 +305,7 @@ export const lifecycleActivationStall = inngest.createFunction(
               limit: t.limit,
               percent,
               resetsAt,
-              manageUrl: origin,
+              manageUrl: appOpenUrl({ kind: "billing" }),
               links,
             }),
         }),
@@ -364,7 +366,7 @@ export const lifecycleWeeklyDigest = inngest.createFunction(
                   teammatesActive: w.teammatesActive,
                 },
                 topTables: w.topTables,
-                openUrl: origin,
+                openUrl: appOpenUrl(),
                 links,
               }),
           }),
@@ -411,7 +413,7 @@ export const lifecycleDormant = inngest.createFunction(
               newRows: d.newRows,
               columnsRecomputed: d.columnsRecomputed,
               rowsNeedRerun: d.rowsNeedRerun,
-              jumpUrl: origin,
+              jumpUrl: appOpenUrl(),
               links,
             }),
         }),
@@ -459,7 +461,7 @@ export const lifecycleTrialWinback = inngest.createFunction(
                 tableCount: t.tableCount,
                 rowsEnriched: t.rowsEnriched,
                 columnCount: t.columnCount,
-                reactivateUrl: origin,
+                reactivateUrl: appOpenUrl({ kind: "billing" }),
                 links,
               }),
           }),

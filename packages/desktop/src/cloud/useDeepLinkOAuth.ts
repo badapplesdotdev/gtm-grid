@@ -23,6 +23,7 @@ import { electron } from "../electron";
 import { authClient } from "./client";
 import { isApiOAuthCallback } from "./api-auth";
 import { inviteTokenFromDeepLink, setPendingInviteToken } from "./pendingInvite";
+import { parseOpenDeepLink, setPendingDestination } from "./deepLinkNav";
 
 export function useApiDeepLinkOAuth(): void {
   useEffect(() => {
@@ -35,14 +36,21 @@ export function useApiDeepLinkOAuth(): void {
 
     // Route a deep link: our OAuth callback re-reads the session; an invite link
     // (`gtmgrid://invite/<token>`) is captured as the pending invite so the app
-    // forces sign-in/sign-up and auto-accepts it. Unrelated links are ignored.
+    // forces sign-in/sign-up and auto-accepts it; an `gtmgrid://open/...` link is
+    // captured as the pending in-app destination the app navigates to once auth +
+    // workspace are ready. Unrelated / garbled links are ignored.
     const onUrl = (url: string): void => {
       if (isApiOAuthCallback(url)) {
         void client.getSession();
         return;
       }
       const inviteToken = inviteTokenFromDeepLink(url);
-      if (inviteToken !== null) setPendingInviteToken(inviteToken);
+      if (inviteToken !== null) {
+        setPendingInviteToken(inviteToken);
+        return;
+      }
+      const destination = parseOpenDeepLink(url);
+      if (destination !== null) setPendingDestination(destination);
     };
 
     return api.onOauthCallback(onUrl);
