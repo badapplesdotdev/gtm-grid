@@ -121,6 +121,16 @@ export interface AnalyticsEventMap {
 
   // ── Support / feedback (Surveys + in-app feedback) ───────────────────────────
   feedback_submitted: { surface: string; rating?: number };
+
+  // ── Lifecycle emails (#8–#20, emitted by the Inngest send-guard) ─────────────
+  /** One event per DELIVERED lifecycle email, so email → reactivation is measurable. */
+  lifecycle_email_sent: {
+    template: string;
+    category: "activation" | "status" | "digest" | "transactional";
+    workspace_id?: string;
+  };
+  /** A user opted a category out via the footer unsubscribe link. */
+  lifecycle_email_unsubscribed: { category: string };
 }
 
 /** Every valid analytics event name. */

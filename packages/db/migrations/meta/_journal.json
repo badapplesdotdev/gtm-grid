@@ -85,6 +85,13 @@
       "when": 1781892751803,
       "tag": "0011_red_mephisto",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1783157978423,
+      "tag": "0012_glamorous_ricochet",
+      "breakpoints": true
     }
   ]
 }

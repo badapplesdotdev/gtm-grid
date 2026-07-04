@@ -70,6 +70,12 @@ export interface SyncedPlan {
   readonly name: string;
   /** Epoch ms the trial ends, or null when not trialing. */
   readonly trialEndsAt: number | null;
+  /**
+   * The CACHED plan id from before this reconcile (webhook variant only).
+   * `previousPlanId === null && id !== null` marks a FIRST paid subscription —
+   * the trigger for the subscription-confirmed email + `subscription_started`.
+   */
+  readonly previousPlanId?: string | null;
 }
 
 /** The error channel of {@link BillingService.syncPlanFromWebhook} — no authz
@@ -212,6 +218,13 @@ export class BillingService extends Effect.Service<BillingService>()(
         workspaceId: string,
       ): Effect.Effect<SyncedPlan, SyncPlanFromWebhookError> =>
         Effect.gen(function* () {
+          // Snapshot the cached plan BEFORE reconciling so the webhook route can
+          // detect the null -> paid transition (first subscription).
+          const prior = yield* repo.findById(workspaceId);
+          const previousPlanId = Option.match(prior, {
+            onNone: () => null,
+            onSome: (w) => w.currentPlanId ?? null,
+          });
           const subs = yield* autumn.getActiveSubscriptions({
             customerId: workspaceId,
           });
@@ -223,7 +236,7 @@ export class BillingService extends Effect.Service<BillingService>()(
             planId,
             paid?.trialEndsAt ?? null,
           );
-          return { id: planId, name: planName(planId), trialEndsAt };
+          return { id: planId, name: planName(planId), trialEndsAt, previousPlanId };
         });
 
       /**

@@ -117,6 +117,19 @@ export const users = pgTable("users", {
   emailVerified: boolean("email_verified").notNull().default(false),
   /** Avatar URL (from OAuth providers or upload). */
   image: text("image"),
+  /**
+   * Last time this user was ACTIVE in a client (desktop heartbeat / realtime
+   * connect), as opposed to merely holding a session. Drives the lifecycle
+   * email crons ("app currently open" = within ~5 min; dormant = >7 days).
+   * Null = never heartbeated (pre-feature accounts).
+   */
+  lastActiveAt: timestamp("last_active_at", { withTimezone: true, mode: "date" }),
+  /**
+   * Lifecycle-email category opt-outs, e.g. `{"digest": false}`. Absent key or
+   * null column = subscribed. Categories: activation | status | digest.
+   * Transactional mail (receipts, dunning, teammate-joined) ignores this.
+   */
+  emailPrefs: jsonb("email_prefs").$type<Record<string, boolean>>(),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull(),
 });
@@ -683,6 +696,38 @@ export const webhookDeliveries = pgTable(
   (t) => [
     index("webhook_deliveries_by_webhook").on(t.webhookId),
     index("webhook_deliveries_by_workspace").on(t.workspaceId),
+  ],
+);
+
+/**
+ * Idempotency log for LIFECYCLE emails (#8–#20, TRI: lifecycle-emails). One row
+ * per delivered send; the unique (user, template, dedupe_key) triple is what
+ * makes every trigger safe to re-run — crons pass a window key ("2026-W27"),
+ * one-shots pass a stable key ("once", or the run/invoice id). Rows are tiny
+ * and kept forever (they double as a send-history audit).
+ */
+export const lifecycleEmailSends = pgTable(
+  "lifecycle_email_sends",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** Workspace context of the send (nullable: some emails are user-scoped). */
+    workspaceId: uuid("workspace_id").references(() => workspaces.id, {
+      onDelete: "set null",
+    }),
+    /** Template slug, e.g. "run-finished", "weekly-digest". */
+    template: text("template").notNull(),
+    /** Idempotency scope within (user, template) — window or entity key. */
+    dedupeKey: text("dedupe_key").notNull(),
+    sentAt: timestamp("sent_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("lifecycle_sends_once").on(t.userId, t.template, t.dedupeKey),
+    index("lifecycle_sends_by_user").on(t.userId),
   ],
 );
 

@@ -22,10 +22,12 @@ import { Effect, Exit } from "effect";
 import { exitToResponse, workerRuntime } from "../../worker/_lib";
 import {
   extractCustomerId,
+  lifecycleBillingEmissions,
   revenueEventForPlan,
   verifyWebhookSignature,
 } from "../../../../lib/billing-webhook-auth";
 import { captureServer } from "../../../../lib/posthog-server";
+import { inngest } from "../../../../lib/inngest/client";
 
 export const runtime = "nodejs";
 
@@ -64,6 +66,29 @@ export async function POST(req: Request): Promise<Response> {
       properties: { workspace_id: workspaceId, plan_id: plan.id ?? "" },
       groups: { workspace: workspaceId },
     });
+
+    // Lifecycle-email triggers (both best-effort): a FIRST paid subscription
+    // (receipt #20) and/or a payment failure/past-due (dunning #17). The
+    // reconcile above stays authoritative for entitlements; these only drive
+    // mail. Decided by a pure helper so the emission rules are unit-pinned.
+    for (const emission of lifecycleBillingEmissions(plan, payload)) {
+      captureServer(
+        emission.event === "billing/subscription.started"
+          ? "subscription_started"
+          : "subscription_payment_failed",
+        {
+          distinctId: workspaceId,
+          properties: { workspace_id: workspaceId, plan_id: emission.planId ?? "" },
+          groups: { workspace: workspaceId },
+        },
+      );
+      await inngest
+        .send({
+          name: emission.event,
+          data: { workspaceId, planId: emission.planId },
+        })
+        .catch(() => undefined);
+    }
     return json({ synced: true, plan }, 200);
   }
   // Typed service failures (workspace/Autumn) → mapped status; defects → 500.

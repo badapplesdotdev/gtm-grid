@@ -221,7 +221,11 @@ describe("BillingService.syncPlan", () => {
       autumn: { activePlanIds: ["free"] },
     });
     if (!Exit.isSuccess(exit)) throw new Error("expected success");
-    expect(exit.value).toEqual({ id: null, name: "Free", trialEndsAt: null });
+    expect(exit.value).toEqual({
+      id: null,
+      name: "Free",
+      trialEndsAt: null,
+    });
   });
 
   it("preserves a lapsed trial's past trialEndsAt (expired-trial vs Free)", async () => {
@@ -288,6 +292,10 @@ describe("BillingService.syncPlanFromWebhook", () => {
       id: "business",
       name: planName("business"),
       trialEndsAt: null,
+      // Fixture workspace has no cached plan → this reconcile is a FIRST
+      // subscription (null -> paid), which the webhook route turns into the
+      // subscription-confirmed email + `subscription_started`.
+      previousPlanId: null,
     });
   });
 
@@ -300,7 +308,12 @@ describe("BillingService.syncPlanFromWebhook", () => {
       autumn: { activePlanIds: ["free"] },
     });
     if (!Exit.isSuccess(exit)) throw new Error("expected success");
-    expect(exit.value).toEqual({ id: null, name: "Free", trialEndsAt: null });
+    expect(exit.value).toEqual({
+      id: null,
+      name: "Free",
+      trialEndsAt: null,
+      previousPlanId: null,
+    });
   });
 
   it("does NOT fail with NotAMemberError for a non-member workspace id (no authz on this path)", async () => {

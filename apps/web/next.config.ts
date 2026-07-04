@@ -90,7 +90,7 @@ const nextConfig: NextConfig = {
       "../../node_modules/.pnpm/quickjs-emscripten@*/node_modules/quickjs-emscripten/**",
     ],
   },
-  transpilePackages: ["@gtmgrid/engine", "@gtmgrid/cloud", "@gtmgrid/analytics"],
+  transpilePackages: ["@gtmgrid/engine", "@gtmgrid/cloud", "@gtmgrid/analytics", "@gtmgrid/email"],
   // quickjs-emscripten loads a WASM *variant* at runtime (quickjs-emscripten-core
   // + @jitl/quickjs-wasmfile-release-asyncify) whose Emscripten-generated glue
   // breaks when webpack bundles it ("a is not a function"). Every quickjs package

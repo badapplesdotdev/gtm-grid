@@ -31,6 +31,28 @@ export {
 } from "./repositories/workspace-repo.js";
 export { MemberRepoLive } from "./repositories/member-repo.js";
 export {
+  LifecycleEmailRepo,
+  LifecycleEmailRepoLive,
+  lifecycleEmailRepoLayer,
+  LifecycleEmailRepoError,
+  type LifecycleCategory,
+  type LifecycleRecipient,
+  type LifecycleSendClaim,
+} from "./repositories/lifecycle-email-repo.js";
+export {
+  LifecycleCronRepo,
+  LifecycleCronRepoLive,
+  lifecycleCronRepoLayer,
+  LifecycleCronRepoError,
+  type CronOwnerTarget,
+  type ColumnsFunctionTarget,
+  type InviteTeamTarget,
+  type CreditWarningTarget,
+  type WeeklyDigestTarget,
+  type DormantTarget,
+  type TrialWinbackTarget,
+} from "./repositories/lifecycle-cron-repo.js";
+export {
   type MemberRow,
   type MemberWithUser,
   type NewMember,

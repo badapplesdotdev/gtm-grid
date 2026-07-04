@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StepRunner, WebhookRecordData } from "./process-webhook-record";
 import {
   fetchGrid,
+  isMissingCredentialError,
   processWebhookRecordHandler,
   resolveRow,
   workspaceRegistry,
@@ -349,6 +350,47 @@ describe("workspaceRegistry", () => {
     expect(Object.keys(providers)).toContain("mycustomtool"); // the custom one
     expect(providers.mycustomtool).toContain("doThing");
     expect(Object.keys(providers)).toContain("trigify"); // and the bundled ones
+  });
+});
+
+/**
+ * The predicate that gates the `lifecycle/credential.missing` email (#10): only
+ * the engine's "API key not configured" fail-fast counts — a rate-limit /
+ * timeout / invalid-key 401 is a DIFFERENT failure that must NOT nudge the user
+ * to connect a key they already connected.
+ */
+describe("isMissingCredentialError", () => {
+  it("matches the engine's exact missingKeyMessage format (manifest.ts)", () => {
+    // Verbatim `missingKeyMessage(man)` from packages/engine/src/connectors/
+    // manifest.ts for a connector named "LeadMagic".
+    const msg =
+      "LeadMagic API key not configured — connect a LeadMagic credential to run this function.";
+    expect(isMissingCredentialError(msg)).toBe(true);
+  });
+
+  it("matches for any connector name (the substring, not the whole message)", () => {
+    expect(
+      isMissingCredentialError(
+        "Apollo API key not configured — connect a Apollo credential to run this function.",
+      ),
+    ).toBe(true);
+  });
+
+  it("does NOT match an invalid-key 401, a rate limit, or a timeout", () => {
+    expect(
+      isMissingCredentialError(
+        "LeadMagic API key invalid or expired (HTTP 401) — check the LeadMagic credential and update the key.",
+      ),
+    ).toBe(false);
+    expect(isMissingCredentialError("rate limited")).toBe(false);
+    expect(isMissingCredentialError("timeout")).toBe(false);
+  });
+
+  it("does NOT match null, undefined, or a non-string error", () => {
+    expect(isMissingCredentialError(null)).toBe(false);
+    expect(isMissingCredentialError(undefined)).toBe(false);
+    expect(isMissingCredentialError({ message: "API key not configured" })).toBe(false);
+    expect(isMissingCredentialError(42)).toBe(false);
   });
 });
 
