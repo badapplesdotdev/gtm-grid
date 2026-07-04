@@ -7,6 +7,7 @@
  * fallback), so each case pins the env explicitly and restores it after.
  */
 
+import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   mintUnsubscribeToken,
@@ -101,7 +102,6 @@ describe("verify — rejection paths", () => {
     // mint for a valid category, then rebuild the payload — the MAC no longer
     // matches, so this ALSO exercises the tamper path; additionally verify a
     // directly-signed bogus payload is rejected by the category whitelist.
-    const { createHmac } = require("node:crypto") as typeof import("node:crypto");
     const payload = "user_42\nmarketing-blast";
     const body = Buffer.from(payload, "utf8").toString("base64url");
     const mac = createHmac("sha256", "s3cret").update(payload).digest("base64url");
