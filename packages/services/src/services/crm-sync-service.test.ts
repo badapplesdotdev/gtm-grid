@@ -14,6 +14,7 @@
 import { Effect, Exit } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TestLayer, type TestLayerFixtures } from "../layers.js";
+import type { RecordedGridEvent } from "../services/realtime-publisher.js";
 import type { CrmBinding, CrmSyncedRow, CrmSyncRun } from "../repositories/crm-repo.js";
 import type { GridCell, GridRow } from "../repositories/webhook-repo.js";
 import { CrmConnectionService } from "./crm-connection-service.js";
@@ -72,6 +73,7 @@ interface World {
   readonly cells: GridCell[];
   readonly syncedRows: CrmSyncedRow[];
   readonly runs: CrmSyncRun[];
+  readonly realtimeEvents: RecordedGridEvent[];
   readonly fixtures: TestLayerFixtures;
 }
 
@@ -109,6 +111,7 @@ function world(overrides?: {
   const cells: GridCell[] = [];
   const syncedRows: CrmSyncedRow[] = overrides?.syncedRows ?? [];
   const runs: CrmSyncRun[] = [];
+  const realtimeEvents: RecordedGridEvent[] = [];
   const fixtures: TestLayerFixtures = {
     workspaces: [
       {
@@ -126,8 +129,9 @@ function world(overrides?: {
     crmBindings: [binding],
     crmSyncedRows: syncedRows,
     crmSyncRuns: runs,
+    realtimeEvents,
   };
-  return { binding, rows, cells, syncedRows, runs, fixtures };
+  return { binding, rows, cells, syncedRows, runs, realtimeEvents, fixtures };
 }
 
 /** Store an Attio connection, then run one worker sync. */
@@ -182,6 +186,13 @@ describe("dedupe modes", () => {
     // Match keys normalized for upsert lookups.
     expect(w.syncedRows.find((e) => e.externalId === "rec_1")?.matchKey).toBe("sarah@vercel.com");
     expect(w.runs[0]?.status).toBe("ok");
+    // Open grids get the rows live WITH their cell values.
+    const inserts = w.realtimeEvents.filter((e) => e.event.type === "row.insert");
+    expect(inserts).toHaveLength(2);
+    const firstInsert = inserts[0].event;
+    if (firstInsert.type === "row.insert") {
+      expect(firstInsert.cells.map((c) => c.value)).toEqual(["Sarah Chen", "sarah@vercel.com"]);
+    }
   });
 
   it("update mode: a NEW record id matching an existing match key updates that row (CRM merge)", async () => {
@@ -199,6 +210,9 @@ describe("dedupe modes", () => {
     expect(cellText(w, rowId, "col_name")).toBe("Sarah Chen-Lee");
     // The new external id now maps to the same grid row.
     expect(w.syncedRows.find((e) => e.externalId === "rec_MERGED")?.rowId).toBe(rowId);
+    // The changed cells were broadcast live.
+    const upserts = w.realtimeEvents.filter((e) => e.event.type === "cell.upsert");
+    expect(upserts.length).toBeGreaterThan(0);
   });
 
   it("skip mode: existing records are never touched, new ones append", async () => {

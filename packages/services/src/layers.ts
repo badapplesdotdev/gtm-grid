@@ -350,6 +350,7 @@ export const appLayer = (params: {
     Layer.provide(membershipService),
     Layer.provide(entitlementService),
     Layer.provide(workspaceRepo),
+    Layer.provide(realtimePublisher),
   );
   const signalService = SignalService.Default.pipe(
     Layer.provide(signalRepo),
@@ -710,6 +711,7 @@ export const TestLayer = (
     Layer.provide(membershipService),
     Layer.provide(entitlementService),
     Layer.provide(workspaceRepo),
+    Layer.provide(realtimePublisher),
   );
   const lifecycleEmailRepo = lifecycleEmailRepoLayer({
     users: (fixtures.users ?? []).flatMap((u) =>

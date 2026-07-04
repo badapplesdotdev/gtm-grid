@@ -7,6 +7,12 @@ import {
   processSignalBinding,
   warmUpSignalBinding,
 } from "../../../lib/inngest/functions/poll-trigify-signals";
+import {
+  enrichCrmRow,
+  pollCrmSync,
+  processCrmBinding,
+  warmUpCrmBinding,
+} from "../../../lib/inngest/functions/poll-crm-sync";
 import { sendTrialReminders } from "../../../lib/inngest/functions/send-trial-reminders";
 import { sendWorkspaceWelcome } from "../../../lib/inngest/functions/send-workspace-welcome";
 import {
@@ -41,6 +47,11 @@ export const { GET, POST, PUT } = serve({
     processSignalBinding,
     warmUpSignalBinding,
     enrichSignalRow,
+    // CRM→grid sync (TRI: crm-sync) — daily cron + manual + warm-up + enrichment.
+    pollCrmSync,
+    processCrmBinding,
+    warmUpCrmBinding,
+    enrichCrmRow,
     // Lifecycle emails (#10 #12 #13 #17 #19 #20) — event-driven sends.
     lifecycleTeammateJoined,
     lifecycleSubscriptionConfirmed,
