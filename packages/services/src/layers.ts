@@ -168,6 +168,9 @@ import {
   type SignalBinding,
 } from "./repositories/signal-repo.js";
 import { SignalService } from "./services/signal-service.js";
+import { AttioAuth } from "./services/attio-auth.js";
+import { AttioClient } from "./services/attio-client.js";
+import { CrmConnectionService } from "./services/crm-connection-service.js";
 import {
   type CrmBinding,
   CrmBindingRepo,
@@ -328,6 +331,13 @@ export const appLayer = (params: {
   const crmBindingRepo = CrmBindingRepoLive.pipe(Layer.provide(dbLayer));
   const crmSyncedRowRepo = CrmSyncedRowRepoLive.pipe(Layer.provide(dbLayer));
   const crmSyncRunRepo = CrmSyncRunRepoLive.pipe(Layer.provide(dbLayer));
+  const attioAuth = AttioAuth.Default;
+  const attioClient = AttioClient.Default.pipe(Layer.provide(attioAuth));
+  const crmConnectionService = CrmConnectionService.Default.pipe(
+    Layer.provide(credentialService),
+    Layer.provide(credentialRepo),
+    Layer.provide(CryptoServiceLive),
+  );
   const signalService = SignalService.Default.pipe(
     Layer.provide(signalRepo),
     Layer.provide(webhookRepo),
@@ -363,6 +373,9 @@ export const appLayer = (params: {
     crmBindingRepo,
     crmSyncedRowRepo,
     crmSyncRunRepo,
+    attioAuth,
+    attioClient,
+    crmConnectionService,
     gridService,
     workspaceRepo,
     lifecycleEmailRepo,
@@ -644,6 +657,11 @@ export const TestLayer = (
     Layer.provide(membershipService),
     Layer.provide(CredentialOwnershipService.Default),
   );
+  const crmConnectionService = CrmConnectionService.Default.pipe(
+    Layer.provide(credentialService),
+    Layer.provide(credentialRepo),
+    Layer.provide(cryptoService),
+  );
   const entitlementService = EntitlementService.Default.pipe(
     Layer.provide(workspaceRepo),
   );
@@ -665,6 +683,8 @@ export const TestLayer = (
   const crmBindingRepo = crmBindingRepoLayer({ bindings: fixtures.crmBindings });
   const crmSyncedRowRepo = crmSyncedRowRepoLayer({ entries: fixtures.crmSyncedRows });
   const crmSyncRunRepo = crmSyncRunRepoLayer({ runs: fixtures.crmSyncRuns });
+  const attioAuth = AttioAuth.Default;
+  const attioClient = AttioClient.Default.pipe(Layer.provide(attioAuth));
   const lifecycleEmailRepo = lifecycleEmailRepoLayer({
     users: (fixtures.users ?? []).flatMap((u) =>
       u.email ? [{ id: u.id, email: u.email, name: u.name ?? null }] : [],
@@ -704,6 +724,9 @@ export const TestLayer = (
     crmBindingRepo,
     crmSyncedRowRepo,
     crmSyncRunRepo,
+    attioAuth,
+    attioClient,
+    crmConnectionService,
     gridService,
     entitlementService,
     workspaceRepo,
@@ -752,6 +775,9 @@ export type AppServices =
   | CrmBindingRepo
   | CrmSyncedRowRepo
   | CrmSyncRunRepo
+  | AttioAuth
+  | AttioClient
+  | CrmConnectionService
   | ExtensionService
   | ExtensionRepo
   | GridService

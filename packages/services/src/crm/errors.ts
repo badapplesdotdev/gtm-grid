@@ -41,9 +41,7 @@ export class AttioAuthRevoked extends Data.TaggedError("AttioAuthRevoked")<{
 }> {}
 
 /** No Attio credential exists for this workspace (deleted or never connected). */
-export class CrmConnectionMissing extends Data.TaggedError("CrmConnectionMissing")<
-  Record<string, never>
-> {}
+export class CrmConnectionMissing extends Data.TaggedError("CrmConnectionMissing") {}
 
 // ── Recoverable-partial (run lands what it can) ───────────────────────────────
 
