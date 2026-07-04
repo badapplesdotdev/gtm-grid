@@ -83,3 +83,50 @@ export function revenueEventForPlan(planId: string | null): Extract<
 > {
   return planId ? "subscription_changed" : "subscription_canceled";
 }
+
+/** A lifecycle-email event the billing webhook emits after a plan reconcile. */
+export interface LifecycleBillingEmission {
+  readonly event: "billing/subscription.started" | "billing/payment.failed";
+  /** The reconciled plan id carried on the event (`null` on a lapsed/free plan). */
+  readonly planId: string | null;
+}
+
+/**
+ * Decide which lifecycle-email events a reconciled webhook implies — pure so the
+ * route just maps over the result. Two independent, CO-emittable triggers:
+ *
+ *  - FIRST paid subscription: the cached plan was empty and the live plan is paid
+ *    (`previousPlanId == null && id !== null`) → `billing/subscription.started`
+ *    (the receipt email #20). The `==` is deliberate: a non-webhook {@link
+ *    SyncedPlan} omits `previousPlanId` (`undefined`), which `== null` treats as
+ *    "was free", so a first paid sync from any path still fires.
+ *  - Payment failure / past-due: the raw Autumn `type` is exactly `payment_failed`
+ *    or ends with `.past_due` → `billing/payment.failed` (the dunning email #17).
+ *    A missing / non-string / unrelated `type` emits nothing.
+ *
+ * Both can fire from ONE delivery (a first paid sync whose payload also reports a
+ * failure), so this returns an array rather than a single event.
+ */
+export function lifecycleBillingEmissions(
+  plan: { readonly id: string | null; readonly previousPlanId?: string | null },
+  payload: unknown,
+): LifecycleBillingEmission[] {
+  const out: LifecycleBillingEmission[] = [];
+
+  // First paid subscription (cached plan null/absent, live plan paid).
+  if (plan.previousPlanId == null && plan.id !== null) {
+    out.push({ event: "billing/subscription.started", planId: plan.id });
+  }
+
+  // Payment failure / past-due, read from the raw Autumn event `type`.
+  const rawType =
+    typeof payload === "object" && payload !== null
+      ? (payload as { type?: unknown }).type
+      : undefined;
+  const eventType = typeof rawType === "string" ? rawType : "";
+  if (eventType === "payment_failed" || eventType.endsWith(".past_due")) {
+    out.push({ event: "billing/payment.failed", planId: plan.id ?? null });
+  }
+
+  return out;
+}

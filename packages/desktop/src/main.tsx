@@ -4,6 +4,7 @@ import App from "./App";
 import { capture, initAnalytics } from "./analytics";
 import { CloudProvider } from "./cloud/client";
 import { PostHogIdentityBridge } from "./cloud/PostHogIdentityBridge";
+import { PresenceHeartbeat } from "./cloud/PresenceHeartbeat";
 import { ErrorBoundary } from "./ErrorBoundary";
 // styles.css first (unlayered app reset), then tailwind.css whose unlayered
 // utilities must win over that reset — see the layering note in tailwind.css.
@@ -21,6 +22,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <ErrorBoundary>
       <CloudProvider>
         <PostHogIdentityBridge />
+        <PresenceHeartbeat />
         <App />
       </CloudProvider>
     </ErrorBoundary>

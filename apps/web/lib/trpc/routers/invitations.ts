@@ -21,6 +21,7 @@
 import { InvitationService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { z } from "zod";
+import { inngest } from "../../inngest/client";
 import {
   protectedProcedure,
   publicProcedure,
@@ -118,7 +119,23 @@ export const invitationsRouter = router({
         ctx.runtime,
         Effect.gen(function* () {
           const svc = yield* InvitationService;
-          return yield* svc.acceptInvitation(input.token);
+          const result = yield* svc.acceptInvitation(input.token);
+          // Notify the inviter out of band (best-effort): the teammate-joined
+          // email (#19) rides an Inngest event so a queue hiccup never fails the
+          // accept. Only on a genuinely NEW membership — re-accepts stay silent.
+          if (result.status === "accepted" && result.newMember) {
+            yield* Effect.tryPromise(() =>
+              inngest.send({
+                name: "workspace/member.joined",
+                data: {
+                  workspaceId: result.workspaceId,
+                  joinedUserId: ctx.userId,
+                  invitedBy: result.invitedBy,
+                },
+              }),
+            ).pipe(Effect.ignore);
+          }
+          return result;
         }),
       ),
     ),

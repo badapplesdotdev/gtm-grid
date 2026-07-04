@@ -147,9 +147,55 @@ export const processSignalBinding = inngest.createFunction(
     );
     const enrichEvents = signalEnrichEvents(result);
     if (enrichEvents.length > 0) await step.sendEvent("enqueue-signal-enrich", enrichEvents);
+    // Reward-loop emails (#12/#13): a CRON sync that landed new rows notifies
+    // the workspace out of band. The lifecycle function applies the presence
+    // gate + per-binding/day dedupe; deliberately NOT emitted from warm-up
+    // (the user just created that binding — they're in the app watching it).
+    const landed = signalsLandedEvent(result, bindingId, Date.now());
+    if (landed !== null) await step.sendEvent("lifecycle-signals-landed", landed);
     return { bindingId, added: result.added, error: result.error };
   },
 );
+
+/** The `lifecycle/signals.landed` event a CRON sync emits when new rows land. */
+export interface SignalsLandedEvent {
+  readonly name: "lifecycle/signals.landed";
+  readonly data: {
+    readonly workspaceId: string;
+    readonly tableId: string;
+    readonly bindingId: string;
+    readonly added: number;
+    readonly landedAt: number;
+  };
+}
+
+/**
+ * Build the reward-loop `lifecycle/signals.landed` event (#12/#13) for a CRON
+ * sync, or `null` when nothing should fire. Emits ONLY when the sync actually
+ * landed rows (`added > 0`) AND resolved a workspace + table — a failed sync
+ * (`added 0`, null workspace/table) or an empty pull produces no email. Pure so
+ * the gate + exact payload shape are unit-pinned; the handler just sends the
+ * result. Deliberately NOT called from warm-up (see the handler comment).
+ */
+export function signalsLandedEvent(
+  result: { readonly added: number; readonly workspaceId: string | null; readonly tableId: string | null },
+  bindingId: string,
+  landedAt: number,
+): SignalsLandedEvent | null {
+  if (result.added <= 0 || result.workspaceId === null || result.tableId === null) {
+    return null;
+  }
+  return {
+    name: "lifecycle/signals.landed",
+    data: {
+      workspaceId: result.workspaceId,
+      tableId: result.tableId,
+      bindingId,
+      added: result.added,
+      landedAt,
+    },
+  };
+}
 
 /** The new-row payload a signal sync returns (table/workspace null on failure). */
 interface SignalSyncRows {

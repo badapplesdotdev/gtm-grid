@@ -468,7 +468,13 @@ describe("InvitationService.acceptInvitation", () => {
     );
     expect(Exit.isSuccess(exit)).toBe(true);
     if (Exit.isSuccess(exit)) {
-      expect(exit.value).toEqual({ status: "accepted", workspaceId: WS_ID });
+      expect(exit.value).toEqual({
+        status: "accepted",
+        workspaceId: WS_ID,
+        // New-membership accept → drives the teammate-joined email (#19).
+        newMember: true,
+        invitedBy: OWNER,
+      });
     }
     expect(trackCalls).toEqual([{ customerId: WS_ID, value: 1 }]);
   });

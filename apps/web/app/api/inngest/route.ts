@@ -9,6 +9,19 @@ import {
 } from "../../../lib/inngest/functions/poll-trigify-signals";
 import { sendTrialReminders } from "../../../lib/inngest/functions/send-trial-reminders";
 import { sendWorkspaceWelcome } from "../../../lib/inngest/functions/send-workspace-welcome";
+import {
+  lifecycleCredentialMissing,
+  lifecyclePaymentFailed,
+  lifecycleSignalsLanded,
+  lifecycleSubscriptionConfirmed,
+  lifecycleTeammateJoined,
+} from "../../../lib/inngest/functions/lifecycle-events";
+import {
+  lifecycleActivationStall,
+  lifecycleDormant,
+  lifecycleTrialWinback,
+  lifecycleWeeklyDigest,
+} from "../../../lib/inngest/functions/lifecycle-crons";
 
 /**
  * The Inngest serve endpoint. Inngest invokes durable function steps by POSTing
@@ -28,5 +41,16 @@ export const { GET, POST, PUT } = serve({
     processSignalBinding,
     warmUpSignalBinding,
     enrichSignalRow,
+    // Lifecycle emails (#10 #12 #13 #17 #19 #20) — event-driven sends.
+    lifecycleTeammateJoined,
+    lifecycleSubscriptionConfirmed,
+    lifecyclePaymentFailed,
+    lifecycleCredentialMissing,
+    lifecycleSignalsLanded,
+    // Lifecycle emails (#8 #9 #11 #14 #15 #16 #18) — scheduled scans.
+    lifecycleActivationStall,
+    lifecycleWeeklyDigest,
+    lifecycleDormant,
+    lifecycleTrialWinback,
   ],
 });

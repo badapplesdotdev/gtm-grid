@@ -274,6 +274,23 @@ export async function resolveRow(
 }
 
 /**
+ * Whether an engine `firstError` is the "connect your API key" fail-fast the
+ * manifest connector throws pre-flight when an apiKey column runs with no
+ * resolved secret (`missingKeyMessage` in packages/engine/src/connectors/
+ * manifest.ts: "<Name> API key not configured — connect a <Name> credential to
+ * run this function."). Only that message gates the `lifecycle/credential.missing`
+ * email (#10) — a rate-limit / timeout / 401-invalid-key is a DIFFERENT failure
+ * and must NOT trigger the "you haven't connected a key" nudge. Non-string
+ * (null/undefined/object) errors are never a match.
+ */
+export function isMissingCredentialError(firstError: unknown): boolean {
+  return (
+    typeof firstError === "string" &&
+    firstError.includes("API key not configured")
+  );
+}
+
+/**
  * Recompute ONE function column over a single row through the engine cloud path.
  * Exported so it can be wrapped in its own per-column `step.run` (TRI-3280) and
  * exercised directly in tests. Builds the Db-FREE engine: store + creds are the
@@ -319,6 +336,17 @@ export async function runEnrichColumn(
       },
       groups: { workspace: ctx.workspaceId },
     });
+    // Missing-credential fail-fast (engine manifest.ts httpCall) → the
+    // "connect your AI key" email (#10). One event per failure; the lifecycle
+    // send-guard's (user, template, "once") dedupe collapses repeats.
+    if (isMissingCredentialError(firstError)) {
+      await inngest
+        .send({
+          name: "lifecycle/credential.missing",
+          data: { workspaceId: ctx.workspaceId, firstError },
+        })
+        .catch(() => undefined);
+    }
   }
   return ran;
 }

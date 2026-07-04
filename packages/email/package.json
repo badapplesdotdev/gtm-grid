@@ -5,13 +5,22 @@
   "type": "module",
   "main": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./lifecycle": "./src/lifecycle/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",
-    "test": "vitest run"
+    "test": "vitest run",
+    "preview": "tsx scripts/render-all.ts"
   },
   "dependencies": {
+    "@react-email/components": "^1.0.12",
+    "@react-email/render": "^2.0.10",
+    "react": "^19.1.0",
     "resend": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "tsx": "^4.19.2"
   }
 }

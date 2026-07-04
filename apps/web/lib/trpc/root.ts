@@ -22,6 +22,7 @@ import { extensionsRouter } from "./routers/extensions";
 import { gridRouter } from "./routers/grid";
 import { invitationsRouter } from "./routers/invitations";
 import { realtimeRouter } from "./routers/realtime";
+import { presenceRouter } from "./routers/presence";
 import { webhooksRouter } from "./routers/webhooks";
 import { signalsRouter } from "./routers/signals";
 import { workspacesRouter } from "./routers/workspaces";
@@ -73,6 +74,8 @@ export const appRouter = router({
   billing: billingRouter,
   /** Workspace invitations (invite -> accept lifecycle). */
   invitations: invitationsRouter,
+  /** Desktop activity heartbeat → `users.last_active_at` (lifecycle emails). */
+  presence: presenceRouter,
   /** Connector credentials — encrypt/save, member-gated decrypt, metadata list. */
   credentials: credentialsRouter,
   /** Member-gated webhook config CRUD (TRI-3250). */

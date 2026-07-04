@@ -130,6 +130,16 @@ import {
   WorkspaceRepoLive,
   workspaceRepoLayer,
 } from "./repositories/workspace-repo.js";
+import {
+  LifecycleEmailRepo,
+  LifecycleEmailRepoLive,
+  lifecycleEmailRepoLayer,
+} from "./repositories/lifecycle-email-repo.js";
+import {
+  LifecycleCronRepo,
+  LifecycleCronRepoLive,
+  lifecycleCronRepoLayer,
+} from "./repositories/lifecycle-cron-repo.js";
 import { ExtensionService } from "./services/extension-service.js";
 import {
   ErrorReporter,
@@ -212,6 +222,8 @@ export const appLayer = (params: {
     : errorReporterNoop;
   const memberRepo = MemberRepoLive.pipe(Layer.provide(dbLayer));
   const workspaceRepo = WorkspaceRepoLive.pipe(Layer.provide(dbLayer));
+  const lifecycleEmailRepo = LifecycleEmailRepoLive.pipe(Layer.provide(dbLayer));
+  const lifecycleCronRepo = LifecycleCronRepoLive.pipe(Layer.provide(dbLayer));
   const workspaceMemberRepo = WorkspaceMemberRepoLive.pipe(
     Layer.provide(dbLayer),
   );
@@ -333,6 +345,8 @@ export const appLayer = (params: {
     signalRepo,
     gridService,
     workspaceRepo,
+    lifecycleEmailRepo,
+    lifecycleCronRepo,
     workspaceMemberRepo,
     invitationRepo,
     credentialRepo,
@@ -622,6 +636,12 @@ export const TestLayer = (
     Layer.provide(membershipService),
   );
   const signalRepo = signalRepoLayer({ bindings: fixtures.signalBindings });
+  const lifecycleEmailRepo = lifecycleEmailRepoLayer({
+    users: (fixtures.users ?? []).flatMap((u) =>
+      u.email ? [{ id: u.id, email: u.email, name: u.name ?? null }] : [],
+    ),
+  });
+  const lifecycleCronRepo = lifecycleCronRepoLayer();
   const signalService = SignalService.Default.pipe(
     Layer.provide(signalRepo),
     Layer.provide(webhookRepo),
@@ -655,6 +675,8 @@ export const TestLayer = (
     gridService,
     entitlementService,
     workspaceRepo,
+    lifecycleEmailRepo,
+    lifecycleCronRepo,
     workspaceMemberRepo,
     invitationRepo,
     credentialRepo,
@@ -706,4 +728,6 @@ export type AppServices =
   | RowRepo
   | CellRepo
   | MeterService
-  | RealtimePublisher;
+  | RealtimePublisher
+  | LifecycleEmailRepo
+  | LifecycleCronRepo;

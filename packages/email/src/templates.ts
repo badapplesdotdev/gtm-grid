@@ -117,6 +117,12 @@ export interface OutboundEmail {
   readonly subject: string;
   readonly html: string;
   readonly text: string;
+  /**
+   * Extra SMTP headers (e.g. `List-Unsubscribe` +
+   * `List-Unsubscribe-Post: List-Unsubscribe=One-Click` on lifecycle sends so
+   * inbox providers surface their native unsubscribe affordance).
+   */
+  readonly headers?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -139,6 +145,7 @@ export async function sendEmail(email: OutboundEmail): Promise<void> {
     subject: email.subject,
     html: email.html,
     text: email.text,
+    headers: email.headers ? { ...email.headers } : undefined,
     // The brand icon ships inline (CID) so it renders with no external hosting.
     attachments: BRAND_ATTACHMENTS,
   });
