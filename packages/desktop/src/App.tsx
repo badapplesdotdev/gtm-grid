@@ -15,9 +15,12 @@ import { AccountBar, PlanBillingModal } from "./cloud/AccountBar";
 import { PendingInvites } from "./cloud/PendingInvites";
 import { cloudEnabled, queryClient, syncWorkspacePlan, apiClient } from "./cloud/client";
 import {
+  buildFolderTree,
+  canMoveFolderInto,
   dedupeTableRowsByName,
-  groupTableList,
+  folderTailPosition,
   positionForMove,
+  type FolderTreeNode,
   type MoveTarget,
   type SidebarFolder,
   type TableListRow,
@@ -929,8 +932,10 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("gtmgrid:openFolders", JSON.stringify(openFolders)); } catch { /* ignore */ }
   }, [openFolders]);
-  // Drag-and-drop: the table row being dragged + the current drop target.
+  // Drag-and-drop: the table row OR folder being dragged + the current drop
+  // target. Exactly one of dragTableId / dragFolderId is set during a drag.
   const [dragTableId, setDragTableId] = useState<string | null>(null);
+  const [dragFolderId, setDragFolderId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<
     | { kind: "table"; id: string; pos: "before" | "after" }
     | { kind: "folder"; id: string }
@@ -1223,6 +1228,7 @@ export default function App() {
     createFolder: createCloudFolder,
     renameFolder: renameCloudFolder,
     deleteFolder: deleteCloudFolder,
+    moveFolder: moveCloudFolder,
     moveTable: moveCloudTable,
   } = useCloudProjectMutations();
   const { addColumn: cloudAddColumn, addRowsWithCells: cloudAddRowsWithCells } =
@@ -1809,12 +1815,18 @@ export default function App() {
   );
   // The sidebar's folders for the open cloud project, in position order.
   const sidebarFolders = useMemo<SidebarFolder[]>(
-    () => (cloudFolders ?? []).map((f) => ({ id: f._id, name: f.name, position: f.position })),
+    () =>
+      (cloudFolders ?? []).map((f) => ({
+        id: f._id,
+        name: f.name,
+        position: f.position,
+        parentId: f.parentId,
+      })),
     [cloudFolders],
   );
-  // Folder sections + root rows the sidebar renders.
-  const groupedTables = useMemo(
-    () => groupTableList(tableList, sidebarFolders),
+  // Nested folder tree + root rows the sidebar renders.
+  const folderTree = useMemo(
+    () => buildFolderTree(tableList, sidebarFolders),
     [tableList, sidebarFolders],
   );
   // Lookup by id so the rows can recover their cloud summary for selection.
@@ -1980,6 +1992,86 @@ export default function App() {
     );
   };
 
+  // Render a folder and, recursively, its sub-folders. `depth` drives the nested
+  // indentation; child folders render INSIDE the body (above the folder's own
+  // table rows) so the sidebar shows a true tree.
+  const renderFolderNode = (node: FolderTreeNode, depth: number): React.ReactNode => {
+    const { folder, rows: folderRows, children } = node;
+    const isOpen = !!openFolders[folder.id];
+    const into = dropTarget?.kind === "folder" && dropTarget.id === folder.id;
+    const isEmpty = folderRows.length === 0 && children.length === 0;
+    const indent = depth > 0 ? { marginLeft: 12 } : undefined;
+    return (
+      <div key={`folder:${folder.id}`} className="sidebar-folder" style={indent}>
+        {renamingFolderId === folder.id ? (
+          <div className="folder-head">
+            <span className="connector-group-toggle open"><Icon.ChevronRight /></span>
+            <span className="folder-ic"><Icon.FolderOpen /></span>
+            <input
+              className="sidebar-rename-input"
+              value={folderDraft}
+              autoFocus
+              onChange={e => setFolderDraft(e.target.value)}
+              onBlur={() => commitFolderRename(folder.id, folderDraft)}
+              onKeyDown={e => {
+                if (e.key === "Enter") commitFolderRename(folder.id, folderDraft);
+                if (e.key === "Escape") setRenamingFolderId(null);
+              }}
+            />
+          </div>
+        ) : (
+          <div
+            className={`folder-head${into ? " drop-into" : ""}${dragFolderId === folder.id ? " dragging" : ""}`}
+            onClick={() => toggleFolder(folder.id)}
+            onKeyDown={onActivateKey(() => toggleFolder(folder.id))}
+            role="button"
+            tabIndex={0}
+            draggable
+            onDragStart={e => onFolderDragStart(e, folder)}
+            onDragEnd={clearDrag}
+            onContextMenu={e => openCtx(e, folderMenuItems(folder))}
+            onDragEnter={() => onFolderDragEnter(folder)}
+            onDragOver={e => onFolderDragOver(e, folder)}
+            onDrop={e => onFolderDrop(e, folder)}
+          >
+            <span className={`connector-group-toggle${isOpen ? " open" : ""}`}><Icon.ChevronRight /></span>
+            <span className="folder-ic">{isOpen ? <Icon.FolderOpen /> : <Icon.Folder />}</span>
+            <span
+              className="folder-name"
+              onDoubleClick={e => { e.stopPropagation(); startFolderRename(folder); }}
+            >
+              {folder.name}
+            </span>
+            <button
+              className="sidebar-item-more"
+              title="Folder options"
+              onClick={e => { e.stopPropagation(); openCtx(e, folderMenuItems(folder)); }}
+            >
+              <Icon.More />
+            </button>
+            <span className="sidebar-item-count">{folderRows.length + children.length}</span>
+          </div>
+        )}
+        {isOpen && (
+          <div className="folder-body">
+            {children.map((child) => renderFolderNode(child, depth + 1))}
+            {isEmpty ? (
+              <div
+                className={`folder-empty${into ? " drop-into" : ""}`}
+                onDragOver={e => onFolderDragOver(e, folder)}
+                onDrop={e => onFolderDrop(e, folder)}
+              >
+                Drop tables or folders here
+              </div>
+            ) : (
+              folderRows.map((row) => renderTableRow(row, true))
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // Default the active cloud table to the first one once the list loads.
   useEffect(() => {
     if (cloudTables && cloudTables.length > 0 && cloudTableId === null) {
@@ -2042,13 +2134,18 @@ export default function App() {
     return `${base} ${n}`;
   };
 
-  const onCreateFolder = async () => {
-    const name = uniqueFolderName("New folder");
+  // Create a folder at the top level, or nested under `parentId` (a sub-folder).
+  const onCreateFolder = async (parentId: string | null = null) => {
+    const name = uniqueFolderName(parentId === null ? "New folder" : "New subfolder");
     try {
       if (!cloudProject) return;
-      const id = await createCloudFolder(cloudProject._id, name);
-      // Open the new folder and drop straight into rename (matching the design).
-      setOpenFolders((o) => ({ ...o, [id]: true }));
+      const id = await createCloudFolder(cloudProject._id, name, parentId);
+      // Open the new folder (and its parent) and drop straight into rename.
+      setOpenFolders((o) => ({
+        ...o,
+        ...(parentId !== null ? { [parentId]: true } : {}),
+        [id]: true,
+      }));
       setFolderDraft(name);
       setRenamingFolderId(id);
     } catch { /* surfaced by the list simply not changing */ }
@@ -2103,13 +2200,28 @@ export default function App() {
 
   const folderMenuItems = (f: SidebarFolder) => [
     { label: "Rename", onClick: () => startFolderRename(f) },
+    { label: "New subfolder", onClick: () => { void onCreateFolder(f.id); } },
     { label: "New table here", onClick: () => newTableInFolder(f.id) },
     { label: "Delete folder", danger: true, onClick: () => { void onDeleteFolder(f.id); } },
   ];
 
+  // Reparent a dragged folder into another folder (`parentId: null` → top
+  // level). The destination-group tail position is computed CLIENT-side (pure
+  // helper) so the backend gets one simple "set parentId + position" write. The
+  // cycle guard (can't drop a folder into its own subtree) is enforced both here
+  // and server-side.
+  const onMoveFolder = async (folderId: string, parentId: string | null) => {
+    if (!cloudProject) return;
+    if (folderId === parentId) return;
+    if (!canMoveFolderInto(sidebarFolders, folderId, parentId)) return;
+    const position = folderTailPosition(sidebarFolders, parentId, folderId);
+    await moveCloudFolder(cloudProject._id, folderId, parentId, position).catch(() => {});
+    if (parentId !== null) openFolder(parentId);
+  };
+
   // ── Sidebar drag & drop (tables ↔ folders) ─────────────────────────────────
 
-  const clearDrag = () => { setDragTableId(null); setDropTarget(null); };
+  const clearDrag = () => { setDragTableId(null); setDragFolderId(null); setDropTarget(null); };
   const dragPosOf = (e: ReactDragEvent): "before" | "after" => {
     const r = e.currentTarget.getBoundingClientRect();
     return e.clientY - r.top < r.height / 2 ? "before" : "after";
@@ -2137,32 +2249,55 @@ export default function App() {
     void onMoveTableRow(dragged, target);
     clearDrag();
   };
+  const onFolderDragStart = (e: ReactDragEvent, f: SidebarFolder) => {
+    setDragFolderId(f.id);
+    e.dataTransfer.effectAllowed = "move";
+    try { e.dataTransfer.setData("text/plain", f.id); } catch { /* webview quirk */ }
+  };
+  // Whether a folder drag may legally drop INTO folder `f` (not itself / its
+  // own subtree). Tables can always drop into any folder.
+  const folderDropAllowed = (f: SidebarFolder): boolean =>
+    dragFolderId !== null
+      ? canMoveFolderInto(sidebarFolders, dragFolderId, f.id)
+      : dragTableId !== null;
   const onFolderDragEnter = (f: SidebarFolder) => {
-    // Auto-expand a collapsed folder while hovering a drag over it.
-    if (dragTableId) openFolder(f.id);
+    // Auto-expand a collapsed folder while hovering a valid drag over it.
+    if (folderDropAllowed(f)) openFolder(f.id);
   };
   const onFolderDragOver = (e: ReactDragEvent, f: SidebarFolder) => {
-    if (!dragTableId) return;
+    if (!folderDropAllowed(f)) return;
     e.preventDefault();
+    e.stopPropagation();
     setDropTarget({ kind: "folder", id: f.id });
   };
   const onFolderDrop = (e: ReactDragEvent, f: SidebarFolder) => {
-    const dragged = tableList.find((r) => r.id === dragTableId);
-    if (!dragged) { clearDrag(); return; }
     e.preventDefault();
     e.stopPropagation();
+    if (dragFolderId) {
+      const folderId = dragFolderId;
+      if (folderDropAllowed(f)) void onMoveFolder(folderId, f.id);
+      clearDrag();
+      return;
+    }
+    const dragged = tableList.find((r) => r.id === dragTableId);
+    if (!dragged) { clearDrag(); return; }
     void onMoveTableRow(dragged, { folderId: f.id });
     clearDrag();
   };
   const onRootDragOver = (e: ReactDragEvent) => {
-    if (!dragTableId) return;
+    if (!dragTableId && !dragFolderId) return;
     e.preventDefault();
     setDropTarget({ kind: "root" });
   };
   const onRootDrop = (e: ReactDragEvent) => {
+    e.preventDefault();
+    if (dragFolderId) {
+      void onMoveFolder(dragFolderId, null);
+      clearDrag();
+      return;
+    }
     const dragged = tableList.find((r) => r.id === dragTableId);
     if (!dragged) { clearDrag(); return; }
-    e.preventDefault();
     void onMoveTableRow(dragged, { folderId: null });
     clearDrag();
   };
@@ -2431,81 +2566,13 @@ export default function App() {
               <div style={{ padding: "4px 16px", fontSize: 12, color: "var(--text-3)" }}>No tables yet</div>
             ) : (
               <>
-                {groupedTables.folders.map(({ folder, rows: folderRows }) => {
-                  const isOpen = !!openFolders[folder.id];
-                  const into = dropTarget?.kind === "folder" && dropTarget.id === folder.id;
-                  return (
-                    <div key={`folder:${folder.id}`} className="sidebar-folder">
-                      {renamingFolderId === folder.id ? (
-                        <div className="folder-head">
-                          <span className="connector-group-toggle open"><Icon.ChevronRight /></span>
-                          <span className="folder-ic"><Icon.FolderOpen /></span>
-                          <input
-                            className="sidebar-rename-input"
-                            value={folderDraft}
-                            autoFocus
-                            onChange={e => setFolderDraft(e.target.value)}
-                            onBlur={() => commitFolderRename(folder.id, folderDraft)}
-                            onKeyDown={e => {
-                              if (e.key === "Enter") commitFolderRename(folder.id, folderDraft);
-                              if (e.key === "Escape") setRenamingFolderId(null);
-                            }}
-                          />
-                        </div>
-                      ) : (
-                        <div
-                          className={`folder-head${into ? " drop-into" : ""}`}
-                          onClick={() => toggleFolder(folder.id)}
-                          onKeyDown={onActivateKey(() => toggleFolder(folder.id))}
-                          role="button"
-                          tabIndex={0}
-                          onContextMenu={e => openCtx(e, folderMenuItems(folder))}
-                          onDragEnter={() => onFolderDragEnter(folder)}
-                          onDragOver={e => onFolderDragOver(e, folder)}
-                          onDrop={e => onFolderDrop(e, folder)}
-                        >
-                          <span className={`connector-group-toggle${isOpen ? " open" : ""}`}><Icon.ChevronRight /></span>
-                          <span className="folder-ic">{isOpen ? <Icon.FolderOpen /> : <Icon.Folder />}</span>
-                          <span
-                            className="folder-name"
-                            onDoubleClick={e => { e.stopPropagation(); startFolderRename(folder); }}
-                          >
-                            {folder.name}
-                          </span>
-                          <button
-                            className="sidebar-item-more"
-                            title="Folder options"
-                            onClick={e => { e.stopPropagation(); openCtx(e, folderMenuItems(folder)); }}
-                          >
-                            <Icon.More />
-                          </button>
-                          <span className="sidebar-item-count">{folderRows.length}</span>
-                        </div>
-                      )}
-                      {isOpen && (
-                        <div className="folder-body">
-                          {folderRows.length === 0 ? (
-                            <div
-                              className={`folder-empty${into ? " drop-into" : ""}`}
-                              onDragOver={e => onFolderDragOver(e, folder)}
-                              onDrop={e => onFolderDrop(e, folder)}
-                            >
-                              Drop tables here
-                            </div>
-                          ) : (
-                            folderRows.map((row) => renderTableRow(row, true))
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                {folderTree.roots.map((node) => renderFolderNode(node, 0))}
                 <div
                   className={`root-drop${dropTarget?.kind === "root" ? " drop-into" : ""}`}
                   onDragOver={onRootDragOver}
                   onDrop={onRootDrop}
                 >
-                  {groupedTables.root.map((row) => renderTableRow(row, false))}
+                  {folderTree.rootRows.map((row) => renderTableRow(row, false))}
                 </div>
               </>
             )}

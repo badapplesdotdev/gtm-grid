@@ -176,8 +176,11 @@ export class InvitationRepo extends Context.Tag("InvitationRepo")<
       userId: string,
     ) => Effect.Effect<UserInfo, InvitationRepoError>;
     /**
-     * Insert a new pending invite OR refresh the existing pending invite for the
-     * same (workspace, email). Returns the resulting row.
+     * Insert a new pending invite OR revive the existing invite row for the
+     * same (workspace, email) — whatever its status — back to a fresh pending
+     * one. The unique index invitations_by_workspace_email permits only one row
+     * per (workspace, email), so revoked/accepted leftovers are reused, never
+     * duplicated. Returns the resulting row.
      */
     readonly upsertPending: (
       input: UpsertInviteInput,
@@ -487,20 +490,24 @@ export const InvitationRepoLive: Layer.Layer<InvitationRepo, never, DbClient> =
                   eq(schema.invitations.email, input.email),
                 ),
               );
-            const pending = existing
-              .map(toInvitation)
-              .find((i) => i.status === "pending");
-            if (pending !== undefined) {
+            // The unique index invitations_by_workspace_email allows at most one
+            // row per (workspace, email) in ANY status, so a revoked/accepted
+            // leftover must be revived here — a fresh insert would violate it.
+            const current = existing.map(toInvitation)[0];
+            if (current !== undefined) {
               const updated = await db
                 .update(schema.invitations)
                 .set({
                   role: input.role,
                   token: input.token,
+                  status: "pending",
                   expiresAt: input.expiresAt,
                   invitedBy: input.invitedBy,
                   createdAt: input.createdAt,
+                  acceptedBy: null,
+                  acceptedAt: null,
                 })
-                .where(eq(schema.invitations.id, pending.id))
+                .where(eq(schema.invitations.id, current.id))
                 .returning(INVITATION_COLUMNS);
               return toInvitation(updated[0]);
             }
@@ -779,22 +786,26 @@ export const invitationRepoLayer = (
       ),
     upsertPending: (input) =>
       Effect.sync(() => {
-        const pending = invitations.find(
+        // Mirrors the Live layer: at most one row per (workspace, email) — the
+        // unique index — so ANY existing row (pending, revoked, or accepted) is
+        // revived to a fresh pending invite instead of inserting a duplicate.
+        const current = invitations.find(
           (i) =>
-            i.workspaceId === input.workspaceId &&
-            i.email === input.email &&
-            i.status === "pending",
+            i.workspaceId === input.workspaceId && i.email === input.email,
         );
-        if (pending !== undefined) {
+        if (current !== undefined) {
           const refreshed: Invitation = {
-            ...pending,
+            ...current,
             role: input.role,
             token: input.token,
+            status: "pending",
             expiresAt: input.expiresAt,
             invitedBy: input.invitedBy,
             createdAt: input.createdAt,
+            acceptedBy: null,
+            acceptedAt: null,
           };
-          const idx = invitations.indexOf(pending);
+          const idx = invitations.indexOf(current);
           invitations[idx] = refreshed;
           return refreshed;
         }

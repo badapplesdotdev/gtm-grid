@@ -161,6 +161,105 @@ describe("InvitationService.inviteByEmail", () => {
     }
   });
 
+  it("revives a revoked invite on re-invite (single row per workspace+email)", async () => {
+    // Regression: a leftover revoked row used to collide with the unconditional
+    // unique index invitations_by_workspace_email on a fresh insert.
+    const fixtures: TestLayerFixtures = {
+      workspaces,
+      memberships: [ownerMembership],
+      users,
+      currentUserId: OWNER,
+      invitations: [liveInvite({ status: "revoked" })],
+    };
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const svc = yield* InvitationService;
+        const result = yield* svc.inviteByEmail({
+          workspaceId: WS_ID,
+          email: INVITEE_EMAIL,
+          role: "admin",
+        });
+        const listed = yield* svc.listInvitations(WS_ID);
+        return { result, listed };
+      }).pipe(Effect.provide(TestLayer(fixtures))),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.result.status).toBe("invited");
+      expect(exit.value.listed).toHaveLength(1);
+      expect(exit.value.listed[0].email).toBe(INVITEE_EMAIL);
+      expect(exit.value.listed[0].role).toBe("admin");
+      expect(exit.value.listed[0].status).toBe("pending");
+      expect(exit.value.listed[0].token).not.toBe(LIVE_TOKEN); // fresh token
+    }
+  });
+
+  it("revives an accepted invite when the ex-member is re-invited", async () => {
+    // INVITEE accepted previously but is NOT a member anymore (no membership
+    // fixture) — the accepted row is reset to a clean pending invite.
+    const fixtures: TestLayerFixtures = {
+      workspaces,
+      memberships: [ownerMembership],
+      users,
+      currentUserId: OWNER,
+      invitations: [
+        liveInvite({
+          status: "accepted",
+          acceptedBy: INVITEE,
+          acceptedAt: Date.now() - HOUR,
+        }),
+      ],
+    };
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const svc = yield* InvitationService;
+        const result = yield* svc.inviteByEmail({
+          workspaceId: WS_ID,
+          email: INVITEE_EMAIL,
+          role: "member",
+        });
+        const listed = yield* svc.listInvitations(WS_ID);
+        return { result, listed };
+      }).pipe(Effect.provide(TestLayer(fixtures))),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.result.status).toBe("invited");
+      expect(exit.value.listed).toHaveLength(1);
+      expect(exit.value.listed[0].status).toBe("pending");
+    }
+  });
+
+  it("re-invites cleanly after an invite -> revoke -> invite lifecycle", async () => {
+    const fixtures: TestLayerFixtures = {
+      workspaces,
+      memberships: [ownerMembership],
+      users,
+      currentUserId: OWNER,
+    };
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const svc = yield* InvitationService;
+        yield* svc.inviteByEmail({ workspaceId: WS_ID, email: INVITEE_EMAIL, role: "member" });
+        const [first] = yield* svc.listInvitations(WS_ID);
+        yield* svc.revokeInvitation(first.id);
+        const result = yield* svc.inviteByEmail({
+          workspaceId: WS_ID,
+          email: INVITEE_EMAIL,
+          role: "member",
+        });
+        const listed = yield* svc.listInvitations(WS_ID);
+        return { result, listed };
+      }).pipe(Effect.provide(TestLayer(fixtures))),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.result.status).toBe("invited");
+      expect(exit.value.listed).toHaveLength(1);
+      expect(exit.value.listed[0].status).toBe("pending");
+    }
+  });
+
   it("rejects a malformed email with InvalidEmailError", async () => {
     const exit = await run(
       { workspaces, memberships: [ownerMembership], users, currentUserId: OWNER },

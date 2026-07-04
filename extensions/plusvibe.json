@@ -264,9 +264,57 @@
           },
           "leads": {
             "type": "array",
-            "description": "Array of leads. Each: { email, first_name, last_name, notes, address_line, city, country, country_code, phone_number, company_name, company_website, linkedin_person_url, linkedin_company_url, custom_variables }",
+            "description": "Array of leads. Run per-row, one lead is built from the mapped columns.",
             "items": {
-              "type": "object"
+              "type": "object",
+              "required": [
+                "email"
+              ],
+              "properties": {
+                "email": {
+                  "type": "string"
+                },
+                "first_name": {
+                  "type": "string"
+                },
+                "last_name": {
+                  "type": "string"
+                },
+                "company_name": {
+                  "type": "string"
+                },
+                "company_website": {
+                  "type": "string"
+                },
+                "phone_number": {
+                  "type": "string"
+                },
+                "linkedin_person_url": {
+                  "type": "string"
+                },
+                "linkedin_company_url": {
+                  "type": "string"
+                },
+                "address_line": {
+                  "type": "string"
+                },
+                "city": {
+                  "type": "string"
+                },
+                "country": {
+                  "type": "string"
+                },
+                "country_code": {
+                  "type": "string"
+                },
+                "notes": {
+                  "type": "string"
+                },
+                "custom_variables": {
+                  "type": "object",
+                  "description": "Custom personalization variables as a { key: value } map. Map a grid column into each value to reference it as a merge tag in your sequence. Add as many as you need."
+                }
+              }
             }
           },
           "skip_if_in_workspace": {

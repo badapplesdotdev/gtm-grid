@@ -306,6 +306,8 @@ html { scroll-behavior: smooth; }
   transition: background .14s ease, border-color .14s ease, color .14s ease, box-shadow .14s ease, transform .14s ease;
 }
 .gtm-home .btn svg { width: 16px; height: 16px; }
+.gtm-home .dl-os-icons { display: inline-flex; align-items: center; gap: 5px; }
+.gtm-home .dl-os-icons svg { width: 14px; height: 14px; }
 .gtm-home .btn-primary {
   background: var(--accent); color: #fff;
   box-shadow: 0 1px 3px var(--tint-shadow);
@@ -320,6 +322,25 @@ html { scroll-behavior: smooth; }
 .gtm-home .btn-ghost { background: transparent; color: var(--text-2); padding: 9px 12px; }
 .gtm-home .btn-ghost:hover { color: var(--text); background: var(--surface-2); }
 .gtm-home .btn-lg { font-size: 15px; padding: 12px 22px; }
+
+/* Download CTA feedback (see DownloadCTA.tsx): the button 302s to a binary
+   download so the page never changes — these acknowledge the click instead of
+   letting it feel dead. The hint is absolutely positioned so it never reflows
+   the button row it sits in. */
+.gtm-home .dl-cta { position: relative; display: inline-flex; }
+.gtm-home .btn[aria-disabled="true"] { cursor: default; pointer-events: none; opacity: .9; }
+.gtm-home .dl-spinner {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, .45); border-top-color: #fff;
+  animation: dl-spin .6s linear infinite;
+}
+@keyframes dl-spin { to { transform: rotate(360deg); } }
+.gtm-home .dl-cta-hint {
+  position: absolute; top: calc(100% + 8px); left: 0;
+  max-width: 260px; font-size: 13px; line-height: 1.4;
+  color: var(--text-2); text-align: left;
+}
+.gtm-home .dl-cta-hint a { color: var(--accent); text-decoration: underline; }
 
 .gtm-home .btn .star-count {
   font-family: var(--font-sans); font-size: 13px; font-weight: 500;

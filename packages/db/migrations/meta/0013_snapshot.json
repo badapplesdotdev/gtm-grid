@@ -1,6 +1,6 @@
 {
-  "id": "e90922b6-806a-4edb-9fcc-f9fb31d91fa1",
-  "prevId": "df6e8ab1-0e46-440c-8ec4-a69b94c0f3e4",
+  "id": "3c52d8b7-8054-4da9-8d6f-2ee49cc2d49f",
+  "prevId": "e90922b6-806a-4edb-9fcc-f9fb31d91fa1",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1100,6 +1100,127 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.lifecycle_email_sends": {
+      "name": "lifecycle_email_sends",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "template": {
+          "name": "template",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dedupe_key": {
+          "name": "dedupe_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sent_at": {
+          "name": "sent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "lifecycle_sends_once": {
+          "name": "lifecycle_sends_once",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "template",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "dedupe_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "lifecycle_sends_by_user": {
+          "name": "lifecycle_sends_by_user",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "lifecycle_email_sends_user_id_users_id_fk": {
+          "name": "lifecycle_email_sends_user_id_users_id_fk",
+          "tableFrom": "lifecycle_email_sends",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "lifecycle_email_sends_workspace_id_workspaces_id_fk": {
+          "name": "lifecycle_email_sends_workspace_id_workspaces_id_fk",
+          "tableFrom": "lifecycle_email_sends",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.members": {
       "name": "members",
       "schema": "",
@@ -1974,6 +2095,18 @@
         "image": {
           "name": "image",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_active_at": {
+          "name": "last_active_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "email_prefs": {
+          "name": "email_prefs",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },
