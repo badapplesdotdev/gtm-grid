@@ -14,7 +14,7 @@ import type { InMemoryUser, Membership, TestLayerFixtures } from "@gtmgrid/servi
 import { TestLayer } from "@gtmgrid/services";
 import { ManagedRuntime } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { authorizeResponse } from "./route";
+import { authorizeResponse } from "../../../../../lib/crm/attio-authorize";
 
 const WS = "11111111-1111-1111-1111-111111111111";
 const OTHER_WS = "99999999-9999-9999-9999-999999999999";

@@ -14,7 +14,7 @@ import type { AppServices, InMemoryUser, Membership, TestLayerFixtures } from "@
 import { AttioAuth, CrmConnectionService, TestLayer } from "@gtmgrid/services";
 import { Effect, ManagedRuntime, Option } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { callbackResponse, type CallbackSessionUser } from "./route";
+import { callbackResponse, type CallbackSessionUser } from "../../../../../lib/crm/attio-callback";
 
 type ServicesRuntime = ManagedRuntime.ManagedRuntime<AppServices, never>;
 
