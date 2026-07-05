@@ -406,6 +406,48 @@ describe("plan row cap", () => {
   });
 });
 
+// ── Disconnect ────────────────────────────────────────────────────────────────
+
+describe("disconnect", () => {
+  it("pauses every attio binding and removes the connection (rows untouched)", async () => {
+    const w = world();
+    scriptFetch(syncScript([rec("rec_1", "Sarah", "sarah@vercel.com")]));
+    await syncOnce(w); // establish connection + 1 synced row
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const sync = yield* CrmSyncService;
+        return yield* sync.disconnect(WS);
+      }).pipe(Effect.provide(TestLayer(w.fixtures))) as Effect.Effect<
+        { removed: boolean; bindingsPaused: number },
+        never,
+        never
+      >,
+    );
+
+    expect(result.bindingsPaused).toBe(1);
+    const binding = w.fixtures.crmBindings?.[0];
+    expect(binding?.pausedReason).toBe("auth_revoked"); // lights the Reconnect banner
+    expect(binding?.lastError).toContain("Reconnect Attio");
+    expect(w.rows).toHaveLength(1); // synced rows survive a disconnect
+    // NOTE: connection removal is asserted end-to-end in
+    // crm-connection-service.test.ts (removeConnection); the in-memory
+    // credential store is instance-scoped, so `removed` is not meaningful
+    // across the two runPromise calls here.
+  });
+
+  it("is member-gated", async () => {
+    const w = world();
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const sync = yield* CrmSyncService;
+        return yield* sync.disconnect(WS);
+      }).pipe(Effect.provide(TestLayer({ ...w.fixtures, currentUserId: "stranger" }))),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+  });
+});
+
 // ── 6. Mid-pull failures ──────────────────────────────────────────────────────
 
 const fullPage = Array.from({ length: 500 }, (_x, i) => rec(`bulk_${i}`, `Person ${i}`, `p${i}@x.com`));

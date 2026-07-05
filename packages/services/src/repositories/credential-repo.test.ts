@@ -208,3 +208,44 @@ describe("CredentialRepo.upsert", () => {
     }
   });
 });
+
+describe("CredentialRepo.remove (in-memory contract)", () => {
+  const WS = "11111111-1111-1111-1111-111111111111";
+  const row = (over: Partial<CredentialRow> = {}): CredentialRow => ({
+    id: "cred_1",
+    workspaceId: WS,
+    extensionId: "attio-crm",
+    scope: "workspace",
+    name: "Attio",
+    ownerUserId: null,
+    secretsEnc: "ciphertext",
+    createdAt: 1,
+    ...over,
+  });
+
+  it("deletes the matching workspace-scope row and reports true", async () => {
+    const layer = credentialRepoLayer([row()]);
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* CredentialRepo;
+        const removed = yield* repo.remove({ workspaceId: WS, extensionId: "attio-crm", scope: "workspace", ownerUserId: null });
+        const after = yield* repo.findSharedForWorker({ workspaceId: WS, extensionId: "attio-crm" });
+        return { removed, stillThere: after._tag === "Some" };
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(result).toEqual({ removed: true, stillThere: false });
+  });
+
+  it("is a no-op (false) when nothing matches, and never touches other slots", async () => {
+    const layer = credentialRepoLayer([row({ extensionId: "attio" })]); // the API-key slot
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* CredentialRepo;
+        const removed = yield* repo.remove({ workspaceId: WS, extensionId: "attio-crm", scope: "workspace", ownerUserId: null });
+        const apiKeyRow = yield* repo.findSharedForWorker({ workspaceId: WS, extensionId: "attio" });
+        return { removed, apiKeySurvives: apiKeyRow._tag === "Some" };
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(result).toEqual({ removed: false, apiKeySurvives: true });
+  });
+});

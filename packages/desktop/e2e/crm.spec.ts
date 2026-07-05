@@ -148,3 +148,48 @@ test.describe("CRM sync — status strip & synced grid", () => {
     await expect(window.locator(".cell-input")).toBeVisible();
   });
 });
+
+test.describe("CRM sync — OAuth management (Tools → Attio)", () => {
+  /** Open the Attio tool panel from the sidebar Tools section. */
+  async function openAttioPanel(window: import("@playwright/test").Page): Promise<void> {
+    await expect(window.locator(".sidebar")).toBeVisible({ timeout: 20_000 });
+    await window.locator(".ext-item-name", { hasText: /^Attio$/ }).first().click();
+    await expect(window.locator(".crm-oauth-card")).toBeVisible({ timeout: 15_000 });
+  }
+
+  test("the panel separates the OAuth connection from the API key, with Reconnect + Disconnect", async ({ launchApp }) => {
+    const { window } = await launchApp(CONNECTED);
+    await openAttioPanel(window);
+
+    // OAuth card reflects the sync connection…
+    const card = window.locator(".crm-oauth-card");
+    await expect(card).toContainText("CRM sync · OAuth connection");
+    await expect(card).toContainText("Connected · Acme Attio");
+    await expect(card.getByRole("button", { name: "Reconnect" })).toBeVisible();
+    await expect(card.getByRole("button", { name: "Disconnect" })).toBeVisible();
+    // …and explains the API key is a separate concern (cell actions).
+    await expect(card).toContainText("API key below is separate");
+  });
+
+  test("disconnect requires confirmation, flips to Not connected, and pauses synced tables", async ({ launchApp }) => {
+    const { window } = await launchApp(CONNECTED);
+    // Create a synced table first so the disconnect has something to pause.
+    await openConfigureStep(window);
+    await window.locator(".crmw-source", { hasText: "People" }).click();
+    await expect(window.locator(".crmw-field", { hasText: "Email addresses" })).toBeVisible();
+    await window.getByRole("button", { name: "Start sync" }).click();
+    await expect(window.locator(".crm-strip")).toBeVisible({ timeout: 10_000 });
+
+    await openAttioPanel(window);
+    const card = window.locator(".crm-oauth-card");
+    await card.getByRole("button", { name: "Disconnect" }).click();
+    await card.getByRole("button", { name: "Confirm disconnect" }).click();
+
+    await expect(card).toContainText("Not connected", { timeout: 10_000 });
+    await expect(card).toContainText("1 synced table paused");
+    await expect.poll(async () => (await mockState()).crmConnected).toBe(false);
+    await expect.poll(async () => (await mockState()).crmBindings[0]?.pausedReason).toBe("auth_revoked");
+    // The card offers the way back in.
+    await expect(card.getByRole("button", { name: "Connect Attio" })).toBeVisible();
+  });
+});

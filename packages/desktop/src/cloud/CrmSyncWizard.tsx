@@ -605,7 +605,7 @@ export function CrmSyncWizard({
 }
 
 /** Open a URL in the system browser (Electron when packaged, else a new tab). */
-async function openExternalUrl(url: string): Promise<void> {
+export async function openExternalUrl(url: string): Promise<void> {
   try {
     const api = electron();
     if (api) { await api.openExternal(url); return; }

@@ -376,6 +376,22 @@ export const crmRouter = router({
       ),
     ),
 
+  /**
+   * Disconnect Attio for the workspace: pauses every synced table (Reconnect
+   * banner) and deletes the stored OAuth connection. Members-only.
+   */
+  disconnect: protectedProcedure
+    .input(z.object({ workspaceId: z.string().min(1) }))
+    .mutation(({ ctx, input }) =>
+      runCrm(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* CrmSyncService;
+          return yield* svc.disconnect(input.workspaceId);
+        }),
+      ),
+    ),
+
   /** Delete a binding (grid rows stay). Members-only. */
   deleteBinding: protectedProcedure
     .input(z.object({ bindingId: z.string().min(1) }))

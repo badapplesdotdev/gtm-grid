@@ -204,7 +204,26 @@ const server = createServer(async (req, res) => {
   // ── engine sidecar API ────────────────────────────────────────────────
   if (pathname === "/api/health") return sendJson(res, { ok: true, project: "e2e" });
   if (pathname === "/api/functions") return sendJson(res, []);
-  if (pathname === "/api/extensions") return sendJson(res, []);
+  if (pathname === "/api/extensions")
+    return sendJson(res, [
+      // Minimal Attio tool so the Tools sidebar + panel (incl. the CRM OAuth
+      // management card) are exercisable end-to-end.
+      { id: "attio", name: "Attio", category: "crm", description: "Attio CRM — records, lists and webhooks via the v2 REST API.", featured: true, methods: 1, connected: false, logo: null },
+    ]);
+  if (pathname === "/api/extensions/attio")
+    return sendJson(res, {
+      id: "attio",
+      name: "Attio",
+      category: "crm",
+      description: "Attio CRM — records, lists and webhooks via the v2 REST API.",
+      version: "1.0.0",
+      baseUrl: "https://api.attio.com",
+      logo: null,
+      auth: { type: "apiKey", header: "Authorization", secretKey: "apiKey" },
+      connected: false,
+      connectedScopes: [],
+      methods: [{ id: "records.query", label: "Query records", description: "POST /v2/objects/{object}/records/query", credits: 1 }],
+    });
   if (pathname === "/api/ai-providers") return sendJson(res, []);
   if (pathname === "/api/skills") return sendJson(res, []);
   if (pathname.startsWith("/api/")) return sendJson(res, {}); // any other engine call

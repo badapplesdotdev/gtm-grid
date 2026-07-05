@@ -3101,6 +3101,7 @@ export default function App() {
               onConnected={refreshConnections}
               onBack={() => setView({ kind: "extensions" })}
               workspaceCreds={workspaceCreds}
+              workspaceId={activeWorkspace ? String(activeWorkspace._id) : undefined}
             />
           </Suspense>
         )}

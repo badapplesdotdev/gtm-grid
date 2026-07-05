@@ -1023,6 +1023,33 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
           return yield* mapRepoError(runs.listByBinding(bindingId, limit), "run list failed");
         }),
 
+      /**
+       * Disconnect Attio for a workspace: pause every attio binding (they show
+       * the Reconnect banner and the cron skips them) and delete the stored
+       * OAuth connection. Rows/tables are untouched. Reconnecting via OAuth
+       * clears the pauses (callback clearPause) and syncing resumes.
+       */
+      disconnect: (workspaceId: string) =>
+        Effect.gen(function* () {
+          yield* membership.requireMember(workspaceId);
+          const all = yield* mapRepoError(bindings.listByWorkspace(workspaceId), "binding list failed");
+          const attio = all.filter((b) => b.provider === "attio");
+          yield* Effect.forEach(
+            attio,
+            (b) =>
+              mapRepoError(
+                bindings.patch(b.id, {
+                  pausedReason: "auth_revoked",
+                  lastError: "Attio was disconnected. Reconnect Attio to resume syncing.",
+                }),
+                "binding pause failed",
+              ),
+            { discard: true },
+          );
+          const removed = yield* connections.removeConnection(workspaceId);
+          return { removed, bindingsPaused: attio.length };
+        }),
+
       remove: (bindingId: string) =>
         Effect.gen(function* () {
           const binding = yield* requireBinding(bindingId);

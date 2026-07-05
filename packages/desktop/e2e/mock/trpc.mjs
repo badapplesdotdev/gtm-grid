@@ -292,6 +292,12 @@ export const procedures = {
     if (b) { b.lastSyncedAt = Date.now(); b.rowsSynced = (b.rowsSynced ?? 0) + 2; }
     return { enqueued: true };
   },
+  "crm.disconnect": (input, s) => {
+    const attio = s.crmBindings.filter((b) => b.workspaceId === s.workspaceId);
+    for (const b of attio) { b.pausedReason = "auth_revoked"; b.lastError = "Attio was disconnected. Reconnect Attio to resume syncing."; }
+    s.crmConnected = false;
+    return { removed: true, bindingsPaused: attio.length };
+  },
   "crm.deleteBinding": (input, s) => {
     s.crmBindings = s.crmBindings.filter((b) => b.id !== input?.bindingId);
     return null;

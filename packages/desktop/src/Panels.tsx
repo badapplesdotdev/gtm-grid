@@ -9,6 +9,8 @@ import { Dialog, DialogContent } from "./components/ui/dialog";
 import { aiProviderCredId } from "./cloud/credentials";
 import { Markdown } from "./AgentPanel";
 import { BrandIcon } from "./BrandIcon";
+import { apiClient } from "./cloud/client";
+import { openExternalUrl } from "./cloud/CrmSyncWizard";
 
 /**
  * The scope a credential is saved under in the panels. Extends the local-only
@@ -437,7 +439,123 @@ function ConnectionsSection({
 
 // ─── Extension detail ────────────────────────────────────
 
-export function ExtensionPanel({ id, onConnected, onBack, workspaceCreds }: { id: string; onConnected: () => void; onBack?: () => void; workspaceCreds?: WorkspaceCredSource }) {
+
+/**
+ * OAuth management for the CRM SYNC connection — deliberately separate from
+ * the API-key section below it: the key powers cell actions (engine methods),
+ * the OAuth grant powers synced tables. Removing one never touches the other.
+ */
+function CrmOAuthSection({ workspaceId }: { workspaceId: string }) {
+  type Status =
+    | { kind: "loading" }
+    | { kind: "disconnected"; configured: boolean }
+    | { kind: "connected"; byName: string; attioWorkspace: string };
+  const [status, setStatus] = useState<Status>({ kind: "loading" });
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    if (!apiClient) return;
+    try {
+      const s = await apiClient.crm.connectionStatus.query({ workspaceId });
+      if (s == null) setStatus({ kind: "disconnected", configured: false });
+      else if (s.connected) setStatus({ kind: "connected", byName: s.connectedByName, attioWorkspace: s.attioWorkspaceName });
+      else setStatus({ kind: "disconnected", configured: s.configured });
+    } catch {
+      setStatus({ kind: "disconnected", configured: false });
+    }
+  }, [workspaceId]);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  // While an OAuth round-trip is in flight, poll for the connection landing.
+  useEffect(() => {
+    if (!busy) return;
+    const t = setInterval(() => { void refresh(); }, 2000);
+    const stop = setTimeout(() => setBusy(false), 120_000);
+    return () => { clearInterval(t); clearTimeout(stop); };
+  }, [busy, refresh]);
+  useEffect(() => {
+    if (busy && status.kind === "connected") { setBusy(false); setNote("Attio connected."); }
+  }, [busy, status]);
+
+  const authorize = async () => {
+    if (!apiClient) return;
+    setNote(null);
+    try {
+      const { url } = await apiClient.crm.authorizeUrl.query({ workspaceId });
+      setBusy(true);
+      await openExternalUrl(url);
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : "Could not start the Attio connection.");
+    }
+  };
+
+  const disconnect = async () => {
+    if (!apiClient) return;
+    setConfirming(false);
+    setNote(null);
+    try {
+      const res = await apiClient.crm.disconnect.mutate({ workspaceId });
+      setNote(
+        res.bindingsPaused > 0
+          ? `Disconnected. ${res.bindingsPaused} synced table${res.bindingsPaused === 1 ? "" : "s"} paused — reconnect to resume.`
+          : "Disconnected.",
+      );
+      await refresh();
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : "Could not disconnect Attio.");
+    }
+  };
+
+  return (
+    <div className="crm-oauth-card">
+      <div className="crm-oauth-head">CRM sync · OAuth connection</div>
+      <div className="crm-oauth-body">
+        {status.kind === "loading" ? (
+          <span className="cell-spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
+        ) : status.kind === "connected" ? (
+          <>
+            <span className="crm-oauth-dot" />
+            <span className="crm-oauth-text">
+              Connected · {status.attioWorkspace}
+              <span className="crm-oauth-sub">read-only · connected by {status.byName} · powers synced tables</span>
+            </span>
+            <button className="skill-btn" disabled={busy} onClick={() => void authorize()}>
+              {busy ? "Waiting for Attio…" : "Reconnect"}
+            </button>
+            {confirming ? (
+              <>
+                <button className="skill-btn danger" onClick={() => void disconnect()}>Confirm disconnect</button>
+                <button className="skill-btn" onClick={() => setConfirming(false)}>Cancel</button>
+              </>
+            ) : (
+              <button className="skill-btn" onClick={() => setConfirming(true)}>Disconnect</button>
+            )}
+          </>
+        ) : (
+          <>
+            <span className="crm-oauth-dot off" />
+            <span className="crm-oauth-text">
+              Not connected
+              <span className="crm-oauth-sub">Connect with OAuth to sync Attio objects &amp; lists into tables</span>
+            </span>
+            <button className="skill-btn primary" disabled={busy || !status.configured} onClick={() => void authorize()}>
+              {busy ? "Waiting for Attio…" : "Connect Attio"}
+            </button>
+          </>
+        )}
+      </div>
+      {note ? <div className="crm-oauth-note">{note}</div> : null}
+      <div className="crm-oauth-note subtle">
+        The API key below is separate — it powers Attio cell actions and is never used for syncing.
+      </div>
+    </div>
+  );
+}
+
+export function ExtensionPanel({ id, onConnected, onBack, workspaceCreds, workspaceId }: { id: string; onConnected: () => void; onBack?: () => void; workspaceCreds?: WorkspaceCredSource; workspaceId?: string }) {
   const [detail, setDetail] = useState<ExtensionDetail | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -483,6 +601,8 @@ export function ExtensionPanel({ id, onConnected, onBack, workspaceCreds }: { id
       {backBar}
       <div className="detail">
       <PanelHeader logo={detail.logo} title={detail.name} description={description} meta={meta} />
+
+      {detail.id === "attio" && workspaceId ? <CrmOAuthSection workspaceId={workspaceId} /> : null}
 
       <ConnectionsSection
         name={detail.name}

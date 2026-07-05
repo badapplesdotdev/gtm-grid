@@ -85,13 +85,13 @@ describe("saveConnection → sessions", () => {
         const svc = yield* CrmConnectionService;
         yield* svc.saveConnection({ workspaceId: WS, tokens: { accessToken: "at_SUPER_SECRET" }, meta: META });
         const repo = yield* CredentialRepo;
-        return Option.getOrNull(yield* repo.findSharedForWorker({ workspaceId: WS, extensionId: "attio" }));
+        return Option.getOrNull(yield* repo.findSharedForWorker({ workspaceId: WS, extensionId: "attio-crm" }));
       }).pipe(
         Effect.provide(TestLayer({ memberships, currentUserId: "user_m" })),
       ) as Effect.Effect<{ extensionId: string; scope: string; secretsEnc: string } | null, never, never>,
     );
     expect(row).not.toBeNull();
-    expect(row?.extensionId).toBe("attio");
+    expect(row?.extensionId).toBe("attio-crm");
     expect(row?.scope).toBe("workspace");
     expect(row?.secretsEnc).not.toContain("at_SUPER_SECRET");
   });
@@ -121,6 +121,33 @@ describe("persistTokens (session.persist)", () => {
     expect(result.tokens).toEqual({ accessToken: "at_new", refreshToken: "rt_1" });
     // Metadata survives rotation ("connected by Morgan" still renders).
     expect(result.meta).toEqual(META);
+  });
+});
+
+describe("removeConnection (disconnect)", () => {
+  it("deletes the stored connection; sessions then fail closed", async () => {
+    const result = await runExit(
+      { memberships, currentUserId: "user_m" },
+      Effect.gen(function* () {
+        const svc = yield* CrmConnectionService;
+        yield* svc.saveConnection({ workspaceId: WS, tokens: { accessToken: "at_1" }, meta: META });
+        const removed = yield* svc.removeConnection(WS);
+        return { removed, session: yield* svc.memberSession(WS) };
+      }),
+    );
+    expect(Exit.isFailure(result)).toBe(true); // memberSession after removal
+    expect(JSON.stringify(result)).toContain("CrmConnectionMissing");
+  });
+
+  it("returns false when there was nothing to remove", async () => {
+    const removed = await run(
+      { memberships, currentUserId: "user_m" },
+      Effect.gen(function* () {
+        const svc = yield* CrmConnectionService;
+        return yield* svc.removeConnection(WS);
+      }),
+    );
+    expect(removed).toBe(false);
   });
 });
 

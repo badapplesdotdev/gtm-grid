@@ -147,7 +147,7 @@ describe("crm.createBinding — first-pull event", () => {
     // session round-trips against the in-memory credential repo.
     await caller.credentials.save({
       workspaceId: WS,
-      extensionId: "attio",
+      extensionId: "attio-crm",
       scope: "workspace",
       name: "Attio",
       secrets: { accessToken: "at_live" },
@@ -253,6 +253,21 @@ describe("crm.syncNow (entitlement gated → enqueue)", () => {
     await expect(caller.crm.syncNow({ bindingId: "crm-1" })).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
+  });
+});
+
+describe("crm.disconnect", () => {
+  it("pauses the workspace's bindings and reports the count", async () => {
+    const crmBindings: CrmBinding[] = [{ ...binding }];
+    const caller = callerFor({ memberships, tables, crmBindings, currentUserId: "member" });
+    const res = await caller.crm.disconnect({ workspaceId: WS });
+    expect(res.bindingsPaused).toBe(1);
+    expect(crmBindings[0]?.pausedReason).toBe("auth_revoked");
+  });
+
+  it("rejects a non-member with FORBIDDEN", async () => {
+    const caller = callerFor({ memberships, tables, crmBindings: [{ ...binding }], currentUserId: "stranger" });
+    await expect(caller.crm.disconnect({ workspaceId: WS })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });
 

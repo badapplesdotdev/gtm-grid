@@ -4801,3 +4801,15 @@ button.crmw-crm-card:hover { border-color: var(--accent); box-shadow: var(--shad
 .cell-wrap.cell-synced { cursor: default; }
 
 .crmw-reconnect { margin-left: auto; margin-right: 10px; flex-shrink: 0; }
+
+/* ── CRM OAuth management card (Tools → Attio) ── */
+.crm-oauth-card { border: 1px solid var(--border); border-radius: var(--r-md); padding: 14px 16px; margin-bottom: 18px; background: var(--surface); }
+.crm-oauth-head { font: 600 10.5px var(--font-sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); margin-bottom: 10px; }
+.crm-oauth-body { display: flex; align-items: center; gap: 10px; }
+.crm-oauth-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
+.crm-oauth-dot.off { background: var(--border-2); }
+.crm-oauth-text { flex: 1; min-width: 0; display: flex; flex-direction: column; font: 500 13px var(--font-sans); color: var(--text); }
+.crm-oauth-sub { font: 400 11.5px var(--font-sans); color: var(--text-3); }
+.crm-oauth-note { margin-top: 10px; font: 400 12px var(--font-sans); color: var(--text-2); }
+.crm-oauth-note.subtle { color: var(--text-3); font-size: 11.5px; }
+.skill-btn.danger { border-color: var(--danger); color: var(--danger); }

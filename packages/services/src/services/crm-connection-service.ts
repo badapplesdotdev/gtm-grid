@@ -1,7 +1,7 @@
 /**
  * `CrmConnectionService` — owns the workspace's Attio connection (TRI:
  * crm-sync). Tokens live in the existing `credentials` table under
- * `extensionId: "attio"`, `scope: "workspace"` as an envelope-encrypted secret
+ * `extensionId: "attio-crm"`, `scope: "workspace"` as an envelope-encrypted secret
  * map, so storage, rotation, and the member/worker read split all reuse the
  * credential machinery:
  *
@@ -27,7 +27,12 @@ import { CredentialRepo } from "../repositories/credential-repo.js";
 import { CredentialService } from "./credential-service.js";
 import { CryptoService } from "./crypto-service.js";
 
-export const ATTIO_EXTENSION_ID = "attio";
+/**
+ * Credential slot for the OAuth CONNECTION — deliberately distinct from the
+ * engine's apiKey slot ("attio"): they share the credentials table, and a
+ * shared id let the Tools panel's "Replace key" overwrite OAuth tokens.
+ */
+export const ATTIO_EXTENSION_ID = "attio-crm";
 
 /** Display metadata alongside the tokens. */
 export interface CrmConnectionMeta {
@@ -167,6 +172,19 @@ export class CrmConnectionService extends Effect.Service<CrmConnectionService>()
             const secrets = yield* readSecretsForWorker(workspaceId);
             return yield* sessionFrom(workspaceId, secrets);
           }),
+
+        /**
+         * Delete the stored OAuth connection (explicit disconnect). Caller
+         * handles authz + pausing bindings. True when a row existed.
+         */
+        removeConnection: (workspaceId: string) =>
+          repo
+            .remove({ workspaceId, extensionId: ATTIO_EXTENSION_ID, scope: "workspace", ownerUserId: null })
+            .pipe(
+              Effect.mapError(
+                (e) => new CrmSyncError({ message: "Could not remove the Attio connection", cause: e }),
+              ),
+            ),
 
         /** Member-gated connection metadata for the UI, or `None` when not connected. */
         connectionMeta: (workspaceId: string) =>

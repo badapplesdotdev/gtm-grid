@@ -127,6 +127,12 @@ export class CredentialRepo extends Context.Tag("CredentialRepo")<
     readonly upsert: (
       input: CredentialUpsert,
     ) => Effect.Effect<string, CredentialRepoError>;
+    /**
+     * Delete the credential on the (workspace, extension, scope, owner) key.
+     * Returns true when a row was removed. Powers explicit disconnects (e.g.
+     * removing a CRM OAuth connection); no-op when nothing matches.
+     */
+    readonly remove: (key: OwnerKey) => Effect.Effect<boolean, CredentialRepoError>;
   }
 >() {}
 
@@ -266,6 +272,29 @@ export const CredentialRepoLive: Layer.Layer<
                 message: `Invalid workspace id: ${input.workspaceId}`,
               }),
             ),
+
+      remove: (key) =>
+        UUID_RE.test(key.workspaceId)
+          ? Effect.tryPromise({
+              try: async () => {
+                const deleted = await db
+                  .delete(schema.credentials)
+                  .where(
+                    and(
+                      eq(schema.credentials.workspaceId, key.workspaceId),
+                      eq(schema.credentials.extensionId, key.extensionId),
+                      eq(schema.credentials.scope, key.scope),
+                      key.ownerUserId === null
+                        ? isNull(schema.credentials.ownerUserId)
+                        : eq(schema.credentials.ownerUserId, key.ownerUserId),
+                    ),
+                  )
+                  .returning({ id: schema.credentials.id });
+                return deleted.length > 0;
+              },
+              catch: fail("credential delete failed"),
+            })
+          : Effect.succeed(false)
     };
   }),
 );
@@ -362,5 +391,13 @@ export const credentialRepoLayer = (
           });
           return id;
         }),
+
+      remove: (key) =>
+        Effect.sync(() => {
+          const index = rows.findIndex((r) => matchesKey(r, key));
+          if (index === -1) return false;
+          rows.splice(index, 1);
+          return true;
+        })
     };
   });
