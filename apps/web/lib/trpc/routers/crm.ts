@@ -1,5 +1,5 @@
 /**
- * The `crm` tRPC router — member-gated Attio CRM-sync CRUD (the desktop
+ * The `crm` tRPC router — member-gated CRM-sync CRUD (the desktop
  * "From your CRM" cloud flow). Mirrors {@link signalsRouter}: each procedure
  * runs a `CrmSyncService` / `CrmConnectionService` Effect via {@link runCrm};
  * the service resolves the owning workspace and asserts membership + cloud
@@ -24,6 +24,7 @@ import {
   crmErrorCopy,
   type CrmError,
   FILTER_OPS,
+  HubspotAuth,
   SUPPORTED_ATTR_TYPES,
 } from "@gtmgrid/services";
 import { TRPCError } from "@trpc/server";
@@ -91,6 +92,9 @@ const siteOrigin = (): string => process.env.SITE_URL ?? "https://www.gtmgrid.de
 
 const sourceKind = z.enum(["object", "list"]);
 
+/** Optional on every procedure: desktop builds that predate HubSpot send none. */
+const provider = z.enum(["attio", "hubspot"]).default("attio");
+
 /** One `CrmFilter` — attr type / op enums mirror the service's domain unions. */
 const filter = z.object({
   attrSlug: z.string().min(1).max(200),
@@ -114,20 +118,23 @@ export const crmRouter = router({
    * call.
    */
   connectionStatus: protectedProcedure
-    .input(z.object({ workspaceId: z.string().min(1) }))
+    .input(z.object({ workspaceId: z.string().min(1), provider }))
     .query(({ ctx, input }) =>
       runCrm(
         ctx.runtime,
         Effect.gen(function* () {
-          const auth = yield* AttioAuth;
+          const configured =
+            input.provider === "hubspot"
+              ? yield* Effect.flatMap(HubspotAuth, (a) => a.isConfigured())
+              : yield* Effect.flatMap(AttioAuth, (a) => a.isConfigured());
           const conn = yield* CrmConnectionService;
-          const configured = yield* auth.isConfigured();
-          const meta = yield* conn.connectionMeta(input.workspaceId);
+          const meta = yield* conn.connectionMeta(input.workspaceId, input.provider);
           return Option.match(meta, {
-            onNone: () => ({ configured, connected: false as const }),
+            onNone: () => ({ configured, connected: false as const, provider: input.provider }),
             onSome: (m) => ({
               configured,
               connected: true as const,
+              provider: input.provider,
               connectedByName: m.connectedByName,
               workspaceLabel: m.crmWorkspaceName,
               // Alias kept for desktop builds that predate the neutral field.
@@ -151,27 +158,44 @@ export const crmRouter = router({
    * state IS the trust for the callback; the browser needs no session at all.
    */
   authorizeUrl: protectedProcedure
-    .input(z.object({ workspaceId: z.string().min(1) }))
+    .input(z.object({ workspaceId: z.string().min(1), provider }))
     .query(({ ctx, input }) =>
       runCrm(
         ctx.runtime,
         Effect.gen(function* () {
           const membership = yield* MembershipService;
           const member = yield* membership.requireMember(input.workspaceId);
-          const auth = yield* AttioAuth;
-          const state = yield* auth.mintState({ workspaceId: input.workspaceId, userId: member.userId });
-          if (state === null) {
-            return yield* Effect.fail(
-              new CrmSyncError({ message: "OAuth state signing unavailable (no BETTER_AUTH_SECRET)" }),
-            );
-          }
-          const url = yield* auth
-            .authorizeUrl(state)
-            .pipe(
-              Effect.catchTag("AttioOAuthNotConfigured", (e) =>
-                Effect.fail(new CrmSyncError({ message: `Attio OAuth env missing: ${e.missing}` })),
-              ),
-            );
+          const claims = { workspaceId: input.workspaceId, userId: member.userId };
+          const url =
+            input.provider === "hubspot"
+              ? yield* Effect.gen(function* () {
+                  const auth = yield* HubspotAuth;
+                  const state = yield* auth.mintState(claims);
+                  if (state === null) {
+                    return yield* Effect.fail(
+                      new CrmSyncError({ message: "OAuth state signing unavailable (no BETTER_AUTH_SECRET)" }),
+                    );
+                  }
+                  return yield* auth.authorizeUrl(state).pipe(
+                    Effect.catchTag("HubspotOAuthNotConfigured", (e) =>
+                      Effect.fail(new CrmSyncError({ message: `HubSpot OAuth env missing: ${e.missing}` })),
+                    ),
+                  );
+                })
+              : yield* Effect.gen(function* () {
+                  const auth = yield* AttioAuth;
+                  const state = yield* auth.mintState(claims);
+                  if (state === null) {
+                    return yield* Effect.fail(
+                      new CrmSyncError({ message: "OAuth state signing unavailable (no BETTER_AUTH_SECRET)" }),
+                    );
+                  }
+                  return yield* auth.authorizeUrl(state).pipe(
+                    Effect.catchTag("AttioOAuthNotConfigured", (e) =>
+                      Effect.fail(new CrmSyncError({ message: `Attio OAuth env missing: ${e.missing}` })),
+                    ),
+                  );
+                });
           return { url };
         }),
       ),
@@ -179,13 +203,13 @@ export const crmRouter = router({
 
   /** Attio objects + lists available to sync (member-gated). */
   listSources: protectedProcedure
-    .input(z.object({ workspaceId: z.string().min(1) }))
+    .input(z.object({ workspaceId: z.string().min(1), provider }))
     .query(({ ctx, input }) =>
       runCrm(
         ctx.runtime,
         Effect.gen(function* () {
           const svc = yield* CrmSyncService;
-          return yield* svc.listSources(input.workspaceId);
+          return yield* svc.listSources(input.workspaceId, input.provider);
         }),
       ),
     ),
@@ -195,6 +219,7 @@ export const crmRouter = router({
     .input(
       z.object({
         workspaceId: z.string().min(1),
+        provider,
         kind: sourceKind,
         id: z.string().min(1),
         label: z.string(),
@@ -205,11 +230,11 @@ export const crmRouter = router({
         ctx.runtime,
         Effect.gen(function* () {
           const svc = yield* CrmSyncService;
-          return yield* svc.describeSource(input.workspaceId, {
-            kind: input.kind,
-            id: input.id,
-            label: input.label,
-          });
+          return yield* svc.describeSource(
+            input.workspaceId,
+            { kind: input.kind, id: input.id, label: input.label },
+            input.provider,
+          );
         }),
       ),
     ),
@@ -219,6 +244,7 @@ export const crmRouter = router({
     .input(
       z.object({
         workspaceId: z.string().min(1),
+        provider,
         kind: sourceKind,
         id: z.string().min(1),
         label: z.string(),
@@ -230,12 +256,11 @@ export const crmRouter = router({
         ctx.runtime,
         Effect.gen(function* () {
           const svc = yield* CrmSyncService;
-          return yield* svc.estimate(input.workspaceId, {
-            kind: input.kind,
-            id: input.id,
-            label: input.label,
-            filters: input.filters,
-          });
+          return yield* svc.estimate(
+            input.workspaceId,
+            { kind: input.kind, id: input.id, label: input.label, filters: input.filters },
+            input.provider,
+          );
         }),
       ),
     ),
@@ -250,6 +275,7 @@ export const crmRouter = router({
     .input(
       z.object({
         workspaceId: z.string().min(1),
+        provider,
         tableId: z.string().min(1),
         sourceKind,
         sourceId: z.string().min(1),
@@ -269,7 +295,7 @@ export const crmRouter = router({
           const svc = yield* CrmSyncService;
           return yield* svc.create({
             tableId: input.tableId,
-            provider: "attio",
+            provider: input.provider,
             sourceKind: input.sourceKind,
             sourceId: input.sourceId,
             sourceLabel: input.sourceLabel,
@@ -284,7 +310,7 @@ export const crmRouter = router({
       captureServer("crm_binding_created", {
         distinctId: ctx.userId,
         properties: {
-          provider: "attio",
+          provider: input.provider,
           binding_id: bindingId,
           source_kind: input.sourceKind,
           dedupe_mode: input.dedupeMode,
@@ -379,17 +405,17 @@ export const crmRouter = router({
     ),
 
   /**
-   * Disconnect Attio for the workspace: pauses every synced table (Reconnect
+   * Disconnect a CRM for the workspace: pauses every synced table (Reconnect
    * banner) and deletes the stored OAuth connection. Members-only.
    */
   disconnect: protectedProcedure
-    .input(z.object({ workspaceId: z.string().min(1) }))
+    .input(z.object({ workspaceId: z.string().min(1), provider }))
     .mutation(({ ctx, input }) =>
       runCrm(
         ctx.runtime,
         Effect.gen(function* () {
           const svc = yield* CrmSyncService;
-          return yield* svc.disconnect(input.workspaceId);
+          return yield* svc.disconnect(input.workspaceId, input.provider);
         }),
       ),
     ),
