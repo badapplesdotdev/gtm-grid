@@ -17,7 +17,7 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Data, Effect } from "effect";
-import { AttioAuthRevoked, AttioNetworkError, AttioServerError, CrmSyncError } from "../crm/errors.js";
+import { CrmAuthRevoked, CrmNetworkError, CrmServerError, CrmSyncError } from "../crm/errors.js";
 
 /** Tokens for one workspace's Attio connection. Optional fields per docs ambiguity. */
 export interface AttioTokens {
@@ -69,7 +69,7 @@ export class AttioAuth extends Effect.Service<AttioAuth>()("AttioAuth", {
 
     /**
      * POST the token endpoint with form-encoded `params`. Grant refusals
-     * (4xx) are {@link AttioAuthRevoked} — for a code exchange that means the
+     * (4xx) are {@link CrmAuthRevoked} — for a code exchange that means the
      * code was bad/expired; for a refresh it means the connection is dead.
      */
     const tokenRequest = (params: Record<string, string>) =>
@@ -87,18 +87,18 @@ export class AttioAuth extends Effect.Service<AttioAuth>()("AttioAuth", {
                 ...params,
               }).toString(),
             }),
-          catch: (cause) => new AttioNetworkError({ cause }),
+          catch: (cause) => new CrmNetworkError({ provider: "Attio", cause }),
         });
-        if (res.status >= 500) return yield* Effect.fail(new AttioServerError({ status: res.status }));
+        if (res.status >= 500) return yield* Effect.fail(new CrmServerError({ provider: "Attio", status: res.status }));
         if (!res.ok) {
-          const detail = yield* Effect.tryPromise({ try: () => res.text(), catch: () => new AttioNetworkError({ cause: "unreadable token error body" }) }).pipe(
+          const detail = yield* Effect.tryPromise({ try: () => res.text(), catch: () => new CrmNetworkError({ provider: "Attio", cause: "unreadable token error body" }) }).pipe(
             Effect.orElseSucceed(() => ""),
           );
-          return yield* Effect.fail(new AttioAuthRevoked({ detail: detail.slice(0, 500) }));
+          return yield* Effect.fail(new CrmAuthRevoked({ provider: "Attio", detail: detail.slice(0, 500) }));
         }
         const body = yield* Effect.tryPromise({
           try: () => res.json() as Promise<TokenResponse>,
-          catch: (cause) => new AttioNetworkError({ cause }),
+          catch: (cause) => new CrmNetworkError({ provider: "Attio", cause }),
         });
         const accessToken = body.access_token ?? "";
         if (!accessToken) {
@@ -161,7 +161,7 @@ export class AttioAuth extends Effect.Service<AttioAuth>()("AttioAuth", {
       /** Exchange an authorization code for tokens. */
       exchangeCode: (code: string) => tokenRequest({ grant_type: "authorization_code", code }),
 
-      /** Refresh an access token. Refusal = the connection is dead (AttioAuthRevoked). */
+      /** Refresh an access token. Refusal = the connection is dead (CrmAuthRevoked). */
       refresh: (refreshToken: string) =>
         tokenRequest({ grant_type: "refresh_token", refresh_token: refreshToken }),
     } as const;

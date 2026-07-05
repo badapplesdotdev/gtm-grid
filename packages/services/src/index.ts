@@ -393,7 +393,7 @@ export {
 export * from "./signals/catalog.js";
 export { SignalRepo, SignalRepoLive, signalRepoLayer, SignalRepoError, type SignalBinding, type SignalBindingColumn, type SignalBindingInsert, type SignalBindingPatch, type SignalDueCursor, type DueBinding, type DueBindingPage } from "./repositories/signal-repo.js";
 export { CrmBindingRepo, CrmBindingRepoLive, crmBindingRepoLayer, CrmSyncedRowRepo, CrmSyncedRowRepoLive, crmSyncedRowRepoLayer, CrmSyncRunRepo, CrmSyncRunRepoLive, crmSyncRunRepoLayer, CrmRepoError, CRM_DAILY_DUE_MS, type CrmBinding, type CrmBindingColumn, type CrmBindingInsert, type CrmBindingPatch, type CrmDueCursor, type CrmDueBinding, type CrmDueBindingPage, type CrmSyncedRow, type CrmSyncedRowUpsert, type CrmSyncRun, type CrmSyncRunFinish } from "./repositories/crm-repo.js";
-export { AttioRateLimitError, AttioServerError, AttioNetworkError, AttioAuthRevoked, CrmConnectionMissing, AttioSchemaDriftError, AttioSourceGoneError, RowCapReached, AttioRequestError, CrmSyncError, isTransientCrmError, type CrmError } from "./crm/errors.js";
+export { CrmRateLimitError, CrmServerError, CrmNetworkError, CrmAuthRevoked, CrmConnectionMissing, CrmSchemaDriftError, CrmSourceGoneError, RowCapReached, CrmRequestError, CrmSyncError, isTransientCrmError, type CrmError } from "./crm/errors.js";
 export { crmErrorCopy, type CrmErrorPresentation, type CrmRunStatus } from "./crm/error-copy.js";
 export { AttioAuth, AttioOAuthNotConfigured, type AttioTokens, type AttioOAuthState } from "./services/attio-auth.js";
 export { AttioClient, ATTIO_PAGE_LIMIT, type AttioSession, type AttioObjectSummary, type AttioListSummary, type AttioAttribute, type AttioRecord, type AttioListEntry } from "./services/attio-client.js";

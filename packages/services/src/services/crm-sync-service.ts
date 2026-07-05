@@ -802,8 +802,8 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
               : fieldsDropped.length > 0
                 ? finalize(
                     "partial",
-                    crmErrorCopy({ _tag: "AttioSchemaDriftError", missingAttrs: fieldsDropped } as CrmError).copy,
-                    "AttioSchemaDriftError",
+                    crmErrorCopy({ _tag: "CrmSchemaDriftError", missingAttrs: fieldsDropped } as CrmError).copy,
+                    "CrmSchemaDriftError",
                     null,
                   )
                 : finalize("ok", null, null, null),

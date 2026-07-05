@@ -103,7 +103,7 @@ export class CrmConnectionService extends Effect.Service<CrmConnectionService>()
             workspaceId,
             extensionId: ATTIO_EXTENSION_ID,
           });
-          if (Option.isNone(row)) return yield* Effect.fail(new CrmConnectionMissing());
+          if (Option.isNone(row)) return yield* Effect.fail(new CrmConnectionMissing({ provider: "Attio" }));
           return yield* crypto.decrypt(workspaceId, row.value.secretsEnc);
         }).pipe(
           Effect.catchTags({
@@ -134,7 +134,7 @@ export class CrmConnectionService extends Effect.Service<CrmConnectionService>()
       const sessionFrom = (workspaceId: string, secrets: SecretMap) =>
         Effect.gen(function* () {
           const tokens = parseTokens(secrets);
-          if (tokens === null) return yield* Effect.fail(new CrmConnectionMissing());
+          if (tokens === null) return yield* Effect.fail(new CrmConnectionMissing({ provider: "Attio" }));
           const session: AttioSession = {
             workspaceId,
             tokens,
@@ -162,7 +162,7 @@ export class CrmConnectionService extends Effect.Service<CrmConnectionService>()
               extensionId: ATTIO_EXTENSION_ID,
               scope: "workspace",
             });
-            if (Option.isNone(secrets)) return yield* Effect.fail(new CrmConnectionMissing());
+            if (Option.isNone(secrets)) return yield* Effect.fail(new CrmConnectionMissing({ provider: "Attio" }));
             return yield* sessionFrom(workspaceId, secrets.value);
           }),
 

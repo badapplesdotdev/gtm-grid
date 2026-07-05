@@ -558,7 +558,7 @@ describe("mid-pull failures", () => {
     const outcome = await syncOnce(w);
 
     expect(outcome.status).toBe("failed");
-    expect(outcome.errorTag).toBe("AttioAuthRevoked");
+    expect(outcome.errorTag).toBe("CrmAuthRevoked");
     expect(outcome.error).toContain("Reconnect Attio");
     const binding = w.fixtures.crmBindings?.[0];
     expect(binding?.pausedReason).toBe("auth_revoked");

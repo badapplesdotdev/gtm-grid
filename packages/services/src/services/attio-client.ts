@@ -10,7 +10,7 @@
  *   policy.
  * - 401 triggers ONE refresh via {@link AttioAuth} + persist via the session,
  *   then a single replay; a second 401 (or a refresh refusal, or no refresh
- *   token) is {@link AttioAuthRevoked} — the binding pauses for reconnect.
+ *   token) is {@link CrmAuthRevoked} — the binding pauses for reconnect.
  * - Every method returns typed data; response parsing failures are
  *   {@link CrmSyncError}s, never exceptions.
  *
@@ -19,12 +19,12 @@
 
 import { Effect, Option, Schedule } from "effect";
 import {
-  AttioAuthRevoked,
-  AttioNetworkError,
-  AttioRateLimitError,
-  AttioRequestError,
-  AttioServerError,
-  AttioSourceGoneError,
+  CrmAuthRevoked,
+  CrmNetworkError,
+  CrmRateLimitError,
+  CrmRequestError,
+  CrmServerError,
+  CrmSourceGoneError,
   CrmSyncError,
   isTransientCrmError,
   type CrmError,
@@ -90,7 +90,7 @@ interface RequestArgs {
   readonly method: "GET" | "POST";
   readonly path: string;
   readonly body?: unknown;
-  /** 404 handling: map to AttioSourceGoneError with this label when set. */
+  /** 404 handling: map to CrmSourceGoneError with this label when set. */
   readonly notFoundLabel?: string;
 }
 
@@ -111,30 +111,30 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
               },
               ...(args.body !== undefined ? { body: JSON.stringify(args.body) } : {}),
             }),
-          catch: (cause) => new AttioNetworkError({ cause }),
+          catch: (cause) => new CrmNetworkError({ provider: "Attio", cause }),
         });
         if (res.status === 401) return { unauthorized: true as const };
         if (res.status === 404 && args.notFoundLabel !== undefined) {
-          return yield* Effect.fail(new AttioSourceGoneError({ sourceLabel: args.notFoundLabel }));
+          return yield* Effect.fail(new CrmSourceGoneError({ provider: "Attio", sourceLabel: args.notFoundLabel }));
         }
         if (res.status === 429) {
           const after = Number(res.headers.get("retry-after"));
           return yield* Effect.fail(
-            new AttioRateLimitError(Number.isFinite(after) && after > 0 ? { retryAfterMs: after * 1000 } : {}),
+            new CrmRateLimitError(Number.isFinite(after) && after > 0 ? { provider: "Attio", retryAfterMs: after * 1000 } : { provider: "Attio" }),
           );
         }
-        if (res.status >= 500) return yield* Effect.fail(new AttioServerError({ status: res.status }));
+        if (res.status >= 500) return yield* Effect.fail(new CrmServerError({ provider: "Attio", status: res.status }));
         if (!res.ok) {
           const detail = yield* Effect.tryPromise({
             try: () => res.text(),
-            catch: (cause) => new AttioNetworkError({ cause }),
+            catch: (cause) => new CrmNetworkError({ provider: "Attio", cause }),
           }).pipe(Effect.orElseSucceed(() => ""));
           // Server-side diagnostics only (path + status + body snippet — never
           // tokens): live Attio refusals must be debuggable from host logs.
           yield* Effect.logWarning("attio request refused").pipe(
             Effect.annotateLogs({ path: args.path, status: res.status, detail: detail.slice(0, 300) }),
           );
-          return yield* Effect.fail(new AttioRequestError({ status: res.status, detail: detail.slice(0, 500) }));
+          return yield* Effect.fail(new CrmRequestError({ provider: "Attio", status: res.status, detail: detail.slice(0, 500) }));
         }
         const json = yield* Effect.tryPromise({
           try: () => res.json() as Promise<unknown>,
@@ -156,12 +156,12 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
 
         const refreshToken = session.tokens.refreshToken;
         if (!refreshToken) {
-          return yield* Effect.fail(new AttioAuthRevoked({ detail: "401 and no refresh token" }));
+          return yield* Effect.fail(new CrmAuthRevoked({ provider: "Attio", detail: "401 and no refresh token" }));
         }
         const refreshed = yield* auth.refresh(refreshToken).pipe(
           Effect.mapError((e) =>
             e._tag === "AttioOAuthNotConfigured"
-              ? new AttioAuthRevoked({ detail: `OAuth not configured: ${e.missing}` })
+              ? new CrmAuthRevoked({ provider: "Attio", detail: `OAuth not configured: ${e.missing}` })
               : e,
           ),
         );
@@ -170,7 +170,7 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
         yield* session.persist(merged);
         const second = yield* attempt(args, merged.accessToken).pipe(Effect.retry(transientRetry));
         if (second.unauthorized) {
-          return yield* Effect.fail(new AttioAuthRevoked({ detail: "401 after refresh" }));
+          return yield* Effect.fail(new CrmAuthRevoked({ provider: "Attio", detail: "401 after refresh" }));
         }
         return second.json;
       });
@@ -258,8 +258,8 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
             // A single VANISHED record (404) must not fail the batch — but a
             // scope refusal (403) must: swallowing it turned a missing Records
             // scope into silent "ok · 0 records" syncs in the first live E2E.
-            Effect.catchTag("AttioSourceGoneError", () => Effect.succeed(Option.none<AttioRecord>())),
-            Effect.catchTag("AttioRequestError", (e) =>
+            Effect.catchTag("CrmSourceGoneError", () => Effect.succeed(Option.none<AttioRecord>())),
+            Effect.catchTag("CrmRequestError", (e) =>
               e.status === 404 ? Effect.succeed(Option.none<AttioRecord>()) : Effect.fail(e),
             ),
           ),
@@ -274,7 +274,7 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
         limit: Math.min(args.ids.length, ATTIO_PAGE_LIMIT),
         offset: 0,
       }).pipe(
-        Effect.catchTag("AttioRequestError", () =>
+        Effect.catchTag("CrmRequestError", () =>
           Effect.suspend(() => {
             bulkInUnsupported = true;
             return individually;

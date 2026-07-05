@@ -44,14 +44,14 @@ type TrpcCode = ConstructorParameters<typeof TRPCError>[0]["code"];
  */
 const CRM_ERROR_CODE: Record<string, TrpcCode> = {
   CrmConnectionMissing: "PRECONDITION_FAILED",
-  AttioAuthRevoked: "PRECONDITION_FAILED",
-  AttioSourceGoneError: "NOT_FOUND",
-  AttioRequestError: "BAD_REQUEST",
-  AttioSchemaDriftError: "BAD_REQUEST",
+  CrmAuthRevoked: "PRECONDITION_FAILED",
+  CrmSourceGoneError: "NOT_FOUND",
+  CrmRequestError: "BAD_REQUEST",
+  CrmSchemaDriftError: "BAD_REQUEST",
   RowCapReached: "BAD_REQUEST",
-  AttioRateLimitError: "TOO_MANY_REQUESTS",
-  AttioServerError: "BAD_GATEWAY",
-  AttioNetworkError: "BAD_GATEWAY",
+  CrmRateLimitError: "TOO_MANY_REQUESTS",
+  CrmServerError: "BAD_GATEWAY",
+  CrmNetworkError: "BAD_GATEWAY",
   CrmSyncError: "INTERNAL_SERVER_ERROR",
 };
 

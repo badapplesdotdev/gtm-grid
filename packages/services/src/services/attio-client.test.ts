@@ -38,7 +38,7 @@ const runExit = <A, E>(effect: Effect.Effect<A, E, AttioClient>) =>
 
 const failureTag = (exit: Awaited<ReturnType<typeof runExit>>): string => {
   if (exit._tag !== "Failure") return "none";
-  const m = JSON.stringify(exit.cause).match(/"_tag":"(Attio[A-Za-z]+|CrmSyncError|CrmConnectionMissing)"/);
+  const m = JSON.stringify(exit.cause).match(/"_tag":"(Crm[A-Za-z]+|RowCapReached)"/);
   return m?.[1] ?? "unknown";
 };
 
@@ -143,22 +143,22 @@ describe("refresh-on-401", () => {
     expect(persisted).toEqual([{ accessToken: "at_new", refreshToken: "rt_1" }]);
   });
 
-  it("401 with no refresh token → AttioAuthRevoked without touching the token endpoint", async () => {
+  it("401 with no refresh token → CrmAuthRevoked without touching the token endpoint", async () => {
     const { session: s } = session({ accessToken: "at_old" });
     const calls = scriptFetch([() => json({}, 401)]);
     const exit = await runExit(Effect.flatMap(AttioClient, (c) => c.listObjects(s)));
-    expect(failureTag(exit)).toBe("AttioAuthRevoked");
+    expect(failureTag(exit)).toBe("CrmAuthRevoked");
     expect(calls).toHaveLength(1);
   });
 
-  it("401 → refresh refused → AttioAuthRevoked", async () => {
+  it("401 → refresh refused → CrmAuthRevoked", async () => {
     const { session: s } = session({ accessToken: "at_old", refreshToken: "rt_dead" });
     scriptFetch([() => json({}, 401), () => json({ error: "invalid_grant" }, 400)]);
     const exit = await runExit(Effect.flatMap(AttioClient, (c) => c.listObjects(s)));
-    expect(failureTag(exit)).toBe("AttioAuthRevoked");
+    expect(failureTag(exit)).toBe("CrmAuthRevoked");
   });
 
-  it("401 → refresh ok → still 401 → AttioAuthRevoked (never loops)", async () => {
+  it("401 → refresh ok → still 401 → CrmAuthRevoked (never loops)", async () => {
     const { session: s } = session({ accessToken: "at_old", refreshToken: "rt_1" });
     const calls = scriptFetch([
       () => json({}, 401),
@@ -166,7 +166,7 @@ describe("refresh-on-401", () => {
       () => json({}, 401),
     ]);
     const exit = await runExit(Effect.flatMap(AttioClient, (c) => c.listObjects(s)));
-    expect(failureTag(exit)).toBe("AttioAuthRevoked");
+    expect(failureTag(exit)).toBe("CrmAuthRevoked");
     expect(calls).toHaveLength(3);
   });
 });
@@ -183,7 +183,7 @@ describe("failure mapping + retry", () => {
     expect(calls).toHaveLength(2);
   }, 15_000);
 
-  it("a 400 is AttioRequestError immediately (no retry)", async () => {
+  it("a 400 is CrmRequestError immediately (no retry)", async () => {
     const { session: s } = session({ accessToken: "at_1" });
     const calls = scriptFetch([() => new Response("bad filter", { status: 400 })]);
     const exit = await runExit(
@@ -191,11 +191,11 @@ describe("failure mapping + retry", () => {
         c.queryObjectRecords(s, { object: "people", sourceLabel: "People", limit: 10, offset: 0 }),
       ),
     );
-    expect(failureTag(exit)).toBe("AttioRequestError");
+    expect(failureTag(exit)).toBe("CrmRequestError");
     expect(calls).toHaveLength(1);
   });
 
-  it("a 404 on a source becomes AttioSourceGoneError carrying the label", async () => {
+  it("a 404 on a source becomes CrmSourceGoneError carrying the label", async () => {
     const { session: s } = session({ accessToken: "at_1" });
     scriptFetch([() => new Response("gone", { status: 404 })]);
     const exit = await runExit(
@@ -203,7 +203,7 @@ describe("failure mapping + retry", () => {
         c.queryObjectRecords(s, { object: "people", sourceLabel: "MQLs — Q3", limit: 10, offset: 0 }),
       ),
     );
-    expect(failureTag(exit)).toBe("AttioSourceGoneError");
+    expect(failureTag(exit)).toBe("CrmSourceGoneError");
     expect(JSON.stringify(exit)).toContain("MQLs — Q3");
   });
 });
@@ -310,7 +310,7 @@ describe("queryRecordsByIds", () => {
         c.queryRecordsByIds(s, { object: "companies", sourceLabel: "Companies", ids: ["rec_gone", "rec_forbidden"] }),
       ),
     );
-    expect(failureTag(exit)).toBe("AttioRequestError");
+    expect(failureTag(exit)).toBe("CrmRequestError");
     expect(JSON.stringify(exit)).toContain("403");
   });
 
