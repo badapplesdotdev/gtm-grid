@@ -1,6 +1,7 @@
-// "From your CRM" — the 3-step wizard that connects Attio (read-only OAuth),
-// picks an object/list + its fields + filters + dedupe rule, then creates a
-// synced grid table backed by a CRM binding the Inngest worker keeps refreshed.
+// "From your CRM" — the 3-step wizard that connects a CRM (read-only OAuth;
+// Attio or HubSpot), picks an object/list + its fields + filters + dedupe
+// rule, then creates a synced grid table backed by a CRM binding the Inngest
+// worker keeps refreshed.
 //
 // The server side is complete (the `crm` tRPC router); this modal only drives
 // the UI. Every user-visible error comes straight from the server (already
@@ -12,7 +13,7 @@ import { Dialog, DialogContent } from "../components/ui/dialog";
 import { BrandIcon } from "../BrandIcon";
 import { electron } from "../electron";
 
-/** Attio attribute types the sync supports (mirrors the server's union). */
+/** Attribute types the sync supports (the server's neutral union — every provider maps into it). */
 const SUPPORTED_ATTR_TYPES = [
   "text",
   "personal-name",
@@ -32,8 +33,28 @@ const SUPPORTED_ATTR_TYPES = [
   "actor-reference",
 ] as const;
 
-const ATTIO_LOGO = "https://www.google.com/s2/favicons?domain=attio.com&sz=128";
-const HUBSPOT_LOGO = "https://www.google.com/s2/favicons?domain=hubspot.com&sz=128";
+export type CrmProviderId = "attio" | "hubspot";
+
+/** Per-provider display bits — the only provider-specific knowledge this modal holds. */
+const PROVIDERS: Record<CrmProviderId, {
+  readonly name: string;
+  readonly logo: string;
+  readonly pickSub: string;
+  readonly readScope: string;
+}> = {
+  attio: {
+    name: "Attio",
+    logo: "https://www.google.com/s2/favicons?domain=attio.com&sz=128",
+    pickSub: "People, Companies, Deals, custom objects and lists",
+    readScope: "Read people, companies, deals & lists",
+  },
+  hubspot: {
+    name: "HubSpot",
+    logo: "https://www.google.com/s2/favicons?domain=hubspot.com&sz=128",
+    pickSub: "Contacts, Companies and saved lists",
+    readScope: "Read contacts, companies & lists",
+  },
+};
 
 /** The six filter operators, in the order the design lists them. */
 const FILTER_OPS = ["is", "is not", "contains", "is known", "is unknown", "after"] as const;
@@ -126,9 +147,13 @@ export function CrmSyncWizard({
   type Step = "pick" | "connect" | "configure";
   const [step, setStep] = useState<Step>("pick");
 
+  // The CRM being connected/configured; every crm.* call threads it through.
+  const [provider, setProvider] = useState<CrmProviderId>("attio");
+  const providerDef = PROVIDERS[provider];
+
   // Connection
   const [configured, setConfigured] = useState<boolean | null>(null);
-  const [connectedMeta, setConnectedMeta] = useState<{ connectedByName: string; attioWorkspaceName: string } | null>(null);
+  const [connectedMeta, setConnectedMeta] = useState<{ connectedByName: string; workspaceLabel: string } | null>(null);
   const [authorizing, setAuthorizing] = useState(false);
 
   // Sources + selection
@@ -149,10 +174,10 @@ export function CrmSyncWizard({
 
   const filterIdRef = useRef(1);
 
-  // ── Connection status: on open, learn whether Attio is configured + connected.
-  const refetchConnection = useCallback(async () => {
+  // ── Connection status: on open, learn whether the CRM is configured + connected.
+  const refetchConnection = useCallback(async (p: CrmProviderId) => {
     try {
-      const s = await apiClient.crm.connectionStatus.query({ workspaceId });
+      const s = await apiClient.crm.connectionStatus.query({ workspaceId, provider: p });
       if (s == null) {
         // Older/mock server without the crm router: treat as unconfigured.
         setConfigured(false);
@@ -161,13 +186,17 @@ export function CrmSyncWizard({
       }
       setConfigured(s.configured);
       if (s.connected) {
-        setConnectedMeta({ connectedByName: s.connectedByName, attioWorkspaceName: s.attioWorkspaceName });
+        setConnectedMeta({
+          connectedByName: s.connectedByName,
+          // Servers predating the neutral field only send the attio alias.
+          workspaceLabel: s.workspaceLabel ?? s.attioWorkspaceName,
+        });
         return true;
       }
       setConnectedMeta(null);
       return false;
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not check the Attio connection.");
+      setError(e instanceof Error ? e.message : `Could not check the ${PROVIDERS[p].name} connection.`);
       return false;
     }
   }, [workspaceId]);
@@ -183,6 +212,7 @@ export function CrmSyncWizard({
       try {
         const r = await apiClient.crm.describeSource.query({
           workspaceId,
+          provider,
           kind: src.kind,
           id: src.id,
           label: src.label,
@@ -200,7 +230,7 @@ export function CrmSyncWizard({
         setLoadingSource(false);
       }
     },
-    [workspaceId],
+    [workspaceId, provider],
   );
 
   // ── Enter the Configure step: fetch sources, auto-select the first object.
@@ -208,7 +238,7 @@ export function CrmSyncWizard({
     setStep("configure");
     setError(null);
     try {
-      const list = (await apiClient.crm.listSources.query({ workspaceId })) as CrmSource[];
+      const list = (await apiClient.crm.listSources.query({ workspaceId, provider })) as CrmSource[];
       setSources(list);
       const firstObject = list.find((s) => s.kind === "object") ?? list[0];
       if (firstObject) {
@@ -218,33 +248,34 @@ export function CrmSyncWizard({
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load your CRM sources.");
     }
-  }, [workspaceId, loadSource]);
+  }, [workspaceId, provider, loadSource]);
 
-  // Pick Attio: if already connected jump to Configure, else the Connect step.
-  const pickAttio = useCallback(async () => {
-    const connected = await refetchConnection();
+  // Pick a CRM: if already connected jump to Configure, else the Connect step.
+  const pickProvider = useCallback(async (p: CrmProviderId) => {
+    setProvider(p);
+    const connected = await refetchConnection(p);
     if (connected) void enterConfigure();
     else setStep("connect");
   }, [refetchConnection, enterConfigure]);
 
-  // ── Connect: open Attio OAuth externally, then poll until connected.
+  // ── Connect: open the CRM's OAuth externally, then poll until connected.
   const connect = useCallback(async () => {
     setError(null);
     try {
-      const { url } = await apiClient.crm.authorizeUrl.query({ workspaceId });
+      const { url } = await apiClient.crm.authorizeUrl.query({ workspaceId, provider });
       await openExternalUrl(url);
       setAuthorizing(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not start the Attio connection.");
+      setError(e instanceof Error ? e.message : `Could not start the ${providerDef.name} connection.`);
     }
-  }, [workspaceId]);
+  }, [workspaceId, provider, providerDef.name]);
 
   // Poll connectionStatus every 2s while authorizing; advance once connected.
   useEffect(() => {
     if (!authorizing) return;
     let cancelled = false;
     const tick = async () => {
-      const connected = await refetchConnection();
+      const connected = await refetchConnection(provider);
       if (cancelled) return;
       if (connected) {
         setAuthorizing(false);
@@ -253,7 +284,7 @@ export function CrmSyncWizard({
     };
     const h = setInterval(() => void tick(), 2000);
     return () => { cancelled = true; clearInterval(h); };
-  }, [authorizing, refetchConnection, enterConfigure]);
+  }, [authorizing, provider, refetchConnection, enterConfigure]);
 
   // The `crm-connected` deep link accelerates the poll: re-check immediately.
   const lastConnectedSignal = useRef(connectedSignal ?? 0);
@@ -263,10 +294,10 @@ export function CrmSyncWizard({
     lastConnectedSignal.current = sig;
     if (step !== "connect") return;
     void (async () => {
-      const connected = await refetchConnection();
+      const connected = await refetchConnection(provider);
       if (connected) { setAuthorizing(false); void enterConfigure(); }
     })();
-  }, [connectedSignal, step, refetchConnection, enterConfigure]);
+  }, [connectedSignal, step, provider, refetchConnection, enterConfigure]);
 
   // ── Estimate (debounced) whenever the source or its filters change.
   const validFilters = useMemo<CrmFilterPayload>(
@@ -286,12 +317,12 @@ export function CrmSyncWizard({
     let cancelled = false;
     const h = setTimeout(() => {
       void apiClient.crm.estimate
-        .query({ workspaceId, kind: selected.kind, id: selected.id, label: selected.label, filters: validFilters })
+        .query({ workspaceId, provider, kind: selected.kind, id: selected.id, label: selected.label, filters: validFilters })
         .then((r) => { if (!cancelled) setEstimate({ count: r.count, isLowerBound: r.isLowerBound }); })
         .catch(() => { if (!cancelled) setEstimate(null); });
     }, 400);
     return () => { cancelled = true; clearTimeout(h); };
-  }, [step, selected, workspaceId, validFilters]);
+  }, [step, selected, workspaceId, provider, validFilters]);
 
   const switchTab = (tab: SourceKind) => {
     setSourceTab(tab);
@@ -339,6 +370,7 @@ export function CrmSyncWizard({
       try {
         await apiClient.crm.createBinding.mutate({
           workspaceId,
+          provider,
           tableId,
           sourceKind: selected.kind,
           sourceId: selected.id,
@@ -394,22 +426,16 @@ export function CrmSyncWizard({
           {step === "pick" && (
             <div className="crmw-pick">
               <span className="crmw-pick-q">Which CRM do you want to pull records from?</span>
-              <button className="crmw-crm-card" onClick={() => void pickAttio()}>
-                <BrandIcon logo={ATTIO_LOGO} name="Attio" size={34} />
-                <span className="crmw-crm-text">
-                  <span className="crmw-crm-name">Attio</span>
-                  <span className="crmw-crm-sub">People, Companies, Deals, custom objects and lists</span>
-                </span>
-                <span className="crmw-caret">›</span>
-              </button>
-              <div className="crmw-crm-card crmw-crm-disabled" aria-disabled="true">
-                <BrandIcon logo={HUBSPOT_LOGO} name="HubSpot" size={34} />
-                <span className="crmw-crm-text">
-                  <span className="crmw-crm-name">HubSpot</span>
-                  <span className="crmw-crm-sub">Contacts, Companies, Deals and saved lists</span>
-                </span>
-                <span className="crmw-chip crmw-chip-soon">Coming soon</span>
-              </div>
+              {(Object.keys(PROVIDERS) as CrmProviderId[]).map((p) => (
+                <button key={p} className="crmw-crm-card" onClick={() => void pickProvider(p)}>
+                  <BrandIcon logo={PROVIDERS[p].logo} name={PROVIDERS[p].name} size={34} />
+                  <span className="crmw-crm-text">
+                    <span className="crmw-crm-name">{PROVIDERS[p].name}</span>
+                    <span className="crmw-crm-sub">{PROVIDERS[p].pickSub}</span>
+                  </span>
+                  <span className="crmw-caret">›</span>
+                </button>
+              ))}
               <div className="crmw-reassure">
                 <LockIcon />
                 Read-only access. GTM Grid never writes back to your CRM.
@@ -419,29 +445,29 @@ export function CrmSyncWizard({
 
           {step === "connect" && (
             <div className="crmw-connect">
-              <BrandIcon logo={ATTIO_LOGO} name="Attio" size={48} />
-              <span className="crmw-connect-title">Connect your Attio account</span>
+              <BrandIcon logo={providerDef.logo} name={providerDef.name} size={48} />
+              <span className="crmw-connect-title">Connect your {providerDef.name} account</span>
               <span className="crmw-connect-sub">
-                You'll be sent to Attio to authorize GTM Grid. We request a <strong>read-only</strong> scope
+                You'll be sent to {providerDef.name} to authorize GTM Grid. We request a <strong>read-only</strong> scope
                 so records can flow into the grid.
               </span>
               <div className="crmw-scopes">
                 <span className="crmw-scopes-label">Requested access</span>
-                <span className="crmw-scope"><CheckIcon />Read people, companies, deals &amp; lists</span>
+                <span className="crmw-scope"><CheckIcon />{providerDef.readScope}</span>
                 <span className="crmw-scope"><CheckIcon />Object &amp; attribute schema</span>
                 <span className="crmw-scope crmw-scope-no"><CrossIcon />No write / delete permissions</span>
               </div>
               {configured === false ? (
-                <div className="crmw-error" role="alert">Attio connection isn't available yet.</div>
+                <div className="crmw-error" role="alert">{providerDef.name} connection isn't available yet.</div>
               ) : authorizing ? (
                 <button className="skill-btn primary crmw-connect-btn" disabled>
                   <span className="cell-spinner" style={{ width: 15, height: 15, borderWidth: 2 }} />
-                  Authorizing with Attio…
+                  Authorizing with {providerDef.name}…
                 </button>
               ) : (
                 <button className="skill-btn primary crmw-connect-btn" onClick={() => void connect()}>
-                  <BrandIcon logo={ATTIO_LOGO} name="Attio" size={18} />
-                  Connect with Attio
+                  <BrandIcon logo={providerDef.logo} name={providerDef.name} size={18} />
+                  Connect with {providerDef.name}
                 </button>
               )}
               {error && <div className="crmw-error" role="alert">{error}</div>}
@@ -454,15 +480,15 @@ export function CrmSyncWizard({
                 <div className="crmw-connected-banner">
                   <span className="crmw-connected-dot" />
                   <span className="crmw-connected-text">
-                    Connected · {connectedMeta.attioWorkspaceName}
+                    Connected · {connectedMeta.workspaceLabel}
                     <span className="crmw-connected-by">connected by {connectedMeta.connectedByName}</span>
                   </span>
                   {/* Reauth path while healthy — e.g. after granting the app
-                      new scopes in Attio, re-consent picks them up. */}
+                      new scopes in the CRM, re-consent picks them up. */}
                   <button className="crmw-link crmw-reconnect" onClick={() => void connect()}>
                     Reconnect
                   </button>
-                  <BrandIcon logo={ATTIO_LOGO} name="Attio" size={16} />
+                  <BrandIcon logo={providerDef.logo} name={providerDef.name} size={16} />
                 </div>
               )}
 
@@ -480,7 +506,7 @@ export function CrmSyncWizard({
                     const active = selected?.id === s.id && selected?.kind === s.kind;
                     return (
                       <button key={`${s.kind}:${s.id}`} className={`crmw-source ${active ? "crmw-source-on" : ""}`} onClick={() => void loadSource(s)}>
-                        <BrandIcon logo={ATTIO_LOGO} name="Attio" size={18} />
+                        <BrandIcon logo={providerDef.logo} name={providerDef.name} size={18} />
                         <span className="crmw-source-text">
                           <span className="crmw-source-label">{s.label}</span>
                           <span className="crmw-source-sub">{s.kind === "list" ? "List" : "Object"}</span>
