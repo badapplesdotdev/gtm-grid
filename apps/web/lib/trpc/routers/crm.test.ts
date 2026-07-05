@@ -256,6 +256,44 @@ describe("crm.syncNow (entitlement gated → enqueue)", () => {
   });
 });
 
+describe("billing.syncPlan resumes lapse-paused syncs", () => {
+  it("clears plan_lapsed pauses when the reconciled plan is paid", async () => {
+    const crmBindings: CrmBinding[] = [
+      { ...binding, pausedReason: "plan_lapsed", lastError: "Your plan doesn't include CRM sync right now." },
+    ];
+    const caller = callerFor({
+      memberships,
+      tables,
+      crmBindings,
+      workspaces: [{ id: WS, name: "WS", ownerId: "member", currentPlanId: "team" }],
+      // The fake Autumn reports an active PAID plan so the reconcile resolves it.
+      autumn: { activePlanIds: ["team"] },
+      currentUserId: "member",
+    });
+    const plan = await caller.billing.syncPlan({ workspaceId: WS });
+    expect(plan.id).not.toBeNull();
+    expect(crmBindings[0]?.pausedReason).toBeNull(); // resumed without the webhook
+  });
+});
+
+describe("entitlement gating (lapsed plan)", () => {
+  it("wizard reads are FORBIDDEN on a lapsed workspace", async () => {
+    const caller = callerFor({
+      memberships,
+      tables,
+      workspaces: [{ id: WS, name: "W", ownerId: "member", currentPlanId: null }],
+      currentUserId: "member",
+    });
+    await expect(caller.crm.listSources({ workspaceId: WS })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      caller.crm.describeSource({ workspaceId: WS, kind: "object", id: "people", label: "People" }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      caller.crm.estimate({ workspaceId: WS, kind: "object", id: "people", label: "People", filters: [] }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
+
 describe("crm.disconnect", () => {
   it("pauses the workspace's bindings and reports the count", async () => {
     const crmBindings: CrmBinding[] = [{ ...binding }];

@@ -17,7 +17,7 @@
  * doesn't retry forever on an unknown customer.
  */
 
-import { BillingService } from "@gtmgrid/services";
+import { CrmBindingRepo, BillingService } from "@gtmgrid/services";
 import { Effect, Exit } from "effect";
 import { exitToResponse, workerRuntime } from "../../worker/_lib";
 import {
@@ -61,6 +61,17 @@ export async function POST(req: Request): Promise<Response> {
 
   if (Exit.isSuccess(exit)) {
     const plan = exit.value;
+    if (plan.id !== null) {
+      // Workspace regained cloud access → resume CRM syncs that lapse-paused.
+      // Best-effort: the reconcile above stays authoritative for entitlements.
+      await runtime
+        .runPromise(
+          Effect.flatMap(CrmBindingRepo, (bindings) =>
+            bindings.clearPause({ workspaceId, provider: "attio", reason: "plan_lapsed" }),
+          ).pipe(Effect.catchAll(() => Effect.succeed(0))),
+        )
+        .catch(() => undefined);
+    }
     captureServer(revenueEventForPlan(plan.id), {
       distinctId: workspaceId,
       properties: { workspace_id: workspaceId, plan_id: plan.id ?? "" },

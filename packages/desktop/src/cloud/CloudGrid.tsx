@@ -168,6 +168,8 @@ interface CloudGridProps {
   tableId: Id<"tables"> | null;
   /** The active workspace id (member-gates the CRM-sync status strip). */
   workspaceId: string | null;
+  /** Open the plan/billing modal (the strip's "View plans" on a lapsed plan). */
+  onUpgrade?: () => void;
   /** The connector/function catalog for the Functions browser (shared with local). */
   connectors: ConnectorInfo[];
   /** Open the AI-provider settings (the Functions browser's "configure AI" link). */
@@ -185,6 +187,7 @@ interface CloudGridProps {
 }
 
 export function CloudGrid({
+  onUpgrade,
   tableId,
   workspaceId,
   connectors,
@@ -744,7 +747,7 @@ export function CloudGrid({
         </div>
       )}
       <SignalStatusStrip tableId={String(table.id)} />
-      {workspaceId && <CrmStatusStrip tableId={String(table.id)} workspaceId={workspaceId} />}
+      {workspaceId && <CrmStatusStrip tableId={String(table.id)} workspaceId={workspaceId} onUpgrade={onUpgrade} />}
       <DataGrid controller={controller} />
 
       {detail && (

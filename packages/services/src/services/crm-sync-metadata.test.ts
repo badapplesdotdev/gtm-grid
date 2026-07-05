@@ -27,7 +27,12 @@ function routeFetch(routes: Array<[match: string, body: () => unknown]>): void {
   });
 }
 
-const fixtures = (): TestLayerFixtures => ({ memberships, currentUserId: "user_m" });
+// Wizard reads are entitlement-gated, so the test workspace needs a live plan.
+const fixtures = (): TestLayerFixtures => ({
+  memberships,
+  workspaces: [{ id: WS, name: "WS", ownerId: "user_m", currentPlanId: "team" }],
+  currentUserId: "user_m",
+});
 
 /** Connect Attio, then run `use` against CrmSyncService. */
 const withService = <A>(

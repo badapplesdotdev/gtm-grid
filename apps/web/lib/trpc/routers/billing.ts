@@ -13,7 +13,7 @@
  * port under `createCaller` in tests (no SDK, no HTTP).
  */
 
-import { BillingService } from "@gtmgrid/services";
+import { CrmBindingRepo, BillingService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { z } from "zod";
 import { captureServer } from "../../posthog-server";
@@ -64,7 +64,16 @@ export const billingRouter = router({
         ctx.runtime,
         Effect.gen(function* () {
           const svc = yield* BillingService;
-          return yield* svc.syncPlan(input.workspaceId);
+          const plan = yield* svc.syncPlan(input.workspaceId);
+          if (plan.id !== null) {
+            // Regained cloud access → resume lapse-paused CRM syncs without
+            // waiting for the Autumn webhook. Best-effort.
+            const bindings = yield* CrmBindingRepo;
+            yield* bindings
+              .clearPause({ workspaceId: input.workspaceId, provider: "attio", reason: "plan_lapsed" })
+              .pipe(Effect.catchAll(() => Effect.succeed(0)));
+          }
+          return plan;
         }),
       ),
     ),

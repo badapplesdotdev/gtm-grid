@@ -268,7 +268,27 @@ export const procedures = {
     });
     return { bindingId };
   },
-  "crm.listBindings": (input, s) => s.crmBindings.filter((b) => b.tableId === input?.tableId),
+  // Mirrors CrmSyncService.listByTable: each binding carries its newest run so
+  // the strip can derive "syncing" server-side (background/cron runs included).
+  "crm.listBindings": (input, s) =>
+    s.crmBindings
+      .filter((b) => b.tableId === input?.tableId)
+      .map((b) => {
+        const run = s.crmRuns.find((r) => r.bindingId === b.id) ?? null;
+        return {
+          ...b,
+          lastRun: run
+            ? {
+                id: run.id,
+                status: run.status,
+                trigger: run.trigger,
+                rowsCreated: run.rowsCreated ?? 0,
+                rowsUpdated: run.rowsUpdated ?? 0,
+                startedAt: run.startedAt,
+              }
+            : null,
+        };
+      }),
   "crm.history": (input, s) => s.crmRuns.filter((r) => r.bindingId === input?.bindingId),
   "crm.syncNow": (input, s) => {
     const b = s.crmBindings.find((x) => x.id === input?.bindingId);

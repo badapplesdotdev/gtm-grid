@@ -18,6 +18,7 @@ import {
   mergePagesToSnapshot,
   patchGridCache,
   patchPagedGridCache,
+  wasEventDropped,
   toCloudDelivery,
   toCloudWebhook,
 } from "./useCloudGrid";
@@ -530,5 +531,31 @@ describe("patchPagedGridCache — page-aware realtime patch (TRI-3272)", () => {
     });
     expect(next[0]?.nextCursor).toEqual(cursor("r1"));
     expect(next[1]?.nextCursor).toBeNull();
+  });
+});
+
+describe("wasEventDropped — the realtime drop-backstop predicate", () => {
+  it("row.insert is dropped while the loaded tail still has a next page", () => {
+    const pages = [page(["r1"], { position: 1, createdAt: 1, id: "r1" })];
+    expect(wasEventDropped(pages, { type: "row.insert", row: { _id: "rX" }, cells: [] })).toBe(true);
+  });
+
+  it("row.insert applies when the tail is the final page", () => {
+    const pages = [page(["r1"], null)];
+    expect(wasEventDropped(pages, { type: "row.insert", row: { _id: "rX" }, cells: [] })).toBe(false);
+  });
+
+  it("cell.upsert is dropped only when the row is not loaded", () => {
+    const pages = [page(["r1"], null)];
+    expect(
+      wasEventDropped(pages, { type: "cell.upsert", cell: { rowId: "r1", columnId: "c1", value: "v", status: "done", error: null } }),
+    ).toBe(false);
+    expect(
+      wasEventDropped(pages, { type: "cell.upsert", cell: { rowId: "missing", columnId: "c1", value: "v", status: "done", error: null } }),
+    ).toBe(true);
+  });
+
+  it("no loaded pages → nothing to drop (seed will fetch)", () => {
+    expect(wasEventDropped([], { type: "row.insert", row: { _id: "rX" }, cells: [] })).toBe(false);
   });
 });

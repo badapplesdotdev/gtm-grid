@@ -234,6 +234,14 @@ export class CrmSyncRunRepo extends Context.Tag("CrmSyncRunRepo")<
       readonly startedAt: number;
     }) => Effect.Effect<string, CrmRepoError>;
     readonly finish: (runId: string, args: CrmSyncRunFinish) => Effect.Effect<void, CrmRepoError>;
+    /**
+     * Update the live counters on a RUNNING run (called after each pulled
+     * page) so the strip can show "Pulling records… N so far" during a sync.
+     */
+    readonly progress: (
+      runId: string,
+      args: { readonly rowsCreated: number; readonly rowsUpdated: number; readonly rowsSkipped: number },
+    ) => Effect.Effect<void, CrmRepoError>;
     readonly findById: (runId: string) => Effect.Effect<Option.Option<CrmSyncRun>, CrmRepoError>;
     readonly listByBinding: (
       bindingId: string,
@@ -641,6 +649,21 @@ export const CrmSyncRunRepoLive: Layer.Layer<CrmSyncRunRepo, never, DbClient> = 
           catch: fail("crm sync run finish failed"),
         }),
 
+      progress: (runId, args) =>
+        Effect.tryPromise({
+          try: async () => {
+            await db
+              .update(runs)
+              .set({
+                rowsCreated: args.rowsCreated,
+                rowsUpdated: args.rowsUpdated,
+                rowsSkipped: args.rowsSkipped,
+              })
+              .where(eq(runs.id, runId));
+          },
+          catch: fail("crm sync run progress failed"),
+        }),
+
       findById: (runId) =>
         UUID_RE.test(runId)
           ? Effect.tryPromise({
@@ -851,6 +874,11 @@ export const crmSyncRunRepoLayer = (fixtures: { runs?: CrmSyncRun[] }): Layer.La
         return id;
       }),
     finish: (runId, args) =>
+      Effect.sync(() => {
+        const i = runs.findIndex((r) => r.id === runId);
+        if (i >= 0) runs[i] = { ...runs[i], ...args };
+      }),
+    progress: (runId, args) =>
       Effect.sync(() => {
         const i = runs.findIndex((r) => r.id === runId);
         if (i >= 0) runs[i] = { ...runs[i], ...args };

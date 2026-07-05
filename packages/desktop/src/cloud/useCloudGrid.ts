@@ -1022,18 +1022,45 @@ function usePagedGridRealtime(
     let teardown: (() => Promise<void>) | null = null;
 
     const buffer: Array<Parameters<typeof patchPagedGridCache>[1]> = [];
+    // Dropped-event backstop: events the paged cache can't place (rows past
+    // the loaded tail — the norm during a large CRM pull) trigger a THROTTLED
+    // refetch of the paged grid + the sidebar table list, so rows appear in
+    // order and counts stay fresh without a render storm.
+    let lastInvalidateAt = 0;
+    let invalidateTimer: ReturnType<typeof setTimeout> | null = null;
+    const INVALIDATE_EVERY_MS = 2000;
+    const invalidateForDrops = () => {
+      if (disposed) return;
+      lastInvalidateAt = Date.now();
+      void qcRef.current.invalidateQueries({ queryKey: gridQueryKeys.tablePaged(tableId) });
+      void qcRef.current.invalidateQueries({ queryKey: gridQueryKeys.table(tableId) });
+      void qcRef.current.invalidateQueries({ queryKey: ["grid", "tables"] });
+    };
+    const scheduleDropInvalidate = () => {
+      if (invalidateTimer !== null) return;
+      const wait = Math.max(0, INVALIDATE_EVERY_MS - (Date.now() - lastInvalidateAt));
+      invalidateTimer = setTimeout(() => {
+        invalidateTimer = null;
+        invalidateForDrops();
+      }, wait);
+    };
     const flush = scheduleFlush(() => {
       if (disposed || buffer.length === 0) return;
       const events = buffer.splice(0, buffer.length);
+      let sawDrop = false;
       qcRef.current.setQueryData<{
         pages: GridPage[];
         pageParams: unknown[];
       }>(gridQueryKeys.tablePaged(tableId), (prev) => {
         if (prev === undefined) return prev;
         let pages: readonly GridPage[] = prev.pages;
-        for (const event of events) pages = patchPagedGridCache(pages, event);
+        for (const event of events) {
+          if (!sawDrop && wasEventDropped(pages, event)) sawDrop = true;
+          pages = patchPagedGridCache(pages, event);
+        }
         return pages === prev.pages ? prev : { ...prev, pages: [...pages] };
       });
+      if (sawDrop) scheduleDropInvalidate();
     });
 
     void (async () => {
@@ -1063,6 +1090,7 @@ function usePagedGridRealtime(
 
     return () => {
       disposed = true;
+      if (invalidateTimer !== null) clearTimeout(invalidateTimer);
       flush.cancel();
       gridPresenceStore.setPublisher(null);
       gridPresenceStore.clear();
@@ -1233,6 +1261,29 @@ export function mergePagesToSnapshot(
  * Returns the next pages array (new identity only for changed pages). Pure +
  * unit-tested without React or Supabase.
  */
+/**
+ * Whether `event` would be DROPPED by {@link patchPagedGridCache} against the
+ * currently loaded pages: a `row.insert` while the loaded tail still has a
+ * next page (the row belongs past what's paged in), or a `cell.upsert` for a
+ * row that isn't loaded. Dropped events mean the server has rows the cache
+ * can't place — the subscriber reacts by (throttled) refetching so synced
+ * rows still appear live during large pulls.
+ */
+export function wasEventDropped(
+  pages: readonly GridPage[],
+  event: Parameters<typeof applyGridEvent>[1],
+): boolean {
+  if (pages.length === 0) return false;
+  if (event.type === "row.insert") {
+    const last = pages[pages.length - 1];
+    return last === undefined || last.nextCursor !== null;
+  }
+  if (event.type === "cell.upsert") {
+    return !pages.some((p) => p.rows.some((r) => r._id === event.cell.rowId));
+  }
+  return false;
+}
+
 export function patchPagedGridCache(
   pages: readonly GridPage[],
   event: Parameters<typeof applyGridEvent>[1],

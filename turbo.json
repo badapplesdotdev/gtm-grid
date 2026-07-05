@@ -9,7 +9,9 @@
     "GTMGRID_POSTHOG_KEY",
     "GTMGRID_POSTHOG_HOST",
     "POSTHOG_KEY",
-    "POSTHOG_HOST"
+    "POSTHOG_HOST",
+    "PARTY_URL",
+    "PARTY_PUBLISH_SECRET"
   ],
   "tasks": {
     "build": {
