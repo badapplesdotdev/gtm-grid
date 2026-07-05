@@ -367,6 +367,18 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
           notFoundLabel: args.sourceLabel,
           body: { limit: args.limit, offset: args.offset },
         }).pipe(
+          Effect.tap((json) => {
+            const rows = dataArray(json);
+            // Shape diagnostic: top-level key NAMES of the first entry only
+            // (never values) — catches API-shape drift from host logs.
+            return Effect.logWarning("crm entries shape").pipe(
+              Effect.annotateLogs({
+                listId: args.listId,
+                count: rows.length,
+                firstEntryKeys: rows[0] === undefined ? "none" : Object.keys(rows[0]).join(","),
+              }),
+            );
+          }),
           Effect.map((json) =>
             dataArray(json).map(
               (raw): AttioListEntry => ({

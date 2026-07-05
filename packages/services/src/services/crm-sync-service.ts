@@ -353,6 +353,18 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
                     sourceLabel: binding.sourceLabel,
                     ids,
                   });
+            // Count-level diagnostics (no record data): a list pull that lands
+            // nothing must be explainable from host logs.
+            yield* Effect.logWarning("crm list page").pipe(
+              Effect.annotateLogs({
+                listId: binding.sourceId,
+                offset,
+                entries: entries.length,
+                parent,
+                parentIds: ids.length,
+                records: records.length,
+              }),
+            );
             return { records, pageFull: entries.length === ATTIO_PAGE_LIMIT };
           })
         : client
@@ -458,6 +470,9 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
             pages += 1;
             offset += ATTIO_PAGE_LIMIT;
 
+            yield* Effect.logWarning("crm page classify").pipe(
+              Effect.annotateLogs({ bindingId: binding.id, offset: offset - ATTIO_PAGE_LIMIT, records: records.length }),
+            );
             if (records.length > 0) {
               const flats = yield* flattenRecords(session, records, flattenCols, cache);
               const textOf = (fr: FlatRecord, slug: string) => fr.texts.get(slug) ?? "";
