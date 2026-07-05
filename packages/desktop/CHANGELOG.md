@@ -1,5 +1,14 @@
 # @gtmgrid/desktop
 
+## 1.5.2
+
+### Patch Changes
+
+- 9ef9754: CRM sync live-review fixes: rows and cells now insert atomically (no more blank "—" rows mid-sync), the status strip shows a live server-derived syncing indicator ("Pulling records from Attio… N so far") for background and cron runs, trial/plan lapse pauses syncing with an in-strip upgrade banner instead of silently retrying, and dropped realtime inserts trigger throttled refetches so sidebar, header, and strip counts stay in agreement during large syncs.
+  - @gtmgrid/analytics@1.5.2
+  - @gtmgrid/cloud@1.5.2
+  - @gtmgrid/services@1.5.2
+
 ## 1.5.1
 
 ### Patch Changes
