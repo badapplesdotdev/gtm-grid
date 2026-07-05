@@ -71,7 +71,10 @@ export function crmErrorCopy(e: CrmError): CrmErrorPresentation {
       if (e.status === 403) {
         return {
           status: "failed",
-          copy: "Attio declined access to that data. In Attio, open the GTM Grid app's settings and enable read access for records, object & list configuration, and workspace members — then reconnect and try again.",
+          // Paused like a revoked auth: the table banner offers one-click
+          // Reconnect, and re-consenting picks up the newly granted scopes.
+          pause: "auth_revoked",
+          copy: "Attio declined access to that data. In Attio, open the GTM Grid app's settings and enable read access for records, object & list configuration, and workspace members — then press Reconnect Attio below.",
         };
       }
       return {

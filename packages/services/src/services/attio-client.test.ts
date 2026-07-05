@@ -295,6 +295,25 @@ describe("queryRecordsByIds", () => {
     expect(names.get("rec_c")).toBe("Vercel");
   });
 
+  it("fallback GETs swallow a 404 (vanished record) but PROPAGATE a 403 (missing scope)", async () => {
+    const { session: s } = session({ accessToken: "at_1" });
+    // Bulk $in refused, then: rec_gone 404s (skipped), rec_forbidden 403s (fatal).
+    scriptFetch([
+      () => new Response("unknown filter", { status: 400 }),
+      (url) =>
+        url.endsWith("/rec_gone")
+          ? new Response("not found", { status: 404 })
+          : new Response("requires scopes: Records read", { status: 403 }),
+    ]);
+    const exit = await runExit(
+      Effect.flatMap(AttioClient, (c) =>
+        c.queryRecordsByIds(s, { object: "companies", sourceLabel: "Companies", ids: ["rec_gone", "rec_forbidden"] }),
+      ),
+    );
+    expect(failureTag(exit)).toBe("AttioRequestError");
+    expect(JSON.stringify(exit)).toContain("403");
+  });
+
   it("empty ids short-circuit without HTTP", async () => {
     const { session: s } = session({ accessToken: "at_1" });
     const calls = scriptFetch([() => json({ data: [] })]);

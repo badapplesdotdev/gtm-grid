@@ -4799,3 +4799,5 @@ button.crmw-crm-card:hover { border-color: var(--accent); box-shadow: var(--shad
 
 /* ── Read-only synced cell ── */
 .cell-wrap.cell-synced { cursor: default; }
+
+.crmw-reconnect { margin-left: auto; margin-right: 10px; flex-shrink: 0; }

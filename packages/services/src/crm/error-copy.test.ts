@@ -96,11 +96,12 @@ describe("crmErrorCopy — status + pause semantics", () => {
     expect(p.copy).toContain("A, B, C and 2 more");
   });
 
-  it("a 403 explains SCOPES and how to fix them (not 'your filters')", () => {
+  it("a 403 explains SCOPES, pauses for reconnect, and never shows the code", () => {
     const p = crmErrorCopy(new AttioRequestError({ status: 403, detail: "missing scope" }));
     expect(p.status).toBe("failed");
+    expect(p.pause).toBe("auth_revoked"); // lights the Reconnect banner
     expect(p.copy).toContain("read access");
-    expect(p.copy).toContain("reconnect");
+    expect(p.copy).toContain("Reconnect Attio");
     expect(p.copy).not.toMatch(/\b403\b/);
   });
 

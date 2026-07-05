@@ -457,6 +457,11 @@ export function CrmSyncWizard({
                     Connected · {connectedMeta.attioWorkspaceName}
                     <span className="crmw-connected-by">connected by {connectedMeta.connectedByName}</span>
                   </span>
+                  {/* Reauth path while healthy — e.g. after granting the app
+                      new scopes in Attio, re-consent picks them up. */}
+                  <button className="crmw-link crmw-reconnect" onClick={() => void connect()}>
+                    Reconnect
+                  </button>
                   <BrandIcon logo={ATTIO_LOGO} name="Attio" size={16} />
                 </div>
               )}

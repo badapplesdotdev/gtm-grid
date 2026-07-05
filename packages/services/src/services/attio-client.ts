@@ -254,9 +254,13 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
                 ? Option.some(toRecord(data as Record<string, unknown>))
                 : Option.none<AttioRecord>();
             }),
-            // A single vanished record must not fail the batch.
+            // A single VANISHED record (404) must not fail the batch — but a
+            // scope refusal (403) must: swallowing it turned a missing Records
+            // scope into silent "ok · 0 records" syncs in the first live E2E.
             Effect.catchTag("AttioSourceGoneError", () => Effect.succeed(Option.none<AttioRecord>())),
-            Effect.catchTag("AttioRequestError", () => Effect.succeed(Option.none<AttioRecord>())),
+            Effect.catchTag("AttioRequestError", (e) =>
+              e.status === 404 ? Effect.succeed(Option.none<AttioRecord>()) : Effect.fail(e),
+            ),
           ),
         { concurrency: 4 },
       ).pipe(Effect.map((opts) => opts.flatMap((o) => (Option.isSome(o) ? [o.value] : []))));
