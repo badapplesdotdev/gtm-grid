@@ -1,0 +1,35 @@
+{
+  "uid": "gtm_grid",
+  "type": "app",
+  "config": {
+    "name": "GTM Grid",
+    "description": "Pull HubSpot Contacts, Companies, or any list into a live GTM Grid table — read-only, synced daily — then enrich every row with AI. GTM Grid never writes back to your CRM.",
+    "distribution": "marketplace",
+    "auth": {
+      "type": "oauth",
+      "redirectUrls": [
+        "https://www.gtmgrid.dev/api/crm/hubspot/callback",
+        "http://localhost:3000/api/crm/hubspot/callback"
+      ],
+      "requiredScopes": [
+        "oauth",
+        "crm.objects.contacts.read",
+        "crm.objects.companies.read",
+        "crm.lists.read",
+        "crm.objects.owners.read"
+      ],
+      "optionalScopes": [],
+      "conditionallyRequiredScopes": []
+    },
+    "permittedUrls": {
+      "fetch": ["https://api.hubapi.com"],
+      "iframe": [],
+      "img": []
+    },
+    "support": {
+      "supportEmail": "morgan@trigify.io",
+      "documentationUrl": "https://www.gtmgrid.dev/docs/hubspot",
+      "supportUrl": "https://www.gtmgrid.dev/docs/hubspot"
+    }
+  }
+}

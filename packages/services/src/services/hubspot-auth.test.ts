@@ -45,8 +45,11 @@ describe("authorize URL", () => {
     expect(url.searchParams.get("redirect_uri")).toBe("https://www.gtmgrid.dev/api/crm/hubspot/callback");
     expect(url.searchParams.get("state")).toBe("state-token");
     expect(url.searchParams.get("scope")).toBe(HUBSPOT_SCOPES.join(" "));
-    // Every scope is read-only — the app can never write to a CRM.
-    for (const scope of HUBSPOT_SCOPES) expect(scope).toMatch(/\.read$/);
+    // Every data scope is read-only — the app can never write to a CRM
+    // ("oauth" is the identity scope every OAuth app carries).
+    for (const scope of HUBSPOT_SCOPES) {
+      if (scope !== "oauth") expect(scope).toMatch(/\.read$/);
+    }
   });
 
   it("is unconfigured without env (HubspotOAuthNotConfigured)", async () => {
