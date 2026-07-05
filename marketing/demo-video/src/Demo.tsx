@@ -102,22 +102,17 @@ const Shot: React.FC<{
   step: number;
   headline: string;
   callout?: string;
-  /** Ken Burns: [fromScale, toScale] and focus shift (px at final scale). */
+  /** Gentle settle-in zoom [from, to] — small values so nothing leaves frame. */
   zoom?: [number, number];
-  shift?: [number, number];
-  /** Which part of the capture the card focuses on. */
-  focus?: string;
-  /** Zoom origin within the image. */
+  /** Zoom origin within the image (where to drift toward). */
   origin?: string;
-}> = ({ src, dur, step, headline, callout, zoom = [1, 1.08], shift = [0, -40], focus = "top center", origin = "50% 45%" }) => {
+}> = ({ src, dur, step, headline, callout, zoom = [1, 1.06], origin = "50% 45%" }) => {
   const frame = useCurrentFrame();
   const head = useIn(0, 18);
   const call = useIn(14, 18);
   const out = useOut(dur);
   const scale = interpolate(frame, [0, dur], zoom, { easing: Easing.linear });
-  const ty = interpolate(frame, [0, dur], [0, shift[1]], { easing: Easing.linear });
-  const tx = interpolate(frame, [0, dur], [0, shift[0]], { easing: Easing.linear });
-  const cardIn = interpolate(frame, [4, 26], [60, 0], {
+  const cardIn = interpolate(frame, [4, 26], [50, 0], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
     easing: EASE,
@@ -126,14 +121,17 @@ const Shot: React.FC<{
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
+  // Full 16:10 capture, entirely in frame: 1380×862 card under a compact header.
+  const CARD_W = 1380;
+  const CARD_H = 862;
   return (
     <AbsoluteFill style={{ fontFamily, opacity: out }}>
       <Bg />
-      <AbsoluteFill style={{ alignItems: "center", paddingTop: 84 }}>
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 18 }}>
+      <AbsoluteFill style={{ alignItems: "center", paddingTop: 44 }}>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
           <div
             style={{
-              fontSize: 30,
+              fontSize: 26,
               fontWeight: 700,
               letterSpacing: "0.14em",
               color: GREEN_DARK,
@@ -145,7 +143,7 @@ const Shot: React.FC<{
           </div>
           <div
             style={{
-              fontSize: 74,
+              fontSize: 62,
               fontWeight: 700,
               color: INK,
               letterSpacing: "-0.02em",
@@ -154,49 +152,57 @@ const Shot: React.FC<{
           >
             {headline}
           </div>
-          {callout ? (
-            <div
-              style={{
-                fontSize: 38,
-                color: "#ffffff",
-                background: GREEN_DARK,
-                padding: "10px 28px",
-                borderRadius: 999,
-                ...call,
-              }}
-            >
-              {callout}
-            </div>
-          ) : null}
         </div>
       </AbsoluteFill>
-      {/* Screenshot card, bleeding off the bottom; inner img gets the Ken Burns. */}
-      <AbsoluteFill style={{ alignItems: "center", justifyContent: "flex-end" }}>
+      <AbsoluteFill style={{ alignItems: "center", justifyContent: "flex-end", paddingBottom: 22 }}>
         <div
           style={{
-            width: 1560,
-            height: 660,
-            borderRadius: 22,
+            width: CARD_W,
+            height: CARD_H,
+            borderRadius: 18,
             overflow: "hidden",
             border: "2px solid #e4e4ea",
-            boxShadow: "0 40px 90px rgba(13,30,20,0.22)",
+            boxShadow: "0 30px 70px rgba(13,30,20,0.20)",
             translate: `0px ${cardIn}px`,
             opacity: cardOpacity,
-            marginBottom: -24,
+            position: "relative",
           }}
         >
           <Img
             src={staticFile(src)}
             style={{
-              width: 1560,
-              height: 974,
-              objectFit: "cover",
-              objectPosition: focus,
+              width: CARD_W,
+              height: CARD_H,
               scale: String(scale),
-              translate: `${tx}px ${ty}px`,
               transformOrigin: origin,
             }}
           />
+          {callout ? (
+            <div
+              style={{
+                position: "absolute",
+                bottom: 20,
+                left: 0,
+                right: 0,
+                display: "flex",
+                justifyContent: "center",
+                ...call,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 30,
+                  color: "#ffffff",
+                  background: GREEN_DARK,
+                  padding: "10px 26px",
+                  borderRadius: 999,
+                  boxShadow: "0 8px 24px rgba(13,30,20,0.35)",
+                }}
+              >
+                {callout}
+              </div>
+            </div>
+          ) : null}
         </div>
       </AbsoluteFill>
     </AbsoluteFill>
@@ -243,10 +249,8 @@ export const Demo: React.FC = () => {
           dur={scenes[1]}
           step={1}
           headline="New table → From your CRM"
-          focus="center 58%"
-          origin="50% 56%"
-          zoom={[1.35, 1.5]}
-          shift={[0, -14]}
+          origin="50% 60%"
+          zoom={[1.0, 1.1]}
         />
       </Sequence>
       <Sequence from={starts[2]} durationInFrames={scenes[2]}>
@@ -256,10 +260,8 @@ export const Demo: React.FC = () => {
           step={2}
           headline="Connect Attio in one click"
           callout="Read-only — no write or delete permissions"
-          focus="center 48%"
-          origin="50% 48%"
-          zoom={[1.28, 1.42]}
-          shift={[0, 0]}
+          origin="50% 50%"
+          zoom={[1.0, 1.1]}
         />
       </Sequence>
       <Sequence from={starts[3]} durationInFrames={scenes[3]}>
@@ -268,10 +270,8 @@ export const Demo: React.FC = () => {
           dur={scenes[3]}
           step={3}
           headline="Pick fields, filters & duplicate handling"
-          focus="center 35%"
-          origin="50% 30%"
-          zoom={[1.15, 1.28]}
-          shift={[0, -120]}
+          origin="50% 45%"
+          zoom={[1.0, 1.08]}
         />
       </Sequence>
       <Sequence from={starts[4]} durationInFrames={scenes[4]}>
@@ -281,10 +281,8 @@ export const Demo: React.FC = () => {
           step={4}
           headline="Records land in a live grid"
           callout="Synced columns stay read-only — add AI columns on top"
-          focus="top center"
-          origin="50% 15%"
-          zoom={[1.12, 1.24]}
-          shift={[0, -20]}
+          origin="35% 25%"
+          zoom={[1.0, 1.08]}
         />
       </Sequence>
       <Sequence from={starts[5]} durationInFrames={scenes[5]}>
@@ -293,10 +291,8 @@ export const Demo: React.FC = () => {
           dur={scenes[5]}
           step={5}
           headline="Synced daily — explained in plain English"
-          focus="top center"
-          origin="50% 12%"
-          zoom={[1.25, 1.4]}
-          shift={[0, 20]}
+          origin="45% 15%"
+          zoom={[1.0, 1.1]}
         />
       </Sequence>
       <Sequence from={starts[6]} durationInFrames={scenes[6]}>
