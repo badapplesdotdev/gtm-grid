@@ -10,3 +10,6 @@ CRM sync fixes from the first live Attio connection.
   scopes or refreshing the authorization never requires revoking the app.
 - Reference-name lookups tolerate Attio rejecting bulk id filters.
 - "Connect with Attio" button renders icon and label on one row.
+- Tools → Attio now has a dedicated "CRM sync · OAuth connection" card
+  to reconnect or disconnect the sync authorization — kept fully
+  separate from the API key that powers Attio cell actions.
