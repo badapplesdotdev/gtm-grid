@@ -224,6 +224,55 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
         },
       }).pipe(Effect.map((json) => dataArray(json).map(toRecord)));
 
+    // Attio's filter language does not document `$in`; live workspaces reject
+    // it with a 400 (found in the first real E2E — a People sample pull with a
+    // Company reference failed the whole wizard). We still TRY one bulk query
+    // (cheap when it works) but remember the refusal for the process lifetime
+    // and go straight to individual GETs afterwards.
+    let bulkInUnsupported = false;
+
+    const fetchRecordsByIds = (
+      session: AttioSession,
+      args: { readonly object: string; readonly sourceLabel: string; readonly ids: readonly string[] },
+    ): Effect.Effect<readonly AttioRecord[], CrmError> => {
+      if (args.ids.length === 0) return Effect.succeed([] as readonly AttioRecord[]);
+      const individually = Effect.forEach(
+        args.ids,
+        (id) =>
+          request(session, {
+            method: "GET",
+            path: `/v2/objects/${encodeURIComponent(args.object)}/records/${encodeURIComponent(id)}`,
+          }).pipe(
+            Effect.map((json) => {
+              const data = (json as { data?: unknown } | null)?.data;
+              return data !== null && typeof data === "object"
+                ? Option.some(toRecord(data as Record<string, unknown>))
+                : Option.none<AttioRecord>();
+            }),
+            // A single vanished record must not fail the batch.
+            Effect.catchTag("AttioSourceGoneError", () => Effect.succeed(Option.none<AttioRecord>())),
+            Effect.catchTag("AttioRequestError", () => Effect.succeed(Option.none<AttioRecord>())),
+          ),
+        { concurrency: 4 },
+      ).pipe(Effect.map((opts) => opts.flatMap((o) => (Option.isSome(o) ? [o.value] : []))));
+
+      if (bulkInUnsupported) return individually;
+      return queryObjectRecords(session, {
+        object: args.object,
+        sourceLabel: args.sourceLabel,
+        filter: { record_id: { $in: [...args.ids] } },
+        limit: Math.min(args.ids.length, ATTIO_PAGE_LIMIT),
+        offset: 0,
+      }).pipe(
+        Effect.catchTag("AttioRequestError", () =>
+          Effect.suspend(() => {
+            bulkInUnsupported = true;
+            return individually;
+          }),
+        ),
+      );
+    };
+
     return {
       /** GET /v2/self — the connected Attio workspace's identity. */
       identifySelf: (session: AttioSession) =>
@@ -326,44 +375,14 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
 
       /**
        * Fetch specific records of an object by id — the list-sync + reference-
-       * name path. Tries ONE bulk `record_id $in` query; if Attio rejects that
-       * filter shape (400), falls back to bounded-concurrency individual GETs
-       * so correctness never depends on an undocumented operator.
+       * name path. Tries ONE bulk `record_id $in` query, then falls back to
+       * bounded-concurrency individual GETs (and remembers when the live API
+       * rejects `$in`, skipping the doomed attempt on later calls).
        */
       queryRecordsByIds: (
         session: AttioSession,
         args: { readonly object: string; readonly sourceLabel: string; readonly ids: readonly string[] },
-      ): Effect.Effect<readonly AttioRecord[], CrmError> =>
-        args.ids.length === 0
-          ? Effect.succeed([] as readonly AttioRecord[])
-          : queryObjectRecords(session, {
-              object: args.object,
-              sourceLabel: args.sourceLabel,
-              filter: { record_id: { $in: [...args.ids] } },
-              limit: Math.min(args.ids.length, ATTIO_PAGE_LIMIT),
-              offset: 0,
-            }).pipe(
-              Effect.catchTag("AttioRequestError", () =>
-                Effect.forEach(
-                  args.ids,
-                  (id) =>
-                    request(session, {
-                      method: "GET",
-                      path: `/v2/objects/${encodeURIComponent(args.object)}/records/${encodeURIComponent(id)}`,
-                    }).pipe(
-                      Effect.map((json) => {
-                        const data = (json as { data?: unknown } | null)?.data;
-                        return data !== null && typeof data === "object"
-                          ? Option.some(toRecord(data as Record<string, unknown>))
-                          : Option.none<AttioRecord>();
-                      }),
-                      // A single vanished record must not fail the batch.
-                      Effect.catchTag("AttioSourceGoneError", () => Effect.succeed(Option.none<AttioRecord>())),
-                    ),
-                  { concurrency: 4 },
-                ).pipe(Effect.map((opts) => opts.flatMap((o) => (Option.isSome(o) ? [o.value] : [])))),
-              ),
-            ),
+      ): Effect.Effect<readonly AttioRecord[], CrmError> => fetchRecordsByIds(session, args),
 
       /**
        * Resolve record ids → display names (the "Company" cell text). Reads
@@ -375,13 +394,7 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
       ): Effect.Effect<ReadonlyMap<string, string>, CrmError> =>
         args.ids.length === 0
           ? Effect.succeed(new Map<string, string>())
-          : queryObjectRecords(session, {
-              object: args.object,
-              sourceLabel: args.object,
-              filter: { record_id: { $in: [...args.ids] } },
-              limit: Math.min(args.ids.length, ATTIO_PAGE_LIMIT),
-              offset: 0,
-            }).pipe(
+          : fetchRecordsByIds(session, { object: args.object, sourceLabel: args.object, ids: args.ids }).pipe(
               Effect.map((records) => {
                 const names = new Map<string, string>();
                 for (const rec of records) {

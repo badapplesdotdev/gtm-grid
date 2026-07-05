@@ -242,6 +242,41 @@ describe("queryRecordsByIds", () => {
     expect(calls[1].url).toContain("/v2/objects/companies/records/");
   });
 
+  it("resolveRecordNames falls back to individual GETs when $in is rejected (live-API behavior)", async () => {
+    const { session: s } = session({ accessToken: "at_1" });
+    const calls = scriptFetch([
+      () => new Response("unknown filter operator", { status: 400 }), // bulk $in refused
+      (url) =>
+        url.endsWith("/rec_c")
+          ? json({ data: { id: { record_id: "rec_c" }, values: { name: [{ value: "Vercel" }] } } })
+          : json({ data: { id: { record_id: "rec_p" }, values: { name: [{ full_name: "Sarah Chen" }] } } }),
+    ]);
+    const names = await run(
+      Effect.flatMap(AttioClient, (c) => c.resolveRecordNames(s, { object: "companies", ids: ["rec_p", "rec_c"] })),
+    );
+    expect(names.get("rec_p")).toBe("Sarah Chen");
+    expect(names.get("rec_c")).toBe("Vercel");
+    expect(calls.length).toBe(3); // 1 refused bulk + 2 GETs
+  });
+
+  it("remembers a rejected $in and skips the bulk attempt on later calls", async () => {
+    const layer2 = AttioClient.Default.pipe(Layer.provide(AttioAuth.Default));
+    const { session: s } = session({ accessToken: "at_1" });
+    const calls = scriptFetch([
+      () => new Response("unknown filter operator", { status: 400 }),
+      (url) => json({ data: { id: { record_id: url.split("/").pop() ?? "" }, values: {} } }),
+    ]);
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const c = yield* AttioClient;
+        yield* c.queryRecordsByIds(s, { object: "companies", sourceLabel: "Companies", ids: ["a"] });
+        yield* c.queryRecordsByIds(s, { object: "companies", sourceLabel: "Companies", ids: ["b"] });
+      }).pipe(Effect.provide(layer2)) as Effect.Effect<void, never, never>,
+    );
+    // call 1: refused bulk; call 2: GET a; call 3: GET b (NO second bulk try).
+    expect(calls.map((c) => c.url.includes("/records/query"))).toEqual([true, false, false]);
+  });
+
   it("resolveRecordNames flattens personal names and plain names", async () => {
     const { session: s } = session({ accessToken: "at_1" });
     scriptFetch([

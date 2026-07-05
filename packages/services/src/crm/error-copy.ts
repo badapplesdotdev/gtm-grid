@@ -70,7 +70,7 @@ export function crmErrorCopy(e: CrmError): CrmErrorPresentation {
     case "AttioRequestError":
       return {
         status: "failed",
-        copy: "One of your filters isn't valid for that field. Edit the sync settings and try again.",
+        copy: "Attio couldn't process that request. Adjust the source or filters and try again.",
       };
     case "CrmSyncError":
       return {

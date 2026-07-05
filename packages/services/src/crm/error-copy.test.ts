@@ -51,7 +51,7 @@ describe("crmErrorCopy — no technical leakage, ever", () => {
     for (const e of EVERY_ERROR) {
       const { copy } = crmErrorCopy(e);
       expect(
-        /We'll|we'll|will try again|Reconnect|Connect|Pick a new source|Edit the sync settings|Add filters|upgrade|Everything else synced/.test(
+        /We'll|we'll|will try again|Reconnect|Connect|Pick a new source|Adjust the source or filters|Add filters|upgrade|Everything else synced/.test(
           copy,
         ),
       ).toBe(true);
