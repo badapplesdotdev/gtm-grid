@@ -4666,7 +4666,7 @@ button.crmw-crm-card:hover { border-color: var(--accent); box-shadow: var(--shad
 .crmw-scopes-label { font: 600 10px var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); }
 .crmw-scope { display: flex; align-items: center; gap: 8px; font: 400 12px var(--font-sans); color: var(--text-2); }
 .crmw-scope-no { color: var(--text-3); }
-.crmw-connect-btn { margin-top: 18px; padding: 11px 22px; font-size: 13.5px; }
+.crmw-connect-btn { margin-top: 18px; padding: 11px 22px; font-size: 13.5px; display: inline-flex; align-items: center; justify-content: center; gap: 9px; }
 
 /* ── Step 3: configure ── */
 .crmw-config { display: flex; flex-direction: column; gap: 20px; }
