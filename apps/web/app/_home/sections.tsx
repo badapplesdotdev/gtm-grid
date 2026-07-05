@@ -474,6 +474,8 @@ export function Footer({ version }: { version: string }) {
           <h5>Company</h5>
           <a href={`${REPO}/releases`}>Changelog</a>
           <a href="/download">Download</a>
+          <a href="/docs/attio">Attio integration</a>
+          <a href="/terms">Terms</a>
           <a href={`${REPO}/blob/main/LICENSE`}>License</a>
         </div>
       </div>

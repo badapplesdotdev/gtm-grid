@@ -3,7 +3,7 @@
 
 import { test, expect } from "./fixtures";
 
-const OUT = "e2e/.listing-shots";
+const OUT = "../../marketing/attio-app-store";
 const CONNECTED = { signedIn: true, paid: true, crmConnected: true };
 
 async function toConfigure(window: import("@playwright/test").Page) {

@@ -925,3 +925,18 @@ code, .mono {
 .download__link { color: var(--accent); font-weight: var(--weight-medium); }
 .download__link:hover { color: var(--accent-hover); }
 .download__sep { color: var(--text-subtle); }
+
+/* ── Prose pages (/docs/*, /terms) — long-form reading, download-page kin ── */
+.prose { max-width: 720px; padding-bottom: var(--space-10, 96px); }
+.prose__home { margin-bottom: var(--space-8); display: inline-flex; }
+.prose__head { margin-bottom: var(--space-8); }
+.prose__head h1 { font-size: var(--text-2xl); letter-spacing: var(--track-tight); margin: var(--space-3) 0; }
+.prose__lede { color: var(--text-muted); font-size: var(--text-lg); line-height: var(--leading-body); max-width: 60ch; }
+.prose h2 { font-size: var(--text-xl); margin: var(--space-8) 0 var(--space-3); letter-spacing: var(--track-tight); }
+.prose p, .prose li { color: var(--text-muted); font-size: var(--text-md, 15px); line-height: 1.65; }
+.prose p { margin: 0 0 var(--space-4); }
+.prose ul, .prose ol { margin: 0 0 var(--space-4); padding-left: 1.4em; display: grid; gap: var(--space-2); }
+.prose ul ul { margin: var(--space-2) 0 0; }
+.prose strong, .prose em { color: var(--text, inherit); }
+.prose a { color: var(--green-700); text-decoration: underline; text-underline-offset: 2px; }
+.prose__foot { margin-top: var(--space-8); padding-top: var(--space-5); border-top: 1px solid var(--line); }
