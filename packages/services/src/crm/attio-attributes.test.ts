@@ -5,15 +5,8 @@
  */
 
 import { describe, expect, it } from "vitest";
-import {
-  flattenAttrValue,
-  matchesAllFilters,
-  matchesFilter,
-  toAttioFilter,
-  toAttioFilterBody,
-  type AttioAttrType,
-  type CrmFilter,
-} from "./attio-attributes.js";
+import { flattenAttrValue, toAttioFilter, toAttioFilterBody, type AttioAttrType } from "./attio-attributes.js";
+import { matchesAllFilters, matchesFilter, type CrmFilter } from "./crm-values.js";
 
 const text = (type: AttioAttrType, entries: ReadonlyArray<Record<string, unknown>>): string => {
   const flat = flattenAttrValue(type, entries);

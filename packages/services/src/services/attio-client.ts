@@ -29,7 +29,8 @@ import {
   isTransientCrmError,
   type CrmError,
 } from "../crm/errors.js";
-import { flattenAttrValue, isSupportedAttrType, type AttioValueEntry } from "../crm/attio-attributes.js";
+import { flattenAttrValue, type AttioValueEntry } from "../crm/attio-attributes.js";
+import { isSupportedAttrType } from "../crm/crm-values.js";
 import { AttioAuth, type AttioTokens } from "./attio-auth.js";
 
 const BASE = "https://api.attio.com";

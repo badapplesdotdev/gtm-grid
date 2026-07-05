@@ -25,15 +25,13 @@
 import { createHash } from "node:crypto";
 import { Effect, Option } from "effect";
 import { MembershipService } from "@gtmgrid/cloud";
+import { flattenAttrValue, toAttioFilterBody, type AttioAttrType } from "../crm/attio-attributes.js";
 import {
-  flattenAttrValue,
   isSupportedAttrType,
   matchesAllFilters,
-  toAttioFilterBody,
-  type AttioAttrType,
   type CrmFilter,
   type FlatValue,
-} from "../crm/attio-attributes.js";
+} from "../crm/crm-values.js";
 import { crmErrorCopy } from "../crm/error-copy.js";
 import { CrmSyncError, RowCapReached, type CrmError } from "../crm/errors.js";
 import {

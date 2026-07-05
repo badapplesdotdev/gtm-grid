@@ -399,5 +399,6 @@ export { AttioAuth, AttioOAuthNotConfigured, type AttioTokens, type AttioOAuthSt
 export { AttioClient, ATTIO_PAGE_LIMIT, type AttioSession, type AttioObjectSummary, type AttioListSummary, type AttioAttribute, type AttioRecord, type AttioListEntry } from "./services/attio-client.js";
 export { CrmConnectionService, ATTIO_EXTENSION_ID, type CrmConnectionMeta } from "./services/crm-connection-service.js";
 export { CrmSyncService, planRowCap, parseBindingConfig, CRM_ROW_CAP_TEAM, CRM_ROW_CAP_SCALE, type CrmBindingConfig, type CrmDedupeMode, type CrmSyncOutcome, type CrmSourceSummary, type CrmSourceField, type CrmSourceDescription, type CrmEstimate, type CreateCrmBindingArgs, type CrmBindingWithRun } from "./services/crm-sync-service.js";
-export { flattenAttrValue, toAttioFilter, toAttioFilterBody, matchesFilter, matchesAllFilters, isSupportedAttrType, SUPPORTED_ATTR_TYPES, FILTER_OPS, type AttioAttrType, type AttioValueEntry, type FlatValue, type CrmFilter, type FilterOp } from "./crm/attio-attributes.js";
+export { flattenAttrValue, toAttioFilter, toAttioFilterBody, type AttioAttrType, type AttioValueEntry } from "./crm/attio-attributes.js";
+export { matchesFilter, matchesAllFilters, isSupportedAttrType, SUPPORTED_ATTR_TYPES, FILTER_OPS, type CrmAttrType, type FlatValue, type CrmFilter, type FilterOp } from "./crm/crm-values.js";
 export { SignalService, SignalError } from "./services/signal-service.js";
