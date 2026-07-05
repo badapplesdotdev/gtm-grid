@@ -44,3 +44,23 @@ test("capture listing screenshots", async ({ launchApp }) => {
   await expect(window.getByText(/2 new/).first()).toBeVisible({ timeout: 10_000 });
   await window.screenshot({ path: `${OUT}/raw-3-sync-log.png`, scale: "device" });
 });
+
+test("capture demo-video extra shots", async ({ launchApp }) => {
+  // Chooser + connect-step frames for the Attio submission demo video.
+  const { app, window } = await launchApp({ signedIn: true, paid: true, crmConnected: false });
+  await window.setViewportSize({ width: 2960, height: 1848 });
+  await app.evaluate(({ BrowserWindow }) => {
+    for (const w of BrowserWindow.getAllWindows()) w.webContents.setZoomFactor(2);
+  });
+
+  await expect(window.locator('button[title="Add table or folder"]')).toBeVisible({ timeout: 20_000 });
+  await window.locator('button[title="Add table or folder"]').click();
+  await window.getByText("New table", { exact: true }).first().click();
+  await expect(window.getByText("From your CRM")).toBeVisible();
+  await window.screenshot({ path: `${OUT}/raw-0-chooser.png`, scale: "device" });
+
+  await window.getByText("From your CRM").click();
+  await window.locator(".crmw-crm-card", { hasText: "Attio" }).first().click();
+  await expect(window.getByText("Connect your Attio account")).toBeVisible();
+  await window.screenshot({ path: `${OUT}/raw-0b-connect.png`, scale: "device" });
+});
