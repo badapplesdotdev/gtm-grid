@@ -36,8 +36,14 @@ const AUTHORIZE_URL = "https://app.hubspot.com/oauth/authorize";
 const TOKEN_URL = "https://api.hubapi.com/oauth/v1/token";
 const STATE_TTL_MS = 15 * 60 * 1000;
 
-/** Read-only scopes for v1: contacts + companies + lists + owner names. */
+/**
+ * Scopes for v1: OAuth identity + read-only contacts, companies, lists, and
+ * owner names. Must stay in lockstep with the app definition's requiredScopes
+ * (integrations/hubspot-app/src/app/app-hsmeta.json) — HubSpot rejects an
+ * authorize URL whose `scope` param doesn't cover the app's required scopes.
+ */
 export const HUBSPOT_SCOPES = [
+  "oauth",
   "crm.objects.contacts.read",
   "crm.objects.companies.read",
   "crm.lists.read",
