@@ -8,7 +8,7 @@ export const RemotionRoot: React.FC = () => {
     <Composition
       id="GtmGridAttioDemo"
       component={Demo}
-      durationInFrames={Math.round(48.5 * 30)}
+      durationInFrames={Math.round(58.5 * 30)}
       fps={30}
       width={1920}
       height={1080}
