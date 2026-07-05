@@ -1,5 +1,12 @@
 # @gtmgrid/mcp
 
+## 1.5.1
+
+### Patch Changes
+
+- @gtmgrid/engine@1.5.1
+- @gtmgrid/observability@1.5.1
+
 ## 1.5.0
 
 ### Patch Changes
