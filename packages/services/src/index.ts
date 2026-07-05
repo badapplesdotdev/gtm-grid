@@ -399,7 +399,11 @@ export { AttioAuth, AttioOAuthNotConfigured, type AttioTokens, type AttioOAuthSt
 export { AttioClient, ATTIO_PAGE_LIMIT, type AttioSession } from "./services/attio-client.js";
 export { CRM_DISPLAY_NAMES, type CrmProvider, type CrmClientApi, type CrmSession, type CrmTokens, type CrmObjectSummary, type CrmListSummary, type CrmAttribute, type CrmAttrRef, type CrmRecord, type CrmListEntry, type CrmPage } from "./services/crm-client.js";
 export { CrmClientRegistry } from "./services/crm-client-registry.js";
-export { CrmConnectionService, ATTIO_EXTENSION_ID, type CrmConnectionMeta } from "./services/crm-connection-service.js";
+export { CrmAuthRegistry } from "./services/crm-auth-registry.js";
+export { HubspotAuth, HubspotOAuthNotConfigured, HUBSPOT_SCOPES, type HubspotOAuthState } from "./services/hubspot-auth.js";
+export { HubspotClient, HUBSPOT_PAGE_LIMIT } from "./services/hubspot-client.js";
+export { mapHubspotPropertyType, flattenHubspotValue, toHubspotSearchBody, type HubspotPropertyMeta } from "./crm/hubspot-attributes.js";
+export { CrmConnectionService, ATTIO_EXTENSION_ID, crmConnectionSlot, type CrmConnectionMeta } from "./services/crm-connection-service.js";
 export { CrmSyncService, planRowCap, parseBindingConfig, CRM_ROW_CAP_TEAM, CRM_ROW_CAP_SCALE, type CrmBindingConfig, type CrmDedupeMode, type CrmSyncOutcome, type CrmSourceSummary, type CrmSourceField, type CrmSourceDescription, type CrmEstimate, type CreateCrmBindingArgs, type CrmBindingWithRun } from "./services/crm-sync-service.js";
 export { flattenAttrValue, toAttioFilter, toAttioFilterBody, type AttioAttrType, type AttioValueEntry } from "./crm/attio-attributes.js";
 export { matchesFilter, matchesAllFilters, isSupportedAttrType, SUPPORTED_ATTR_TYPES, FILTER_OPS, type CrmAttrType, type FlatValue, type CrmFilter, type FilterOp } from "./crm/crm-values.js";

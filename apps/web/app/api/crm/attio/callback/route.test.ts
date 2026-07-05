@@ -122,8 +122,8 @@ describe("callbackResponse", () => {
       );
       expect(Option.isSome(meta)).toBe(true);
       if (Option.isSome(meta)) {
-        expect(meta.value.attioWorkspaceName).toBe("Acme CRM");
-        expect(meta.value.attioWorkspaceId).toBe("attio_ws_1");
+        expect(meta.value.crmWorkspaceName).toBe("Acme CRM");
+        expect(meta.value.crmWorkspaceId).toBe("attio_ws_1");
         expect(meta.value.connectedByUserId).toBe(OWNER);
         expect(meta.value.connectedByName).toBe("Olive Owner");
       }

@@ -8,12 +8,14 @@
 
 import { Effect } from "effect";
 import { AttioClient } from "./attio-client.js";
+import { HubspotClient } from "./hubspot-client.js";
 import type { CrmClientApi, CrmProvider } from "./crm-client.js";
 
 export class CrmClientRegistry extends Effect.Service<CrmClientRegistry>()("CrmClientRegistry", {
   effect: Effect.gen(function* () {
     const attio = yield* AttioClient;
-    const clients: Partial<Record<CrmProvider, CrmClientApi>> = { attio };
+    const hubspot = yield* HubspotClient;
+    const clients: Partial<Record<CrmProvider, CrmClientApi>> = { attio, hubspot };
     return {
       forProvider: (provider: string): CrmClientApi => {
         const client = clients[provider as CrmProvider];

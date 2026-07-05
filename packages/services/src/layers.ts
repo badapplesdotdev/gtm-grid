@@ -171,6 +171,9 @@ import { SignalService } from "./services/signal-service.js";
 import { AttioAuth } from "./services/attio-auth.js";
 import { AttioClient } from "./services/attio-client.js";
 import { CrmClientRegistry } from "./services/crm-client-registry.js";
+import { CrmAuthRegistry } from "./services/crm-auth-registry.js";
+import { HubspotAuth } from "./services/hubspot-auth.js";
+import { HubspotClient } from "./services/hubspot-client.js";
 import { CrmConnectionService } from "./services/crm-connection-service.js";
 import { CrmSyncService } from "./services/crm-sync-service.js";
 import {
@@ -335,11 +338,15 @@ export const appLayer = (params: {
   const crmSyncRunRepo = CrmSyncRunRepoLive.pipe(Layer.provide(dbLayer));
   const attioAuth = AttioAuth.Default;
   const attioClient = AttioClient.Default.pipe(Layer.provide(attioAuth));
-  const crmClientRegistry = CrmClientRegistry.Default.pipe(Layer.provide(attioClient));
+  const hubspotAuth = HubspotAuth.Default;
+  const hubspotClient = HubspotClient.Default.pipe(Layer.provide(hubspotAuth));
+  const crmClientRegistry = CrmClientRegistry.Default.pipe(Layer.provide(attioClient), Layer.provide(hubspotClient));
+  const crmAuthRegistry = CrmAuthRegistry.Default.pipe(Layer.provide(attioAuth), Layer.provide(hubspotAuth));
   const crmConnectionService = CrmConnectionService.Default.pipe(
     Layer.provide(credentialService),
     Layer.provide(credentialRepo),
     Layer.provide(CryptoServiceLive),
+    Layer.provide(crmAuthRegistry),
   );
   const crmSyncService = CrmSyncService.Default.pipe(
     Layer.provide(crmBindingRepo),
@@ -391,7 +398,10 @@ export const appLayer = (params: {
     crmSyncRunRepo,
     attioAuth,
     attioClient,
+    hubspotAuth,
+    hubspotClient,
     crmClientRegistry,
+    crmAuthRegistry,
     crmConnectionService,
     crmSyncService,
     gridService,
@@ -675,10 +685,17 @@ export const TestLayer = (
     Layer.provide(membershipService),
     Layer.provide(CredentialOwnershipService.Default),
   );
+  const attioAuth = AttioAuth.Default;
+  const attioClient = AttioClient.Default.pipe(Layer.provide(attioAuth));
+  const hubspotAuth = HubspotAuth.Default;
+  const hubspotClient = HubspotClient.Default.pipe(Layer.provide(hubspotAuth));
+  const crmClientRegistry = CrmClientRegistry.Default.pipe(Layer.provide(attioClient), Layer.provide(hubspotClient));
+  const crmAuthRegistry = CrmAuthRegistry.Default.pipe(Layer.provide(attioAuth), Layer.provide(hubspotAuth));
   const crmConnectionService = CrmConnectionService.Default.pipe(
     Layer.provide(credentialService),
     Layer.provide(credentialRepo),
     Layer.provide(cryptoService),
+    Layer.provide(crmAuthRegistry),
   );
   const entitlementService = EntitlementService.Default.pipe(
     Layer.provide(workspaceRepo),
@@ -701,9 +718,6 @@ export const TestLayer = (
   const crmBindingRepo = crmBindingRepoLayer({ bindings: fixtures.crmBindings });
   const crmSyncedRowRepo = crmSyncedRowRepoLayer({ entries: fixtures.crmSyncedRows });
   const crmSyncRunRepo = crmSyncRunRepoLayer({ runs: fixtures.crmSyncRuns });
-  const attioAuth = AttioAuth.Default;
-  const attioClient = AttioClient.Default.pipe(Layer.provide(attioAuth));
-  const crmClientRegistry = CrmClientRegistry.Default.pipe(Layer.provide(attioClient));
   const crmSyncService = CrmSyncService.Default.pipe(
     Layer.provide(crmBindingRepo),
     Layer.provide(crmSyncedRowRepo),
@@ -758,7 +772,10 @@ export const TestLayer = (
     crmSyncRunRepo,
     attioAuth,
     attioClient,
+    hubspotAuth,
+    hubspotClient,
     crmClientRegistry,
+    crmAuthRegistry,
     crmConnectionService,
     crmSyncService,
     gridService,
@@ -811,7 +828,10 @@ export type AppServices =
   | CrmSyncRunRepo
   | AttioAuth
   | AttioClient
+  | HubspotAuth
+  | HubspotClient
   | CrmClientRegistry
+  | CrmAuthRegistry
   | CrmConnectionService
   | CrmSyncService
   | ExtensionService

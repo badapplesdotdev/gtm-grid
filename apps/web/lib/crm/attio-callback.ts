@@ -155,12 +155,13 @@ export async function callbackResponse(params: {
       const self = yield* client.identifySelf(session);
       yield* connection.saveConnection({
         workspaceId: claims.workspaceId,
+        provider: "attio",
         tokens,
         meta: {
           connectedByUserId: claims.userId,
           connectedByName: nameFromDb,
-          attioWorkspaceId: self.workspaceId,
-          attioWorkspaceName: self.workspaceName,
+          crmWorkspaceId: self.workspaceId,
+          crmWorkspaceName: self.workspaceName,
         },
       });
       // Reconnecting resolves a revoked-auth pause (NOT source_gone — a deleted

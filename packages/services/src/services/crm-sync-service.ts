@@ -917,7 +917,7 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
           yield* membership.requireMember(workspaceId);
           yield* entitlement.requireCloudAccess(workspaceId);
           const client = registry.forProvider(provider);
-          const session = yield* connections.memberSession(workspaceId);
+          const session = yield* connections.memberSession(workspaceId, client.provider);
           const [objects, lists] = yield* Effect.all([client.listObjects(session), client.listLists(session)]);
           const sources: CrmSourceSummary[] = [
             ...objects.map(
@@ -939,7 +939,7 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
           yield* membership.requireMember(workspaceId);
           yield* entitlement.requireCloudAccess(workspaceId);
           const client = registry.forProvider(provider);
-          const session = yield* connections.memberSession(workspaceId);
+          const session = yield* connections.memberSession(workspaceId, client.provider);
           return yield* describeAttrs(client, session, source);
         }),
 
@@ -957,7 +957,7 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
           yield* membership.requireMember(workspaceId);
           yield* entitlement.requireCloudAccess(workspaceId);
           const client = registry.forProvider(provider);
-          const session = yield* connections.memberSession(workspaceId);
+          const session = yield* connections.memberSession(workspaceId, client.provider);
           const serverFilter = client.compileServerFilter(args.filters, args.kind);
           const filterAttrs: readonly CrmAttrRef[] = args.filters.map((f) => ({ slug: f.attrSlug, type: f.attrType }));
           const { records, nextCursor } = yield* pullPage(
@@ -982,11 +982,8 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
           const workspaceId = table.value.workspaceId;
           yield* membership.requireMember(workspaceId);
           yield* entitlement.requireCloudAccess(workspaceId);
-          if (args.provider !== "attio") {
-            return yield* Effect.fail(new CrmSyncError({ message: `Unknown CRM provider ${String(args.provider)}` }));
-          }
           // Connection must exist before a binding can (wizard enforces too).
-          yield* connections.memberSession(workspaceId);
+          yield* connections.memberSession(workspaceId, args.provider);
 
           const now = Date.now();
           const bindingId = yield* mapRepoError(
@@ -1108,25 +1105,26 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
        * OAuth connection. Rows/tables are untouched. Reconnecting via OAuth
        * clears the pauses (callback clearPause) and syncing resumes.
        */
-      disconnect: (workspaceId: string) =>
+      disconnect: (workspaceId: string, provider: CrmProvider = "attio") =>
         Effect.gen(function* () {
           yield* membership.requireMember(workspaceId);
+          const name = registry.forProvider(provider).displayName;
           const all = yield* mapRepoError(bindings.listByWorkspace(workspaceId), "binding list failed");
-          const attio = all.filter((b) => b.provider === "attio");
+          const paused = all.filter((b) => b.provider === provider);
           yield* Effect.forEach(
-            attio,
+            paused,
             (b) =>
               mapRepoError(
                 bindings.patch(b.id, {
                   pausedReason: "auth_revoked",
-                  lastError: "Attio was disconnected. Reconnect Attio to resume syncing.",
+                  lastError: `${name} was disconnected. Reconnect ${name} to resume syncing.`,
                 }),
                 "binding pause failed",
               ),
             { discard: true },
           );
-          const removed = yield* connections.removeConnection(workspaceId);
-          return { removed, bindingsPaused: attio.length };
+          const removed = yield* connections.removeConnection(workspaceId, provider);
+          return { removed, bindingsPaused: paused.length };
         }),
 
       remove: (bindingId: string) =>
@@ -1238,7 +1236,7 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
             return outcome;
           }
           const session = yield* connections
-            .workerSession(binding.workspaceId)
+            .workerSession(binding.workspaceId, registry.forProvider(binding.provider).provider)
             .pipe(
               Effect.catchTag("CrmConnectionMissing", (e) =>
                 // A missing connection is a USER-facing outcome, not a crash:

@@ -129,7 +129,9 @@ export const crmRouter = router({
               configured,
               connected: true as const,
               connectedByName: m.connectedByName,
-              attioWorkspaceName: m.attioWorkspaceName,
+              workspaceLabel: m.crmWorkspaceName,
+              // Alias kept for desktop builds that predate the neutral field.
+              attioWorkspaceName: m.crmWorkspaceName,
             }),
           });
         }),
