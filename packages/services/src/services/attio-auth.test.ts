@@ -18,7 +18,7 @@ const runExit = <A, E>(effect: Effect.Effect<A, E, AttioAuth>) =>
 const failureTag = (exit: Awaited<ReturnType<typeof runExit>>): string => {
   if (exit._tag !== "Failure") return "none";
   const failure = JSON.stringify(exit.cause);
-  const m = failure.match(/"_tag":"(Attio[A-Za-z]+|CrmSyncError)"/);
+  const m = failure.match(/"_tag":"(Crm[A-Za-z]+)"/);
   return m?.[1] ?? "unknown";
 };
 
@@ -165,7 +165,7 @@ describe("token endpoint", () => {
     expect(tokens).toEqual({ accessToken: "at_only" });
   });
 
-  it("a refresh refusal is AttioAuthRevoked", async () => {
+  it("a refresh refusal is CrmAuthRevoked", async () => {
     vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 }));
     const exit = await runExit(
       Effect.gen(function* () {
@@ -173,7 +173,7 @@ describe("token endpoint", () => {
         return yield* auth.refresh("rt_dead");
       }),
     );
-    expect(failureTag(exit)).toBe("AttioAuthRevoked");
+    expect(failureTag(exit)).toBe("CrmAuthRevoked");
   });
 
   it("missing client env fails closed with AttioOAuthNotConfigured", async () => {

@@ -25,15 +25,7 @@
 import { createHash } from "node:crypto";
 import { Effect, Option } from "effect";
 import { MembershipService } from "@gtmgrid/cloud";
-import {
-  flattenAttrValue,
-  isSupportedAttrType,
-  matchesAllFilters,
-  toAttioFilterBody,
-  type AttioAttrType,
-  type CrmFilter,
-  type FlatValue,
-} from "../crm/attio-attributes.js";
+import { isSupportedAttrType, matchesAllFilters, type CrmFilter } from "../crm/crm-values.js";
 import { crmErrorCopy } from "../crm/error-copy.js";
 import { CrmSyncError, RowCapReached, type CrmError } from "../crm/errors.js";
 import {
@@ -48,7 +40,8 @@ import { ColumnRepo } from "../repositories/column-repo.js";
 import { WebhookRepo } from "../repositories/webhook-repo.js";
 import { WorkspaceRepo } from "../repositories/workspace-repo.js";
 import type { GridChangeEvent } from "../realtime/events.js";
-import { AttioClient, ATTIO_PAGE_LIMIT, type AttioRecord, type AttioSession } from "./attio-client.js";
+import { CrmClientRegistry } from "./crm-client-registry.js";
+import type { CrmAttrRef, CrmClientApi, CrmProvider, CrmRecord, CrmSession } from "./crm-client.js";
 import { CrmConnectionService } from "./crm-connection-service.js";
 import { EntitlementService } from "./entitlement-service.js";
 import { RealtimePublisher } from "./realtime-publisher.js";
@@ -74,9 +67,11 @@ export const planRowCap = (planId: string | null): number =>
 /**
  * Hard bound on pages fetched per run: enough to fill the biggest cap plus
  * slack for worker-side filters discarding records, but never unbounded —
- * a low-match filter over a huge object must not page forever.
+ * a low-match filter over a huge object must not page forever. Derived from
+ * the provider's page size (500 Attio, 100 HubSpot) so smaller pages don't
+ * truncate sooner.
  */
-const MAX_PAGES_PER_RUN = CRM_ROW_CAP_SCALE / ATTIO_PAGE_LIMIT + 40;
+const maxPagesPerRun = (pageLimit: number): number => CRM_ROW_CAP_SCALE / pageLimit + 40;
 
 /**
  * A `running` run older than this is treated as a crashed leftover, not an
@@ -182,7 +177,7 @@ export interface CrmEstimate {
 
 export interface CreateCrmBindingArgs {
   readonly tableId: string;
-  readonly provider: "attio";
+  readonly provider: CrmProvider;
   readonly sourceKind: "object" | "list";
   readonly sourceId: string;
   readonly sourceLabel: string;
@@ -233,7 +228,7 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
     const runs = yield* CrmSyncRunRepo;
     const grid = yield* WebhookRepo;
     const columns = yield* ColumnRepo;
-    const client = yield* AttioClient;
+    const registry = yield* CrmClientRegistry;
     const connections = yield* CrmConnectionService;
     const membership = yield* MembershipService;
     const entitlement = yield* EntitlementService;
@@ -264,7 +259,8 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
     const mapRepoError = <A, R>(effect: Effect.Effect<A, unknown, R>, message: string) =>
       effect.pipe(
         Effect.mapError((e) =>
-          e !== null && typeof e === "object" && "_tag" in e && String((e as { _tag: string })._tag).startsWith("Attio")
+          e !== null && typeof e === "object" && "_tag" in e &&
+          (String((e as { _tag: string })._tag).startsWith("Crm") || (e as { _tag: string })._tag === "RowCapReached")
             ? (e as CrmError)
             : new CrmSyncError({ message, cause: e }),
         ),
@@ -280,29 +276,24 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
     const newCache = (): ResolveCache => ({ refNames: new Map(), members: null });
 
     /**
-     * Flatten `records` across `cols` to text, batch-resolving record
-     * references + actors through the per-run cache (one query per object per
-     * page + one members fetch per run, instead of per-cell lookups).
+     * Resolve `records`' pre-flattened values to final cell text, batch-
+     * resolving record references + actors through the per-run cache (one
+     * query per referenced object per page + one members fetch per run,
+     * instead of per-cell lookups). Flattening itself happens inside the
+     * provider client — the engine never sees raw CRM value shapes.
      */
-    const flattenRecords = (
-      session: AttioSession,
-      records: readonly AttioRecord[],
-      cols: ReadonlyArray<{ readonly attrSlug: string; readonly attrType: string }>,
+    const resolveRecords = (
+      client: CrmClientApi,
+      session: CrmSession,
+      records: readonly CrmRecord[],
       cache: ResolveCache,
     ): Effect.Effect<readonly FlatRecord[], CrmError> =>
       Effect.gen(function* () {
-        const flats = records.map((rec) => ({
-          externalId: rec.recordId,
-          flat: new Map<string, FlatValue>(
-            cols.map((c) => [c.attrSlug, flattenAttrValue(c.attrType as AttioAttrType, rec.values[c.attrSlug])]),
-          ),
-        }));
-
         const wantRefs = new Map<string, Set<string>>();
         let wantMembers = false;
-        for (const { flat } of flats) {
-          for (const v of flat.values()) {
-            if (v.kind === "ref" && !cache.refNames.has(`${v.targetObject} ${v.targetRecordId}`)) {
+        for (const rec of records) {
+          for (const v of Object.values(rec.values)) {
+            if (v.kind === "ref" && !cache.refNames.has(`${v.targetObject} ${v.targetRecordId}`)) {
               const set = wantRefs.get(v.targetObject) ?? new Set<string>();
               set.add(v.targetRecordId);
               wantRefs.set(v.targetObject, set);
@@ -312,57 +303,57 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
         }
         for (const [object, ids] of wantRefs) {
           const idList = [...ids];
-          for (let i = 0; i < idList.length; i += ATTIO_PAGE_LIMIT) {
-            const chunk = idList.slice(i, i + ATTIO_PAGE_LIMIT);
-            const names = yield* client.resolveRecordNames(session, { object, ids: chunk });
-            for (const id of chunk) cache.refNames.set(`${object} ${id}`, names.get(id) ?? "");
-          }
+          const names = yield* client.resolveRecordNames(session, { object, ids: idList });
+          for (const id of idList) cache.refNames.set(`${object} ${id}`, names.get(id) ?? "");
         }
         if (wantMembers) cache.members = yield* client.listMembers(session);
 
-        return flats.map(({ externalId, flat }) => {
+        return records.map((rec) => {
           const texts = new Map<string, string>();
-          for (const [slug, v] of flat) {
+          for (const [slug, v] of Object.entries(rec.values)) {
             texts.set(
               slug,
               v.kind === "text"
                 ? v.text
                 : v.kind === "ref"
-                  ? (cache.refNames.get(`${v.targetObject} ${v.targetRecordId}`) ?? "")
+                  ? (cache.refNames.get(`${v.targetObject} ${v.targetRecordId}`) ?? "")
                   : (cache.members?.get(v.actorId) ?? ""),
             );
           }
-          return { externalId, texts };
+          return { externalId: rec.recordId, texts };
         });
       });
 
     /** One page of source records (object query, or list entries → records). */
     const pullPage = (
-      session: AttioSession,
+      client: CrmClientApi,
+      session: CrmSession,
       binding: {
         readonly sourceKind: string;
         readonly sourceId: string;
         readonly sourceLabel: string;
       },
-      serverFilter: Record<string, unknown> | undefined,
-      offset: number,
-    ): Effect.Effect<{ records: readonly AttioRecord[]; pageFull: boolean }, CrmError> =>
+      serverFilter: unknown | undefined,
+      attrs: readonly CrmAttrRef[],
+      cursor: string | null,
+    ): Effect.Effect<{ records: readonly CrmRecord[]; nextCursor: string | null }, CrmError> =>
       binding.sourceKind === "list"
         ? Effect.gen(function* () {
-            const entries = yield* client.queryListEntries(session, {
+            const page = yield* client.queryListEntries(session, {
               listId: binding.sourceId,
               sourceLabel: binding.sourceLabel,
-              limit: ATTIO_PAGE_LIMIT,
-              offset,
+              limit: client.pageLimit,
+              cursor,
             });
-            const parent = entries.find((e) => e.parentObject !== "")?.parentObject ?? "";
-            const ids = entries.map((e) => e.parentRecordId).filter((id) => id !== "");
+            const parent = page.items.find((e) => e.parentObject !== "")?.parentObject ?? "";
+            const ids = page.items.map((e) => e.parentRecordId).filter((id) => id !== "");
             const records =
               parent === "" || ids.length === 0
-                ? ([] as readonly AttioRecord[])
+                ? ([] as readonly CrmRecord[])
                 : yield* client.queryRecordsByIds(session, {
                     object: parent,
                     sourceLabel: binding.sourceLabel,
+                    attrs,
                     ids,
                   });
             // Count-level diagnostics (no record data): a list pull that lands
@@ -370,33 +361,35 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
             yield* Effect.logWarning("crm list page").pipe(
               Effect.annotateLogs({
                 listId: binding.sourceId,
-                offset,
-                entries: entries.length,
+                cursor: cursor ?? "start",
+                entries: page.items.length,
                 parent,
                 parentIds: ids.length,
                 records: records.length,
               }),
             );
-            return { records, pageFull: entries.length === ATTIO_PAGE_LIMIT };
+            return { records, nextCursor: page.nextCursor };
           })
         : client
             .queryObjectRecords(session, {
               object: binding.sourceId,
               sourceLabel: binding.sourceLabel,
+              attrs,
               ...(serverFilter !== undefined ? { filter: serverFilter } : {}),
-              limit: ATTIO_PAGE_LIMIT,
-              offset,
+              limit: client.pageLimit,
+              cursor,
             })
-            .pipe(Effect.map((records) => ({ records, pageFull: records.length === ATTIO_PAGE_LIMIT })));
+            .pipe(Effect.map((page) => ({ records: page.items, nextCursor: page.nextCursor })));
 
     // ── The sync loop ─────────────────────────────────────────────────────────
 
     const runSync = (
       binding: CrmBinding,
-      session: AttioSession,
+      session: CrmSession,
       trigger: "cron" | "manual" | "warmup",
     ): Effect.Effect<CrmSyncOutcome, CrmSyncError> =>
       Effect.gen(function* () {
+        const client = registry.forProvider(binding.provider);
         const startedAt = Date.now();
         const runId = yield* mapRepoError(
           runs.start({
@@ -434,9 +427,9 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
               listId: binding.sourceId,
               sourceLabel: binding.sourceLabel,
               limit: 1,
-              offset: 0,
+              cursor: null,
             });
-            const parent = probe.find((e) => e.parentObject !== "")?.parentObject;
+            const parent = probe.items.find((e) => e.parentObject !== "")?.parentObject;
             if (parent !== undefined) {
               const parentAttrs = yield* client.getAttributes(session, "objects", parent, binding.sourceLabel);
               for (const a of parentAttrs) liveSlugs.add(a.slug);
@@ -466,27 +459,38 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
               : yield* mapRepoError(syncedRows.countByBinding(binding.id), "synced-row count failed");
           let budget = Math.max(0, cap - preexisting);
 
-          const serverFilter =
-            binding.sourceKind === "object" ? toAttioFilterBody(activeFilters) : undefined;
+          const serverFilter = client.compileServerFilter(
+            activeFilters,
+            binding.sourceKind === "list" ? "list" : "object",
+          );
+          const pullAttrs: readonly CrmAttrRef[] = flattenCols.map((c) => ({ slug: c.attrSlug, type: c.attrType }));
           const cache = newCache();
-          let offset = 0;
+          let cursor: string | null = null;
           let pages = 0;
           let pullComplete = false;
 
           while (true) {
-            if (pages >= MAX_PAGES_PER_RUN) {
+            if (pages >= maxPagesPerRun(client.pageLimit)) {
               pageBudgetExhausted = true;
               break;
             }
-            const { records, pageFull } = yield* pullPage(session, binding, serverFilter, offset);
+            const page: { records: readonly CrmRecord[]; nextCursor: string | null } = yield* pullPage(
+              client,
+              session,
+              binding,
+              serverFilter,
+              pullAttrs,
+              cursor,
+            );
+            const records = page.records;
             pages += 1;
-            offset += ATTIO_PAGE_LIMIT;
 
             yield* Effect.logWarning("crm page classify").pipe(
-              Effect.annotateLogs({ bindingId: binding.id, offset: offset - ATTIO_PAGE_LIMIT, records: records.length }),
+              Effect.annotateLogs({ bindingId: binding.id, cursor: cursor ?? "start", records: records.length }),
             );
+            cursor = page.nextCursor;
             if (records.length > 0) {
-              const flats = yield* flattenRecords(session, records, flattenCols, cache);
+              const flats = yield* resolveRecords(client, session, records, cache);
               const textOf = (fr: FlatRecord, slug: string) => fr.texts.get(slug) ?? "";
               const kept = flats.filter(
                 (fr) => fr.externalId !== "" && matchesAllFilters(activeFilters, (slug) => textOf(fr, slug)),
@@ -719,7 +723,9 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
               })
               .pipe(Effect.catchAll(() => Effect.void));
 
-            if (!pageFull) {
+            // Complete pull = the provider says the source is exhausted (never
+            // a page-length heuristic) — the stale pass depends on this.
+            if (cursor === null) {
               pullComplete = true;
               break;
             }
@@ -804,8 +810,12 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
               : fieldsDropped.length > 0
                 ? finalize(
                     "partial",
-                    crmErrorCopy({ _tag: "AttioSchemaDriftError", missingAttrs: fieldsDropped } as CrmError).copy,
-                    "AttioSchemaDriftError",
+                    crmErrorCopy({
+                      _tag: "CrmSchemaDriftError",
+                      provider: registry.forProvider(binding.provider).displayName,
+                      missingAttrs: fieldsDropped,
+                    } as CrmError).copy,
+                    "CrmSchemaDriftError",
                     null,
                   )
                 : finalize("ok", null, null, null),
@@ -820,58 +830,62 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
     // ── Wizard metadata (member-gated) ────────────────────────────────────────
 
     const describeAttrs = (
-      session: AttioSession,
+      client: CrmClientApi,
+      session: CrmSession,
       source: { kind: "object" | "list"; id: string; label: string },
     ) =>
       Effect.gen(function* () {
-        // Sample records: 3 from the source (for lists, via their entries).
-        const sample =
-          source.kind === "object"
-            ? yield* client.queryObjectRecords(session, {
-                object: source.id,
-                sourceLabel: source.label,
-                limit: 3,
-                offset: 0,
-              })
-            : yield* Effect.gen(function* () {
-                const entries = yield* client.queryListEntries(session, {
-                  listId: source.id,
-                  sourceLabel: source.label,
-                  limit: 3,
-                  offset: 0,
-                });
-                const parent = entries.find((e) => e.parentObject !== "")?.parentObject ?? "";
-                const ids = entries.map((e) => e.parentRecordId).filter((id) => id !== "");
-                return parent === "" || ids.length === 0
-                  ? ([] as readonly AttioRecord[])
-                  : yield* client.queryRecordsByIds(session, { object: parent, sourceLabel: source.label, ids });
-              });
-
-        // Attribute schema: for lists, the parent object's attributes are what
-        // the grid will sync (entry-scoped attrs are out of scope for v1).
+        // Attribute schema first (records flatten over it): for lists, the
+        // parent object's attributes are what the grid will sync (entry-scoped
+        // attrs are out of scope for v1).
         const target =
           source.kind === "object"
             ? { kind: "objects" as const, id: source.id }
             : yield* Effect.gen(function* () {
-                const entries = yield* client.queryListEntries(session, {
+                const probe = yield* client.queryListEntries(session, {
                   listId: source.id,
                   sourceLabel: source.label,
                   limit: 1,
-                  offset: 0,
+                  cursor: null,
                 });
-                const parent = entries.find((e) => e.parentObject !== "")?.parentObject ?? source.id;
+                const parent = probe.items.find((e) => e.parentObject !== "")?.parentObject ?? source.id;
                 return { kind: "objects" as const, id: parent };
               });
         const attrs = yield* client.getAttributes(session, target.kind, target.id, source.label);
         const supported = attrs.filter((a) => a.supported && a.slug !== "");
+        const attrRefs: readonly CrmAttrRef[] = supported.map((a) => ({ slug: a.slug, type: a.type }));
+
+        // Sample records: 3 from the source (for lists, via their entries).
+        const sample =
+          source.kind === "object"
+            ? (yield* client.queryObjectRecords(session, {
+                object: source.id,
+                sourceLabel: source.label,
+                attrs: attrRefs,
+                limit: 3,
+                cursor: null,
+              })).items
+            : yield* Effect.gen(function* () {
+                const page = yield* client.queryListEntries(session, {
+                  listId: source.id,
+                  sourceLabel: source.label,
+                  limit: 3,
+                  cursor: null,
+                });
+                const parent = page.items.find((e) => e.parentObject !== "")?.parentObject ?? "";
+                const ids = page.items.map((e) => e.parentRecordId).filter((id) => id !== "");
+                return parent === "" || ids.length === 0
+                  ? ([] as readonly CrmRecord[])
+                  : yield* client.queryRecordsByIds(session, {
+                      object: parent,
+                      sourceLabel: source.label,
+                      attrs: attrRefs,
+                      ids,
+                    });
+              });
 
         const cache = newCache();
-        const flats = yield* flattenRecords(
-          session,
-          sample,
-          supported.map((a) => ({ attrSlug: a.slug, attrType: a.type })),
-          cache,
-        );
+        const flats = yield* resolveRecords(client, session, sample, cache);
 
         const fields = supported.map((a): CrmSourceField => {
           const samples = flats
@@ -898,11 +912,12 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
 
     return {
       // ── Member: wizard metadata ────────────────────────────────────────────
-      listSources: (workspaceId: string) =>
+      listSources: (workspaceId: string, provider: CrmProvider = "attio") =>
         Effect.gen(function* () {
           yield* membership.requireMember(workspaceId);
           yield* entitlement.requireCloudAccess(workspaceId);
-          const session = yield* connections.memberSession(workspaceId);
+          const client = registry.forProvider(provider);
+          const session = yield* connections.memberSession(workspaceId, client.provider);
           const [objects, lists] = yield* Effect.all([client.listObjects(session), client.listLists(session)]);
           const sources: CrmSourceSummary[] = [
             ...objects.map(
@@ -918,12 +933,14 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
       describeSource: (
         workspaceId: string,
         source: { readonly kind: "object" | "list"; readonly id: string; readonly label: string },
+        provider: CrmProvider = "attio",
       ) =>
         Effect.gen(function* () {
           yield* membership.requireMember(workspaceId);
           yield* entitlement.requireCloudAccess(workspaceId);
-          const session = yield* connections.memberSession(workspaceId);
-          return yield* describeAttrs(session, source);
+          const client = registry.forProvider(provider);
+          const session = yield* connections.memberSession(workspaceId, client.provider);
+          return yield* describeAttrs(client, session, source);
         }),
 
       estimate: (
@@ -934,23 +951,27 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
           readonly label: string;
           readonly filters: readonly CrmFilter[];
         },
+        provider: CrmProvider = "attio",
       ) =>
         Effect.gen(function* () {
           yield* membership.requireMember(workspaceId);
           yield* entitlement.requireCloudAccess(workspaceId);
-          const session = yield* connections.memberSession(workspaceId);
-          const serverFilter = args.kind === "object" ? toAttioFilterBody(args.filters) : undefined;
-          const { records, pageFull } = yield* pullPage(
+          const client = registry.forProvider(provider);
+          const session = yield* connections.memberSession(workspaceId, client.provider);
+          const serverFilter = client.compileServerFilter(args.filters, args.kind);
+          const filterAttrs: readonly CrmAttrRef[] = args.filters.map((f) => ({ slug: f.attrSlug, type: f.attrType }));
+          const { records, nextCursor } = yield* pullPage(
+            client,
             session,
             { sourceKind: args.kind, sourceId: args.id, sourceLabel: args.label },
             serverFilter,
-            0,
+            filterAttrs,
+            null,
           );
           const cache = newCache();
-          const filterCols = args.filters.map((f) => ({ attrSlug: f.attrSlug, attrType: f.attrType }));
-          const flats = yield* flattenRecords(session, records, filterCols, cache);
+          const flats = yield* resolveRecords(client, session, records, cache);
           const kept = flats.filter((fr) => matchesAllFilters(args.filters, (slug) => fr.texts.get(slug) ?? ""));
-          return { count: kept.length, isLowerBound: pageFull } satisfies CrmEstimate;
+          return { count: kept.length, isLowerBound: nextCursor !== null } satisfies CrmEstimate;
         }),
 
       // ── Member: binding lifecycle ──────────────────────────────────────────
@@ -961,11 +982,8 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
           const workspaceId = table.value.workspaceId;
           yield* membership.requireMember(workspaceId);
           yield* entitlement.requireCloudAccess(workspaceId);
-          if (args.provider !== "attio") {
-            return yield* Effect.fail(new CrmSyncError({ message: `Unknown CRM provider ${String(args.provider)}` }));
-          }
           // Connection must exist before a binding can (wizard enforces too).
-          yield* connections.memberSession(workspaceId);
+          yield* connections.memberSession(workspaceId, args.provider);
 
           const now = Date.now();
           const bindingId = yield* mapRepoError(
@@ -1087,25 +1105,26 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
        * OAuth connection. Rows/tables are untouched. Reconnecting via OAuth
        * clears the pauses (callback clearPause) and syncing resumes.
        */
-      disconnect: (workspaceId: string) =>
+      disconnect: (workspaceId: string, provider: CrmProvider = "attio") =>
         Effect.gen(function* () {
           yield* membership.requireMember(workspaceId);
+          const name = registry.forProvider(provider).displayName;
           const all = yield* mapRepoError(bindings.listByWorkspace(workspaceId), "binding list failed");
-          const attio = all.filter((b) => b.provider === "attio");
+          const paused = all.filter((b) => b.provider === provider);
           yield* Effect.forEach(
-            attio,
+            paused,
             (b) =>
               mapRepoError(
                 bindings.patch(b.id, {
                   pausedReason: "auth_revoked",
-                  lastError: "Attio was disconnected. Reconnect Attio to resume syncing.",
+                  lastError: `${name} was disconnected. Reconnect ${name} to resume syncing.`,
                 }),
                 "binding pause failed",
               ),
             { discard: true },
           );
-          const removed = yield* connections.removeConnection(workspaceId);
-          return { removed, bindingsPaused: attio.length };
+          const removed = yield* connections.removeConnection(workspaceId, provider);
+          return { removed, bindingsPaused: paused.length };
         }),
 
       remove: (bindingId: string) =>
@@ -1217,7 +1236,7 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
             return outcome;
           }
           const session = yield* connections
-            .workerSession(binding.workspaceId)
+            .workerSession(binding.workspaceId, registry.forProvider(binding.provider).provider)
             .pipe(
               Effect.catchTag("CrmConnectionMissing", (e) =>
                 // A missing connection is a USER-facing outcome, not a crash:
@@ -1233,7 +1252,10 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
               // Record the pause + a user-visible run entry even though the
               // sync never started.
               const binding = yield* requireBinding(bindingId);
-              const p = crmErrorCopy({ _tag: "CrmConnectionMissing" } as CrmError);
+              const p = crmErrorCopy({
+                _tag: "CrmConnectionMissing",
+                provider: registry.forProvider(binding.provider).displayName,
+              } as CrmError);
               const startedAt = Date.now();
               const runId = yield* runs
                 .start({

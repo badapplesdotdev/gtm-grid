@@ -31,6 +31,8 @@ export function freshState() {
     // ── CRM sync (Attio) ────────────────────────────────────────────────────
     // Whether the workspace has an Attio OAuth connection (crm.connectionStatus).
     crmConnected: false,
+    // Same for HubSpot — the two providers connect independently.
+    hubspotConnected: false,
     // Bindings + sync-run history, seedable per scenario (shallow overrides).
     crmBindings: [],
     crmRuns: [],

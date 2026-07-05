@@ -44,12 +44,13 @@ const withService = <A>(
       const connections = yield* CrmConnectionService;
       yield* connections.saveConnection({
         workspaceId: WS,
+        provider: "attio",
         tokens: { accessToken: "at_test" },
         meta: {
           connectedByUserId: "user_m",
           connectedByName: "Morgan",
-          attioWorkspaceId: "aw",
-          attioWorkspaceName: "Acme",
+          crmWorkspaceId: "aw",
+          crmWorkspaceName: "Acme",
         },
       });
       const svc = yield* CrmSyncService;

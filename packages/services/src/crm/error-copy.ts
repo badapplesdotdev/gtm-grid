@@ -4,11 +4,13 @@
  * error hierarchy (crm/errors.ts) and the sync-log/status-strip copy. Rules:
  *
  * - Copy NEVER contains HTTP statuses, error tags, stack fragments, or jargon
- *   (a unit test enforces this over every tag).
+ *   (a unit test enforces this over every tag, for every provider).
  * - Every message says what happened AND what happens next — either "we'll
  *   handle it" or one concrete action the user can take.
  * - `binding` tells the caller whether to pause the binding (failures the user
  *   must resolve) so the cron stops burning attempts on a dead connection.
+ * - Copy names the provider from the error's `provider` display name
+ *   ("Attio", "HubSpot") — one switch serves every CRM.
  */
 
 import type { CrmError } from "./errors.js";
@@ -32,54 +34,54 @@ const oneOf = (labels: ReadonlyArray<string>): string =>
 export function crmErrorCopy(e: CrmError): CrmErrorPresentation {
   switch (e._tag) {
     // Transient failures only reach here after retries were exhausted.
-    case "AttioRateLimitError":
-    case "AttioServerError":
-    case "AttioNetworkError":
+    case "CrmRateLimitError":
+    case "CrmServerError":
+    case "CrmNetworkError":
       return {
         status: "warn",
-        copy: "Attio was temporarily unavailable. We'll try again at the next sync.",
+        copy: `${e.provider} was temporarily unavailable. We'll try again at the next sync.`,
       };
-    case "AttioAuthRevoked":
+    case "CrmAuthRevoked":
       return {
         status: "failed",
         pause: "auth_revoked",
-        copy: "Your Attio connection needs attention. Reconnect Attio to resume syncing.",
+        copy: `Your ${e.provider} connection needs attention. Reconnect ${e.provider} to resume syncing.`,
       };
     case "CrmConnectionMissing":
       return {
         status: "failed",
         pause: "auth_revoked",
-        copy: "Attio isn't connected for this workspace. Connect Attio to start syncing.",
+        copy: `${e.provider} isn't connected for this workspace. Connect ${e.provider} to start syncing.`,
       };
-    case "AttioSchemaDriftError":
+    case "CrmSchemaDriftError":
       return {
         status: "partial",
         copy: `${e.missingAttrs.length} field${e.missingAttrs.length === 1 ? "" : "s"} could not be mapped and ${e.missingAttrs.length === 1 ? "was" : "were"} skipped: ${oneOf(e.missingAttrs)}. Everything else synced.`,
       };
-    case "AttioSourceGoneError":
+    case "CrmSourceGoneError":
       return {
         status: "failed",
         pause: "source_gone",
-        copy: `"${e.sourceLabel}" no longer exists in your Attio workspace. Pick a new source or remove this sync.`,
+        copy: `"${e.sourceLabel}" no longer exists in your ${e.provider} workspace. Pick a new source or remove this sync.`,
       };
     case "RowCapReached":
       return {
         status: "partial",
         copy: `Synced the first ${e.cap.toLocaleString("en-US")} records (your plan's limit). Add filters to narrow what's pulled, or upgrade to sync more.`,
       };
-    case "AttioRequestError":
+    case "CrmRequestError":
       if (e.status === 403) {
         return {
           status: "failed",
           // Paused like a revoked auth: the table banner offers one-click
           // Reconnect, and re-consenting picks up the newly granted scopes.
           pause: "auth_revoked",
-          copy: "Attio declined access to that data. In Attio, open the GTM Grid app's settings and enable read access for records, object & list configuration, and workspace members — then press Reconnect Attio below.",
+          copy: `${e.provider} declined access to that data. In ${e.provider}, open the GTM Grid app's settings and enable read access for your records and lists — then press Reconnect ${e.provider} below.`,
         };
       }
       return {
         status: "failed",
-        copy: "Attio couldn't process that request. Adjust the source or filters and try again.",
+        copy: `${e.provider} couldn't process that request. Adjust the source or filters and try again.`,
       };
     case "CrmSyncError":
       return {

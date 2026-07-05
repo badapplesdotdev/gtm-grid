@@ -445,11 +445,12 @@ function ConnectionsSection({
  * the API-key section below it: the key powers cell actions (engine methods),
  * the OAuth grant powers synced tables. Removing one never touches the other.
  */
-function CrmOAuthSection({ workspaceId }: { workspaceId: string }) {
+function CrmOAuthSection({ workspaceId, provider }: { workspaceId: string; provider: "attio" | "hubspot" }) {
+  const crmName = provider === "hubspot" ? "HubSpot" : "Attio";
   type Status =
     | { kind: "loading" }
     | { kind: "disconnected"; configured: boolean }
-    | { kind: "connected"; byName: string; attioWorkspace: string };
+    | { kind: "connected"; byName: string; crmWorkspace: string };
   const [status, setStatus] = useState<Status>({ kind: "loading" });
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -458,14 +459,15 @@ function CrmOAuthSection({ workspaceId }: { workspaceId: string }) {
   const refresh = useCallback(async () => {
     if (!apiClient) return;
     try {
-      const s = await apiClient.crm.connectionStatus.query({ workspaceId });
+      const s = await apiClient.crm.connectionStatus.query({ workspaceId, provider });
       if (s == null) setStatus({ kind: "disconnected", configured: false });
-      else if (s.connected) setStatus({ kind: "connected", byName: s.connectedByName, attioWorkspace: s.attioWorkspaceName });
-      else setStatus({ kind: "disconnected", configured: s.configured });
+      else if (s.connected) {
+        setStatus({ kind: "connected", byName: s.connectedByName, crmWorkspace: s.workspaceLabel ?? s.attioWorkspaceName });
+      } else setStatus({ kind: "disconnected", configured: s.configured });
     } catch {
       setStatus({ kind: "disconnected", configured: false });
     }
-  }, [workspaceId]);
+  }, [workspaceId, provider]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -477,18 +479,18 @@ function CrmOAuthSection({ workspaceId }: { workspaceId: string }) {
     return () => { clearInterval(t); clearTimeout(stop); };
   }, [busy, refresh]);
   useEffect(() => {
-    if (busy && status.kind === "connected") { setBusy(false); setNote("Attio connected."); }
+    if (busy && status.kind === "connected") { setBusy(false); setNote(`${crmName} connected.`); }
   }, [busy, status]);
 
   const authorize = async () => {
     if (!apiClient) return;
     setNote(null);
     try {
-      const { url } = await apiClient.crm.authorizeUrl.query({ workspaceId });
+      const { url } = await apiClient.crm.authorizeUrl.query({ workspaceId, provider });
       setBusy(true);
       await openExternalUrl(url);
     } catch (e) {
-      setNote(e instanceof Error ? e.message : "Could not start the Attio connection.");
+      setNote(e instanceof Error ? e.message : `Could not start the ${crmName} connection.`);
     }
   };
 
@@ -497,7 +499,7 @@ function CrmOAuthSection({ workspaceId }: { workspaceId: string }) {
     setConfirming(false);
     setNote(null);
     try {
-      const res = await apiClient.crm.disconnect.mutate({ workspaceId });
+      const res = await apiClient.crm.disconnect.mutate({ workspaceId, provider });
       setNote(
         res.bindingsPaused > 0
           ? `Disconnected. ${res.bindingsPaused} synced table${res.bindingsPaused === 1 ? "" : "s"} paused — reconnect to resume.`
@@ -505,7 +507,7 @@ function CrmOAuthSection({ workspaceId }: { workspaceId: string }) {
       );
       await refresh();
     } catch (e) {
-      setNote(e instanceof Error ? e.message : "Could not disconnect Attio.");
+      setNote(e instanceof Error ? e.message : `Could not disconnect ${crmName}.`);
     }
   };
 
@@ -519,11 +521,11 @@ function CrmOAuthSection({ workspaceId }: { workspaceId: string }) {
           <>
             <span className="crm-oauth-dot" />
             <span className="crm-oauth-text">
-              Connected · {status.attioWorkspace}
+              Connected · {status.crmWorkspace}
               <span className="crm-oauth-sub">read-only · connected by {status.byName} · powers synced tables</span>
             </span>
             <button className="skill-btn" disabled={busy} onClick={() => void authorize()}>
-              {busy ? "Waiting for Attio…" : "Reconnect"}
+              {busy ? `Waiting for ${crmName}…` : "Reconnect"}
             </button>
             {confirming ? (
               <>
@@ -539,17 +541,17 @@ function CrmOAuthSection({ workspaceId }: { workspaceId: string }) {
             <span className="crm-oauth-dot off" />
             <span className="crm-oauth-text">
               Not connected
-              <span className="crm-oauth-sub">Connect with OAuth to sync Attio objects &amp; lists into tables</span>
+              <span className="crm-oauth-sub">Connect with OAuth to sync {crmName} objects &amp; lists into tables</span>
             </span>
             <button className="skill-btn primary" disabled={busy || !status.configured} onClick={() => void authorize()}>
-              {busy ? "Waiting for Attio…" : "Connect Attio"}
+              {busy ? `Waiting for ${crmName}…` : `Connect ${crmName}`}
             </button>
           </>
         )}
       </div>
       {note ? <div className="crm-oauth-note">{note}</div> : null}
       <div className="crm-oauth-note subtle">
-        The API key below is separate — it powers Attio cell actions and is never used for syncing.
+        The API key below is separate — it powers {crmName} cell actions and is never used for syncing.
       </div>
     </div>
   );
@@ -602,7 +604,9 @@ export function ExtensionPanel({ id, onConnected, onBack, workspaceCreds, worksp
       <div className="detail">
       <PanelHeader logo={detail.logo} title={detail.name} description={description} meta={meta} />
 
-      {detail.id === "attio" && workspaceId ? <CrmOAuthSection workspaceId={workspaceId} /> : null}
+      {(detail.id === "attio" || detail.id === "hubspot") && workspaceId ? (
+        <CrmOAuthSection workspaceId={workspaceId} provider={detail.id} />
+      ) : null}
 
       <ConnectionsSection
         name={detail.name}

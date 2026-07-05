@@ -14,7 +14,8 @@ import type { AppServices, InMemoryUser, Membership, TestLayerFixtures } from "@
 import { AttioAuth, CrmConnectionService, TestLayer } from "@gtmgrid/services";
 import { Effect, ManagedRuntime, Option } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { callbackResponse, type CallbackSessionUser } from "../../../../../lib/crm/attio-callback";
+import { callbackResponse, type CallbackSessionUser } from "../../../../../lib/crm/crm-callback";
+import { ATTIO_OAUTH } from "../../../../../lib/crm/oauth-providers";
 
 type ServicesRuntime = ManagedRuntime.ManagedRuntime<AppServices, never>;
 
@@ -80,7 +81,7 @@ describe("callbackResponse", () => {
     vi.stubGlobal("fetch", fetchSpy);
     const runtime = runtimeFor();
     try {
-      const res = await callbackResponse({ runtime, code: "code", state: "garbage", error: null, sessionUser });
+      const res = await callbackResponse({ oauth: ATTIO_OAUTH, runtime, code: "code", state: "garbage", error: null, sessionUser });
       expect(res.status).toBe(400);
       expect(await res.text()).toContain("expired");
       expect(fetchSpy).not.toHaveBeenCalled();
@@ -93,7 +94,7 @@ describe("callbackResponse", () => {
     const runtime = runtimeFor();
     try {
       const state = await mintState(runtime);
-      const res = await callbackResponse({ runtime, code: "", state, error: "access_denied", sessionUser });
+      const res = await callbackResponse({ oauth: ATTIO_OAUTH, runtime, code: "", state, error: "access_denied", sessionUser });
       expect(res.status).toBe(200);
       const body = await res.text();
       expect(body).toContain("You canceled the connection");
@@ -108,7 +109,7 @@ describe("callbackResponse", () => {
     const runtime = runtimeFor();
     try {
       const state = await mintState(runtime);
-      const res = await callbackResponse({ runtime, code: "auth_code", state, error: null, sessionUser });
+      const res = await callbackResponse({ oauth: ATTIO_OAUTH, runtime, code: "auth_code", state, error: null, sessionUser });
 
       expect(res.status).toBe(200);
       const body = await res.text();
@@ -122,8 +123,8 @@ describe("callbackResponse", () => {
       );
       expect(Option.isSome(meta)).toBe(true);
       if (Option.isSome(meta)) {
-        expect(meta.value.attioWorkspaceName).toBe("Acme CRM");
-        expect(meta.value.attioWorkspaceId).toBe("attio_ws_1");
+        expect(meta.value.crmWorkspaceName).toBe("Acme CRM");
+        expect(meta.value.crmWorkspaceId).toBe("attio_ws_1");
         expect(meta.value.connectedByUserId).toBe(OWNER);
         expect(meta.value.connectedByName).toBe("Olive Owner");
       }

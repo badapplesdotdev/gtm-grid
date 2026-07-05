@@ -18,7 +18,12 @@ import { BrandIcon } from "../BrandIcon";
 import { electron } from "../electron";
 import { gridQueryKeys } from "./useCloudGrid";
 
-const ATTIO_LOGO = "https://www.google.com/s2/favicons?domain=attio.com&sz=128";
+/** Provider display bits, keyed by the binding's stored provider string. */
+const PROVIDER_DISPLAY: Record<string, { readonly name: string; readonly logo: string }> = {
+  attio: { name: "Attio", logo: "https://www.google.com/s2/favicons?domain=attio.com&sz=128" },
+  hubspot: { name: "HubSpot", logo: "https://www.google.com/s2/favicons?domain=hubspot.com&sz=128" },
+};
+const providerDisplay = (provider: string) => PROVIDER_DISPLAY[provider] ?? PROVIDER_DISPLAY.attio;
 
 type PausedReason = null | "auth_revoked" | "source_gone" | "plan_lapsed";
 
@@ -200,13 +205,16 @@ function CrmBindingRow({ binding, tableId, workspaceId, onUpgrade }: { binding: 
     }
   };
 
+  const crm = providerDisplay(binding.provider);
+
   const reconnect = async () => {
     setError(null);
     try {
-      const { url } = await apiClient.crm.authorizeUrl.query({ workspaceId });
+      const provider = binding.provider === "hubspot" ? ("hubspot" as const) : ("attio" as const);
+      const { url } = await apiClient.crm.authorizeUrl.query({ workspaceId, provider });
       await openExternalUrl(url);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not start the Attio connection.");
+      setError(e instanceof Error ? e.message : `Could not start the ${crm.name} connection.`);
     }
   };
 
@@ -252,16 +260,16 @@ function CrmBindingRow({ binding, tableId, workspaceId, onUpgrade }: { binding: 
   return (
     <div className="crm-strip" role="status">
       <div className="crm-strip-row">
-        <span className="crm-strip-logo"><BrandIcon logo={ATTIO_LOGO} name="Attio" size={15} /></span>
+        <span className="crm-strip-logo"><BrandIcon logo={crm.logo} name={crm.name} size={15} /></span>
         <div className="crm-strip-main">
           <span className="crm-strip-title">
-            Synced from Attio · {binding.sourceLabel}
+            Synced from {crm.name} · {binding.sourceLabel}
             <span className="crm-strip-kind">{binding.sourceKind === "list" ? "list" : "object"}</span>
           </span>
           {active ? (
             <span className="crm-strip-meta crm-strip-meta-sync">
               <span className="cell-spinner" style={{ width: 11, height: 11, borderWidth: 1.5 }} />
-              Pulling records from Attio…
+              Pulling records from {crm.name}…
               {pulledSoFar !== null && pulledSoFar > 0 ? ` ${pulledSoFar.toLocaleString()} so far` : ""}
             </span>
           ) : binding.lastSyncedAt === null ? (
@@ -284,8 +292,8 @@ function CrmBindingRow({ binding, tableId, workspaceId, onUpgrade }: { binding: 
       {/* Paused banners — the recovery path for a broken binding. */}
       {paused === "auth_revoked" && (
         <div className="crm-strip-banner crm-strip-banner-warn">
-          <span className="crm-strip-banner-text">{binding.lastError ?? "Attio access was revoked."}</span>
-          <button className="btn btn-outline btn-sm" onClick={() => void reconnect()}>Reconnect Attio</button>
+          <span className="crm-strip-banner-text">{binding.lastError ?? `${crm.name} access was revoked.`}</span>
+          <button className="btn btn-outline btn-sm" onClick={() => void reconnect()}>Reconnect {crm.name}</button>
         </div>
       )}
       {paused === "plan_lapsed" && (
@@ -300,7 +308,7 @@ function CrmBindingRow({ binding, tableId, workspaceId, onUpgrade }: { binding: 
       )}
       {paused === "source_gone" && !confirmRemove && (
         <div className="crm-strip-banner crm-strip-banner-warn">
-          <span className="crm-strip-banner-text">{binding.lastError ?? "This Attio source is no longer available."}</span>
+          <span className="crm-strip-banner-text">{binding.lastError ?? `This ${crm.name} source is no longer available.`}</span>
           <button className="btn btn-outline btn-sm" onClick={() => setConfirmRemove(true)}>Remove sync</button>
         </div>
       )}
@@ -315,7 +323,7 @@ function CrmBindingRow({ binding, tableId, workspaceId, onUpgrade }: { binding: 
       {error && <div className="crm-strip-error" role="alert">{error}</div>}
 
       {showLog && (
-        <SyncHistoryPanel runs={runs} loading={historyQ.isLoading} schedule={binding.schedule} onRetry={() => void syncNow()} retryDisabled={syncing} />
+        <SyncHistoryPanel runs={runs} loading={historyQ.isLoading} schedule={binding.schedule} onRetry={() => void syncNow()} retryDisabled={syncing} providerName={crm.name} />
       )}
     </div>
   );
@@ -327,12 +335,14 @@ function SyncHistoryPanel({
   schedule,
   onRetry,
   retryDisabled,
+  providerName,
 }: {
   runs: readonly CrmRun[];
   loading: boolean;
   schedule: string | null;
   onRetry: () => void;
   retryDisabled: boolean;
+  providerName: string;
 }) {
   return (
     <div className="crm-history">
@@ -346,14 +356,14 @@ function SyncHistoryPanel({
         <div className="crm-history-empty">No sync runs yet.</div>
       ) : (
         <div className="crm-history-list">
-          {runs.map((r) => <HistoryEntry key={r.id} run={r} onRetry={onRetry} retryDisabled={retryDisabled} />)}
+          {runs.map((r) => <HistoryEntry key={r.id} run={r} onRetry={onRetry} retryDisabled={retryDisabled} providerName={providerName} />)}
         </div>
       )}
     </div>
   );
 }
 
-function HistoryEntry({ run, onRetry, retryDisabled }: { run: CrmRun; onRetry: () => void; retryDisabled: boolean }) {
+function HistoryEntry({ run, onRetry, retryDisabled, providerName }: { run: CrmRun; onRetry: () => void; retryDisabled: boolean; providerName: string }) {
   const dot = run.status === "ok" ? "ok" : run.status === "failed" ? "err" : run.status === "running" ? "run" : "warn";
   const title =
     run.status === "failed" ? "Sync failed"
@@ -363,7 +373,7 @@ function HistoryEntry({ run, onRetry, retryDisabled }: { run: CrmRun; onRetry: (
   const detailParts: string[] = [];
   if (run.status !== "running" && run.status !== "failed") {
     detailParts.push(`${run.rowsCreated} new`, `${run.rowsUpdated} updated`);
-    if (run.rowsStaled > 0) detailParts.push(`${run.rowsStaled} no longer in Attio`);
+    if (run.rowsStaled > 0) detailParts.push(`${run.rowsStaled} no longer in ${providerName}`);
   }
   if (run.error) detailParts.push(run.error);
   if (run.fieldsDropped && run.fieldsDropped.length > 0) detailParts.push(`dropped: ${run.fieldsDropped.join(", ")}`);

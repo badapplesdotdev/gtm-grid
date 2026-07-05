@@ -25,7 +25,7 @@ async function openConfigureStep(window: import("@playwright/test").Page): Promi
 }
 
 test.describe("CRM sync — wizard", () => {
-  test("the chooser offers 'From your CRM' and step 1 shows Attio + HubSpot (coming soon)", async ({ launchApp }) => {
+  test("the chooser offers 'From your CRM' and step 1 shows Attio + HubSpot, both connectable", async ({ launchApp }) => {
     const { window } = await launchApp(CONNECTED);
     await openChooser(window);
 
@@ -34,9 +34,10 @@ test.describe("CRM sync — wizard", () => {
 
     await expect(window.locator(".crmw-modal")).toBeVisible();
     await expect(window.locator(".crmw-crm-card", { hasText: "Attio" }).first()).toBeVisible();
-    const hubspot = window.locator(".crmw-crm-disabled", { hasText: "HubSpot" });
+    const hubspot = window.locator(".crmw-crm-card", { hasText: "HubSpot" });
     await expect(hubspot).toBeVisible();
-    await expect(hubspot.getByText("Coming soon")).toBeVisible();
+    await expect(hubspot).toBeEnabled();
+    await expect(window.locator(".crmw-crm-disabled")).toHaveCount(0);
     // The read-only reassurance from the design.
     await expect(window.getByText(/never writes back to your CRM/i)).toBeVisible();
   });
@@ -217,6 +218,63 @@ test.describe("CRM sync — status strip & synced grid", () => {
     const banner = window.locator(".crm-strip-banner");
     await expect(banner).toContainText(lapsedCopy);
     await expect(banner.getByRole("button", { name: "View plans" })).toBeVisible();
+  });
+});
+
+
+test.describe("CRM sync — HubSpot provider", () => {
+  test("without a connection, picking HubSpot shows the HubSpot consent panel", async ({ launchApp }) => {
+    const { window } = await launchApp({ signedIn: true, paid: true, hubspotConnected: false });
+    await openChooser(window);
+    await window.getByText("From your CRM").click();
+    await window.locator(".crmw-crm-card", { hasText: "HubSpot" }).click();
+
+    await expect(window.getByText("Connect your HubSpot account")).toBeVisible();
+    await expect(window.getByText(/Read contacts, companies & lists/i)).toBeVisible();
+    await expect(window.getByRole("button", { name: /Connect with HubSpot/i })).toBeVisible();
+  });
+
+  test("connected: HubSpot wizard → Start sync lands on a grid with 'Synced from HubSpot'", async ({ launchApp }) => {
+    const { window } = await launchApp({ signedIn: true, paid: true, hubspotConnected: true });
+    await openChooser(window);
+    await window.getByText("From your CRM").click();
+    await window.locator(".crmw-crm-card", { hasText: "HubSpot" }).click();
+
+    // Connected workspace skips straight to Configure with HubSpot sources.
+    await expect(window.locator(".crmw-source-grid")).toBeVisible();
+    await expect(window.getByText(/acme\.hubspot\.com/).first()).toBeVisible();
+    await window.locator(".crmw-source", { hasText: "Contacts" }).click();
+    await expect(window.locator(".crmw-field", { hasText: "Email" })).toBeVisible();
+    await window.getByRole("button", { name: "Start sync" }).click();
+
+    await expect(window.locator(".crm-strip")).toBeVisible({ timeout: 10_000 });
+    await expect(window.locator(".crm-strip-title")).toContainText("Synced from HubSpot");
+    await expect.poll(async () => (await mockState()).crmBindings[0]?.provider).toBe("hubspot");
+    // A HubSpot connection alone must NOT satisfy the Attio path.
+    expect((await mockState()).crmConnected).toBe(false);
+  });
+
+  test("Tools → HubSpot shows the OAuth card and disconnect pauses only hubspot bindings", async ({ launchApp }) => {
+    const { window } = await launchApp({
+      ...{ signedIn: true, paid: true, hubspotConnected: true },
+      crmBindings: [
+        seededBinding({ id: "crmb_hs", provider: "hubspot", sourceLabel: "Contacts" }),
+        seededBinding({ id: "crmb_at", tableId: "tbl_1", provider: "attio" }),
+      ],
+    });
+    await expect(window.locator(".sidebar")).toBeVisible({ timeout: 20_000 });
+    await window.locator(".ext-item-name", { hasText: /^HubSpot$/ }).first().click();
+    const card = window.locator(".crm-oauth-card");
+    await expect(card).toBeVisible({ timeout: 15_000 });
+    await expect(card).toContainText("Connected · acme.hubspot.com");
+    await card.getByRole("button", { name: "Disconnect" }).click();
+    await card.getByRole("button", { name: "Confirm disconnect" }).click();
+
+    await expect(card).toContainText("Not connected", { timeout: 10_000 });
+    await expect.poll(async () => (await mockState()).hubspotConnected).toBe(false);
+    const bindings = (await mockState()).crmBindings;
+    expect(bindings.find((b: { id: string }) => b.id === "crmb_hs")?.pausedReason).toBe("auth_revoked");
+    expect(bindings.find((b: { id: string }) => b.id === "crmb_at")?.pausedReason).toBeNull();
   });
 });
 

@@ -1,11 +1,13 @@
 /**
- * The Attio OAuth handshake's FIRST leg (TRI: crm-sync), extracted from the
- * route file because Next.js route modules may only export route handlers —
- * `authorizeResponse` is the offline-testable core the route's `GET` wraps
- * (mirrors `lib/invite-preview.ts`). See the route file for the flow docs.
+ * A CRM OAuth handshake's FIRST leg (TRI: crm-sync), provider-agnostic —
+ * everything provider-specific arrives via a {@link CrmOAuthAdapter}. Lives
+ * outside the route files because Next.js route modules may only export route
+ * handlers — `authorizeResponse` is the offline-testable core each provider's
+ * `GET` wraps (mirrors `lib/invite-preview.ts`).
  */
 
-import { type AppServices, AttioAuth, MembershipService } from "@gtmgrid/services";
+import { type AppServices, MembershipService } from "@gtmgrid/services";
+import type { CrmOAuthAdapter } from "./oauth-providers";
 import { Cause, Effect, Exit, type ManagedRuntime } from "effect";
 import { resolveSiteUrl } from "../site-url";
 import { crmOAuthPage, htmlResponse } from "./oauth-html";
@@ -40,32 +42,34 @@ function failureTag<E>(exit: Exit.Exit<unknown, E>): string | undefined {
     : undefined;
 }
 
-/** The page shown when the Attio OAuth app has no client id/secret configured. */
-function notConfiguredPage(): Response {
+/** The page shown when the provider's OAuth app has no client id/secret configured. */
+function notConfiguredPage(name: string): Response {
   return htmlResponse(
     crmOAuthPage({
-      title: "Attio isn't set up yet — gtm grid",
-      heading: "Attio isn't set up yet",
-      message:
-        "Connecting Attio isn't available on this deployment yet. Please reach out to your GTM Grid admin, then try again.",
+      title: `${name} isn't set up yet — gtm grid`,
+      heading: `${name} isn't set up yet`,
+      message: `Connecting ${name} isn't available on this deployment yet. Please reach out to your GTM Grid admin, then try again.`,
     }),
     503,
   );
 }
 
 /**
- * The Attio OAuth handshake's first leg as a `Response`, given a resolved
- * `userId` (or `null` when signed out) and a services `runtime`. Testable
- * offline: pass a `TestLayer` runtime and a chosen `userId`.
+ * A CRM OAuth handshake's first leg as a `Response`, given a resolved
+ * `userId` (or `null` when signed out), a services `runtime`, and the
+ * provider's adapter. Testable offline: pass a `TestLayer` runtime and a
+ * chosen `userId`.
  */
 export async function authorizeResponse(params: {
   readonly runtime: ServicesRuntime;
+  readonly oauth: CrmOAuthAdapter;
   readonly userId: string | null;
   readonly workspaceId: string;
   readonly siteUrl: string;
   /** The full URL of this request, echoed as `returnTo` on the sign-in bounce. */
   readonly returnTo: string;
 }): Promise<Response> {
+  const name = params.oauth.displayName;
   // Signed out → bounce to sign-in, preserving where to come back to. apps/web
   // has no first-party sign-in page yet (auth is desktop-owned), so this points
   // at the site root carrying `returnTo`; see the file header / integration note.
@@ -77,7 +81,7 @@ export async function authorizeResponse(params: {
       crmOAuthPage({
         title: "That link looks wrong — gtm grid",
         heading: "That connection link looks wrong",
-        message: "Go back to GTM Grid and start connecting Attio again from your workspace settings.",
+        message: `Go back to GTM Grid and start connecting ${name} again from your workspace settings.`,
       }),
       400,
     );
@@ -88,21 +92,20 @@ export async function authorizeResponse(params: {
     Effect.gen(function* () {
       const membership = yield* MembershipService;
       yield* membership.requireMember(params.workspaceId);
-      const auth = yield* AttioAuth;
-      const state = yield* auth.mintState({ workspaceId: params.workspaceId, userId });
+      const state = yield* params.oauth.mintState({ workspaceId: params.workspaceId, userId });
       // No signing secret ⇒ treat as unconfigured (same page as a missing app).
       if (state === null) return { kind: "unconfigured" as const };
-      const url = yield* auth.authorizeUrl(state);
+      const url = yield* params.oauth.authorizeUrl(state);
       return { kind: "ok" as const, url };
     }),
   );
 
   if (Exit.isSuccess(exit)) {
-    return exit.value.kind === "ok" ? redirect(exit.value.url) : notConfiguredPage();
+    return exit.value.kind === "ok" ? redirect(exit.value.url) : notConfiguredPage(name);
   }
 
   const tag = failureTag(exit);
-  if (tag === "AttioOAuthNotConfigured") return notConfiguredPage();
+  if (tag === params.oauth.notConfiguredTag) return notConfiguredPage(name);
   if (tag === "NotAMemberError" || tag === "UnauthenticatedError") {
     return htmlResponse(
       crmOAuthPage({
@@ -117,8 +120,8 @@ export async function authorizeResponse(params: {
   return htmlResponse(
     crmOAuthPage({
       title: "Something went wrong — gtm grid",
-      heading: "We couldn't start the Attio connection",
-      message: "Something went wrong on our end. Go back to GTM Grid and try connecting Attio again in a moment.",
+      heading: `We couldn't start the ${name} connection`,
+      message: `Something went wrong on our end. Go back to GTM Grid and try connecting ${name} again in a moment.`,
     }),
     500,
   );

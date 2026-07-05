@@ -197,28 +197,54 @@ export const procedures = {
   },
   "grid.dedupe": () => ({ removed: 0 }),
 
-  // ── CRM sync (Attio) ──────────────────────────────────────────────────────
+  // ── CRM sync (Attio + HubSpot) ────────────────────────────────────────────
   // The wizard + status strip surface. Mirrors the real `crm` router closely
   // enough for E2E: connectionStatus gates step 2, createBinding adds synced
   // (read-only) columns + a first-pull row, syncNow appends a history run.
-  "crm.connectionStatus": (_input, s) =>
-    s.crmConnected
-      ? { configured: true, connected: true, connectedByName: "Morgan", attioWorkspaceName: "Acme Attio" }
-      : { configured: true, connected: false },
-  "crm.authorizeUrl": () => ({ url: "https://app.attio.com/authorize?client_id=e2e&state=fake" }),
-  "crm.listSources": () => [
-    { kind: "object", id: "people", label: "People", parentObject: null },
-    { kind: "object", id: "companies", label: "Companies", parentObject: null },
-    { kind: "list", id: "list_mql", label: "MQLs — Q3", parentObject: "people" },
-  ],
-  "crm.describeSource": () => ({
-    fields: [
-      { slug: "name", title: "Name", type: "personal-name", recommended: true, sample: "Sarah Chen  ·  Marcus Webb" },
-      { slug: "email_addresses", title: "Email addresses", type: "email-address", recommended: true, sample: "sarah.chen@vercel.com" },
-      { slug: "phone_numbers", title: "Phone numbers", type: "phone-number", recommended: false, sample: "+1 415-555-0142" },
-    ],
-    suggestedMatchKey: "email_addresses",
-  }),
+  // Every handler reads the optional `provider` input (default attio) like
+  // the real router.
+  "crm.connectionStatus": (input, s) => {
+    const provider = input?.provider ?? "attio";
+    const connected = provider === "hubspot" ? s.hubspotConnected : s.crmConnected;
+    const label = provider === "hubspot" ? "acme.hubspot.com" : "Acme Attio";
+    return connected
+      ? { configured: true, connected: true, provider, connectedByName: "Morgan", workspaceLabel: label, attioWorkspaceName: label }
+      : { configured: true, connected: false, provider };
+  },
+  "crm.authorizeUrl": (input) =>
+    (input?.provider ?? "attio") === "hubspot"
+      ? { url: "https://app.hubspot.com/oauth/authorize?client_id=e2e&state=fake" }
+      : { url: "https://app.attio.com/authorize?client_id=e2e&state=fake" },
+  "crm.listSources": (input) =>
+    (input?.provider ?? "attio") === "hubspot"
+      ? [
+          { kind: "object", id: "contacts", label: "Contacts", parentObject: null },
+          { kind: "object", id: "companies", label: "Companies", parentObject: null },
+          { kind: "list", id: "7", label: "Newsletter subscribers", parentObject: "contacts" },
+        ]
+      : [
+          { kind: "object", id: "people", label: "People", parentObject: null },
+          { kind: "object", id: "companies", label: "Companies", parentObject: null },
+          { kind: "list", id: "list_mql", label: "MQLs — Q3", parentObject: "people" },
+        ],
+  "crm.describeSource": (input) =>
+    (input?.provider ?? "attio") === "hubspot"
+      ? {
+          fields: [
+            { slug: "firstname", title: "First name", type: "text", recommended: true, sample: "Sarah  ·  Marcus" },
+            { slug: "email", title: "Email", type: "email-address", recommended: true, sample: "sarah.chen@vercel.com" },
+            { slug: "lifecyclestage", title: "Lifecycle stage", type: "select", recommended: false, sample: "customer" },
+          ],
+          suggestedMatchKey: "email",
+        }
+      : {
+          fields: [
+            { slug: "name", title: "Name", type: "personal-name", recommended: true, sample: "Sarah Chen  ·  Marcus Webb" },
+            { slug: "email_addresses", title: "Email addresses", type: "email-address", recommended: true, sample: "sarah.chen@vercel.com" },
+            { slug: "phone_numbers", title: "Phone numbers", type: "phone-number", recommended: false, sample: "+1 415-555-0142" },
+          ],
+          suggestedMatchKey: "email_addresses",
+        },
   "crm.estimate": () => ({ count: 124, isLowerBound: false }),
   "crm.createBinding": (input, s) => {
     const bindingId = `crmb_${s.crmBindings.length + 1}`;
@@ -252,7 +278,7 @@ export const procedures = {
       id: bindingId,
       workspaceId: s.workspaceId,
       tableId,
-      provider: "attio",
+      provider: input?.provider ?? "attio",
       sourceKind: input?.sourceKind ?? "object",
       sourceId: input?.sourceId ?? "people",
       sourceLabel: input?.sourceLabel ?? "People",
@@ -313,10 +339,13 @@ export const procedures = {
     return { enqueued: true };
   },
   "crm.disconnect": (input, s) => {
-    const attio = s.crmBindings.filter((b) => b.workspaceId === s.workspaceId);
-    for (const b of attio) { b.pausedReason = "auth_revoked"; b.lastError = "Attio was disconnected. Reconnect Attio to resume syncing."; }
-    s.crmConnected = false;
-    return { removed: true, bindingsPaused: attio.length };
+    const provider = input?.provider ?? "attio";
+    const name = provider === "hubspot" ? "HubSpot" : "Attio";
+    const paused = s.crmBindings.filter((b) => b.workspaceId === s.workspaceId && (b.provider ?? "attio") === provider);
+    for (const b of paused) { b.pausedReason = "auth_revoked"; b.lastError = `${name} was disconnected. Reconnect ${name} to resume syncing.`; }
+    if (provider === "hubspot") s.hubspotConnected = false;
+    else s.crmConnected = false;
+    return { removed: true, bindingsPaused: paused.length };
   },
   "crm.deleteBinding": (input, s) => {
     s.crmBindings = s.crmBindings.filter((b) => b.id !== input?.bindingId);

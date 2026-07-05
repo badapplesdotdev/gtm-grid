@@ -14,7 +14,8 @@ import type { InMemoryUser, Membership, TestLayerFixtures } from "@gtmgrid/servi
 import { TestLayer } from "@gtmgrid/services";
 import { ManagedRuntime } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { authorizeResponse } from "../../../../../lib/crm/attio-authorize";
+import { authorizeResponse } from "../../../../../lib/crm/crm-authorize";
+import { ATTIO_OAUTH } from "../../../../../lib/crm/oauth-providers";
 
 const WS = "11111111-1111-1111-1111-111111111111";
 const OTHER_WS = "99999999-9999-9999-9999-999999999999";
@@ -54,7 +55,7 @@ describe("authorizeResponse", () => {
     const runtime = runtimeFor({ currentUserId: null });
     try {
       const returnTo = `${SITE}/api/crm/attio/authorize?workspace=${WS}`;
-      const res = await authorizeResponse({ runtime, userId: null, workspaceId: WS, siteUrl: SITE, returnTo });
+      const res = await authorizeResponse({ oauth: ATTIO_OAUTH, runtime, userId: null, workspaceId: WS, siteUrl: SITE, returnTo });
       expect(res.status).toBe(302);
       expect(res.headers.get("location")).toBe(`${SITE}/?returnTo=${encodeURIComponent(returnTo)}`);
     } finally {
@@ -66,6 +67,7 @@ describe("authorizeResponse", () => {
     const runtime = runtimeFor();
     try {
       const res = await authorizeResponse({
+        oauth: ATTIO_OAUTH,
         runtime,
         userId: OWNER,
         workspaceId: OTHER_WS,
@@ -85,6 +87,7 @@ describe("authorizeResponse", () => {
     const runtime = runtimeFor();
     try {
       const res = await authorizeResponse({
+        oauth: ATTIO_OAUTH,
         runtime,
         userId: OWNER,
         workspaceId: "not-a-uuid",
@@ -101,6 +104,7 @@ describe("authorizeResponse", () => {
     const runtime = runtimeFor();
     try {
       const res = await authorizeResponse({
+        oauth: ATTIO_OAUTH,
         runtime,
         userId: OWNER,
         workspaceId: WS,
@@ -125,6 +129,7 @@ describe("authorizeResponse", () => {
     const runtime = runtimeFor();
     try {
       const res = await authorizeResponse({
+        oauth: ATTIO_OAUTH,
         runtime,
         userId: OWNER,
         workspaceId: WS,

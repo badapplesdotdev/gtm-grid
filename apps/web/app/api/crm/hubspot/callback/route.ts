@@ -1,10 +1,10 @@
 /**
- * `GET /api/crm/attio/callback?code=…&state=…` — the END of the Attio OAuth
- * handshake (TRI: crm-sync). Attio redirects the browser here.
+ * `GET /api/crm/hubspot/callback?code=…&state=…` — the END of the HubSpot OAuth
+ * handshake (TRI: crm-sync). HubSpot redirects the browser here.
  *
  * Flow: `?error=access_denied` → friendly cancel page; invalid/expired state →
  * 400 plain-English page (the CSRF gate); otherwise exchange the code, identify
- * the Attio workspace, persist the encrypted connection, clear auth_revoked
+ * the HubSpot workspace, persist the encrypted connection, clear auth_revoked
  * pauses, capture `crm_connected`, and bounce into the app via
  * `gtmgrid://open/crm-connected`.
  *
@@ -18,7 +18,7 @@ import { appLayer } from "@gtmgrid/services";
 import { ManagedRuntime } from "effect";
 import type { NextRequest } from "next/server";
 import { callbackResponse, type CallbackSessionUser } from "../../../../../lib/crm/crm-callback";
-import { ATTIO_OAUTH } from "../../../../../lib/crm/oauth-providers";
+import { HUBSPOT_OAUTH } from "../../../../../lib/crm/oauth-providers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,7 +37,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   const { db } = await import("@gtmgrid/db/client");
   const rt = ManagedRuntime.make(appLayer({ db, userId: sessionUser?.id ?? null }));
   try {
-    return await callbackResponse({ runtime: rt, oauth: ATTIO_OAUTH, code, state, error, sessionUser });
+    return await callbackResponse({ runtime: rt, oauth: HUBSPOT_OAUTH, code, state, error, sessionUser });
   } finally {
     await rt.dispose();
   }

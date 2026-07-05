@@ -1,5 +1,5 @@
 /**
- * `GET /api/crm/attio/authorize?workspace=<uuid>` — the START of the Attio
+ * `GET /api/crm/hubspot/authorize?workspace=<uuid>` — the START of the HubSpot
  * OAuth handshake (TRI: crm-sync).
  *
  * The desktop app opens this URL in the system browser. We:
@@ -8,9 +8,9 @@
  *   2. verify that user is a MEMBER of `?workspace` (MembershipService) — you
  *      can only connect a CRM to a workspace you belong to.
  *   3. mint a signed `state` (binds workspace+user, 15-min TTL — the CSRF
- *      defense the callback checks) and 302 to Attio's authorize URL.
+ *      defense the callback checks) and 302 to HubSpot's authorize URL.
  *
- * When the Attio OAuth app isn't configured (no client id/secret) we render a
+ * When the HubSpot OAuth app isn't configured (no client id/secret) we render a
  * short human message rather than redirecting into a broken handshake. Every
  * non-redirect outcome is a plain-English page — never an HTTP code or trace.
  *
@@ -24,7 +24,7 @@ import { appLayer } from "@gtmgrid/services";
 import { ManagedRuntime } from "effect";
 import type { NextRequest } from "next/server";
 import { authorizeResponse, siteOrigin } from "../../../../../lib/crm/crm-authorize";
-import { ATTIO_OAUTH } from "../../../../../lib/crm/oauth-providers";
+import { HUBSPOT_OAUTH } from "../../../../../lib/crm/oauth-providers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,7 +38,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   try {
     return await authorizeResponse({
       runtime: rt,
-      oauth: ATTIO_OAUTH,
+      oauth: HUBSPOT_OAUTH,
       userId,
       workspaceId,
       siteUrl: siteOrigin(),

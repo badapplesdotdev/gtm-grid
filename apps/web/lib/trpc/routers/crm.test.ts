@@ -79,7 +79,7 @@ describe("crm.connectionStatus", () => {
   it("reports disconnected + unconfigured for a member with no connection", async () => {
     const caller = callerFor({ memberships, currentUserId: "member" });
     const status = await caller.crm.connectionStatus({ workspaceId: WS });
-    expect(status).toEqual({ configured: false, connected: false });
+    expect(status).toEqual({ configured: false, connected: false, provider: "attio" });
   });
 
   it("rejects a non-member with FORBIDDEN", async () => {
@@ -351,5 +351,79 @@ describe("crm.listBindings / deleteBinding", () => {
     const caller = callerFor({ memberships, tables, crmBindings, currentUserId: "member" });
     await caller.crm.deleteBinding({ bindingId: "crm-1" });
     expect(crmBindings).toHaveLength(0);
+  });
+});
+
+describe("crm provider routing (hubspot)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("authorizeUrl with provider hubspot mints a HubSpot URL with read-only scopes", async () => {
+    vi.stubEnv("HUBSPOT_CLIENT_ID", "hs-client");
+    vi.stubEnv("HUBSPOT_CLIENT_SECRET", "hs-secret");
+    vi.stubEnv("BETTER_AUTH_SECRET", "test-hmac-secret");
+    const caller = callerFor({ memberships, currentUserId: "member" });
+    const { url } = await caller.crm.authorizeUrl({ workspaceId: WS, provider: "hubspot" });
+    const parsed = new URL(url);
+    expect(parsed.origin).toBe("https://app.hubspot.com");
+    expect(parsed.searchParams.get("redirect_uri")).toContain("/api/crm/hubspot/callback");
+    expect(parsed.searchParams.get("scope")).toContain("crm.objects.contacts.read");
+  });
+
+  it("connectionStatus is per provider: a hubspot connection doesn't light up attio", async () => {
+    const caller = callerFor({ memberships, currentUserId: "member" });
+    // Seed a HubSpot connection through the same credential slot machinery the
+    // OAuth callback writes to.
+    await caller.credentials.save({
+      workspaceId: WS,
+      extensionId: "hubspot-crm",
+      scope: "workspace",
+      name: "HubSpot",
+      secrets: {
+        accessToken: "at_hs",
+        connectedByName: "Morgan",
+        crmWorkspaceId: "424242",
+        crmWorkspaceName: "acme.hubspot.com",
+      },
+    });
+    const hubspot = await caller.crm.connectionStatus({ workspaceId: WS, provider: "hubspot" });
+    const attio = await caller.crm.connectionStatus({ workspaceId: WS });
+    expect(hubspot).toMatchObject({
+      connected: true,
+      provider: "hubspot",
+      workspaceLabel: "acme.hubspot.com",
+      // The legacy alias mirrors the neutral label for old desktop builds.
+      attioWorkspaceName: "acme.hubspot.com",
+    });
+    expect(attio).toMatchObject({ connected: false, provider: "attio" });
+  });
+
+  it("createBinding persists provider hubspot on the binding row", async () => {
+    vi.spyOn(inngest, "send").mockResolvedValue({ ids: [] });
+    const crmBindings: CrmBinding[] = [];
+    const caller = callerFor({ memberships, tables, crmBindings, currentUserId: "member" });
+    await caller.credentials.save({
+      workspaceId: WS,
+      extensionId: "hubspot-crm",
+      scope: "workspace",
+      name: "HubSpot",
+      secrets: { accessToken: "at_hs" },
+    });
+    const out = await caller.crm.createBinding({
+      workspaceId: WS,
+      provider: "hubspot",
+      tableId: TABLE,
+      sourceKind: "object",
+      sourceId: "contacts",
+      sourceLabel: "Contacts",
+      fields: [{ attrSlug: "email", attrType: "email-address", title: "Email" }],
+      filters: [],
+      dedupeMode: "update",
+      matchKeyAttr: "email",
+    });
+    expect(out.bindingId).toBeTruthy();
+    expect(crmBindings[0]?.provider).toBe("hubspot");
+    vi.restoreAllMocks();
   });
 });

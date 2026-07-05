@@ -141,12 +141,13 @@ const syncOnce = (w: World): Promise<CrmSyncOutcome> =>
       const connections = yield* CrmConnectionService;
       yield* connections.saveConnection({
         workspaceId: WS,
+        provider: "attio",
         tokens: { accessToken: "at_test" },
         meta: {
           connectedByUserId: "user_m",
           connectedByName: "Morgan",
-          attioWorkspaceId: "attio_ws",
-          attioWorkspaceName: "Acme",
+          crmWorkspaceId: "attio_ws",
+          crmWorkspaceName: "Acme",
         },
       });
       const sync = yield* CrmSyncService;
@@ -273,8 +274,9 @@ describe("match-key collisions", () => {
         const connections = yield* CrmConnectionService;
         yield* connections.saveConnection({
           workspaceId: WS,
+          provider: "attio",
           tokens: { accessToken: "at_test" },
-          meta: { connectedByUserId: "user_m", connectedByName: "M", attioWorkspaceId: "a", attioWorkspaceName: "A" },
+          meta: { connectedByUserId: "user_m", connectedByName: "M", crmWorkspaceId: "a", crmWorkspaceName: "A" },
         });
         const sync = yield* CrmSyncService;
         yield* sync.create({
@@ -558,7 +560,7 @@ describe("mid-pull failures", () => {
     const outcome = await syncOnce(w);
 
     expect(outcome.status).toBe("failed");
-    expect(outcome.errorTag).toBe("AttioAuthRevoked");
+    expect(outcome.errorTag).toBe("CrmAuthRevoked");
     expect(outcome.error).toContain("Reconnect Attio");
     const binding = w.fixtures.crmBindings?.[0];
     expect(binding?.pausedReason).toBe("auth_revoked");

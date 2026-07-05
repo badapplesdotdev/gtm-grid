@@ -1,15 +1,14 @@
 /**
- * The Attio OAuth handshake's SECOND leg (TRI: crm-sync), extracted from the
- * route file because Next.js route modules may only export route handlers —
- * `callbackResponse` is the offline-testable core the route's `GET` wraps.
- * See the route file for the flow docs.
+ * A CRM OAuth handshake's SECOND leg (TRI: crm-sync), provider-agnostic —
+ * everything provider-specific arrives via a {@link CrmOAuthAdapter}. Lives
+ * outside the route files because Next.js route modules may only export route
+ * handlers — `callbackResponse` is the offline-testable core each provider's
+ * `GET` wraps.
  */
 
 import {
   type AppServices,
-  type AttioSession,
-  AttioAuth,
-  AttioClient,
+  type CrmSession,
   CrmBindingRepo,
   CrmConnectionService,
   WorkspaceRepo,
@@ -17,8 +16,7 @@ import {
 import { Effect, Exit, type ManagedRuntime, Option } from "effect";
 import { captureServer } from "../posthog-server";
 import { type CrmPageLink, crmOAuthPage, htmlResponse } from "./oauth-html";
-
-const ATTIO_PROVIDER = "attio";
+import type { CrmOAuthAdapter } from "./oauth-providers";
 
 type ServicesRuntime = ManagedRuntime.ManagedRuntime<AppServices, never>;
 
@@ -37,17 +35,20 @@ function displayName(sessionUser: CallbackSessionUser | null, stateUserId: strin
   return sessionUser.name && sessionUser.name.trim() !== "" ? sessionUser.name : sessionUser.email;
 }
 
-/** Retry link back into the authorize route for a known workspace. */
-function retryLink(workspaceId: string): CrmPageLink {
-  return { href: `/api/crm/attio/authorize?workspace=${encodeURIComponent(workspaceId)}`, label: "Try connecting again" };
+/** Retry link back into the provider's authorize route for a known workspace. */
+function retryLink(provider: string, workspaceId: string): CrmPageLink {
+  return {
+    href: `/api/crm/${provider}/authorize?workspace=${encodeURIComponent(workspaceId)}`,
+    label: "Try connecting again",
+  };
 }
 
-function canceledPage(retry: CrmPageLink | undefined): Response {
+function canceledPage(name: string, retry: CrmPageLink | undefined): Response {
   return htmlResponse(
     crmOAuthPage({
       title: "Connection canceled — gtm grid",
       heading: "You canceled the connection",
-      message: "No problem — nothing was connected. You can start the Attio connection again whenever you're ready.",
+      message: `No problem — nothing was connected. You can start the ${name} connection again whenever you're ready.`,
       primary: retry,
     }),
     200,
@@ -65,25 +66,25 @@ function expiredPage(): Response {
   );
 }
 
-function failurePage(retry: CrmPageLink): Response {
+function failurePage(name: string, retry: CrmPageLink): Response {
   return htmlResponse(
     crmOAuthPage({
       title: "Couldn't finish — gtm grid",
-      heading: "We couldn't finish connecting Attio",
-      message: "Attio didn't complete the connection. This is usually temporary — please try again in a moment.",
+      heading: `We couldn't finish connecting ${name}`,
+      message: `${name} didn't complete the connection. This is usually temporary — please try again in a moment.`,
       primary: retry,
     }),
     502,
   );
 }
 
-function successPage(attioWorkspaceName: string): Response {
-  const named = attioWorkspaceName.trim() !== "";
+function successPage(name: string, crmWorkspaceName: string): Response {
+  const named = crmWorkspaceName.trim() !== "";
   return htmlResponse(
     crmOAuthPage({
-      title: "Attio connected — gtm grid",
-      heading: named ? `Connected to ${attioWorkspaceName}` : "Attio connected",
-      message: "Attio connected — returning to GTM Grid…",
+      title: `${name} connected — gtm grid`,
+      heading: named ? `Connected to ${crmWorkspaceName}` : `${name} connected`,
+      message: `${name} connected — returning to GTM Grid…`,
       // Fires the deep link instantly (same mechanism as /open); the CTA is the
       // fallback when the browser doesn't hand off to the app.
       redirectTo: "gtmgrid://open/crm-connected",
@@ -94,38 +95,39 @@ function successPage(attioWorkspaceName: string): Response {
 }
 
 /**
- * Complete the Attio OAuth handshake as a `Response`, given a built `runtime`
- * and the resolved browser session user. Testable offline: pass a `TestLayer`
- * runtime + a stubbed `fetch` for the token and `/v2/self` calls.
+ * Complete a CRM OAuth handshake as a `Response`, given a built `runtime`,
+ * the provider's adapter, and the resolved browser session user. Testable
+ * offline: pass a `TestLayer` runtime + a stubbed `fetch` for the token and
+ * identify calls.
  */
 export async function callbackResponse(params: {
   readonly runtime: ServicesRuntime;
+  readonly oauth: CrmOAuthAdapter;
   readonly code: string;
   readonly state: string;
   readonly error: string | null;
   readonly sessionUser: CallbackSessionUser | null;
 }): Promise<Response> {
-  const verify = (token: string) => params.runtime.runPromise(Effect.flatMap(AttioAuth, (a) => a.verifyState(token)));
+  const { provider, displayName: name } = params.oauth;
+  const verify = (token: string) => params.runtime.runPromise(params.oauth.verifyState(token));
 
-  // 1. The user declined on Attio's consent screen.
+  // 1. The user declined on the provider's consent screen.
   if (params.error !== null && params.error !== "") {
     const claims = params.state !== "" ? await verify(params.state) : null;
-    return canceledPage(claims ? retryLink(claims.workspaceId) : undefined);
+    return canceledPage(name, claims ? retryLink(provider, claims.workspaceId) : undefined);
   }
 
   // 2. CSRF/expiry gate — an invalid or aged state never exchanges a code.
   const claims = params.state !== "" ? await verify(params.state) : null;
   if (claims === null) return expiredPage();
 
-  if (params.code === "") return failurePage(retryLink(claims.workspaceId));
+  if (params.code === "") return failurePage(name, retryLink(provider, claims.workspaceId));
 
   const connectedByName = displayName(params.sessionUser, claims.userId);
 
   // 3. Exchange → identify → persist → un-pause, all against the same runtime.
   const exit = await params.runtime.runPromiseExit(
     Effect.gen(function* () {
-      const auth = yield* AttioAuth;
-      const client = yield* AttioClient;
       const connection = yield* CrmConnectionService;
       const bindings = yield* CrmBindingRepo;
       const workspaces = yield* WorkspaceRepo;
@@ -146,40 +148,41 @@ export async function callbackResponse(params: {
             )
           : connectedByName;
 
-      const tokens = yield* auth.exchangeCode(params.code);
-      const session: AttioSession = {
+      const tokens = yield* params.oauth.exchangeCode(params.code);
+      const session: CrmSession = {
         workspaceId: claims.workspaceId,
         tokens,
         persist: () => Effect.void,
       };
-      const self = yield* client.identifySelf(session);
+      const self = yield* params.oauth.identifySelf(session);
       yield* connection.saveConnection({
         workspaceId: claims.workspaceId,
+        provider,
         tokens,
         meta: {
           connectedByUserId: claims.userId,
           connectedByName: nameFromDb,
-          attioWorkspaceId: self.workspaceId,
-          attioWorkspaceName: self.workspaceName,
+          crmWorkspaceId: self.workspaceId,
+          crmWorkspaceName: self.workspaceName,
         },
       });
       // Reconnecting resolves a revoked-auth pause (NOT source_gone — a deleted
       // source isn't fixed by re-authing).
-      yield* bindings.clearPause({ workspaceId: claims.workspaceId, provider: ATTIO_PROVIDER, reason: "auth_revoked" });
+      yield* bindings.clearPause({ workspaceId: claims.workspaceId, provider, reason: "auth_revoked" });
       return self.workspaceName;
     }),
   );
 
-  // Any failure (a bad/expired code, an Attio outage, a persist defect) becomes a
-  // retry page — defects are already routed to Error Tracking by the host
-  // `reportError` sink wired into `appLayer`.
-  if (Exit.isFailure(exit)) return failurePage(retryLink(claims.workspaceId));
+  // Any failure (a bad/expired code, a provider outage, a persist defect)
+  // becomes a retry page — defects are already routed to Error Tracking by the
+  // host `reportError` sink wired into `appLayer`.
+  if (Exit.isFailure(exit)) return failurePage(name, retryLink(provider, claims.workspaceId));
 
   // 4. Success → analytics + the bounce-into-app page.
   captureServer("crm_connected", {
     distinctId: claims.userId,
-    properties: { provider: ATTIO_PROVIDER, workspace_id: claims.workspaceId },
+    properties: { provider, workspace_id: claims.workspaceId },
     groups: { workspace: claims.workspaceId },
   });
-  return successPage(exit.value);
+  return successPage(name, exit.value);
 }

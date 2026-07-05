@@ -1,12 +1,16 @@
 /**
  * Typed error hierarchy for the CRM-sync subsystem (TRI: crm-sync). Every
- * failure an Attio call or a sync run can produce is one of these tags —
+ * failure a CRM call or a sync run can produce is one of these tags —
  * `crm/error-copy.ts` maps each tag to the human-readable copy + run status
  * that end users see, and `isTransientCrmError` drives the silent retry policy.
  *
+ * Provider-neutral: each tag carries `provider`, the DISPLAY name of the CRM
+ * ("Attio", "HubSpot") so copy can name the right product without a parallel
+ * tag set per provider.
+ *
  * Grouping (mirrors how the sync loop reacts):
  * - TRANSIENT  → retried silently with backoff; only surfaces if exhausted.
- * - AUTH       → pauses the binding until the user reconnects Attio.
+ * - AUTH       → pauses the binding until the user reconnects the CRM.
  * - PARTIAL    → the run continues/lands what it can and reports what it skipped.
  * - HARD       → the run fails with actionable copy.
  */
@@ -15,46 +19,54 @@ import { Data } from "effect";
 
 // ── Transient (silently retried) ──────────────────────────────────────────────
 
-/** Attio returned 429. `retryAfterMs` honors the Retry-After header when sent. */
-export class AttioRateLimitError extends Data.TaggedError("AttioRateLimitError")<{
+/** The CRM returned 429. `retryAfterMs` honors the Retry-After header when sent. */
+export class CrmRateLimitError extends Data.TaggedError("CrmRateLimitError")<{
+  readonly provider: string;
   readonly retryAfterMs?: number;
 }> {}
 
-/** Attio returned a 5xx. */
-export class AttioServerError extends Data.TaggedError("AttioServerError")<{
+/** The CRM returned a 5xx. */
+export class CrmServerError extends Data.TaggedError("CrmServerError")<{
+  readonly provider: string;
   readonly status: number;
 }> {}
 
 /** The fetch itself rejected (DNS, connection reset, timeout). */
-export class AttioNetworkError extends Data.TaggedError("AttioNetworkError")<{
+export class CrmNetworkError extends Data.TaggedError("CrmNetworkError")<{
+  readonly provider: string;
   readonly cause: unknown;
 }> {}
 
 // ── Auth (pauses the binding; user must reconnect) ────────────────────────────
 
 /**
- * Attio rejected the token (401 after a refresh attempt, or the refresh itself
- * was refused). The connection is dead until the user re-runs OAuth.
+ * The CRM rejected the token (401 after a refresh attempt, or the refresh
+ * itself was refused). The connection is dead until the user re-runs OAuth.
  */
-export class AttioAuthRevoked extends Data.TaggedError("AttioAuthRevoked")<{
+export class CrmAuthRevoked extends Data.TaggedError("CrmAuthRevoked")<{
+  readonly provider: string;
   readonly detail?: string;
 }> {}
 
-/** No Attio credential exists for this workspace (deleted or never connected). */
-export class CrmConnectionMissing extends Data.TaggedError("CrmConnectionMissing") {}
+/** No CRM credential exists for this workspace (deleted or never connected). */
+export class CrmConnectionMissing extends Data.TaggedError("CrmConnectionMissing")<{
+  readonly provider: string;
+}> {}
 
 // ── Recoverable-partial (run lands what it can) ───────────────────────────────
 
 /**
  * One or more mapped attributes no longer exist upstream (deleted/renamed in
- * Attio). The run skips those columns, syncs the rest, and reports the labels.
+ * the CRM). The run skips those columns, syncs the rest, and reports the labels.
  */
-export class AttioSchemaDriftError extends Data.TaggedError("AttioSchemaDriftError")<{
+export class CrmSchemaDriftError extends Data.TaggedError("CrmSchemaDriftError")<{
+  readonly provider: string;
   readonly missingAttrs: ReadonlyArray<string>;
 }> {}
 
 /** The bound object/list itself is gone upstream (404 on the source). */
-export class AttioSourceGoneError extends Data.TaggedError("AttioSourceGoneError")<{
+export class CrmSourceGoneError extends Data.TaggedError("CrmSourceGoneError")<{
+  readonly provider: string;
   readonly sourceLabel: string;
 }> {}
 
@@ -68,8 +80,9 @@ export class RowCapReached extends Data.TaggedError("RowCapReached")<{
 
 // ── Hard ──────────────────────────────────────────────────────────────────────
 
-/** Attio rejected the request as malformed (400) — usually an inexpressible filter. */
-export class AttioRequestError extends Data.TaggedError("AttioRequestError")<{
+/** The CRM rejected the request as malformed (400/403) — e.g. an inexpressible filter or a missing scope. */
+export class CrmRequestError extends Data.TaggedError("CrmRequestError")<{
+  readonly provider: string;
   readonly status: number;
   readonly detail?: string;
 }> {}
@@ -82,19 +95,19 @@ export class CrmSyncError extends Data.TaggedError("CrmSyncError")<{
 
 /** Union of every CRM-sync failure. */
 export type CrmError =
-  | AttioRateLimitError
-  | AttioServerError
-  | AttioNetworkError
-  | AttioAuthRevoked
+  | CrmRateLimitError
+  | CrmServerError
+  | CrmNetworkError
+  | CrmAuthRevoked
   | CrmConnectionMissing
-  | AttioSchemaDriftError
-  | AttioSourceGoneError
+  | CrmSchemaDriftError
+  | CrmSourceGoneError
   | RowCapReached
-  | AttioRequestError
+  | CrmRequestError
   | CrmSyncError;
 
 /** Failures worth an in-process retry: rate limit, 5xx, or network. */
 export const isTransientCrmError = (e: CrmError): boolean =>
-  e._tag === "AttioRateLimitError" ||
-  e._tag === "AttioServerError" ||
-  e._tag === "AttioNetworkError";
+  e._tag === "CrmRateLimitError" ||
+  e._tag === "CrmServerError" ||
+  e._tag === "CrmNetworkError";

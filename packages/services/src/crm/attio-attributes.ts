@@ -1,51 +1,22 @@
 /**
  * Pure Attio attribute layer (TRI: crm-sync): flattens Attio's typed value
- * entries into grid cell text, and compiles the wizard's six filter ops into
- * (a) an optional server-side Attio filter for narrowing the pull and (b) a
- * worker-side predicate that is ALWAYS applied.
- *
- * Worker-authoritative filtering: the server-side filter is only an
- * optimization — every record is re-checked here against the flattened text,
- * so a filter always means exactly what the wizard preview showed, regardless
- * of Attio operator semantics.
+ * entries into grid cell text, and compiles the wizard's filter ops into an
+ * optional server-side Attio prefilter for narrowing the pull. The neutral
+ * cell-type union, `FlatValue` shape, and worker-side filter predicate live
+ * in `crm-values.ts` — this module only maps Attio INTO that vocabulary.
  *
  * Reference values (record links, actors) carry no display name in the API —
  * `flattenAttrValue` returns a `ref` descriptor and the sync worker resolves
  * names in batches per run (AttioClient.resolveRecordNames / listMembers).
  */
 
+import type { CrmAttrType, CrmFilter, FlatValue } from "./crm-values.js";
+
+/** Attio's attribute-type names coincide with the neutral union (it was modeled on them). */
+export type AttioAttrType = CrmAttrType;
+
 /** One entry of an Attio record's `values[attrSlug]` array (shape varies by type). */
 export type AttioValueEntry = Record<string, unknown>;
-
-/** Attio attribute types the field picker supports in v1. */
-export const SUPPORTED_ATTR_TYPES = [
-  "text",
-  "personal-name",
-  "email-address",
-  "domain",
-  "phone-number",
-  "number",
-  "currency",
-  "date",
-  "timestamp",
-  "checkbox",
-  "select",
-  "status",
-  "rating",
-  "location",
-  "record-reference",
-  "actor-reference",
-] as const;
-export type AttioAttrType = (typeof SUPPORTED_ATTR_TYPES)[number];
-
-export const isSupportedAttrType = (t: string): t is AttioAttrType =>
-  (SUPPORTED_ATTR_TYPES as ReadonlyArray<string>).includes(t);
-
-/** A flattened cell: plain text, or a reference the worker must resolve to a name. */
-export type FlatValue =
-  | { readonly kind: "text"; readonly text: string }
-  | { readonly kind: "ref"; readonly targetObject: string; readonly targetRecordId: string }
-  | { readonly kind: "actor"; readonly actorId: string };
 
 const str = (v: unknown): string => (v === null || v === undefined ? "" : String(v));
 
@@ -141,17 +112,6 @@ export function flattenAttrValue(
 
 // ── Filters ───────────────────────────────────────────────────────────────────
 
-/** The wizard's filter ops (mirrors the design's dropdown). */
-export const FILTER_OPS = ["is", "is not", "contains", "is known", "is unknown", "after"] as const;
-export type FilterOp = (typeof FILTER_OPS)[number];
-
-export interface CrmFilter {
-  readonly attrSlug: string;
-  readonly attrType: AttioAttrType;
-  readonly op: FilterOp;
-  readonly value: string;
-}
-
 /**
  * Server-side Attio prefilter for one filter, when the op's semantics are
  * certain enough to narrow the pull ($eq / $contains / $not_empty / $gt).
@@ -187,35 +147,3 @@ export function toAttioFilterBody(
   if (parts.length === 1) return parts[0];
   return { $and: parts };
 }
-
-/**
- * Worker-side predicate over the FLATTENED text of the filtered attribute —
- * always applied, authoritative. Text ops are case-insensitive except "is",
- * which is an exact match (what non-technical users expect from "is").
- */
-export function matchesFilter(f: CrmFilter, flatText: string): boolean {
-  const text = flatText.trim();
-  const value = f.value.trim();
-  switch (f.op) {
-    case "is":
-      return text === value;
-    case "is not":
-      return text !== value;
-    case "contains":
-      return text.toLowerCase().includes(value.toLowerCase());
-    case "is known":
-      return text !== "";
-    case "is unknown":
-      return text === "";
-    case "after": {
-      const a = Date.parse(text);
-      const b = Date.parse(value);
-      return Number.isFinite(a) && Number.isFinite(b) && a > b;
-    }
-  }
-}
-
-export const matchesAllFilters = (
-  filters: ReadonlyArray<CrmFilter>,
-  flatTextByAttr: (attrSlug: string) => string,
-): boolean => filters.every((f) => matchesFilter(f, flatTextByAttr(f.attrSlug)));
