@@ -1,0 +1,353 @@
+/**
+ * Scheduled CRM→grid sync poller (cloud-only). The desktop has no cron; the
+ * recurring daily pull lives here, structured exactly like the Social-Signals
+ * poller ({@link pollTrigifySignals}) so the two share one operational model:
+ *
+ *   - {@link pollCrmSync} runs on a daily cron, collects the bindings whose
+ *     schedule is DUE via SQL keyset pagination (the due predicate runs in the
+ *     DB), and fans them out in bounded chunks (~{@link FANOUT_CHUNK}/event).
+ *   - {@link processCrmBinding} handles each `crm/binding.due` (cron) or
+ *     `crm/binding.sync-now` (manual) event: it runs `CrmSyncService.syncForWorker`
+ *     (membership-free — the Inngest signing key is the trust boundary), captures
+ *     the per-run PostHog event, publishes a realtime row-insert so open grids
+ *     refresh live, and fans out `crm/row.inserted` enrichment for new rows.
+ *   - {@link warmUpCrmBinding} front-loads retries after a binding is created so
+ *     the first data lands in seconds, not at the next daily cron.
+ *   - {@link enrichCrmRow} runs a newly synced row's function columns in `{{ref}}`
+ *     dependency order, reusing the webhook enricher's helpers.
+ *
+ * `runtime = "nodejs"` for the Effect runtime + credential decrypt (node:crypto).
+ */
+
+import {
+  type AppServices,
+  appLayer,
+  type CrmSyncOutcome,
+  CrmSyncService,
+  DUE_PAGE_SIZE,
+  FANOUT_CHUNK,
+} from "@gtmgrid/services";
+import { Effect, ManagedRuntime } from "effect";
+import { inngest } from "../client";
+import { onFailure } from "../on-failure";
+import { captureServer } from "../../posthog-server";
+import { enrichRowInDepOrder } from "../enrich-row";
+import { toStepRunner } from "./process-webhook-record";
+
+/** Build a per-run Effect runtime (no member identity) and run one program. */
+async function withRuntime<A>(run: (exec: <X>(e: Effect.Effect<X, unknown, AppServices>) => Promise<X>) => Promise<A>): Promise<A> {
+  const { db } = await import("@gtmgrid/db/client");
+  const runtime = ManagedRuntime.make(appLayer({ db, userId: null }));
+  try {
+    return await run((e) => runtime.runPromise(e));
+  } finally {
+    await runtime.dispose();
+  }
+}
+
+// ── Pure helpers (unit-pinned) ─────────────────────────────────────────────────
+
+/**
+ * Map the Inngest event that woke {@link processCrmBinding} / {@link warmUpCrmBinding}
+ * to the `syncForWorker` trigger. `sync-now` is a user's manual "Sync now";
+ * `binding.created` is the post-create warm-up; everything else (the daily
+ * `binding.due` fan-out) is the cron. Total + pure so the mapping is unit-pinned.
+ */
+export function crmSyncTrigger(eventName: string): "cron" | "manual" | "warmup" {
+  if (eventName === "crm/binding.sync-now") return "manual";
+  if (eventName === "crm/binding.created") return "warmup";
+  return "cron";
+}
+
+/**
+ * Map a sync outcome status to the terminal analytics event. `ok` completed;
+ * `partial`/`warn` both landed data but degraded (schema drift, row cap, page
+ * budget), so both report `crm_sync_partial`; `failed` never landed. Pure so the
+ * status→event mapping is unit-pinned independent of PostHog wiring.
+ */
+export function crmTerminalEvent(
+  status: CrmSyncOutcome["status"],
+): "crm_sync_completed" | "crm_sync_partial" | "crm_sync_failed" {
+  switch (status) {
+    case "ok":
+      return "crm_sync_completed";
+    case "partial":
+    case "warn":
+      return "crm_sync_partial";
+    case "failed":
+      return "crm_sync_failed";
+  }
+}
+
+/**
+ * Build the `crm/row.inserted` events to enrich each row a sync just inserted —
+ * one per row, idempotent by rowId (dedupes a replayed enqueue), handled by
+ * {@link enrichCrmRow}. Gives synced rows the same dependency-ordered function
+ * cascade webhook rows get. Empty when nothing was inserted (caller skips the
+ * sendEvent). Only new rows carry ids in the outcome, so updated rows are not
+ * re-enriched here (their function columns already ran on first insert).
+ */
+export function crmEnrichEvents(outcome: {
+  readonly newRowIds: readonly string[];
+  readonly tableId: string;
+  readonly workspaceId: string;
+}): Array<{ name: "crm/row.inserted"; data: { tableId: string; workspaceId: string; rowId: string }; id: string }> {
+  const { newRowIds, tableId, workspaceId } = outcome;
+  if (newRowIds.length === 0 || !tableId || !workspaceId) return [];
+  return newRowIds.map((rowId) => ({
+    name: "crm/row.inserted" as const,
+    data: { tableId, workspaceId, rowId },
+    id: `crm-enrich:${rowId}`,
+  }));
+}
+
+/**
+ * Capture the per-run PostHog events for one sync outcome: a `crm_sync_started`
+ * marker plus the terminal `completed`/`partial`/`failed` event, both keyed by
+ * the real `sync_run_id` (only known after the run). Server-side, workspace-grouped,
+ * exactly like the webhook worker's `column_run_failed`. No-ops when PostHog is
+ * unconfigured. Fire-and-forget (the client flushes each event immediately).
+ */
+function captureCrmSync(outcome: CrmSyncOutcome, trigger: "cron" | "manual" | "warmup"): void {
+  const base = {
+    provider: outcome.provider,
+    binding_id: outcome.bindingId,
+    sync_run_id: outcome.runId,
+    trigger,
+    workspace_id: outcome.workspaceId,
+  };
+  const opts = { distinctId: outcome.workspaceId, groups: { workspace: outcome.workspaceId } };
+  captureServer("crm_sync_started", { ...opts, properties: base });
+  switch (crmTerminalEvent(outcome.status)) {
+    case "crm_sync_completed":
+      captureServer("crm_sync_completed", {
+        ...opts,
+        properties: {
+          ...base,
+          rows_created: outcome.rowsCreated,
+          rows_updated: outcome.rowsUpdated,
+          rows_skipped: outcome.rowsSkipped,
+          rows_staled: outcome.rowsStaled,
+        },
+      });
+      break;
+    case "crm_sync_partial":
+      captureServer("crm_sync_partial", {
+        ...opts,
+        properties: {
+          ...base,
+          rows_created: outcome.rowsCreated,
+          rows_updated: outcome.rowsUpdated,
+          fields_dropped: outcome.fieldsDropped.length,
+          error_tag: outcome.errorTag,
+        },
+      });
+      break;
+    case "crm_sync_failed":
+      captureServer("crm_sync_failed", { ...opts, properties: { ...base, error_tag: outcome.errorTag } });
+      break;
+  }
+}
+
+/** Run one sync through the worker path; an Effect failure surfaces as a step failure (Inngest retries). */
+function runSyncStep(bindingId: string, trigger: "cron" | "manual" | "warmup"): Promise<CrmSyncOutcome> {
+  return withRuntime((exec) =>
+    exec(
+      Effect.gen(function* () {
+        const svc = yield* CrmSyncService;
+        return yield* svc.syncForWorker(bindingId, trigger);
+      }),
+    ),
+  );
+}
+
+// ── Functions ──────────────────────────────────────────────────────────────────
+
+/** Cron (daily 09:00 UTC): enumerate due bindings and fan out one event each. */
+export const pollCrmSync = inngest.createFunction(
+  { id: "poll-crm-sync", retries: 1, triggers: [{ cron: "0 9 * * *" }], onFailure },
+  async ({ step }) => {
+    // Collect DUE bindings via SQL keyset pagination — the due predicate (enabled
+    // + daily + not paused + lastSyncedAt null-or-≥20h-old) runs in the DB with a
+    // LIMIT per page, so we never load + JS-filter the whole enabled population.
+    // `now` is captured ONCE so paging is consistent.
+    const due = await step.run("collect-due", () =>
+      withRuntime(async (exec) => {
+        const now = Date.now();
+        const out: { bindingId: string; workspaceId: string }[] = [];
+        let cursor: { readonly createdAt: number; readonly id: string } | null = null;
+        // Bound the work per cron tick: at most a fixed number of pages, so a
+        // pathological backlog can't make one tick run unbounded (the next daily
+        // tick resumes — bindings stay marked due until synced).
+        for (let page = 0; page < 200; page += 1) {
+          const result: {
+            items: ReadonlyArray<{ id: string; workspaceId: string; createdAt: number }>;
+            nextCursor: { readonly createdAt: number; readonly id: string } | null;
+          } = await exec(
+            Effect.gen(function* () {
+              const svc = yield* CrmSyncService;
+              return yield* svc.listDuePage({ now, limit: DUE_PAGE_SIZE, cursor });
+            }),
+          );
+          for (const b of result.items) out.push({ bindingId: b.id, workspaceId: b.workspaceId });
+          if (result.nextCursor === null) break;
+          cursor = result.nextCursor;
+        }
+        return out;
+      }),
+    );
+
+    if (due.length === 0) return { due: 0 };
+
+    // Chunk the fan-out into bounded batches across separate steps, rather than
+    // one giant sendEvent array — keeps each enqueue payload small and lets the
+    // per-binding function's global concurrency cap pace the actual pulls.
+    let chunks = 0;
+    for (let i = 0; i < due.length; i += FANOUT_CHUNK) {
+      const batch = due.slice(i, i + FANOUT_CHUNK);
+      await step.sendEvent(
+        `fan-out-bindings-${i}`,
+        batch.map((d) => ({ name: "crm/binding.due", data: d })),
+      );
+      chunks += 1;
+    }
+    return { due: due.length, chunks };
+  },
+);
+
+/**
+ * Per-binding sync, fanned out from the cron OR triggered by a manual "Sync now"
+ * (`crm/binding.sync-now`). Two-tier concurrency: a GLOBAL account-scoped cap
+ * bounds total in-flight syncs across ALL workspaces (per-workspace limits
+ * otherwise multiply unbounded as workspaces grow), while the per-workspace key
+ * keeps any single workspace from monopolising runs. `syncForWorker` never throws
+ * for sync-level errors (the outcome carries the status + user copy) — an Effect
+ * failure here means a disabled/paused binding or a bookkeeping failure, which we
+ * let surface as a step failure so Inngest retries.
+ */
+export const processCrmBinding = inngest.createFunction(
+  {
+    id: "process-crm-binding",
+    concurrency: [
+      // Account-scoped limits REQUIRE a key (Inngest rejects the whole app sync
+      // without one). A constant key makes one shared account-wide pool.
+      { scope: "account", key: '"crm-sync"', limit: 50 },
+      { key: "event.data.workspaceId", limit: 2 },
+    ],
+    retries: 2,
+    onFailure,
+    triggers: [{ event: "crm/binding.due" }, { event: "crm/binding.sync-now" }],
+  },
+  async ({ event, step }) => {
+    const bindingId = (event.data as { bindingId?: string }).bindingId ?? "";
+    if (!bindingId) return { bindingId, status: null };
+    const trigger = crmSyncTrigger(event.name);
+    const outcome = await step.run(`sync:${bindingId}`, () => runSyncStep(bindingId, trigger));
+    if (outcome.runId === "") {
+      // Overlap guard fired (a run for this binding is already in flight) —
+      // nothing synced, so no analytics/realtime/enrichment.
+      return { bindingId, status: "skipped", rowsCreated: 0, rowsUpdated: 0 };
+    }
+
+    // Each side effect is its own durable step so a retry re-runs only what did
+    // not complete (analytics fire once, realtime once, enrichment once).
+    await step.run(`analytics:${bindingId}:${outcome.runId}`, async () => {
+      captureCrmSync(outcome, trigger);
+      return null;
+    });
+    // Realtime is published from INSIDE CrmSyncService.runSync (row.insert
+    // WITH cell values + cell.upsert on updates) — the worker no longer
+    // publishes, which would duplicate rows with empty cells.
+    const enrichEvents = crmEnrichEvents(outcome);
+    if (enrichEvents.length > 0) await step.sendEvent("enqueue-crm-enrich", enrichEvents);
+
+    return { bindingId, status: outcome.status, rowsCreated: outcome.rowsCreated, rowsUpdated: outcome.rowsUpdated };
+  },
+);
+
+/**
+ * Backoff (seconds) between warm-up attempts — front-loaded because a fresh CRM
+ * pull can take a moment to page + flatten, with a longer tail for large sources.
+ * Total window ≈ 8 minutes across 10 attempts.
+ */
+const WARM_UP_BACKOFF_S = [15, 15, 30, 30, 60, 60, 60, 60, 60, 60] as const;
+
+/**
+ * Post-create warm-up: front-load the FIRST sync so a newly created binding shows
+ * rows in seconds instead of waiting for the daily cron. Triggered by the
+ * `crm/binding.created` event the tRPC `create` mutation emits, it retries the
+ * pull on a front-loaded backoff until the first data lands (a binding whose
+ * `lastSyncedAt` is still null stays due), mirroring {@link warmUpSignalBinding}.
+ *
+ * Each attempt IS a real sync run (its own `sync_run_id` + `crm_sync_runs` row),
+ * so analytics fire per attempt with the `warmup` trigger. Stops on the first
+ * attempt that lands rows (publishing realtime + enqueuing enrichment then), or
+ * on exhausting the backoff — at which point the daily cron's still-due predicate
+ * takes over. An Effect failure (disabled binding, bookkeeping) fails the step
+ * and Inngest retries.
+ */
+export const warmUpCrmBinding = inngest.createFunction(
+  {
+    id: "warm-up-crm-binding",
+    concurrency: [
+      // Same shared account-wide pool as processCrmBinding — mass binding
+      // creation must not fan warm-up pulls out unbounded.
+      { scope: "account", key: '"crm-sync"', limit: 50 },
+      { key: "event.data.workspaceId", limit: 2 },
+    ],
+    retries: 1,
+    onFailure,
+    triggers: [{ event: "crm/binding.created" }],
+  },
+  async ({ event, step }) => {
+    const bindingId = (event.data as { bindingId?: string }).bindingId ?? "";
+    if (!bindingId) return { bindingId, rowsCreated: 0, attempts: 0 };
+
+    for (let attempt = 0; attempt < WARM_UP_BACKOFF_S.length; attempt += 1) {
+      await step.sleep(`backoff-${attempt}`, `${WARM_UP_BACKOFF_S[attempt]}s`);
+      const outcome = await step.run(`warm-up:${bindingId}:${attempt}`, () => runSyncStep(bindingId, "warmup"));
+      if (outcome.runId === "") continue; // another run is already in flight
+      await step.run(`warm-up-analytics:${bindingId}:${attempt}`, async () => {
+        captureCrmSync(outcome, "warmup");
+        return null;
+      });
+      if (outcome.rowsCreated > 0) {
+        const enrichEvents = crmEnrichEvents(outcome);
+        if (enrichEvents.length > 0) await step.sendEvent(`warm-up-enrich:${bindingId}:${attempt}`, enrichEvents);
+        return { bindingId, rowsCreated: outcome.rowsCreated, attempts: attempt + 1 };
+      }
+    }
+    // Exhausted: leave it to the daily cron (still-empty bindings stay due).
+    return { bindingId, rowsCreated: 0, attempts: WARM_UP_BACKOFF_S.length };
+  },
+);
+
+/**
+ * Enrich one CRM-inserted row: run its table's function columns in `{{ref}}`
+ * dependency order (the SAME cascade as the webhook + signal enrichers, reusing
+ * {@link enrichRowInDepOrder}), each in its own durable step so a mid-cascade
+ * failure retries only the remaining columns.
+ */
+export const enrichCrmRow = inngest.createFunction(
+  {
+    id: "enrich-crm-row",
+    concurrency: [
+      { scope: "account", key: '"crm-enrich"', limit: 50 },
+      { key: "event.data.workspaceId", limit: 4 },
+    ],
+    retries: 2,
+    onFailure,
+    triggers: [{ event: "crm/row.inserted" }],
+  },
+  async ({ event, step }) => {
+    const d = event.data as { tableId?: string; workspaceId?: string; rowId?: string };
+    if (!d.tableId || !d.workspaceId || !d.rowId) return { enriched: false as const };
+    const ran = await enrichRowInDepOrder(toStepRunner(step), {
+      tableId: d.tableId,
+      workspaceId: d.workspaceId,
+      rowId: d.rowId,
+      keyPrefix: `crm:${d.rowId}`,
+    });
+    return { rowId: d.rowId, enriched: true as const, ran };
+  },
+);

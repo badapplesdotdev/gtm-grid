@@ -32,8 +32,13 @@ export const createCallerFactory = t.createCallerFactory;
 /** Base procedure — open to anyone. */
 export const publicProcedure = t.procedure;
 
-/** Maps a typed Effect failure (`Data.TaggedError`) to a `TRPCError` code. */
-function toTrpcError(tag: string | undefined, message: string): TRPCError {
+/**
+ * Maps a typed Effect failure (`Data.TaggedError`) to a `TRPCError` code.
+ * Exported so a domain router with its own error translation (e.g. `crm`, which
+ * runs CRM failures through `crmErrorCopy` for user-safe copy) can still fall
+ * back to this shared mapping for the authz tags every procedure can raise.
+ */
+export function toTrpcError(tag: string | undefined, message: string): TRPCError {
   switch (tag) {
     case "UnauthenticatedError":
       return new TRPCError({ code: "UNAUTHORIZED", message });

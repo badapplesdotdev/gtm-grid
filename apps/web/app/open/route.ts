@@ -23,7 +23,7 @@ export const dynamic = "force-dynamic";
 
 /** Whitelisted in-app destinations (mirror deepLinkNav.ts). */
 const DEST_RE =
-  /^(table\/[0-9a-f-]{36}|new-table|settings\/ai-providers|invite|members|billing)$/;
+  /^(table\/[0-9a-f-]{36}|new-table|settings\/ai-providers|invite|members|billing|crm-connected)$/;
 const WORKSPACE_RE = /^[0-9a-f-]{36}$/;
 
 function escapeHtml(s: string): string {

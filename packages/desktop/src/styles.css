@@ -4605,3 +4605,197 @@ button.import-type:hover { background: var(--surface-3); }
 .dedupe-now { align-self: flex-start; margin-top: 4px; }
 .dedupe-msg { font-size: 12px; color: var(--accent); }
 .dedupe-err { margin: 0; }
+
+/* ─────────────────────────── CRM sync (Attio) ─────────────────────────────
+   The "From your CRM" chooser tile badge, the 3-step sync wizard, the synced-
+   table status strip + collapsible history log, and the read-only synced cell
+   affordance. Uses the shared design tokens so it themes (light/dark) with the
+   rest of the app. */
+
+/* New-table chooser: "New" badge on the CRM tile. */
+.acx-item-new {
+  margin-left: 7px; font: 600 9px var(--font-sans); letter-spacing: .05em;
+  text-transform: uppercase; color: var(--accent); background: var(--accent-soft);
+  padding: 1px 5px; border-radius: 3px; vertical-align: middle;
+}
+
+/* ── Wizard shell + stepper ── */
+.crmw-modal { width: 600px; max-width: 94vw; max-height: 88vh; display: flex; flex-direction: column; padding: 0; }
+.crmw-head { padding: 16px 20px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.crmw-head-row { display: flex; align-items: center; justify-content: space-between; }
+.crmw-title { font: 600 15px var(--font-sans); letter-spacing: -.01em; color: var(--text); }
+.crmw-stepper { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.crmw-step { display: flex; align-items: center; gap: 6px; font: 600 11.5px var(--font-sans); color: var(--accent); }
+.crmw-step.crmw-step-muted { font-weight: 500; color: var(--text-3); }
+.crmw-step-line { flex: 1; height: 1px; background: var(--border); }
+.crmw-step-dot {
+  width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center;
+  justify-content: center; font: 600 10px var(--font-mono); flex-shrink: 0;
+}
+.crmw-step-dot.crmw-step-active, .crmw-step-dot.crmw-step-done { background: var(--accent); color: #fff; }
+.crmw-step-dot.crmw-step-todo { background: var(--surface-2); border: 1px solid var(--border); color: var(--text-3); }
+
+.crmw-body { padding: 20px; overflow-y: auto; flex: 1; }
+
+/* ── Step 1: pick ── */
+.crmw-pick { display: flex; flex-direction: column; gap: 10px; }
+.crmw-pick-q { font: 400 12.5px var(--font-sans); color: var(--text-2); margin-bottom: 2px; }
+.crmw-crm-card {
+  display: flex; align-items: center; gap: 14px; padding: 16px; border: 1px solid var(--border);
+  border-radius: var(--r-md); background: var(--surface); cursor: pointer; text-align: left; width: 100%;
+}
+button.crmw-crm-card:hover { border-color: var(--accent); box-shadow: var(--shadow-sm); }
+.crmw-crm-disabled { cursor: default; opacity: .7; }
+.crmw-crm-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.crmw-crm-name { font: 600 14px var(--font-sans); color: var(--text); }
+.crmw-crm-sub { font: 400 12px var(--font-sans); color: var(--text-2); }
+.crmw-caret { color: var(--text-3); font-size: 18px; }
+.crmw-reassure {
+  display: flex; align-items: center; gap: 8px; margin-top: 6px; padding: 10px 12px;
+  background: var(--surface-2); border-radius: var(--r-sm); font: 400 11.5px var(--font-sans); color: var(--text-3);
+}
+
+/* ── Step 2: connect ── */
+.crmw-connect { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 14px 0 8px; }
+.crmw-connect-title { font: 600 16px var(--font-sans); color: var(--text); margin-top: 14px; }
+.crmw-connect-sub { font: 400 12.5px var(--font-sans); color: var(--text-2); max-width: 360px; margin-top: 6px; line-height: 1.5; }
+.crmw-scopes {
+  width: 100%; max-width: 380px; margin-top: 16px; padding: 12px 14px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--r-md); display: flex; flex-direction: column; gap: 8px; text-align: left;
+}
+.crmw-scopes-label { font: 600 10px var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); }
+.crmw-scope { display: flex; align-items: center; gap: 8px; font: 400 12px var(--font-sans); color: var(--text-2); }
+.crmw-scope-no { color: var(--text-3); }
+.crmw-connect-btn { margin-top: 18px; padding: 11px 22px; font-size: 13.5px; }
+
+/* ── Step 3: configure ── */
+.crmw-config { display: flex; flex-direction: column; gap: 20px; }
+.crmw-connected-banner {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--success-bg);
+  border: 1px solid color-mix(in srgb, var(--success) 35%, transparent); border-radius: var(--r-md);
+}
+.crmw-connected-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
+.crmw-connected-text { flex: 1; font: 500 12.5px var(--font-sans); color: var(--success-ink); display: flex; align-items: center; gap: 8px; }
+.crmw-connected-by { font-weight: 400; color: var(--text-3); }
+.crmw-section { display: flex; flex-direction: column; }
+.crmw-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.crmw-section-label { font: 600 10.5px var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); }
+.crmw-link { all: unset; cursor: pointer; font: 500 11.5px var(--font-sans); color: var(--accent); }
+.crmw-link:hover { text-decoration: underline; }
+.crmw-tabs { display: inline-flex; gap: 2px; padding: 3px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); }
+.crmw-tab { all: unset; cursor: pointer; padding: 4px 12px; border-radius: 5px; font: 500 11.5px var(--font-sans); color: var(--text-2); }
+.crmw-tab.crmw-tab-on { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
+.crmw-source-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.crmw-source {
+  all: unset; box-sizing: border-box; cursor: pointer; display: flex; align-items: center; gap: 10px;
+  padding: 11px 12px; border: 1px solid var(--border); background: var(--surface); border-radius: var(--r-md);
+}
+.crmw-source:hover { border-color: var(--border-2); }
+.crmw-source.crmw-source-on { border-color: var(--accent); background: var(--accent-soft); }
+.crmw-source-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.crmw-source-label { font: 600 12.5px var(--font-sans); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crmw-source-sub { font: 400 11px var(--font-mono); color: var(--text-3); }
+.crmw-empty, .crmw-no-filters {
+  font: 400 12px var(--font-sans); color: var(--text-3); padding: 10px 12px; background: var(--surface-2);
+  border: 1px dashed var(--border-2); border-radius: var(--r-sm);
+}
+.crmw-loading, .crmw-history-loading { display: flex; justify-content: center; padding: 16px 0; }
+
+/* Field rows */
+.crmw-fields { display: flex; flex-direction: column; gap: 6px; }
+.crmw-field {
+  all: unset; box-sizing: border-box; cursor: pointer; display: flex; align-items: center; gap: 11px;
+  width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface);
+}
+.crmw-field:hover { background: var(--surface-2); }
+.crmw-check { width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid var(--border-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.crmw-check.crmw-check-on { background: var(--accent); border-color: var(--accent); }
+.crmw-field-text { flex: 1; min-width: 0; }
+.crmw-field-title { display: block; font: 500 13px var(--font-sans); color: var(--text); }
+.crmw-field-sample { display: block; font: 400 11px var(--font-mono); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Chips */
+.crmw-chip { font: 600 9px var(--font-sans); letter-spacing: .05em; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; flex-shrink: 0; }
+.crmw-chip-rec { color: var(--accent); background: var(--accent-soft); }
+.crmw-chip-soon { color: var(--text-3); background: var(--surface-3); }
+
+/* Filters */
+.crmw-filters { display: flex; flex-direction: column; gap: 8px; }
+.crmw-filter-row { display: flex; align-items: center; gap: 8px; }
+.crmw-select, .crmw-input {
+  box-sizing: border-box; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 7px 10px; font: 400 12.5px var(--font-sans); color: var(--text); box-shadow: var(--shadow-sm);
+}
+.crmw-filter-field { flex: 1; min-width: 0; }
+.crmw-filter-op { width: 130px; flex-shrink: 0; }
+.crmw-filter-value { width: 130px; flex-shrink: 0; }
+.crmw-filter-del { all: unset; cursor: pointer; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: var(--r-sm); color: var(--text-3); flex-shrink: 0; }
+.crmw-filter-del:hover { background: var(--danger-bg); color: var(--danger); }
+
+/* Dedupe radios */
+.crmw-dedupe { display: flex; flex-direction: column; gap: 6px; }
+.crmw-radio-row {
+  all: unset; box-sizing: border-box; cursor: pointer; display: flex; align-items: center; gap: 11px;
+  padding: 11px 12px; border: 1px solid var(--border); background: var(--surface); border-radius: var(--r-sm);
+}
+.crmw-radio-row:hover { border-color: var(--border-2); }
+.crmw-radio-row.crmw-radio-on { border-color: var(--accent); background: var(--accent-soft); }
+.crmw-radio { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--border-2); flex-shrink: 0; }
+.crmw-radio.crmw-radio-fill { border: 5px solid var(--accent); }
+.crmw-radio-text { flex: 1; }
+.crmw-radio-title { display: block; font: 500 13px var(--font-sans); color: var(--text); }
+.crmw-radio-desc { display: block; font: 400 11.5px var(--font-sans); color: var(--text-2); }
+
+.crmw-hint { margin-top: 8px; font: 400 11.5px var(--font-sans); color: var(--text-3); }
+.crmw-error { margin-top: 12px; padding: 9px 12px; background: var(--danger-bg); border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent); border-radius: var(--r-sm); font: 400 12px var(--font-sans); color: var(--danger); }
+
+/* Footer */
+.crmw-footer { padding: 12px 20px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.crmw-est { font: 400 12px var(--font-sans); color: var(--text-2); }
+.crmw-est strong { color: var(--text); font-family: var(--font-mono); }
+
+/* ── Status strip ── */
+.crm-strip { display: flex; flex-direction: column; background: var(--surface); border-bottom: 1px solid var(--border); }
+.crm-strip-row { display: flex; align-items: center; gap: 12px; padding: 9px 16px; }
+.crm-strip-logo {
+  display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px;
+  border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--border); flex-shrink: 0;
+}
+.crm-strip-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.crm-strip-title { font: 500 12.5px var(--font-sans); color: var(--text); display: flex; align-items: center; gap: 7px; }
+.crm-strip-kind {
+  font: 600 9.5px var(--font-sans); letter-spacing: .04em; text-transform: uppercase; color: var(--text-3);
+  background: var(--surface-2); border: 1px solid var(--border); padding: 1px 6px; border-radius: 4px;
+}
+.crm-strip-meta { font: 400 11.5px var(--font-sans); color: var(--text-3); }
+.crm-strip-meta-sync { color: var(--accent); display: flex; align-items: center; gap: 6px; }
+.crm-strip-banner { display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-top: 1px solid var(--border); }
+.crm-strip-banner-warn { background: var(--warn-bg); }
+.crm-strip-banner-text { flex: 1; font: 400 12px var(--font-sans); color: var(--text-2); }
+.crm-strip-error { padding: 6px 16px; font: 400 11.5px var(--font-sans); color: var(--danger); border-top: 1px solid var(--border); }
+
+/* ── History log ── */
+.crm-history { padding: 12px 16px; background: var(--surface-2); border-top: 1px solid var(--border); }
+.crm-history-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.crm-history-label { font: 600 10.5px var(--font-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); }
+.crm-history-schedule { font: 400 11.5px var(--font-sans); color: var(--text-3); }
+.crm-history-empty { font: 400 11.5px var(--font-sans); color: var(--text-3); }
+.crm-history-list { display: flex; flex-direction: column; gap: 6px; }
+.crm-history-entry {
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--r-md);
+}
+.crm-history-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
+.crm-history-dot-ok { background: var(--success); }
+.crm-history-dot-warn { background: var(--warn); }
+.crm-history-dot-err { background: var(--danger); }
+.crm-history-dot-run { background: var(--accent); }
+.crm-history-body { flex: 1; min-width: 0; }
+.crm-history-title-row { display: flex; align-items: center; gap: 8px; }
+.crm-history-title { font: 600 12.5px var(--font-sans); color: var(--text); }
+.crm-history-chip { color: var(--warn); background: var(--warn-bg); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); }
+.crm-history-detail { font: 400 11.5px var(--font-sans); color: var(--text-2); margin-top: 2px; }
+.crm-history-time { font: 400 11px var(--font-mono); color: var(--text-3); white-space: nowrap; flex-shrink: 0; }
+
+/* ── Read-only synced cell ── */
+.cell-wrap.cell-synced { cursor: default; }

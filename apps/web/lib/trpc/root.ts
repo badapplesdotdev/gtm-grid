@@ -18,6 +18,7 @@ import { Effect } from "effect";
 import { authRouter } from "./routers/auth";
 import { billingRouter } from "./routers/billing";
 import { credentialsRouter } from "./routers/credentials";
+import { crmRouter } from "./routers/crm";
 import { extensionsRouter } from "./routers/extensions";
 import { gridRouter } from "./routers/grid";
 import { invitationsRouter } from "./routers/invitations";
@@ -82,6 +83,8 @@ export const appRouter = router({
   webhooks: webhooksRouter,
   /** Member-gated Social Signals (Trigify) bindings; recurring poll runs in Inngest. */
   signals: signalsRouter,
+  /** Member-gated Attio CRM-sync bindings; sync execution runs in Inngest. */
+  crm: crmRouter,
   /** Member-gated connector extensions (TRI-3250). */
   extensions: extensionsRouter,
   /**

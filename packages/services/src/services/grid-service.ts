@@ -141,6 +141,12 @@ export interface GridColumn {
   readonly code: string | null;
   readonly params: unknown;
   readonly condition: string | null;
+  /**
+   * Optional behaviour flags (jsonb). Additive — CRM-synced columns carry
+   * `{ synced: true, crmBindingId, attrSlug, attrType }` so the desktop can
+   * render them read-only. `null`/absent for ordinary user columns.
+   */
+  readonly config: unknown;
 }
 
 /** A cell projection in the desktop `getTable` shape. */
@@ -209,6 +215,7 @@ const toGridColumn = (c: Column): GridColumn => ({
   code: c.code,
   params: c.params,
   condition: c.condition,
+  config: c.config ?? null,
 });
 
 /** Project a repo `Cell` onto the desktop `getTable` cell shape. */
@@ -1352,6 +1359,19 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
           );
         }
         yield* requireCloudMember(row.value.workspaceId);
+        // Server-side backstop for CRM-synced columns: they are owned by the
+        // sync worker (WebhookRepo write path) — a member edit through any
+        // client would be silently overwritten on the next sync, or permanently
+        // corrupt pull-only data in skip/create modes. The desktop hides these
+        // edit affordances; this makes the guarantee hold for every client.
+        const cfg: unknown = column.value.config;
+        if (typeof cfg === "object" && cfg !== null && "synced" in cfg && cfg.synced === true) {
+          return yield* Effect.fail(
+            new InvalidCellError({
+              message: "This column is synced from your CRM and can't be edited.",
+            }),
+          );
+        }
         const existing = yield* cells.findByRowColumn(rowId, columnId);
         return {
           row: row.value,

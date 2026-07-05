@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, memo, lazy, Suspense, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { api, API_BASE, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, type SignalSource } from "./api";
+import { api, API_BASE, Column, Cell, ConnectorInfo, ExtensionInfo, AiProviderInfo, SkillInfo, isSyncedColumn, type SignalSource } from "./api";
 import { electron } from "./electron";
 import { onActivateKey } from "./lib/utils";
 import { firstCsvFile, dragHasFiles } from "./csvDrop";
@@ -14,6 +14,7 @@ import { ProjectSwitcher, CloudIcon } from "./ProjectSwitcher";
 import { AccountBar, PlanBillingModal } from "./cloud/AccountBar";
 import { PendingInvites } from "./cloud/PendingInvites";
 import { cloudEnabled, queryClient, syncWorkspacePlan, apiClient } from "./cloud/client";
+import { useQuery as useReactQuery } from "@tanstack/react-query";
 import {
   buildFolderTree,
   canMoveFolderInto,
@@ -120,6 +121,9 @@ const SignalsModal = lazy(() =>
 );
 const ImportCsvModal = lazy(() =>
   import("./ImportCsvModal").then((m) => ({ default: m.ImportCsvModal })),
+);
+const CrmSyncWizard = lazy(() =>
+  import("./cloud/CrmSyncWizard").then((m) => ({ default: m.CrmSyncWizard })),
 );
 
 /** Lightweight fallback shown while a lazy panel chunk loads. */
@@ -335,8 +339,15 @@ function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCel
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // CRM-synced columns are read-only: the sync owns their values, so inline
+  // editing is blocked (the affordance below explains why).
+  const synced = isSyncedColumn(col);
+  const syncedTitle = "Synced from Attio — updated automatically";
+  // A cell is inline-editable only when it's a manual, non-synced column.
+  const editableCol = col.kind === "manual" && !synced;
+
   const startEdit = (seed?: string) => {
-    if (col.kind === "function") return;
+    if (!editableCol) return;
     if (seed !== undefined) {
       // Type-to-edit: replace with the typed character, cursor at the end.
       setDraft(seed);
@@ -473,6 +484,8 @@ function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCel
       }
       return <div className="cell-wrap">{runBtn}<span className="cell-empty">—</span></div>;
     }
+    // A synced (read-only) empty cell shows a plain dash, not an editable "empty".
+    if (synced) return <div className="cell-wrap cell-synced" title={syncedTitle}><span className="cell-empty">—</span></div>;
     return <div className="cell-wrap cell-editable" onClick={() => startEdit()}><span className="cell-empty">empty</span></div>;
   }
 
@@ -539,8 +552,12 @@ function CellContentInner({ cell, col, onEdit, onOpenDetails, onExpand, onRunCel
 
   const strVal = cell.value != null ? String(cell.value) : "";
   return (
-    <div className="cell-wrap" onClick={col.kind === "manual" ? () => startEdit() : undefined}
-         style={col.kind === "manual" ? { cursor: "text" } : {}}>
+    <div
+      className={`cell-wrap${synced ? " cell-synced" : ""}`}
+      title={synced ? syncedTitle : undefined}
+      onClick={editableCol ? () => startEdit() : undefined}
+      style={editableCol ? { cursor: "text" } : {}}
+    >
       <span className="cell-value">{strVal}</span>
       <div className="cell-actions">{expandBtn}{runBtn}</div>
     </div>
@@ -665,12 +682,14 @@ function NewTableChooser({
   onCsv,
   onWebhook,
   onSignals,
+  onCrm,
 }: {
   onClose: () => void;
   onBlank: () => void;
   onCsv: () => void;
   onWebhook: () => void;
   onSignals: () => void;
+  onCrm: () => void;
 }) {
   const Caret = (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
@@ -680,6 +699,9 @@ function NewTableChooser({
   );
   const WebhookIcon = (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17a4 4 0 0 1 3.6-3.98" /><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06" /><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8" /></svg>
+  );
+  const CrmIcon = (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 1l4 4-4 4" /><path d="M3 11V9a4 4 0 0 1 4-4h14" /><path d="M7 23l-4-4 4-4" /><path d="M21 13v2a4 4 0 0 1-4 4H3" /></svg>
   );
 
   return (
@@ -712,6 +734,14 @@ function NewTableChooser({
               <span className="acx-item-text">
                 <span className="acx-item-title">From Social Signals</span>
                 <span className="acx-item-sub">Powered by Trigify — pulls social posts into rows (API key required).</span>
+              </span>
+              <span className="acx-item-caret">{Caret}</span>
+            </button>
+            <button className="acx-item" onClick={() => { onCrm(); onClose(); }}>
+              <span className="acx-item-icon acx-icon-accent">{CrmIcon}</span>
+              <span className="acx-item-text">
+                <span className="acx-item-title">From your CRM<span className="acx-item-new">New</span></span>
+                <span className="acx-item-sub">Attio — pull records into a synced grid.</span>
               </span>
               <span className="acx-item-caret">{Caret}</span>
             </button>
@@ -967,6 +997,11 @@ export default function App() {
   // straight-to-blank entry points.
   const [showNewTableChooser, setShowNewTableChooser] = useState(false);
   const [showSignals, setShowSignals] = useState(false);
+  // "From your CRM" wizard. `crmConnectedSignal` is bumped by the `crm-connected`
+  // deep link so an open wizard on its Connect step advances without waiting for
+  // its 2s connection poll.
+  const [showCrmWizard, setShowCrmWizard] = useState(false);
+  const [crmConnectedSignal, setCrmConnectedSignal] = useState(0);
   // Bumped to ask the CloudGrid to auto-open the webhook setup form (the chooser's
   // Webhook flow). A monotonic token so each request re-triggers cleanly.
   const [openWebhookToken, setOpenWebhookToken] = useState(0);
@@ -1578,6 +1613,13 @@ export default function App() {
       case "billing":
         setShowUpgrade(true);
         break;
+      case "crm-connected":
+        // The Attio OAuth bounce landed. If the CRM wizard is open on its
+        // Connect step it reads this bump to advance immediately (otherwise its
+        // 2s poll would); if the wizard is closed this is a harmless no-op
+        // beyond the main process having already focused the window.
+        setCrmConnectedSignal((n) => n + 1);
+        break;
     }
     clearPendingDestination();
   }, [
@@ -1870,6 +1912,38 @@ export default function App() {
     }
   }, []);
 
+  // ── CRM-synced table ids (Attio) ──────────────────────────────────────────
+  // There is only a per-table bindings query (no workspace-level "list all CRM
+  // tables"), so we ACCUMULATE: query the ACTIVE table's bindings and remember
+  // which tables are CRM-backed for the session. The open table's badge is thus
+  // always accurate; tables opened earlier keep their Attio icon. A workspace
+  // query would let every synced table badge on first paint — none exists yet.
+  const [crmSyncedTableIds, setCrmSyncedTableIds] = useState<Set<string>>(new Set());
+  const activeCrmBindingsQ = useReactQuery({
+    queryKey: ["crm", "bindings", cloudTableId ? String(cloudTableId) : ""],
+    enabled: apiClient !== null && cloudTableId !== null && activeWorkspace != null,
+    queryFn: async (): Promise<readonly { id: string }[]> => {
+      // Older/mock servers without the crm router answer null — treat as "no
+      // bindings", never crash the shell.
+      const res: unknown = await apiClient.crm.listBindings.query({
+        tableId: String(cloudTableId),
+      });
+      return Array.isArray(res) ? (res as readonly { id: string }[]) : [];
+    },
+    staleTime: 15_000,
+  });
+  useEffect(() => {
+    const tid = cloudTableId ? String(cloudTableId) : null;
+    if (tid === null || activeCrmBindingsQ.data === undefined) return;
+    const hasBinding = activeCrmBindingsQ.data.length > 0;
+    setCrmSyncedTableIds((prev) => {
+      if (prev.has(tid) === hasBinding) return prev;
+      const next = new Set(prev);
+      if (hasBinding) next.add(tid); else next.delete(tid);
+      return next;
+    });
+  }, [cloudTableId, activeCrmBindingsQ.data]);
+
   // ── Tables list (cloud-only) ──────────────────────────────────────────────
   // The sidebar Tables list is purely the open cloud project's tables (cloud is
   // the only data path). De-duplicated by name; favourites pinned to the top.
@@ -1884,13 +1958,14 @@ export default function App() {
             id: t._id,
             name: t.name,
             synced: true,
+            crmSynced: crmSyncedTableIds.has(String(t._id)),
             favorite: t.favorite,
             rows: t.rows ?? 0,
             folderId: t.folderId,
             position: t.position,
           })),
       ),
-    [cloudTables],
+    [cloudTables, crmSyncedTableIds],
   );
   // The sidebar's folders for the open cloud project, in position order.
   const sidebarFolders = useMemo<SidebarFolder[]>(
@@ -2033,7 +2108,9 @@ export default function App() {
         }
       >
         <span className="sidebar-item-icon">
-          {cloudRowLocked ? "🔒" : <Icon.Table />}
+          {cloudRowLocked ? "🔒" : row.crmSynced
+            ? <BrandIcon logo="https://www.google.com/s2/favicons?domain=attio.com&sz=128" name="Attio" size={14} />
+            : <Icon.Table />}
         </span>
         <span className="sidebar-item-name">{row.name}</span>
         {row.favorite && <span className="sidebar-item-star"><Icon.Star filled /></span>}
@@ -2963,6 +3040,7 @@ export default function App() {
           <Suspense fallback={<PanelFallback />}>
             <CloudGrid
               tableId={cloudTableId}
+              workspaceId={activeWorkspace?._id ?? null}
               connectors={connectors}
               onOpenAiSettings={() => setView({ kind: "ai", id: aiProviders[0]?.id ?? "anthropic" })}
               openWebhookToken={openWebhookToken}
@@ -3165,7 +3243,25 @@ export default function App() {
           onCsv={() => setImportMode("cloud")}
           onWebhook={() => { void onChooseWebhook(); }}
           onSignals={() => setShowSignals(true)}
+          onCrm={() => setShowCrmWizard(true)}
         />
+      )}
+
+      {showCrmWizard && activeWorkspace && cloudProject && (
+        <Suspense fallback={<PanelFallback />}>
+          <CrmSyncWizard
+            workspaceId={activeWorkspace._id}
+            connectedSignal={crmConnectedSignal}
+            createTable={(name) => createCloudTable(cloudProject._id, name).then(String)}
+            deleteTable={(tableId) => deleteCloudTable(tableId as Id<"tables">).then(() => undefined)}
+            onClose={() => setShowCrmWizard(false)}
+            onCreated={(tableId) => {
+              setShowCrmWizard(false);
+              setCloudTableId(tableId as Id<"tables">);
+              setView({ kind: "table" });
+            }}
+          />
+        </Suspense>
       )}
 
       {showSignals && signalsCloud && (

@@ -24,6 +24,7 @@
 
 import { memo, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import { CellContent } from "./App";
+import { isSyncedColumn } from "./api";
 import type { Cell, Column } from "./api";
 import type { CellActions, CtxItem, Sel } from "./DataGrid";
 import { BotGlyph } from "./PresenceAvatars";
@@ -167,7 +168,11 @@ function GridCellInner({
                 void navigator.clipboard?.writeText(text).catch(() => {});
               },
             },
-            { label: "Clear cell", onClick: () => actions.clearCell(rowId, col.id) },
+            // Synced (CRM-owned) cells are read-only — clearing would overwrite
+            // CRM data with "" and, outside update mode, the loss is permanent.
+            ...(isSyncedColumn(col)
+              ? []
+              : [{ label: "Clear cell", onClick: () => actions.clearCell(rowId, col.id) }]),
           ]),
         );
       }}
@@ -207,7 +212,7 @@ function GridCellInner({
                   colId: col.id,
                   columnName: col.name,
                   value: cell?.value != null ? String(cell.value) : "",
-                  editable: col.kind === "manual",
+                  editable: col.kind === "manual" && !isSyncedColumn(col),
                   anchor,
                 })
             : undefined

@@ -93,6 +93,18 @@ describe("parseOpenDeepLink — recognised grammar", () => {
     });
   });
 
+  it("crm-connected → the CRM-connected resume destination", () => {
+    expect(parseOpenDeepLink("gtmgrid://open/crm-connected")).toEqual({
+      kind: "crm-connected",
+    });
+  });
+
+  it("ignores a trailing query/hash on crm-connected (OAuth bounce params)", () => {
+    expect(
+      parseOpenDeepLink("gtmgrid://open/crm-connected?workspace=ws_9#ok"),
+    ).toEqual({ kind: "crm-connected" });
+  });
+
   it("matches the scheme + destination keywords case-insensitively", () => {
     expect(parseOpenDeepLink("GTMGRID://OPEN/NEW-TABLE")).toEqual({
       kind: "new-table",
@@ -102,6 +114,9 @@ describe("parseOpenDeepLink — recognised grammar", () => {
     });
     expect(parseOpenDeepLink("gtmgrid://open/Members")).toEqual({
       kind: "invite",
+    });
+    expect(parseOpenDeepLink("gtmgrid://open/CRM-Connected")).toEqual({
+      kind: "crm-connected",
     });
   });
 
@@ -140,6 +155,7 @@ describe("parseOpenDeepLink — non-open links are ignored (null)", () => {
   it("returns null for a garbled table path with extra segments", () => {
     expect(parseOpenDeepLink("gtmgrid://open/table/tbl_1/extra")).toBeNull();
     expect(parseOpenDeepLink("gtmgrid://open/new-table/extra")).toBeNull();
+    expect(parseOpenDeepLink("gtmgrid://open/crm-connected/extra")).toBeNull();
   });
 
   it("returns null for the wrong scheme or host", () => {

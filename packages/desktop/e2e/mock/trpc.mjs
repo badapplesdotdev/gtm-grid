@@ -196,4 +196,93 @@ export const procedures = {
     return { ok: true };
   },
   "grid.dedupe": () => ({ removed: 0 }),
+
+  // ── CRM sync (Attio) ──────────────────────────────────────────────────────
+  // The wizard + status strip surface. Mirrors the real `crm` router closely
+  // enough for E2E: connectionStatus gates step 2, createBinding adds synced
+  // (read-only) columns + a first-pull row, syncNow appends a history run.
+  "crm.connectionStatus": (_input, s) =>
+    s.crmConnected
+      ? { configured: true, connected: true, connectedByName: "Morgan", attioWorkspaceName: "Acme Attio" }
+      : { configured: true, connected: false },
+  "crm.authorizeUrl": () => ({ url: "https://app.attio.com/authorize?client_id=e2e&state=fake" }),
+  "crm.listSources": () => [
+    { kind: "object", id: "people", label: "People", parentObject: null },
+    { kind: "object", id: "companies", label: "Companies", parentObject: null },
+    { kind: "list", id: "list_mql", label: "MQLs — Q3", parentObject: "people" },
+  ],
+  "crm.describeSource": () => ({
+    fields: [
+      { slug: "name", title: "Name", type: "personal-name", recommended: true, sample: "Sarah Chen  ·  Marcus Webb" },
+      { slug: "email_addresses", title: "Email addresses", type: "email-address", recommended: true, sample: "sarah.chen@vercel.com" },
+      { slug: "phone_numbers", title: "Phone numbers", type: "phone-number", recommended: false, sample: "+1 415-555-0142" },
+    ],
+    suggestedMatchKey: "email_addresses",
+  }),
+  "crm.estimate": () => ({ count: 124, isLowerBound: false }),
+  "crm.createBinding": (input, s) => {
+    const bindingId = `crmb_${s.crmBindings.length + 1}`;
+    const tableId = input?.tableId;
+    // Synced (read-only) columns for the mapped fields…
+    const columns = (input?.fields ?? []).map((f, i) => {
+      const c = col(`col_crm_${bindingId}_${i}`, tableId, f.title, "manual", {
+        config: { synced: true, crmBindingId: bindingId, attrSlug: f.attrSlug, attrType: f.attrType },
+      });
+      s.columns.push(c);
+      return { attrSlug: f.attrSlug, attrType: f.attrType, columnId: c._id, title: f.title };
+    });
+    // …and one already-pulled row so the grid shows synced data immediately.
+    const rowId = `row_crm_${bindingId}`;
+    s.rows.push({ _id: rowId, tableId, position: 1 });
+    s.cells[rowId] = Object.fromEntries(
+      columns.map((c, i) => [c.columnId, cell(i === 0 ? "Sarah Chen" : "sarah.chen@vercel.com")]),
+    );
+    s.crmBindings.push({
+      id: bindingId,
+      workspaceId: s.workspaceId,
+      tableId,
+      provider: "attio",
+      sourceKind: input?.sourceKind ?? "object",
+      sourceId: input?.sourceId ?? "people",
+      sourceLabel: input?.sourceLabel ?? "People",
+      columns,
+      config: { filters: input?.filters ?? [], dedupeMode: input?.dedupeMode ?? "update", matchKeyAttr: input?.matchKeyAttr ?? null },
+      schedule: "daily",
+      enabled: true,
+      pausedReason: null,
+      lastSyncedAt: s.now,
+      lastError: null,
+      rowsSynced: 1,
+      createdAt: s.now,
+    });
+    return { bindingId };
+  },
+  "crm.listBindings": (input, s) => s.crmBindings.filter((b) => b.tableId === input?.tableId),
+  "crm.history": (input, s) => s.crmRuns.filter((r) => r.bindingId === input?.bindingId),
+  "crm.syncNow": (input, s) => {
+    const b = s.crmBindings.find((x) => x.id === input?.bindingId);
+    const runId = `crmrun_${s.crmRuns.length + 1}`;
+    s.crmRuns.unshift({
+      id: runId,
+      workspaceId: s.workspaceId,
+      bindingId: input?.bindingId,
+      tableId: b?.tableId ?? "",
+      status: "ok",
+      trigger: "manual",
+      rowsCreated: 2,
+      rowsUpdated: 5,
+      rowsSkipped: 0,
+      rowsStaled: 0,
+      fieldsDropped: null,
+      error: null,
+      startedAt: s.now,
+      finishedAt: s.now,
+    });
+    if (b) { b.lastSyncedAt = s.now; b.rowsSynced = (b.rowsSynced ?? 0) + 2; }
+    return { enqueued: true };
+  },
+  "crm.deleteBinding": (input, s) => {
+    s.crmBindings = s.crmBindings.filter((b) => b.id !== input?.bindingId);
+    return null;
+  },
 };

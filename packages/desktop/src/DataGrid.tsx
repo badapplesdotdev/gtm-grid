@@ -24,6 +24,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { Icon } from "./App";
 import { FnIcon, type ColumnMeta } from "./FnIcon";
 import { missingInputs } from "./columnInputs";
+import { isSyncedColumn } from "./api";
 import type { Cell, Column, FullTable } from "./api";
 import { VirtualGridBody } from "./VirtualGridBody";
 import { useColumnWindow } from "./useColumnWindow";
@@ -452,15 +453,23 @@ export function DataGrid({
       items.push({ separator: true });
     }
     items.push({ label: "Copy", onClick: copySelection });
+    // Synced (CRM-owned) columns are read-only — exclude them from the range
+    // clear so "Clear N cells" can never wipe CRM data.
+    const clearableCols = cols.filter((col) => !isSyncedColumn(col));
+    const clearCount = rows.length * clearableCols.length;
     items.push(
       { separator: true },
-      {
-        label: `Clear ${cellCount} cell${cellCount !== 1 ? "s" : ""}`,
-        onClick: () => {
-          for (const row of rows) for (const col of cols) c.clearCell(row.id, col.id);
-          setSel(null);
-        },
-      },
+      ...(clearCount > 0
+        ? [
+            {
+              label: `Clear ${clearCount} cell${clearCount !== 1 ? "s" : ""}`,
+              onClick: () => {
+                for (const row of rows) for (const col of clearableCols) c.clearCell(row.id, col.id);
+                setSel(null);
+              },
+            },
+          ]
+        : []),
       {
         label: `Delete ${rows.length} row${rows.length !== 1 ? "s" : ""}`,
         danger: true,
