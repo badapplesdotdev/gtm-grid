@@ -96,6 +96,14 @@ describe("crmErrorCopy — status + pause semantics", () => {
     expect(p.copy).toContain("A, B, C and 2 more");
   });
 
+  it("a 403 explains SCOPES and how to fix them (not 'your filters')", () => {
+    const p = crmErrorCopy(new AttioRequestError({ status: 403, detail: "missing scope" }));
+    expect(p.status).toBe("failed");
+    expect(p.copy).toContain("read access");
+    expect(p.copy).toContain("reconnect");
+    expect(p.copy).not.toMatch(/\b403\b/);
+  });
+
   it("row cap is partial and formats the cap for humans", () => {
     const p = crmErrorCopy(new RowCapReached({ cap: 10_000 }));
     expect(p.status).toBe("partial");

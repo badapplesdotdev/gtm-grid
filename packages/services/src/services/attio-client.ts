@@ -128,6 +128,11 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
             try: () => res.text(),
             catch: (cause) => new AttioNetworkError({ cause }),
           }).pipe(Effect.orElseSucceed(() => ""));
+          // Server-side diagnostics only (path + status + body snippet — never
+          // tokens): live Attio refusals must be debuggable from host logs.
+          yield* Effect.logWarning("attio request refused").pipe(
+            Effect.annotateLogs({ path: args.path, status: res.status, detail: detail.slice(0, 300) }),
+          );
           return yield* Effect.fail(new AttioRequestError({ status: res.status, detail: detail.slice(0, 500) }));
         }
         const json = yield* Effect.tryPromise({

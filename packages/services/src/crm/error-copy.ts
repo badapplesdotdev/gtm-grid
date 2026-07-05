@@ -68,6 +68,12 @@ export function crmErrorCopy(e: CrmError): CrmErrorPresentation {
         copy: `Synced the first ${e.cap.toLocaleString("en-US")} records (your plan's limit). Add filters to narrow what's pulled, or upgrade to sync more.`,
       };
     case "AttioRequestError":
+      if (e.status === 403) {
+        return {
+          status: "failed",
+          copy: "Attio declined access to that data. In Attio, open the GTM Grid app's settings and enable read access for records, object & list configuration, and workspace members — then reconnect and try again.",
+        };
+      }
       return {
         status: "failed",
         copy: "Attio couldn't process that request. Adjust the source or filters and try again.",
