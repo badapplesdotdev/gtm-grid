@@ -286,10 +286,10 @@ export const procedures = {
       rowsStaled: 0,
       fieldsDropped: null,
       error: null,
-      startedAt: s.now,
-      finishedAt: s.now,
+      startedAt: Date.now(),
+      finishedAt: Date.now(),
     });
-    if (b) { b.lastSyncedAt = s.now; b.rowsSynced = (b.rowsSynced ?? 0) + 2; }
+    if (b) { b.lastSyncedAt = Date.now(); b.rowsSynced = (b.rowsSynced ?? 0) + 2; }
     return { enqueued: true };
   },
   "crm.deleteBinding": (input, s) => {
