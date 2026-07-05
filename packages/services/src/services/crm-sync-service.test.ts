@@ -15,7 +15,7 @@ import { Effect, Exit } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TestLayer, type TestLayerFixtures } from "../layers.js";
 import type { RecordedGridEvent } from "../services/realtime-publisher.js";
-import type { CrmBinding, CrmSyncedRow, CrmSyncRun } from "../repositories/crm-repo.js";
+import { CrmBindingRepo, type CrmBinding, type CrmSyncedRow, type CrmSyncRun } from "../repositories/crm-repo.js";
 import type { GridCell, GridRow } from "../repositories/webhook-repo.js";
 import { CrmConnectionService } from "./crm-connection-service.js";
 import { CrmSyncService, planRowCap, type CrmSyncOutcome } from "./crm-sync-service.js";
@@ -403,6 +403,85 @@ describe("plan row cap", () => {
     // A capped (incomplete) pull must not false-stale the 9,999 unseen entries.
     expect(outcome.rowsStaled).toBe(0);
     expect(w.syncedRows.filter((e) => e.stale)).toHaveLength(0);
+  });
+});
+
+// ── Trial-lapse gating ────────────────────────────────────────────────────────
+
+describe("plan lapse", () => {
+  it("pauses the binding with upgrade copy and SUCCEEDS the worker effect (no retry churn)", async () => {
+    const w = world({ planId: null }); // Free / lapsed workspace
+    scriptFetch(syncScript([rec("rec_1", "Sarah", "sarah@vercel.com")]));
+    const outcome = await syncOnce(w);
+
+    // The effect RESOLVED (Effect failure = 3 Inngest retries/day, forever).
+    expect(outcome.errorTag).toBe("PlanRequired");
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain("Upgrade to resume");
+    expect(outcome.rowsCreated).toBe(0);
+    expect(w.rows).toHaveLength(0); // nothing pulled
+
+    const binding = w.fixtures.crmBindings?.[0];
+    expect(binding?.pausedReason).toBe("plan_lapsed");
+    expect(binding?.lastError).toContain("Upgrade to resume");
+    // ONE user-visible run row with the human copy.
+    expect(w.runs).toHaveLength(1);
+    expect(w.runs[0]?.error).toContain("Upgrade to resume");
+    expect(w.runs[0]?.error).not.toMatch(/PlanRequired|_tag/);
+  });
+
+  it("a lapse-paused binding drops out of the daily due page", async () => {
+    const w = world({ planId: null });
+    scriptFetch(syncScript([]));
+    await syncOnce(w); // pauses
+    const page = await Effect.runPromise(
+      Effect.gen(function* () {
+        const sync = yield* CrmSyncService;
+        return yield* sync.listDuePage({ now: Date.now(), limit: 10, cursor: null });
+      }).pipe(Effect.provide(TestLayer(w.fixtures))) as Effect.Effect<
+        { items: readonly unknown[] },
+        never,
+        never
+      >,
+    );
+    expect(page.items).toHaveLength(0);
+  });
+
+  it("clearPause('plan_lapsed') resumes the binding (billing-webhook seam)", async () => {
+    const w = world({ planId: null });
+    scriptFetch(syncScript([]));
+    await syncOnce(w); // pauses
+    const cleared = await Effect.runPromise(
+      Effect.gen(function* () {
+        const bindings = yield* CrmBindingRepo;
+        return yield* bindings.clearPause({ workspaceId: WS, provider: "attio", reason: "plan_lapsed" });
+      }).pipe(Effect.provide(TestLayer(w.fixtures))) as Effect.Effect<number, never, never>,
+    );
+    expect(cleared).toBe(1);
+    expect(w.fixtures.crmBindings?.[0]?.pausedReason).toBeNull();
+  });
+});
+
+// ── lastRun on listByTable (the strip's in-flight signal) ───────────────────
+
+describe("listByTable lastRun", () => {
+  it("attaches the newest run so the strip can detect background syncs", async () => {
+    const w = world();
+    scriptFetch(syncScript([rec("rec_1", "Sarah", "sarah@vercel.com")]));
+    await syncOnce(w);
+    const list = await Effect.runPromise(
+      Effect.gen(function* () {
+        const sync = yield* CrmSyncService;
+        return yield* sync.listByTable(TABLE);
+      }).pipe(Effect.provide(TestLayer(w.fixtures))) as Effect.Effect<
+        readonly { lastRun: { status: string; rowsCreated: number } | null }[],
+        never,
+        never
+      >,
+    );
+    expect(list).toHaveLength(1);
+    expect(list[0]?.lastRun?.status).toBe("ok");
+    expect(list[0]?.lastRun?.rowsCreated).toBe(1);
   });
 });
 

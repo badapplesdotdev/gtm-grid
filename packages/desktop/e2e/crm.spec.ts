@@ -100,6 +100,31 @@ test.describe("CRM sync — wizard", () => {
   });
 });
 
+
+/** A pre-seeded binding on the built-in "Leads" table (tbl_1), for scenarios
+ *  that need a synced table without walking the wizard. */
+function seededBinding(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "crmb_seed",
+    workspaceId: "ws_1",
+    tableId: "tbl_1",
+    provider: "attio",
+    sourceKind: "object",
+    sourceId: "people",
+    sourceLabel: "People",
+    columns: [],
+    config: { filters: [], dedupeMode: "update", matchKeyAttr: null },
+    schedule: "daily",
+    enabled: true,
+    pausedReason: null,
+    lastSyncedAt: Date.now(),
+    lastError: null,
+    rowsSynced: 6,
+    createdAt: Date.now(),
+    ...overrides,
+  };
+}
+
 test.describe("CRM sync — status strip & synced grid", () => {
   test("Sync now records a run that appears in the sync log", async ({ launchApp }) => {
     const { window } = await launchApp(CONNECTED);
@@ -146,6 +171,52 @@ test.describe("CRM sync — status strip & synced grid", () => {
     await window.locator(".ctx-backdrop").click(); // dismiss via backdrop
     await window.locator(".cell-value", { hasText: /^Acme$/ }).first().click();
     await expect(window.locator(".cell-input")).toBeVisible();
+  });
+
+  test("a background run shows the pulling state without clicking Sync now", async ({ launchApp }) => {
+    const { window } = await launchApp({
+      ...CONNECTED,
+      crmBindings: [seededBinding({ lastSyncedAt: null })],
+      crmRuns: [
+        {
+          id: "crmrun_bg",
+          workspaceId: "ws_1",
+          bindingId: "crmb_seed",
+          tableId: "tbl_1",
+          status: "running",
+          trigger: "cron",
+          rowsCreated: 240,
+          rowsUpdated: 0,
+          rowsSkipped: 0,
+          rowsStaled: 0,
+          fieldsDropped: null,
+          error: null,
+          startedAt: Date.now(),
+          finishedAt: null,
+        },
+      ],
+    });
+    await window.locator(".sidebar-item-name", { hasText: "Leads" }).first().click();
+
+    // The strip derives "syncing" from the server-side run — no local click.
+    await expect(window.locator(".crm-strip")).toBeVisible({ timeout: 10_000 });
+    await expect(window.locator(".crm-strip")).toContainText("Pulling records from Attio…");
+    await expect(window.locator(".crm-strip")).toContainText("240 so far");
+    await expect(window.getByRole("button", { name: /Syncing…|Sync now/ })).toBeDisabled();
+  });
+
+  test("a plan-lapsed binding shows the upgrade banner with View plans", async ({ launchApp }) => {
+    const lapsedCopy = "Your plan doesn't include CRM sync right now. Upgrade to resume syncing.";
+    const { window } = await launchApp({
+      ...CONNECTED,
+      crmBindings: [seededBinding({ pausedReason: "plan_lapsed", lastError: lapsedCopy })],
+    });
+    await window.locator(".sidebar-item-name", { hasText: "Leads" }).first().click();
+
+    await expect(window.locator(".crm-strip")).toBeVisible({ timeout: 10_000 });
+    const banner = window.locator(".crm-strip-banner");
+    await expect(banner).toContainText(lapsedCopy);
+    await expect(banner.getByRole("button", { name: "View plans" })).toBeVisible();
   });
 });
 

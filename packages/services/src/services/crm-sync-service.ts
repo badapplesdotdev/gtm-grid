@@ -192,6 +192,18 @@ export interface CreateCrmBindingArgs {
   readonly matchKeyAttr: string | null;
 }
 
+/** A binding plus its newest run — what the status strip consumes. */
+export interface CrmBindingWithRun extends CrmBinding {
+  readonly lastRun: {
+    readonly id: string;
+    readonly status: string;
+    readonly trigger: string;
+    readonly rowsCreated: number;
+    readonly rowsUpdated: number;
+    readonly startedAt: number;
+  } | null;
+}
+
 interface FlatRecord {
   readonly externalId: string;
   readonly texts: ReadonlyMap<string, string>;
@@ -550,35 +562,40 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
               const now = Date.now();
               if (inserts.length > 0) {
                 const base = yield* mapRepoError(grid.maxRowPosition(binding.tableId), "row position failed");
+                const cellsForIds = (ids: readonly string[]) =>
+                  inserts.flatMap((fr, i) => {
+                    const rowId = ids[i];
+                    if (rowId === undefined) return [];
+                    return activeCols.flatMap((col) => {
+                      const value = fr.texts.get(col.attrSlug) ?? "";
+                      if (value === "") return [];
+                      return [
+                        {
+                          workspaceId: binding.workspaceId,
+                          tableId: binding.tableId,
+                          rowId,
+                          columnId: col.columnId,
+                          cell: { value, status: "done", error: null, updatedAt: now },
+                        },
+                      ];
+                    });
+                  });
+                // ONE transaction: a row can never be read without its cells
+                // (the two-step path let paged reads race the gap and render
+                // whole pages of blank rows mid-sync).
                 const rowIds = yield* mapRepoError(
-                  grid.insertRowsBulk(
+                  grid.insertRowsWithCellsBulk(
                     inserts.map((_fr, i) => ({
                       workspaceId: binding.workspaceId,
                       tableId: binding.tableId,
                       position: base + i + 1,
                       createdAt: now,
                     })),
+                    cellsForIds,
                   ),
-                  "row insert failed",
+                  "row+cell insert failed",
                 );
-                const cells = inserts.flatMap((fr, i) => {
-                  const rowId = rowIds[i];
-                  if (rowId === undefined) return [];
-                  return activeCols.flatMap((col) => {
-                    const value = fr.texts.get(col.attrSlug) ?? "";
-                    if (value === "") return [];
-                    return [
-                      {
-                        workspaceId: binding.workspaceId,
-                        tableId: binding.tableId,
-                        rowId,
-                        columnId: col.columnId,
-                        cell: { value, status: "done", error: null, updatedAt: now },
-                      },
-                    ];
-                  });
-                });
-                yield* mapRepoError(grid.insertCellsBulk(cells), "cell insert failed");
+                const cells = cellsForIds(rowIds);
                 counters.created += rowIds.length;
                 newRowIds.push(...rowIds);
                 // Open grids see the pulled records land live, WITH their cell
@@ -600,7 +617,9 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
                           error: c.cell.error,
                         })),
                     }),
-                  { discard: true },
+                  // Bounded fan-out: sequential publishing was up to 500 serial
+                  // HTTP POSTs per Attio page.
+                  { concurrency: 8, discard: true },
                 );
 
                 if (cfg.dedupeMode !== "create") {
@@ -689,6 +708,16 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
                 );
               }
             }
+
+            // Live progress for the strip ("Pulling records… N so far").
+            // Best-effort: a progress hiccup must never fail the pull.
+            yield* runs
+              .progress(runId, {
+                rowsCreated: counters.created,
+                rowsUpdated: counters.updated,
+                rowsSkipped: counters.skipped,
+              })
+              .pipe(Effect.catchAll(() => Effect.void));
 
             if (!pageFull) {
               pullComplete = true;
@@ -872,6 +901,7 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
       listSources: (workspaceId: string) =>
         Effect.gen(function* () {
           yield* membership.requireMember(workspaceId);
+          yield* entitlement.requireCloudAccess(workspaceId);
           const session = yield* connections.memberSession(workspaceId);
           const [objects, lists] = yield* Effect.all([client.listObjects(session), client.listLists(session)]);
           const sources: CrmSourceSummary[] = [
@@ -891,6 +921,7 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
       ) =>
         Effect.gen(function* () {
           yield* membership.requireMember(workspaceId);
+          yield* entitlement.requireCloudAccess(workspaceId);
           const session = yield* connections.memberSession(workspaceId);
           return yield* describeAttrs(session, source);
         }),
@@ -906,6 +937,7 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
       ) =>
         Effect.gen(function* () {
           yield* membership.requireMember(workspaceId);
+          yield* entitlement.requireCloudAccess(workspaceId);
           const session = yield* connections.memberSession(workspaceId);
           const serverFilter = args.kind === "object" ? toAttioFilterBody(args.filters) : undefined;
           const { records, pageFull } = yield* pullPage(
@@ -1011,9 +1043,35 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
       listByTable: (tableId: string) =>
         Effect.gen(function* () {
           const table = yield* mapRepoError(grid.findTable(tableId), "table lookup failed");
-          if (Option.isNone(table)) return [] as readonly CrmBinding[];
+          if (Option.isNone(table)) return [] as readonly CrmBindingWithRun[];
           yield* membership.requireMember(table.value.workspaceId);
-          return yield* mapRepoError(bindings.listByTable(tableId), "binding list failed");
+          const list = yield* mapRepoError(bindings.listByTable(tableId), "binding list failed");
+          // Newest run rides along so the strip can detect in-flight syncs
+          // (any trigger) and show a live pulled-so-far count.
+          return yield* Effect.forEach(
+            list,
+            (b) =>
+              mapRepoError(runs.listByBinding(b.id, 1), "run lookup failed").pipe(
+                Effect.map((rs): CrmBindingWithRun => {
+                  const r = rs[0];
+                  return {
+                    ...b,
+                    lastRun:
+                      r === undefined
+                        ? null
+                        : {
+                            id: r.id,
+                            status: r.status,
+                            trigger: r.trigger,
+                            rowsCreated: r.rowsCreated,
+                            rowsUpdated: r.rowsUpdated,
+                            startedAt: r.startedAt,
+                          },
+                  };
+                }),
+              ),
+            { concurrency: 4 },
+          );
         }),
 
       listRuns: (bindingId: string, limit: number) =>
@@ -1103,9 +1161,61 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
             };
             return outcome;
           }
-          yield* entitlement
-            .requireCloudAccess(binding.workspaceId)
-            .pipe(Effect.mapError((e) => new CrmSyncError({ message: "workspace has no cloud access", cause: e })));
+          const entitled = yield* entitlement.requireCloudAccess(binding.workspaceId).pipe(
+            Effect.as(true),
+            Effect.catchTag("PlanRequiredError", () => Effect.succeed(false)),
+            Effect.mapError((e) => new CrmSyncError({ message: "entitlement check failed", cause: e })),
+          );
+          if (!entitled) {
+            // Trial expired / plan lapsed: pause instead of failing the step.
+            // A failed Effect meant 3 Inngest attempts + Error-Tracking noise
+            // per binding per DAY, forever, with nothing user-visible. Pausing
+            // drops the binding out of the daily due-page; the billing
+            // webhook / plan reconcile clears the pause on upgrade.
+            const copy = "Your plan doesn't include CRM sync right now. Upgrade to resume syncing.";
+            const startedAt = Date.now();
+            const runId = yield* runs
+              .start({
+                workspaceId: binding.workspaceId,
+                bindingId: binding.id,
+                tableId: binding.tableId,
+                trigger,
+                startedAt,
+              })
+              .pipe(Effect.mapError((e) => new CrmSyncError({ message: "sync run start failed", cause: e })));
+            yield* runs
+              .finish(runId, {
+                status: "failed",
+                rowsCreated: 0,
+                rowsUpdated: 0,
+                rowsSkipped: 0,
+                rowsStaled: 0,
+                fieldsDropped: null,
+                error: copy,
+                finishedAt: Date.now(),
+              })
+              .pipe(Effect.catchAll(() => Effect.void));
+            yield* bindings
+              .patch(binding.id, { pausedReason: "plan_lapsed", lastError: copy })
+              .pipe(Effect.catchAll(() => Effect.void));
+            const outcome: CrmSyncOutcome = {
+              runId,
+              bindingId: binding.id,
+              tableId: binding.tableId,
+              workspaceId: binding.workspaceId,
+              provider: binding.provider,
+              status: "failed",
+              rowsCreated: 0,
+              rowsUpdated: 0,
+              rowsSkipped: 0,
+              rowsStaled: 0,
+              fieldsDropped: [],
+              error: copy,
+              errorTag: "PlanRequired",
+              newRowIds: [],
+            };
+            return outcome;
+          }
           const session = yield* connections
             .workerSession(binding.workspaceId)
             .pipe(

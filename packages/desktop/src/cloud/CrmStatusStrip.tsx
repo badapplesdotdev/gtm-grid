@@ -20,7 +20,7 @@ import { gridQueryKeys } from "./useCloudGrid";
 
 const ATTIO_LOGO = "https://www.google.com/s2/favicons?domain=attio.com&sz=128";
 
-type PausedReason = null | "auth_revoked" | "source_gone";
+type PausedReason = null | "auth_revoked" | "source_gone" | "plan_lapsed";
 
 /** Give a manual sync this long before the strip stops waiting (the run
  *  continues server-side; the sync log shows the eventual result). */
@@ -43,6 +43,15 @@ interface CrmBinding {
   readonly lastError: string | null;
   readonly rowsSynced: number | null;
   readonly createdAt: number;
+  /** Newest run summary (additive server field; absent on older servers). */
+  readonly lastRun?: {
+    readonly id: string;
+    readonly status: string;
+    readonly trigger: string;
+    readonly rowsCreated: number;
+    readonly rowsUpdated: number;
+    readonly startedAt: number;
+  } | null;
 }
 
 /** One sync run (crm.history). */
@@ -83,7 +92,7 @@ async function openExternalUrl(url: string): Promise<void> {
   if (!tab) w.location.assign(url);
 }
 
-export function CrmStatusStrip({ tableId, workspaceId }: { tableId: string; workspaceId: string }) {
+export function CrmStatusStrip({ tableId, workspaceId, onUpgrade }: { tableId: string; workspaceId: string; onUpgrade?: () => void }) {
   const q = useReactQuery({
     queryKey: ["crm", "bindings", tableId],
     enabled: apiClient !== null && workspaceId !== "",
@@ -92,20 +101,26 @@ export function CrmStatusStrip({ tableId, workspaceId }: { tableId: string; work
       const res: unknown = await apiClient.crm.listBindings.query({ tableId });
       return Array.isArray(res) ? (res as readonly CrmBinding[]) : [];
     },
-    staleTime: 15_000,
+    staleTime: 5_000,
+    // While ANY binding has a run in flight (cron/warm-up/manual), poll so the
+    // strip reflects background syncs without a click.
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      return Array.isArray(data) && data.some((b) => b?.lastRun?.status === "running") ? 3000 : false;
+    },
   });
   const bindings = q.data ?? [];
   if (bindings.length === 0) return null;
   return (
     <>
       {bindings.map((b) => (
-        <CrmBindingRow key={b.id} binding={b} tableId={tableId} workspaceId={workspaceId} />
+        <CrmBindingRow key={b.id} binding={b} tableId={tableId} workspaceId={workspaceId} onUpgrade={onUpgrade} />
       ))}
     </>
   );
 }
 
-function CrmBindingRow({ binding, tableId, workspaceId }: { binding: CrmBinding; tableId: string; workspaceId: string }) {
+function CrmBindingRow({ binding, tableId, workspaceId, onUpgrade }: { binding: CrmBinding; tableId: string; workspaceId: string; onUpgrade?: () => void }) {
   const qc = useQueryClient();
   const [syncing, setSyncing] = useState(false);
   const [showLog, setShowLog] = useState(false);
@@ -205,7 +220,34 @@ function CrmBindingRow({ binding, tableId, workspaceId }: { binding: CrmBinding;
     }
   };
 
+  // When a server-side run finishes (serverActive goes true→false), refresh
+  // the grid, the table meta, and the sidebar counts — same keys the realtime
+  // drop-backstop invalidates.
+  const wasServerActiveRef = useRef(false);
+
   const paused = binding.pausedReason;
+  // A run is in flight server-side (any trigger — cron, warm-up, manual from
+  // anywhere). The local `syncing` click-state stays for instant feedback.
+  const serverActive = binding.lastRun?.status === "running";
+  const active = serverActive || syncing;
+  const pulledSoFar = serverActive
+    ? (binding.lastRun?.rowsCreated ?? 0) + (binding.lastRun?.rowsUpdated ?? 0)
+    : null;
+
+  useEffect(() => {
+    if (serverActive) {
+      wasServerActiveRef.current = true;
+      return;
+    }
+    if (!wasServerActiveRef.current) return;
+    wasServerActiveRef.current = false;
+    void Promise.all([
+      qc.invalidateQueries({ queryKey: gridQueryKeys.tablePaged(tableId) }),
+      qc.invalidateQueries({ queryKey: gridQueryKeys.table(tableId) }),
+      qc.invalidateQueries({ queryKey: ["grid", "tables"] }),
+      qc.invalidateQueries({ queryKey: ["crm", "bindings", tableId] }),
+    ]);
+  }, [serverActive, qc, tableId]);
 
   return (
     <div className="crm-strip" role="status">
@@ -216,23 +258,26 @@ function CrmBindingRow({ binding, tableId, workspaceId }: { binding: CrmBinding;
             Synced from Attio · {binding.sourceLabel}
             <span className="crm-strip-kind">{binding.sourceKind === "list" ? "list" : "object"}</span>
           </span>
-          {syncing ? (
+          {active ? (
             <span className="crm-strip-meta crm-strip-meta-sync">
               <span className="cell-spinner" style={{ width: 11, height: 11, borderWidth: 1.5 }} />
               Pulling records from Attio…
+              {pulledSoFar !== null && pulledSoFar > 0 ? ` ${pulledSoFar.toLocaleString()} so far` : ""}
             </span>
+          ) : binding.lastSyncedAt === null ? (
+            <span className="crm-strip-meta">first sync in progress…</span>
           ) : (
             <span className="crm-strip-meta">
               {(binding.rowsSynced ?? 0).toLocaleString()} records · pull-only
               {matchKeyTitle ? ` · matched on ${matchKeyTitle}` : ""}
-              {binding.lastSyncedAt ? ` · last synced ${agoLabel(binding.lastSyncedAt)}` : ""}
+              {` · last synced ${agoLabel(binding.lastSyncedAt)}`}
             </span>
           )}
         </div>
         <span style={{ flex: 1 }} />
         <button className="btn btn-outline btn-sm" onClick={() => setShowLog((v) => !v)}>Sync log</button>
-        <button className="btn btn-primary btn-sm" disabled={syncing} onClick={() => void syncNow()}>
-          {syncing ? "Syncing…" : "Sync now"}
+        <button className="btn btn-primary btn-sm" disabled={active} onClick={() => void syncNow()}>
+          {active ? "Syncing…" : "Sync now"}
         </button>
       </div>
 
@@ -241,6 +286,16 @@ function CrmBindingRow({ binding, tableId, workspaceId }: { binding: CrmBinding;
         <div className="crm-strip-banner crm-strip-banner-warn">
           <span className="crm-strip-banner-text">{binding.lastError ?? "Attio access was revoked."}</span>
           <button className="btn btn-outline btn-sm" onClick={() => void reconnect()}>Reconnect Attio</button>
+        </div>
+      )}
+      {paused === "plan_lapsed" && (
+        <div className="crm-strip-banner crm-strip-banner-warn">
+          <span className="crm-strip-banner-text">
+            {binding.lastError ?? "Your plan doesn't include CRM sync right now. Upgrade to resume syncing."}
+          </span>
+          {onUpgrade ? (
+            <button className="btn btn-outline btn-sm" onClick={onUpgrade}>View plans</button>
+          ) : null}
         </div>
       )}
       {paused === "source_gone" && !confirmRemove && (

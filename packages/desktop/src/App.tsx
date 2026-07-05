@@ -3045,6 +3045,7 @@ export default function App() {
               onOpenAiSettings={() => setView({ kind: "ai", id: aiProviders[0]?.id ?? "anthropic" })}
               openWebhookToken={openWebhookToken}
               onMissing={onCloudTableMissing}
+              onUpgrade={() => setShowUpgrade(true)}
             />
           </Suspense>
         )}

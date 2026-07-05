@@ -366,6 +366,27 @@ export class WebhookRepo extends Context.Tag("WebhookRepo")<
         readonly cell: CellWrite;
       }[],
     ) => Effect.Effect<void, WebhookRepoError>;
+    /**
+     * Insert rows AND their cells in ONE transaction, so no read can ever
+     * observe the rows without their data (the two-step bulk path let paged
+     * reads race the gap and render blank rows mid-sync). `cellsFor` receives
+     * the new row ids (input order) and returns every cell to insert.
+     */
+    readonly insertRowsWithCellsBulk: (
+      rows: readonly {
+        readonly workspaceId: string;
+        readonly tableId: string;
+        readonly position: number;
+        readonly createdAt: number;
+      }[],
+      cellsFor: (rowIds: readonly string[]) => readonly {
+        readonly workspaceId: string;
+        readonly tableId: string;
+        readonly rowId: string;
+        readonly columnId: string;
+        readonly cell: CellWrite;
+      }[],
+    ) => Effect.Effect<readonly string[], WebhookRepoError>;
     /** Patch an existing cell by id. */
     readonly patchCell: (
       cellId: string,
@@ -979,6 +1000,40 @@ export const WebhookRepoLive: Layer.Layer<WebhookRepo, never, DbClient> =
             catch: fail("cell insert failed"),
           }),
 
+        insertRowsWithCellsBulk: (rowValues, cellsFor) =>
+          rowValues.length === 0
+            ? Effect.succeed([] as readonly string[])
+            : Effect.tryPromise({
+                try: () =>
+                  db.transaction(async (tx) => {
+                    const rows = await tx
+                      .insert(schema.rows)
+                      .values([...rowValues])
+                      .returning({ id: schema.rows.id });
+                    if (rows.length !== rowValues.length) {
+                      throw new Error("row bulk insert returned wrong id count");
+                    }
+                    const ids = rows.map((r) => r.id);
+                    const cellValues = cellsFor(ids);
+                    if (cellValues.length > 0) {
+                      await tx.insert(schema.cells).values(
+                        cellValues.map((v) => ({
+                          workspaceId: v.workspaceId,
+                          tableId: v.tableId,
+                          rowId: v.rowId,
+                          columnId: v.columnId,
+                          value: v.cell.value,
+                          status: v.cell.status as never,
+                          error: v.cell.error,
+                          updatedAt: v.cell.updatedAt,
+                        })),
+                      );
+                    }
+                    return ids as readonly string[];
+                  }),
+                catch: fail("row+cell transactional insert failed"),
+              }),
+
         insertCellsBulk: (values) =>
           values.length === 0
             ? Effect.succeed(undefined)
@@ -1381,6 +1436,27 @@ export const webhookRepoLayer = (fixtures: {
             updatedAt: v.cell.updatedAt,
           });
         }
+      }),
+    insertRowsWithCellsBulk: (rowValues, cellsFor) =>
+      Effect.sync(() => {
+        // Synchronous, so atomic by construction — mirrors the Live tx.
+        const ids = rowValues.map((v) => {
+          const id = nextId("row");
+          rows.push({ id, tableId: v.tableId, position: v.position });
+          return id;
+        });
+        for (const v of cellsFor(ids)) {
+          cells.push({
+            id: nextId("cell"),
+            rowId: v.rowId,
+            columnId: v.columnId,
+            value: v.cell.value,
+            status: v.cell.status,
+            error: v.cell.error,
+            updatedAt: v.cell.updatedAt,
+          });
+        }
+        return ids as readonly string[];
       }),
     insertCell: (values) =>
       Effect.sync(() => {
