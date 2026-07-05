@@ -231,12 +231,23 @@ export const procedures = {
       s.columns.push(c);
       return { attrSlug: f.attrSlug, attrType: f.attrType, columnId: c._id, title: f.title };
     });
-    // …and one already-pulled row so the grid shows synced data immediately.
-    const rowId = `row_crm_${bindingId}`;
-    s.rows.push({ _id: rowId, tableId, position: 1 });
-    s.cells[rowId] = Object.fromEntries(
-      columns.map((c, i) => [c.columnId, cell(i === 0 ? "Sarah Chen" : "sarah.chen@vercel.com")]),
-    );
+    // …and a page of already-pulled rows so the grid shows synced data
+    // immediately (Sarah first — specs assert on her).
+    const SEED = [
+      ["Sarah Chen", "sarah.chen@vercel.com"],
+      ["Marcus Webb", "m.webb@stripe.com"],
+      ["Elena Rodriguez", "elena@linear.app"],
+      ["David Okafor", "d.okafor@notion.so"],
+      ["Priya Nair", "priya@figma.com"],
+      ["Tom Bradley", "tom.bradley@ramp.com"],
+    ];
+    SEED.forEach(([name, email], r) => {
+      const rowId = `row_crm_${bindingId}_${r}`;
+      s.rows.push({ _id: rowId, tableId, position: r + 1 });
+      s.cells[rowId] = Object.fromEntries(
+        columns.map((c, i) => [c.columnId, cell(i === 0 ? name : email)]),
+      );
+    });
     s.crmBindings.push({
       id: bindingId,
       workspaceId: s.workspaceId,
@@ -250,9 +261,9 @@ export const procedures = {
       schedule: "daily",
       enabled: true,
       pausedReason: null,
-      lastSyncedAt: s.now,
+      lastSyncedAt: Date.now(),
       lastError: null,
-      rowsSynced: 1,
+      rowsSynced: 6,
       createdAt: s.now,
     });
     return { bindingId };

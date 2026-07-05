@@ -46,3 +46,4 @@ packages/desktop/.last-run.json
 # Stray root-level screenshots (testing artifacts)
 /*.png
 packages/desktop/e2e/.mock.pid
+packages/desktop/e2e/.listing-shots/
