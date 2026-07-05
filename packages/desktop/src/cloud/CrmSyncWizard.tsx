@@ -202,8 +202,10 @@ export function CrmSyncWizard({
   }, [workspaceId]);
 
   // ── Load a source's fields + suggested match key, seed the recommended set.
+  // `p` is passed explicitly on the pick→configure hop (setProvider hasn't
+  // re-rendered yet, so the state in this closure would be stale).
   const loadSource = useCallback(
-    async (src: CrmSource) => {
+    async (src: CrmSource, p: CrmProviderId = provider) => {
       setSelected(src);
       setLoadingSource(true);
       setError(null);
@@ -212,7 +214,7 @@ export function CrmSyncWizard({
       try {
         const r = await apiClient.crm.describeSource.query({
           workspaceId,
-          provider,
+          provider: p,
           kind: src.kind,
           id: src.id,
           label: src.label,
@@ -234,16 +236,16 @@ export function CrmSyncWizard({
   );
 
   // ── Enter the Configure step: fetch sources, auto-select the first object.
-  const enterConfigure = useCallback(async () => {
+  const enterConfigure = useCallback(async (p: CrmProviderId = provider) => {
     setStep("configure");
     setError(null);
     try {
-      const list = (await apiClient.crm.listSources.query({ workspaceId, provider })) as CrmSource[];
+      const list = (await apiClient.crm.listSources.query({ workspaceId, provider: p })) as CrmSource[];
       setSources(list);
       const firstObject = list.find((s) => s.kind === "object") ?? list[0];
       if (firstObject) {
         setSourceTab(firstObject.kind);
-        await loadSource(firstObject);
+        await loadSource(firstObject, p);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load your CRM sources.");
@@ -254,7 +256,7 @@ export function CrmSyncWizard({
   const pickProvider = useCallback(async (p: CrmProviderId) => {
     setProvider(p);
     const connected = await refetchConnection(p);
-    if (connected) void enterConfigure();
+    if (connected) void enterConfigure(p);
     else setStep("connect");
   }, [refetchConnection, enterConfigure]);
 
