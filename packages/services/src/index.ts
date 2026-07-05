@@ -396,7 +396,9 @@ export { CrmBindingRepo, CrmBindingRepoLive, crmBindingRepoLayer, CrmSyncedRowRe
 export { CrmRateLimitError, CrmServerError, CrmNetworkError, CrmAuthRevoked, CrmConnectionMissing, CrmSchemaDriftError, CrmSourceGoneError, RowCapReached, CrmRequestError, CrmSyncError, isTransientCrmError, type CrmError } from "./crm/errors.js";
 export { crmErrorCopy, type CrmErrorPresentation, type CrmRunStatus } from "./crm/error-copy.js";
 export { AttioAuth, AttioOAuthNotConfigured, type AttioTokens, type AttioOAuthState } from "./services/attio-auth.js";
-export { AttioClient, ATTIO_PAGE_LIMIT, type AttioSession, type AttioObjectSummary, type AttioListSummary, type AttioAttribute, type AttioRecord, type AttioListEntry } from "./services/attio-client.js";
+export { AttioClient, ATTIO_PAGE_LIMIT, type AttioSession } from "./services/attio-client.js";
+export { CRM_DISPLAY_NAMES, type CrmProvider, type CrmClientApi, type CrmSession, type CrmTokens, type CrmObjectSummary, type CrmListSummary, type CrmAttribute, type CrmAttrRef, type CrmRecord, type CrmListEntry, type CrmPage } from "./services/crm-client.js";
+export { CrmClientRegistry } from "./services/crm-client-registry.js";
 export { CrmConnectionService, ATTIO_EXTENSION_ID, type CrmConnectionMeta } from "./services/crm-connection-service.js";
 export { CrmSyncService, planRowCap, parseBindingConfig, CRM_ROW_CAP_TEAM, CRM_ROW_CAP_SCALE, type CrmBindingConfig, type CrmDedupeMode, type CrmSyncOutcome, type CrmSourceSummary, type CrmSourceField, type CrmSourceDescription, type CrmEstimate, type CreateCrmBindingArgs, type CrmBindingWithRun } from "./services/crm-sync-service.js";
 export { flattenAttrValue, toAttioFilter, toAttioFilterBody, type AttioAttrType, type AttioValueEntry } from "./crm/attio-attributes.js";

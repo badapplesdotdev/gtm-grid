@@ -1,9 +1,11 @@
 /**
  * `AttioClient` — every HTTP call GTM Grid makes to api.attio.com (TRI:
- * crm-sync). One typed, resilient seam:
+ * crm-sync). Implements the provider-neutral {@link CrmClientApi}: records
+ * are pre-flattened to `FlatValue`s here (Attio's typed value entries never
+ * leave this module) and paging is exposed as an opaque cursor synthesized
+ * from Attio's limit/offset.
  *
- * - Tokens are passed per call via an {@link AttioSession} (member and worker
- *   paths read them differently — see CrmConnectionService).
+ * Resilience:
  * - Transient failures (429 / 5xx / network) retry in-process with jittered
  *   exponential backoff, honoring `Retry-After` when Attio sends one. This is
  *   under the cron's outer Inngest step retries, mirroring the signal-service
@@ -29,55 +31,41 @@ import {
   isTransientCrmError,
   type CrmError,
 } from "../crm/errors.js";
-import { flattenAttrValue, type AttioValueEntry } from "../crm/attio-attributes.js";
-import { isSupportedAttrType } from "../crm/crm-values.js";
+import { flattenAttrValue, toAttioFilterBody, type AttioAttrType, type AttioValueEntry } from "../crm/attio-attributes.js";
+import { isSupportedAttrType, type CrmFilter, type FlatValue } from "../crm/crm-values.js";
+import type {
+  CrmAttrRef,
+  CrmAttribute,
+  CrmListEntry,
+  CrmListSummary,
+  CrmObjectSummary,
+  CrmPage,
+  CrmRecord,
+  CrmSession,
+} from "./crm-client.js";
 import { AttioAuth, type AttioTokens } from "./attio-auth.js";
 
 const BASE = "https://api.attio.com";
 /** Attio's documented page ceiling for query endpoints. */
 export const ATTIO_PAGE_LIMIT = 500;
 
-/** One workspace's live Attio access: current tokens + how to persist a refresh. */
-export interface AttioSession {
-  readonly workspaceId: string;
-  readonly tokens: AttioTokens;
-  /**
-   * Persist refreshed tokens. Failures are swallowed by the client (the
-   * refreshed token still works in-memory for this run; the next run will
-   * refresh again) — persistence must never fail a sync.
-   */
-  readonly persist: (tokens: AttioTokens) => Effect.Effect<void, never>;
-}
+/** @deprecated The neutral {@link CrmSession} — kept as an alias for existing imports. */
+export type AttioSession = CrmSession;
 
-export interface AttioObjectSummary {
-  readonly slug: string;
-  readonly label: string;
-}
-
-export interface AttioListSummary {
-  readonly id: string;
-  readonly name: string;
-  /** The object slug this list's entries reference (e.g. "people"). */
-  readonly parentObject: string;
-}
-
-export interface AttioAttribute {
-  readonly slug: string;
-  readonly title: string;
-  readonly type: string;
-  readonly supported: boolean;
-}
-
-export interface AttioRecord {
+/** A raw Attio record: attribute slug → typed value entries. Internal only. */
+interface RawAttioRecord {
   readonly recordId: string;
   readonly values: Readonly<Record<string, ReadonlyArray<AttioValueEntry>>>;
 }
 
-export interface AttioListEntry {
-  readonly entryId: string;
-  readonly parentObject: string;
-  readonly parentRecordId: string;
-}
+/** Attio's offset paging behind the neutral opaque cursor. */
+const offsetOf = (cursor: string | null): number => {
+  if (cursor === null) return 0;
+  const n = Number(cursor);
+  return Number.isSafeInteger(n) && n >= 0 ? n : 0;
+};
+const nextCursorOf = (offset: number, pageSize: number, got: number): string | null =>
+  got === pageSize ? String(offset + pageSize) : null;
 
 /** Jittered exponential backoff over transient failures (≤4 retries). */
 const transientRetry = Schedule.exponential("500 millis").pipe(
@@ -149,7 +137,7 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
      * separately awaited — the backoff schedule's growth covers Attio's small
      * windows, and the cron's outer retries cover large ones.
      */
-    const request = (session: AttioSession, args: RequestArgs): Effect.Effect<unknown, CrmError> =>
+    const request = (session: CrmSession, args: RequestArgs): Effect.Effect<unknown, CrmError> =>
       Effect.gen(function* () {
         const first = yield* attempt(args, session.tokens.accessToken).pipe(Effect.retry(transientRetry));
         if (!first.unauthorized) return first.json;
@@ -203,14 +191,25 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
       return out;
     };
 
-    const toRecord = (raw: Record<string, unknown>): AttioRecord => ({
+    const toRaw = (raw: Record<string, unknown>): RawAttioRecord => ({
       recordId: idOf(raw, "record_id"),
       values: valuesOf(raw),
     });
 
-    /** Query one page of an object's records. */
-    const queryObjectRecords = (
-      session: AttioSession,
+    /** Pre-flatten the requested attributes — the neutral record the engine sees. */
+    const toCrmRecord = (raw: RawAttioRecord, attrs: readonly CrmAttrRef[]): CrmRecord => {
+      const values: Record<string, FlatValue> = {};
+      for (const a of attrs) {
+        values[a.slug] = isSupportedAttrType(a.type)
+          ? flattenAttrValue(a.type as AttioAttrType, raw.values[a.slug])
+          : { kind: "text", text: "" };
+      }
+      return { recordId: raw.recordId, values };
+    };
+
+    /** Query one page of an object's RAW records. */
+    const queryRawObjectRecords = (
+      session: CrmSession,
       args: {
         readonly object: string;
         readonly sourceLabel: string;
@@ -228,7 +227,7 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
           offset: args.offset,
           ...(args.filter !== undefined ? { filter: args.filter } : {}),
         },
-      }).pipe(Effect.map((json) => dataArray(json).map(toRecord)));
+      }).pipe(Effect.map((json) => dataArray(json).map(toRaw)));
 
     // Attio's filter language does not document `$in`; live workspaces reject
     // it with a 400 (found in the first real E2E — a People sample pull with a
@@ -237,11 +236,23 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
     // and go straight to individual GETs afterwards.
     let bulkInUnsupported = false;
 
-    const fetchRecordsByIds = (
-      session: AttioSession,
+    const fetchRawRecordsByIds = (
+      session: CrmSession,
       args: { readonly object: string; readonly sourceLabel: string; readonly ids: readonly string[] },
-    ): Effect.Effect<readonly AttioRecord[], CrmError> => {
-      if (args.ids.length === 0) return Effect.succeed([] as readonly AttioRecord[]);
+    ): Effect.Effect<readonly RawAttioRecord[], CrmError> => {
+      if (args.ids.length === 0) return Effect.succeed([] as readonly RawAttioRecord[]);
+      // Self-chunk: the bulk $in query is capped at one page, so oversized id
+      // sets split here (callers used to chunk — the neutral interface says
+      // clients own their batch limits).
+      if (args.ids.length > ATTIO_PAGE_LIMIT) {
+        const chunks: string[][] = [];
+        for (let i = 0; i < args.ids.length; i += ATTIO_PAGE_LIMIT) {
+          chunks.push([...args.ids.slice(i, i + ATTIO_PAGE_LIMIT)]);
+        }
+        return Effect.forEach(chunks, (ids) => fetchRawRecordsByIds(session, { ...args, ids })).pipe(
+          Effect.map((pages) => pages.flat()),
+        );
+      }
       const individually = Effect.forEach(
         args.ids,
         (id) =>
@@ -252,22 +263,22 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
             Effect.map((json) => {
               const data = (json as { data?: unknown } | null)?.data;
               return data !== null && typeof data === "object"
-                ? Option.some(toRecord(data as Record<string, unknown>))
-                : Option.none<AttioRecord>();
+                ? Option.some(toRaw(data as Record<string, unknown>))
+                : Option.none<RawAttioRecord>();
             }),
             // A single VANISHED record (404) must not fail the batch — but a
             // scope refusal (403) must: swallowing it turned a missing Records
             // scope into silent "ok · 0 records" syncs in the first live E2E.
-            Effect.catchTag("CrmSourceGoneError", () => Effect.succeed(Option.none<AttioRecord>())),
+            Effect.catchTag("CrmSourceGoneError", () => Effect.succeed(Option.none<RawAttioRecord>())),
             Effect.catchTag("CrmRequestError", (e) =>
-              e.status === 404 ? Effect.succeed(Option.none<AttioRecord>()) : Effect.fail(e),
+              e.status === 404 ? Effect.succeed(Option.none<RawAttioRecord>()) : Effect.fail(e),
             ),
           ),
         { concurrency: 4 },
       ).pipe(Effect.map((opts) => opts.flatMap((o) => (Option.isSome(o) ? [o.value] : []))));
 
       if (bulkInUnsupported) return individually;
-      return queryObjectRecords(session, {
+      return queryRawObjectRecords(session, {
         object: args.object,
         sourceLabel: args.sourceLabel,
         filter: { record_id: { $in: [...args.ids] } },
@@ -284,8 +295,12 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
     };
 
     return {
+      provider: "attio" as const,
+      displayName: "Attio",
+      pageLimit: ATTIO_PAGE_LIMIT,
+
       /** GET /v2/self — the connected Attio workspace's identity. */
-      identifySelf: (session: AttioSession) =>
+      identifySelf: (session: CrmSession) =>
         request(session, { method: "GET", path: "/v2/self" }).pipe(
           Effect.map((json) => {
             const r = (json as Record<string, unknown> | null) ?? {};
@@ -300,11 +315,11 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
         ),
 
       /** GET /v2/objects — object summaries for the wizard's source picker. */
-      listObjects: (session: AttioSession) =>
+      listObjects: (session: CrmSession) =>
         request(session, { method: "GET", path: "/v2/objects" }).pipe(
           Effect.map((json) =>
             dataArray(json).map(
-              (raw): AttioObjectSummary => ({
+              (raw): CrmObjectSummary => ({
                 slug:
                   typeof raw.api_slug === "string" && raw.api_slug !== ""
                     ? raw.api_slug
@@ -321,10 +336,10 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
         ),
 
       /** GET /v2/lists — list summaries for the wizard's Lists tab. */
-      listLists: (session: AttioSession) =>
+      listLists: (session: CrmSession) =>
         request(session, { method: "GET", path: "/v2/lists" }).pipe(
           Effect.map((json) =>
-            dataArray(json).map((raw): AttioListSummary => {
+            dataArray(json).map((raw): CrmListSummary => {
               const parent = Array.isArray(raw.parent_object)
                 ? (raw.parent_object.find((p): p is string => typeof p === "string") ?? "")
                 : typeof raw.parent_object === "string"
@@ -340,14 +355,14 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
         ),
 
       /** GET /v2/{objects|lists}/{id}/attributes — the field picker's rows. */
-      getAttributes: (session: AttioSession, target: "objects" | "lists", identifier: string, sourceLabel: string) =>
+      getAttributes: (session: CrmSession, target: "objects" | "lists", identifier: string, sourceLabel: string) =>
         request(session, {
           method: "GET",
           path: `/v2/${target}/${encodeURIComponent(identifier)}/attributes`,
           notFoundLabel: sourceLabel,
         }).pipe(
           Effect.map((json) =>
-            dataArray(json).map((raw): AttioAttribute => {
+            dataArray(json).map((raw): CrmAttribute => {
               const type = typeof raw.type === "string" ? raw.type : "";
               return {
                 slug: typeof raw.api_slug === "string" ? raw.api_slug : "",
@@ -359,18 +374,44 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
           ),
         ),
 
-      queryObjectRecords,
+      /** One page of an object's records, pre-flattened over `attrs`. */
+      queryObjectRecords: (
+        session: CrmSession,
+        args: {
+          readonly object: string;
+          readonly sourceLabel: string;
+          readonly attrs: readonly CrmAttrRef[];
+          readonly filter?: unknown;
+          readonly limit: number;
+          readonly cursor: string | null;
+        },
+      ): Effect.Effect<CrmPage<CrmRecord>, CrmError> => {
+        const offset = offsetOf(args.cursor);
+        return queryRawObjectRecords(session, {
+          object: args.object,
+          sourceLabel: args.sourceLabel,
+          ...(args.filter !== undefined ? { filter: args.filter as Record<string, unknown> } : {}),
+          limit: args.limit,
+          offset,
+        }).pipe(
+          Effect.map((raws) => ({
+            items: raws.map((r) => toCrmRecord(r, args.attrs)),
+            nextCursor: nextCursorOf(offset, args.limit, raws.length),
+          })),
+        );
+      },
 
       /** POST /v2/lists/{list}/entries/query — one page of a list's membership. */
       queryListEntries: (
-        session: AttioSession,
-        args: { readonly listId: string; readonly sourceLabel: string; readonly limit: number; readonly offset: number },
-      ) =>
-        request(session, {
+        session: CrmSession,
+        args: { readonly listId: string; readonly sourceLabel: string; readonly limit: number; readonly cursor: string | null },
+      ): Effect.Effect<CrmPage<CrmListEntry>, CrmError> => {
+        const offset = offsetOf(args.cursor);
+        return request(session, {
           method: "POST",
           path: `/v2/lists/${encodeURIComponent(args.listId)}/entries/query`,
           notFoundLabel: args.sourceLabel,
-          body: { limit: args.limit, offset: args.offset },
+          body: { limit: args.limit, offset },
         }).pipe(
           Effect.tap((json) => {
             const rows = dataArray(json);
@@ -384,39 +425,49 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
               }),
             );
           }),
-          Effect.map((json) =>
-            dataArray(json).map(
-              (raw): AttioListEntry => ({
+          Effect.map((json) => {
+            const items = dataArray(json).map(
+              (raw): CrmListEntry => ({
                 entryId: idOf(raw, "entry_id"),
                 parentObject: typeof raw.parent_object === "string" ? raw.parent_object : "",
                 parentRecordId: typeof raw.parent_record_id === "string" ? raw.parent_record_id : "",
               }),
-            ),
-          ),
-        ),
+            );
+            return { items, nextCursor: nextCursorOf(offset, args.limit, items.length) };
+          }),
+        );
+      },
 
       /**
-       * Fetch specific records of an object by id — the list-sync + reference-
-       * name path. Tries ONE bulk `record_id $in` query, then falls back to
-       * bounded-concurrency individual GETs (and remembers when the live API
-       * rejects `$in`, skipping the doomed attempt on later calls).
+       * Fetch specific records of an object by id, pre-flattened — the
+       * list-sync path. Tries ONE bulk `record_id $in` query, then falls back
+       * to bounded-concurrency individual GETs (and remembers when the live
+       * API rejects `$in`, skipping the doomed attempt on later calls).
        */
       queryRecordsByIds: (
-        session: AttioSession,
-        args: { readonly object: string; readonly sourceLabel: string; readonly ids: readonly string[] },
-      ): Effect.Effect<readonly AttioRecord[], CrmError> => fetchRecordsByIds(session, args),
+        session: CrmSession,
+        args: {
+          readonly object: string;
+          readonly sourceLabel: string;
+          readonly attrs: readonly CrmAttrRef[];
+          readonly ids: readonly string[];
+        },
+      ): Effect.Effect<readonly CrmRecord[], CrmError> =>
+        fetchRawRecordsByIds(session, { object: args.object, sourceLabel: args.sourceLabel, ids: args.ids }).pipe(
+          Effect.map((raws) => raws.map((r) => toCrmRecord(r, args.attrs))),
+        ),
 
       /**
        * Resolve record ids → display names (the "Company" cell text). Reads
        * each record's `name` attribute via the flattener; unknown ids map to "".
        */
       resolveRecordNames: (
-        session: AttioSession,
+        session: CrmSession,
         args: { readonly object: string; readonly ids: readonly string[] },
       ): Effect.Effect<ReadonlyMap<string, string>, CrmError> =>
         args.ids.length === 0
           ? Effect.succeed(new Map<string, string>())
-          : fetchRecordsByIds(session, { object: args.object, sourceLabel: args.object, ids: args.ids }).pipe(
+          : fetchRawRecordsByIds(session, { object: args.object, sourceLabel: args.object, ids: args.ids }).pipe(
               Effect.map((records) => {
                 const names = new Map<string, string>();
                 for (const rec of records) {
@@ -432,7 +483,7 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
             ),
 
       /** GET /v2/workspace_members — actor id → member name (Owner columns). */
-      listMembers: (session: AttioSession): Effect.Effect<ReadonlyMap<string, string>, CrmError> =>
+      listMembers: (session: CrmSession): Effect.Effect<ReadonlyMap<string, string>, CrmError> =>
         request(session, { method: "GET", path: "/v2/workspace_members" }).pipe(
           Effect.map((json) => {
             const members = new Map<string, string>();
@@ -446,6 +497,10 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
             return members;
           }),
         ),
+
+      /** Attio prefilters apply to OBJECT queries only (lists page raw entries). */
+      compileServerFilter: (filters: readonly CrmFilter[], kind: "object" | "list"): unknown | undefined =>
+        kind === "object" ? toAttioFilterBody(filters) : undefined,
     } as const;
   }),
   dependencies: [],

@@ -117,12 +117,21 @@ describe("parsing", () => {
           ],
         }),
     ]);
-    const records = await run(
+    const page = await run(
       Effect.flatMap(AttioClient, (c) =>
-        c.queryObjectRecords(s, { object: "companies", sourceLabel: "Companies", limit: 500, offset: 0 }),
+        c.queryObjectRecords(s, {
+          object: "companies",
+          sourceLabel: "Companies",
+          attrs: [{ slug: "name", type: "text" }],
+          limit: 500,
+          cursor: null,
+        }),
       ),
     );
-    expect(records).toEqual([{ recordId: "rec_1", values: { name: [{ value: "Vercel" }], junk: [] } }]);
+    // Values arrive PRE-FLATTENED — raw Attio entries never leave the client.
+    expect(page.items).toEqual([{ recordId: "rec_1", values: { name: { kind: "text", text: "Vercel" } } }]);
+    // One short page ⇒ the source is exhausted.
+    expect(page.nextCursor).toBeNull();
     expect(JSON.parse(calls[0].body)).toEqual({ limit: 500, offset: 0 });
   });
 });
@@ -188,7 +197,7 @@ describe("failure mapping + retry", () => {
     const calls = scriptFetch([() => new Response("bad filter", { status: 400 })]);
     const exit = await runExit(
       Effect.flatMap(AttioClient, (c) =>
-        c.queryObjectRecords(s, { object: "people", sourceLabel: "People", limit: 10, offset: 0 }),
+        c.queryObjectRecords(s, { object: "people", sourceLabel: "People", attrs: [], limit: 10, cursor: null }),
       ),
     );
     expect(failureTag(exit)).toBe("CrmRequestError");
@@ -200,7 +209,7 @@ describe("failure mapping + retry", () => {
     scriptFetch([() => new Response("gone", { status: 404 })]);
     const exit = await runExit(
       Effect.flatMap(AttioClient, (c) =>
-        c.queryObjectRecords(s, { object: "people", sourceLabel: "MQLs — Q3", limit: 10, offset: 0 }),
+        c.queryObjectRecords(s, { object: "people", sourceLabel: "MQLs — Q3", attrs: [], limit: 10, cursor: null }),
       ),
     );
     expect(failureTag(exit)).toBe("CrmSourceGoneError");
@@ -216,7 +225,7 @@ describe("queryRecordsByIds", () => {
     ]);
     const records = await run(
       Effect.flatMap(AttioClient, (c) =>
-        c.queryRecordsByIds(s, { object: "companies", sourceLabel: "Companies", ids: ["rec_1", "rec_2"] }),
+        c.queryRecordsByIds(s, { object: "companies", sourceLabel: "Companies", attrs: [], ids: ["rec_1", "rec_2"] }),
       ),
     );
     expect(records.map((r) => r.recordId)).toEqual(["rec_1", "rec_2"]);
@@ -234,7 +243,7 @@ describe("queryRecordsByIds", () => {
     ]);
     const records = await run(
       Effect.flatMap(AttioClient, (c) =>
-        c.queryRecordsByIds(s, { object: "companies", sourceLabel: "Companies", ids: ["rec_1", "rec_2"] }),
+        c.queryRecordsByIds(s, { object: "companies", sourceLabel: "Companies", attrs: [], ids: ["rec_1", "rec_2"] }),
       ),
     );
     expect(records.map((r) => r.recordId).sort()).toEqual(["rec_1", "rec_2"]);
@@ -269,8 +278,8 @@ describe("queryRecordsByIds", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const c = yield* AttioClient;
-        yield* c.queryRecordsByIds(s, { object: "companies", sourceLabel: "Companies", ids: ["a"] });
-        yield* c.queryRecordsByIds(s, { object: "companies", sourceLabel: "Companies", ids: ["b"] });
+        yield* c.queryRecordsByIds(s, { object: "companies", sourceLabel: "Companies", attrs: [], ids: ["a"] });
+        yield* c.queryRecordsByIds(s, { object: "companies", sourceLabel: "Companies", attrs: [], ids: ["b"] });
       }).pipe(Effect.provide(layer2)) as Effect.Effect<void, never, never>,
     );
     // call 1: refused bulk; call 2: GET a; call 3: GET b (NO second bulk try).
@@ -307,7 +316,7 @@ describe("queryRecordsByIds", () => {
     ]);
     const exit = await runExit(
       Effect.flatMap(AttioClient, (c) =>
-        c.queryRecordsByIds(s, { object: "companies", sourceLabel: "Companies", ids: ["rec_gone", "rec_forbidden"] }),
+        c.queryRecordsByIds(s, { object: "companies", sourceLabel: "Companies", attrs: [], ids: ["rec_gone", "rec_forbidden"] }),
       ),
     );
     expect(failureTag(exit)).toBe("CrmRequestError");
