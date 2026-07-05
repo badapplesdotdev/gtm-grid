@@ -168,7 +168,11 @@ function GridCellInner({
                 void navigator.clipboard?.writeText(text).catch(() => {});
               },
             },
-            { label: "Clear cell", onClick: () => actions.clearCell(rowId, col.id) },
+            // Synced (CRM-owned) cells are read-only — clearing would overwrite
+            // CRM data with "" and, outside update mode, the loss is permanent.
+            ...(isSyncedColumn(col)
+              ? []
+              : [{ label: "Clear cell", onClick: () => actions.clearCell(rowId, col.id) }]),
           ]),
         );
       }}

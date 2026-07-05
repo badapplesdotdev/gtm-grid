@@ -77,9 +77,11 @@ async function runCrm<A, E>(
     }
     throw toTrpcError(err._tag, err.message ?? "Request failed.");
   }
+  // Defects carry internals (DB/decrypt detail) — never surface them; the
+  // squashed cause still reaches Error Tracking via `cause`.
   throw new TRPCError({
     code: "INTERNAL_SERVER_ERROR",
-    message: Cause.pretty(exit.cause),
+    message: "Something went wrong. Please try again in a moment.",
     cause: Cause.squash(exit.cause),
   });
 }
@@ -91,17 +93,17 @@ const sourceKind = z.enum(["object", "list"]);
 
 /** One `CrmFilter` — attr type / op enums mirror the service's domain unions. */
 const filter = z.object({
-  attrSlug: z.string().min(1),
+  attrSlug: z.string().min(1).max(200),
   attrType: z.enum(SUPPORTED_ATTR_TYPES),
   op: z.enum(FILTER_OPS),
-  value: z.string(),
+  value: z.string().max(500),
 });
 
 /** A mapped field (attribute → synced column) for `createBinding`. */
 const field = z.object({
-  attrSlug: z.string().min(1),
-  attrType: z.string().min(1),
-  title: z.string().min(1),
+  attrSlug: z.string().min(1).max(200),
+  attrType: z.enum(SUPPORTED_ATTR_TYPES),
+  title: z.string().min(1).max(200),
 });
 
 export const crmRouter = router({
@@ -218,7 +220,7 @@ export const crmRouter = router({
         kind: sourceKind,
         id: z.string().min(1),
         label: z.string(),
-        filters: z.array(filter),
+        filters: z.array(filter).max(20),
       }),
     )
     .query(({ ctx, input }) =>
@@ -249,9 +251,11 @@ export const crmRouter = router({
         tableId: z.string().min(1),
         sourceKind,
         sourceId: z.string().min(1),
-        sourceLabel: z.string(),
-        fields: z.array(field),
-        filters: z.array(filter),
+        sourceLabel: z.string().min(1).max(200),
+        // Bounded: one DB column insert per field — an unbounded array would be
+        // a write-burst lever for any authenticated member.
+        fields: z.array(field).min(1).max(100),
+        filters: z.array(filter).max(20),
         dedupeMode: z.enum(["update", "skip", "create"]),
         matchKeyAttr: z.string().nullable(),
       }),
@@ -353,15 +357,21 @@ export const crmRouter = router({
       ),
     ),
 
-  /** CRM bindings on a table. Members-only. */
+  /**
+   * CRM bindings on a table. Members-only — membership is checked against the
+   * TABLE's own workspace inside the service (a client-supplied workspaceId
+   * was an IDOR: any member of any workspace could read another workspace's
+   * binding config by table id). The desktop still sends workspaceId; zod
+   * strips unknown keys, so it is simply ignored here.
+   */
   listBindings: protectedProcedure
-    .input(z.object({ tableId: z.string().min(1), workspaceId: z.string().min(1) }))
+    .input(z.object({ tableId: z.string().min(1) }))
     .query(({ ctx, input }) =>
       runCrm(
         ctx.runtime,
         Effect.gen(function* () {
           const svc = yield* CrmSyncService;
-          return yield* svc.listByTable(input.tableId, input.workspaceId);
+          return yield* svc.listByTable(input.tableId);
         }),
       ),
     ),

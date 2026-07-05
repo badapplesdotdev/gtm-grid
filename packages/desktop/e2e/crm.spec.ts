@@ -130,9 +130,20 @@ test.describe("CRM sync — status strip & synced grid", () => {
     await window.locator(".cell-value", { hasText: "Sarah Chen" }).click();
     await expect(window.locator(".cell-input")).toHaveCount(0);
 
+    // The context menu must not offer "Clear cell" on a synced column either —
+    // clearing writes "" over CRM data (regression: the clear path originally
+    // bypassed the read-only gating).
+    await window.locator(".cell-value", { hasText: "Sarah Chen" }).click({ button: "right" });
+    await expect(window.locator(".ctx-menu")).toBeVisible();
+    await expect(window.locator(".ctx-item", { hasText: "Clear cell" })).toHaveCount(0);
+    await window.locator(".ctx-backdrop").click(); // dismiss via backdrop
+
     // Sanity: an ordinary manual cell on the seeded "Leads" table still edits
-    // (regression guard that the gating is scoped to synced columns only).
+    // AND still offers "Clear cell" (the gating is scoped to synced columns).
     await window.locator(".sidebar-item-name", { hasText: "Leads" }).first().click();
+    await window.locator(".cell-value", { hasText: /^Acme$/ }).first().click({ button: "right" });
+    await expect(window.locator(".ctx-item", { hasText: "Clear cell" })).toBeVisible();
+    await window.locator(".ctx-backdrop").click(); // dismiss via backdrop
     await window.locator(".cell-value", { hasText: /^Acme$/ }).first().click();
     await expect(window.locator(".cell-input")).toBeVisible();
   });

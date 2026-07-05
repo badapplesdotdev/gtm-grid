@@ -264,9 +264,33 @@ describe("crm.listBindings / deleteBinding", () => {
       crmBindings: [{ ...binding }],
       currentUserId: "member",
     });
-    const list = await caller.crm.listBindings({ tableId: TABLE, workspaceId: WS });
+    const list = await caller.crm.listBindings({ tableId: TABLE });
     expect(list).toHaveLength(1);
     expect(list[0]?.id).toBe("crm-1");
+  });
+
+  it("CROSS-TENANT: a member of another workspace cannot read a table's bindings", async () => {
+    // Attacker is a legitimate member of workspace B, probing workspace A's
+    // table id. Membership must be checked against the TABLE's workspace —
+    // never any client-supplied id (the original shape was an IDOR).
+    const caller = callerFor({
+      memberships: [
+        ...memberships,
+        { workspaceId: "ws-ATTACKER", userId: "attacker", role: "member" },
+      ],
+      tables,
+      crmBindings: [{ ...binding }],
+      currentUserId: "attacker",
+    });
+    await expect(caller.crm.listBindings({ tableId: TABLE })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
+
+  it("an unknown table id returns empty (no existence probing)", async () => {
+    const caller = callerFor({ memberships, tables, crmBindings: [{ ...binding }], currentUserId: "member" });
+    const list = await caller.crm.listBindings({ tableId: "00000000-0000-0000-0000-000000000000" });
+    expect(list).toEqual([]);
   });
 
   it("deletes a binding for a member", async () => {

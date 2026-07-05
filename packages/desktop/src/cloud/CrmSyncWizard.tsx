@@ -12,6 +12,26 @@ import { Dialog, DialogContent } from "../components/ui/dialog";
 import { BrandIcon } from "../BrandIcon";
 import { electron } from "../electron";
 
+/** Attio attribute types the sync supports (mirrors the server's union). */
+const SUPPORTED_ATTR_TYPES = [
+  "text",
+  "personal-name",
+  "email-address",
+  "domain",
+  "phone-number",
+  "number",
+  "currency",
+  "date",
+  "timestamp",
+  "checkbox",
+  "select",
+  "status",
+  "rating",
+  "location",
+  "record-reference",
+  "actor-reference",
+] as const;
+
 const ATTIO_LOGO = "https://www.google.com/s2/favicons?domain=attio.com&sz=128";
 const HUBSPOT_LOGO = "https://www.google.com/s2/favicons?domain=hubspot.com&sz=128";
 
@@ -82,6 +102,7 @@ const StepDot = ({ n, state }: { n: number; state: "done" | "active" | "todo" })
 export function CrmSyncWizard({
   workspaceId,
   createTable,
+  deleteTable,
   onClose,
   onCreated,
   connectedSignal,
@@ -90,6 +111,8 @@ export function CrmSyncWizard({
   workspaceId: string;
   /** Create the empty cloud table the binding fills; returns its id. */
   createTable: (name: string) => Promise<string>;
+  /** Best-effort rollback when binding creation fails after the table exists. */
+  deleteTable: (tableId: string) => Promise<void>;
   onClose: () => void;
   /** Navigate to the freshly-created synced table. */
   onCreated: (tableId: string) => void;
@@ -300,21 +323,35 @@ export function CrmSyncWizard({
     setSubmitting(true);
     setError(null);
     try {
+      // The binding needs a tableId, so the table is created first; if binding
+      // creation then fails, roll the empty table back — otherwise every retry
+      // would strand another orphan table in the sidebar.
       const tableId = await createTable(selected.label);
       const chosenFields = fields
         .filter((f) => chosen.has(f.slug))
-        .map((f) => ({ attrSlug: f.slug, attrType: f.type, title: f.title }));
-      await apiClient.crm.createBinding.mutate({
-        workspaceId,
-        tableId,
-        sourceKind: selected.kind,
-        sourceId: selected.id,
-        sourceLabel: selected.label,
-        fields: chosenFields,
-        filters: validFilters,
-        dedupeMode: dedupe,
-        matchKeyAttr: dedupe === "update" ? matchKeyAttr : null,
-      });
+        .flatMap((f) => {
+          // Narrow the wire `type: string` to the router's attr-type union;
+          // the server only returns supported types, so this never drops in
+          // practice — it just proves it to the compiler without a cast.
+          const attrType = SUPPORTED_ATTR_TYPES.find((t) => t === f.type);
+          return attrType === undefined ? [] : [{ attrSlug: f.slug, attrType, title: f.title }];
+        });
+      try {
+        await apiClient.crm.createBinding.mutate({
+          workspaceId,
+          tableId,
+          sourceKind: selected.kind,
+          sourceId: selected.id,
+          sourceLabel: selected.label,
+          fields: chosenFields,
+          filters: validFilters,
+          dedupeMode: dedupe,
+          matchKeyAttr: dedupe === "update" ? matchKeyAttr : null,
+        });
+      } catch (bindErr) {
+        await deleteTable(tableId).catch(() => {}); // best-effort rollback
+        throw bindErr;
+      }
       onCreated(tableId);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not start the sync.");

@@ -243,6 +243,11 @@ export const processCrmBinding = inngest.createFunction(
     if (!bindingId) return { bindingId, status: null };
     const trigger = crmSyncTrigger(event.name);
     const outcome = await step.run(`sync:${bindingId}`, () => runSyncStep(bindingId, trigger));
+    if (outcome.runId === "") {
+      // Overlap guard fired (a run for this binding is already in flight) —
+      // nothing synced, so no analytics/realtime/enrichment.
+      return { bindingId, status: "skipped", rowsCreated: 0, rowsUpdated: 0 };
+    }
 
     // Each side effect is its own durable step so a retry re-runs only what did
     // not complete (analytics fire once, realtime once, enrichment once).
@@ -284,7 +289,12 @@ const WARM_UP_BACKOFF_S = [15, 15, 30, 30, 60, 60, 60, 60, 60, 60] as const;
 export const warmUpCrmBinding = inngest.createFunction(
   {
     id: "warm-up-crm-binding",
-    concurrency: [{ key: "event.data.workspaceId", limit: 2 }],
+    concurrency: [
+      // Same shared account-wide pool as processCrmBinding — mass binding
+      // creation must not fan warm-up pulls out unbounded.
+      { scope: "account", key: '"crm-sync"', limit: 50 },
+      { key: "event.data.workspaceId", limit: 2 },
+    ],
     retries: 1,
     onFailure,
     triggers: [{ event: "crm/binding.created" }],
@@ -296,6 +306,7 @@ export const warmUpCrmBinding = inngest.createFunction(
     for (let attempt = 0; attempt < WARM_UP_BACKOFF_S.length; attempt += 1) {
       await step.sleep(`backoff-${attempt}`, `${WARM_UP_BACKOFF_S[attempt]}s`);
       const outcome = await step.run(`warm-up:${bindingId}:${attempt}`, () => runSyncStep(bindingId, "warmup"));
+      if (outcome.runId === "") continue; // another run is already in flight
       await step.run(`warm-up-analytics:${bindingId}:${attempt}`, async () => {
         captureCrmSync(outcome, "warmup");
         return null;

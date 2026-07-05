@@ -329,6 +329,54 @@ describe("GridService.getTablePage — keyset pagination (TRI-3272)", () => {
   });
 });
 
+describe("GridService.setCell — CRM-synced column backstop", () => {
+  it("refuses member writes to a synced column with human copy (cell untouched)", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [
+        column({
+          config: { synced: true, crmBindingId: "b1", attrSlug: "name", attrType: "personal-name" },
+        }),
+      ],
+      rows: [row()],
+      cells: [
+        { id: "cell1", workspaceId: WS, tableId: "t1", rowId: "r1", columnId: "c1", value: "Sarah Chen", status: "done", error: null, updatedAt: 1 },
+      ],
+    });
+    const { run } = harness({ store });
+    // The "clear cell" shape any client could send — value "" over CRM data.
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.setCell({ rowId: "r1", columnId: "c1", hasValue: true, value: "" })),
+    );
+    expect(failTag(exit)).toBe("InvalidCellError");
+    expect(JSON.stringify(exit)).toContain("synced from your CRM");
+    expect(store.cells.find((c) => c.rowId === "r1")?.value).toBe("Sarah Chen");
+  });
+
+  it("setCellStatus is refused on synced columns too", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [column({ config: { synced: true, crmBindingId: "b1", attrSlug: "name", attrType: "personal-name" } })],
+      rows: [row()],
+    });
+    const { run } = harness({ store });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.setCellStatus({ rowId: "r1", columnId: "c1", status: "running" })),
+    );
+    expect(failTag(exit)).toBe("InvalidCellError");
+  });
+
+  it("ordinary user columns are unaffected by the guard", async () => {
+    const store = makeGridStore({ tables: [table()], columns: [column()], rows: [row()] });
+    const { run } = harness({ store });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.setCell({ rowId: "r1", columnId: "c1", hasValue: true, value: "hello" })),
+    );
+    expect(failTag(exit)).toBeUndefined();
+    expect(store.cells.find((c) => c.rowId === "r1")?.value).toBe("hello");
+  });
+});
+
 describe("GridService.setCell — COALESCE merge", () => {
   it("keeps the existing value when a status-only patch omits it", async () => {
     const store = makeGridStore({

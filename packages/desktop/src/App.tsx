@@ -1927,7 +1927,6 @@ export default function App() {
       // bindings", never crash the shell.
       const res: unknown = await apiClient.crm.listBindings.query({
         tableId: String(cloudTableId),
-        workspaceId: activeWorkspace!._id,
       });
       return Array.isArray(res) ? (res as readonly { id: string }[]) : [];
     },
@@ -3254,6 +3253,7 @@ export default function App() {
             workspaceId={activeWorkspace._id}
             connectedSignal={crmConnectedSignal}
             createTable={(name) => createCloudTable(cloudProject._id, name).then(String)}
+            deleteTable={(tableId) => deleteCloudTable(tableId as Id<"tables">).then(() => undefined)}
             onClose={() => setShowCrmWizard(false)}
             onCreated={(tableId) => {
               setShowCrmWizard(false);

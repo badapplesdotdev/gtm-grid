@@ -1359,6 +1359,19 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
           );
         }
         yield* requireCloudMember(row.value.workspaceId);
+        // Server-side backstop for CRM-synced columns: they are owned by the
+        // sync worker (WebhookRepo write path) — a member edit through any
+        // client would be silently overwritten on the next sync, or permanently
+        // corrupt pull-only data in skip/create modes. The desktop hides these
+        // edit affordances; this makes the guarantee hold for every client.
+        const cfg: unknown = column.value.config;
+        if (typeof cfg === "object" && cfg !== null && "synced" in cfg && cfg.synced === true) {
+          return yield* Effect.fail(
+            new InvalidCellError({
+              message: "This column is synced from your CRM and can't be edited.",
+            }),
+          );
+        }
         const existing = yield* cells.findByRowColumn(rowId, columnId);
         return {
           row: row.value,

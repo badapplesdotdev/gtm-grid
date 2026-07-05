@@ -22,6 +22,10 @@ const ATTIO_LOGO = "https://www.google.com/s2/favicons?domain=attio.com&sz=128";
 
 type PausedReason = null | "auth_revoked" | "source_gone";
 
+/** Give a manual sync this long before the strip stops waiting (the run
+ *  continues server-side; the sync log shows the eventual result). */
+const SYNC_WAIT_CAP_MS = 5 * 60 * 1000;
+
 /** A CRM binding on the table (crm.listBindings). */
 interface CrmBinding {
   readonly id: string;
@@ -85,7 +89,7 @@ export function CrmStatusStrip({ tableId, workspaceId }: { tableId: string; work
     enabled: apiClient !== null && workspaceId !== "",
     queryFn: async (): Promise<readonly CrmBinding[]> => {
       // Null from an older/mock server = no bindings (never crash the grid).
-      const res: unknown = await apiClient.crm.listBindings.query({ tableId, workspaceId });
+      const res: unknown = await apiClient.crm.listBindings.query({ tableId });
       return Array.isArray(res) ? (res as readonly CrmBinding[]) : [];
     },
     staleTime: 15_000,
@@ -111,6 +115,7 @@ function CrmBindingRow({ binding, tableId, workspaceId }: { binding: CrmBinding;
   // DIFFERENT (newly-created) run finished — otherwise the last finished run
   // would read as "done" the instant we start.
   const baselineRunIdRef = useRef<string | null>(null);
+  const syncStartedAtRef = useRef<number | null>(null);
 
   // The match-key column's human title, resolved from the binding config.
   const matchKeyTitle = useMemo(() => {
@@ -134,8 +139,21 @@ function CrmBindingRow({ binding, tableId, workspaceId }: { binding: CrmBinding;
 
   // Once a NEW run (id ≠ the pre-sync baseline) stops "running", the sync has
   // landed — refresh the grid + the binding summary, then drop 'Syncing…'.
+  // Two escape hatches keep the spinner from trapping the strip forever:
+  // a persistently failing history poll, and a hard cap on how long we wait
+  // (the run itself keeps going server-side either way).
   useEffect(() => {
     if (!syncing) return;
+    if (historyQ.isError) {
+      setSyncing(false);
+      setError("Couldn't check the sync's progress. It may still be running — open the sync log in a moment.");
+      return;
+    }
+    if (syncStartedAtRef.current !== null && Date.now() - syncStartedAtRef.current > SYNC_WAIT_CAP_MS) {
+      setSyncing(false);
+      setError("This sync is taking a while. It's still running — check the sync log for the result.");
+      return;
+    }
     const newest = runs[0];
     if (newest && newest.id !== baselineRunIdRef.current && newest.status !== "running") {
       setSyncing(false);
@@ -145,16 +163,20 @@ function CrmBindingRow({ binding, tableId, workspaceId }: { binding: CrmBinding;
         qc.invalidateQueries({ queryKey: ["crm", "bindings", tableId] }),
       ]);
     }
-  }, [syncing, runs, qc, tableId]);
+  }, [syncing, runs, historyQ.isError, qc, tableId]);
 
   const syncNow = async () => {
+    if (syncing) return; // double-click guard (state also disables the button)
     setError(null);
+    // Disable SYNCHRONOUSLY — the baseline fetch below yields to the event
+    // loop, and a fast double-click there would enqueue two runs.
+    setSyncing(true);
+    syncStartedAtRef.current = Date.now();
     try {
       // Baseline the current newest run BEFORE enqueuing so completion detection
       // waits for the fresh run rather than reading the last finished one.
       const current: unknown = await apiClient.crm.history.query({ bindingId: binding.id });
       baselineRunIdRef.current = Array.isArray(current) ? ((current[0] as CrmRun | undefined)?.id ?? null) : null;
-      setSyncing(true);
       await apiClient.crm.syncNow.mutate({ bindingId: binding.id });
       await qc.invalidateQueries({ queryKey: ["crm", "history", binding.id] });
     } catch (e) {

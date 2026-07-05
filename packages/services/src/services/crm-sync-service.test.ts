@@ -249,6 +249,52 @@ describe("dedupe modes", () => {
 
 // ── 2. Hash guard ─────────────────────────────────────────────────────────────
 
+describe("match-key collisions", () => {
+  it("two NEW records sharing a match key in ONE page insert once (second skipped)", async () => {
+    const w = world();
+    scriptFetch(
+      syncScript([
+        rec("rec_a", "Sarah Chen", "shared@vercel.com"),
+        rec("rec_b", "Sarah C. (dupe)", "shared@vercel.com"),
+      ]),
+    );
+    const outcome = await syncOnce(w);
+
+    expect(outcome.rowsCreated).toBe(1);
+    expect(outcome.rowsSkipped).toBe(1);
+    expect(w.rows).toHaveLength(1); // dedupe no longer depends on page boundaries
+  });
+
+  it("create() gives Always-create bindings a MANUAL schedule (import, not daily re-append)", async () => {
+    const w = world();
+    scriptFetch([() => json({ data: [] })]);
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const connections = yield* CrmConnectionService;
+        yield* connections.saveConnection({
+          workspaceId: WS,
+          tokens: { accessToken: "at_test" },
+          meta: { connectedByUserId: "user_m", connectedByName: "M", attioWorkspaceId: "a", attioWorkspaceName: "A" },
+        });
+        const sync = yield* CrmSyncService;
+        yield* sync.create({
+          tableId: TABLE,
+          provider: "attio",
+          sourceKind: "object",
+          sourceId: "people",
+          sourceLabel: "People",
+          fields: [{ attrSlug: "name", attrType: "personal-name", title: "Name" }],
+          filters: [],
+          dedupeMode: "create",
+          matchKeyAttr: null,
+        });
+      }).pipe(Effect.provide(TestLayer(w.fixtures))) as Effect.Effect<void, never, never>,
+    );
+    const created = w.fixtures.crmBindings?.find((b) => b.id !== w.binding.id);
+    expect(created?.schedule).toBe("manual");
+  });
+});
+
 describe("hash guard", () => {
   it("an unchanged CRM re-sync performs zero cell writes", async () => {
     const w = world();
@@ -396,6 +442,60 @@ describe("mid-pull failures", () => {
     const binding = w.fixtures.crmBindings?.[0];
     expect(binding?.pausedReason).toBe("auth_revoked");
     expect(outcome.rowsStaled).toBe(0);
+  });
+
+  it("overlap guard: a run already in flight makes a second sync a no-op", async () => {
+    const w = world();
+    // Another worker started a run for this binding seconds ago and is mid-pull.
+    w.runs.push({
+      id: "run_inflight",
+      workspaceId: WS,
+      bindingId: w.binding.id,
+      tableId: TABLE,
+      status: "running",
+      trigger: "cron",
+      rowsCreated: 0,
+      rowsUpdated: 0,
+      rowsSkipped: 0,
+      rowsStaled: 0,
+      fieldsDropped: null,
+      error: null,
+      startedAt: Date.now() - 5_000,
+      finishedAt: null,
+    });
+    scriptFetch(syncScript([rec("rec_1", "Sarah", "sarah@vercel.com")]));
+    const outcome = await syncOnce(w);
+
+    expect(outcome.runId).toBe(""); // the worker's skip sentinel
+    expect(outcome.errorTag).toBe("SyncAlreadyRunning");
+    expect(outcome.rowsCreated).toBe(0);
+    expect(w.rows).toHaveLength(0); // nothing pulled
+    expect(w.runs).toHaveLength(1); // no second run row
+  });
+
+  it("overlap guard: a crashed leftover run (stale) does NOT block the next sync", async () => {
+    const w = world();
+    w.runs.push({
+      id: "run_crashed",
+      workspaceId: WS,
+      bindingId: w.binding.id,
+      tableId: TABLE,
+      status: "running",
+      trigger: "cron",
+      rowsCreated: 0,
+      rowsUpdated: 0,
+      rowsSkipped: 0,
+      rowsStaled: 0,
+      fieldsDropped: null,
+      error: null,
+      startedAt: Date.now() - 11 * 60 * 1000, // older than SYNC_STALE_RUN_MS
+      finishedAt: null,
+    });
+    scriptFetch(syncScript([rec("rec_1", "Sarah", "sarah@vercel.com")]));
+    const outcome = await syncOnce(w);
+
+    expect(outcome.runId).not.toBe("");
+    expect(outcome.rowsCreated).toBe(1);
   });
 
   it("a paused binding refuses to sync until reconnected", async () => {
