@@ -294,6 +294,34 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
       );
     };
 
+    // List → parent object is stable metadata: memoize for the process
+    // lifetime (the sync loop asks per page).
+    const listParentCache = new Map<string, string>();
+    const getListParent = (
+      session: CrmSession,
+      args: { readonly listId: string; readonly sourceLabel: string },
+    ): Effect.Effect<string, CrmError> => {
+      const cached = listParentCache.get(args.listId);
+      if (cached !== undefined) return Effect.succeed(cached);
+      return request(session, {
+        method: "GET",
+        path: `/v2/lists/${encodeURIComponent(args.listId)}`,
+        notFoundLabel: args.sourceLabel,
+      }).pipe(
+        Effect.map((json) => {
+          const data = (json as { data?: Record<string, unknown> } | null)?.data ?? {};
+          const raw = data.parent_object;
+          const parent = Array.isArray(raw)
+            ? (raw.find((p): p is string => typeof p === "string") ?? "")
+            : typeof raw === "string"
+              ? raw
+              : "";
+          if (parent !== "") listParentCache.set(args.listId, parent);
+          return parent;
+        }),
+      );
+    };
+
     return {
       provider: "attio" as const,
       displayName: "Attio",
@@ -400,6 +428,9 @@ export class AttioClient extends Effect.Service<AttioClient>()("AttioClient", {
           })),
         );
       },
+
+      /** GET /v2/lists/{list} — the parent object slug from list metadata. */
+      getListParent,
 
       /** POST /v2/lists/{list}/entries/query — one page of a list's membership. */
       queryListEntries: (

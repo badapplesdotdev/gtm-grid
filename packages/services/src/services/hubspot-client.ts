@@ -383,6 +383,12 @@ export class HubspotClient extends Effect.Service<HubspotClient>()("HubspotClien
         );
       },
 
+      /** GET /crm/v3/lists/{list} — the parent object slug from list metadata. */
+      getListParent: (
+        session: CrmSession,
+        args: { readonly listId: string; readonly sourceLabel: string },
+      ): Effect.Effect<string, CrmError> => listParentOf(session, args.listId, args.sourceLabel),
+
       /** GET /crm/v3/lists/{list}/memberships — one page of member record ids. */
       queryListEntries: (
         session: CrmSession,
