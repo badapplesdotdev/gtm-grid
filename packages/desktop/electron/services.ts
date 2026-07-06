@@ -163,6 +163,11 @@ export class EngineService extends Effect.Service<EngineService>()("EngineServic
 export class UpdaterService extends Effect.Service<UpdaterService>()("UpdaterService", {
   effect: Effect.gen(function* () {
     const engine = yield* EngineService;
+    const observability = yield* ObservabilityService;
+
+    // Plain connectivity blips — expected on laptops, never worth an error report.
+    const isOfflineNoise = (msg: string): boolean =>
+      /ERR_INTERNET_DISCONNECTED|ERR_NETWORK|ERR_CONNECTION|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|net::/i.test(msg);
 
     const setup = (send: (channel: string, ...args: unknown[]) => void) =>
       Effect.sync(() => {
@@ -171,7 +176,18 @@ export class UpdaterService extends Effect.Service<UpdaterService>()("UpdaterSer
         autoUpdater.autoInstallOnAppQuit = false;
         autoUpdater.on("update-available", (i) => send("updater:available", i.version));
         autoUpdater.on("update-downloaded", (i) => send("updater:downloaded", i.version));
-        autoUpdater.on("error", (e) => send("updater:error", String(e)));
+        autoUpdater.on("error", (e) => {
+          const msg = String(e);
+          send("updater:error", msg);
+          // A user whose install SILENTLY fails is stuck offering themselves the
+          // same version forever — the failure must reach Error Tracking with the
+          // squirrel detail so it's diagnosable without their machine.
+          if (!isOfflineNoise(msg)) {
+            void Effect.runPromise(
+              observability.reportException(`auto-update failed: ${msg.slice(0, 400)}`, "autoUpdater"),
+            ).catch(() => {});
+          }
+        });
         const check = () => autoUpdater.checkForUpdates().catch(() => {});
         void check();
         setInterval(check, 2 * 60 * 60 * 1000);
@@ -185,7 +201,7 @@ export class UpdaterService extends Effect.Service<UpdaterService>()("UpdaterSer
 
     return { setup, quitAndInstall } as const;
   }),
-  dependencies: [EngineService.Default],
+  dependencies: [EngineService.Default, ObservabilityService.Default],
 }) {}
 
 // ── Composed runtime ──────────────────────────────────────────────────────────
