@@ -172,9 +172,15 @@ export class UpdaterService extends Effect.Service<UpdaterService>()("UpdaterSer
     const setup = (send: (channel: string, ...args: unknown[]) => void) =>
       Effect.sync(() => {
         if (!app.isPackaged) return;
-        autoUpdater.autoDownload = true;
+        // The redesigned update dialog owns the download: it surfaces on
+        // update-available, shows real progress, then offers Restart — so the
+        // download starts on the user's click, not silently in the background.
+        autoUpdater.autoDownload = false;
         autoUpdater.autoInstallOnAppQuit = false;
-        autoUpdater.on("update-available", (i) => send("updater:available", i.version));
+        autoUpdater.on("update-available", (i) =>
+          send("updater:available", { version: i.version, notes: i.releaseNotes ?? null }),
+        );
+        autoUpdater.on("download-progress", (p) => send("updater:progress", Math.round(p.percent)));
         autoUpdater.on("update-downloaded", (i) => send("updater:downloaded", i.version));
         autoUpdater.on("error", (e) => {
           const msg = String(e);
@@ -199,7 +205,12 @@ export class UpdaterService extends Effect.Service<UpdaterService>()("UpdaterSer
       yield* Effect.sync(() => autoUpdater.quitAndInstall());
     });
 
-    return { setup, quitAndInstall } as const;
+    /** Start downloading the offered update (failures flow via updater:error). */
+    const download = Effect.sync(() => {
+      autoUpdater.downloadUpdate().catch(() => {});
+    });
+
+    return { setup, quitAndInstall, download } as const;
   }),
   dependencies: [EngineService.Default, ObservabilityService.Default],
 }) {}

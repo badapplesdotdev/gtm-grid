@@ -17,11 +17,13 @@ test.describe("Electron shell", () => {
     const keys = await window.evaluate(() => Object.keys((window as any).electronAPI ?? {}).sort());
     expect(keys).toEqual(
       [
+        "downloadUpdate",
         "isElectron",
         "onOauthCallback",
         "onUpdateAvailable",
         "onUpdateDownloaded",
         "onUpdateError",
+        "onUpdateProgress",
         "openExternal",
         "quitAndInstall",
         "sidecarDiagnostics",
@@ -81,11 +83,40 @@ test.describe("Electron shell", () => {
     const { app, window } = await launchApp();
     await window.evaluate(() => {
       (window as any).__updates = [];
-      (window as any).electronAPI.onUpdateAvailable((v: string) => (window as any).__updates.push(v));
+      (window as any).electronAPI.onUpdateAvailable((i: { version: string }) => (window as any).__updates.push(i.version));
     });
     await app.evaluate(({ BrowserWindow }) => {
-      BrowserWindow.getAllWindows()[0]?.webContents.send("updater:available", "9.9.9");
+      BrowserWindow.getAllWindows()[0]?.webContents.send("updater:available", { version: "9.9.9", notes: null });
     });
     await expect.poll(() => window.evaluate(() => (window as any).__updates ?? [])).toContain("9.9.9");
+  });
+
+  test("the redesigned update dialog walks available → downloading → ready via IPC", async ({ launchApp }) => {
+    const { app, window } = await launchApp();
+    const send = (channel: string, payload: unknown) =>
+      app.evaluate(({ BrowserWindow }, [ch, p]) => {
+        BrowserWindow.getAllWindows()[0]?.webContents.send(ch as string, p);
+      }, [channel, payload] as const);
+
+    // Offer an update with changesets-style notes → dialog with version chips
+    // and categorized sections.
+    await send("updater:available", {
+      version: "9.9.9",
+      notes: "### Minor Changes\n\n- abc1234: A shiny new capability.\n\n### Patch Changes\n\n- def5678: A squashed bug.",
+    });
+    await expect(window.locator(".upd-head-title")).toHaveText("Update available");
+    await expect(window.locator(".upd-chip-accent", { hasText: "v9.9.9" })).toBeVisible();
+    await expect(window.getByText("A shiny new capability.")).toBeVisible();
+    await expect(window.getByText("A squashed bug.")).toBeVisible();
+
+    // Start the download → live progress.
+    await window.getByRole("button", { name: /Download & restart/ }).click();
+    await send("updater:progress", 42);
+    await expect(window.locator(".upd-progress-pct")).toHaveText("42%");
+
+    // Downloaded → ready state with Restart now.
+    await send("updater:downloaded", "9.9.9");
+    await expect(window.getByText("Update ready — restart to install")).toBeVisible();
+    await expect(window.getByRole("button", { name: "Restart now" })).toBeVisible();
   });
 });

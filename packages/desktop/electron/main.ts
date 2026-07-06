@@ -121,6 +121,7 @@ function registerIpc(): void {
   ipcMain.handle("sidecar_diagnostics", () => run(Effect.flatMap(EngineService, (e) => e.diagnostics)));
   ipcMain.handle("stop_sidecar", () => run(Effect.flatMap(EngineService, (e) => e.stop)));
   ipcMain.handle("open_external", (_e, url: string) => shell.openExternal(url));
+  ipcMain.handle("updater:download", () => run(Effect.flatMap(UpdaterService, (u) => u.download)));
   ipcMain.handle("updater:quit-and-install", () => {
     isQuitting = true;
     return run(Effect.flatMap(UpdaterService, (u) => u.quitAndInstall));

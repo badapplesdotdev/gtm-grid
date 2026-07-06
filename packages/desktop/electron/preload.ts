@@ -27,12 +27,16 @@ const api = {
     on("oauth-callback", (url) => cb(url as string)),
 
   // ── Auto-updater ──────────────────────────────────────────────────────────
-  onUpdateAvailable: (cb: (version: string) => void): (() => void) =>
-    on("updater:available", (v) => cb(v as string)),
+  onUpdateAvailable: (cb: (info: { version: string; notes: unknown }) => void): (() => void) =>
+    on("updater:available", (i) => cb(i as { version: string; notes: unknown })),
+  onUpdateProgress: (cb: (percent: number) => void): (() => void) =>
+    on("updater:progress", (p) => cb(p as number)),
   onUpdateDownloaded: (cb: (version: string) => void): (() => void) =>
     on("updater:downloaded", (v) => cb(v as string)),
   onUpdateError: (cb: (message: string) => void): (() => void) =>
     on("updater:error", (m) => cb(m as string)),
+  /** Start downloading the offered update. */
+  downloadUpdate: (): Promise<void> => ipcRenderer.invoke("updater:download"),
   /** Stop the engine, then quit + install the downloaded update. */
   quitAndInstall: (): Promise<void> => ipcRenderer.invoke("updater:quit-and-install"),
 };
