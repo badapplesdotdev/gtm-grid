@@ -875,7 +875,23 @@ function UpdateDialog({
             GTM Grid <strong>v{version}</strong> is ready to install.
           </p>
           {notes && <div className="update-notes">{notes}</div>}
-          {error && <div className="conn-err">{error}</div>}
+          {error && (
+            <div className="conn-err">
+              {error}{" "}
+              <button
+                className="crmw-link"
+                onClick={() => {
+                  const url = "https://www.gtmgrid.dev/download";
+                  const api = electron();
+                  if (api) void api.openExternal(url);
+                  else window.open(url, "_blank", "noopener");
+                }}
+              >
+                Download it manually
+              </button>{" "}
+              and drag it into Applications — that clears anything blocking in-place updates.
+            </div>
+          )}
         </div>
         <div className="modal-footer">
           <button className="btn btn-outline" onClick={onLater} disabled={updating}>Later</button>
@@ -1075,7 +1091,7 @@ export default function App() {
   const pendingInviteToken = usePendingInviteToken();
   // In-app auto-update (Tauri only): a newer SIGNED release surfaces a download
   // affordance next to the bell + an UpdateDialog that downloads/installs/relaunches.
-  const update = useUpdateCheck();
+  const { update, error: updaterError } = useUpdateCheck();
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
@@ -1090,6 +1106,16 @@ export default function App() {
       setUpdating(false);
     }
   }, [update, updating]);
+  // Squirrel failures arrive AFTER install() resolves (via updater:error) — the
+  // app relaunches on the OLD version. Surface them so the user isn't stuck in a
+  // silent offer-install-offer loop; the dialog then offers a manual download.
+  useEffect(() => {
+    if (updaterError !== null && update !== null) {
+      setUpdating(false);
+      setUpdateError("The update couldn't be installed automatically.");
+      setUpdateDialogOpen(true);
+    }
+  }, [updaterError, update]);
   // On first sight of an available update, pop the dialog automatically — unless
   // the user already chose "Later" for THIS version (then it waits behind the
   // bell-adjacent download button).

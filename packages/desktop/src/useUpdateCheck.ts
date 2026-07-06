@@ -23,11 +23,23 @@ export interface AvailableUpdate {
   readonly install: () => Promise<void>;
 }
 
+export interface UpdateCheck {
+  readonly update: AvailableUpdate | null;
+  /**
+   * The updater's LAST error (download or install). Squirrel failures happen
+   * AFTER quitAndInstall resolves, so without this channel a failed install is
+   * invisible — the app relaunches on the old version and re-offers the same
+   * update forever.
+   */
+  readonly error: string | null;
+}
+
 /** Vite dev flag, read defensively (import.meta.env isn't typed in this project). */
 const IS_DEV = Boolean((import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV);
 
-export function useUpdateCheck(): AvailableUpdate | null {
+export function useUpdateCheck(): UpdateCheck {
   const [update, setUpdate] = useState<AvailableUpdate | null>(null);
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     // DEV-only preview: outside the app the real updater is unavailable, so let a
     // developer simulate an update via localStorage["gtmgrid:mockUpdate"]. Never
@@ -53,10 +65,17 @@ export function useUpdateCheck(): AvailableUpdate | null {
 
     const api = electron();
     if (!api) return;
-    // The main process auto-downloads; surface the banner once it's ready to apply.
-    return api.onUpdateDownloaded((version) => {
+    // The main process auto-downloads; surface the banner once it's ready to
+    // apply. A fresh download clears any stale failure.
+    const offDownloaded = api.onUpdateDownloaded((version) => {
+      setError(null);
       setUpdate({ version, notes: null, install: () => api.quitAndInstall() });
     });
+    const offError = api.onUpdateError?.((message) => setError(message));
+    return () => {
+      offDownloaded();
+      offError?.();
+    };
   }, []);
-  return update;
+  return { update, error };
 }
