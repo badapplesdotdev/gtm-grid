@@ -315,6 +315,27 @@ export const procedures = {
             : null,
         };
       }),
+  // Add one more source field to an existing binding (the add-column popover's
+  // "From {CRM}" section). Mirrors the real router: creates the synced column,
+  // extends the binding mapping, and "backfills" the seeded rows immediately
+  // (the real backfill rides the enqueued sync).
+  "crm.addBindingField": (input, s) => {
+    const b = s.crmBindings.find((x) => x.id === input?.bindingId);
+    if (!b) return { columnId: "" };
+    const f = input?.field ?? {};
+    const existing = b.columns.find((c) => c.attrSlug === f.attrSlug);
+    if (existing) return { columnId: existing.columnId };
+    const c = col(`col_crm_${b.id}_${b.columns.length}`, b.tableId, f.title ?? "Field", "manual", {
+      config: { synced: true, crmBindingId: b.id, attrSlug: f.attrSlug, attrType: f.attrType },
+    });
+    s.columns.push(c);
+    b.columns = [...b.columns, { attrSlug: f.attrSlug, attrType: f.attrType, columnId: c._id, title: f.title }];
+    for (const row of s.rows.filter((r) => r.tableId === b.tableId)) {
+      s.cells[row._id] = { ...(s.cells[row._id] ?? {}), [c._id]: cell("backfilled") };
+    }
+    return { columnId: c._id };
+  },
+
   "crm.history": (input, s) => s.crmRuns.filter((r) => r.bindingId === input?.bindingId),
   "crm.syncNow": (input, s) => {
     const b = s.crmBindings.find((x) => x.id === input?.bindingId);

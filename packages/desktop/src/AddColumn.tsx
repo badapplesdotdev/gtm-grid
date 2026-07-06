@@ -121,22 +121,68 @@ const TYPES = [
 
 // ─── Add column popover ──────────────────────────────────
 
+/** A synced table's CRM hookup for the add-column popover ("From HubSpot"). */
+export interface AddColumnCrmSource {
+  /** Display name of the CRM ("Attio", "HubSpot"). */
+  readonly providerName: string;
+  readonly logo: string;
+  /** The source's fields NOT yet mapped to columns (fetched on expand). */
+  readonly fetchAvailableFields: () => Promise<
+    ReadonlyArray<{ attrSlug: string; attrType: string; title: string; sample: string }>
+  >;
+  /** Map one more field onto the binding (server backfills via sync). */
+  readonly addField: (field: { attrSlug: string; attrType: string; title: string }) => Promise<void>;
+}
+
 export function AddColumnPopover({
   tableId,
   anchor,
   onClose,
   onAdded,
   onUseFunction,
+  crm,
 }: {
   tableId: string;
   anchor: { left: number; top: number } | null;
   onClose: () => void;
   onAdded: () => void;
   onUseFunction: () => void;
+  /** Present only on synced tables — adds the "From {CRM}" section. */
+  crm?: AddColumnCrmSource;
 }) {
   const gridApi = useColumnApi();
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
+  const [crmView, setCrmView] = useState(false);
+  const [crmFields, setCrmFields] = useState<
+    ReadonlyArray<{ attrSlug: string; attrType: string; title: string; sample: string }> | null
+  >(null);
+  const [crmError, setCrmError] = useState<string | null>(null);
+
+  const openCrmView = async () => {
+    if (!crm) return;
+    setCrmView(true);
+    setCrmError(null);
+    try {
+      setCrmFields(await crm.fetchAvailableFields());
+    } catch (e) {
+      setCrmError(e instanceof Error ? e.message : "Could not load fields.");
+    }
+  };
+
+  const addCrmField = async (field: { attrSlug: string; attrType: string; title: string }) => {
+    if (!crm || saving) return;
+    setSaving(true);
+    setCrmError(null);
+    try {
+      await crm.addField(field);
+      onAdded();
+      onClose();
+    } catch (e) {
+      setCrmError(e instanceof Error ? e.message : "Could not add the field.");
+      setSaving(false);
+    }
+  };
 
   // Add a manual column of the chosen type. Name is optional — falls back to
   // the type label so a single click on a type row always works.
@@ -163,6 +209,49 @@ export function AddColumnPopover({
       }
     : { position: "fixed", top: "14vh", left: "50%", transform: "translateX(-50%)" };
 
+  if (crm && crmView) {
+    const query = name.trim().toLowerCase();
+    const shown = (crmFields ?? []).filter(
+      (f) => query === "" || f.title.toLowerCase().includes(query) || f.attrSlug.toLowerCase().includes(query),
+    );
+    return (
+      <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+        <DialogContent className="addcol acx" style={style} overlayClassName="bare-scrim" srTitle={`Add a ${crm.providerName} field`}>
+          <div className="acx-group-label acx-crm-head">
+            <button className="acx-back" onClick={() => setCrmView(false)} aria-label="Back">‹</button>
+            From {crm.providerName}
+          </div>
+          <input
+            className="acx-name"
+            placeholder="Search fields…"
+            value={name}
+            autoFocus
+            onChange={(e) => setName(e.target.value)}
+          />
+          <div className="acx-group acx-crm-fields">
+            {crmFields === null && !crmError ? (
+              <div className="acx-crm-empty"><span className="cell-spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /></div>
+            ) : shown.length === 0 && !crmError ? (
+              <div className="acx-crm-empty">Every field from this source is already synced.</div>
+            ) : (
+              shown.map((f) => (
+                <button key={f.attrSlug} className="acx-item" onClick={() => void addCrmField(f)} disabled={saving}>
+                  <span className="acx-item-icon"><img src={crm.logo} alt="" width={15} height={15} /></span>
+                  <span className="acx-item-text">
+                    <span className="acx-item-title">{f.title}</span>
+                    <span className="acx-item-sub">{f.sample || "no sample values"}</span>
+                  </span>
+                  <span className="acx-type-add">Add</span>
+                </button>
+              ))
+            )}
+            {crmError && <div className="acx-crm-error" role="alert">{crmError}</div>}
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="addcol acx" style={style} overlayClassName="bare-scrim" srTitle="Add column">
@@ -174,6 +263,20 @@ export function AddColumnPopover({
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && add("text")}
         />
+
+        {crm && (
+          <div className="acx-group">
+            <div className="acx-group-label">Synced source</div>
+            <button className="acx-item" onClick={() => void openCrmView()}>
+              <span className="acx-item-icon"><img src={crm.logo} alt="" width={15} height={15} /></span>
+              <span className="acx-item-text">
+                <span className="acx-item-title">From {crm.providerName}</span>
+                <span className="acx-item-sub">Add another field from this source</span>
+              </span>
+              <span className="acx-item-caret">{Chevron}</span>
+            </button>
+          </div>
+        )}
 
         {/* Actions — enrichment / AI route to the Functions browser */}
         <div className="acx-group">

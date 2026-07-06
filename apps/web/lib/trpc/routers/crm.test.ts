@@ -8,7 +8,7 @@
  * worker — these procedures only build/validate + enqueue.
  */
 
-import type { CrmBinding, GridTable, Membership } from "@gtmgrid/services";
+import type { CrmBinding, GridTable, Membership, StoreColumn } from "@gtmgrid/services";
 import { TestLayer, type TestLayerFixtures } from "@gtmgrid/services";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { inngest } from "../../inngest/client";
@@ -425,5 +425,35 @@ describe("crm provider routing (hubspot)", () => {
     expect(out.bindingId).toBeTruthy();
     expect(crmBindings[0]?.provider).toBe("hubspot");
     vi.restoreAllMocks();
+  });
+});
+
+describe("crm.addBindingField — one more synced column", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("maps the field, enqueues the backfill sync, and rejects non-members", async () => {
+    const send = vi.spyOn(inngest, "send").mockResolvedValue({ ids: [] });
+    const gridColumns: StoreColumn[] = [];
+    const crmBindings: CrmBinding[] = [{ ...binding }];
+    const caller = callerFor({ memberships, tables, crmBindings, gridColumns, currentUserId: "member" });
+    const out = await caller.crm.addBindingField({
+      bindingId: binding.id,
+      field: { attrSlug: "job_title", attrType: "text", title: "Job title" },
+    });
+    expect(out.columnId).toBeTruthy();
+    expect(gridColumns).toHaveLength(1);
+    expect(gridColumns[0]?.name).toBe("Job title");
+    expect(crmBindings[0]?.columns.map((c) => c.attrSlug)).toContain("job_title");
+    expect(send).toHaveBeenCalledWith({
+      name: "crm/binding.sync-now",
+      data: { bindingId: binding.id, workspaceId: WS },
+    });
+
+    const stranger = callerFor({ memberships, tables, crmBindings, currentUserId: "stranger" });
+    await expect(
+      stranger.crm.addBindingField({ bindingId: binding.id, field: { attrSlug: "x", attrType: "text", title: "X" } }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });

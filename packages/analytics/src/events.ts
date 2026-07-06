@@ -187,6 +187,8 @@ export interface AnalyticsEventMap {
     filters: number;
     workspace_id: string;
   };
+  /** A source field was added to an existing synced-table binding. */
+  crm_binding_field_added: { binding_id: string; attr_slug: string; workspace_id: string };
 }
 
 /** Every valid analytics event name. */

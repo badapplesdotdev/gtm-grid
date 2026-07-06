@@ -3099,6 +3099,21 @@ body.resizing-agent .agent-panel { transition: none; }
   font: 600 10.5px var(--font-sans); text-transform: uppercase; letter-spacing: .06em;
   color: var(--text-3); padding: 3px 8px 5px;
 }
+/* "From {CRM}" subview — add a synced-source field as a new column. */
+.acx-crm-head { display: flex; align-items: center; gap: 6px; padding-bottom: 2px; }
+.acx-back {
+  all: unset; cursor: pointer; font: 600 15px var(--font-sans); color: var(--text-2);
+  width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;
+  border-radius: var(--r-sm);
+}
+.acx-back:hover { background: var(--surface-2); color: var(--text); }
+.acx-crm-fields { max-height: 320px; overflow-y: auto; }
+.acx-crm-empty {
+  display: flex; align-items: center; justify-content: center; padding: 18px 8px;
+  font: 400 12.5px var(--font-sans); color: var(--text-3); text-align: center;
+}
+.acx-crm-error { font: 400 12px var(--font-sans); color: var(--danger); padding: 6px 8px; }
+
 .acx-item {
   all: unset; cursor: pointer; box-sizing: border-box; width: 100%;
   display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: var(--r-sm);

@@ -339,6 +339,46 @@ export const crmRouter = router({
     }),
 
   /**
+   * Add one more source field to an existing binding as a new synced column.
+   * Members-only + entitlement (enforced in the service). Best-effort enqueues
+   * a sync so the new column backfills; the daily cron covers a dropped event.
+   */
+  addBindingField: protectedProcedure
+    .input(
+      z.object({
+        bindingId: z.string().min(1),
+        field: z.object({
+          attrSlug: z.string().min(1).max(200),
+          attrType: z.enum(SUPPORTED_ATTR_TYPES),
+          title: z.string().min(1).max(200),
+        }),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { columnId, workspaceId } = await runCrm(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* CrmSyncService;
+          return yield* svc.addField(input.bindingId, input.field);
+        }),
+      );
+      captureServer("crm_binding_field_added", {
+        distinctId: ctx.userId,
+        properties: { binding_id: input.bindingId, attr_slug: input.field.attrSlug, workspace_id: workspaceId },
+        groups: { workspace: workspaceId },
+      });
+      try {
+        await inngest.send({ name: "crm/binding.sync-now", data: { bindingId: input.bindingId, workspaceId } });
+      } catch (err) {
+        console.error(
+          `[crm] backfill enqueue failed for binding ${input.bindingId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+      return { columnId };
+    }),
+
+  /**
    * Manual "Sync now": validate (member + entitlement) then enqueue the worker.
    * All execution is durable, so this only enqueues; the enqueue is best-effort
    * (the cron reconciles a dropped event within the hour).

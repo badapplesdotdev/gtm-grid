@@ -222,6 +222,39 @@ test.describe("CRM sync — status strip & synced grid", () => {
 });
 
 
+
+test.describe("CRM sync — add a source field as a new column", () => {
+  test("the + menu offers 'From Attio' on a synced table and adding a field lands a backfilled column", async ({ launchApp }) => {
+    const { window } = await launchApp(CONNECTED);
+    // Create a synced table through the wizard (seeds rows + binding).
+    await openConfigureStep(window);
+    await window.locator(".crmw-source", { hasText: "People" }).click();
+    await expect(window.locator(".crmw-field", { hasText: "Email addresses" })).toBeVisible();
+    await window.getByRole("button", { name: "Start sync" }).click();
+    await expect(window.locator(".crm-strip")).toBeVisible({ timeout: 10_000 });
+
+    // Open the add-column popover: the synced-source section is present.
+    await window.locator(".add-col-btn, [aria-label='Add column']").first().click();
+    const fromCrm = window.locator(".acx-item", { hasText: "From Attio" });
+    await expect(fromCrm).toBeVisible();
+    await fromCrm.click();
+
+    // Unmapped fields only: Phone numbers wasn't part of the recommended set…
+    const phone = window.locator(".acx-item", { hasText: "Phone numbers" });
+    await expect(phone).toBeVisible();
+    // …while already-synced fields don't reappear.
+    await expect(window.locator(".acx-item", { hasText: "Email addresses" })).toHaveCount(0);
+
+    await phone.click();
+    // The new column lands, values backfilled (mock fills immediately; live
+    // rides the enqueued sync).
+    await expect(window.locator(".dg-head-cell, th", { hasText: "Phone numbers" }).first()).toBeVisible({ timeout: 10_000 });
+    const state = await mockState();
+    const bindingCols = state.crmBindings[0].columns.map((c: { attrSlug: string }) => c.attrSlug);
+    expect(bindingCols).toContain("phone_numbers");
+  });
+});
+
 test.describe("CRM sync — HubSpot provider", () => {
   test("without a connection, picking HubSpot shows the HubSpot consent panel", async ({ launchApp }) => {
     const { window } = await launchApp({ signedIn: true, paid: true, hubspotConnected: false });

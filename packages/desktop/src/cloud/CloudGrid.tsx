@@ -32,6 +32,7 @@ import { api } from "../api";
 import type { AiProviderInfo, Cell, ConnectorInfo, Column, FullTable } from "../api";
 import {
   AddColumnPopover,
+  type AddColumnCrmSource,
   FunctionsModal,
   ColumnAuthoringApiProvider,
   type ColumnAuthoringApi,
@@ -197,6 +198,70 @@ export function CloudGrid({
 }: CloudGridProps) {
   const { data, loadMore, hasMore, isLoadingMore } = useCloudTablePaged(tableId);
   const session = useCloudSession();
+  const crmQc = useQueryClient();
+
+  // The table's CRM binding (if any) powers the add-column popover's
+  // "From {CRM}" section — one more source field, server-backfilled by the
+  // sync the mutation enqueues.
+  const crmBindingsQ = useReactQuery({
+    queryKey: ["crm", "bindings", String(tableId)],
+    enabled: apiClient !== null && Boolean(workspaceId) && tableId !== null,
+    queryFn: async () => {
+      const res: unknown = await apiClient.crm.listBindings.query({ tableId: String(tableId) });
+      return Array.isArray(res)
+        ? (res as ReadonlyArray<{
+            id: string;
+            provider: string;
+            sourceKind: "object" | "list";
+            sourceId: string;
+            sourceLabel: string;
+            columns: ReadonlyArray<{ attrSlug: string }>;
+          }>)
+        : [];
+    },
+    staleTime: 5_000,
+  });
+  const crmBinding = crmBindingsQ.data?.[0];
+  const addColumnCrm = useMemo<AddColumnCrmSource | undefined>(() => {
+    if (!crmBinding || !workspaceId || tableId === null) return undefined;
+    const provider = crmBinding.provider === "hubspot" ? ("hubspot" as const) : ("attio" as const);
+    const providerName = provider === "hubspot" ? "HubSpot" : "Attio";
+    const logo = `https://www.google.com/s2/favicons?domain=${provider === "hubspot" ? "hubspot.com" : "attio.com"}&sz=128`;
+    return {
+      providerName,
+      logo,
+      fetchAvailableFields: async () => {
+        const desc = await apiClient.crm.describeSource.query({
+          workspaceId,
+          provider,
+          kind: crmBinding.sourceKind,
+          id: crmBinding.sourceId,
+          label: crmBinding.sourceLabel,
+        });
+        const mapped = new Set(crmBinding.columns.map((c) => c.attrSlug));
+        return desc.fields
+          .filter((f) => !mapped.has(f.slug))
+          .map((f) => ({ attrSlug: f.slug, attrType: f.type, title: f.title, sample: f.sample }));
+      },
+      addField: async (field) => {
+        // describeSource only returns supported attr types, and the server
+        // re-validates against its enum — the narrow here just satisfies the
+        // router's input type.
+        const attrType = field.attrType as Parameters<
+          typeof apiClient.crm.addBindingField.mutate
+        >[0]["field"]["attrType"];
+        await apiClient.crm.addBindingField.mutate({
+          bindingId: crmBinding.id,
+          field: { attrSlug: field.attrSlug, attrType, title: field.title },
+        });
+        await Promise.all([
+          crmQc.invalidateQueries({ queryKey: gridQueryKeys.table(String(tableId)) }),
+          crmQc.invalidateQueries({ queryKey: gridQueryKeys.tablePaged(String(tableId)) }),
+          crmQc.invalidateQueries({ queryKey: ["crm", "bindings", String(tableId)] }),
+        ]);
+      },
+    };
+  }, [crmBinding, workspaceId, crmQc, tableId]);
   const {
     setCell,
     addRow,
@@ -797,6 +862,7 @@ export function CloudGrid({
         <AddColumnPopover
           tableId={table.id}
           anchor={addColAnchor}
+          crm={addColumnCrm}
           onClose={() => setShowAddCol(false)}
           onAdded={() => setShowAddCol(false)}
           onUseFunction={() => { setShowAddCol(false); setShowFunctions(true); }}
