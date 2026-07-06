@@ -1,5 +1,19 @@
 # @gtmgrid/desktop
 
+## 1.6.0
+
+### Minor Changes
+
+- 53ccedf: Add more CRM fields to a synced table after creation: the add-column menu now has a "From HubSpot" / "From Attio" section listing the source's unmapped fields — one click adds the field as a new read-only synced column and backfills every row on the next sync.
+- 309ac60: HubSpot CRM sync: connect HubSpot alongside Attio and pull Contacts, Companies, or any list into a live synced table — same read-only OAuth flow, daily refresh + Sync now, filters, dedupe modes, and plan caps as Attio. The wizard's HubSpot card is now active, the table strip and Tools panel show the right CRM everywhere, and both connections can coexist in one workspace. Under the hood the sync engine is now provider-neutral (one engine, per-CRM clients) with proactive token refresh for HubSpot's short-lived tokens.
+
+### Patch Changes
+
+- 53ccedf: Empty CRM lists now configure and sync correctly: a list's parent object is resolved from list metadata instead of its first member, so HubSpot's default lists (and any empty Attio list) describe their fields instead of erroring — and syncing an empty list no longer risks dropping mapped columns.
+  - @gtmgrid/analytics@1.6.0
+  - @gtmgrid/cloud@1.6.0
+  - @gtmgrid/services@1.6.0
+
 ## 1.5.2
 
 ### Patch Changes

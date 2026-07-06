@@ -1,5 +1,7 @@
 # @gtmgrid/observability
 
+## 1.6.0
+
 ## 1.5.2
 
 ## 1.5.1
