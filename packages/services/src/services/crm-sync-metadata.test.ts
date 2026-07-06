@@ -176,14 +176,12 @@ describe("describeSource", () => {
     expect(desc.suggestedMatchKey).toBe("domains");
   });
 
-  it("a list source describes its PARENT object's attributes (via its entries)", async () => {
+  it("a list source describes its PARENT object's attributes (from list metadata)", async () => {
     routeFetch([
-      [
-        "/entries/query",
-        () => ({
-          data: [{ id: { entry_id: "e1" }, parent_object: "people", parent_record_id: "r1" }],
-        }),
-      ],
+      ["/lists/l1/entries/query", () => ({
+        data: [{ id: { entry_id: "e1" }, parent_object: "people", parent_record_id: "r1" }],
+      })],
+      ["/lists/l1", () => ({ data: { id: { list_id: "l1" }, parent_object: "people" } })],
       ["/objects/people/records/query", () => ({ data: [] })],
       ["/attributes", () => PEOPLE_ATTRS],
     ]);
@@ -191,6 +189,22 @@ describe("describeSource", () => {
       svc.describeSource(WS, { kind: "list", id: "l1", label: "MQLs — Q3" }),
     );
     expect(desc.fields.map((f) => f.slug)).toContain("email_addresses");
+  });
+
+  it("an EMPTY list still describes (parent from metadata, never from members)", async () => {
+    // Zero entries: the parent must come from GET /v2/lists/{id} — the old
+    // member-derived fallback sent the LIST ID to the attributes endpoint
+    // (live HubSpot: 400 "Unable to infer object type from: 10").
+    routeFetch([
+      ["/lists/l1/entries/query", () => ({ data: [] })],
+      ["/lists/l1", () => ({ data: { id: { list_id: "l1" }, parent_object: "people" } })],
+      ["/attributes", () => PEOPLE_ATTRS],
+    ]);
+    const desc = await withService(fixtures(), (svc) =>
+      svc.describeSource(WS, { kind: "list", id: "l1", label: "Empty list" }),
+    );
+    expect(desc.fields.map((f) => f.slug)).toContain("email_addresses");
+    expect(desc.fields.every((f) => f.sample === "")).toBe(true);
   });
 });
 

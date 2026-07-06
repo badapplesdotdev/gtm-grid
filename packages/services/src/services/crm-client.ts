@@ -128,6 +128,16 @@ export interface CrmClientApi {
     },
   ) => Effect.Effect<CrmPage<CrmRecord>, CrmError>;
 
+  /**
+   * The object slug a list's entries belong to, resolved from LIST METADATA —
+   * never from its members (an empty list must still describe and sync).
+   * "" when the provider can't tell (callers fall back / degrade).
+   */
+  readonly getListParent: (
+    session: CrmSession,
+    args: { readonly listId: string; readonly sourceLabel: string },
+  ) => Effect.Effect<string, CrmError>;
+
   readonly queryListEntries: (
     session: CrmSession,
     args: {

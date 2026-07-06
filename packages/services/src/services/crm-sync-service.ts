@@ -345,7 +345,11 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
               limit: client.pageLimit,
               cursor,
             });
-            const parent = page.items.find((e) => e.parentObject !== "")?.parentObject ?? "";
+            const metaParent = yield* client.getListParent(session, {
+              listId: binding.sourceId,
+              sourceLabel: binding.sourceLabel,
+            });
+            const parent = metaParent !== "" ? metaParent : (page.items.find((e) => e.parentObject !== "")?.parentObject ?? "");
             const ids = page.items.map((e) => e.parentRecordId).filter((id) => id !== "");
             const records =
               parent === "" || ids.length === 0
@@ -423,14 +427,13 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
           // For LIST sources the synced attributes live on the parent OBJECT,
           // not the list — resolve the parent's attributes too when needed.
           if (binding.sourceKind === "list") {
-            const probe = yield* client.queryListEntries(session, {
+            // Parent from LIST METADATA — an empty list must still resolve its
+            // schema (member-derived parents made empty lists drop every column).
+            const parent = yield* client.getListParent(session, {
               listId: binding.sourceId,
               sourceLabel: binding.sourceLabel,
-              limit: 1,
-              cursor: null,
             });
-            const parent = probe.items.find((e) => e.parentObject !== "")?.parentObject;
-            if (parent !== undefined) {
+            if (parent !== "") {
               const parentAttrs = yield* client.getAttributes(session, "objects", parent, binding.sourceLabel);
               for (const a of parentAttrs) liveSlugs.add(a.slug);
             }
@@ -842,14 +845,14 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
           source.kind === "object"
             ? { kind: "objects" as const, id: source.id }
             : yield* Effect.gen(function* () {
-                const probe = yield* client.queryListEntries(session, {
+                // Parent from LIST METADATA — never from the first member (an
+                // EMPTY list used to fall back to the list id and 400 the
+                // provider's properties endpoint).
+                const parent = yield* client.getListParent(session, {
                   listId: source.id,
                   sourceLabel: source.label,
-                  limit: 1,
-                  cursor: null,
                 });
-                const parent = probe.items.find((e) => e.parentObject !== "")?.parentObject ?? source.id;
-                return { kind: "objects" as const, id: parent };
+                return { kind: "objects" as const, id: parent !== "" ? parent : source.id };
               });
         const attrs = yield* client.getAttributes(session, target.kind, target.id, source.label);
         const supported = attrs.filter((a) => a.supported && a.slug !== "");
@@ -872,7 +875,7 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
                   limit: 3,
                   cursor: null,
                 });
-                const parent = page.items.find((e) => e.parentObject !== "")?.parentObject ?? "";
+                const parent = target.id;
                 const ids = page.items.map((e) => e.parentRecordId).filter((id) => id !== "");
                 return parent === "" || ids.length === 0
                   ? ([] as readonly CrmRecord[])
