@@ -41,7 +41,8 @@ import {
 } from "./cloud/deepLinkNav";
 import { fireConfetti } from "./cloud/confetti";
 import { useUpdateCheck } from "./useUpdateCheck";
-import { changelogNotes } from "./changelog";
+import { changelogEntry } from "./changelog";
+import { UpdateDialog, WhatsNewDialog, ChangelogModal } from "./UpdateFlow";
 import { capture } from "./analytics";
 import { TRIAL_DURATION_DAYS } from "@gtmgrid/cloud";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./components/ui/tooltip";
@@ -845,98 +846,6 @@ function NotificationCenter({
 
 // ─── Update + changelog dialogs ───────────────────────────
 
-/** The "update available" dialog: version + release notes + download/relaunch.
- *  Opened automatically on first sight of an update and re-openable from the
- *  download button next to the bell. */
-function UpdateDialog({
-  version,
-  notes,
-  updating,
-  error,
-  onDownload,
-  onLater,
-}: {
-  version: string;
-  notes: string | null;
-  updating: boolean;
-  error: string | null;
-  onDownload: () => void;
-  onLater: () => void;
-}) {
-  return (
-    <Dialog open onOpenChange={(o) => { if (!o) onLater(); }}>
-      <DialogContent className="modal update-modal" style={{ width: 460 }} srTitle="Update available">
-        <div className="modal-header">
-          <span className="modal-title">Update available</span>
-          <button className="modal-close" onClick={onLater} aria-label="Close"><Icon.X /></button>
-        </div>
-        <div className="modal-body">
-          <p className="update-lead">
-            GTM Grid <strong>v{version}</strong> is ready to install.
-          </p>
-          {notes && <div className="update-notes">{notes}</div>}
-          {error && (
-            <div className="conn-err">
-              {error}{" "}
-              <button
-                className="crmw-link"
-                onClick={() => {
-                  const url = "https://www.gtmgrid.dev/download";
-                  const api = electron();
-                  if (api) void api.openExternal(url);
-                  else window.open(url, "_blank", "noopener");
-                }}
-              >
-                Download it manually
-              </button>{" "}
-              and drag it into Applications — that clears anything blocking in-place updates.
-            </div>
-          )}
-        </div>
-        <div className="modal-footer">
-          <button className="btn btn-outline" onClick={onLater} disabled={updating}>Later</button>
-          <button className="btn btn-primary" onClick={onDownload} disabled={updating}>
-            {updating ? "Downloading…" : (<><Icon.Download size={13} /> Download &amp; restart</>)}
-          </button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/** "What's new" dialog shown once on the first launch of a freshly-installed
- *  version, listing that version's changelog notes. */
-function ChangelogDialog({
-  version,
-  items,
-  onClose,
-}: {
-  version: string;
-  items: readonly string[];
-  onClose: () => void;
-}) {
-  return (
-    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="modal changelog-modal" style={{ width: 460 }} srTitle={`What's new in version ${version}`}>
-        <div className="modal-header">
-          <span className="modal-title">What&apos;s new in v{version}</span>
-          <button className="modal-close" onClick={onClose} aria-label="Close"><Icon.X /></button>
-        </div>
-        <div className="modal-body">
-          <ul className="changelog-list">
-            {items.map((it, i) => (
-              <li key={i}>{it}</li>
-            ))}
-          </ul>
-        </div>
-        <div className="modal-footer">
-          <button className="btn btn-primary" onClick={onClose}>Got it</button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 // ─── Main App ─────────────────────────────────────────────
 
 export default function App() {
@@ -1091,31 +1000,21 @@ export default function App() {
   const pendingInviteToken = usePendingInviteToken();
   // In-app auto-update (Tauri only): a newer SIGNED release surfaces a download
   // affordance next to the bell + an UpdateDialog that downloads/installs/relaunches.
-  const { update, error: updaterError } = useUpdateCheck();
+  const updateCheck = useUpdateCheck();
+  const update = updateCheck.update;
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
-  const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
-  const runUpdate = useCallback(async () => {
-    if (!update || updating) return;
-    setUpdating(true);
-    setUpdateError(null);
-    try {
-      await update.install(); // downloads, installs, then relaunches the app
-    } catch {
-      setUpdateError("Update failed — please try again.");
-      setUpdating(false);
-    }
-  }, [update, updating]);
   // Squirrel failures arrive AFTER install() resolves (via updater:error) — the
   // app relaunches on the OLD version. Surface them so the user isn't stuck in a
   // silent offer-install-offer loop; the dialog then offers a manual download.
   useEffect(() => {
-    if (updaterError !== null && update !== null) {
-      setUpdating(false);
+    if (updateCheck.error !== null && update !== null) {
       setUpdateError("The update couldn't be installed automatically.");
       setUpdateDialogOpen(true);
+    } else {
+      setUpdateError(null);
     }
-  }, [updaterError, update]);
+  }, [updateCheck.error, update]);
   // On first sight of an available update, pop the dialog automatically — unless
   // the user already chose "Later" for THIS version (then it waits behind the
   // bell-adjacent download button).
@@ -1136,15 +1035,16 @@ export default function App() {
   // running version against the last one we recorded. Show the changelog once,
   // then record the current version so it won't show again until the next update.
   const [changelogOpen, setChangelogOpen] = useState(false);
-  const changelogItems = useMemo(() => changelogNotes(__APP_VERSION__), []);
+  const [changelogModalOpen, setChangelogModalOpen] = useState(false);
+  const currentEntry = useMemo(() => changelogEntry(__APP_VERSION__), []);
   useEffect(() => {
     let last: string | null = null;
     try { last = localStorage.getItem("gtmgrid:lastVersion"); } catch { /* ignore */ }
-    if (last !== null && last !== __APP_VERSION__ && changelogItems.length > 0) {
+    if (last !== null && last !== __APP_VERSION__ && currentEntry !== null && (currentEntry.added.length > 0 || currentEntry.fixed.length > 0)) {
       setChangelogOpen(true);
     }
     try { localStorage.setItem("gtmgrid:lastVersion", __APP_VERSION__); } catch { /* ignore */ }
-  }, [changelogItems]);
+  }, [currentEntry]);
   // Boot-loader timing (see the boot gate before the main return). A signed-in
   // cloud user lands in a cloud project; we hold the full-screen branded loader
   // until that resolves so the app never flashes local-then-cloud on open.
@@ -2623,25 +2523,28 @@ export default function App() {
           { id: "import-csv", label: "Import CSV", keywords: "upload file", run: () => setImportMode("cloud") },
           { id: "browse-tables", label: "Browse all tables", keywords: "search manage", run: () => setView({ kind: "tables" }) },
           { id: "switch-project", label: "Switch project / workspace", keywords: "change", run: () => setShowProjects(true) },
+          { id: "changelog", label: "What's new / Changelog", keywords: "release notes version updates", run: () => setChangelogModalOpen(true) },
           ...(activeWorkspace ? [{ id: "workspace-settings", label: "Workspace settings", keywords: "members seats billing", run: () => setShowWorkspaceSettings(true) } as PaletteAction] : []),
         ]}
       />
       {update && updateDialogOpen && (
         <UpdateDialog
-          version={update.version}
-          notes={update.notes}
-          updating={updating}
+          check={updateCheck}
+          currentVersion={__APP_VERSION__}
           error={updateError}
-          onDownload={() => void runUpdate()}
-          onLater={skipUpdate}
+          onClose={skipUpdate}
         />
       )}
-      {changelogOpen && (
-        <ChangelogDialog
+      {changelogOpen && currentEntry && (
+        <WhatsNewDialog
           version={__APP_VERSION__}
-          items={changelogItems}
+          entry={currentEntry}
+          onOpenChangelog={() => { setChangelogOpen(false); setChangelogModalOpen(true); }}
           onClose={() => setChangelogOpen(false)}
         />
+      )}
+      {changelogModalOpen && (
+        <ChangelogModal currentVersion={__APP_VERSION__} onClose={() => setChangelogModalOpen(false)} />
       )}
       <div className="app">
       {/* ── Sidebar ─────────────────────── */}

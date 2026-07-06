@@ -17,9 +17,11 @@ export interface ElectronAPI {
   /** Subscribe to `gtmgrid://` deep-link OAuth callbacks. Returns an unsubscribe. */
   onOauthCallback(cb: (url: string) => void): () => void;
   /** Auto-updater events (electron-updater, driven from main). */
-  onUpdateAvailable(cb: (version: string) => void): () => void;
+  onUpdateAvailable?(cb: (info: { version: string; notes: unknown }) => void): () => void;
   onUpdateDownloaded(cb: (version: string) => void): () => void;
+  onUpdateProgress?(cb: (percent: number) => void): () => void;
   onUpdateError(cb: (message: string) => void): () => void;
+  downloadUpdate?(): Promise<void>;
   /** Stop the engine, then quit + install the downloaded update. */
   quitAndInstall(): Promise<void>;
 }
