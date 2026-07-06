@@ -998,10 +998,12 @@ export default function App() {
   const [showNewTableChooser, setShowNewTableChooser] = useState(false);
   const [showSignals, setShowSignals] = useState(false);
   // "From your CRM" wizard. `crmConnectedSignal` is bumped by the `crm-connected`
-  // deep link so an open wizard on its Connect step advances without waiting for
-  // its 2s connection poll.
+  // deep link so the wizard advances without waiting for its 2s connection poll;
+  // `crmResumeProvider` names the CRM that link connected, so a wizard reopened
+  // after being closed resumes the right provider.
   const [showCrmWizard, setShowCrmWizard] = useState(false);
   const [crmConnectedSignal, setCrmConnectedSignal] = useState(0);
+  const [crmResumeProvider, setCrmResumeProvider] = useState<string | null>(null);
   // Bumped to ask the CloudGrid to auto-open the webhook setup form (the chooser's
   // Webhook flow). A monotonic token so each request re-triggers cleanly.
   const [openWebhookToken, setOpenWebhookToken] = useState(0);
@@ -1614,10 +1616,15 @@ export default function App() {
         setShowUpgrade(true);
         break;
       case "crm-connected":
-        // The Attio OAuth bounce landed. If the CRM wizard is open on its
-        // Connect step it reads this bump to advance immediately (otherwise its
-        // 2s poll would); if the wizard is closed this is a harmless no-op
-        // beyond the main process having already focused the window.
+        // A CRM OAuth bounce landed (any provider). Make sure the wizard is open
+        // and pointed at the just-connected provider so the connection is
+        // reflected and the user can continue: reopen it if they'd closed it
+        // while authorizing in the browser (otherwise they'd be stranded on the
+        // dashboard with nothing to resume). The bumped signal drives the
+        // wizard — already open or freshly reopened — to re-check the connection
+        // and advance without waiting for its 2s poll.
+        setCrmResumeProvider(dest.provider);
+        setShowCrmWizard(true);
         setCrmConnectedSignal((n) => n + 1);
         break;
     }
@@ -3245,7 +3252,7 @@ export default function App() {
           onCsv={() => setImportMode("cloud")}
           onWebhook={() => { void onChooseWebhook(); }}
           onSignals={() => setShowSignals(true)}
-          onCrm={() => setShowCrmWizard(true)}
+          onCrm={() => { setCrmResumeProvider(null); setShowCrmWizard(true); }}
         />
       )}
 
@@ -3254,6 +3261,7 @@ export default function App() {
           <CrmSyncWizard
             workspaceId={activeWorkspace._id}
             connectedSignal={crmConnectedSignal}
+            resumeProvider={crmResumeProvider}
             createTable={(name) => createCloudTable(cloudProject._id, name).then(String)}
             deleteTable={(tableId) => deleteCloudTable(tableId as Id<"tables">).then(() => undefined)}
             onClose={() => setShowCrmWizard(false)}

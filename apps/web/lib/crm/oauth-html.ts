@@ -1,6 +1,7 @@
 /**
- * The branded HTML shell shared by the Attio OAuth routes' human-facing pages
- * (`app/api/crm/attio/{authorize,callback}/route.ts`).
+ * The branded HTML shell shared by every CRM provider's OAuth routes'
+ * human-facing pages (`app/api/crm/<provider>/{authorize,callback}/route.ts`,
+ * via the provider-agnostic `crm-authorize`/`crm-callback` cores).
  *
  * These routes are hit in a real browser during the OAuth handshake, so every
  * outcome — success, cancellation, an expired link, an unconfigured app — must

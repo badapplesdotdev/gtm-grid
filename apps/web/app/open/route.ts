@@ -25,6 +25,8 @@ export const dynamic = "force-dynamic";
 const DEST_RE =
   /^(table\/[0-9a-f-]{36}|new-table|settings\/ai-providers|invite|members|billing|crm-connected)$/;
 const WORKSPACE_RE = /^[0-9a-f-]{36}$/;
+/** The CRM slug carried on a `crm-connected` bounce (lowercase letters only). */
+const PROVIDER_RE = /^[a-z]+$/;
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -33,9 +35,13 @@ function escapeHtml(s: string): string {
 export function GET(req: NextRequest): Response {
   const rawTo = req.nextUrl.searchParams.get("to") ?? "";
   const rawWs = req.nextUrl.searchParams.get("workspace") ?? "";
+  const rawProvider = req.nextUrl.searchParams.get("provider") ?? "";
   const dest = DEST_RE.test(rawTo) ? rawTo : "";
   const ws = dest && WORKSPACE_RE.test(rawWs) ? rawWs : "";
-  const deepLink = `gtmgrid://open${dest ? `/${dest}` : ""}${ws ? `?workspace=${ws}` : ""}`;
+  // The provider is only meaningful for the crm-connected bounce.
+  const provider = dest === "crm-connected" && PROVIDER_RE.test(rawProvider) ? rawProvider : "";
+  const query = [ws && `workspace=${ws}`, provider && `provider=${provider}`].filter(Boolean).join("&");
+  const deepLink = `gtmgrid://open${dest ? `/${dest}` : ""}${query ? `?${query}` : ""}`;
   const safeLink = escapeHtml(deepLink);
 
   const html = `<!doctype html>

@@ -93,16 +93,24 @@ describe("parseOpenDeepLink — recognised grammar", () => {
     });
   });
 
-  it("crm-connected → the CRM-connected resume destination", () => {
+  it("crm-connected → the CRM-connected resume destination (no provider)", () => {
     expect(parseOpenDeepLink("gtmgrid://open/crm-connected")).toEqual({
       kind: "crm-connected",
+      provider: null,
     });
   });
 
-  it("ignores a trailing query/hash on crm-connected (OAuth bounce params)", () => {
+  it("crm-connected carries the provider from ?provider=", () => {
+    expect(parseOpenDeepLink("gtmgrid://open/crm-connected?provider=hubspot")).toEqual({
+      kind: "crm-connected",
+      provider: "hubspot",
+    });
+  });
+
+  it("ignores an unrelated trailing query/hash on crm-connected (OAuth bounce params)", () => {
     expect(
       parseOpenDeepLink("gtmgrid://open/crm-connected?workspace=ws_9#ok"),
-    ).toEqual({ kind: "crm-connected" });
+    ).toEqual({ kind: "crm-connected", provider: null });
   });
 
   it("matches the scheme + destination keywords case-insensitively", () => {
@@ -117,6 +125,7 @@ describe("parseOpenDeepLink — recognised grammar", () => {
     });
     expect(parseOpenDeepLink("gtmgrid://open/CRM-Connected")).toEqual({
       kind: "crm-connected",
+      provider: null,
     });
   });
 

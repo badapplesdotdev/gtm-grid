@@ -78,8 +78,12 @@ function failurePage(name: string, retry: CrmPageLink): Response {
   );
 }
 
-function successPage(name: string, crmWorkspaceName: string): Response {
+function successPage(provider: string, name: string, crmWorkspaceName: string): Response {
   const named = crmWorkspaceName.trim() !== "";
+  // Carry the provider so the desktop can resume the RIGHT CRM when the deep
+  // link reopens a wizard the user had closed. `provider` is a fixed internal
+  // slug (attio / hubspot), but encode defensively — never raw query input.
+  const providerQ = encodeURIComponent(provider);
   return htmlResponse(
     crmOAuthPage({
       title: `${name} connected — gtm grid`,
@@ -87,8 +91,8 @@ function successPage(name: string, crmWorkspaceName: string): Response {
       message: `${name} connected — returning to GTM Grid…`,
       // Fires the deep link instantly (same mechanism as /open); the CTA is the
       // fallback when the browser doesn't hand off to the app.
-      redirectTo: "gtmgrid://open/crm-connected",
-      primary: { href: "/open?to=crm-connected", label: "Open GTM Grid" },
+      redirectTo: `gtmgrid://open/crm-connected?provider=${providerQ}`,
+      primary: { href: `/open?to=crm-connected&provider=${providerQ}`, label: "Open GTM Grid" },
     }),
     200,
   );
@@ -184,5 +188,5 @@ export async function callbackResponse(params: {
     properties: { provider, workspace_id: claims.workspaceId },
     groups: { workspace: claims.workspaceId },
   });
-  return successPage(name, exit.value);
+  return successPage(provider, name, exit.value);
 }

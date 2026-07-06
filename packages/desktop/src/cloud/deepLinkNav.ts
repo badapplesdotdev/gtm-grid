@@ -33,8 +33,10 @@ import { useSyncExternalStore } from "react";
  *  - `ai-providers` — open the AI-provider credentials panel.
  *  - `invite`       — open the invite / members UI (also the `members` alias).
  *  - `billing`      — open the billing / plan UI.
- *  - `crm-connected` — the Attio OAuth callback bounce: the CRM sync wizard,
- *                     if open on its Connect step, advances to Configure.
+ *  - `crm-connected` — a CRM OAuth callback bounce (any provider): the CRM sync
+ *                     wizard advances to Configure, reopening first if it had
+ *                     been closed. `provider` is the CRM that was connected
+ *                     (`?provider=`), or `null` when the link omits it.
  */
 export type DeepLinkDestination =
   | { readonly kind: "focus" }
@@ -43,7 +45,7 @@ export type DeepLinkDestination =
   | { readonly kind: "ai-providers" }
   | { readonly kind: "invite" }
   | { readonly kind: "billing" }
-  | { readonly kind: "crm-connected" };
+  | { readonly kind: "crm-connected"; readonly provider: string | null };
 
 /**
  * Parse an `gtmgrid://open/...` deep link into a {@link DeepLinkDestination}, or
@@ -103,8 +105,10 @@ export function parseOpenDeepLink(url: string): DeepLinkDestination | null {
       return { kind: "invite" };
     case "billing":
       return { kind: "billing" };
-    case "crm-connected":
-      return { kind: "crm-connected" };
+    case "crm-connected": {
+      const provider = parsed.searchParams.get("provider");
+      return { kind: "crm-connected", provider: provider && provider.length > 0 ? provider : null };
+    }
     default:
       return null;
   }
