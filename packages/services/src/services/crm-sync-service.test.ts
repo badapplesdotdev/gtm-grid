@@ -634,3 +634,71 @@ describe("mid-pull failures", () => {
     expect(Exit.isFailure(exit)).toBe(true);
   });
 });
+
+// ── Adding a field to an existing binding ─────────────────────────────────────
+
+describe("addField (new synced column on an existing binding)", () => {
+  const JOB_ATTRS = {
+    data: [
+      { api_slug: "name", title: "Name", type: "personal-name" },
+      { api_slug: "email_addresses", title: "Email", type: "email-address" },
+      { api_slug: "job_title", title: "Job title", type: "text" },
+    ],
+  };
+  const recWithTitle = (id: string, name: string, email: string, title: string) => ({
+    id: { record_id: id },
+    values: {
+      name: [{ full_name: name }],
+      email_addresses: [{ email_address: email }],
+      job_title: [{ value: title }],
+    },
+  });
+
+  it("maps the field, and the NEXT sync backfills every existing row (hash change)", async () => {
+    const w = world();
+    scriptFetch(syncScript([recWithTitle("rec_1", "Sarah", "sarah@vercel.com", "VP Sales")]));
+    await syncOnce(w);
+    expect(w.rows).toHaveLength(1);
+
+    const { columnId } = await Effect.runPromise(
+      Effect.gen(function* () {
+        const sync = yield* CrmSyncService;
+        return yield* sync.addField(w.binding.id, { attrSlug: "job_title", attrType: "text", title: "Job title" });
+      }).pipe(Effect.provide(TestLayer(w.fixtures))) as Effect.Effect<{ columnId: string }, never, never>,
+    );
+    // The in-memory repo replaces the stored row on patch — read it back.
+    const stored = (w.fixtures.crmBindings as CrmBinding[])[0];
+    expect(stored.columns.map((c) => c.attrSlug)).toContain("job_title");
+
+    // Same upstream data — but the hash now covers job_title, so the run
+    // rewrites the row and fills the new column.
+    scriptFetch([() => json(JOB_ATTRS), () => json({ data: [recWithTitle("rec_1", "Sarah", "sarah@vercel.com", "VP Sales")] })]);
+    const second = await syncOnce(w);
+    expect(second.rowsUpdated).toBe(1);
+    expect(cellText(w, w.rows[0].id, columnId)).toBe("VP Sales");
+  });
+
+  it("is idempotent: an already-mapped slug returns the existing column", async () => {
+    const w = world();
+    const first = await Effect.runPromise(
+      Effect.gen(function* () {
+        const sync = yield* CrmSyncService;
+        return yield* sync.addField(w.binding.id, { attrSlug: "email_addresses", attrType: "email-address", title: "Email" });
+      }).pipe(Effect.provide(TestLayer(w.fixtures))) as Effect.Effect<{ columnId: string }, never, never>,
+    );
+    expect(first.columnId).toBe("col_email");
+    expect(w.binding.columns).toHaveLength(2);
+  });
+
+  it("is member-gated", async () => {
+    const w = world();
+    w.fixtures.currentUserId = "stranger";
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const sync = yield* CrmSyncService;
+        return yield* sync.addField(w.binding.id, { attrSlug: "job_title", attrType: "text", title: "Job title" });
+      }).pipe(Effect.provide(TestLayer(w.fixtures))) as Effect.Effect<{ columnId: string }, unknown, never>,
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+  });
+});

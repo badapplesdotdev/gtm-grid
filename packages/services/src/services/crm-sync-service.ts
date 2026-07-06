@@ -1046,6 +1046,61 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
           return bindingId;
         }),
 
+      /**
+       * Add ONE more source field to an existing binding as a new synced
+       * column. Backfill rides the next sync: the values-hash is scoped to the
+       * synced columns, so every record's hash changes and the run rewrites
+       * all cells — including the new column. (In "create" dedupe mode there
+       * is no record→row identity, so only future imports carry the field.)
+       * Idempotent: an already-mapped slug returns its existing column.
+       */
+      addField: (
+        bindingId: string,
+        field: { readonly attrSlug: string; readonly attrType: string; readonly title: string },
+      ) =>
+        Effect.gen(function* () {
+          const binding = yield* requireBinding(bindingId);
+          yield* membership.requireMember(binding.workspaceId);
+          yield* entitlement.requireCloudAccess(binding.workspaceId);
+          const existing = binding.columns.find((c) => c.attrSlug === field.attrSlug);
+          if (existing !== undefined) return { columnId: existing.columnId, workspaceId: binding.workspaceId };
+          const now = Date.now();
+          const position = yield* mapRepoError(columns.nextPosition(binding.tableId), "column position failed");
+          const columnId = yield* mapRepoError(
+            columns.insert({
+              workspaceId: binding.workspaceId,
+              tableId: binding.tableId,
+              name: field.title,
+              type: "text",
+              kind: "manual",
+              provider: null,
+              method: null,
+              code: null,
+              params: null,
+              condition: null,
+              config: {
+                synced: true,
+                crmBindingId: binding.id,
+                attrSlug: field.attrSlug,
+                attrType: field.attrType,
+              },
+              position,
+              createdAt: now,
+            }),
+            "column insert failed",
+          );
+          yield* mapRepoError(
+            bindings.patch(binding.id, {
+              columns: [
+                ...binding.columns,
+                { attrSlug: field.attrSlug, attrType: field.attrType, columnId, title: field.title },
+              ],
+            }),
+            "binding mapping failed",
+          );
+          return { columnId, workspaceId: binding.workspaceId };
+        }),
+
       /** Validate a manual sync-now (member + entitlement) and return the binding. */
       guardSyncNow: (bindingId: string) =>
         Effect.gen(function* () {
