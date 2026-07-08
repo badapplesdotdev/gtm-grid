@@ -71,7 +71,7 @@
     "esbuild": "^0.25.12",
     "jsdom": "^29.1.1",
     "playwright": "^1.61.1",
-    "typescript": "^5.7.2",
+    "typescript": "^7.0.2",
     "vite": "^6.0.7"
   }
 }
