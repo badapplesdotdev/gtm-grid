@@ -1201,3 +1201,29 @@ export function makeCloudSource(
     },
   };
 }
+
+/** The actionable message every {@link missingCloudSource} method rejects with. */
+export const NO_CLOUD_CONTEXT_MESSAGE =
+  "This gtmgrid agent has no active cloud project, so it can't read or write the grid. Tell the user to open a project (and select a table) in the gtm grid desktop app, then start the chat again.";
+
+/**
+ * A {@link CloudGridSource} stand-in for when the MCP was spawned WITHOUT a
+ * complete cloud context. The server still connects (so the agent gets a live
+ * handshake and the local-registry discovery tools keep working), but every
+ * grid method rejects with {@link NO_CLOUD_CONTEXT_MESSAGE} — a returned tool
+ * error the agent surfaces, NOT a process-killing throw at module load. This is
+ * the graceful counterpart to {@link makeCloudSource}: a context-less spawn env
+ * degrades to "tools report the missing project" instead of an uncaught
+ * exception that takes the whole MCP down before it connects.
+ */
+export function missingCloudSource(): CloudGridSource {
+  // Async so a call returns a REJECTED promise (matching every CloudGridSource
+  // method's `Promise<…>` contract) rather than throwing synchronously — the
+  // tool handlers `await` it, and the rejection becomes a returned tool error.
+  const fail = async (): Promise<never> => {
+    throw new Error(NO_CLOUD_CONTEXT_MESSAGE);
+  };
+  // Every CloudGridSource member is a method; the get trap returns the same
+  // rejecting function for each, so any tool call rejects with the one message.
+  return new Proxy({} as CloudGridSource, { get: () => fail });
+}

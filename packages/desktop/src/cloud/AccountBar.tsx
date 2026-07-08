@@ -58,6 +58,7 @@ import {
   type OAuthProvider,
   type WorkspaceSummary,
 } from "./auth";
+import { friendlyAuthError } from "./authErrors";
 import { GitHub, Google } from "./onboarding/icons";
 import { PlanGrid, BillingToggle } from "./onboarding/PlanGrid";
 import type { SelectablePlan } from "./onboarding/flow-logic";
@@ -749,7 +750,9 @@ function SignInSection(props: { onDone: () => void }) {
       await signInWithPassword(email.trim(), password, flow);
       props.onDone();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Sign in failed");
+      // Map the auth failure to human copy (same as onboarding) instead of
+      // leaking the raw fetch/Better-Auth message to the account menu.
+      setError(friendlyAuthError(e, flow));
     } finally {
       setBusy(false);
     }
