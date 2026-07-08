@@ -45,6 +45,21 @@ describe("/open — whitelisted destinations", () => {
       );
     }
   });
+
+  it("crm-connected carries a valid provider", async () => {
+    expect(firedLink(await bounce(`?to=crm-connected&provider=hubspot`))).toBe(
+      "gtmgrid://open/crm-connected?provider=hubspot",
+    );
+  });
+
+  it("drops an invalid provider, and provider on any other destination", async () => {
+    expect(firedLink(await bounce(`?to=crm-connected&provider=Bad%20One`))).toBe(
+      "gtmgrid://open/crm-connected",
+    );
+    expect(firedLink(await bounce(`?to=billing&provider=hubspot`))).toBe(
+      "gtmgrid://open/billing",
+    );
+  });
 });
 
 describe("/open — rejection paths (degrade to bare open, never reflect)", () => {

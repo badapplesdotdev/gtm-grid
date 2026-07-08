@@ -62,6 +62,11 @@ type FilterOp = (typeof FILTER_OPS)[number];
 /** Operators that take no value input (presence checks). */
 const VALUELESS_OPS = new Set<FilterOp>(["is known", "is unknown"]);
 
+/** How long the "Authorizing…" poll waits for the handshake before it gives up
+ *  with a retryable error, rather than spinning forever when the OAuth callback
+ *  is slow or errors out. OAuth normally lands within a few seconds. */
+const AUTHORIZE_TIMEOUT_MS = 90_000;
+
 type SourceKind = "object" | "list";
 
 /** One syncable Attio source (crm.listSources). */
@@ -127,6 +132,7 @@ export function CrmSyncWizard({
   onClose,
   onCreated,
   connectedSignal,
+  resumeProvider,
 }: {
   /** The active workspace (all crm procedures are member-gated on it). */
   workspaceId: string;
@@ -138,11 +144,18 @@ export function CrmSyncWizard({
   /** Navigate to the freshly-created synced table. */
   onCreated: (tableId: string) => void;
   /**
-   * Bumped by App when the `crm-connected` deep link lands, so a wizard sitting
-   * on the Connect step re-checks the connection immediately (rather than
-   * waiting for the next 2s poll tick).
+   * Bumped by App when the `crm-connected` deep link lands, so the wizard
+   * re-checks the connection immediately (rather than waiting for the next 2s
+   * poll tick) — whether it was still open on its Connect step or was reopened
+   * by App after the user had closed it mid-authorization.
    */
   connectedSignal?: number;
+  /**
+   * The provider named by the `crm-connected` deep link, so a wizard reopened
+   * from a closed state resumes the CRM that was actually connected. Unknown /
+   * absent values fall back to whatever the user was connecting.
+   */
+  resumeProvider?: string | null;
 }) {
   type Step = "pick" | "connect" | "configure";
   const [step, setStep] = useState<Step>("pick");
@@ -150,6 +163,11 @@ export function CrmSyncWizard({
   // The CRM being connected/configured; every crm.* call threads it through.
   const [provider, setProvider] = useState<CrmProviderId>("attio");
   const providerDef = PROVIDERS[provider];
+
+  // The deep link names the provider it just connected; validate it against the
+  // CRMs we know so a stale/garbled value can't select an unsupported one.
+  const resume: CrmProviderId | null =
+    resumeProvider != null && resumeProvider in PROVIDERS ? (resumeProvider as CrmProviderId) : null;
 
   // Connection
   const [configured, setConfigured] = useState<boolean | null>(null);
@@ -273,6 +291,8 @@ export function CrmSyncWizard({
   }, [workspaceId, provider, providerDef.name]);
 
   // Poll connectionStatus every 2s while authorizing; advance once connected.
+  // Bounded by a timeout so a slow or errored callback surfaces a retryable
+  // error instead of leaving the "Authorizing…" spinner running forever.
   useEffect(() => {
     if (!authorizing) return;
     let cancelled = false;
@@ -285,21 +305,43 @@ export function CrmSyncWizard({
       }
     };
     const h = setInterval(() => void tick(), 2000);
-    return () => { cancelled = true; clearInterval(h); };
-  }, [authorizing, provider, refetchConnection, enterConfigure]);
+    const timeout = setTimeout(() => {
+      if (cancelled) return;
+      setAuthorizing(false);
+      setError(
+        `Still waiting on ${providerDef.name}. Finish authorizing in your browser, then try Connect again.`,
+      );
+    }, AUTHORIZE_TIMEOUT_MS);
+    return () => { cancelled = true; clearInterval(h); clearTimeout(timeout); };
+  }, [authorizing, provider, refetchConnection, enterConfigure, providerDef.name]);
 
-  // The `crm-connected` deep link accelerates the poll: re-check immediately.
-  const lastConnectedSignal = useRef(connectedSignal ?? 0);
+  // The `crm-connected` deep link resumes the flow: whether the wizard was still
+  // open on its Connect step or was reopened by App after being closed, re-check
+  // the connection for the provider the link named (falling back to the one in
+  // flight) and jump to Configure — or drop onto Connect if the link raced
+  // ahead of the server persisting the connection, so the poll can catch it.
+  // The ref starts unseeded when a resume provider is present so a freshly
+  // reopened wizard fires on mount; otherwise it's seeded to skip mount.
+  const lastConnectedSignal = useRef<number | null>(resume ? null : (connectedSignal ?? 0));
   useEffect(() => {
     const sig = connectedSignal ?? 0;
     if (sig === lastConnectedSignal.current) return;
     lastConnectedSignal.current = sig;
-    if (step !== "connect") return;
+    const p = resume ?? provider;
     void (async () => {
-      const connected = await refetchConnection(provider);
-      if (connected) { setAuthorizing(false); void enterConfigure(); }
+      setProvider(p);
+      const connected = await refetchConnection(p);
+      if (connected) {
+        setAuthorizing(false);
+        void enterConfigure(p);
+      } else if (step === "pick") {
+        // Reopened cold but the connection isn't visible yet — sit on Connect so
+        // the 2s poll (and any follow-up signal) can pick it up once it lands.
+        setStep("connect");
+        setAuthorizing(true);
+      }
     })();
-  }, [connectedSignal, step, provider, refetchConnection, enterConfigure]);
+  }, [connectedSignal, resume, provider, step, refetchConnection, enterConfigure]);
 
   // ── Estimate (debounced) whenever the source or its filters change.
   const validFilters = useMemo<CrmFilterPayload>(

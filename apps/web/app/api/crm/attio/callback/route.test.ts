@@ -113,8 +113,9 @@ describe("callbackResponse", () => {
 
       expect(res.status).toBe(200);
       const body = await res.text();
-      expect(body).toContain("gtmgrid://open/crm-connected");
-      expect(body).toContain("/open?to=crm-connected");
+      expect(body).toContain("gtmgrid://open/crm-connected?provider=attio");
+      // The CTA href is HTML-escaped (& → &amp;) by crmOAuthPage.
+      expect(body).toContain("/open?to=crm-connected&amp;provider=attio");
       expect(body).toContain("Acme CRM");
 
       // The connection was actually persisted (read it back through the service).
