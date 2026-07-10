@@ -939,4 +939,6 @@ code, .mono {
 .prose ul ul { margin: var(--space-2) 0 0; }
 .prose strong, .prose em { color: var(--text, inherit); }
 .prose a { color: var(--green-700); text-decoration: underline; text-underline-offset: 2px; }
+/* Out-specify `.prose a` (0,1,1) so the button keeps its own colour and has no underline. */
+.prose a.prose__cta { margin-top: var(--space-5); color: var(--text-on-accent); text-decoration: none; }
 .prose__foot { margin-top: var(--space-8); padding-top: var(--space-5); border-top: 1px solid var(--line); }
