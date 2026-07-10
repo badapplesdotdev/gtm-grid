@@ -419,16 +419,19 @@ export const cloudGridStoreShape = (
 
     /**
      * Buffer a write; once a full chunk has accumulated, flush it. Backpressure:
-     * when the in-flight set is at its cap, await the soonest-settling POST
+     * while the in-flight set is at its cap, await the soonest-settling POST
      * before scheduling another — so the engine's per-row `await setCell` blocks
-     * here, throttling how fast rows are scheduled. A sub-{@link FLUSH_CHUNK}
-     * remainder arms the idle timer so it still streams in tranches (see
-     * {@link FLUSH_INTERVAL_MS}) rather than waiting for `drainAll` at run end.
+     * here, throttling how fast rows are scheduled. The cap check is a `while`,
+     * not an `if`: `onFlushTick` can fire during the await and consume the freed
+     * slot, so we must re-check before scheduling or in-flight could exceed the
+     * cap. A sub-{@link FLUSH_CHUNK} remainder arms the idle timer so it still
+     * streams in tranches (see {@link FLUSH_INTERVAL_MS}) rather than waiting for
+     * `drainAll` at run end.
      */
     const enqueue = async (write: BatchedCellWrite): Promise<void> => {
       pending.push(write);
       while (pending.length >= FLUSH_CHUNK) {
-        if (inFlight.size >= MAX_IN_FLIGHT) {
+        while (inFlight.size >= MAX_IN_FLIGHT) {
           await Promise.race(inFlight);
         }
         startFlush(pending.splice(0, FLUSH_CHUNK));
@@ -445,7 +448,7 @@ export const cloudGridStoreShape = (
         flushTimer = null;
       }
       while (pending.length > 0) {
-        if (inFlight.size >= MAX_IN_FLIGHT) {
+        while (inFlight.size >= MAX_IN_FLIGHT) {
           await Promise.race(inFlight);
         }
         startFlush(pending.splice(0, FLUSH_CHUNK));
