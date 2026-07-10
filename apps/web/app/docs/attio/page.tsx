@@ -27,6 +27,9 @@ export default function AttioDocsPage() {
           table, then enrich every row with AI. Read-only by design: GTM Grid never writes to
           your CRM.
         </p>
+        <Link className="btn btn--primary prose__cta" href="/download">
+          Download GTM Grid
+        </Link>
       </header>
 
       <h2>What it does</h2>
@@ -40,6 +43,10 @@ export default function AttioDocsPage() {
 
       <h2>Connecting Attio</h2>
       <ol>
+        <li>
+          <Link href="/download">Download GTM Grid</Link> and sign in. GTM Grid is a desktop
+          app for macOS, Windows, and Linux.
+        </li>
         <li>In GTM Grid, open <strong>New table → From your CRM</strong> and pick Attio.</li>
         <li>
           Your browser opens Attio&rsquo;s consent screen. GTM Grid requests{" "}
