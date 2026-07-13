@@ -1,5 +1,13 @@
 # @gtmgrid/server
 
+## 1.7.1
+
+### Patch Changes
+
+- f79b6ee: Automatically discover the models available to the authenticated Codex CLI. The agent picker now refreshes from Codex's own model cache when it opens, shows the configured default model, excludes hidden models, and safely falls back when the cache has not been created yet.
+  - @gtmgrid/engine@1.7.1
+  - @gtmgrid/observability@1.7.1
+
 ## 1.7.0
 
 ### Patch Changes
