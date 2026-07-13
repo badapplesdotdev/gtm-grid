@@ -8,16 +8,16 @@
  *      no credits are spent), and a throwing condition surfaces as a cell error.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Db } from "./db.js";
+import { describe, expect, it } from "vitest";
 import { Engine } from "./execute.js";
 import { buildFormulaPrelude, compileExpression, detectLibs } from "./formula.js";
 import { defaultRegistry, Registry } from "./registry.js";
 import { runFunction } from "./sandbox.js";
+import { makeMemoryStore, type MemoryStore } from "./test-helpers.js";
 import type { Connector, ConnectorMethod } from "./types.js";
+
+let colSeq = 0;
+const nextColId = () => `col${colSeq++}`;
 
 const noopDispatch = async () => null;
 
@@ -82,9 +82,8 @@ describe("runFunction with a formula prelude (real QuickJS sandbox)", () => {
   });
 });
 
-describe("Engine.runColumn — formula + conditional gate (temp SQLite DB)", () => {
-  let dir: string;
-  let db: Db;
+describe("Engine.runColumn — formula + conditional gate (in-memory store)", () => {
+  let store: MemoryStore;
 
   /** A registry whose single connector records each dispatch (to prove skip = no run). */
   let dispatched: Array<Record<string, unknown>>;
@@ -106,72 +105,68 @@ describe("Engine.runColumn — formula + conditional gate (temp SQLite DB)", () 
     return new Registry([connector]);
   };
 
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "formula-test-"));
-    db = new Db(join(dir, "project.db"));
-  });
-  afterEach(() => {
-    db.close();
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  const formulaCol = (tableId: string, name: string, expression: string, type = "text") =>
-    db.createColumn({
-      tableId,
+  const manualCol = (name: string, type = "text") =>
+    store.addColumn({ id: nextColId(), table_id: "t", name, type: type as never, kind: "manual" });
+  const formulaCol = (name: string, expression: string, type = "text", condition?: string) =>
+    store.addColumn({
+      id: nextColId(),
+      table_id: "t",
       name,
       type: type as never,
       kind: "function",
       provider: "formula",
       method: "eval",
       params: { expression },
+      ...(condition ? { condition } : {}),
     });
 
   it("evaluates a formula over typed row values", async () => {
-    const table = db.createTable("Leads");
-    const email = db.createColumn({ tableId: table.id, name: "Email", kind: "manual" });
-    const domain = formulaCol(table.id, "Domain", '{{Email}}.split("@")[1]');
-    const r1 = db.createRow(table.id);
-    const r2 = db.createRow(table.id);
-    db.setCell(r1.id, email.id, { value: "ada@acme.com", status: "done" });
-    db.setCell(r2.id, email.id, { value: "grace@navy.mil", status: "done" });
+    store = makeMemoryStore();
+    const email = manualCol("Email");
+    const domain = formulaCol("Domain", '{{Email}}.split("@")[1]');
+    store.addRow({ id: "r1", table_id: "t" });
+    store.addRow({ id: "r2", table_id: "t" });
+    store.setCellSync("r1", email.id, { value: "ada@acme.com", status: "done" });
+    store.setCellSync("r2", email.id, { value: "grace@navy.mil", status: "done" });
 
-    const engine = new Engine(db, {}, defaultRegistry());
+    const engine = new Engine({}, defaultRegistry(), { store, creds: store });
     const res = await engine.runColumn(domain.id);
 
     expect(res).toEqual({ ran: 2, errors: 0 });
-    expect(db.getCell(r1.id, domain.id)?.value).toBe("acme.com");
-    expect(db.getCell(r2.id, domain.id)?.value).toBe("navy.mil");
+    expect(store.readCell("r1", domain.id)?.value).toBe("acme.com");
+    expect(store.readCell("r2", domain.id)?.value).toBe("navy.mil");
   });
 
   it("preserves value types — a number column stays a number", async () => {
-    const table = db.createTable("Scores");
-    const score = db.createColumn({ tableId: table.id, name: "Score", type: "number", kind: "manual" });
-    const next = formulaCol(table.id, "Next", "{{Score}} + 1", "number");
-    const row = db.createRow(table.id);
-    db.setCell(row.id, score.id, { value: 41, status: "done" });
+    store = makeMemoryStore();
+    const score = manualCol("Score", "number");
+    const next = formulaCol("Next", "{{Score}} + 1", "number");
+    store.addRow({ id: "r", table_id: "t" });
+    store.setCellSync("r", score.id, { value: 41, status: "done" });
 
-    await new Engine(db, {}, defaultRegistry()).runColumn(next.id);
-    expect(db.getCell(row.id, next.id)?.value).toBe(42);
+    await new Engine({}, defaultRegistry(), { store, creds: store }).runColumn(next.id);
+    expect(store.readCell("r", next.id)?.value).toBe(42);
   });
 
   it("evaluates a formula using a helper library (FormulaJS)", async () => {
-    const table = db.createTable("Math");
-    const a = db.createColumn({ tableId: table.id, name: "A", type: "number", kind: "manual" });
-    const b = db.createColumn({ tableId: table.id, name: "B", type: "number", kind: "manual" });
-    const sum = formulaCol(table.id, "Sum", "SUM({{A}}, {{B}})", "number");
-    const row = db.createRow(table.id);
-    db.setCell(row.id, a.id, { value: 2, status: "done" });
-    db.setCell(row.id, b.id, { value: 3, status: "done" });
+    store = makeMemoryStore();
+    const a = manualCol("A", "number");
+    const b = manualCol("B", "number");
+    const sum = formulaCol("Sum", "SUM({{A}}, {{B}})", "number");
+    store.addRow({ id: "r", table_id: "t" });
+    store.setCellSync("r", a.id, { value: 2, status: "done" });
+    store.setCellSync("r", b.id, { value: 3, status: "done" });
 
-    await new Engine(db, {}, defaultRegistry()).runColumn(sum.id);
-    expect(db.getCell(row.id, sum.id)?.value).toBe(5);
+    await new Engine({}, defaultRegistry(), { store, creds: store }).runColumn(sum.id);
+    expect(store.readCell("r", sum.id)?.value).toBe(5);
   });
 
   it("conditional-run skips falsy rows WITHOUT dispatching (saves credits)", async () => {
-    const table = db.createTable("People");
-    const email = db.createColumn({ tableId: table.id, name: "Email", kind: "manual" });
-    const enrich = db.createColumn({
-      tableId: table.id,
+    store = makeMemoryStore();
+    const email = manualCol("Email");
+    const enrich = store.addColumn({
+      id: nextColId(),
+      table_id: "t",
       name: "Enriched",
       kind: "function",
       provider: "spy",
@@ -179,26 +174,27 @@ describe("Engine.runColumn — formula + conditional gate (temp SQLite DB)", () 
       params: { value: "{{Email}}" },
       condition: "Boolean({{Email}})", // only run if Email is present
     });
-    const r1 = db.createRow(table.id); // has email → runs
-    const r2 = db.createRow(table.id); // no email → skipped
-    db.setCell(r1.id, email.id, { value: "ada@acme.com", status: "done" });
+    store.addRow({ id: "r1", table_id: "t" }); // has email → runs
+    store.addRow({ id: "r2", table_id: "t" }); // no email → skipped
+    store.setCellSync("r1", email.id, { value: "ada@acme.com", status: "done" });
 
-    const engine = new Engine(db, {}, spyRegistry());
+    const engine = new Engine({}, spyRegistry(), { store, creds: store });
     const res = await engine.runColumn(enrich.id);
 
     expect(res).toEqual({ ran: 1, errors: 0 });
     expect(dispatched).toHaveLength(1); // the gated-off row never reached the connector
-    expect(db.getCell(r1.id, enrich.id)?.status).toBe("done");
-    expect(db.getCell(r2.id, enrich.id)?.status ?? "empty").toBe("empty");
-    expect(db.getCell(r2.id, enrich.id)?.value ?? null).toBeNull();
-    // The gated-off cell carries a "Condition not met" note so the grid can explain the blank.
-    expect(db.getCell(r2.id, enrich.id)?.error).toBe("Condition not met");
+    expect(store.readCell("r1", enrich.id)?.status).toBe("done");
+    expect(store.readCell("r2", enrich.id)?.status ?? "empty").toBe("empty");
+    expect(store.readCell("r2", enrich.id)?.value ?? null).toBeNull();
+    // The gated-off cell carries a "Run condition not met" note so the grid can explain the blank.
+    expect(store.readCell("r2", enrich.id)?.error).toBe("Run condition not met");
   });
 
   it("marks a cell error (not a silent skip) when the condition throws", async () => {
-    const table = db.createTable("T");
-    const out = db.createColumn({
-      tableId: table.id,
+    store = makeMemoryStore();
+    const out = store.addColumn({
+      id: nextColId(),
+      table_id: "t",
       name: "Out",
       kind: "function",
       provider: "spy",
@@ -206,14 +202,14 @@ describe("Engine.runColumn — formula + conditional gate (temp SQLite DB)", () 
       params: {},
       condition: "nope.alsoNope", // ReferenceError at eval time
     });
-    const row = db.createRow(table.id);
+    store.addRow({ id: "r", table_id: "t" });
 
-    const engine = new Engine(db, {}, spyRegistry());
+    const engine = new Engine({}, spyRegistry(), { store, creds: store });
     const res = await engine.runColumn(out.id);
 
-    expect(res).toEqual({ ran: 0, errors: 1 });
+    expect(res).toMatchObject({ ran: 0, errors: 1 });
     expect(dispatched).toHaveLength(0);
-    const cell = db.getCell(row.id, out.id);
+    const cell = store.readCell("r", out.id);
     expect(cell?.status).toBe("error");
     expect(cell?.error).toContain("condition:");
   });

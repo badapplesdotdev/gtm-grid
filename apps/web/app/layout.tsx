@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { DM_Sans, JetBrains_Mono } from "next/font/google";
+import { DM_Sans, JetBrains_Mono, Newsreader } from "next/font/google";
 import "./globals.css";
 
 // DM Sans is the UI sans (300–700; wordmark is 700, -0.02em tracking).
@@ -19,11 +19,21 @@ const jetbrainsMono = JetBrains_Mono({
   display: "swap",
 });
 
+// Newsreader is the editorial display serif used by the marketing homepage
+// (the headless-engine redesign). Self-hosted via next/font so it satisfies the
+// app CSP (no Google-Fonts @import). Exposed as --font-newsreader.
+const newsreader = Newsreader({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-newsreader",
+  display: "swap",
+});
+
 export const metadata: Metadata = {
-  title: "GTM Grid — every column is a function",
+  title: "Grid — the headless GTM engine",
   description:
-    "A local-first, programmable spreadsheet for go-to-market teams. Every column is a function — a manual value, an AI prompt, or a connector call. Bring your own AI key; execution stays on your machine.",
-  applicationName: "GTM Grid",
+    "Grid is the headless GTM engine that runs your go-to-market programmatically. Enrich, score, route, and sync every record from Claude Code, MCP, the CLI, or a REST call — with a live grid so you always see what's running.",
+  applicationName: "Grid",
   metadataBase: new URL("https://gtmgrid.com"),
   icons: {
     icon: "/icon.png",
@@ -31,20 +41,20 @@ export const metadata: Metadata = {
     apple: "/apple-icon.png",
   },
   openGraph: {
-    title: "GTM Grid — every column is a function",
+    title: "Grid — the headless GTM engine",
     description:
-      "A local-first, programmable spreadsheet for go-to-market teams. Bring your own key; execution stays local.",
-    siteName: "GTM Grid",
+      "The headless GTM engine — programmable, source-available, every column a function. Drive it from Claude Code, MCP, the CLI, or a REST call.",
+    siteName: "Grid",
     type: "website",
     images: [
-      { url: "/brand/og-cover.jpg", width: 1849, height: 618, alt: "GTM Grid" },
+      { url: "/brand/og-cover.jpg", width: 1849, height: 618, alt: "Grid" },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "GTM Grid — every column is a function",
+    title: "Grid — the headless GTM engine",
     description:
-      "A local-first, programmable spreadsheet for go-to-market teams. Bring your own key; execution stays local.",
+      "The headless GTM engine — programmable, source-available, every column a function. Drive it from Claude Code, MCP, the CLI, or a REST call.",
     images: ["/brand/og-cover.jpg"],
   },
 };
@@ -55,7 +65,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${dmSans.variable} ${jetbrainsMono.variable}`}>
+    <html lang="en" className={`${dmSans.variable} ${jetbrainsMono.variable} ${newsreader.variable}`}>
       <body>{children}</body>
     </html>
   );

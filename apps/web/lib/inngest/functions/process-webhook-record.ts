@@ -2,14 +2,22 @@ import {
   CloudSchemaMapping,
   Engine,
   aiConfigFromEnv,
+  bundledConnectors,
   cloudGridStoreShape,
+  connectorFromManifest,
   defaultRegistry,
+  parseManifest,
   type Column,
   type EngineConfig,
   type GridStoreShape,
+  type Registry,
+  type RunErrorContext,
 } from "@gtmgrid/engine";
+import { buildColumnDeps, topoSortColumnIds } from "@gtmgrid/services/columns";
 import { Effect } from "effect";
 import { inngest } from "../client";
+import { onFailure } from "../on-failure";
+import { captureServer, captureServerException } from "../../posthog-server";
 import { workerClient, WORKER_REFS } from "../worker-client";
 
 /**
@@ -114,6 +122,60 @@ function engineConfig(): EngineConfig {
  * pointed at the worker HTTP endpoints and resolving the workspace's SHARED
  * connector secrets. Mirrors `cloud-run.ts` `buildCloudStore`.
  */
+/**
+ * The engine registry for a workspace, layered so a connector column ALWAYS
+ * resolves `sdk[provider][method](inputs)` in the sandbox (execute.ts) — a
+ * missing provider leaves `sdk[provider]` undefined and the run fails with
+ * "sandbox: cannot read property <method>". Layers (later overrides earlier):
+ *
+ *   1. {@link defaultRegistry} — the code-defined built-ins (ai/formula/http/…).
+ *   2. {@link bundledConnectors} — the manifests SHIPPED with the app
+ *      (`extensions/*.json`: trigify, leadmagic, apollo, …). The desktop sidecar
+ *      seeds these from disk at startup; the cloud worker has no `extensions/`
+ *      directory, so it MUST register them here. Without this layer a webhook
+ *      auto-enrich of any bundled-connector column throws in the sandbox even
+ *      though the same column runs fine when triggered from the desktop.
+ *   3. The workspace's installed manifest connectors fetched per workspace
+ *      (custom/uploaded connectors, which can also override a bundled one).
+ *
+ * Cached per workspace with a short TTL so a newly-installed connector becomes
+ * available within ~a minute without a DB round-trip on every column run. A fetch
+ * failure for layer 3 still leaves layers 1+2 intact (built-ins + every bundled
+ * connector), so the run no longer degrades to built-ins-only on a transient
+ * extensions-endpoint failure.
+ */
+const REGISTRY_TTL_MS = 60_000;
+const registryCache = new Map<string, { reg: Promise<Registry>; at: number }>();
+
+export function workspaceRegistry(workspaceId: string): Promise<Registry> {
+  const now = Date.now();
+  const cached = registryCache.get(workspaceId);
+  if (cached && now - cached.at < REGISTRY_TTL_MS) return cached.reg;
+  const reg = (async (): Promise<Registry> => {
+    const registry = defaultRegistry();
+    // Layer 2: the app's bundled connectors, available in every environment.
+    for (const connector of bundledConnectors()) registry.add(connector);
+    try {
+      // Layer 3: the workspace's installed (custom) manifest connectors.
+      const manifests = (await workerClient.query("/api/worker/getExtensions", {
+        workspaceId,
+      })) as unknown[];
+      for (const manifest of manifests) {
+        try {
+          registry.add(connectorFromManifest(parseManifest(manifest)));
+        } catch {
+          /* skip a single malformed manifest — never fail the whole registry */
+        }
+      }
+    } catch {
+      /* extensions endpoint unavailable — keep the built-ins + bundled connectors */
+    }
+    return registry;
+  })();
+  registryCache.set(workspaceId, { reg, at: now });
+  return reg;
+}
+
 function buildWorkerStore(
   tableId: string,
   workspaceId: string,
@@ -132,8 +194,14 @@ function buildWorkerStore(
 interface WorkerGrid {
   readonly columns: ReadonlyArray<{
     readonly _id: string;
+    readonly name: string;
     readonly type: Column["type"];
     readonly kind: Column["kind"];
+    // Carried so enrichment can order columns by their {{ref}} dependency graph
+    // (the worker `getTable` projection already returns these — grid-service).
+    readonly provider: string | null;
+    readonly params: Record<string, unknown>;
+    readonly condition: string | null;
     readonly position: number;
   }>;
   readonly rows: ReadonlyArray<{ readonly _id: string }>;
@@ -149,6 +217,23 @@ export async function fetchGrid(tableId: string): Promise<WorkerGrid> {
   return (await workerClient.query(WORKER_REFS.getTable, {
     tableId,
   })) as WorkerGrid;
+}
+
+/**
+ * The COLUMNS-ONLY worker read: all columns plus ZERO rows/cells, via
+ * `getTableForRows` with an empty row set. Enrichment only needs the column list
+ * to order columns by their `{{ref}}` dependency graph, so this never loads the
+ * table's rows/cells — a 50k-row webhook table no longer ships its whole grid
+ * just to topo-sort a handful of columns.
+ */
+export async function fetchGridColumns(
+  tableId: string,
+): Promise<WorkerGrid["columns"]> {
+  const grid = (await workerClient.query(WORKER_REFS.getTableForRows, {
+    tableId,
+    rowIds: [],
+  })) as WorkerGrid;
+  return grid.columns;
 }
 
 /**
@@ -189,6 +274,23 @@ export async function resolveRow(
 }
 
 /**
+ * Whether an engine `firstError` is the "connect your API key" fail-fast the
+ * manifest connector throws pre-flight when an apiKey column runs with no
+ * resolved secret (`missingKeyMessage` in packages/engine/src/connectors/
+ * manifest.ts: "<Name> API key not configured — connect a <Name> credential to
+ * run this function."). Only that message gates the `lifecycle/credential.missing`
+ * email (#10) — a rate-limit / timeout / 401-invalid-key is a DIFFERENT failure
+ * and must NOT trigger the "you haven't connected a key" nudge. Non-string
+ * (null/undefined/object) errors are never a match.
+ */
+export function isMissingCredentialError(firstError: unknown): boolean {
+  return (
+    typeof firstError === "string" &&
+    firstError.includes("API key not configured")
+  );
+}
+
+/**
  * Recompute ONE function column over a single row through the engine cloud path.
  * Exported so it can be wrapped in its own per-column `step.run` (TRI-3280) and
  * exercised directly in tests. Builds the Db-FREE engine: store + creds are the
@@ -196,16 +298,56 @@ export async function resolveRow(
  * unloaded). Returns the number of cells the engine ran.
  */
 export async function runEnrichColumn(
-  data: WebhookRecordData,
+  ctx: { tableId: string; workspaceId: string },
   columnId: string,
   rowId: string,
 ): Promise<number> {
-  const store = await buildWorkerStore(data.tableId, data.workspaceId);
-  const engine = new Engine(undefined, engineConfig(), defaultRegistry(), undefined, {
-    store,
-    creds: store,
-  });
-  const { ran } = await engine.runColumn(columnId, { rowIds: [rowId] });
+  const [store, registry] = await Promise.all([
+    buildWorkerStore(ctx.tableId, ctx.workspaceId),
+    // Built-ins + the workspace's installed manifest connectors, so a column that
+    // calls e.g. `sdk["leadmagic"]["emailfinder"](…)` resolves instead of throwing.
+    workspaceRegistry(ctx.workspaceId),
+  ]);
+  // Systemic run failures (connector/AI bugs) → PostHog Error Tracking, deduped by
+  // the engine. There's no user identity in the worker, so group under the workspace.
+  const reportError = (error: unknown, c: RunErrorContext): void =>
+    captureServerException(error, {
+      distinctId: ctx.workspaceId,
+      properties: { source: "engine-run", surface: "cloud", table_id: ctx.tableId, ...c },
+    });
+  const engine = new Engine(
+    { ...engineConfig(), reportError },
+    registry,
+    { store, creds: store },
+  );
+  const { ran, errors, firstError } = await engine.runColumn(columnId, { rowIds: [rowId] });
+  // Failure-rate signal for dashboards/alerts (complements the deduped exceptions).
+  if (errors > 0) {
+    captureServer("column_run_failed", {
+      distinctId: ctx.workspaceId,
+      properties: {
+        column_id: columnId,
+        provider: null,
+        method: null,
+        ran,
+        errors,
+        first_error: firstError,
+        surface: "cloud",
+      },
+      groups: { workspace: ctx.workspaceId },
+    });
+    // Missing-credential fail-fast (engine manifest.ts httpCall) → the
+    // "connect your AI key" email (#10). One event per failure; the lifecycle
+    // send-guard's (user, template, "once") dedupe collapses repeats.
+    if (isMissingCredentialError(firstError)) {
+      await inngest
+        .send({
+          name: "lifecycle/credential.missing",
+          data: { workspaceId: ctx.workspaceId, firstError },
+        })
+        .catch(() => undefined);
+    }
+  }
   return ran;
 }
 
@@ -227,7 +369,7 @@ export interface StepRunner {
  * runtime value is unchanged. This adapter is the SINGLE, deliberate place the
  * two type worlds meet — everything downstream is fully typed.
  */
-function toStepRunner(step: {
+export function toStepRunner(step: {
   run: (id: string, fn: () => Promise<unknown>) => Promise<unknown>;
 }): StepRunner {
   return {
@@ -272,11 +414,22 @@ export async function processWebhookRecordHandler(
   const functionColumns = await step.run(
     `enrich-columns:${data.recordId}`,
     async () => {
-      const grid = await fetchGrid(data.tableId);
-      return grid.columns
+      const columns = await fetchGridColumns(data.tableId);
+      // Order by the {{ref}} DEPENDENCY graph, not authored position, so a column
+      // that maps/computes off another column's output always enriches AFTER its
+      // source (Get API data → map field → compute value cascades correctly even
+      // when the author placed the columns out of order). Cycle-tolerant.
+      const fnCols = columns
         .filter((c) => c.kind === "function")
-        .sort((a, b) => a.position - b.position)
-        .map((c) => c._id);
+        .map((c) => ({
+          id: c._id,
+          name: c.name,
+          kind: c.kind,
+          provider: c.provider,
+          params: c.params,
+          condition: c.condition,
+        }));
+      return topoSortColumnIds(fnCols, buildColumnDeps(fnCols));
     },
   );
 
@@ -288,7 +441,7 @@ export async function processWebhookRecordHandler(
   for (const columnId of functionColumns) {
     const n = await step.run(
       `enrich:${data.recordId}:${columnId}`,
-      async () => runEnrichColumn(data, columnId, rowId),
+      async () => runEnrichColumn({ tableId: data.tableId, workspaceId: data.workspaceId }, columnId, rowId),
     );
     ran += n;
   }
@@ -304,11 +457,15 @@ export const processWebhookRecord = inngest.createFunction(
     // unbounded as the number of workspaces grows), while the per-workspace key
     // still prevents one busy workspace from starving others. Retries cover
     // transient worker/engine failures (step memoization makes them safe).
+    // Account-scoped limits REQUIRE a key (Inngest rejects the whole app sync
+    // without one, leaving prod functions unregistered); a constant key makes
+    // one shared account-wide pool for this function's runs.
     concurrency: [
-      { scope: "account", limit: 50 },
+      { scope: "account", key: '"webhook-enrich"', limit: 50 },
       { key: "event.data.workspaceId", limit: 5 },
     ],
     retries: 3,
+    onFailure,
     triggers: [{ event: "webhook/record.received" }],
   },
   async ({ event, step }) => {

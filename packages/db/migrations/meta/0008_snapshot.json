@@ -1,5 +1,5 @@
 {
-  "id": "73400829-e265-475d-8291-855f97018985",
+  "id": "12385edf-ff21-4dc8-a8df-9fa2f2e58902",
   "prevId": "089e94cc-4a0e-473f-9441-9ae457e8f0af",
   "version": "7",
   "dialect": "postgresql",
@@ -1608,178 +1608,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.table_shares": {
-      "name": "table_shares",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "workspace_id": {
-          "name": "workspace_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "table_id": {
-          "name": "table_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "token": {
-          "name": "token",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "snapshot": {
-          "name": "snapshot",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "snapshot_version": {
-          "name": "snapshot_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "enabled": {
-          "name": "enabled",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_by": {
-          "name": "created_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "revoked_at": {
-          "name": "revoked_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "table_shares_by_workspace": {
-          "name": "table_shares_by_workspace",
-          "columns": [
-            {
-              "expression": "workspace_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "table_shares_by_table": {
-          "name": "table_shares_by_table",
-          "columns": [
-            {
-              "expression": "table_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "table_shares_by_token": {
-          "name": "table_shares_by_token",
-          "columns": [
-            {
-              "expression": "token",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "table_shares_workspace_id_workspaces_id_fk": {
-          "name": "table_shares_workspace_id_workspaces_id_fk",
-          "tableFrom": "table_shares",
-          "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "table_shares_table_id_tables_id_fk": {
-          "name": "table_shares_table_id_tables_id_fk",
-          "tableFrom": "table_shares",
-          "tableTo": "tables",
-          "columnsFrom": [
-            "table_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "table_shares_created_by_users_id_fk": {
-          "name": "table_shares_created_by_users_id_fk",
-          "tableFrom": "table_shares",
-          "tableTo": "users",
-          "columnsFrom": [
-            "created_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.tables": {
       "name": "tables",
       "schema": "",
@@ -1820,6 +1648,18 @@
           "type": "bigint",
           "primaryKey": false,
           "notNull": true
+        },
+        "dedupe_column": {
+          "name": "dedupe_column",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "dedupe_keep": {
+          "name": "dedupe_keep",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -1879,6 +1719,19 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "tables_dedupe_column_columns_id_fk": {
+          "name": "tables_dedupe_column_columns_id_fk",
+          "tableFrom": "tables",
+          "tableTo": "columns",
+          "columnsFrom": [
+            "dedupe_column"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },

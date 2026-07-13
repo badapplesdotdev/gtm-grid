@@ -18,10 +18,12 @@ import { Effect } from "effect";
 import { authRouter } from "./routers/auth";
 import { billingRouter } from "./routers/billing";
 import { credentialsRouter } from "./routers/credentials";
+import { crmRouter } from "./routers/crm";
 import { extensionsRouter } from "./routers/extensions";
 import { gridRouter } from "./routers/grid";
 import { invitationsRouter } from "./routers/invitations";
 import { realtimeRouter } from "./routers/realtime";
+import { presenceRouter } from "./routers/presence";
 import { shareRouter } from "./routers/share";
 import { webhooksRouter } from "./routers/webhooks";
 import { signalsRouter } from "./routers/signals";
@@ -74,12 +76,16 @@ export const appRouter = router({
   billing: billingRouter,
   /** Workspace invitations (invite -> accept lifecycle). */
   invitations: invitationsRouter,
+  /** Desktop activity heartbeat → `users.last_active_at` (lifecycle emails). */
+  presence: presenceRouter,
   /** Connector credentials — encrypt/save, member-gated decrypt, metadata list. */
   credentials: credentialsRouter,
   /** Member-gated webhook config CRUD (TRI-3250). */
   webhooks: webhooksRouter,
   /** Member-gated Social Signals (Trigify) bindings; recurring poll runs in Inngest. */
   signals: signalsRouter,
+  /** Member-gated Attio CRM-sync bindings; sync execution runs in Inngest. */
+  crm: crmRouter,
   /** Member-gated connector extensions (TRI-3250). */
   extensions: extensionsRouter,
   /**
@@ -92,11 +98,7 @@ export const appRouter = router({
    * server-gated PartyKit grid connection for live grid + presence (TRI-3261).
    */
   realtime: realtimeRouter,
-
-  /**
-   * Share a cloud table via a public URL: `getByToken` (public) renders a
-   * frozen snapshot; `create`/`listByTable`/`revoke`/`clone` are member-gated.
-   */
+  /** Frozen, read-only table snapshots shared through public capability URLs. */
   share: shareRouter,
 });
 

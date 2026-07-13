@@ -1,120 +1,392 @@
 /**
- * CloudGrid (T9 → W4) — the LIVE multiplayer grid view for a CLOUD project.
+ * CloudGrid — the LIVE multiplayer grid view for a CLOUD project.
  *
- * Renders a cloud table via {@link useCloudTable}, so cell edits / added rows /
- * run statuses by any workspace member appear here without a refresh. The data
- * source is chosen INSIDE the hooks by the strangler flag (TRI-3254): the NEW
- * tRPC + W3 realtime path (`grid.getTable` seed + `subscribeToGrid` cache patch)
- * or the LEGACY Convex `useQuery` subscription. Edits, add row and add column go
- * through {@link useCloudGridMutations}; running a column goes through the local
- * sidecar via the {@link runCloudColumn} Effect orchestration. This component is
- * data-source-agnostic — it only knows the `FullTable`-shaped hook output.
+ * It renders the SAME {@link DataGrid} the local environment uses (TRI-3313
+ * follow-up: one shared grid, no divergence). CloudGrid's only job is to build
+ * the {@link GridController} from the cloud data hooks + mutation layer and to
+ * mount the SAME column-authoring modals the local grid uses, pointed at a
+ * cloud backend via {@link ColumnAuthoringApiProvider}. Everything the user
+ * sees and does in the grid — the header right-click menu, add/edit/delete
+ * column, add row, run, cells — is therefore identical to local; only the
+ * action functions differ (cloud tRPC + realtime instead of the local sidecar).
  *
- * It reuses the existing `CellContent` cell renderer and the shared `.grid-*`
- * CSS, so cloud and local grids look identical. The component stays plain React;
- * the run LOGIC is the Effect service. It imports only the `Id` TYPE.
+ * Data source: the NEW tRPC + W3 realtime path via {@link useCloudTablePaged}
+ * (paged + live), so edits/added rows/run statuses by any member appear without
+ * a refresh. Running a column still goes through the local sidecar via the
+ * {@link runCloudColumn} Effect orchestration — which is WHY the authoring
+ * adapter reuses the LOCAL `api.aiProviders` / `api.generateFormula` (the same
+ * sidecar AI that will execute the column).
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useQuery as useReactQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import type { Id } from "./ids";
-import { CellContent, Icon } from "../App";
-import type { Cell } from "../api";
-import { VirtualGridBody } from "../VirtualGridBody";
+import { apiClient } from "./client";
+import { Icon, ExpandedEditor } from "../App";
+import CellDetails, { extractCode } from "../CellDetails";
+import { setAgentPresenceTable } from "./agentPresence";
+import { api } from "../api";
+import type { AiProviderInfo, Cell, ConnectorInfo, Column, FullTable } from "../api";
+import {
+  AddColumnPopover,
+  type AddColumnCrmSource,
+  FunctionsModal,
+  ColumnAuthoringApiProvider,
+  type ColumnAuthoringApi,
+} from "../AddColumn";
+import { ColumnEditPanel } from "../ColumnEditPanel";
+import { DataGrid, type GridController } from "../DataGrid";
+import { buildColumnMetaMap } from "../FnIcon";
+import { DedupePopover } from "../DedupePopover";
 import { resolveRowHeight } from "../gridVirtual";
-import { useColumnWindow } from "../useColumnWindow";
-import { GridColSpacer } from "../GridColSpacer";
-import { runCloudColumn } from "./cloud-run";
+import { buildPresenceView } from "../gridPresence";
+import { runCloudColumn, runCloudPreview } from "./cloud-run";
+import { cascadeDependents, runColumnsInDepOrder } from "../gridRun";
 import { WebhookModal } from "./WebhookModal";
 import { ShareModal } from "./ShareModal";
+import { CrmStatusStrip } from "./CrmStatusStrip";
+import { useMe } from "./auth";
+import { gridPresenceStore, useGridPresenceRoster } from "./presenceStore";
 import {
+  gridQueryKeys,
   useCloudGridMutations,
   useCloudSession,
   useCloudTablePaged,
 } from "./useCloudGrid";
-import { isCloudTableMissing } from "../cloudSync";
+import { isCloudTableMissing } from "../tableTree";
 
 /** Fixed cloud column width (px) — cloud columns are not resizable. */
 const CLOUD_COL_W = 180;
-/** Row-number gutter width (px) — matches `.col-row-num` in styles.css. */
-const CLOUD_GUTTER_W = 48;
-/** Trailing add/delete column width (px) — matches `.add-col-th`. */
-const CLOUD_ADD_COL_W = 44;
+
+/**
+ * How many dependent columns a cascade runs at once. Independent siblings run in
+ * parallel up to this bound; the sidecar already clamps per-column row concurrency
+ * and serializes through its own semaphore, so this only caps column fan-out.
+ */
+const CASCADE_CONCURRENCY = 4;
+
+/** A signal binding's status fields the strip renders (tRPC listSignalBindings). */
+interface SignalBindingStatus {
+  readonly id: string;
+  readonly label: string;
+  readonly rowsPulled: number | null;
+  readonly lastSyncedAt: number | null;
+  readonly lastError: string | null;
+  readonly enabled: boolean;
+}
+
+/** Compact relative timestamp for the signal strip. */
+function agoLabel(ts: number): string {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+/**
+ * Social-signal status strip for a cloud table backed by Trigify bindings:
+ * shows each binding's pull progress (rows pulled, last synced, last error) and
+ * a "Sync now" that triggers the member-gated tRPC pull. This is the user's
+ * RECOURSE when a signal table looks empty — previously there was no way to
+ * see a binding error or re-pull without recreating the table. Renders nothing
+ * for tables with no bindings (the common case — one cheap cached query).
+ * Auto-refetches while a binding is still waiting for its first results so the
+ * strip flips to "n rows" on its own as the warm-up lands them.
+ */
+function SignalStatusStrip({ tableId }: { tableId: string }) {
+  const qc = useQueryClient();
+  const [syncing, setSyncing] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const q = useReactQuery({
+    queryKey: ["signals", "bindings", tableId],
+    enabled: apiClient !== null,
+    queryFn: async (): Promise<readonly SignalBindingStatus[]> =>
+      (await apiClient!.signals.listSignalBindings.query({
+        tableId,
+      })) as readonly SignalBindingStatus[],
+    staleTime: 15_000,
+    // Poll the strip while any binding is pre-first-data (the cloud warm-up is
+    // filling it server-side); idle once data has landed.
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some((b) => (b.rowsPulled ?? 0) === 0 && b.enabled)
+        ? 10_000
+        : false,
+  });
+  const bindings = q.data ?? [];
+  if (bindings.length === 0) return null;
+
+  const syncNow = async (bindingId: string) => {
+    if (apiClient === null) return;
+    setSyncing(bindingId);
+    setSyncError(null);
+    try {
+      await apiClient.signals.syncSignalBinding.mutate({ bindingId });
+      // Refresh the strip AND the grid page so newly-pulled rows appear without
+      // waiting for a window-focus refetch.
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["signals", "bindings", tableId] }),
+        qc.invalidateQueries({ queryKey: gridQueryKeys.tablePaged(tableId) }),
+      ]);
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : "Sync failed");
+    } finally {
+      setSyncing(null);
+    }
+  };
+
+  return (
+    <div className="signal-strip" role="status">
+      {bindings.map((b) => (
+        <div key={b.id} className="signal-strip-row">
+          <span className="signal-strip-dot" data-state={b.lastError ? "error" : (b.rowsPulled ?? 0) > 0 ? "ok" : "warming"} />
+          <span className="signal-strip-label">{b.label}</span>
+          <span className="signal-strip-meta">
+            {(b.rowsPulled ?? 0) > 0
+              ? `${b.rowsPulled} rows pulled${b.lastSyncedAt ? ` · synced ${agoLabel(b.lastSyncedAt)}` : ""}`
+              : "waiting for first results — Trigify is scraping (~1 min)"}
+          </span>
+          {b.lastError && <span className="signal-strip-error" title={b.lastError}>{b.lastError}</span>}
+          <button
+            className="btn btn-outline btn-sm"
+            disabled={syncing !== null}
+            onClick={() => void syncNow(b.id)}
+            title="Pull the latest results from Trigify now"
+          >
+            {syncing === b.id ? "Syncing…" : "Sync now"}
+          </button>
+        </div>
+      ))}
+      {syncError && <div className="signal-strip-error">{syncError}</div>}
+    </div>
+  );
+}
 
 interface CloudGridProps {
   /** The active cloud table to render, or `null` when none is selected. */
   tableId: Id<"tables"> | null;
+  /** The active workspace id (member-gates the CRM-sync status strip). */
+  workspaceId: string | null;
+  /** Open the plan/billing modal (the strip's "View plans" on a lapsed plan). */
+  onUpgrade?: () => void;
+  /** The connector/function catalog for the Functions browser (shared with local). */
+  connectors: ConnectorInfo[];
+  /** Open the AI-provider settings (the Functions browser's "configure AI" link). */
+  onOpenAiSettings?: () => void;
   /**
    * A monotonically-increasing token that, when it changes to a truthy value,
-   * auto-opens the webhook setup form for the current table. Used by the
-   * "New table → Webhook" chooser flow to land directly on the webhook form
-   * after creating/selecting the cloud table. `0`/undefined = do nothing.
+   * auto-opens the webhook setup form for the current table.
    */
   openWebhookToken?: number;
   /**
-   * Fired when the open cloud table's load returns 404 / not-found (`data` is
-   * `null`). The open id is a STALE deleted id (a re-sync swap deleted it); the
-   * parent self-heals by re-pointing to the table's current linked cloud id
-   * (TRI-3312) instead of leaving the dead-id "no longer exists" error.
+   * Fired when the open cloud table's load returns 404 / not-found so the parent
+   * can self-heal to the table's current linked cloud id (TRI-3312).
    */
   onMissing?: () => void;
 }
 
-/**
- * The cloud grid. Self-contained: it owns its own column-run / cell-run busy
- * state (the live `running` cell status comes from Convex, so we only track the
- * in-flight request to disable the trigger).
- */
-export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridProps) {
-  // Lazily-paged grid (TRI-3272): only the loaded pages are resident, and the
-  // viewport scroll handler below pulls the next page as the user nears the end —
-  // so combined with the C1 virtualization a 10k-row table's memory is bounded.
-  const { data, loadMore, hasMore, isLoadingMore } =
-    useCloudTablePaged(tableId);
+export function CloudGrid({
+  onUpgrade,
+  tableId,
+  workspaceId,
+  connectors,
+  onOpenAiSettings,
+  openWebhookToken,
+  onMissing,
+}: CloudGridProps) {
+  const { data, loadMore, hasMore, isLoadingMore } = useCloudTablePaged(tableId);
   const session = useCloudSession();
-  const { setCell, addRow, addColumn, deleteRow, deleteColumn } =
-    useCloudGridMutations();
+  const crmQc = useQueryClient();
+
+  // The table's CRM binding (if any) powers the add-column popover's
+  // "From {CRM}" section — one more source field, server-backfilled by the
+  // sync the mutation enqueues.
+  const crmBindingsQ = useReactQuery({
+    queryKey: ["crm", "bindings", String(tableId)],
+    enabled: apiClient !== null && Boolean(workspaceId) && tableId !== null,
+    queryFn: async () => {
+      const res: unknown = await apiClient.crm.listBindings.query({ tableId: String(tableId) });
+      return Array.isArray(res)
+        ? (res as ReadonlyArray<{
+            id: string;
+            provider: string;
+            sourceKind: "object" | "list";
+            sourceId: string;
+            sourceLabel: string;
+            columns: ReadonlyArray<{ attrSlug: string }>;
+          }>)
+        : [];
+    },
+    staleTime: 5_000,
+  });
+  const crmBinding = crmBindingsQ.data?.[0];
+  const addColumnCrm = useMemo<AddColumnCrmSource | undefined>(() => {
+    if (!crmBinding || !workspaceId || tableId === null) return undefined;
+    const provider = crmBinding.provider === "hubspot" ? ("hubspot" as const) : ("attio" as const);
+    const providerName = provider === "hubspot" ? "HubSpot" : "Attio";
+    const logo = `https://www.google.com/s2/favicons?domain=${provider === "hubspot" ? "hubspot.com" : "attio.com"}&sz=128`;
+    return {
+      providerName,
+      logo,
+      fetchAvailableFields: async () => {
+        const desc = await apiClient.crm.describeSource.query({
+          workspaceId,
+          provider,
+          kind: crmBinding.sourceKind,
+          id: crmBinding.sourceId,
+          label: crmBinding.sourceLabel,
+        });
+        const mapped = new Set(crmBinding.columns.map((c) => c.attrSlug));
+        return desc.fields
+          .filter((f) => !mapped.has(f.slug))
+          .map((f) => ({ attrSlug: f.slug, attrType: f.type, title: f.title, sample: f.sample }));
+      },
+      addField: async (field) => {
+        // describeSource only returns supported attr types, and the server
+        // re-validates against its enum — the narrow here just satisfies the
+        // router's input type.
+        const attrType = field.attrType as Parameters<
+          typeof apiClient.crm.addBindingField.mutate
+        >[0]["field"]["attrType"];
+        await apiClient.crm.addBindingField.mutate({
+          bindingId: crmBinding.id,
+          field: { attrSlug: field.attrSlug, attrType, title: field.title },
+        });
+        await Promise.all([
+          crmQc.invalidateQueries({ queryKey: gridQueryKeys.table(String(tableId)) }),
+          crmQc.invalidateQueries({ queryKey: gridQueryKeys.tablePaged(String(tableId)) }),
+          crmQc.invalidateQueries({ queryKey: ["crm", "bindings", String(tableId)] }),
+        ]);
+      },
+    };
+  }, [crmBinding, workspaceId, crmQc, tableId]);
+  const {
+    setCell,
+    addRow,
+    addColumn,
+    updateColumn,
+    deleteRow,
+    deleteColumn,
+    setDedupe,
+    dedupeTable,
+  } = useCloudGridMutations();
 
   const [runningColId, setRunningColId] = useState<string | null>(null);
   const [runningCells, setRunningCells] = useState<Set<string>>(new Set());
   const [showWebhook, setShowWebhook] = useState(false);
   const [showShare, setShowShare] = useState(false);
+  // Authoring overlays (shared with the local grid; opened via controller intents).
+  const [showAddCol, setShowAddCol] = useState(false);
+  const [addColAnchor, setAddColAnchor] = useState<{ left: number; top: number } | null>(null);
+  const [showFunctions, setShowFunctions] = useState(false);
+  const [editCol, setEditCol] = useState<Column | null>(null);
+  const [dedupeOpen, setDedupeOpen] = useState(false);
+  // Cell-details drawer (view a function/HTTP cell's full response) + expanded
+  // editor (long text). Mirrors the local grid so synced responses are inspectable.
+  const [detail, setDetail] = useState<{ columnName: string; value: unknown } | null>(null);
+  const [cellExpand, setCellExpand] = useState<{
+    rowId: string;
+    colId: string;
+    columnName: string;
+    value: string;
+    editable: boolean;
+    anchor: { left: number; top: number; width: number };
+  } | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  // Row-virtualization plumbing (TRI-3267): the scroll container the
-  // virtualizer reads from, and the resolved per-density row height.
-  const gridScrollRef = useRef<HTMLDivElement>(null);
   const rowHeight = resolveRowHeight();
 
-  // Column virtualization (TRI-3286): window the DATA columns horizontally so a
-  // cloud table with hundreds of columns mounts only the visible columns ×
-  // visible rows. Cloud columns are a fixed width (no resize). The gutter is NOT
-  // part of this window — it is the always-present sticky gutter cell rendered
-  // once below, so it is reserved exactly once and `spacers.left` is the first
-  // visible data column's offset (gutter excluded). The hook runs
-  // unconditionally (count 0 when no table) to keep hook order stable.
-  const cloudColumns = data?.columns ?? [];
-  const columnWindow = useColumnWindow({
-    count: cloudColumns.length,
-    scrollRef: gridScrollRef,
-    getColumnWidth: () => CLOUD_COL_W,
-  });
-
-  // Tie page fetching to the virtualization viewport (TRI-3272): when the user
-  // scrolls within ~10 row-heights of the bottom and another page exists, pull
-  // it. The infinite query + `loadMore` guards against concurrent fetches, so a
-  // burst of scroll events triggers at most one in-flight page load.
-  const onGridScroll = useCallback(
-    (e: React.UIEvent<HTMLDivElement>) => {
-      if (!hasMore || isLoadingMore) return;
-      const el = e.currentTarget;
-      const nearBottom =
-        el.scrollHeight - el.scrollTop - el.clientHeight < rowHeight * 10;
-      if (nearBottom) loadMore();
-    },
-    [hasMore, isLoadingMore, loadMore, rowHeight],
+  // ── Multiplayer presence ───────────────────────────────────────────────
+  // The live roster (fed by the realtime hook) resolved into the avatar stack +
+  // per-cell cursor index, with the local user excluded.
+  const me = useMe();
+  const selfId = me?.user._id ?? null;
+  const roster = useGridPresenceRoster();
+  const presenceView = useMemo(
+    () => buildPresenceView(roster, selfId),
+    [roster, selfId],
   );
 
-  // Auto-open the webhook form when the chooser's "Webhook" flow bumps the token
-  // (and a table is actually present to bind it to).
+  // "provider.method" → presentation metadata (logo, labels, credits) for the
+  // grid headers; rebuilt only when the connector catalog changes.
+  const fnColumnMeta = useMemo(() => buildColumnMetaMap(connectors), [connectors]);
+
+  // model id → AI provider identity, so ai.generate columns wear the logo of
+  // the model they call. The LOCAL sidecar's provider catalog is correct here
+  // too — it's the engine that executes cloud AI columns.
+  const [aiProviders, setAiProviders] = useState<AiProviderInfo[]>([]);
+  useEffect(() => {
+    let ignore = false;
+    api
+      .aiProviders()
+      .then((p) => {
+        if (!ignore) setAiProviders(p);
+      })
+      .catch(() => {});
+    return () => {
+      ignore = true;
+    };
+  }, []);
+  const aiModelMeta = useMemo(() => {
+    const m = new Map<string, { providerName: string; logo: string | null }>();
+    for (const p of aiProviders) {
+      for (const model of p.models) if (!m.has(model)) m.set(model, { providerName: p.name, logo: p.logo });
+    }
+    return m;
+  }, [aiProviders]);
+
+  const columnMeta = useCallback(
+    (col: Column) => {
+      const base = col.fn ? fnColumnMeta.get(col.fn) ?? null : null;
+      if (col.provider === "ai") {
+        const model = typeof col.params?.model === "string" ? col.params.model : "";
+        const mp = model ? aiModelMeta.get(model) : undefined;
+        if (mp) {
+          return {
+            providerName: mp.providerName,
+            logo: mp.logo,
+            methodLabel: model,
+            category: "AI",
+            credits: base?.credits,
+            requiredInputs: base?.requiredInputs,
+          };
+        }
+      }
+      return base;
+    },
+    [fnColumnMeta, aiModelMeta],
+  );
+  // Seed our identity (name/image) so cursor publishes carry it; re-seed when the
+  // open table changes (a fresh subscription registers a new publisher).
+  useEffect(() => {
+    if (me?.user) {
+      gridPresenceStore.updateLocal({
+        userId: me.user._id,
+        name: me.user.name,
+        image: me.user.image,
+      });
+    }
+  }, [me, tableId]);
+
+  // Publish the open table's identity (name + column name→id) for the agent
+  // presence mapper — read at tool-event time, never re-rendering anything.
+  useEffect(() => {
+    if (tableId !== null && data != null) {
+      setAgentPresenceTable({
+        tableId,
+        tableName: data.name,
+        columnIdByName: new Map(
+          data.columns.map((col) => [col.name.trim().toLowerCase(), col.id]),
+        ),
+      });
+    }
+    return () => setAgentPresenceTable(null);
+  }, [tableId, data]);
+
+  // Auto-open the webhook form when the chooser's "Webhook" flow bumps the token.
   const lastTokenRef = useRef(0);
   useEffect(() => {
     if (!openWebhookToken || openWebhookToken === lastTokenRef.current) return;
@@ -122,11 +394,8 @@ export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridPro
     if (tableId !== null) setShowWebhook(true);
   }, [openWebhookToken, tableId]);
 
-  // Open-cloud-table 404 self-heal (TRI-3312): when the load reports the table no
-  // longer exists (`data === null`, a 404 from `grid.getTable`), tell the parent
-  // ONCE per (table, missing) so it can re-point to the current linked cloud id
-  // instead of stranding the user on the dead-id "no longer exists" error. Guarded
-  // by a ref so a re-render with the same null `data` doesn't re-fire.
+  // Open-cloud-table 404 self-heal (TRI-3312): tell the parent ONCE per
+  // (table, missing) so it can re-point to the current linked cloud id.
   const missingFiredFor = useRef<string | null>(null);
   useEffect(() => {
     if (tableId !== null && isCloudTableMissing(data)) {
@@ -135,25 +404,73 @@ export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridPro
         onMissing?.();
       }
     } else if (!isCloudTableMissing(data)) {
-      // Reset once this table resolves (or we switch tables) so a future swap of
-      // the SAME id can self-heal again.
       missingFiredFor.current = null;
     }
   }, [tableId, data, onMissing]);
 
-  const runColumn = useCallback(
-    async (columnId: string) => {
+  // Latest function-column set, read by the cascade closures at call time so they
+  // stay referentially stable across realtime updates (runCell is part of the
+  // memoized `cellActions` bundle — see DataGrid; a `data`-dependent closure would
+  // re-render every visible cell on each cell.upsert).
+  const cascadeColumnsRef = useRef<Column[]>([]);
+  cascadeColumnsRef.current = data?.columns ?? [];
+
+  // Raw single-column run (sidecar call + header spinner), WITHOUT cascading — the
+  // unit that the cascade and run-all compose over.
+  const runColumnRaw = useCallback(
+    async (columnId: string, opts: { force?: boolean; rowIds?: string[] }) => {
       if (tableId === null) return;
       setRunningColId(columnId);
       try {
-        await runCloudColumn(session, { tableId, columnId });
+        await runCloudColumn(session, {
+          tableId,
+          columnId,
+          force: opts.force,
+          rowIds: opts.rowIds,
+        });
       } catch {
-        /* surfaced live via the cell error status from Convex */
+        /* surfaced live via the cell error status */
       } finally {
         setRunningColId(null);
       }
     },
     [tableId, session],
+  );
+
+  // The data cascade: once the seed columns produced data for `rowIds`, run every
+  // column DOWNSTREAM of them (force, because their input just changed) in
+  // dependency order — independent siblings in parallel, chained ones serialized.
+  // e.g. Get API data → map field in sibling → compute value in next sibling.
+  const cascadeFrom = useCallback(
+    async (seedColumnIds: string[], rowIds?: string[]) => {
+      const fnCols = cascadeColumnsRef.current.filter((c) => c.kind === "function");
+      await cascadeDependents(seedColumnIds, fnCols, rowIds, CASCADE_CONCURRENCY, runColumnRaw);
+    },
+    [runColumnRaw],
+  );
+
+  const runColumn = useCallback(
+    async (columnId: string, opts?: { force?: boolean; rowIds?: string[] }) => {
+      // FORCE by default on an explicit column run: a synced/re-run table arrives
+      // with cells already "done", and a non-forced run skips them. The header
+      // context menu's scoped variants pass `opts` explicitly (e.g. force:false).
+      await runColumnRaw(columnId, { force: opts?.force ?? true, rowIds: opts?.rowIds });
+      // …then populate everything that depends on it for the same rows.
+      await cascadeFrom([columnId], opts?.rowIds);
+    },
+    [runColumnRaw, cascadeFrom],
+  );
+
+  // Run every function column for a subset of rows (the user's selection) in
+  // dependency order — independent columns in parallel, dependents after sources.
+  const runRows = useCallback(
+    async (rowIds: string[]) => {
+      if (tableId === null || rowIds.length === 0) return;
+      const fnCols = cascadeColumnsRef.current.filter((c) => c.kind === "function");
+      // Non-force: "Run selected rows" computes the unrun cells in dep order.
+      await runColumnsInDepOrder(fnCols, rowIds, CASCADE_CONCURRENCY, runColumnRaw, false);
+    },
+    [tableId, runColumnRaw],
   );
 
   const runCell = useCallback(
@@ -162,17 +479,9 @@ export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridPro
       const key = `${rowId}:${columnId}`;
       setRunningCells((s) => new Set(s).add(key));
       try {
-        // Force is scoped to the ONE explicitly-targeted cell via `rowIds:[rowId]`
-        // so re-running this cell never re-runs (or re-bills) any other row's
-        // already-`done` cell in the column (TRI-3283 L2).
-        await runCloudColumn(session, {
-          tableId,
-          columnId,
-          force: true,
-          rowIds: [rowId],
-        });
+        await runCloudColumn(session, { tableId, columnId, force: true, rowIds: [rowId] });
       } catch {
-        /* surfaced live via the cell error status from Convex */
+        /* surfaced live via the cell error status */
       } finally {
         setRunningCells((s) => {
           const n = new Set(s);
@@ -180,8 +489,144 @@ export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridPro
           return n;
         });
       }
+      // Cascade dependents for just this row.
+      await cascadeFrom([columnId], [rowId]);
     },
-    [tableId, session],
+    [tableId, session, cascadeFrom],
+  );
+
+  // Run an explicit set of function cells (range selection's "Run N cells"):
+  // one scoped force+rowIds run per column, then cascade the affected columns/rows.
+  const runCells = useCallback(
+    async (cells: Array<{ rowId: string; colId: string }>) => {
+      if (tableId === null) return;
+      const byCol = new Map<string, string[]>();
+      for (const { rowId, colId } of cells) {
+        const list = byCol.get(colId) ?? [];
+        list.push(rowId);
+        byCol.set(colId, list);
+      }
+      for (const [columnId, rowIds] of byCol) {
+        const keys = rowIds.map((r) => `${r}:${columnId}`);
+        setRunningCells((s) => { const n = new Set(s); for (const k of keys) n.add(k); return n; });
+        try {
+          await runCloudColumn(session, { tableId, columnId, force: true, rowIds });
+        } catch {
+          /* surfaced live via the cell error status */
+        } finally {
+          setRunningCells((s) => { const n = new Set(s); for (const k of keys) n.delete(k); return n; });
+        }
+      }
+      await cascadeFrom([...byCol.keys()], [...new Set(cells.map((c) => c.rowId))]);
+    },
+    [tableId, session, cascadeFrom],
+  );
+
+  // Surface mutation failures inline instead of dropping them as unhandled
+  // rejections (a failed add previously looked like the button "did nothing").
+  const guard = useCallback(async (fn: () => Promise<unknown>, what: string) => {
+    setActionError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : `Failed to ${what}`);
+    }
+  }, []);
+
+  // ── Stable cell-level intents (TRI render-perf) ──────────────────────────
+  // These feed the memoized grid rows/cells via DataGrid's `cellActions` bundle,
+  // so they MUST keep a stable identity across renders — otherwise a realtime
+  // flush (which rebuilds the controller object) would re-render every visible
+  // cell. `guard`, the mutation fns and `tableId` are all themselves stable.
+  const handleSetCell = useCallback(
+    (rowId: string, colId: string, value: string) => {
+      if (tableId === null) return;
+      void guard(
+        () => setCell(tableId, rowId as Id<"rows">, colId as Id<"columns">, value),
+        "set cell",
+      );
+    },
+    [guard, setCell, tableId],
+  );
+  const handleClearCell = useCallback(
+    (rowId: string, colId: string) => {
+      if (tableId === null) return;
+      void guard(
+        () => setCell(tableId, rowId as Id<"rows">, colId as Id<"columns">, ""),
+        "clear cell",
+      );
+    },
+    [guard, setCell, tableId],
+  );
+  const handleOpenCellDetails = useCallback((col: Column, cell: Cell | undefined) => {
+    // One right rail at a time: the details drawer overlaps the edit panel.
+    setEditCol(null);
+    setDetail({
+      columnName: col.name,
+      value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
+    });
+  }, []);
+  const handleActiveCellChange = useCallback(
+    (cell: { rowId: string; colId: string } | null) =>
+      gridPresenceStore.updateLocal({
+        cursor: cell ? { rowId: cell.rowId, columnId: cell.colId } : null,
+        editing: null,
+      }),
+    [],
+  );
+  const handleEditingCellChange = useCallback(
+    (cell: { rowId: string; colId: string } | null) =>
+      gridPresenceStore.updateLocal(
+        cell
+          ? {
+              editing: { rowId: cell.rowId, columnId: cell.colId },
+              cursor: { rowId: cell.rowId, columnId: cell.colId },
+            }
+          : { editing: null }, // stopped editing — keep the selection cursor
+      ),
+    [],
+  );
+
+  // The cloud column-authoring backend. addColumn / updateColumn target the
+  // cloud tRPC API; generateFormula / aiProviders reuse the LOCAL sidecar (which
+  // is what runs cloud columns), so AI + formula authoring works identically.
+  const cloudColumnApi = useMemo<ColumnAuthoringApi>(
+    () => ({
+      addColumn: async (tId, body) => {
+        const id = await addColumn(tId as Id<"tables">, {
+          name: body.name,
+          type: body.type,
+          fn: body.fn,
+          code: body.code ?? undefined,
+          params: body.params,
+        });
+        return { id: String(id) };
+      },
+      updateColumn: async (columnId, patch) => {
+        if (tableId === null) throw new Error("No table selected");
+        const col = await updateColumn(tableId, columnId as Id<"columns">, {
+          name: patch.name,
+          type: patch.type as
+            | "text" | "number" | "boolean" | "date" | "json" | undefined,
+          kind: patch.kind as "manual" | "function" | undefined,
+          provider: patch.provider,
+          method: patch.method,
+          code: patch.code,
+          params: patch.params as Record<string, unknown> | undefined,
+          condition: patch.condition,
+        });
+        // The live `column.update` broadcast patches the grid; return the shape
+        // the modal expects.
+        return { ok: true as const, id: col.id, tableId: col.tableId };
+      },
+      generateFormula: api.generateFormula,
+      aiProviders: api.aiProviders,
+      // Previewing a function dry-runs it through the sidecar's cloud preview
+      // route (same worker-backed store as a cloud column run, but persisting /
+      // metering nothing). Authenticated as the signed-in member via `session`.
+      previewFunction: (tId, body) => runCloudPreview(session, { tableId: tId, ...body }),
+    }),
+    [addColumn, updateColumn, tableId, session],
   );
 
   if (tableId === null) {
@@ -212,10 +657,7 @@ export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridPro
     );
   }
 
-  const fnColCount = data.columns.filter((c) => c.kind === "function").length;
-
-  // Webhook setup renders INLINE in this pane (replacing the grid), not as a
-  // fullscreen overlay — closing returns to the grid.
+  // Webhook setup renders INLINE in this pane (replacing the grid).
   if (showWebhook) {
     return (
       <WebhookModal
@@ -229,7 +671,7 @@ export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridPro
     );
   }
 
-  // Share panel also renders INLINE in this pane (replacing the grid).
+  // Share setup renders inline in this pane, matching webhook setup.
   if (showShare) {
     return (
       <ShareModal
@@ -242,213 +684,249 @@ export function CloudGrid({ tableId, openWebhookToken, onMissing }: CloudGridPro
     );
   }
 
-  return (
-    <>
-      <div className="toolbar">
-        <span className="toolbar-title">{data.name}</span>
-        <span className="toolbar-meta">
-          {data.rows.length} rows · {data.columns.length} cols
-        </span>
-        <span className="free-badge" title="Live multiplayer">LIVE</span>
-        <div className="toolbar-spacer" />
-        <button
-          className="btn btn-outline btn-sm"
-          onClick={() => addRow(data.id as Id<"tables">)}
-        >
-          <Icon.Plus size={11} /> Add row
-        </button>
-        <button
-          className="btn btn-outline btn-sm"
-          onClick={() => setShowWebhook(true)}
-          title="Configure this table's inbound webhook"
-        >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17a4 4 0 0 1 3.6-3.98" /><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06" /><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8" /></svg>{" "}
-          Webhook
-        </button>
-        <button
-          className="btn btn-outline btn-sm"
-          onClick={() => setShowShare(true)}
-          title="Share this table as a public read-only link"
-        >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" /><polyline points="16 6 12 2 8 6" /><line x1="12" y1="2" x2="12" y2="15" /></svg>{" "}
-          Share
-        </button>
-        <div className="toolbar-sep" />
-        <button
-          className="btn btn-primary btn-sm"
-          disabled={fnColCount === 0 || session === null}
-          title={
-            session === null
-              ? "Sign in to run cloud columns"
-              : fnColCount === 0
-                ? "No function columns to run"
-                : `Run ${fnColCount} function column${fnColCount !== 1 ? "s" : ""}`
-          }
-          onClick={async () => {
-            for (const col of data.columns.filter((c) => c.kind === "function")) {
-              await runColumn(col.id);
-            }
-          }}
-        >
-          <Icon.Play size={10} /> Run
-        </button>
-      </div>
+  const table: FullTable = data;
+  const fnColCount = table.columns.filter((c) => c.kind === "function").length;
 
-      {data.columns.length === 0 ? (
-        <div className="empty-state">
-          <div className="empty-icon"><Icon.Zap /></div>
-          <div className="empty-title">No columns yet</div>
-          <p className="empty-sub">
-            Add a column to define this cloud table's structure.
-          </p>
-          <button
-            className="btn btn-primary"
-            onClick={() =>
-              addColumn(data.id as Id<"tables">, { name: "Column", type: "text" })
-            }
-          >
-            <Icon.Plus /> Add first column
-          </button>
-        </div>
-      ) : (
-        <div className="grid-wrap" ref={gridScrollRef} onScroll={onGridScroll}>
-          <table
-            className="grid-table"
-            style={{
-              // Reserve the gutter EXACTLY ONCE: gutter (rendered cell) + all
-              // data columns (the virtualizer's total) + the trailing add-col.
-              width:
-                CLOUD_GUTTER_W +
-                data.columns.length * CLOUD_COL_W +
-                CLOUD_ADD_COL_W,
-            }}
-          >
-            <thead>
-              <tr>
-                <th className="grid-th row-num-th col-row-num" />
-                <GridColSpacer side="left" width={columnWindow.spacers.left} as="th" />
-                {columnWindow.virtualColumns.map((vc) => {
-                  const col = data.columns[vc.index];
-                  return (
-                  <th
-                    key={col.id}
-                    className="grid-th"
-                    style={{ width: CLOUD_COL_W, minWidth: 80 }}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      deleteColumn(col.id as Id<"columns">);
-                    }}
-                    title="Right-click to delete column"
-                  >
-                    <div className="th-inner">
-                      <span className="th-name">{col.name}</span>
-                      {col.kind === "function" && col.fn && (
-                        <span className="th-fn-badge" title={col.fn}>
-                          {col.fn.split(".").pop()}
-                        </span>
-                      )}
-                      {col.kind === "function" && (
-                        <button
-                          className="th-run-btn"
-                          title={`Run ${col.name}`}
-                          onClick={() => runColumn(col.id)}
-                          disabled={runningColId === col.id || session === null}
-                        >
-                          {runningColId === col.id ? (
-                            <span className="cell-spinner" />
-                          ) : (
-                            <Icon.Play size={9} />
-                          )}
-                        </button>
-                      )}
-                    </div>
-                  </th>
-                  );
-                })}
-                <GridColSpacer side="right" width={columnWindow.spacers.right} as="th" />
-                <th className="grid-th add-col-th">
-                  <button
-                    className="add-col-btn"
-                    title="Add column"
-                    onClick={() =>
-                      addColumn(data.id as Id<"tables">, { name: "Column", type: "text" })
-                    }
-                  >
-                    <Icon.Plus size={16} />
-                  </button>
-                </th>
-              </tr>
-            </thead>
-            {data.rows.length === 0 ? (
-              <tbody>
-                <tr>
-                  <td className="grid-td row-num-td" />
-                  <GridColSpacer side="left" width={columnWindow.spacers.left} />
-                  {columnWindow.virtualColumns.map((vc) => {
-                    const col = data.columns[vc.index];
-                    return (
-                    <td key={col.id} className="grid-td">
-                      <div className="cell-wrap"><span className="cell-empty">—</span></div>
-                    </td>
-                    );
-                  })}
-                  <GridColSpacer side="right" width={columnWindow.spacers.right} />
-                  <td className="grid-td" />
-                </tr>
-              </tbody>
-            ) : (
-              <VirtualGridBody
-                rows={data.rows}
-                scrollRef={gridScrollRef}
-                rowHeight={rowHeight}
-                colSpan={data.columns.length + 2}
-                columnWindow={columnWindow}
-                renderRow={(row, idx, cw) => (
-                  <tr key={row.id} className="grid-tr">
-                    <td className="grid-td row-num-td">{idx + 1}</td>
-                    <GridColSpacer side="left" width={cw.spacers.left} />
-                    {cw.virtualColumns.map((vc) => {
-                      const col = data.columns[vc.index];
-                      const cell: Cell | undefined = row.cells[col.id];
-                      return (
-                        <td key={col.id} className="grid-td">
-                          <CellContent
-                            cell={cell}
-                            col={col}
-                            onEdit={(v) =>
-                              setCell(
-                                row.id as Id<"rows">,
-                                col.id as Id<"columns">,
-                                v,
-                              )
-                            }
-                            onRunCell={
-                              col.kind === "function"
-                                ? () => runCell(row.id, col.id)
-                                : undefined
-                            }
-                            running={runningCells.has(`${row.id}:${col.id}`)}
-                          />
-                        </td>
-                      );
-                    })}
-                    <GridColSpacer side="right" width={cw.spacers.right} />
-                    <td className="grid-td">
-                      <button
-                        className="th-run-btn"
-                        title="Delete row"
-                        onClick={() => deleteRow(row.id as Id<"rows">)}
-                      >
-                        <Icon.X />
-                      </button>
-                    </td>
-                  </tr>
-                )}
-              />
-            )}
-          </table>
+  // ── Promote a JSON field to a column (from the Cell details drawer) ──
+  // Mirrors the local grid's promoteCreate/promoteMap: a FUNCTION column whose
+  // code extracts the chosen path from the source cell ({{<source column>}}),
+  // so the mapping applies to every row — existing (run now) and future (the
+  // webhook worker's auto-run enriches new rows).
+  const uniqueColName = (base: string): string => {
+    const existing = new Set(table.columns.map((c) => c.name.toLowerCase()));
+    if (!existing.has(base.toLowerCase())) return base;
+    let n = 2;
+    while (existing.has(`${base} ${n}`.toLowerCase())) n++;
+    return `${base} ${n}`;
+  };
+  const promoteCreate = async (path: string[], label: string) => {
+    if (!detail) return;
+    const srcName = detail.columnName;
+    // Dismiss the cell-details drawer immediately — the new column appears in the
+    // grid with its cells loading while the run (below) fills them.
+    setDetail(null);
+    const id = await addColumn(tableId, {
+      name: uniqueColName(label),
+      type: "text",
+      code: extractCode(path),
+      params: { src: `{{${srcName}}}` },
+    });
+    await runColumn(String(id)).catch(() => {});
+  };
+  const promoteMap = async (path: string[], targetId: string) => {
+    if (!detail) return;
+    const srcName = detail.columnName;
+    // Dismiss the cell-details drawer immediately; the mapped column's cells show
+    // a loading state until the run populates them.
+    setDetail(null);
+    await updateColumn(tableId, targetId as Id<"columns">, {
+      kind: "function",
+      provider: null,
+      method: null,
+      code: extractCode(path),
+      params: { src: `{{${srcName}}}` },
+    });
+    await runColumn(targetId).catch(() => {});
+  };
+
+  // Duplicate a column: copy the config (incl. custom code), then carry the run
+  // condition over via updateColumn (the cloud addColumn mutation has no
+  // condition field). Cells start empty — duplicating copies the recipe, not
+  // the results.
+  const duplicateColumn = async (col: Column) => {
+    const body: { name: string; type?: string; fn?: string; code?: string; params?: Record<string, unknown> } = {
+      name: uniqueColName(`${col.name} copy`),
+      type: col.type,
+      params: col.params,
+    };
+    if (col.fn === "code") body.code = col.code ?? undefined;
+    else if (col.fn) body.fn = col.fn;
+    const id = await addColumn(tableId, body);
+    if (col.condition) {
+      await updateColumn(tableId, id as Id<"columns">, { condition: col.condition });
+    }
+  };
+
+  const controller: GridController = {
+    table,
+    rowHeight,
+    columnWidth: () => CLOUD_COL_W,
+    minColWidth: 80,
+    runProgress: null,
+    runningColId,
+    runningCells,
+    fnColCount,
+    canRun: session !== null,
+    runDisabledReason: session === null ? "Sign in to run cloud columns" : undefined,
+    canAddRow: true,
+    // LIVE is status, not an action — keep it always inline (never folded into
+    // the overflow menu). Dedupe + Webhook are actions (see toolbarActions).
+    toolbarExtras: (
+      <span className="free-badge" title="Live multiplayer">LIVE</span>
+    ),
+    // Toolbar actions, rendered inline when wide and folded into the "⋯" overflow
+    // menu when the toolbar is narrow (e.g. the agent panel squeezing the grid).
+    toolbarActions: [
+      {
+        id: "dedupe",
+        label: "Dedupe",
+        side: "left",
+        active: !!table.dedupe,
+        onClick: () => setDedupeOpen(true),
+        title: "Deduplicate rows on a column",
+      },
+      {
+        id: "webhook",
+        label: "Webhook",
+        icon: (
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17a4 4 0 0 1 3.6-3.98" /><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06" /><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8" /></svg>
+        ),
+        onClick: () => setShowWebhook(true),
+        title: "Configure this table's inbound webhook",
+      },
+      {
+        id: "share",
+        label: "Share",
+        icon: (
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" /><polyline points="16 6 12 2 8 6" /><line x1="12" y1="2" x2="12" y2="15" /></svg>
+        ),
+        onClick: () => setShowShare(true),
+        title: "Share this table as a public read-only link",
+      },
+    ],
+    columnMeta,
+    addRow: () => void guard(() => addRow(tableId), "add row"),
+    runAll: async () => {
+      // Run every function column in DEPENDENCY order (independent columns in
+      // parallel, dependents after their sources) — the ordering IS the cascade.
+      const fnCols = table.columns.filter((c) => c.kind === "function");
+      await runColumnsInDepOrder(fnCols, undefined, CASCADE_CONCURRENCY, runColumnRaw, true);
+    },
+    runRows,
+    runColumn,
+    runCell,
+    runCells,
+    setCell: handleSetCell,
+    deleteRow: (rowId) => void guard(() => deleteRow(tableId, rowId as Id<"rows">), "delete row"),
+    deleteColumn: (colId) => void guard(() => deleteColumn(tableId, colId as Id<"columns">), "delete column"),
+    clearCell: handleClearCell,
+    // One right rail at a time: the edit panel overlaps the details drawer.
+    editColumn: (col) => { setDetail(null); setEditCol(col); },
+    renameColumn: (colId, name) =>
+      void guard(() => updateColumn(tableId, colId as Id<"columns">, { name }), "rename column"),
+    duplicateColumn: (col) => void guard(() => duplicateColumn(col), "duplicate column"),
+    openAddColumn: (anchor) => { setAddColAnchor(anchor); setShowAddCol(true); },
+    // Cloud columns are a fixed width (no resize) — omit `resizeColumn`.
+    onScrollNearBottom: hasMore && !isLoadingMore ? loadMore : undefined,
+    // Inspect a cell's full response (status-code/JSON) like the local grid;
+    // the drawer supports promote-to-column (Clay-style field mapping).
+    openCellDetails: handleOpenCellDetails,
+    expandCell: setCellExpand,
+    // ── Multiplayer presence ──
+    presence: presenceView,
+    onActiveCellChange: handleActiveCellChange,
+    onEditingCellChange: handleEditingCellChange,
+  };
+
+  return (
+    <ColumnAuthoringApiProvider value={cloudColumnApi}>
+      {actionError && (
+        <div className="account-menu-error" role="alert" style={{ margin: "6px 12px" }}>
+          {actionError}
         </div>
       )}
-    </>
+      <SignalStatusStrip tableId={String(table.id)} />
+      {workspaceId && <CrmStatusStrip tableId={String(table.id)} workspaceId={workspaceId} onUpgrade={onUpgrade} />}
+      <DataGrid controller={controller} />
+
+      {detail && (
+        <CellDetails
+          source={detail}
+          columns={table.columns.map((c) => ({ id: c.id, name: c.name }))}
+          onClose={() => setDetail(null)}
+          onCreate={(path, label) => guard(() => promoteCreate(path, label), "add column")}
+          onMapTo={(path, targetId) => guard(() => promoteMap(path, targetId), "map column")}
+        />
+      )}
+
+      {cellExpand && (
+        <ExpandedEditor
+          columnName={cellExpand.columnName}
+          value={cellExpand.value}
+          editable={cellExpand.editable}
+          anchor={cellExpand.anchor}
+          onSave={(v) =>
+            void guard(
+              () =>
+                setCell(
+                  tableId,
+                  cellExpand.rowId as Id<"rows">,
+                  cellExpand.colId as Id<"columns">,
+                  v,
+                ),
+              "set cell",
+            )
+          }
+          onClose={() => setCellExpand(null)}
+        />
+      )}
+
+      {dedupeOpen && (
+        <DedupePopover
+          columns={table.columns.map((c) => ({ id: c.id, name: c.name }))}
+          current={table.dedupe ?? null}
+          setDedupe={(body) => setDedupe(table.id as Id<"tables">, body)}
+          dedupeTable={() => dedupeTable(table.id as Id<"tables">)}
+          onClose={() => setDedupeOpen(false)}
+          onChanged={() => setDedupeOpen(false)}
+        />
+      )}
+
+      {showAddCol && (
+        <AddColumnPopover
+          tableId={table.id}
+          anchor={addColAnchor}
+          crm={addColumnCrm}
+          onClose={() => setShowAddCol(false)}
+          onAdded={() => setShowAddCol(false)}
+          onUseFunction={() => { setShowAddCol(false); setShowFunctions(true); }}
+        />
+      )}
+
+      {showFunctions && (
+        <FunctionsModal
+          tableId={table.id}
+          connectors={connectors}
+          onClose={() => setShowFunctions(false)}
+          onAdded={(col) => {
+            setShowFunctions(false);
+            // Clay flow: the column was just added — configure it in the rail.
+            if (col) {
+              setDetail(null);
+              setEditCol(col);
+            }
+          }}
+          onOpenAiSettings={onOpenAiSettings}
+        />
+      )}
+
+      {editCol && (
+        <ColumnEditPanel
+          column={editCol}
+          columns={table.columns.map((c) => ({ id: c.id, name: c.name, type: c.type }))}
+          connectors={connectors}
+          // No tableId: the preview dry-run resolves rows via the LOCAL sidecar,
+          // which can't see cloud tables — the panel hides Try-on-rows without it.
+          rows={table.rows}
+          onClose={() => setEditCol(null)}
+          onSaved={(run) => {
+            const colId = editCol.id;
+            setEditCol(null);
+            if (run) void runColumn(colId, run);
+          }}
+          onError={setActionError}
+        />
+      )}
+    </ColumnAuthoringApiProvider>
   );
 }

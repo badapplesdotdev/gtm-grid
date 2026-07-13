@@ -6,22 +6,14 @@
  * omitting it keeps the existing value. We forward that presence as `hasValue`.
  */
 
-import { type CloudCellStatus, WebhookService } from "@gtmgrid/services";
+import { WebhookService } from "@gtmgrid/services";
 import { Effect } from "effect";
-import { runWorker } from "../_lib";
+import { runWorkerSecretOrMember } from "../_lib";
+import { SetCellSchema } from "../_schemas";
 
 export const runtime = "nodejs";
-
-interface SetCellBody {
-  rowId: string;
-  columnId: string;
-  value?: unknown;
-  status?: CloudCellStatus;
-  error?: string | null;
-}
-
 export function POST(req: Request): Promise<Response> {
-  return runWorker(req, (body: SetCellBody) =>
+  return runWorkerSecretOrMember(req, SetCellSchema, (body) =>
     Effect.gen(function* () {
       const svc = yield* WebhookService;
       return yield* svc.setCell({

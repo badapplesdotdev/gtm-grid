@@ -13,10 +13,9 @@
  *      in/up/out, OAuth (incl. the `gtmgrid://` desktop deep link), and the
  *      email-OTP verify + password-reset flows, persisting its own session.
  *
- * The cloud layer is mounted ONLY when `VITE_API_URL` is set (`cloudEnabled` /
- * `cloudViaApi`). When it is unset (an OSS / local-only build), no provider
- * mounts and the local sidecar app issues zero cloud calls — the local SQLite
- * engine path is entirely unaffected.
+ * The desktop app is cloud-only: `VITE_API_URL` is REQUIRED and the cloud layer
+ * is always on. `cloudEnabled` / `cloudViaApi` are kept as constant-`true` named
+ * exports so the (many) historical call sites still compile.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -32,28 +31,31 @@ import { useApiDeepLinkOAuth } from "./useDeepLinkOAuth";
 /**
  * The apps/web API base URL (Next.js host that serves both tRPC at `/api/trpc`
  * and Better Auth at `/api/auth`). Read once from Vite's `import.meta.env`; an
- * empty string is treated as unset. Presence of this var is the strangler FLAG
- * that selects the new Postgres-tier path over the legacy Convex path.
+ * empty string is treated as unset. REQUIRED — the desktop app is cloud-only, so
+ * a missing value is a fatal misconfiguration (see the throw below).
  */
 export const API_URL: string | undefined =
   (import.meta.env.VITE_API_URL as string | undefined) || undefined;
 
-/**
- * Whether the tRPC + Better Auth cloud layer is enabled. True iff `VITE_API_URL`
- * is configured. When false the app runs local-only (no provider, zero cloud
- * calls). `cloudEnabled` is the alias the feature hooks/components gate on; both
- * names mean the same thing now that the new path is the only path.
- */
-export const cloudViaApi = API_URL !== undefined;
+// Fatal misconfiguration guard for a real run (dev or packaged prod): the build
+// also fails fast on a missing value (vite.config.ts). Skipped under Vitest,
+// where the module is imported with no Vite env and the network is mocked.
+if (!API_URL && import.meta.env.MODE !== "test") {
+  throw new Error("VITE_API_URL is required — the desktop app is cloud-only.");
+}
 
 /**
- * Whether the cloud layer is usable (an apps/web API is configured). Identical
- * to {@link cloudViaApi}; kept as a distinct export so the many call sites that
- * gate cloud reads/writes on "is the cloud configured?" read naturally. The
- * OSS/local invariant — no provider, zero cloud calls when unset — holds because
- * both gates are the same single flag.
+ * Whether the tRPC + Better Auth cloud layer is enabled. Always `true` now that
+ * the desktop is cloud-only. Kept as a named export (a literal `true`) so the
+ * many historical call sites that gate on it still compile.
  */
-export const cloudEnabled = cloudViaApi;
+export const cloudViaApi = true;
+
+/**
+ * Alias of {@link cloudViaApi}; kept as a distinct constant-`true` export so the
+ * call sites that read "is the cloud configured?" continue to compile.
+ */
+export const cloudEnabled = true;
 
 /**
  * Base URL of the inbound-webhook receiver. The webhook setup form builds each
@@ -158,21 +160,18 @@ export function makeTrpcClient(apiUrl: string) {
 }
 
 /**
- * The shared Better Auth client, or `null` when the new path is disabled. A
- * module-level singleton so every hook/component shares one session + one
- * cookie jar. `null` on the legacy/local path so nothing here ever runs.
+ * The shared Better Auth client. A module-level singleton so every
+ * hook/component shares one session + one cookie jar. Always constructed now
+ * that the desktop is cloud-only.
  */
-export const authClient: CloudAuthClient | null = cloudViaApi
-  ? makeAuthClient(API_URL as string)
-  : null;
+export const authClient: CloudAuthClient = makeAuthClient(API_URL as string);
 
 /**
- * The shared tRPC client, or `null` when the new path is disabled. A
- * module-level singleton mirroring {@link authClient}.
+ * The shared tRPC client. A module-level singleton mirroring {@link authClient}.
  */
-export const apiClient: ReturnType<typeof makeTrpcClient> | null = cloudViaApi
-  ? makeTrpcClient(API_URL as string)
-  : null;
+export const apiClient: ReturnType<typeof makeTrpcClient> = makeTrpcClient(
+  API_URL as string,
+);
 
 /**
  * Reconcile a workspace's cached plan with its live Autumn subscription, then
@@ -183,7 +182,6 @@ export const apiClient: ReturnType<typeof makeTrpcClient> | null = cloudViaApi
  * stays as-is. A no-op when the cloud layer is off.
  */
 export async function syncWorkspacePlan(workspaceId: string): Promise<void> {
-  if (apiClient === null) return;
   try {
     await apiClient.billing.syncPlan.mutate({ workspaceId });
     await queryClient.invalidateQueries({ queryKey: ["workspaces", "me"] });
@@ -193,9 +191,11 @@ export async function syncWorkspacePlan(workspaceId: string): Promise<void> {
 }
 
 /**
- * Build the react-query `QueryClient`. Defaults mirror a desktop app: no
- * window-focus refetch (the Tauri webview's focus events are noisy) and a short
- * stale time so cloud reads stay fresh without thrashing. A factory (not a
+ * Build the react-query `QueryClient`. Defaults mirror a desktop app: refetch on
+ * window focus so cloud changes made elsewhere (a teammate creating a table,
+ * adding an integration key, etc.) show up when you return to the app — gated by
+ * a 30s `staleTime` so the Tauri webview's noisy focus events don't thrash the
+ * network (a query refetches on focus only once it's stale). A factory (not a
  * module singleton) so each provider mount — and each test — gets an isolated
  * cache.
  */
@@ -203,7 +203,7 @@ export function makeQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
       queries: {
-        refetchOnWindowFocus: false,
+        refetchOnWindowFocus: true,
         staleTime: 30_000,
       },
     },
@@ -236,7 +236,7 @@ function ApiDeepLinkOAuthBridge({ children }: { children: ReactNode }) {
  * place. Mounted only when the cloud layer is on (so `authClient` is non-null).
  */
 function AuthQuerySync(): null {
-  const session = authClient!.useSession();
+  const session = authClient.useSession();
   const userId = session.data?.user?.id ?? null;
   const prev = useRef<string | null>(null);
   useEffect(() => {
@@ -253,25 +253,15 @@ function AuthQuerySync(): null {
  * clients are module singletons consumed directly by hooks, so the only React
  * provider needed is react-query's.
  *
- * The `QueryClientProvider` is mounted UNCONDITIONALLY — even local-only (no
- * `VITE_API_URL`) builds. `App` always calls react-query hooks (`useMe`, etc.);
- * those queries are disabled when cloud is off, but `useQuery` still calls
- * `useQueryClient()`, which throws "No QueryClient set" if no provider is mounted
- * — crashing the whole app to a blank screen for every OSS user with no env vars.
- * The client is constructed lazily and issues zero network calls, so this is free
- * in local mode. Only the cloud-specific deep-link OAuth bridge stays gated.
+ * The cloud layer is always on (the desktop is cloud-only), so the auth-query
+ * sync and the deep-link OAuth bridge always mount alongside the react-query
+ * provider.
  */
 export function CloudProvider({ children }: { children: ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
-      {cloudEnabled ? (
-        <>
-          <AuthQuerySync />
-          <ApiDeepLinkOAuthBridge>{children}</ApiDeepLinkOAuthBridge>
-        </>
-      ) : (
-        children
-      )}
+      <AuthQuerySync />
+      <ApiDeepLinkOAuthBridge>{children}</ApiDeepLinkOAuthBridge>
     </QueryClientProvider>
   );
 }

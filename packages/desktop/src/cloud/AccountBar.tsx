@@ -20,17 +20,17 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { type BillingCycle, resolvePlanId } from "@gtmgrid/cloud";
+import { Dialog, DialogContent } from "../components/ui/dialog";
 import type { Id } from "./ids";
-import type { CloudProject } from "./useCloudGrid";
 import { cloudEnabled, syncWorkspacePlan } from "./client";
-import { isTauri } from "./desktop-oauth";
+import { electron } from "../electron";
 
-/** Open a URL in the system browser (Tauri opener when packaged, else a new tab). */
+/** Open a URL in the system browser (Electron when packaged, else a new tab). */
 async function openExternalUrl(url: string): Promise<void> {
   try {
-    if (isTauri()) {
-      const { openUrl } = await import("@tauri-apps/plugin-opener");
-      await openUrl(url);
+    const api = electron();
+    if (api) {
+      await api.openExternal(url);
       return;
     }
   } catch {
@@ -99,29 +99,10 @@ export function PlanBadge() {
 interface AccountBarProps {
   projectName: string;
   healthStatus: HealthStatus;
-  currentProjectPath: string | null;
-  /** Whether the app is currently viewing a CLOUD project (vs. local). */
-  inCloud?: boolean;
   /** The open cloud project's name (shown as the selected Environment item). */
   cloudProjectName?: string | null;
-  /** Switch the app back to LOCAL mode (drop the open cloud project). */
-  onSwitchToLocal?: () => void;
-  /**
-   * The active workspace's cloud projects (TRI-3313-D), so the bottom account
-   * menu can offer switching INTO a cloud env from the local env. `undefined`
-   * while loading / when there is no active workspace.
-   */
-  cloudProjects?: readonly CloudProject[] | undefined;
-  /**
-   * Open a cloud project (TRI-3313-D). Routes through the SAME handler the top
-   * ProjectSwitcher's cloud `onSelect` uses, so switching to cloud from the
-   * bottom menu behaves identically.
-   */
-  onOpenCloudProject?: (project: CloudProject) => void;
-  /** Open the local project switcher (unchanged local behaviour). */
+  /** Open the cloud project switcher. */
   onSwitchProject: () => void;
-  /** Refresh the current local project path when the menu opens. */
-  onOpenMenu: () => void;
   /** Current appearance theme (for the dark-mode toggle). */
   theme?: "light" | "dark";
   /** Toggle the appearance theme; when provided, the Appearance section shows. */
@@ -134,6 +115,33 @@ interface AccountBarProps {
 }
 
 /**
+ * The account avatar: the signed-in user's profile picture when available
+ * (`me.user.image`, an OAuth/profile URL), otherwise the initial letter. The
+ * `.account-avatar` class supplies the circle; the image fills it. `no-referrer`
+ * is required for Google/GitHub avatar hotlinking (same as PresenceAvatars). On
+ * a broken image URL we fall back to the letter.
+ */
+export function AccountAvatar({ image, letter }: { image: string | null; letter: string }) {
+  const [failed, setFailed] = useState(false);
+  const showImage = image != null && image !== "" && !failed;
+  return (
+    <span className="account-avatar">
+      {showImage ? (
+        <img
+          className="account-avatar-img"
+          src={image}
+          alt=""
+          referrerPolicy="no-referrer"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        letter
+      )}
+    </span>
+  );
+}
+
+/**
  * The sidebar-footer account control + dropdown menu. Shows local project info
  * always; layers cloud auth + workspace switching on top when signed in.
  */
@@ -141,14 +149,8 @@ export function AccountBar(props: AccountBarProps) {
   const {
     projectName,
     healthStatus,
-    currentProjectPath,
-    inCloud = false,
     cloudProjectName = null,
-    onSwitchToLocal,
-    cloudProjects,
-    onOpenCloudProject,
     onSwitchProject,
-    onOpenMenu,
     theme,
     onToggleTheme,
     onStartOnboarding,
@@ -166,8 +168,7 @@ export function AccountBar(props: AccountBarProps) {
 
   const openMenu = useCallback(() => {
     setOpen(true);
-    onOpenMenu();
-  }, [onOpenMenu]);
+  }, []);
 
   return (
     <div className="account-bar">
@@ -175,7 +176,7 @@ export function AccountBar(props: AccountBarProps) {
         className="account-btn"
         onClick={() => (open ? setOpen(false) : openMenu())}
       >
-        <span className="account-avatar">{avatarLetter}</span>
+        <AccountAvatar image={signedIn ? me!.user.image : null} letter={avatarLetter} />
         <span className="account-text">
           <span className="account-name">
             {signedIn
@@ -221,7 +222,7 @@ export function AccountBar(props: AccountBarProps) {
           <div className="account-backdrop" onClick={() => setOpen(false)} />
           <div className="account-menu">
             <div className="account-menu-head">
-              <span className="account-avatar">{avatarLetter}</span>
+              <AccountAvatar image={signedIn ? me!.user.image : null} letter={avatarLetter} />
               <div className="account-menu-head-text">
                 <strong>
                   {signedIn
@@ -277,10 +278,8 @@ export function AccountBar(props: AccountBarProps) {
                 <SignInSection onDone={() => setOpen(false)} />
               ))}
 
-            {/* Environment section — which project the app is currently in. When
-                in CLOUD mode the open cloud project is the checked current item
-                and Local is offered as a switchable option; otherwise the local
-                project is current. Local usage (no cloud) is unchanged. */}
+            {/* Environment section — the open cloud project (the only data path)
+                + a "Switch project" action that opens the cloud project switcher. */}
             <div className="account-menu-sec">
               <div className="account-menu-label">Environment</div>
               {/* Current selected environment (checkmark). */}
@@ -299,73 +298,13 @@ export function AccountBar(props: AccountBarProps) {
                 </svg>
                 <div className="account-menu-current-text">
                   <span className="account-menu-current-name">
-                    {inCloud ? cloudProjectName ?? "Cloud project" : projectName}
+                    {cloudProjectName ?? "Cloud project"}
                   </span>
                   <span className="account-menu-current-path">
-                    {inCloud
-                      ? "Cloud · live multiplayer"
-                      : currentProjectPath ?? "Local · this device"}
+                    Cloud · live multiplayer
                   </span>
                 </div>
               </div>
-
-              {/* When in cloud, offer switching back to the LOCAL project. */}
-              {inCloud && onSwitchToLocal && (
-                <button
-                  className="account-menu-item"
-                  onClick={() => {
-                    setOpen(false);
-                    onSwitchToLocal();
-                  }}
-                >
-                  <svg
-                    width="15"
-                    height="15"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-                    <line x1="8" y1="21" x2="16" y2="21" />
-                    <line x1="12" y1="17" x2="12" y2="21" />
-                  </svg>
-                  Switch to local · {projectName}
-                </button>
-              )}
-
-              {/* TRI-3313-D: when in the LOCAL env, offer switching INTO a cloud
-                  env from the bottom menu — the inverse of "Switch to local".
-                  Lists the workspace's cloud projects (each routes through the
-                  SAME onOpenCloudProject the top ProjectSwitcher uses). Only shown
-                  for signed-in users with at least one cloud project. */}
-              {!inCloud && signedIn && onOpenCloudProject && (cloudProjects?.length ?? 0) > 0 &&
-                cloudProjects!.map((p) => (
-                  <button
-                    key={p._id}
-                    className="account-menu-item"
-                    onClick={() => {
-                      setOpen(false);
-                      onOpenCloudProject(p);
-                    }}
-                  >
-                    <svg
-                      width="15"
-                      height="15"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
-                    </svg>
-                    Switch to cloud · {p.name}
-                  </button>
-                ))}
 
               <button
                 className="account-menu-item"
@@ -456,6 +395,8 @@ export function AccountBar(props: AccountBarProps) {
                 <SignOutButton onDone={() => setOpen(false)} />
               </div>
             )}
+
+            <div className="account-menu-version">GTM Grid v{__APP_VERSION__}</div>
           </div>
         </>
       )}
@@ -528,8 +469,8 @@ export function PlanBillingModal(props: {
   const isFree = selectedPlan === "free";
 
   return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ width: 460 }}>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="modal" srTitle="Plan & billing" style={{ width: 460 }}>
         <div className="modal-header">
           <span className="modal-title">Plan &amp; billing</span>
           <button className="modal-close" onClick={onClose} aria-label="Close">
@@ -575,17 +516,11 @@ export function PlanBillingModal(props: {
             Upgrade / change plan
           </button>
         </div>
-      </div>
 
       {/* Plan-selection modal — the SHARED PlanGrid + the existing checkout. */}
       {showUpgrade && (
-        <div
-          className="overlay"
-          onMouseDown={(e) =>
-            e.target === e.currentTarget && setShowUpgrade(false)
-          }
-        >
-          <div className="modal gtm-onboarding-modal" style={{ width: 900, maxWidth: "94vw" }}>
+        <Dialog open onOpenChange={(o) => { if (!o) setShowUpgrade(false); }}>
+          <DialogContent className="modal gtm-onboarding-modal" srTitle="Choose a plan" style={{ width: 900, maxWidth: "94vw" }}>
             <div className="modal-header">
               <span className="modal-title">Choose a plan</span>
               <BillingToggle billing={billing} onChange={setBilling} />
@@ -633,10 +568,11 @@ export function PlanBillingModal(props: {
                     : "Continue to checkout"}
               </button>
             </div>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
-    </div>
+    </DialogContent>
+    </Dialog>
   );
 }
 

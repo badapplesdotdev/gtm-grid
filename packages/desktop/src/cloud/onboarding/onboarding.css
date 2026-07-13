@@ -182,12 +182,14 @@
   line-height: 1.1;
   margin: 0 0 8px;
   color: var(--ob-text-body);
+  text-wrap: balance;
 }
 .ob-screen-sub {
   font-size: 13px;
   line-height: 1.4;
   color: var(--ob-text-muted);
   margin: 0 0 24px;
+  text-wrap: pretty;
 }
 
 /* ── Fields ── */
@@ -651,7 +653,7 @@
   color: var(--ob-text-subtle);
   background: var(--ob-surface-card);
   flex-shrink: 0;
-  transition: all 0.12s;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
 .ob-dot.done {
   background: var(--ob-accent);

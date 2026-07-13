@@ -12,6 +12,8 @@
 - **Auth:** API key via the `x-api-key` header (the connector sends this). Use a **secret `sk_` key** server-side; publishable `pk_` keys are for browser embeds and are domain-locked.
 - **Cost:** 1 credit per call. Free tier = 100 new people + 1,000 profile views/month. Pro from $50/mo.
 - **Quota / limits:** `402` when the request or new-profile quota is exceeded; `429` when rate-limited (respect the `Retry-After` header).
+- **Rate limit (connector):** Avtrz publishes no numeric request rate in its docs (only `429` + `Retry-After` behavior). The connector applies a safe default of `rpm: 120` / `concurrency: 3`, with a stricter `rps: 2` override on the credit-consuming `getAvatar` call to spread large runs and stay under quota.
+- **No picker fields:** this is a stateless, single-endpoint enrichment API. Inputs are `linkedin_url`, `username`, and the `size` enum — none of which are enumerable resources, so there are no `options`-backed dropdowns and no list endpoints to add.
 
 ## Endpoints by job
 

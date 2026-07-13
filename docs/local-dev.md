@@ -58,12 +58,22 @@ pnpm desktop                    # or: pnpm tauri:dev (native window)
 The server-gated PartyKit party (`apps/party`) fans out grid changes to other
 windows. Run it locally with the SAME `PARTY_AUTH_SECRET` / `PARTY_PUBLISH_SECRET`
 you set in `apps/web/.env.local` (the party verifies the connection token and the
-server-publish bearer with them):
+server-publish bearer with them).
+
+**`partykit dev` does NOT read `process.env`** — passing the secrets as shell env
+vars leaves `lobby.env` empty, so `onBeforeConnect` returns **503** on every
+WebSocket handshake. Pass them as `--var` instead (or add them to `partykit.json`
+`vars`):
 ```bash
-PARTY_AUTH_SECRET=<same as apps/web> \
-PARTY_PUBLISH_SECRET=<same as apps/web> \
-  pnpm -F @gtmgrid/party dev    # partykit dev on http://127.0.0.1:1999
+pnpm -F @gtmgrid/party exec partykit dev \
+  --var PARTY_AUTH_SECRET=<same as apps/web> \
+  --var PARTY_PUBLISH_SECRET=<same as apps/web>   # partykit dev on http://127.0.0.1:1999
 ```
+Sanity check: a plain `GET` to a room URL (`/parties/grid/<ws>:<table>`) should
+return **405** (worker loaded, secrets set) — a **503** means the secrets didn't
+reach `lobby.env`. In the desktop window the realtime WS handshake should be
+**101 Switching Protocols**, not 503.
+
 With `PARTY_URL=http://127.0.0.1:1999` on `apps/web` and `VITE_PARTY_URL=http://127.0.0.1:1999`
 on the desktop, an edit in one window appears live in another. If the party is not
 running (or `PARTY_URL`/`PARTY_PUBLISH_SECRET` are unset on `apps/web`), the

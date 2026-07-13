@@ -110,7 +110,7 @@ describe("SignalService.syncForWorker (membership-free credential path)", () => 
       (s) => s.syncForWorker("sig-1"),
     );
     expect(Exit.isSuccess(exit)).toBe(true);
-    if (Exit.isSuccess(exit)) expect(exit.value).toBe(1);
+    if (Exit.isSuccess(exit)) expect(exit.value.added).toBe(1);
   });
 
   it("fails closed (SignalError) when no shared Trigify credential exists", async () => {
@@ -160,7 +160,7 @@ describe("SignalService.syncForWorker (membership-free credential path)", () => 
       (s) => s.syncForWorker("sig-1"),
     );
     expect(Exit.isSuccess(exit)).toBe(true);
-    if (Exit.isSuccess(exit)) expect(exit.value).toBe(0);
+    if (Exit.isSuccess(exit)) expect(exit.value.added).toBe(0);
   });
 
   it("returns 0 for an unknown binding id", async () => {
@@ -172,7 +172,50 @@ describe("SignalService.syncForWorker (membership-free credential path)", () => 
       },
       (s) => s.syncForWorker("missing"),
     );
-    expect(Exit.isSuccess(exit) && exit.value).toBe(0);
+    expect(Exit.isSuccess(exit) && exit.value.added).toBe(0);
+  });
+});
+
+// Trigify searches take ~10-30s to start returning results, so the create-time
+// pull is almost always 0. Stamping `lastSyncedAt` on that empty pull deferred
+// the next pull by the full schedule interval (a "daily" cloud binding sat empty
+// for 24h). The rule: `lastSyncedAt` stays NULL until the binding has EVER
+// pulled data (always-due → the hourly cron retries), then stamps normally.
+describe("SignalService sync — lastSyncedAt stamping (empty-table warm-up)", () => {
+  const fixtures = async (bindings: SignalBinding[]) => ({
+    currentUserId: null,
+    workspaces: [{ id: WS, name: "WS", ownerId: "owner", currentPlanId: "team" }],
+    signalBindings: bindings,
+    tables: [table(WS)],
+    webhookCredentials: new Map([[`${WS}:trigify`, await encryptedKey(WS, "tk_live")]]),
+  });
+
+  it("keeps lastSyncedAt NULL on a 0-result pull before first data (binding stays due)", async () => {
+    stubTrigify([]); // search still scraping — nothing back yet
+    const bindings = [binding({ rowsPulled: 0, lastSyncedAt: null })];
+    const exit = await run(await fixtures(bindings), (s) => s.syncForWorker("sig-1"));
+    expect(Exit.isSuccess(exit) && exit.value.added).toBe(0);
+    expect(bindings[0].lastSyncedAt).toBeNull();
+    expect(bindings[0].lastError).toBeNull();
+  });
+
+  it("stamps lastSyncedAt once the pull delivers first data", async () => {
+    stubTrigify([{ id: "r1" }]);
+    const bindings = [binding({ rowsPulled: 0, lastSyncedAt: null })];
+    const exit = await run(await fixtures(bindings), (s) => s.syncForWorker("sig-1"));
+    expect(Exit.isSuccess(exit) && exit.value.added).toBe(1);
+    expect(bindings[0].lastSyncedAt).not.toBeNull();
+    expect(bindings[0].rowsPulled).toBe(1);
+  });
+
+  it("stamps lastSyncedAt on an empty pull AFTER first data (no hot-loop once seeded)", async () => {
+    stubTrigify([]); // nothing new this round
+    const bindings = [binding({ rowsPulled: 5, lastSyncedAt: 1000 })];
+    const exit = await run(await fixtures(bindings), (s) => s.syncForWorker("sig-1"));
+    expect(Exit.isSuccess(exit) && exit.value.added).toBe(0);
+    // Re-stamped (not nulled): the binding has data, so schedule semantics hold.
+    expect(bindings[0].lastSyncedAt).not.toBeNull();
+    expect(bindings[0].lastSyncedAt).not.toBe(1000);
   });
 });
 
@@ -195,7 +238,7 @@ describe("SignalService.syncForWorker (durable dedupe + bulk insert)", () => {
       (s) => s.syncForWorker("sig-1"),
     );
     expect(Exit.isSuccess(exit)).toBe(true);
-    if (Exit.isSuccess(exit)) expect(exit.value).toBe(0);
+    if (Exit.isSuccess(exit)) expect(exit.value.added).toBe(0);
   });
 
   it("inserts rows + cells for fresh results and computes positions above the table's max", async () => {
@@ -219,7 +262,7 @@ describe("SignalService.syncForWorker (durable dedupe + bulk insert)", () => {
       (s) => s.syncForWorker("sig-1"),
     );
     expect(Exit.isSuccess(exit)).toBe(true);
-    if (Exit.isSuccess(exit)) expect(exit.value).toBe(2);
+    if (Exit.isSuccess(exit)) expect(exit.value.added).toBe(2);
     // Two new rows appended above the existing max position (7).
     expect(rows.filter((r) => r.position > 7)).toHaveLength(2);
     expect(rows.map((r) => r.position).sort((a, b) => a - b)).toEqual([7, 8, 9]);
@@ -354,5 +397,48 @@ describe("SignalService.remove / listByTable (entitlement gated)", () => {
       (s) => s.listByTable(TABLE),
     );
     expect(failureTag(exit)).toBe("PlanRequiredError");
+  });
+});
+
+// In-process resilience for the Trigify call, under the cron's outer Inngest
+// step-retries: a transient 429/5xx/network blip is retried with capped
+// exponential backoff + jitter; a permanent 4xx fails fast (no wasted retries).
+describe("SignalService.syncForWorker — Trigify transient retry (backoff + jitter)", () => {
+  const workerFixtures = async () => ({
+    currentUserId: null,
+    workspaces: [{ id: WS, name: "WS", ownerId: "owner", currentPlanId: "team" }],
+    signalBindings: [binding()],
+    tables: [table(WS)],
+    webhookCredentials: new Map([[`${WS}:trigify`, await encryptedKey(WS, "tk_live")]]),
+  });
+
+  it("retries a transient 429 then succeeds", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("slow down", { status: 429 }))
+      .mockResolvedValue(new Response(JSON.stringify([{ id: "r1" }]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const exit = await run(await workerFixtures(), (s) => s.syncForWorker("sig-1"));
+    expect(Exit.isSuccess(exit) && exit.value.added).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2); // first 429 retried, second 200 succeeded
+  });
+
+  it("retries a network error (fetch rejection) then succeeds", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("connection reset"))
+      .mockResolvedValue(new Response(JSON.stringify([{ id: "r1" }]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const exit = await run(await workerFixtures(), (s) => s.syncForWorker("sig-1"));
+    expect(Exit.isSuccess(exit) && exit.value.added).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does NOT retry a permanent 4xx — fails fast on the first attempt", async () => {
+    const fetchMock = vi.fn(async () => new Response("bad key", { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const exit = await run(await workerFixtures(), (s) => s.syncForWorker("sig-1"));
+    expect(failureTag(exit)).toBe("SignalError");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

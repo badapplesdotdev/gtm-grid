@@ -6,7 +6,16 @@
   "description": "Email & mobile finder — enrich a person to a verified work email and direct phone.",
   "baseUrl": "https://api.prospeo.io",
   "logo": "https://www.google.com/s2/favicons?domain=prospeo.io&sz=128",
-  "auth": { "type": "apiKey", "header": "X-KEY", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "X-KEY",
+    "secretKey": "apiKey"
+  },
+  "rateLimit": {
+    "rpm": 300,
+    "rps": 5,
+    "concurrency": 3
+  },
   "methods": [
     {
       "id": "enrichPerson",
@@ -17,28 +26,59 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["data"],
+        "required": [
+          "data"
+        ],
         "properties": {
           "data": {
             "type": "object",
             "description": "Identifiers. e.g. { \"linkedin_url\": \"https://linkedin.com/in/...\" } or { \"first_name\": \"Jane\", \"last_name\": \"Doe\", \"company_website\": \"acme.com\" }",
             "properties": {
-              "first_name": { "type": "string" },
-              "last_name": { "type": "string" },
-              "full_name": { "type": "string" },
-              "company_name": { "type": "string" },
-              "company_website": { "type": "string" },
-              "company_linkedin_url": { "type": "string" },
-              "linkedin_url": { "type": "string" },
-              "email": { "type": "string" },
-              "person_id": { "type": "string", "description": "Person id returned by Search Person" }
+              "first_name": {
+                "type": "string"
+              },
+              "last_name": {
+                "type": "string"
+              },
+              "full_name": {
+                "type": "string"
+              },
+              "company_name": {
+                "type": "string"
+              },
+              "company_website": {
+                "type": "string"
+              },
+              "company_linkedin_url": {
+                "type": "string"
+              },
+              "linkedin_url": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              },
+              "person_id": {
+                "type": "string",
+                "description": "Person id returned by Search Person"
+              }
             }
           },
-          "only_verified_email": { "type": "boolean", "description": "Only return the email if it is verified" },
-          "enrich_mobile": { "type": "boolean", "description": "Also attempt to reveal a direct mobile number (10 credits if found)" },
-          "only_verified_mobile": { "type": "boolean", "description": "Only return the mobile if it is verified" }
+          "only_verified_email": {
+            "type": "boolean",
+            "description": "Only return the email if it is verified"
+          },
+          "enrich_mobile": {
+            "type": "boolean",
+            "description": "Also attempt to reveal a direct mobile number (10 credits if found)"
+          },
+          "only_verified_mobile": {
+            "type": "boolean",
+            "description": "Only return the mobile if it is verified"
+          }
         }
-      }
+      },
+      "category": "Enrich people"
     },
     {
       "id": "bulkEnrichPerson",
@@ -49,33 +89,66 @@
       "credits": 2,
       "input": {
         "type": "object",
-        "required": ["data"],
+        "required": [
+          "data"
+        ],
         "properties": {
           "data": {
             "type": "array",
             "description": "Up to 50 person records, each with an identifier plus matching datapoints",
             "items": {
               "type": "object",
-              "required": ["identifier"],
+              "required": [
+                "identifier"
+              ],
               "properties": {
-                "identifier": { "type": "string", "description": "Your own unique tracking string, echoed back in the response" },
-                "first_name": { "type": "string" },
-                "last_name": { "type": "string" },
-                "full_name": { "type": "string" },
-                "company_name": { "type": "string" },
-                "company_website": { "type": "string" },
-                "company_linkedin_url": { "type": "string" },
-                "linkedin_url": { "type": "string" },
-                "email": { "type": "string" },
-                "person_id": { "type": "string" }
+                "identifier": {
+                  "type": "string",
+                  "description": "Your own unique tracking string, echoed back in the response"
+                },
+                "first_name": {
+                  "type": "string"
+                },
+                "last_name": {
+                  "type": "string"
+                },
+                "full_name": {
+                  "type": "string"
+                },
+                "company_name": {
+                  "type": "string"
+                },
+                "company_website": {
+                  "type": "string"
+                },
+                "company_linkedin_url": {
+                  "type": "string"
+                },
+                "linkedin_url": {
+                  "type": "string"
+                },
+                "email": {
+                  "type": "string"
+                },
+                "person_id": {
+                  "type": "string"
+                }
               }
             }
           },
-          "only_verified_email": { "type": "boolean" },
-          "enrich_mobile": { "type": "boolean", "description": "Also attempt to reveal mobiles (10 credits per mobile found)" },
-          "only_verified_mobile": { "type": "boolean" }
+          "only_verified_email": {
+            "type": "boolean"
+          },
+          "enrich_mobile": {
+            "type": "boolean",
+            "description": "Also attempt to reveal mobiles (10 credits per mobile found)"
+          },
+          "only_verified_mobile": {
+            "type": "boolean"
+          }
         }
-      }
+      },
+      "category": "Enrich people"
     },
     {
       "id": "enrichCompany",
@@ -86,20 +159,35 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["data"],
+        "required": [
+          "data"
+        ],
         "properties": {
           "data": {
             "type": "object",
             "description": "Company identifiers. e.g. { \"company_website\": \"intercom.com\" }",
             "properties": {
-              "company_website": { "type": "string", "description": "Domain, e.g. 'intercom.com'" },
-              "company_linkedin_url": { "type": "string", "description": "e.g. 'https://linkedin.com/company/deloitte'" },
-              "company_name": { "type": "string", "description": "Discouraged as the sole identifier" },
-              "company_id": { "type": "string", "description": "Company id from a previous enrichment or Search Company" }
+              "company_website": {
+                "type": "string",
+                "description": "Domain, e.g. 'intercom.com'"
+              },
+              "company_linkedin_url": {
+                "type": "string",
+                "description": "e.g. 'https://linkedin.com/company/deloitte'"
+              },
+              "company_name": {
+                "type": "string",
+                "description": "Discouraged as the sole identifier"
+              },
+              "company_id": {
+                "type": "string",
+                "description": "Company id from a previous enrichment or Search Company"
+              }
             }
           }
         }
-      }
+      },
+      "category": "Enrich company"
     },
     {
       "id": "bulkEnrichCompany",
@@ -110,25 +198,41 @@
       "credits": 2,
       "input": {
         "type": "object",
-        "required": ["data"],
+        "required": [
+          "data"
+        ],
         "properties": {
           "data": {
             "type": "array",
             "description": "Up to 50 company records, each with an identifier plus at least one datapoint",
             "items": {
               "type": "object",
-              "required": ["identifier"],
+              "required": [
+                "identifier"
+              ],
               "properties": {
-                "identifier": { "type": "string", "description": "Your own unique tracking string, echoed back in the response" },
-                "company_website": { "type": "string" },
-                "company_linkedin_url": { "type": "string" },
-                "company_name": { "type": "string" },
-                "company_id": { "type": "string" }
+                "identifier": {
+                  "type": "string",
+                  "description": "Your own unique tracking string, echoed back in the response"
+                },
+                "company_website": {
+                  "type": "string"
+                },
+                "company_linkedin_url": {
+                  "type": "string"
+                },
+                "company_name": {
+                  "type": "string"
+                },
+                "company_id": {
+                  "type": "string"
+                }
               }
             }
           }
         }
-      }
+      },
+      "category": "Enrich company"
     },
     {
       "id": "searchPerson",
@@ -137,14 +241,27 @@
       "verb": "POST",
       "path": "/search-person",
       "credits": 1,
+      "rateLimit": {
+        "rps": 1,
+        "rpm": 30
+      },
       "input": {
         "type": "object",
-        "required": ["filters"],
+        "required": [
+          "filters"
+        ],
         "properties": {
-          "filters": { "type": "object", "description": "Filter object (job_title, seniority, department, location, company filters, etc.). Use Search Suggestions to get canonical filter values. Cannot use only exclude filters." },
-          "page": { "type": "integer", "description": "Page number, defaults to 1. Max 1,000." }
+          "filters": {
+            "type": "object",
+            "description": "Filter object (job_title, seniority, department, location, company filters, etc.). Use Search Suggestions to get canonical filter values. Cannot use only exclude filters."
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number, defaults to 1. Max 1,000."
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "searchCompany",
@@ -153,14 +270,27 @@
       "verb": "POST",
       "path": "/search-company",
       "credits": 1,
+      "rateLimit": {
+        "rps": 1,
+        "rpm": 30
+      },
       "input": {
         "type": "object",
-        "required": ["filters"],
+        "required": [
+          "filters"
+        ],
         "properties": {
-          "filters": { "type": "object", "description": "Company filter object (industry, employee_count, location, technologies, funding, etc.). Use Search Suggestions for canonical values. Cannot use only exclude filters." },
-          "page": { "type": "integer", "description": "Page number, defaults to 1. Max 1,000." }
+          "filters": {
+            "type": "object",
+            "description": "Company filter object (industry, employee_count, location, technologies, funding, etc.). Use Search Suggestions for canonical values. Cannot use only exclude filters."
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number, defaults to 1. Max 1,000."
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "searchSuggestions",
@@ -172,14 +302,33 @@
       "input": {
         "type": "object",
         "properties": {
-          "location_search": { "type": "string", "description": "Find canonical location values" },
-          "job_title_search": { "type": "string", "description": "Find job title suggestions" },
-          "technology_search": { "type": "string", "description": "Find technology names" },
-          "industry_search": { "type": "string", "description": "Find industry suggestions" },
-          "naics_search": { "type": "string", "description": "Find NAICS codes (numeric or text)" },
-          "sic_search": { "type": "string", "description": "Find SIC codes (numeric or text)" }
+          "location_search": {
+            "type": "string",
+            "description": "Find canonical location values"
+          },
+          "job_title_search": {
+            "type": "string",
+            "description": "Find job title suggestions"
+          },
+          "technology_search": {
+            "type": "string",
+            "description": "Find technology names"
+          },
+          "industry_search": {
+            "type": "string",
+            "description": "Find industry suggestions"
+          },
+          "naics_search": {
+            "type": "string",
+            "description": "Find NAICS codes (numeric or text)"
+          },
+          "sic_search": {
+            "type": "string",
+            "description": "Find SIC codes (numeric or text)"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "accountInformation",
@@ -188,7 +337,10 @@
       "verb": "GET",
       "path": "/account-information",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     }
   ]
 }

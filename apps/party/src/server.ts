@@ -23,6 +23,7 @@
  */
 
 import type * as Party from "partykit/server";
+import { capturePartyEvent, capturePartyException } from "./analytics";
 import {
   authorizeGridConnection,
   isAuthorizedPublish,
@@ -74,27 +75,57 @@ export default class GridServer implements Party.Server {
     return request;
   }
 
+  /** Report an unexpected realtime-handler failure to PostHog Error Tracking. */
+  private capture(error: unknown, handler: string): void {
+    const [workspaceId, tableId] = this.room.id.split(":");
+    capturePartyException(this.room.env as Record<string, unknown>, error, {
+      handler,
+      workspace_id: workspaceId ?? "",
+      table_id: tableId ?? "",
+    });
+  }
+
   /** Track the joined connection's presence identity and broadcast the roster. */
   onConnect(conn: GridConn, ctx: Party.ConnectionContext): void {
-    const userId = ctx.request.headers.get("x-gtmgrid-user") ?? "";
-    conn.setState({ userId });
-    this.broadcastPresence();
+    try {
+      const userId = ctx.request.headers.get("x-gtmgrid-user") ?? "";
+      conn.setState({ userId });
+      this.broadcastPresence();
+      // Realtime adoption telemetry (best-effort). Room id = `${workspaceId}:${tableId}`.
+      const [workspaceId, tableId] = this.room.id.split(":");
+      capturePartyEvent(
+        this.room.env as Record<string, unknown>,
+        "realtime_connected",
+        userId,
+        { workspace_id: workspaceId ?? "", table_id: tableId ?? "" },
+        workspaceId,
+      );
+    } catch (e) {
+      this.capture(e, "onConnect");
+    }
   }
 
   /** A presence update from a client → store it and re-broadcast the roster. */
   onMessage(message: string, sender: GridConn): void {
-    let parsed: { kind?: unknown; state?: unknown };
     try {
-      parsed = JSON.parse(message) as { kind?: unknown; state?: unknown };
-    } catch {
-      return;
+      let parsed: { kind?: unknown; state?: unknown };
+      try {
+        parsed = JSON.parse(message) as { kind?: unknown; state?: unknown };
+      } catch {
+        return;
+      }
+      if (parsed.kind !== "presence" || typeof parsed.state !== "object") return;
+      const prev = sender.state;
+      if (prev) {
+        // Stamp the authoritative userId from the verified token — never trust the
+        // client-sent userId, so a member can't spoof another's presence/cursor.
+        const state = { ...(parsed.state as GridPresenceState), userId: prev.userId };
+        sender.setState({ ...prev, presence: state });
+      }
+      this.broadcastPresence();
+    } catch (e) {
+      this.capture(e, "onMessage");
     }
-    if (parsed.kind !== "presence" || typeof parsed.state !== "object") return;
-    const prev = sender.state;
-    if (prev) {
-      sender.setState({ ...prev, presence: parsed.state as GridPresenceState });
-    }
-    this.broadcastPresence();
   }
 
   /** Re-broadcast the roster when a member leaves. */
@@ -108,29 +139,42 @@ export default class GridServer implements Party.Server {
    * we authorize it then broadcast to connected clients. No bearer → 401.
    */
   async onRequest(req: Party.Request): Promise<Response> {
-    if (req.method !== "POST") {
-      return new Response("method not allowed", { status: 405 });
-    }
-    const secret = this.room.env.PARTY_PUBLISH_SECRET as string | undefined;
-    if (!isAuthorizedPublish(req.headers.get("Authorization"), secret)) {
-      return new Response("unauthorized", { status: 401 });
-    }
-    let event: GridChangeEvent;
     try {
-      event = (await req.json()) as GridChangeEvent;
-    } catch {
-      return new Response("bad request", { status: 400 });
+      if (req.method !== "POST") {
+        return new Response("method not allowed", { status: 405 });
+      }
+      const secret = this.room.env.PARTY_PUBLISH_SECRET as string | undefined;
+      if (!isAuthorizedPublish(req.headers.get("Authorization"), secret)) {
+        return new Response("unauthorized", { status: 401 });
+      }
+      let event: GridChangeEvent;
+      try {
+        event = (await req.json()) as GridChangeEvent;
+      } catch {
+        return new Response("bad request", { status: 400 });
+      }
+      this.room.broadcast(JSON.stringify({ kind: "grid", event }));
+      return new Response("ok", { status: 200 });
+    } catch (e) {
+      // An unexpected publish failure must surface (a dropped broadcast means
+      // members silently miss a grid change), not vanish into a 500.
+      this.capture(e, "onRequest");
+      return new Response("internal error", { status: 500 });
     }
-    this.room.broadcast(JSON.stringify({ kind: "grid", event }));
-    return new Response("ok", { status: 200 });
   }
 
-  /** Broadcast the current presence roster (the non-empty states) to everyone. */
+  /**
+   * Broadcast the current presence roster to everyone. Includes EVERY authorized
+   * connection (not just those that published a cursor) so joined-but-idle members
+   * still appear in the avatar stack; the published cursor/editing state (if any)
+   * is merged with the connection's authoritative identity + id.
+   */
   private broadcastPresence(): void {
     const states: GridPresenceState[] = [];
     for (const conn of this.room.getConnections<ConnState>()) {
-      const presence = conn.state?.presence;
-      if (presence) states.push(presence);
+      const s = conn.state;
+      if (!s) continue;
+      states.push({ ...(s.presence ?? {}), userId: s.userId, connectionId: conn.id });
     }
     this.room.broadcast(JSON.stringify({ kind: "presence", states }));
   }

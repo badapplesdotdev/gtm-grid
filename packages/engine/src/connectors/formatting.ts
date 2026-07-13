@@ -461,6 +461,8 @@ export const formattingConnector: Connector = {
   name: "Formatting",
   category: "formatting",
   auth: null,
+  // Pure-local transforms — exempt from the engine's safety-default rate limit.
+  local: true,
   methods: [
     cleanCompanyName,
     concatenate,

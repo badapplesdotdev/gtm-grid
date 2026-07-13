@@ -122,7 +122,14 @@ export type InvitationPreview =
 
 /** The result of {@link InvitationService.acceptInvitation}. */
 export type AcceptResult =
-  | { status: "accepted"; workspaceId: string }
+  | {
+      status: "accepted";
+      workspaceId: string;
+      /** True when this accept INSERTED a membership (vs. already a member). */
+      newMember: boolean;
+      /** Better Auth user id of the inviter (drives the teammate-joined email). */
+      invitedBy: string;
+    }
   | { status: "wrong_account"; invitedEmail: string }
   | { status: "invalid" }
   | { status: "seat_limit"; checkoutUrl: string };
@@ -425,7 +432,12 @@ export class InvitationService extends Effect.Service<InvitationService>()(
           if (!result.alreadyMember) {
             yield* seats.trackSeatUsed(inv.workspaceId);
           }
-          return { status: "accepted", workspaceId: result.workspaceId };
+          return {
+            status: "accepted",
+            workspaceId: result.workspaceId,
+            newMember: !result.alreadyMember,
+            invitedBy: inv.invitedBy,
+          };
         });
 
       return {

@@ -1,6 +1,8 @@
 {
   "files": [],
   "references": [
+    { "path": "./packages/analytics" },
+    { "path": "./packages/observability" },
     { "path": "./packages/cloud" },
     { "path": "./packages/db" },
     { "path": "./packages/services" },
@@ -8,7 +10,6 @@
     { "path": "./packages/auth" },
     { "path": "./packages/engine" },
     { "path": "./packages/server" },
-    { "path": "./packages/cli" },
     { "path": "./packages/mcp" }
   ]
 }

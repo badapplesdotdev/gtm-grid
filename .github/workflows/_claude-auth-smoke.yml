@@ -1,0 +1,30 @@
+name: _claude-auth-smoke
+
+# TEMPORARY: verify the self-hosted Mac runner can authenticate Claude under
+# launchd (the real runner context, where the login Keychain is reachable —
+# unlike a plain SSH shell). Delete once confirmed.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: [self-hosted, macos, review-agent]
+    timeout-minutes: 5
+    steps:
+      - name: claude headless auth check
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"
+          echo "claude: $(command -v claude) ($(claude --version 2>/dev/null))"
+          OUT="$(printf 'Reply with exactly the word: READY' | claude -p --model claude-opus-4-8 --output-format json 2>err.log || true)"
+          echo "$OUT" | jq '{result, is_error, cost: .total_cost_usd}'
+          if echo "$OUT" | jq -e '.is_error == true' >/dev/null; then
+            echo "::error::claude auth failed under launchd runner"; tail -5 err.log; exit 1
+          fi
+          echo "auth OK"

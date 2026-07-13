@@ -4,6 +4,19 @@
 // and newly-created columns are immediately on screen.
 
 import { useMemo, useState } from "react";
+import { Sheet, SheetContent } from "./components/ui/sheet";
+
+/** Compact relative timestamp, e.g. "2m ago". */
+function agoLabel(ts: number): string {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+function durationLabel(ms: number): string {
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
 
 interface FlatField {
   path: string[];
@@ -19,11 +32,25 @@ function typeOf(v: unknown): string {
 function typeIcon(t: string): string {
   return t === "number" ? "#" : t === "boolean" ? "☑" : t === "array" ? "[ ]" : t === "object" ? "{ }" : "T";
 }
-function flatten(value: unknown, prefix: string[] = [], out: FlatField[] = [], depth = 0): FlatField[] {
+/** Cap on how many array elements we drill into, so a giant list can't spawn
+ *  thousands of pills. The array container pill is always kept as the escape
+ *  hatch for "map the whole list", so nothing is truly hidden past the cap. */
+const ARRAY_EXPAND_CAP = 100;
+export function flatten(value: unknown, prefix: string[] = [], out: FlatField[] = [], depth = 0): FlatField[] {
   if (value && typeof value === "object" && !Array.isArray(value) && depth < 6) {
     const entries = Object.entries(value as Record<string, unknown>);
     if (!entries.length) out.push({ path: prefix, value, type: "object" });
     else for (const [k, v] of entries) flatten(v, [...prefix, k], out, depth + 1);
+  } else if (Array.isArray(value) && depth < 6) {
+    // Surface the array itself (so the whole list can still be mapped) AND drill
+    // into each element, so an array maps exactly like any other field — element
+    // by element. The element index becomes a path segment ("0", "1", …); since
+    // JS reads `arr["0"]` as `arr[0]`, extractCode resolves it with no special
+    // casing. An empty array has nothing to drill into, so the container is all.
+    out.push({ path: prefix, value, type: "array" });
+    value
+      .slice(0, ARRAY_EXPAND_CAP)
+      .forEach((v, i) => flatten(v, [...prefix, String(i)], out, depth + 1));
   } else {
     out.push({ path: prefix, value, type: typeOf(value) });
   }
@@ -36,7 +63,20 @@ function preview(v: unknown): string {
   const s = String(v);
   return s.length > 60 ? s.slice(0, 60) + "…" : s;
 }
-const leafName = (f: FlatField) => f.path[f.path.length - 1] ?? "value";
+const isIndexSeg = (s: string) => /^(0|[1-9]\d*)$/.test(s);
+/** Display/column name for a field. An array element's leaf is a numeric index,
+ *  which alone ("0") is a poor name — fold it back into the parent key as
+ *  `parent[0]` so the default reads like `email[0]`, not `0`. */
+const leafName = (f: FlatField): string => {
+  const p = f.path;
+  if (!p.length) return "value";
+  const last = p[p.length - 1];
+  if (isIndexSeg(last)) {
+    const parent = p[p.length - 2];
+    return parent ? `${parent}[${last}]` : `[${last}]`;
+  }
+  return last;
+};
 
 export default function CellDetails({
   source,
@@ -44,18 +84,46 @@ export default function CellDetails({
   onClose,
   onCreate,
   onMapTo,
+  meta,
+  fetchRaw,
 }: {
   source: { columnName: string; value: unknown };
   columns: { id: string; name: string }[];
   onClose: () => void;
-  onCreate: (path: string[], label: string) => Promise<void> | void;
-  onMapTo: (path: string[], targetId: string) => Promise<void> | void;
+  /**
+   * Promote a response field to a new column / map onto an existing one. Optional:
+   * when omitted (e.g. the cloud grid, which doesn't yet support promote/map), the
+   * drawer is VIEW-ONLY — you can still inspect and copy the full response.
+   */
+  onCreate?: (path: string[], label: string) => Promise<void> | void;
+  onMapTo?: (path: string[], targetId: string) => Promise<void> | void;
+  /** Run metadata for the cell ("what happened, when") — local function cells. */
+  meta?: { fn?: string | null; ranAt?: number | null; runMs?: number | null } | null;
+  /** Lazily fetch the archived raw pre-simplify response (local only). */
+  fetchRaw?: () => Promise<unknown>;
 }) {
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<number | null>(null);
   const [draftName, setDraftName] = useState("");
   const [busy, setBusy] = useState(false);
   const [doneMsg, setDoneMsg] = useState<string | null>(null);
+  // Raw tab: undefined = not fetched, null = fetched-and-absent, else the archive.
+  const [tab, setTab] = useState<"fields" | "raw">("fields");
+  const [raw, setRaw] = useState<unknown>(undefined);
+  const [rawBusy, setRawBusy] = useState(false);
+
+  const openRaw = async () => {
+    setTab("raw");
+    if (raw !== undefined || !fetchRaw) return;
+    setRawBusy(true);
+    try {
+      setRaw((await fetchRaw()) ?? null);
+    } catch {
+      setRaw(null);
+    } finally {
+      setRawBusy(false);
+    }
+  };
 
   const fields = useMemo(() => flatten(source.value), [source.value]);
   const visible = fields
@@ -70,6 +138,7 @@ export default function CellDetails({
     setDoneMsg(null);
   };
   const create = async (f: FlatField, name: string) => {
+    if (!onCreate) return;
     setBusy(true);
     try {
       await onCreate(f.path, name.trim() || leafName(f));
@@ -80,6 +149,7 @@ export default function CellDetails({
     }
   };
   const map = async (f: FlatField, targetId: string, targetName: string) => {
+    if (!onMapTo) return;
     setBusy(true);
     try {
       await onMapTo(f.path, targetId);
@@ -91,7 +161,8 @@ export default function CellDetails({
   };
 
   return (
-    <aside className="cell-details">
+    <Sheet open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <SheetContent className="cell-details" srTitle="Cell details">
       <div className="cd-header">
         <span className="cd-title">⚡ Cell details</span>
         <div className="cd-header-actions">
@@ -100,6 +171,35 @@ export default function CellDetails({
         </div>
       </div>
 
+      {/* Run metadata strip — when, how long, which tool produced this cell. */}
+      {meta?.ranAt != null && (
+        <div className="cd-meta" title={new Date(meta.ranAt).toLocaleString()}>
+          Ran {agoLabel(meta.ranAt)}
+          {meta.runMs != null && <> · {durationLabel(meta.runMs)}</>}
+          {meta.fn && <> · <code>{meta.fn}</code></>}
+        </div>
+      )}
+
+      {fetchRaw && (
+        <div className="cd-tabs">
+          <button className={`cd-tab${tab === "fields" ? " active" : ""}`} onClick={() => setTab("fields")}>Fields</button>
+          <button className={`cd-tab${tab === "raw" ? " active" : ""}`} onClick={() => void openRaw()}>Raw response</button>
+        </div>
+      )}
+
+      {tab === "raw" ? (
+        <div className="cd-body">
+          {rawBusy ? (
+            <div className="cd-raw-empty">Loading…</div>
+          ) : raw == null ? (
+            <div className="cd-raw-empty">
+              No separate raw response archived — the stored value IS the full response.
+            </div>
+          ) : (
+            <pre className="cd-raw"><code>{typeof raw === "string" ? raw : JSON.stringify(raw, null, 2)}</code></pre>
+          )}
+        </div>
+      ) : (
       <div className="cd-body">
         <div className="cd-search">
           <input placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false} />
@@ -115,7 +215,7 @@ export default function CellDetails({
                 <span className="cd-value">{preview(f.value)}</span>
               </button>
 
-              {selected === i && (
+              {selected === i && onCreate && (
                 <div className="cd-action">
                   <div className="cd-action-title">Add “{leafName(f)}” as new column</div>
                   <div className="cd-create-row">
@@ -130,7 +230,7 @@ export default function CellDetails({
                       {busy ? "…" : "Create column"}
                     </button>
                   </div>
-                  {columns.length > 0 && (
+                  {onMapTo && columns.length > 0 && (
                     <>
                       <div className="cd-or">or map to an existing column</div>
                       <div className="cd-map-list">
@@ -148,11 +248,13 @@ export default function CellDetails({
           ))}
         </div>
       </div>
+      )}
 
       <div className="cd-footer">
         from <strong>{source.columnName}</strong> · {fields.length} fields
       </div>
-    </aside>
+      </SheetContent>
+    </Sheet>
   );
 }
 

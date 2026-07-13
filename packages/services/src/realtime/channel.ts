@@ -36,12 +36,41 @@ export interface GridPresenceUpdate {
   readonly state: GridPresenceState;
 }
 
+/** A cell address a member is selected on / editing (scopes a presence cursor). */
+export interface GridPresenceCell {
+  readonly rowId: string;
+  readonly columnId: string;
+}
+
 /** Presence state a member publishes (cursor / editing target). Extensible. */
 export interface GridPresenceState {
   readonly userId: string;
+  /**
+   * Server-stamped per-socket id so the same user across tabs can be deduped.
+   * Clients never set this — the party fills it in on broadcast.
+   */
+  readonly connectionId?: string;
   readonly name?: string | null;
-  /** The cell the member is currently editing, if any. */
-  readonly editing?: { readonly rowId: string; readonly columnId: string } | null;
+  /** Avatar URL (from `users.image`), if the member has one. */
+  readonly image?: string | null;
+  /** The cell the member has selected (renders as the colored ring). */
+  readonly cursor?: GridPresenceCell | null;
+  /** The cell the member is currently editing, if any (stronger indicator). */
+  readonly editing?: GridPresenceCell | null;
+  /**
+   * True for an AI-AGENT participant (the user's in-app agent working the
+   * table over its own connection). Rendered with a bot glyph + fixed accent
+   * color, and deduped SEPARATELY from the driving member (who shares the
+   * same token-stamped `userId`). The party passes this through untouched.
+   */
+  readonly agent?: boolean;
+  /** Human-readable activity label, e.g. "adding 5 rows" (agent presence). */
+  readonly activity?: string | null;
+  /**
+   * Column the participant is working over (columnId) when the activity is
+   * column-scoped rather than cell-scoped — renders a column-header ring.
+   */
+  readonly column?: string | null;
 }
 
 /** Options for {@link subscribeToGrid}. */
@@ -114,15 +143,20 @@ export const subscribeToGrid = (
     }
   });
 
+  // The last state we published, re-sent on every (re)connect. partysocket opens
+  // a NEW socket on reconnect, so a one-shot open listener would drop presence
+  // after any network blip — we must re-publish `lastState` on each `open`.
+  let lastState: GridPresenceState | undefined = options.presence;
+
   const sendPresence = (state: GridPresenceState): void => {
+    lastState = state;
     const update: GridPresenceUpdate = { kind: "presence", state };
     socket.send(JSON.stringify(update));
   };
 
-  if (options.presence) {
-    const initial = options.presence;
-    socket.addEventListener("open", () => sendPresence(initial), { once: true });
-  }
+  socket.addEventListener("open", () => {
+    if (lastState) sendPresence(lastState);
+  });
 
   return {
     updatePresence: async (state) => {

@@ -27,8 +27,15 @@
 import { AutumnClient } from "@gtmgrid/cloud";
 import { schema } from "@gtmgrid/db";
 import { eq } from "drizzle-orm";
-import { Context, Data, Effect, Layer, Option } from "effect";
+import { Context, Data, Duration, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
+
+/**
+ * Hard cap on the best-effort Autumn usage flush inside `meterActions`. The DB
+ * counter is authoritative, so the external track must never hold a grid write
+ * open longer than this — past it the flush is interrupted and ignored.
+ */
+const METER_TRACK_TIMEOUT = Duration.seconds(2);
 
 /** A workspace's cloud-actions quota snapshot the bulk pre-check reads. */
 export interface MeterQuota {
@@ -124,7 +131,18 @@ export const MeterServiceLive: Layer.Layer<
                 },
                 catch: fail("meter increment"),
               });
-              yield* trackActions(workspaceId, n);
+              // The DB counter above is authoritative; the Autumn flush is two
+              // sequential external HTTP calls (getOrCreate + track). BOUND it so a
+              // slow/hung Autumn can never stall a grid write — without it, every
+              // addColumn/addRow/setCell waited on Autumn's full round-trip, which
+              // is the bulk of the "add column takes 20–30s" report. Stays
+              // best-effort: interrupted-on-timeout and ignored, exactly like a
+              // transport error. (Serverless: a detached fork would risk the lambda
+              // freezing before billing completes, so we cap rather than fork.)
+              yield* trackActions(workspaceId, n).pipe(
+                Effect.timeout(METER_TRACK_TIMEOUT),
+                Effect.ignore,
+              );
             }),
       trackActions,
       readQuota: (workspaceId) =>

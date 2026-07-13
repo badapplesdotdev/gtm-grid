@@ -2,7 +2,8 @@
 // create a table that a local poller keeps filling with new results.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, SignalSource } from "./api";
+import { SignalSource } from "./api";
+import { Dialog, DialogContent } from "./components/ui/dialog";
 
 
 // Fields surfaced in the main form (beyond `required`); the rest go under Advanced.
@@ -126,9 +127,10 @@ function Dropdown({
 }
 
 /**
- * Cloud adapter — when present, the modal loads sources + creates the binding via
- * the cloud (tRPC) path instead of the local sidecar. Cloud `create` also makes
- * the cloud table + columns, so the modal only hands it the source + config.
+ * Cloud adapter — the modal loads sources + creates the binding via the cloud
+ * (tRPC) path. Cloud `create` also makes the cloud table + columns, so the modal
+ * only hands it the source + config. The desktop is cloud-only, so this is
+ * always supplied.
  */
 export interface SignalsCloud {
   loadSources: () => Promise<{ trigifyConnected: boolean; sources: SignalSource[] }>;
@@ -149,15 +151,13 @@ export function SignalsModal({
   onClose: () => void;
   onCreated: (tableId: string, added: number) => void;
   onConnectTrigify: () => void;
-  cloud?: SignalsCloud;
+  cloud: SignalsCloud;
 }) {
   const [loading, setLoading] = useState(true);
   const [connected, setConnected] = useState(false);
   const [sources, setSources] = useState<SignalSource[]>([]);
   const [selected, setSelected] = useState<SignalSource | null>(null);
   const [name, setName] = useState("");
-  // Local pulls once (no cron); cloud runs the recurring Inngest poll (daily).
-  const schedule = cloud ? "daily" : "manual";
   const [values, setValues] = useState<Record<string, string | boolean | string[]>>({});
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -165,7 +165,7 @@ export function SignalsModal({
 
   useEffect(() => {
     let cancelled = false;
-    (cloud ? cloud.loadSources() : api.signalSources())
+    cloud.loadSources()
       .then((r) => {
         if (cancelled) return;
         setSources(r.sources);
@@ -257,9 +257,7 @@ export function SignalsModal({
     setSubmitting(true);
     setError(null);
     try {
-      const r = cloud
-        ? await cloud.create({ sourceId: selected.id, name: name.trim() || selected.label, config: buildConfig(), columns: selected.columns })
-        : await api.createSignal({ sourceId: selected.id, name: name.trim() || selected.label, config: buildConfig(), schedule });
+      const r = await cloud.create({ sourceId: selected.id, name: name.trim() || selected.label, config: buildConfig(), columns: selected.columns });
       if (r.error) { setError(r.error); return; }
       if (r.tableId) onCreated(r.tableId, r.added ?? 0);
     } catch (e) {
@@ -344,8 +342,8 @@ export function SignalsModal({
   };
 
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal sig-modal" onClick={(e) => e.stopPropagation()}>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="modal sig-modal" srTitle="From Social Signals">
         <div className="sig-head">
           <div>
             <div className="sig-title">From Social Signals</div>
@@ -421,8 +419,18 @@ export function SignalsModal({
             )}
 
             <div className="sig-note">
-              This pulls results into the table <strong>once now</strong>. Recurring auto-refresh on a
-              schedule (hourly / daily) runs 24/7 server-side and is a <strong>cloud plan</strong> feature.
+              {cloud ? (
+                <>
+                  Trigify starts scraping immediately — first results stream in over the
+                  <strong> first minute</strong>, then refresh automatically on a daily schedule
+                  (with a <strong>Sync now</strong> available on the table any time).
+                </>
+              ) : (
+                <>
+                  This pulls results into the table <strong>once now</strong>. Recurring auto-refresh on a
+                  schedule (hourly / daily) runs 24/7 server-side and is a <strong>cloud plan</strong> feature.
+                </>
+              )}
             </div>
 
             {error && <div className="sig-error">{error}</div>}
@@ -436,7 +444,7 @@ export function SignalsModal({
             </div>
           </div>
         )}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -29,12 +29,25 @@ export interface Column {
   readonly code: string | null;
   readonly params: unknown;
   readonly condition: string | null;
+  /**
+   * Column-level behaviour flags (nullable jsonb). CRM-synced columns carry
+   * `{ synced: true, crmBindingId, attrSlug, attrType }` — read-only in the
+   * grid, written only by the sync worker. Null/absent for user columns.
+   * Optional so pre-existing in-memory fixtures stay valid.
+   */
+  readonly config?: unknown;
   readonly position: number;
   readonly createdAt: number;
 }
 
 /** Fields an `addColumn` insert supplies. */
 export interface NewColumn {
+  /**
+   * Client-supplied primary key. Optional: the DB generates one when omitted.
+   * Supplied by the cloud grid so an optimistic column insert matches the
+   * server's id and the realtime self-echo converges instead of duplicating.
+   */
+  readonly id?: string;
   readonly workspaceId: string;
   readonly tableId: string;
   readonly name: string;
@@ -45,8 +58,22 @@ export interface NewColumn {
   readonly code: string | null;
   readonly params: unknown;
   readonly condition: string | null;
+  /** Optional behaviour flags (see {@link Column.config}); defaults to null. */
+  readonly config?: unknown;
   readonly position: number;
   readonly createdAt: number;
+}
+
+/** The mutable fields an `updateColumn` may patch (id/table/workspace are fixed). */
+export interface ColumnPatch {
+  readonly name?: string;
+  readonly type?: string;
+  readonly kind?: ColumnKind;
+  readonly provider?: string | null;
+  readonly method?: string | null;
+  readonly code?: string | null;
+  readonly params?: unknown;
+  readonly condition?: string | null;
 }
 
 /** Raised when a column read/write fails (DB/transport error). */
@@ -88,6 +115,16 @@ export class ColumnRepo extends Context.Tag("ColumnRepo")<
     readonly insert: (
       values: NewColumn,
     ) => Effect.Effect<string, ColumnRepoError>;
+    /** Patch a column's mutable fields; resolves to the updated projection. */
+    readonly update: (
+      id: string,
+      patch: ColumnPatch,
+    ) => Effect.Effect<Option.Option<Column>, ColumnRepoError>;
+    /** Set a column's display position (reorder). */
+    readonly setPosition: (
+      id: string,
+      position: number,
+    ) => Effect.Effect<void, ColumnRepoError>;
     /** Delete a column (FK cascade drops its cells). */
     readonly remove: (id: string) => Effect.Effect<void, ColumnRepoError>;
   }
@@ -111,6 +148,7 @@ export const ColumnRepoLive: Layer.Layer<ColumnRepo, never, DbClient> =
         code: schema.columns.code,
         params: schema.columns.params,
         condition: schema.columns.condition,
+        config: schema.columns.config,
         position: schema.columns.position,
         createdAt: schema.columns.createdAt,
       } as const;
@@ -164,6 +202,7 @@ export const ColumnRepoLive: Layer.Layer<ColumnRepo, never, DbClient> =
               const rows = await db
                 .insert(schema.columns)
                 .values({
+                  ...(values.id !== undefined ? { id: values.id } : {}),
                   workspaceId: values.workspaceId,
                   tableId: values.tableId,
                   name: values.name,
@@ -174,6 +213,7 @@ export const ColumnRepoLive: Layer.Layer<ColumnRepo, never, DbClient> =
                   code: values.code,
                   params: values.params,
                   condition: values.condition,
+                  config: values.config ?? null,
                   position: values.position,
                   createdAt: values.createdAt,
                 })
@@ -185,6 +225,49 @@ export const ColumnRepoLive: Layer.Layer<ColumnRepo, never, DbClient> =
               return id;
             },
             catch: fail("column insert"),
+          }),
+        update: (id, patch) =>
+          !UUID_RE.test(id)
+            ? Effect.succeed(Option.none<Column>())
+            : Effect.tryPromise({
+                try: async () => {
+                  // Only set the keys the caller actually provided, so an omitted
+                  // field keeps its current value.
+                  const set: Record<string, unknown> = {};
+                  if (patch.name !== undefined) set.name = patch.name;
+                  if (patch.type !== undefined) set.type = patch.type;
+                  if (patch.kind !== undefined) set.kind = patch.kind;
+                  if (patch.provider !== undefined) set.provider = patch.provider;
+                  if (patch.method !== undefined) set.method = patch.method;
+                  if (patch.code !== undefined) set.code = patch.code;
+                  if (patch.params !== undefined) set.params = patch.params;
+                  if (patch.condition !== undefined) set.condition = patch.condition;
+                  if (Object.keys(set).length === 0) {
+                    const rows = await db
+                      .select(cols)
+                      .from(schema.columns)
+                      .where(eq(schema.columns.id, id))
+                      .limit(1);
+                    return Option.fromNullable(rows[0] ?? null);
+                  }
+                  const rows = await db
+                    .update(schema.columns)
+                    .set(set as never)
+                    .where(eq(schema.columns.id, id))
+                    .returning(cols);
+                  return Option.fromNullable(rows[0] ?? null);
+                },
+                catch: fail("column update"),
+              }),
+        setPosition: (id, position) =>
+          Effect.tryPromise({
+            try: async () => {
+              await db
+                .update(schema.columns)
+                .set({ position })
+                .where(eq(schema.columns.id, id));
+            },
+            catch: fail("column set position"),
           }),
         remove: (id) =>
           Effect.tryPromise({
@@ -220,9 +303,28 @@ export const columnRepoLayer = (store: GridStore): Layer.Layer<ColumnRepo> =>
       ),
     insert: (values) =>
       Effect.sync(() => {
-        const id = store.nextId("column");
-        store.columns.push({ id, ...values });
+        const id = values.id ?? store.nextId("column");
+        store.columns.push({ ...values, id });
         return id;
+      }),
+    update: (id, patch) =>
+      Effect.sync(() => {
+        const col = store.columns.find((c) => c.id === id);
+        if (!col) return Option.none<Column>();
+        if (patch.name !== undefined) col.name = patch.name;
+        if (patch.type !== undefined) col.type = patch.type;
+        if (patch.kind !== undefined) col.kind = patch.kind;
+        if (patch.provider !== undefined) col.provider = patch.provider;
+        if (patch.method !== undefined) col.method = patch.method;
+        if (patch.code !== undefined) col.code = patch.code;
+        if (patch.params !== undefined) col.params = patch.params;
+        if (patch.condition !== undefined) col.condition = patch.condition;
+        return Option.some(col);
+      }),
+    setPosition: (id, position) =>
+      Effect.sync(() => {
+        const col = store.columns.find((c) => c.id === id);
+        if (col) col.position = position;
       }),
     remove: (id) => Effect.sync(() => cascadeDeleteColumn(store, id)),
   });

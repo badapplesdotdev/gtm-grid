@@ -1,23 +1,20 @@
 /**
  * GridStore — the async storage abstraction the execution engine runs against.
  *
- * `Engine.dispatch` + `runColumn` historically called the concrete synchronous
- * `Db` directly. To let the same engine drive either local SQLite (solo) or a
- * cloud project (team multiplayer) we hide every read/write the run path needs
- * behind this Effect service: a tagged type, typed errors, and a `Layer`.
+ * `Engine.dispatch` + `runColumn` drive every read/write the run path needs
+ * through this Effect service rather than a concrete store: a tagged type, typed
+ * errors, and a `Layer`.
  *
  * This follows the canonical Effect pattern in `sample-service.ts`:
  *   - errors are `Data.TaggedError` values in the Effect error channel,
  *   - the service is a `Context.Tag`, and
  *   - a `Layer` provides a concrete implementation.
  *
- * `SqliteGridStore` (this file) is the local implementation: a thin, behaviour-
- * preserving wrapper over the existing `Db`. The cloud store (`store-cloud.ts`)
- * is just another `Layer` for the same tag.
+ * The engine is always cloud-store-backed: the cloud store (`store-cloud.ts`)
+ * is the `Layer` for this tag.
  */
 
-import { Context, Data, Effect, Layer } from "effect";
-import type { Db } from "./db.js";
+import { Context, Data, Effect } from "effect";
 import type { Cell, CellStatus, Column, Credential, Row } from "./types.js";
 
 /**
@@ -31,11 +28,28 @@ export class GridStoreError extends Data.TaggedError("GridStoreError")<{
   readonly cause?: unknown;
 }> {}
 
-/** Patch shape accepted by {@link GridStore.setCell} — mirrors `Db.setCell`. */
+/** Patch shape accepted by {@link GridStore.setCell} — mirrors `Db.setCell`.
+ *  The run-metadata fields (`ranAt`/`runMs`/`raw`) are written by the engine's
+ *  terminal markDone/markError; stores that don't persist them (cloud) simply
+ *  ignore the extra fields. */
 export interface CellPatch {
   value?: unknown;
   status?: CellStatus;
   error?: string | null;
+  ranAt?: number | null;
+  runMs?: number | null;
+  raw?: unknown;
+}
+
+/**
+ * One keyset page of a paged full-column run: a read-only {@link GridStoreShape}
+ * scoped to this page's rows, the page's `rowIds` (in run order), and the opaque
+ * `nextCursor` to fetch the following page (`null` on the last).
+ */
+export interface GridStorePage {
+  readonly reads: GridStoreShape;
+  readonly rowIds: readonly string[];
+  readonly nextCursor: unknown;
 }
 
 /**
@@ -85,8 +99,27 @@ export interface GridStoreShape {
    * the column/rows/cells through the returned shape, while still WRITING
    * through the live store. Cheap synchronous stores (SQLite) omit it and the
    * engine reads directly, preserving their exact behaviour.
+   *
+   * When `rowIds` is supplied (a row-scoped run — cascade / run-cell /
+   * run-rows), the snapshot may fetch ONLY those rows' data instead of the whole
+   * grid, so a scoped run never loads a 50k-row table to touch a handful of
+   * rows. A store that can't scope ignores the arg and snapshots the full grid.
    */
-  readonly snapshot?: () => Effect.Effect<GridStoreShape, GridStoreError>;
+  readonly snapshot?: (
+    rowIds?: readonly string[],
+  ) => Effect.Effect<GridStoreShape, GridStoreError>;
+  /**
+   * Optional: fetch ONE keyset page of the grid for a FULL-column run, so a
+   * store that would otherwise load every row at once streams the grid
+   * page-by-page with bounded resident memory. `cursor` is `null` for the first
+   * page; the returned `nextCursor` (opaque to the engine) seeks the next page,
+   * and `null` marks the last. `reads` is a snapshot scoped to that page's rows.
+   * When present, the engine pages a full run; when omitted, it falls back to a
+   * single {@link snapshot}. Cheap synchronous stores omit it.
+   */
+  readonly snapshotPage?: (
+    cursor: unknown,
+  ) => Effect.Effect<GridStorePage, GridStoreError>;
   /**
    * Optional: when `true`, the engine SKIPS the interim `running` cell write at
    * the start of each row (`runColumn`), writing only the terminal `done`/
@@ -108,8 +141,8 @@ export interface GridStoreShape {
 }
 
 /**
- * The GridStore service tag. The engine `yield*`s this; a `Layer`
- * (`sqliteGridStore` here, `cloudGridStore` later) provides the implementation.
+ * The GridStore service tag. The engine `yield*`s this; the cloud store
+ * (`cloudGridStore`) provides the implementation.
  */
 export class GridStore extends Context.Tag("GridStore")<
   GridStore,
@@ -126,49 +159,3 @@ export class CredentialStore extends Context.Tag("CredentialStore")<
   CredentialStore,
   GridStoreShape
 >() {}
-
-/**
- * Wrap a synchronous `Db` call in an Effect, mapping any thrown error into a
- * typed {@link GridStoreError}. Behaviour is identical to calling `Db` directly
- * — the only change is the success/failure travels through the Effect channel.
- */
-const fromSync = <A>(
-  operation: string,
-  thunk: () => A,
-): Effect.Effect<A, GridStoreError> =>
-  Effect.try({
-    try: thunk,
-    catch: (cause) =>
-      new GridStoreError({
-        message: cause instanceof Error ? cause.message : String(cause),
-        operation,
-        cause,
-      }),
-  });
-
-/**
- * Build a {@link GridStoreShape} backed by a concrete synchronous {@link Db}.
- * This is the byte-for-byte local implementation: each method delegates to the
- * matching `Db` method, so cell values, statuses, credential precedence, and
- * ordering are exactly what they were before the abstraction existed.
- */
-export const sqliteGridStoreShape = (db: Db): GridStoreShape => ({
-  getColumn: (columnId) => fromSync("getColumn", () => db.getColumn(columnId)),
-  listColumns: (tableId) => fromSync("listColumns", () => db.listColumns(tableId)),
-  listRows: (tableId) => fromSync("listRows", () => db.listRows(tableId)),
-  rowCells: (rowId) => fromSync("rowCells", () => db.rowCells(rowId)),
-  getCell: (rowId, columnId) =>
-    fromSync("getCell", () => db.getCell(rowId, columnId)),
-  setCell: (rowId, columnId, patch) =>
-    fromSync("setCell", () => db.setCell(rowId, columnId, patch)),
-  getCredential: (provider) =>
-    fromSync("getCredential", () => db.getCredential(provider)),
-});
-
-/** A {@link GridStore} `Layer` backed by the given local SQLite {@link Db}. */
-export const sqliteGridStore = (db: Db): Layer.Layer<GridStore> =>
-  Layer.succeed(GridStore, sqliteGridStoreShape(db));
-
-/** A {@link CredentialStore} `Layer` backed by the given local SQLite {@link Db}. */
-export const sqliteCredentialStore = (db: Db): Layer.Layer<CredentialStore> =>
-  Layer.succeed(CredentialStore, sqliteGridStoreShape(db));

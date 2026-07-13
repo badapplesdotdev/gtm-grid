@@ -1,8 +1,8 @@
 # gtmgrid
 
-A local-first, programmable GTM spreadsheet — a Clay/Revcode-style tool where **every column is a function**. Runs fully on your machine: SQLite storage, a QuickJS sandbox for column logic, declarative HTTP connectors, bring-your-own AI key, and an MCP server so Claude Code / Codex can drive your grid.
+A cloud-only, programmable GTM spreadsheet — a Clay/Revcode-style tool where **every column is a function**. Grid data lives in **Postgres** (the single source of truth); column **execution and your keys stay on your machine** via a local Node sidecar engine — a QuickJS sandbox for column logic, declarative HTTP connectors, bring-your-own AI key, and an MCP server so Claude Code / Codex can drive your grid. An account is **required**; the free path is **self-hosting** (run your own Postgres + the `apps/web` backend).
 
-No remote job queue, no pricing gate. Bring your own AI key and your own Claude Code subscription.
+**Self-host** the whole thing on your own Postgres — fully functional, no usage caps, source-available under [FSL-1.1-MIT](./LICENSE); you run and operate the infra. Or use our **managed cloud** for zero-ops hosting plus realtime team multiplayer. Either way, bring your own AI key and your own Claude Code subscription.
 
 ## Getting started
 
@@ -19,15 +19,67 @@ cd gtm-grid
 pnpm install          # one-time; builds better-sqlite3 natively
 ```
 
-**Run it (dev — two terminals, fastest for hacking):**
+### Run it locally
+
+Grid data lives in **Postgres**, so a local run needs three things: the database,
+the backend API the desktop talks to, and the desktop UI itself (plus the engine
+sidecar that runs your columns on your machine).
+
+**1. Start Postgres** (just the database — everything else runs from source):
 
 ```bash
-# terminal 1 — the engine sidecar (HTTP API on :8787)
+docker compose up -d          # Postgres on localhost:5432
+```
+
+**2. Configure env.** Create `apps/web/.env.local`:
+
+```bash
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/postgres
+SITE_URL=http://localhost:3000
+INVITE_BASE_URL=http://localhost:3000
+GTMGRID_SELF_HOST=1                            # self-host: never expires/locks out
+BETTER_AUTH_SECRET=$(openssl rand -hex 32)     # paste the generated value
+WEBHOOK_WORKER_SECRET=$(openssl rand -hex 24)  # paste the generated value
+CREDENTIALS_MASTER_KEY=$(openssl rand -hex 32) # paste the generated value
+```
+
+> `GTMGRID_SELF_HOST=1` is important: it bypasses the paid cloud-access gate and
+> usage cap, so a self-hosted instance keeps working indefinitely (without it, a
+> workspace falls to Free when its 7-day trial lapses and cloud writes start
+> failing). Billing only applies to the managed cloud.
+
+…and `packages/desktop/.env.local` (point the desktop at your local backend):
+
+```bash
+VITE_API_URL=http://localhost:3000
+```
+
+**3. Migrate, then run** (apply the schema once, then three terminals):
+
+```bash
+# one-time: create the schema in your local Postgres
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/postgres \
+  pnpm -F @gtmgrid/db db:migrate
+
+# terminal 1 — the backend API (tRPC + Better Auth) on :3000
+pnpm -F @gtmgrid/web dev
+
+# terminal 2 — the engine sidecar (:8787) — runs your columns on your machine
 GTMGRID_PROJECT=default pnpm server
 
-# terminal 2 — the React UI on http://localhost:5173
+# terminal 3 — the desktop UI
 pnpm desktop
 ```
+
+**Sign up** against your local backend and start building — create tables, add
+function columns, connect your AI key in-app, and run them right away. With
+`GTMGRID_SELF_HOST=1` your instance never expires or meters usage. Connector/AI
+keys are stored encrypted on *your* machine.
+
+> Live multiplayer + inbound webhooks need extra services (Supabase Realtime /
+> PartyKit, Inngest). This Postgres-only flow gives you a fully working
+> single-window instance; see [`docs/local-dev.md`](./docs/local-dev.md) for the
+> complete setup.
 
 **Or run the native window** (spawns the sidecar for you):
 
@@ -44,7 +96,7 @@ PATH="/opt/homebrew/bin:$PATH" pnpm tauri:build    # → packages/desktop/src-ta
 
 **Connect your keys (in-app):** open **AI Providers** in the sidebar to add an Anthropic / OpenAI / OpenRouter key, and **Extensions → Browse all** to connect enrichment providers. Keys are stored encrypted on *your* machine — see below.
 
-> **Your data & keys stay local.** Projects live at `~/gtmgrid/<name>.db` and API keys are stored there encrypted (AES-256-GCM) — *outside this repo*. A fresh clone starts as a blank slate with no tables and no keys; each person connects their own. `node_modules/`, build output, and `*.db` files are git-ignored by design.
+> **Your keys & execution stay local.** Grid data lives in Postgres (self-hosted or our cloud), but your connector/AI keys are stored in a local secrets vault encrypted (AES-256-GCM) — *outside this repo* — and the sidecar engine runs column execution on your machine. A fresh clone starts as a blank slate with no keys; each person connects their own. `node_modules/`, build output, and local secret files are git-ignored by design.
 
 ## Architecture
 
@@ -67,7 +119,7 @@ apps/
             (/api/auth) + inbound-webhook receiver + Inngest worker + worker endpoints
 ```
 
-- **Storage** — `better-sqlite3`, one `.db` file per project at `~/gtmgrid/<name>.db`. Schema: tables → columns → rows → cells, plus `extensions` and encrypted `credentials` (AES-256-GCM, scoped local/personal/team).
+- **Storage** — grid data lives in **Postgres** ([Supabase](https://supabase.com), via Drizzle, `@gtmgrid/db`) — the single source of truth for tables → columns → rows → cells, whether self-hosted or our cloud. The desktop keeps only a small **local secrets vault** on disk: encrypted `credentials` (AES-256-GCM, connector/AI keys) and extension manifests — **not** grid data.
 - **Sandbox** — `quickjs-emscripten` (asyncify build). Each column's JS body runs isolated; `sdk.<provider>.<method>(...)` calls are blocking (asyncify) and marshalled to host-side async work. `process`/`require`/`fetch` are not reachable inside.
 - **Connectors** — one declarative manifest (verb + path + zod input) becomes an `sdk` call, an MCP tool, and (later) a UI form. Built-ins: `ai.generate`, `github.getUser`.
 - **Execution** — `engine.runColumn()` resolves `{{Column Name}}` templates, runs the column over rows with bounded concurrency (`mapConcurrent`), writes cells with `pending/running/done/error` status.
@@ -208,18 +260,18 @@ gtmgrid is **source-available** under the
 [Functional Source License (FSL-1.1-MIT)](./LICENSE) — one repo, all the code,
 free to use/self-host/modify for any purpose **except** building a competing
 commercial product (each release converts to MIT two years after it ships). The
-free local app is **100% local and offline** — local solo projects use the
-bundled SQLite engine and never call the cloud. The commercial value is
-**multiplayer / team collaboration**, sold on top as a paid tier.
+free path is **self-hosting**: run your own Postgres plus the `apps/web` backend
+and you get the whole tool, unlimited. The commercial value is **managed hosting +
+multiplayer / team collaboration**, sold on top as a paid tier.
 
-| | Free (local solo) | Paid (cloud team) |
+| | Self-host (your Postgres) | Hosted cloud (ours) |
 | --- | --- | --- |
-| **Storage** | local SQLite, one `.db` per project | Postgres ([Supabase](https://supabase.com), via Drizzle) workspace (cloud source of truth) |
-| **Collaboration** | single machine | live multiplayer — members edit the same grids in real time |
+| **Storage** | Postgres you run ([Supabase](https://supabase.com)/Drizzle, or any Postgres) | managed Postgres ([Supabase](https://supabase.com), via Drizzle) |
+| **Account** | required (sign in against your backend) | required (sign in against ours) |
+| **Collaboration** | live multiplayer within your instance | live multiplayer — members edit the same grids in real time |
 | **Connectors & tables** | unlimited | unlimited (nothing is capped) |
-| **Billing** | none | per-**seat** subscription, metered per workspace member |
-| **Execution** | local engine | **still local** — see below |
-| **Offline** | yes | online-first (cloud is the live source of truth) |
+| **Billing** | none (you run the infra) | per-**seat** subscription, metered per workspace member |
+| **Execution** | **local** — on your machine via the sidecar | **still local** — see below |
 
 Key design points (all shipped across Waves 1–3 of the cloud build):
 
@@ -237,9 +289,10 @@ Key design points (all shipped across Waves 1–3 of the cloud build):
   `cloud_actions_used` counter on the write path and track immediately to Autumn's
   `cloud_actions` meter (free tier caps at 2000, paid is metered overage). There is
   a single metering surface — both the grid `MeterService` and the webhook worker
-  write the same counter; there is no pending counter or scheduled flush. Local
-  solo projects are **never** metered — they never touch the cloud. New Autumn
-  customers are created with the workspace name + owner email.
+  write the same counter; there is no pending counter or scheduled flush. Metering
+  applies to our **hosted** cloud only — self-hosted instances run against your own
+  Postgres and are never metered. New Autumn customers are created with the
+  workspace name + owner email.
 - **Realtime multiplayer via Supabase.** Cloud team projects live in Postgres. The
   desktop SEEDS each grid via tRPC `grid.getTable`, then SUBSCRIBES to a
   per-workspace+table **Supabase Realtime Broadcast** channel; the server publishes
@@ -256,8 +309,9 @@ Key design points (all shipped across Waves 1–3 of the cloud build):
 - **Shared team credentials.** Workspace connector keys are stored in Postgres,
   encrypted at rest under a workspace-scoped key (envelope-wrapped by a backend
   master secret). Plaintext is only ever decrypted in the trusted run path —
-  never exposed to other members' clients. Local projects keep the existing
-  machine-local `~/.gtmgrid/key` AES-256-GCM model, untouched.
+  never exposed to other members' clients. Your machine keeps a local
+  `~/.gtmgrid/key` AES-256-GCM secrets vault for personal connector/AI keys used by
+  the local sidecar engine.
 
 The cloud tier is built on **Drizzle over Postgres** (`@gtmgrid/db`), **Better
 Auth** (`@gtmgrid/auth`), an **Effect-DI service layer** (`@gtmgrid/services`:
@@ -278,7 +332,7 @@ variable **names** are listed here; never commit secret values.
 | --- | --- | --- |
 | `DATABASE_URL` | apps/web env + `.env` for `pnpm db:migrate` | Supabase POOLED (Supavisor transaction mode, port 6543) Postgres URL the Drizzle client opens with `prepare:false` |
 | `SITE_URL` | apps/web env | the app's public base URL; a trusted origin for Better Auth OAuth redirects (alongside the `gtmgrid://` desktop deep link) |
-| `VITE_API_URL` | `.env` (desktop build) | base URL of the apps/web host serving the tRPC API + Better Auth; SET = cloud on, UNSET = local-only |
+| `VITE_API_URL` | `.env` (desktop build) | **required** — base URL of the apps/web backend serving the tRPC API + Better Auth (your self-hosted host, or ours). The desktop has no local-only mode; it always talks to this backend |
 | `VITE_INNGEST_URL` | `.env` (desktop build) | base URL of the webhook app, used to render a table's webhook endpoint |
 | `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` | `.env` (desktop build) | locate the Supabase project + publishable key for the live-grid Realtime subscription |
 | `AUTUMN_SECRET_KEY` | apps/web env | server-side Autumn key for seats `check`/`checkout` + cloud-actions metering |
@@ -310,9 +364,10 @@ pnpm db:generate   # generate SQL migrations from the schema (offline, no DB)
 pnpm db:migrate    # apply committed migrations (reads DATABASE_URL)
 ```
 
-The OSS build runs with **no** cloud env at all: the desktop client treats an
-absent `VITE_API_URL` as "cloud disabled", so the local-only SQLite path needs no
-database to build or run.
+The desktop build **requires** `VITE_API_URL` — it always talks to an apps/web
+backend (your self-hosted instance or ours). Self-hosters point it at their own
+host backed by their own Postgres; there is no local-only build that runs without a
+database.
 
 ### Future Expansion
 

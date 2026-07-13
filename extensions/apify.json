@@ -6,7 +6,15 @@
   "description": "Run any Apify actor/scraper and get results back per row. Run-sync returns dataset items in one call.",
   "baseUrl": "https://api.apify.com/v2",
   "logo": "https://www.google.com/s2/favicons?domain=apify.com&sz=128",
-  "auth": { "type": "apiKey", "header": "Authorization", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "Authorization",
+    "secretKey": "apiKey"
+  },
+  "rateLimit": {
+    "rps": 60,
+    "concurrency": 5
+  },
   "methods": [
     {
       "id": "runActorSync",
@@ -17,10 +25,32 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["actorId"],
+        "required": [
+          "actorId"
+        ],
         "properties": {
-          "actorId": { "type": "string", "description": "Actor id, format 'username~actorname', e.g. 'apify~website-content-crawler'" }
+          "actorId": {
+            "type": "string",
+            "description": "Actor id, format 'username~actorname', e.g. 'apify~website-content-crawler'"
+          }
         }
+      },
+      "category": "Scraping",
+      "options": {
+        "actorId": {
+          "method": "listActors",
+          "itemsPath": "data.items",
+          "labelKey": "title",
+          "valueKey": "id",
+          "sublabelKey": "username",
+          "args": {
+            "my": 1,
+            "limit": 1000
+          }
+        }
+      },
+      "rateLimit": {
+        "rps": 3
       }
     },
     {
@@ -32,10 +62,32 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["actorId"],
+        "required": [
+          "actorId"
+        ],
         "properties": {
-          "actorId": { "type": "string", "description": "Actor id, format 'username~actorname'" }
+          "actorId": {
+            "type": "string",
+            "description": "Actor id, format 'username~actorname'"
+          }
         }
+      },
+      "category": "Scraping",
+      "options": {
+        "actorId": {
+          "method": "listActors",
+          "itemsPath": "data.items",
+          "labelKey": "title",
+          "valueKey": "id",
+          "sublabelKey": "username",
+          "args": {
+            "my": 1,
+            "limit": 1000
+          }
+        }
+      },
+      "rateLimit": {
+        "rps": 3
       }
     },
     {
@@ -47,12 +99,36 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["datasetId"],
+        "required": [
+          "datasetId"
+        ],
         "properties": {
-          "datasetId": { "type": "string", "description": "Dataset id (defaultDatasetId from a run)" },
-          "clean": { "type": "boolean" },
-          "limit": { "type": "integer" },
-          "offset": { "type": "integer" }
+          "datasetId": {
+            "type": "string",
+            "description": "Dataset id (defaultDatasetId from a run)"
+          },
+          "clean": {
+            "type": "boolean"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          }
+        }
+      },
+      "category": "Scraping",
+      "options": {
+        "datasetId": {
+          "method": "listDatasets",
+          "itemsPath": "data.items",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "itemCount",
+          "args": {
+            "limit": 1000
+          }
         }
       }
     },
@@ -63,7 +139,70 @@
       "verb": "GET",
       "path": "/users/me",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "id": "listActors",
+      "label": "List Actors",
+      "description": "List your account's Actors (paginated). Use my=1 to limit to Actors you own/created. Returns { data: { items: [{ id, name, username, title }] } }. The item `id` works directly as `actorId` on the run endpoints (so does username~name).",
+      "verb": "GET",
+      "path": "/acts",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "my": {
+            "type": "integer",
+            "description": "Set 1 to list only Actors you own"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max items (default 1000)"
+          },
+          "offset": {
+            "type": "integer",
+            "description": "Pagination offset"
+          },
+          "sortBy": {
+            "type": "string",
+            "description": "createdAt | stats.lastRunStartedAt"
+          }
+        }
+      },
+      "category": "Scraping"
+    },
+    {
+      "id": "listDatasets",
+      "label": "List Datasets",
+      "description": "List your datasets (paginated). Returns { data: { items: [{ id, name, title, itemCount, actId }] } }. Use a dataset `id` as `datasetId` for getDatasetItems.",
+      "verb": "GET",
+      "path": "/datasets",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "unnamed": {
+            "type": "boolean",
+            "description": "Include unnamed (run-default) datasets"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max items (default 1000)"
+          },
+          "offset": {
+            "type": "integer",
+            "description": "Pagination offset"
+          },
+          "desc": {
+            "type": "boolean",
+            "description": "Sort descending by createdAt"
+          }
+        }
+      },
+      "category": "Scraping"
     }
   ]
 }

@@ -82,6 +82,7 @@ import {
   makeGridStore,
   type StoreCell,
   type StoreColumn,
+  type StoreFolder,
   type StoreProject,
   type StoreRow,
   type StoreTable,
@@ -101,6 +102,11 @@ import {
   TableRepoLive,
   tableRepoLayer,
 } from "./repositories/table-repo.js";
+import {
+  FolderRepo,
+  FolderRepoLive,
+  folderRepoLayer,
+} from "./repositories/folder-repo.js";
 import {
   type WebhookDelivery,
   WebhookDeliveryRepo,
@@ -130,7 +136,22 @@ import {
   WorkspaceRepoLive,
   workspaceRepoLayer,
 } from "./repositories/workspace-repo.js";
+import {
+  LifecycleEmailRepo,
+  LifecycleEmailRepoLive,
+  lifecycleEmailRepoLayer,
+} from "./repositories/lifecycle-email-repo.js";
+import {
+  LifecycleCronRepo,
+  LifecycleCronRepoLive,
+  lifecycleCronRepoLayer,
+} from "./repositories/lifecycle-cron-repo.js";
 import { ExtensionService } from "./services/extension-service.js";
+import {
+  ErrorReporter,
+  errorReporterLayer,
+  errorReporterNoop,
+} from "./services/error-reporter.js";
 import { EntitlementService } from "./services/entitlement-service.js";
 import { GridService } from "./services/grid-service.js";
 import { ShareService } from "./services/share-service.js";
@@ -154,6 +175,28 @@ import {
   type SignalBinding,
 } from "./repositories/signal-repo.js";
 import { SignalService } from "./services/signal-service.js";
+import { AttioAuth } from "./services/attio-auth.js";
+import { AttioClient } from "./services/attio-client.js";
+import { CrmClientRegistry } from "./services/crm-client-registry.js";
+import { CrmAuthRegistry } from "./services/crm-auth-registry.js";
+import { HubspotAuth } from "./services/hubspot-auth.js";
+import { HubspotClient } from "./services/hubspot-client.js";
+import { CrmConnectionService } from "./services/crm-connection-service.js";
+import { CrmSyncService } from "./services/crm-sync-service.js";
+import {
+  type CrmBinding,
+  CrmBindingRepo,
+  CrmBindingRepoLive,
+  crmBindingRepoLayer,
+  type CrmSyncedRow,
+  CrmSyncedRowRepo,
+  CrmSyncedRowRepoLive,
+  crmSyncedRowRepoLayer,
+  type CrmSyncRun,
+  CrmSyncRunRepo,
+  CrmSyncRunRepoLive,
+  crmSyncRunRepoLayer,
+} from "./repositories/crm-repo.js";
 import { BillingService } from "./services/billing-service.js";
 import { CredentialService } from "./services/credential-service.js";
 import {
@@ -194,11 +237,22 @@ export const identityFromUserId = (
 export const appLayer = (params: {
   readonly db: Db;
   readonly userId: string | null;
+  /**
+   * Host sink for SWALLOWED, best-effort failures (e.g. a failed invite email) →
+   * PostHog Error Tracking. apps/web passes `captureServerException`; omitted ⇒ a
+   * no-op reporter (tests / OSS). Uncaught failures still surface at the boundary.
+   */
+  readonly reportError?: (error: unknown, context?: Record<string, unknown>) => void;
 }): Layer.Layer<AppServices> => {
   const dbLayer = dbClientLayer(params.db);
   const identity = identityFromUserId(params.userId);
+  const errorReporter: Layer.Layer<ErrorReporter> = params.reportError
+    ? errorReporterLayer(params.reportError)
+    : errorReporterNoop;
   const memberRepo = MemberRepoLive.pipe(Layer.provide(dbLayer));
   const workspaceRepo = WorkspaceRepoLive.pipe(Layer.provide(dbLayer));
+  const lifecycleEmailRepo = LifecycleEmailRepoLive.pipe(Layer.provide(dbLayer));
+  const lifecycleCronRepo = LifecycleCronRepoLive.pipe(Layer.provide(dbLayer));
   const workspaceMemberRepo = WorkspaceMemberRepoLive.pipe(
     Layer.provide(dbLayer),
   );
@@ -211,6 +265,7 @@ export const appLayer = (params: {
   const extensionRepo = ExtensionRepoLive.pipe(Layer.provide(dbLayer));
   const projectRepo = ProjectRepoLive.pipe(Layer.provide(dbLayer));
   const tableRepo = TableRepoLive.pipe(Layer.provide(dbLayer));
+  const folderRepo = FolderRepoLive.pipe(Layer.provide(dbLayer));
   const columnRepo = ColumnRepoLive.pipe(Layer.provide(dbLayer));
   const rowRepo = RowRepoLive.pipe(Layer.provide(dbLayer));
   const cellRepo = CellRepoLive.pipe(Layer.provide(dbLayer));
@@ -259,7 +314,7 @@ export const appLayer = (params: {
     Layer.provide(membershipService),
     Layer.provide(seatsService),
     Layer.provide(identity),
-    Layer.provide(InviteEmailPortLive),
+    Layer.provide(InviteEmailPortLive.pipe(Layer.provide(errorReporter))),
   );
   const credentialService = CredentialService.Default.pipe(
     Layer.provide(credentialRepo),
@@ -277,12 +332,42 @@ export const appLayer = (params: {
     Layer.provide(CellMerge.Default),
     Layer.provide(credentialCryptoLive),
     Layer.provide(entitlementService),
+    Layer.provide(columnRepo),
+    Layer.provide(realtimePublisher),
   );
   const extensionService = ExtensionService.Default.pipe(
     Layer.provide(extensionRepo),
     Layer.provide(membershipService),
   );
   const signalRepo = SignalRepoLive.pipe(Layer.provide(dbLayer));
+  const crmBindingRepo = CrmBindingRepoLive.pipe(Layer.provide(dbLayer));
+  const crmSyncedRowRepo = CrmSyncedRowRepoLive.pipe(Layer.provide(dbLayer));
+  const crmSyncRunRepo = CrmSyncRunRepoLive.pipe(Layer.provide(dbLayer));
+  const attioAuth = AttioAuth.Default;
+  const attioClient = AttioClient.Default.pipe(Layer.provide(attioAuth));
+  const hubspotAuth = HubspotAuth.Default;
+  const hubspotClient = HubspotClient.Default.pipe(Layer.provide(hubspotAuth));
+  const crmClientRegistry = CrmClientRegistry.Default.pipe(Layer.provide(attioClient), Layer.provide(hubspotClient));
+  const crmAuthRegistry = CrmAuthRegistry.Default.pipe(Layer.provide(attioAuth), Layer.provide(hubspotAuth));
+  const crmConnectionService = CrmConnectionService.Default.pipe(
+    Layer.provide(credentialService),
+    Layer.provide(credentialRepo),
+    Layer.provide(CryptoServiceLive),
+    Layer.provide(crmAuthRegistry),
+  );
+  const crmSyncService = CrmSyncService.Default.pipe(
+    Layer.provide(crmBindingRepo),
+    Layer.provide(crmSyncedRowRepo),
+    Layer.provide(crmSyncRunRepo),
+    Layer.provide(webhookRepo),
+    Layer.provide(columnRepo),
+    Layer.provide(crmClientRegistry),
+    Layer.provide(crmConnectionService),
+    Layer.provide(membershipService),
+    Layer.provide(entitlementService),
+    Layer.provide(workspaceRepo),
+    Layer.provide(realtimePublisher),
+  );
   const signalService = SignalService.Default.pipe(
     Layer.provide(signalRepo),
     Layer.provide(webhookRepo),
@@ -294,6 +379,7 @@ export const appLayer = (params: {
   const gridService = GridService.Default.pipe(
     Layer.provide(projectRepo),
     Layer.provide(tableRepo),
+    Layer.provide(folderRepo),
     Layer.provide(columnRepo),
     Layer.provide(rowRepo),
     Layer.provide(cellRepo),
@@ -321,10 +407,23 @@ export const appLayer = (params: {
     extensionService,
     signalService,
     signalRepo,
+    crmBindingRepo,
+    crmSyncedRowRepo,
+    crmSyncRunRepo,
+    attioAuth,
+    attioClient,
+    hubspotAuth,
+    hubspotClient,
+    crmClientRegistry,
+    crmAuthRegistry,
+    crmConnectionService,
+    crmSyncService,
     gridService,
     shareService,
     shareRepo,
     workspaceRepo,
+    lifecycleEmailRepo,
+    lifecycleCronRepo,
     workspaceMemberRepo,
     invitationRepo,
     credentialRepo,
@@ -333,6 +432,7 @@ export const appLayer = (params: {
     extensionRepo,
     projectRepo,
     tableRepo,
+    folderRepo,
     columnRepo,
     rowRepo,
     cellRepo,
@@ -375,6 +475,7 @@ export interface TestLayerFixtures {
     readonly id: string;
     readonly name?: string | null;
     readonly email?: string | null;
+    readonly image?: string | null;
   }[];
   /**
    * Configures the fake Autumn port (@gtmgrid/cloud `fakeAutumnLayer`) backing
@@ -399,6 +500,12 @@ export interface TestLayerFixtures {
   readonly webhooks?: Webhook[];
   /** Signal bindings visible to {@link SignalRepo} (MUTATED by insert/patch/delete). */
   readonly signalBindings?: SignalBinding[];
+  /** CRM bindings visible to {@link CrmBindingRepo} (MUTATED by insert/patch/delete). */
+  readonly crmBindings?: CrmBinding[];
+  /** CRM record→row identity map for {@link CrmSyncedRowRepo} (MUTATED by upsert/stale). */
+  readonly crmSyncedRows?: CrmSyncedRow[];
+  /** CRM sync-run history for {@link CrmSyncRunRepo} (MUTATED by start/finish). */
+  readonly crmSyncRuns?: CrmSyncRun[];
   /** Table shares visible to {@link ShareRepo} (MUTATED by insert/revoke). */
   readonly shares?: TableShare[];
   /** Tables backing the webhook worker grid paths. */
@@ -433,6 +540,8 @@ export interface TestLayerFixtures {
   readonly gridProjects?: StoreProject[];
   /** Tables visible to {@link TableRepo} (MUTATED by create/deleteTable). */
   readonly gridTables?: StoreTable[];
+  /** Sidebar folders visible to {@link FolderRepo} (MUTATED by folder CRUD). */
+  readonly gridFolders?: StoreFolder[];
   /** Columns visible to {@link ColumnRepo} (MUTATED by addColumn/delete). */
   readonly gridColumns?: StoreColumn[];
   /** Rows visible to {@link RowRepo} (MUTATED by addRow(s)/delete). */
@@ -469,6 +578,7 @@ const membershipsToMemberRows = (
     createdAt: i,
     name: null,
     email: null,
+    image: null,
   }));
 
 /**
@@ -490,6 +600,7 @@ export const TestLayer = (
       id: u.id,
       name: u.name ?? null,
       email: u.email ?? null,
+      image: u.image ?? null,
     })),
   );
   const webhookRepo = webhookRepoLayer({
@@ -511,12 +622,14 @@ export const TestLayer = (
   const gridStore: GridStore = makeGridStore({
     projects: fixtures.gridProjects,
     tables: fixtures.gridTables,
+    folders: fixtures.gridFolders,
     columns: fixtures.gridColumns,
     rows: fixtures.gridRows,
     cells: fixtures.gridCells,
   });
   const projectRepo = projectRepoLayer(gridStore);
   const tableRepo = tableRepoLayer(gridStore);
+  const folderRepo = folderRepoLayer(gridStore);
   const columnRepo = columnRepoLayer(gridStore);
   const rowRepo = rowRepoLayer(gridStore);
   const cellRepo = cellRepoLayer(gridStore);
@@ -590,6 +703,18 @@ export const TestLayer = (
     Layer.provide(membershipService),
     Layer.provide(CredentialOwnershipService.Default),
   );
+  const attioAuth = AttioAuth.Default;
+  const attioClient = AttioClient.Default.pipe(Layer.provide(attioAuth));
+  const hubspotAuth = HubspotAuth.Default;
+  const hubspotClient = HubspotClient.Default.pipe(Layer.provide(hubspotAuth));
+  const crmClientRegistry = CrmClientRegistry.Default.pipe(Layer.provide(attioClient), Layer.provide(hubspotClient));
+  const crmAuthRegistry = CrmAuthRegistry.Default.pipe(Layer.provide(attioAuth), Layer.provide(hubspotAuth));
+  const crmConnectionService = CrmConnectionService.Default.pipe(
+    Layer.provide(credentialService),
+    Layer.provide(credentialRepo),
+    Layer.provide(cryptoService),
+    Layer.provide(crmAuthRegistry),
+  );
   const entitlementService = EntitlementService.Default.pipe(
     Layer.provide(workspaceRepo),
   );
@@ -600,12 +725,36 @@ export const TestLayer = (
     Layer.provide(CellMerge.Default),
     Layer.provide(fixtures.crypto ?? credentialCryptoTest()),
     Layer.provide(entitlementService),
+    Layer.provide(columnRepo),
+    Layer.provide(realtimePublisher),
   );
   const extensionService = ExtensionService.Default.pipe(
     Layer.provide(extensionRepo),
     Layer.provide(membershipService),
   );
   const signalRepo = signalRepoLayer({ bindings: fixtures.signalBindings });
+  const crmBindingRepo = crmBindingRepoLayer({ bindings: fixtures.crmBindings });
+  const crmSyncedRowRepo = crmSyncedRowRepoLayer({ entries: fixtures.crmSyncedRows });
+  const crmSyncRunRepo = crmSyncRunRepoLayer({ runs: fixtures.crmSyncRuns });
+  const crmSyncService = CrmSyncService.Default.pipe(
+    Layer.provide(crmBindingRepo),
+    Layer.provide(crmSyncedRowRepo),
+    Layer.provide(crmSyncRunRepo),
+    Layer.provide(webhookRepo),
+    Layer.provide(columnRepo),
+    Layer.provide(crmClientRegistry),
+    Layer.provide(crmConnectionService),
+    Layer.provide(membershipService),
+    Layer.provide(entitlementService),
+    Layer.provide(workspaceRepo),
+    Layer.provide(realtimePublisher),
+  );
+  const lifecycleEmailRepo = lifecycleEmailRepoLayer({
+    users: (fixtures.users ?? []).flatMap((u) =>
+      u.email ? [{ id: u.id, email: u.email, name: u.name ?? null }] : [],
+    ),
+  });
+  const lifecycleCronRepo = lifecycleCronRepoLayer();
   const signalService = SignalService.Default.pipe(
     Layer.provide(signalRepo),
     Layer.provide(webhookRepo),
@@ -617,6 +766,7 @@ export const TestLayer = (
   const gridService = GridService.Default.pipe(
     Layer.provide(projectRepo),
     Layer.provide(tableRepo),
+    Layer.provide(folderRepo),
     Layer.provide(columnRepo),
     Layer.provide(rowRepo),
     Layer.provide(cellRepo),
@@ -648,11 +798,24 @@ export const TestLayer = (
     extensionService,
     signalService,
     signalRepo,
+    crmBindingRepo,
+    crmSyncedRowRepo,
+    crmSyncRunRepo,
+    attioAuth,
+    attioClient,
+    hubspotAuth,
+    hubspotClient,
+    crmClientRegistry,
+    crmAuthRegistry,
+    crmConnectionService,
+    crmSyncService,
     gridService,
     shareService,
     shareRepo,
     entitlementService,
     workspaceRepo,
+    lifecycleEmailRepo,
+    lifecycleCronRepo,
     workspaceMemberRepo,
     invitationRepo,
     credentialRepo,
@@ -661,6 +824,7 @@ export const TestLayer = (
     extensionRepo,
     projectRepo,
     tableRepo,
+    folderRepo,
     columnRepo,
     rowRepo,
     cellRepo,
@@ -692,6 +856,17 @@ export type AppServices =
   | WebhookDeliveryRepo
   | SignalService
   | SignalRepo
+  | CrmBindingRepo
+  | CrmSyncedRowRepo
+  | CrmSyncRunRepo
+  | AttioAuth
+  | AttioClient
+  | HubspotAuth
+  | HubspotClient
+  | CrmClientRegistry
+  | CrmAuthRegistry
+  | CrmConnectionService
+  | CrmSyncService
   | ExtensionService
   | ExtensionRepo
   | GridService
@@ -700,8 +875,11 @@ export type AppServices =
   | EntitlementService
   | ProjectRepo
   | TableRepo
+  | FolderRepo
   | ColumnRepo
   | RowRepo
   | CellRepo
   | MeterService
-  | RealtimePublisher;
+  | RealtimePublisher
+  | LifecycleEmailRepo
+  | LifecycleCronRepo;

@@ -82,6 +82,16 @@ export class CellRepo extends Context.Tag("CellRepo")<
       tableId: string,
     ) => Effect.Effect<readonly Cell[], CellRepoError>;
     /**
+     * Only a single column's cells across a table — for callers that read one
+     * column over every row (e.g. the dedupe sweep, which inspects just the
+     * dedupe column's value). Served by the `cells_by_table_column` index, so
+     * it returns ~one cell per row instead of the full rows×columns matrix.
+     */
+    readonly listByTableColumn: (
+      tableId: string,
+      columnId: string,
+    ) => Effect.Effect<readonly Cell[], CellRepoError>;
+    /**
      * Only the cells belonging to a given set of rows — for the PAGED getTable.
      * Reads a single page's cells (the rows from one keyset page) instead of the
      * whole table, so resident memory stays bounded. An empty `rowIds` returns
@@ -153,6 +163,22 @@ export const CellRepoLive: Layer.Layer<CellRepo, never, DbClient> =
                 catch: fail("cell page list"),
               });
         },
+        listByTableColumn: (tableId, columnId) =>
+          UUID_RE.test(tableId) && UUID_RE.test(columnId)
+            ? Effect.tryPromise({
+                try: () =>
+                  db
+                    .select(cols)
+                    .from(schema.cells)
+                    .where(
+                      and(
+                        eq(schema.cells.tableId, tableId),
+                        eq(schema.cells.columnId, columnId),
+                      ),
+                    ),
+                catch: fail("cell column list"),
+              })
+            : Effect.succeed([] as readonly Cell[]),
         findByRowColumn: (rowId, columnId) =>
           UUID_RE.test(rowId) && UUID_RE.test(columnId)
             ? Effect.tryPromise({
@@ -250,6 +276,12 @@ export const cellRepoLayer = (store: GridStore): Layer.Layer<CellRepo> =>
       const set = new Set(rowIds);
       return Effect.succeed(store.cells.filter((c) => set.has(c.rowId)));
     },
+    listByTableColumn: (tableId, columnId) =>
+      Effect.succeed(
+        store.cells.filter(
+          (c) => c.tableId === tableId && c.columnId === columnId,
+        ),
+      ),
     findByRowColumn: (rowId, columnId) =>
       Effect.succeed(
         Option.fromNullable(

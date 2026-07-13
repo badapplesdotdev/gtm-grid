@@ -115,6 +115,37 @@ const upsertCell = (
 };
 
 /**
+ * Reorder `items` to match the id order in `order`, stably. Items whose id is in
+ * `order` come first in that exact order; any item the event omits (or that was
+ * added after the event was produced) is kept and appended in its prior relative
+ * order. Ids in `order` that the snapshot doesn't hold are skipped. Returns the
+ * SAME array reference when the order is already correct, so an idempotent
+ * re-delivery is a no-op (no needless re-render).
+ */
+const reorderById = <T extends { readonly _id: string }>(
+  items: readonly T[],
+  order: readonly string[],
+): readonly T[] => {
+  const byId = new Map(items.map((it) => [it._id, it]));
+  const seen = new Set<string>();
+  const next: T[] = [];
+  for (const id of order) {
+    const it = byId.get(id);
+    if (it !== undefined && !seen.has(id)) {
+      next.push(it);
+      seen.add(id);
+    }
+  }
+  for (const it of items) {
+    if (!seen.has(it._id)) next.push(it);
+  }
+  // Preserve referential identity when nothing actually moved.
+  const unchanged =
+    next.length === items.length && next.every((it, i) => it === items[i]);
+  return unchanged ? items : next;
+};
+
+/**
  * Apply one grid change event to a snapshot, returning the next snapshot.
  *
  * A `null` snapshot (table not loaded / already deleted) is passed through
@@ -123,10 +154,13 @@ const upsertCell = (
  * snapshot to `null`.
  */
 export const applyGridEvent = (
-  snapshot: GridSnapshot | null,
+  snapshot: GridSnapshot | null | undefined,
   event: GridChangeEvent,
 ): GridSnapshot | null => {
-  if (snapshot === null) return null;
+  // `undefined` reaches us via react-query's setQueryData updater when the
+  // target cache key has no entry (e.g. the unpaged `table` snapshot while the
+  // grid is paged) — there is nothing to patch either way.
+  if (snapshot == null) return null;
 
   switch (event.type) {
     case "cell.upsert":
@@ -158,6 +192,19 @@ export const applyGridEvent = (
       return { ...snapshot, columns };
     }
 
+    case "column.update": {
+      // Replace the column in place by id (order preserved). If we don't yet
+      // hold the column (not loaded / out-of-order delivery), leave the snapshot
+      // unchanged — the column will arrive correct on its next full read.
+      let found = false;
+      const columns = snapshot.columns.map((c) => {
+        if (c._id !== event.column._id) return c;
+        found = true;
+        return event.column;
+      });
+      return found ? { ...snapshot, columns } : snapshot;
+    }
+
     case "column.delete":
       return {
         ...snapshot,
@@ -165,6 +212,22 @@ export const applyGridEvent = (
         // Cascade: drop the deleted column's cells (mirrors the FK ON DELETE).
         cells: snapshot.cells.filter((c) => c.columnId !== event.columnId),
       };
+
+    case "column.reorder": {
+      const columns = reorderById(snapshot.columns, event.columnIds);
+      return columns === snapshot.columns ? snapshot : { ...snapshot, columns };
+    }
+
+    case "row.reorder": {
+      const rows = reorderById(snapshot.rows, event.rowIds);
+      return rows === snapshot.rows ? snapshot : { ...snapshot, rows };
+    }
+
+    case "table.rename":
+      // Relabel in place only when the viewed snapshot IS this table.
+      return event.tableId === snapshot.table._id
+        ? { ...snapshot, table: { ...snapshot.table, name: event.name } }
+        : snapshot;
 
     case "table.insert":
       // A sibling table was created — a `getTable` snapshot for THIS table is
@@ -174,5 +237,15 @@ export const applyGridEvent = (
     case "table.delete":
       // The viewed table is gone — collapse to the "no longer exists" sentinel.
       return event.tableId === snapshot.table._id ? null : snapshot;
+
+    case "folders.changed":
+      // Sidebar folder organization changed — a `getTable` snapshot holds no
+      // folder data, so the grid is unaffected (the list view refetches).
+      return snapshot;
+
+    case "table.favorite":
+      // A favourite/pin toggled — sidebar-only state, no `getTable` data, so
+      // the grid is unaffected (the list view refetches + reorders).
+      return snapshot;
   }
 };

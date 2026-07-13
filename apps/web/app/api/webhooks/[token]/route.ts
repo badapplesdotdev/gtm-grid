@@ -1,6 +1,10 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
 import { createHash } from "node:crypto";
 import { inngest } from "../../../../lib/inngest/client";
+import { captureServer } from "../../../../lib/posthog-server";
+import { clientIp, rateLimit } from "../../../../lib/rate-limit";
+import { resolveSiteUrl } from "../../../../lib/site-url";
+import { applyMapping, type MappingEntry } from "../../../../lib/webhook-mapping";
+import { signatureCheckPasses } from "../../../../lib/webhook-signature";
 
 /**
  * The public webhook receiver. A third party POSTs JSON to
@@ -10,8 +14,12 @@ import { inngest } from "../../../../lib/inngest/client";
  *     (secret-gated with `WEBHOOK_WORKER_SECRET`). Unknown OR disabled tokens
  *     resolve to `null` and are rejected with 404 WITHOUT leaking which (no
  *     per-reason message).
- *  2. Verifies the `X-GTMGrid-Signature` header — `hex(HMAC-SHA256(signingSecret,
- *     rawBody))` — in constant time. A missing/invalid signature → 401.
+ *  2. When the webhook has OPTED IN to signature auth (a `signingSecret` is
+ *     set), verifies the `X-GTMGrid-Signature` header —
+ *     `hex(HMAC-SHA256(signingSecret, rawBody))` — in constant time; a
+ *     missing/invalid signature → 401. Without a secret the endpoint accepts
+ *     unsigned posts: the unguessable token IS the credential, which is what
+ *     most third-party senders (no custom HMAC support) can work with.
  *  3. Applies the stored field mapping (`[{ path, columnId }]`) to the parsed
  *     JSON, producing a `{ columnId: value }` map.
  *  4. Computes an idempotent `recordId` (an inbound idempotency header, else
@@ -25,12 +33,6 @@ import { inngest } from "../../../../lib/inngest/client";
  */
 export const runtime = "nodejs";
 
-/** A single field-mapping entry: a JSON path → the target column id. */
-interface MappingEntry {
-  readonly path: string;
-  readonly columnId: string;
-}
-
 /** The resolved webhook config the worker route returns (or `null`). */
 interface ResolvedWebhook {
   readonly webhookId: string;
@@ -43,19 +45,16 @@ interface ResolvedWebhook {
   readonly upsertKey: string | null;
 }
 
-const json = (body: unknown, status: number): Response =>
+const json = (body: unknown, status: number, extraHeaders?: Record<string, string>): Response =>
   new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...extraHeaders },
   });
 
-/** Resolve the base URL of the apps/web deployment serving the worker endpoints. */
+/** Resolve the base URL of the apps/web deployment serving the worker endpoints
+ *  — `SITE_URL` when configured, else the Vercel-injected deployment URL. */
 function workerBaseUrl(): string {
-  const url = process.env.SITE_URL;
-  if (url === undefined || url === "") {
-    throw new Error("SITE_URL is not configured");
-  }
-  return url.replace(/\/$/, "");
+  return resolveSiteUrl();
 }
 
 /** Resolve the shared worker bearer secret, failing closed when unset. */
@@ -84,56 +83,6 @@ async function resolveToken(token: string): Promise<ResolvedWebhook | null> {
   if (text === "") return null;
   const parsed = JSON.parse(text);
   return parsed === null ? null : (parsed as ResolvedWebhook);
-}
-
-/**
- * Verify `hex(HMAC-SHA256(secret, rawBody)) === header` in constant time.
- * Returns false on any missing input or length mismatch (length is not secret).
- */
-function verifySignature(
-  rawBody: string,
-  signatureHeader: string | null,
-  signingSecret: string | null,
-): boolean {
-  if (signatureHeader === null || signingSecret === null || signingSecret === "") {
-    return false;
-  }
-  const expected = createHmac("sha256", signingSecret).update(rawBody).digest("hex");
-  const a = Buffer.from(expected, "utf8");
-  const b = Buffer.from(signatureHeader, "utf8");
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
-}
-
-/**
- * Read a value out of `body` at a dotted/bracketed `path` (e.g. `a.b[0].c` or
- * `payload.email`). Returns `undefined` when any segment is missing.
- */
-function valueAtPath(body: unknown, path: string): unknown {
-  const segments = path
-    .replace(/\[(\w+)\]/g, ".$1")
-    .split(".")
-    .filter((s) => s.length > 0);
-  let current: unknown = body;
-  for (const segment of segments) {
-    if (current === null || typeof current !== "object") return undefined;
-    current = (current as Record<string, unknown>)[segment];
-  }
-  return current;
-}
-
-/** Apply the stored mapping to the body → `{ columnId: value }` (skip missing). */
-function applyMapping(
-  body: unknown,
-  mapping: readonly MappingEntry[],
-): Record<string, unknown> {
-  const cells: Record<string, unknown> = {};
-  for (const entry of mapping) {
-    const value = valueAtPath(body, entry.path);
-    if (value === undefined) continue;
-    cells[entry.columnId] = value;
-  }
-  return cells;
 }
 
 /**
@@ -178,6 +127,14 @@ export async function POST(
 ): Promise<Response> {
   const { token } = await params;
 
+  // Rate limit the public ingress per token+IP BEFORE any work (token resolve,
+  // body read, enqueue) so abuse/floods are cheap to reject. 120 posts / 60s is
+  // generous for legitimate webhook senders.
+  const limit = rateLimit(`webhook:${token}:${clientIp(req)}`, 120, 60_000);
+  if (!limit.ok) {
+    return json({ error: "Too many requests" }, 429, { "Retry-After": String(limit.retryAfter) });
+  }
+
   // Read the RAW body once — HMAC is computed over the exact bytes received.
   const rawBody = await req.text();
 
@@ -187,9 +144,10 @@ export async function POST(
     return json({ error: "Not found" }, 404);
   }
 
-  // Verify the signature BEFORE parsing/acting on the body.
+  // Auth gate BEFORE parsing/acting on the body: signature auth is OPT-IN —
+  // enforced only for webhooks that have a signing secret set.
   const signature = req.headers.get("X-GTMGrid-Signature");
-  if (!verifySignature(rawBody, signature, webhook.signingSecret)) {
+  if (!signatureCheckPasses(rawBody, signature, webhook.signingSecret)) {
     return json({ error: "Invalid signature" }, 401);
   }
 
@@ -200,7 +158,7 @@ export async function POST(
     return json({ error: "Invalid JSON body" }, 400);
   }
 
-  const mappedCells = applyMapping(body, webhook.mapping);
+  const mappedCells = applyMapping(body, webhook.mapping, Date.now());
 
   const idempotencyHeader =
     req.headers.get("Idempotency-Key") ?? req.headers.get("X-Idempotency-Key");
@@ -219,6 +177,18 @@ export async function POST(
       upsertKey: webhook.upsertKey,
       recordId,
     },
+  });
+
+  captureServer("webhook_received", {
+    distinctId: webhook.workspaceId,
+    properties: {
+      webhook_id: webhook.webhookId,
+      workspace_id: webhook.workspaceId,
+      table_id: webhook.tableId,
+      auto_run: webhook.autoRun,
+      mode: webhook.mode,
+    },
+    groups: { workspace: webhook.workspaceId },
   });
 
   return json({ accepted: true, recordId }, 202);

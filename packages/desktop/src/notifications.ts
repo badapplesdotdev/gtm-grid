@@ -1,34 +1,48 @@
 /**
  * Notification-center model (TRI-3308) — PURE, DOM-free.
  *
- * The app used to stack full-width banners at the top of the shell (trial-ends,
- * the auto-sync nudge, and update-available). Stacked they looked bad and ate
- * vertical space, so they're consolidated behind a bell-icon notification
- * center. This module is the model: it derives the ACTIVE notification list from
- * app state, computes the unread badge, and owns the dismissed/seen persistence
- * shape — all unit-testable offline (no DOM, no React), so App.tsx only wires
- * the action ids to handlers and renders.
+ * The app used to stack full-width banners at the top of the shell (trial-ends
+ * and update-available). Stacked they looked bad and ate vertical space, so
+ * they're consolidated behind a bell-icon notification center. This module is the
+ * model: it derives the ACTIVE notification list from app state, computes the
+ * unread badge, and owns the dismissed/seen persistence shape — all unit-testable
+ * offline (no DOM, no React), so App.tsx only wires the action ids to handlers
+ * and renders.
  *
  * Eligibility is unchanged from the banners it replaces: the trial item mirrors
- * the old `.trial-banner` gate, the auto-sync nudge reuses
- * {@link autoSyncNudgeVisible} from cloudSync.ts (eligible cloud user + auto-sync
- * OFF + not dismissed), and the update item mirrors the old `.update-banner`.
+ * the old `.trial-banner` gate, and the update item mirrors the old
+ * `.update-banner`.
  */
 
-import { autoSyncNudgeVisible } from "./cloudSync";
+/**
+ * The notification kinds the center can surface. Also the stable item `id` (one
+ * of each is live at a time), so dismissed/seen sets key on the kind:
+ *   - `trial.started`    — welcome, just after the 7-day trial begins.
+ *   - `trial`            — the countdown ("Trial ends in N days").
+ *   - `cloudActionsLow`  — nearing the plan's cloud-actions limit.
+ *   - `trial.expired`    — the trial lapsed and the cloud tier is locked.
+ * App-update alerts are NOT here — they live in the dedicated download affordance
+ * next to the bell (UpdateDialog), not the notification center.
+ */
+export type NotificationKind =
+  | "trial"
+  | "trial.started"
+  | "trial.expired"
+  | "cloudActionsLow";
 
-/** The three notification kinds migrated from the stacked banners. Also the
- * stable item `id` (one of each is live at a time), so dismissed/seen sets key
- * on the kind. */
-export type NotificationKind = "trial" | "autoSyncNudge" | "update";
-
-/** All kinds in newest-first display order. `update` is the most actionable
- * (a release is ready), then the auto-sync nudge, then the trial countdown. */
+/** All kinds in newest-first display order — most urgent first. */
 export const NOTIFICATION_ORDER: readonly NotificationKind[] = [
-  "update",
-  "autoSyncNudge",
+  "trial.expired",
+  "cloudActionsLow",
   "trial",
+  "trial.started",
 ];
+
+/**
+ * Fraction of the cloud-actions limit at/above which the low-credits warning
+ * fires (e.g. 0.8 = warn once 80% is used). Below this the warning stays silent.
+ */
+export const CLOUD_ACTIONS_LOW_THRESHOLD = 0.8;
 
 /** Visual tone, mapped onto the app's existing accent/warn/danger tokens. */
 export type NotificationSeverity = "info" | "success" | "warning";
@@ -46,12 +60,7 @@ export interface NotificationAction {
 }
 
 /** Every action id the notification center can emit. */
-export type NotificationActionId =
-  | "trial.upgrade"
-  | "autoSync.enable"
-  | "autoSync.dismiss"
-  | "update.install"
-  | "update.dismiss";
+export type NotificationActionId = "trial.upgrade";
 
 /** A built notification item, newest-first in {@link buildNotifications}. */
 export interface AppNotification {
@@ -84,17 +93,20 @@ export interface NotificationInputs {
   /** Whole days left until the active workspace's trial ends, or null when not
    * trialing / cloud trial banner shouldn't show (mirrors `showTrialBanner`). */
   readonly trialDaysLeft: number | null;
-  /** The auto-sync nudge eligibility gate (reused from cloudSync.ts). */
-  readonly autoSync: {
-    readonly cloudEnabled: boolean;
-    readonly inCloud: boolean;
-    readonly isAuthenticated: boolean;
-    readonly autoSyncOn: boolean;
-  };
-  /** The available newer release version, or null when none / dismissed upstream. */
-  readonly updateVersion: string | null;
-  /** Optional error text to append to the update item (e.g. a failed install). */
-  readonly updateError: string | null;
+  /** True for the first ~24h of a fresh trial — drives the welcome item (and
+   * suppresses the redundant countdown while it shows). Defaults to false. */
+  readonly trialStarted?: boolean;
+  /** True when the cloud tier is locked because the trial has lapsed — drives the
+   * dismissible "trial expired" companion to the full-screen locked panel.
+   * Defaults to false. */
+  readonly trialExpired?: boolean;
+  /** The workspace's cloud-actions usage, or null when unmetered/unknown. The
+   * low-credits warning fires when `used / limit >= CLOUD_ACTIONS_LOW_THRESHOLD`
+   * and the limit is a positive number (a null limit = unlimited = no warning). */
+  readonly cloudActions?: {
+    readonly used: number;
+    readonly limit: number | null;
+  } | null;
   /** Persisted dismissed/seen kinds. */
   readonly persist: NotificationPersistState;
 }
@@ -117,69 +129,95 @@ function trialNotification(daysLeft: number): AppNotification {
   };
 }
 
-/** The auto-sync nudge item — copy preserved verbatim from the old banner,
- * including the overwrite warning. */
-function autoSyncNudgeNotification(): AppNotification {
+/** Welcome item shown just after a trial begins. Dismissible (it self-clears once
+ * the welcome window passes; dismissing hides it sooner). */
+function trialStartedNotification(): AppNotification {
   return {
-    id: "autoSyncNudge",
-    kind: "autoSyncNudge",
-    title: "Back up your local tables",
-    body:
-      "Keep your local tables backed up — turn on auto-sync to push them to the cloud automatically. Your local version always overwrites the cloud copy.",
+    id: "trial.started",
+    kind: "trial.started",
+    title: "Your free trial is active",
+    body: "You're on a 7-day Team trial — cloud tables, realtime sync & shared credentials are unlocked. Add a card any time to keep them after the trial.",
     severity: "success",
     dismissible: true,
-    actions: [
-      { id: "autoSync.enable", label: "Turn on auto-sync", variant: "primary" },
-      { id: "autoSync.dismiss", label: "Dismiss", variant: "ghost" },
-    ],
+    actions: [{ id: "trial.upgrade", label: "See plans", variant: "ghost" }],
   };
 }
 
-/** The update-available item — mirrors the old `.update-banner`. */
-function updateNotification(version: string, error: string | null): AppNotification {
+/** Item shown once the trial has lapsed and the cloud tier is locked. The
+ * companion to the full-screen locked panel; dismissible so it can be cleared. */
+function trialExpiredNotification(): AppNotification {
   return {
-    id: "update",
-    kind: "update",
-    title: "Update ready",
-    body: `GTM Grid v${version} is available.${error ? ` ${error}` : ""}`,
-    severity: "info",
+    id: "trial.expired",
+    kind: "trial.expired",
+    title: "Your free trial has ended",
+    body: "Cloud tables, realtime sync & shared credentials are locked. Your data is safe — upgrade to unlock them again.",
+    severity: "warning",
     dismissible: true,
-    actions: [
-      { id: "update.install", label: "Update & restart", variant: "primary" },
-      { id: "update.dismiss", label: "Later", variant: "ghost" },
-    ],
+    actions: [{ id: "trial.upgrade", label: "Upgrade now", variant: "primary" }],
+  };
+}
+
+/** Low cloud-actions warning. `pct` is the whole-percent of the limit used. */
+function cloudActionsLowNotification(pct: number): AppNotification {
+  return {
+    id: "cloudActionsLow",
+    kind: "cloudActionsLow",
+    title: pct >= 100 ? "You're out of cloud actions" : "Cloud actions running low",
+    body:
+      pct >= 100
+        ? "You've used all your cloud actions for this period. Upgrade for more headroom on enrichment, webhooks & runs."
+        : `You've used ${pct}% of your cloud actions. Upgrade for more headroom before runs start failing.`,
+    severity: "warning",
+    dismissible: true,
+    actions: [{ id: "trial.upgrade", label: "Upgrade now", variant: "primary" }],
   };
 }
 
 /**
- * Derive the active notification list (newest-first) from app state. Each kind's
- * eligibility matches the banner it replaces:
- *   - update: a newer version exists and it hasn't been dismissed,
- *   - autoSyncNudge: {@link autoSyncNudgeVisible} (eligible cloud user, auto-sync
- *     OFF, not dismissed),
- *   - trial: a trial countdown is present (the trial banner is NOT dismissible).
+ * Derive the active notification list (newest-first) from app state:
+ *   - trial.expired: the trial lapsed and the cloud tier is locked.
+ *   - cloudActionsLow: at/over {@link CLOUD_ACTIONS_LOW_THRESHOLD} of the limit.
+ *   - trial: a trial countdown is present (NOT dismissible; suppressed while the
+ *     welcome shows and when the trial has already expired).
+ *   - trial.started: the first ~24h welcome.
  * Dismissed kinds are excluded so a dismissed item never reappears in-session or
- * across sessions (the caller backs `persist` with localStorage).
+ * across sessions (the caller backs `persist` with localStorage). App-update
+ * alerts are intentionally absent — they surface via the bell-adjacent download
+ * button + UpdateDialog instead.
  */
 export function buildNotifications(input: NotificationInputs): readonly AppNotification[] {
   const dismissed = new Set(input.persist.dismissed);
   const out: AppNotification[] = [];
 
-  if (input.updateVersion !== null && !dismissed.has("update")) {
-    out.push(updateNotification(input.updateVersion, input.updateError));
+  if (input.trialExpired && !dismissed.has("trial.expired")) {
+    out.push(trialExpiredNotification());
   }
 
-  const nudgeVisible = autoSyncNudgeVisible({
-    cloudEnabled: input.autoSync.cloudEnabled,
-    inCloud: input.autoSync.inCloud,
-    isAuthenticated: input.autoSync.isAuthenticated,
-    autoSyncOn: input.autoSync.autoSyncOn,
-    dismissed: dismissed.has("autoSyncNudge"),
-  });
-  if (nudgeVisible) out.push(autoSyncNudgeNotification());
+  const ca = input.cloudActions ?? null;
+  if (
+    ca !== null &&
+    typeof ca.limit === "number" &&
+    ca.limit > 0 &&
+    ca.used / ca.limit >= CLOUD_ACTIONS_LOW_THRESHOLD &&
+    !dismissed.has("cloudActionsLow")
+  ) {
+    const pct = Math.min(100, Math.floor((ca.used / ca.limit) * 100));
+    out.push(cloudActionsLowNotification(pct));
+  }
 
-  if (input.trialDaysLeft !== null && !dismissed.has("trial")) {
+  // The countdown is redundant while the welcome shows, and meaningless once the
+  // trial has expired — suppress it in both cases.
+  if (
+    input.trialDaysLeft !== null &&
+    !input.trialStarted &&
+    !input.trialExpired &&
+    !dismissed.has("trial")
+  ) {
     out.push(trialNotification(input.trialDaysLeft));
+  }
+
+  if (input.trialStarted && !input.trialExpired && !dismissed.has("trial.started")) {
+    out.push(trialStartedNotification());
   }
 
   // Stable newest-first ordering regardless of insertion order above.
@@ -235,22 +273,24 @@ export function dismissNotification(
   return { dismissed: [...dismissed], seen: persist.seen };
 }
 
-// ── Persistence (localStorage, reusing the auto-sync nudge key/pattern) ──────
+// ── Persistence (localStorage) ───────────────────────────────────────────────
 //
-// The auto-sync nudge already persisted a single dismissed flag under
-// `gtmgrid:autoSyncNudgeDismissed`. The center generalises that to a JSON
-// dismissed/seen map under one key; on first run we MIGRATE the old flag so a
-// previously-dismissed nudge STAYS dismissed (no regression of TRI-3298's
-// "stays dismissed across sessions").
+// The center persists a JSON dismissed/seen map under one key.
 
 /** The notification-center persistence key (dismissed + seen, JSON). */
 export const NOTIFICATIONS_PERSIST_KEY = "gtmgrid:notifications";
-/** The legacy single-flag auto-sync nudge dismissal key (TRI-3298). */
-export const LEGACY_AUTO_SYNC_NUDGE_KEY = "gtmgrid:autoSyncNudgeDismissed";
 
 /** Whether a parsed value is a NotificationKind (drops unknown/garbage kinds). */
 function isKind(v: unknown): v is NotificationKind {
-  return v === "trial" || v === "autoSyncNudge" || v === "update";
+  // "update" / "autoSyncNudge" are intentionally excluded — legacy persisted
+  // dismissals of those are dropped on parse now that updates live outside the
+  // center and auto-sync (the local paradigm) is gone.
+  return (
+    v === "trial" ||
+    v === "trial.started" ||
+    v === "trial.expired" ||
+    v === "cloudActionsLow"
+  );
 }
 
 /** Coerce an unknown JSON value into a deduped array of valid kinds. */
@@ -262,14 +302,11 @@ function toKindList(v: unknown): NotificationKind[] {
 }
 
 /**
- * Parse persisted state from the stored JSON string plus the legacy nudge flag.
- * Garbage / missing values yield {@link EMPTY_PERSIST_STATE}. When the legacy
- * flag is set, `autoSyncNudge` is folded into BOTH dismissed and seen so a
- * previously-dismissed nudge stays dismissed and silent.
+ * Parse persisted state from the stored JSON string. Garbage / missing values
+ * yield {@link EMPTY_PERSIST_STATE}.
  */
 export function parsePersistState(
   raw: string | null | undefined,
-  legacyNudgeDismissed: boolean,
 ): NotificationPersistState {
   let dismissed: NotificationKind[] = [];
   let seen: NotificationKind[] = [];
@@ -284,14 +321,6 @@ export function parsePersistState(
     } catch {
       /* garbage → empty */
     }
-  }
-  if (legacyNudgeDismissed) {
-    const d = new Set(dismissed);
-    d.add("autoSyncNudge");
-    dismissed = [...d];
-    const s = new Set(seen);
-    s.add("autoSyncNudge");
-    seen = [...s];
   }
   return { dismissed, seen };
 }

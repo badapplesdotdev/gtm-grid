@@ -23,6 +23,60 @@ const monorepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", ".."
  */
 const nextConfig: NextConfig = {
   outputFileTracingRoot: monorepoRoot,
+  // Required to support PostHog trailing slash API requests.
+  skipTrailingSlashRedirect: true,
+  async rewrites() {
+    return [
+      {
+        source: "/ingest/static/:path*",
+        destination: "https://us-assets.i.posthog.com/static/:path*",
+      },
+      {
+        source: "/ingest/array/:path*",
+        destination: "https://us-assets.i.posthog.com/array/:path*",
+      },
+      {
+        source: "/ingest/:path*",
+        destination: "https://us.i.posthog.com/:path*",
+      },
+    ];
+  },
+  // Baseline security headers on every response.
+  async headers() {
+    // Content-Security-Policy. Pragmatic but real: it blocks injected object/base
+    // tags and cross-origin framing/exfiltration while allowing what the app
+    // actually uses. `'unsafe-inline'`/`'unsafe-eval'` on script-src are kept
+    // because Next's inline bootstrap isn't nonce-based here — tightening to a
+    // nonce CSP is a follow-up. PostHog ingestion is same-origin via the `/ingest`
+    // proxy; the absolute hosts are allowlisted in connect-src as a belt-and-braces
+    // for direct calls. `data:`/`blob:` images cover avatars + canvas exports.
+    const csp = [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob: https:",
+      "font-src 'self' data:",
+      "connect-src 'self' https://us.i.posthog.com https://us-assets.i.posthog.com https://*.posthog.com https://*.ingest.vercel.com https://vitals.vercel-insights.com",
+      "worker-src 'self' blob:",
+      "frame-ancestors 'self'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "object-src 'none'",
+    ].join("; ");
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Content-Security-Policy", value: csp },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+          { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" },
+        ],
+      },
+    ];
+  },
   // The QuickJS WASM variant is loaded by quickjs-emscripten-core via a DYNAMIC
   // import, so Next's static file tracer never sees it and it (plus its .wasm) is
   // missing from the deployed function. Force-include the variant + ffi-types for
@@ -36,7 +90,7 @@ const nextConfig: NextConfig = {
       "../../node_modules/.pnpm/quickjs-emscripten@*/node_modules/quickjs-emscripten/**",
     ],
   },
-  transpilePackages: ["@gtmgrid/engine", "@gtmgrid/cloud"],
+  transpilePackages: ["@gtmgrid/engine", "@gtmgrid/cloud", "@gtmgrid/analytics", "@gtmgrid/email"],
   // quickjs-emscripten loads a WASM *variant* at runtime (quickjs-emscripten-core
   // + @jitl/quickjs-wasmfile-release-asyncify) whose Emscripten-generated glue
   // breaks when webpack bundles it ("a is not a function"). Every quickjs package

@@ -1,12 +1,10 @@
 /**
  * Notification-center model tests (TRI-3308). Cover the pure model offline (no
  * DOM, no React):
- *   - the builder yields the right items per app state (trial present/absent,
- *     auto-sync nudge eligible/not/dismissed, update present/absent),
+ *   - the builder yields the right items per app state (trial present/absent),
  *   - unreadCount reflects active+unseen,
  *   - markAllSeen / dismissNotification transitions,
- *   - persistence parse/serialize, incl. the legacy auto-sync-nudge migration
- *     (so "stays dismissed across sessions" never regresses).
+ *   - persistence parse/serialize.
  */
 
 import { describe, expect, it } from "vitest";
@@ -23,34 +21,19 @@ import {
   type NotificationPersistState,
 } from "./notifications";
 
-const eligibleAutoSync = {
-  cloudEnabled: true,
-  inCloud: true,
-  isAuthenticated: true,
-  autoSyncOn: false,
-} as const;
-
 const inputs = (over: Partial<NotificationInputs> = {}): NotificationInputs => ({
   trialDaysLeft: null,
-  autoSync: { ...eligibleAutoSync },
-  updateVersion: null,
-  updateError: null,
   persist: EMPTY_PERSIST_STATE,
   ...over,
 });
 
 describe("buildNotifications — per-state items", () => {
-  it("yields nothing when no state is active (with the nudge gate off)", () => {
-    const out = buildNotifications(
-      inputs({ autoSync: { ...eligibleAutoSync, cloudEnabled: false } }),
-    );
-    expect(out).toEqual([]);
+  it("yields nothing when no state is active", () => {
+    expect(buildNotifications(inputs())).toEqual([]);
   });
 
   it("includes the trial item when a countdown is present", () => {
-    const out = buildNotifications(
-      inputs({ trialDaysLeft: 5, autoSync: { ...eligibleAutoSync, cloudEnabled: false } }),
-    );
+    const out = buildNotifications(inputs({ trialDaysLeft: 5 }));
     expect(out).toHaveLength(1);
     expect(out[0].kind).toBe("trial");
     expect(out[0].body).toContain("ends in 5 days");
@@ -59,99 +42,98 @@ describe("buildNotifications — per-state items", () => {
   });
 
   it("uses the singular + today copy and warning severity near the edge", () => {
-    const one = buildNotifications(inputs({ trialDaysLeft: 1, autoSync: { ...eligibleAutoSync, cloudEnabled: false } }))[0];
+    const one = buildNotifications(inputs({ trialDaysLeft: 1 }))[0];
     expect(one.body).toContain("ends in 1 day");
     expect(one.body).not.toContain("1 days");
     expect(one.severity).toBe("warning");
 
-    const today = buildNotifications(inputs({ trialDaysLeft: 0, autoSync: { ...eligibleAutoSync, cloudEnabled: false } }))[0];
+    const today = buildNotifications(inputs({ trialDaysLeft: 0 }))[0];
     expect(today.body).toContain("ends today");
     expect(today.severity).toBe("warning");
 
-    const far = buildNotifications(inputs({ trialDaysLeft: 9, autoSync: { ...eligibleAutoSync, cloudEnabled: false } }))[0];
+    const far = buildNotifications(inputs({ trialDaysLeft: 9 }))[0];
     expect(far.severity).toBe("info");
   });
 
   it("omits the trial item when no countdown", () => {
-    const out = buildNotifications(inputs({ trialDaysLeft: null, autoSync: { ...eligibleAutoSync, cloudEnabled: false } }));
+    const out = buildNotifications(inputs({ trialDaysLeft: null }));
     expect(out.find((n) => n.kind === "trial")).toBeUndefined();
   });
 
-  it("includes the auto-sync nudge only for eligible cloud users with auto-sync OFF", () => {
-    expect(buildNotifications(inputs()).map((n) => n.kind)).toContain("autoSyncNudge");
+  it("hides the trial item once the kind is dismissed via persist", () => {
+    // The trial item itself is not user-dismissible, but a persisted dismissal
+    // (defensive) still suppresses it.
+    const persist: NotificationPersistState = { dismissed: ["trial"], seen: [] };
+    const out = buildNotifications(inputs({ trialDaysLeft: 3, persist }));
+    expect(out.map((n) => n.kind)).not.toContain("trial");
+  });
 
-    // auto-sync ON → no nudge
+  it("never includes an update item (updates live outside the notification center)", () => {
+    const out = buildNotifications(inputs({ trialDaysLeft: 3 }));
+    expect(out.map((n) => n.kind)).not.toContain("update");
+  });
+
+  it("shows the welcome item and suppresses the countdown during the welcome window", () => {
+    const out = buildNotifications(inputs({ trialDaysLeft: 7, trialStarted: true }));
+    expect(out.map((n) => n.kind)).toContain("trial.started");
+    expect(out.map((n) => n.kind)).not.toContain("trial");
+    const started = out.find((n) => n.kind === "trial.started")!;
+    expect(started.severity).toBe("success");
+    expect(started.dismissible).toBe(true);
+  });
+
+  it("shows the expired item and suppresses countdown/welcome once expired", () => {
+    const out = buildNotifications(
+      inputs({ trialDaysLeft: 0, trialStarted: true, trialExpired: true }),
+    );
+    expect(out.map((n) => n.kind)).toEqual(["trial.expired"]);
+    const expired = out[0];
+    expect(expired.dismissible).toBe(true);
+    expect(expired.actions.map((a) => a.id)).toEqual(["trial.upgrade"]);
+  });
+
+  it("fires the low cloud-actions warning at/over the threshold only", () => {
     expect(
-      buildNotifications(inputs({ autoSync: { ...eligibleAutoSync, autoSyncOn: true } })).map((n) => n.kind),
-    ).not.toContain("autoSyncNudge");
+      buildNotifications(inputs({ cloudActions: { used: 79, limit: 100 } })).map(
+        (n) => n.kind,
+      ),
+    ).not.toContain("cloudActionsLow");
 
-    // not signed in → no nudge
-    expect(
-      buildNotifications(inputs({ autoSync: { ...eligibleAutoSync, isAuthenticated: false } })).map((n) => n.kind),
-    ).not.toContain("autoSyncNudge");
+    const low = buildNotifications(inputs({ cloudActions: { used: 80, limit: 100 } }));
+    const item = low.find((n) => n.kind === "cloudActionsLow")!;
+    expect(item.body).toContain("80%");
+    expect(item.severity).toBe("warning");
 
-    // cloud disabled (pure-local build) → no nudge
-    expect(
-      buildNotifications(inputs({ autoSync: { ...eligibleAutoSync, cloudEnabled: false } })).map((n) => n.kind),
-    ).not.toContain("autoSyncNudge");
-
-    // TRI-3313-A: the nudge is shown in the LOCAL env too (no cloud project
-    // open) when signed in — eligibility is consistent with the relaxed
-    // syncUiVisible, so a signed-in local user still gets the auto-sync nudge.
-    expect(
-      buildNotifications(inputs({ autoSync: { ...eligibleAutoSync, inCloud: false } })).map((n) => n.kind),
-    ).toContain("autoSyncNudge");
+    const out = buildNotifications(inputs({ cloudActions: { used: 100, limit: 100 } }))
+      .find((n) => n.kind === "cloudActionsLow")!;
+    expect(out.title).toContain("out of cloud actions");
   });
 
-  it("auto-sync nudge keeps the overwrite warning + both actions", () => {
-    const nudge = buildNotifications(inputs()).find((n) => n.kind === "autoSyncNudge");
-    expect(nudge).toBeDefined();
-    expect(nudge?.body).toContain("local version always overwrites the cloud copy");
-    expect(nudge?.dismissible).toBe(true);
-    expect(nudge?.actions.map((a) => a.id)).toEqual(["autoSync.enable", "autoSync.dismiss"]);
+  it("treats an unlimited (null) limit as no warning", () => {
+    const out = buildNotifications(
+      inputs({ cloudActions: { used: 9999, limit: null } }),
+    );
+    expect(out.map((n) => n.kind)).not.toContain("cloudActionsLow");
   });
 
-  it("hides the auto-sync nudge once dismissed", () => {
-    const persist: NotificationPersistState = { dismissed: ["autoSyncNudge"], seen: ["autoSyncNudge"] };
-    const out = buildNotifications(inputs({ persist }));
-    expect(out.map((n) => n.kind)).not.toContain("autoSyncNudge");
-  });
-
-  it("includes the update item with version + error when an update is present", () => {
-    const out = buildNotifications(inputs({ updateVersion: "0.4.0", updateError: "Install failed.", autoSync: { ...eligibleAutoSync, cloudEnabled: false } }));
-    const update = out.find((n) => n.kind === "update");
-    expect(update?.body).toBe("GTM Grid v0.4.0 is available. Install failed.");
-    expect(update?.actions.map((a) => a.id)).toEqual(["update.install", "update.dismiss"]);
-  });
-
-  it("omits the update item when none / dismissed", () => {
-    expect(buildNotifications(inputs({ updateVersion: null })).map((n) => n.kind)).not.toContain("update");
-    const persist: NotificationPersistState = { dismissed: ["update"], seen: [] };
-    expect(buildNotifications(inputs({ updateVersion: "0.4.0", persist })).map((n) => n.kind)).not.toContain("update");
-  });
-
-  it("orders newest-first: update, then auto-sync nudge, then trial", () => {
-    const out = buildNotifications(inputs({ trialDaysLeft: 3, updateVersion: "0.4.0" }));
-    expect(out.map((n) => n.kind)).toEqual(["update", "autoSyncNudge", "trial"]);
+  it("orders the most urgent kind first", () => {
+    const out = buildNotifications(
+      inputs({ trialExpired: true, cloudActions: { used: 90, limit: 100 } }),
+    );
+    expect(out[0].kind).toBe("trial.expired");
   });
 });
 
 describe("unreadCount — active + unseen", () => {
   it("counts every active item when none are seen", () => {
-    const i = inputs({ trialDaysLeft: 3, updateVersion: "0.4.0" });
+    const i = inputs({ trialDaysLeft: 3 });
     const out = buildNotifications(i);
-    expect(out).toHaveLength(3);
-    expect(unreadCount(out, i.persist)).toBe(3);
+    expect(out).toHaveLength(1);
+    expect(unreadCount(out, i.persist)).toBe(1);
   });
 
   it("excludes seen kinds from the badge", () => {
-    const i = inputs({ trialDaysLeft: 3, updateVersion: "0.4.0", persist: { dismissed: [], seen: ["update", "trial"] } });
-    const out = buildNotifications(i);
-    expect(unreadCount(out, i.persist)).toBe(1); // only the nudge unseen
-  });
-
-  it("is zero when every active item is seen", () => {
-    const i = inputs({ trialDaysLeft: 3, updateVersion: "0.4.0", persist: { dismissed: [], seen: ["update", "trial", "autoSyncNudge"] } });
+    const i = inputs({ trialDaysLeft: 3, persist: { dismissed: [], seen: ["trial"] } });
     const out = buildNotifications(i);
     expect(unreadCount(out, i.persist)).toBe(0);
   });
@@ -159,21 +141,20 @@ describe("unreadCount — active + unseen", () => {
 
 describe("markAllSeen — opening the center clears the badge", () => {
   it("marks every active item seen so unreadCount becomes 0", () => {
-    const i = inputs({ trialDaysLeft: 3, updateVersion: "0.4.0" });
+    const i = inputs({ trialDaysLeft: 3 });
     const out = buildNotifications(i);
-    expect(unreadCount(out, i.persist)).toBe(3);
+    expect(unreadCount(out, i.persist)).toBe(1);
     const next = markAllSeen(out, i.persist);
     expect(unreadCount(out, next)).toBe(0);
-    expect([...next.seen].sort()).toEqual(["autoSyncNudge", "trial", "update"]);
+    expect(next.seen).toEqual(["trial"]);
   });
 
   it("prunes seen entries that are no longer active", () => {
-    // update went away; previously seen.
-    const persist: NotificationPersistState = { dismissed: [], seen: ["update", "trial"] };
-    const out = buildNotifications(inputs({ trialDaysLeft: 3, updateVersion: null, autoSync: { ...eligibleAutoSync, cloudEnabled: false } }));
-    expect(out.map((n) => n.kind)).toEqual(["trial"]);
+    const persist: NotificationPersistState = { dismissed: [], seen: ["trial"] };
+    const out = buildNotifications(inputs({ trialDaysLeft: null }));
+    expect(out).toEqual([]);
     const next = markAllSeen(out, persist);
-    expect(next.seen).toEqual(["trial"]); // "update" pruned
+    expect(next.seen).toEqual([]); // "trial" pruned (no longer active)
   });
 
   it("does not mutate the input persist state", () => {
@@ -186,55 +167,40 @@ describe("markAllSeen — opening the center clears the badge", () => {
 
 describe("dismissNotification — removes + persists", () => {
   it("adds the kind to dismissed so the builder drops it", () => {
-    const i = inputs();
-    expect(buildNotifications(i).map((n) => n.kind)).toContain("autoSyncNudge");
-    const next = dismissNotification("autoSyncNudge", i.persist);
-    expect(next.dismissed).toContain("autoSyncNudge");
-    expect(buildNotifications(inputs({ persist: next })).map((n) => n.kind)).not.toContain("autoSyncNudge");
+    const i = inputs({ trialDaysLeft: 3 });
+    expect(buildNotifications(i).map((n) => n.kind)).toContain("trial");
+    const next = dismissNotification("trial", i.persist);
+    expect(next.dismissed).toContain("trial");
+    expect(
+      buildNotifications(inputs({ trialDaysLeft: 3, persist: next })).map((n) => n.kind),
+    ).not.toContain("trial");
   });
 
   it("is idempotent and does not mutate the input", () => {
-    const persist: NotificationPersistState = { dismissed: ["update"], seen: [] };
-    const a = dismissNotification("update", persist);
-    expect(a.dismissed).toEqual(["update"]);
-    expect(persist.dismissed).toEqual(["update"]);
+    const persist: NotificationPersistState = { dismissed: ["trial"], seen: [] };
+    const a = dismissNotification("trial", persist);
+    expect(a.dismissed).toEqual(["trial"]);
+    expect(persist.dismissed).toEqual(["trial"]);
   });
 });
 
 describe("persistence — parse / serialize / round-trip", () => {
   it("round-trips dismissed + seen through serialize/parse", () => {
-    const state: NotificationPersistState = { dismissed: ["update"], seen: ["update", "trial"] };
+    const state: NotificationPersistState = { dismissed: ["trial"], seen: ["trial"] };
     const raw = serializePersistState(state);
-    const back = parsePersistState(raw, false);
-    expect(back).toEqual(state);
+    expect(parsePersistState(raw)).toEqual(state);
   });
 
   it("treats missing / garbage as empty", () => {
-    expect(parsePersistState(null, false)).toEqual(EMPTY_PERSIST_STATE);
-    expect(parsePersistState("", false)).toEqual(EMPTY_PERSIST_STATE);
-    expect(parsePersistState("not json", false)).toEqual(EMPTY_PERSIST_STATE);
-    expect(parsePersistState("123", false)).toEqual(EMPTY_PERSIST_STATE);
+    expect(parsePersistState(null)).toEqual(EMPTY_PERSIST_STATE);
+    expect(parsePersistState("")).toEqual(EMPTY_PERSIST_STATE);
+    expect(parsePersistState("not json")).toEqual(EMPTY_PERSIST_STATE);
+    expect(parsePersistState("123")).toEqual(EMPTY_PERSIST_STATE);
   });
 
   it("drops unknown kinds and dedupes", () => {
-    const raw = JSON.stringify({ dismissed: ["update", "bogus", "update"], seen: ["nope"] });
-    expect(parsePersistState(raw, false)).toEqual({ dismissed: ["update"], seen: [] });
-  });
-
-  it("migrates the legacy auto-sync-nudge dismissal so it stays dismissed", () => {
-    // Old session only had the legacy flag set; new JSON empty.
-    const state = parsePersistState(null, true);
-    expect(state.dismissed).toContain("autoSyncNudge");
-    expect(state.seen).toContain("autoSyncNudge");
-    // And the builder keeps the nudge hidden across sessions.
-    expect(buildNotifications(inputs({ persist: state })).map((n) => n.kind)).not.toContain("autoSyncNudge");
-  });
-
-  it("does not duplicate autoSyncNudge when both legacy flag and JSON have it", () => {
-    const raw = JSON.stringify({ dismissed: ["autoSyncNudge"], seen: ["autoSyncNudge"] });
-    const state = parsePersistState(raw, true);
-    expect(state.dismissed).toEqual(["autoSyncNudge"]);
-    expect(state.seen).toEqual(["autoSyncNudge"]);
+    const raw = JSON.stringify({ dismissed: ["trial", "bogus", "trial", "update", "autoSyncNudge"], seen: ["nope"] });
+    expect(parsePersistState(raw)).toEqual({ dismissed: ["trial"], seen: [] });
   });
 
   it("exposes a stable persist key", () => {

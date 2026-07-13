@@ -3,6 +3,7 @@
 // Tiny copy-to-clipboard button used by the final CTA command line.
 
 import { useState } from "react";
+import posthog from "posthog-js";
 
 export function CopyButton({ text, title = "Copy" }: { text: string; title?: string }) {
   const [copied, setCopied] = useState(false);
@@ -10,6 +11,7 @@ export function CopyButton({ text, title = "Copy" }: { text: string; title?: str
     if (navigator.clipboard) navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 1400);
+    posthog.capture("clone_command_copied");
   };
   return (
     <button type="button" className="copy" title={title} aria-label={title} onClick={copy}>

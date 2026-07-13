@@ -3,7 +3,6 @@
 // calls host-side, and writing cells with pending/running/done/error status.
 
 import { Effect } from "effect";
-import type { Db } from "./db.js";
 import {
   buildFormulaPrelude,
   compileExpression,
@@ -14,20 +13,38 @@ import {
 import { Registry, defaultRegistry } from "./registry.js";
 import { runFunction, type SandboxDispatch } from "./sandbox.js";
 import {
-  sqliteGridStoreShape,
   type GridStoreError,
+  type GridStorePage,
   type GridStoreShape,
 } from "./store.js";
-import type { AiConfig, Column, ConnectorMethod } from "./types.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
+import type { AiConfig, AiFallbackRequest, AiGenerationEvent, Column, ConnectorMethod, RateLimit } from "./types.js";
+
+// One LLM-observability trace id per column run, propagated across the run's
+// concurrent rows so every `ai.generate` generation in a single "Run" shares a
+// trace (PostHog groups $ai_generation events by $ai_trace_id). A standalone
+// dispatch (preview / option resolution) outside a run has no store → the host
+// mints a per-generation id.
+const aiRunTrace = new AsyncLocalStorage<string>();
 
 /** Stored on a cell's `error` (with status "empty") when a run condition gates the
- *  row off, so the grid can show a muted "Condition not met" note instead of a dash. */
-export const CONDITION_SKIP_NOTE = "Condition not met";
+ *  row off, so the grid can show a muted "Run condition not met" note instead of a dash. */
+export const CONDITION_SKIP_NOTE = "Run condition not met";
 
 export interface EngineConfig {
   ai?: AiConfig;
   /** All connected AI providers (for model-based routing). */
   aiProviders?: AiConfig[];
+  /**
+   * Fallback for `ai.generate` when no AI provider key is connected — routes the
+   * prompt through the user's coding agent (Claude Code / Codex). Set by the
+   * sidecar (in-process {@link generateWithAgent}) and by the MCP (an HTTP POST to
+   * the sidecar). Absent ⇒ `ai.generate` throws "No AI provider connected".
+   */
+  aiFallback?: (req: AiFallbackRequest) => Promise<string>;
+  /** Per-host LLM-observability sink for `ai.generate` (emits `$ai_generation`). */
+  onAiGeneration?: (event: AiGenerationEvent) => void;
   /**
    * Enforce the SSRF guard on every connector HTTP call this engine makes. Set
    * true ONLY on server-side run paths (the Vercel webhook-enrichment worker),
@@ -36,14 +53,46 @@ export interface EngineConfig {
    * user's own machine, so localhost/LAN connectors stay valid).
    */
   guardSsrf?: boolean;
+  /**
+   * Safety-default outbound throttle applied to any OUTBOUND connector that
+   * declares no `rateLimit` of its own (including user-uploaded manifests) — so an
+   * unconfigured connector can never fire an unbounded burst. Defaults to
+   * {@link DEFAULT_RATE_LIMIT}. Pass `{}` (no bounds) to opt a trusted engine out,
+   * or a tuned {@link RateLimit} to raise/lower it. Connectors marked `local`
+   * (pure in-process transforms) are always exempt regardless of this value.
+   */
+  defaultRateLimit?: RateLimit;
+  /**
+   * Optional exception sink for run failures. The engine runs in several hosts
+   * (sidecar, cloud worker, MCP, CLI), so it never imports a telemetry client —
+   * the host injects a reporter that forwards to PostHog Error Tracking (mirrors
+   * {@link aiFallback}/{@link guardSsrf} injection). Called from a failing cell run
+   * with the ORIGINAL thrown error (full stack), but DEDUPED per run: at most a few
+   * distinct error signatures are reported, so a 1000-row run with one failure mode
+   * raises one exception, not a thousand. Per-cell errors are still recorded as cell
+   * status regardless; this is purely the systemic-bug signal. Absent ⇒ no reporting.
+   */
+  reportError?: (error: unknown, context: RunErrorContext) => void;
 }
 
-/** A cell's state as observed during a run, for per-cell progress streaming. */
+/** Context handed to {@link EngineConfig.reportError} for a failed cell run. */
+export interface RunErrorContext {
+  readonly columnId: string;
+  readonly provider: string | null;
+  readonly method: string | null;
+  readonly rowId: string;
+  /** How many cells have failed in this run so far (this error included). */
+  readonly errorCount: number;
+}
+
+/** A cell's state as observed during a run, for per-cell progress streaming.
+ *  Status "empty" streams a condition-gated skip (error = CONDITION_SKIP_NOTE)
+ *  so live grids show WHY a cell stayed blank instead of doing nothing. */
 export interface CellProgress {
   readonly rowId: string;
   readonly columnId: string;
   readonly value: unknown;
-  readonly status: "running" | "done" | "error";
+  readonly status: "running" | "done" | "error" | "empty";
   readonly error: string | null;
 }
 
@@ -69,64 +118,90 @@ export interface RunColumnOptions {
 }
 
 /**
- * Optional store injection for the {@link Engine}.
- *
- * Local projects leave these unset: the engine builds a `SqliteGridStore` over
- * the constructor `db`/`credsDb`, exactly as before (behaviour unchanged). Cloud
- * projects pass a `ConvexGridStore`-backed shape so the SAME engine reads inputs
- * from Convex and writes cell status/results back via the T4 mutations — the run
- * path is identical; only where reads/writes go changes.
+ * The injected stores the {@link Engine} runs against. The engine is always
+ * cloud-store-backed: the cloud run lane (server `cloud-run.ts`, MCP
+ * `cloud-source.ts`) builds a cloud-client-backed {@link GridStoreShape} and
+ * passes it here, so the run path reads inputs from Postgres and writes cell
+ * status/results back via the worker mutations. Both are REQUIRED — there is no
+ * local-SQLite fallback.
  */
 export interface EngineStores {
   /** The project store the run path reads/writes through. */
-  readonly store?: GridStoreShape;
+  readonly store: GridStoreShape;
   /** The credential store `dispatch` resolves connector secrets through. */
-  readonly creds?: GridStoreShape;
+  readonly creds: GridStoreShape;
 }
 
 export class Engine {
-  /**
-   * The local SQLite db, when running a LOCAL project. Undefined on the cloud
-   * path, where the store + credentials are injected and no Db exists. Read it
-   * through {@link requireDb} when a Db is genuinely required.
-   */
-  readonly db?: Db;
-  /** Where credentials live — the shared global db when running multi-project. */
-  readonly credsDb?: Db;
   readonly registry: Registry;
   config: EngineConfig;
 
-  /** The project store the run path reads/writes through (local SQLite wrapper). */
+  /** The project store the run path reads/writes through. */
   private readonly store: GridStoreShape;
   /** The credentials store `dispatch` resolves connector secrets through. */
   private readonly creds: GridStoreShape;
 
   constructor(
-    db: Db | undefined,
     config: EngineConfig = {},
     registry: Registry = defaultRegistry(),
-    credsDb?: Db,
-    stores: EngineStores = {},
+    stores: EngineStores,
   ) {
-    this.db = db;
-    this.credsDb = credsDb ?? db;
     this.registry = registry;
     this.config = config;
-    // The engine drives a GridStore abstraction, not the concrete Db. For local
-    // projects that store defaults to a thin SqliteGridStore over the same Db, so
-    // behaviour is unchanged; cloud projects inject a ConvexGridStore (built by
-    // the server cloud-run lane) so the same run path reads/writes Convex — there
-    // a Db is never constructed, so the SQLite fallback is only built when a store
-    // is NOT injected. Credentials may live in a separate (shared/global) store
-    // when running multi-project, or be injected (workspace-shared cloud creds).
-    this.store = stores.store ?? sqliteGridStoreShape(requireDb(db, "store"));
-    this.creds =
-      stores.creds ?? sqliteGridStoreShape(requireDb(this.credsDb, "credentials"));
+    // The engine always drives an injected GridStore (cloud-client-backed): the
+    // run path reads/writes through it, and credentials resolve through `creds`
+    // (the workspace-shared cloud credential store, often the same store).
+    this.store = stores.store;
+    this.creds = stores.creds;
   }
 
-  /** The local SQLite db, or throw if the engine was built without one (cloud). */
-  requireDb(): Db {
-    return requireDb(this.db, "db");
+  /**
+   * Per-connector outbound throttles, lazily created from a method's resolved
+   * {@link RateLimit}. A column run drives ONE method over many rows, so a single
+   * limiter keyed by provider paces the whole run; a method that declares a
+   * stricter override than its connector default gets an additional gate. Calls
+   * with no rate limit go straight through (legacy behaviour, no overhead).
+   */
+  private limiters = new Map<string, RateLimiter>();
+
+  private cachedLimiter(key: string, rl: RateLimit): RateLimiter {
+    let lim = this.limiters.get(key);
+    if (!lim) {
+      lim = new RateLimiter(rl);
+      this.limiters.set(key, lim);
+    }
+    return lim;
+  }
+
+  /** Run `fn` behind the connector's (and any stricter per-method) rate gate. */
+  private throttle<T>(provider: string, m: ConnectorMethod, fn: () => Promise<T>): Promise<T> {
+    const connector = this.registry.get(provider);
+    const connRate = connector?.rateLimit;
+    const mRate = m.rateLimit;
+    // The loader sets method.rateLimit to the connector-default OBJECT when the
+    // method declares none, so reference inequality ⇒ a genuine per-method gate
+    // (a stricter override, or a method-only rate on an otherwise unlimited connector).
+    const hasMethodGate = !!mRate && mRate !== connRate;
+
+    let run = fn;
+    if (hasMethodGate) {
+      const inner = run;
+      run = () => this.cachedLimiter(`${provider}:${m.id}`, mRate as RateLimit).run(inner);
+    }
+    if (connRate) {
+      const inner = run;
+      run = () => this.cachedLimiter(provider, connRate).run(inner);
+    } else if (!hasMethodGate && !connector?.local) {
+      // No explicit connector or per-method rate, and this connector makes
+      // outbound calls (not a pure-local transform): apply the conservative
+      // safety default so an unconfigured/user-uploaded connector can't fire an
+      // unbounded burst. Each provider gets its OWN default budget (keyed by
+      // provider), not a shared global one.
+      const def = this.config.defaultRateLimit ?? DEFAULT_RATE_LIMIT;
+      const inner = run;
+      run = () => this.cachedLimiter(provider, def).run(inner);
+    }
+    return run();
   }
 
   /** Host-side dispatcher exposed to the sandbox as `sdk.<provider>.<method>`. */
@@ -142,12 +217,17 @@ export class Engine {
             ? [this.config.ai]
             : [];
         return yield* Effect.promise(() =>
-          m.run(input, {
-            secrets: cred?.secrets ?? {},
-            ai: this.config.ai,
-            aiProviders,
-            guardSsrf: this.config.guardSsrf,
-          }),
+          this.throttle(provider, m, () =>
+            m.run(input, {
+              secrets: cred?.secrets ?? {},
+              ai: this.config.ai,
+              aiProviders,
+              guardSsrf: this.config.guardSsrf,
+              aiFallback: this.config.aiFallback,
+              onAiGeneration: this.config.onAiGeneration,
+              aiTraceId: aiRunTrace.getStore(),
+            }),
+          ),
         );
       }),
     );
@@ -177,8 +257,19 @@ export class Engine {
           const v = cells.get(cid)?.value;
           return v == null ? "" : typeof v === "string" ? v : JSON.stringify(v);
         });
+      // Interpolate {{Column}} in every string, including those NESTED inside
+      // object/array params (e.g. an http.request column's `headers`/`body`).
+      // Non-string leaves are preserved as-is, so numbers/booleans stay typed.
+      const interpDeep = (v: unknown): unknown =>
+        typeof v === "string"
+          ? interp(v)
+          : Array.isArray(v)
+            ? v.map(interpDeep)
+            : v && typeof v === "object"
+              ? Object.fromEntries(Object.entries(v).map(([k, val]) => [k, interpDeep(val)]))
+              : v;
       const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(col.params)) out[k] = typeof v === "string" ? interp(v) : v;
+      for (const [k, v] of Object.entries(col.params)) out[k] = interpDeep(v);
       return out;
     });
   }
@@ -210,24 +301,39 @@ export class Engine {
     return `function(inputs, sdk){ return sdk[${JSON.stringify(col.provider)}][${JSON.stringify(col.method)}](inputs); }`;
   }
 
-  async runColumn(columnId: string, opts: RunColumnOptions = {}): Promise<{ ran: number; errors: number }> {
-    // Take one read snapshot for the whole run. For stores whose granular reads
-    // are expensive to repeat (ConvexGridStore re-fetches the full grid on every
-    // read), `snapshot()` fetches the grid ONCE and serves every per-row read
-    // from memory, so a run over N rows is O(N) store reads instead of O(N^2).
-    // Local SQLite has no `snapshot` (reads are cheap, synchronous) and falls
-    // back to the live store, preserving its exact behaviour. Writes still go to
-    // the live store so cell status streams to clients during the run.
-    const reads = this.store.snapshot
-      ? await Effect.runPromise(this.store.snapshot())
-      : this.store;
+  async runColumn(
+    columnId: string,
+    opts: RunColumnOptions = {},
+  ): Promise<{ ran: number; errors: number; firstError?: string }> {
+    // Open a trace for this run; every ai.generate row below shares it.
+    aiRunTrace.enterWith(randomUUID());
+    // Resolve how this run reads the grid. A `snapshot()` fetches the grid once
+    // and serves every per-row read from memory (O(N) reads, not O(N^2)); the
+    // writes still go to the LIVE store so cell status streams during the run.
+    //   • Row-scoped run (opts.rowIds): snapshot ONLY those rows, so a cascade /
+    //     run-cell / run-rows never loads a 50k-row grid to touch a few rows.
+    //   • Full run + the store can page (`snapshotPage`): stream the grid one
+    //     bounded keyset page at a time so resident memory stays per-page.
+    //   • Full run, no paging: a single whole-grid snapshot (legacy behaviour).
+    //   • No snapshot at all (local SQLite): read live, exact prior behaviour.
+    const wantsPaging =
+      opts.rowIds === undefined && this.store.snapshotPage !== undefined;
+
+    let firstPage: GridStorePage | undefined;
+    let reads: GridStoreShape;
+    if (wantsPaging && this.store.snapshotPage) {
+      firstPage = await Effect.runPromise(this.store.snapshotPage(null));
+      reads = firstPage.reads;
+    } else if (this.store.snapshot) {
+      reads = await Effect.runPromise(this.store.snapshot(opts.rowIds));
+    } else {
+      reads = this.store;
+    }
 
     const col = await Effect.runPromise(reads.getColumn(columnId));
     if (!col) throw new Error(`column ${columnId} not found`);
     if (col.kind !== "function") return { ran: 0, errors: 0 };
 
-    const rowIds =
-      opts.rowIds ?? (await Effect.runPromise(reads.listRows(col.table_id))).map((r) => r.id);
     const providers = this.registry.providerMap();
 
     // Precompile the formula body and the "only run if" condition ONCE (same for every
@@ -253,6 +359,16 @@ export class Engine {
     };
 
     const counters = { ran: 0, errors: 0 };
+    // The first cell error message — returned so a caller (the MCP run_column
+    // tool) can tell the user WHY a run failed (e.g. a missing AI/connector key)
+    // without a follow-up get_table read.
+    let firstError: string | undefined;
+    // Deduped systemic-error reporting (PostHog Error Tracking, via the injected
+    // `reportError`): emit at most MAX_REPORTED_ERRORS DISTINCT error signatures
+    // per run, so a 1000-row run with one failure mode raises a single exception,
+    // not a thousand. Per-cell status is recorded regardless (see markError).
+    const reportedSignatures = new Set<string>();
+    const MAX_REPORTED_ERRORS = 3;
     // Stores that batch terminal writes (the cloud store) coalesce the interim
     // `running` write away so a cell is ONE write, not two HTTP POSTs. Cheap
     // synchronous stores leave the flag unset and keep streaming `running`.
@@ -268,24 +384,89 @@ export class Engine {
     // Formula columns have no runBatch and are already excluded by batchableMethod.
     const batchMethod = condition ? null : this.batchableMethod(col);
 
+    // Per-row run start times, for the run-duration metadata on terminal writes.
+    const startedAt = new Map<string, number>();
+    // Archive the raw pre-`simplify` response only when it carries MORE than the
+    // stored value (different serialization) and fits the size cap — otherwise
+    // null, which also clears a stale archive from a previous run.
+    const RAW_CAP = 64_000;
+    const rawToArchive = (value: unknown, raw: unknown): unknown => {
+      if (raw === undefined || raw === null) return null;
+      try {
+        const rawJson = JSON.stringify(raw);
+        if (rawJson == null || rawJson.length > RAW_CAP) return null;
+        return rawJson === JSON.stringify(value) ? null : raw;
+      } catch {
+        return null; // unserializable response — skip the archive, never the run
+      }
+    };
+    const runMeta = (rowId: string): { ranAt: number; runMs: number | null } => {
+      const start = startedAt.get(rowId);
+      const ranAt = Date.now();
+      return { ranAt, runMs: start != null ? ranAt - start : null };
+    };
+
     // Mark a cell `running` (unless the store coalesces it) and stream progress.
     const markRunning = async (rowId: string): Promise<void> => {
+      startedAt.set(rowId, Date.now());
       if (skipRunning) return;
       await Effect.runPromise(this.store.setCell(rowId, columnId, { status: "running", error: null }));
       emit({ rowId, columnId, value: null, status: "running", error: null });
     };
-    const markDone = async (rowId: string, value: unknown): Promise<void> => {
-      await Effect.runPromise(this.store.setCell(rowId, columnId, { value, status: "done", error: null }));
+    const markDone = async (rowId: string, value: unknown, raw?: unknown): Promise<void> => {
+      const { ranAt, runMs } = runMeta(rowId);
+      await Effect.runPromise(
+        this.store.setCell(rowId, columnId, {
+          value,
+          status: "done",
+          error: null,
+          ranAt,
+          runMs,
+          raw: rawToArchive(value, raw),
+        }),
+      );
       emit({ rowId, columnId, value, status: "done", error: null });
       counters.ran++;
     };
     const markError = async (rowId: string, e: unknown): Promise<void> => {
       const message = e instanceof Error ? e.message : String(e);
-      await Effect.runPromise(this.store.setCell(rowId, columnId, { status: "error", error: message }));
+      if (firstError === undefined) firstError = message;
+      const { ranAt, runMs } = runMeta(rowId);
+      await Effect.runPromise(
+        this.store.setCell(rowId, columnId, { status: "error", error: message, ranAt, runMs, raw: null }),
+      );
       emit({ rowId, columnId, value: null, status: "error", error: message });
       counters.errors++;
+      // Forward the ORIGINAL error (full stack) to the host's exception sink,
+      // deduped per run so noise stays bounded. Never let a telemetry failure
+      // abort the run.
+      const report = this.config.reportError;
+      if (report && reportedSignatures.size < MAX_REPORTED_ERRORS) {
+        const signature = `${col.provider}:${col.method}:${message}`;
+        if (!reportedSignatures.has(signature)) {
+          reportedSignatures.add(signature);
+          try {
+            report(e, {
+              columnId,
+              provider: col.provider,
+              method: col.method,
+              rowId,
+              errorCount: counters.errors,
+            });
+          } catch {
+            /* a telemetry sink failure must never fail the run */
+          }
+        }
+      }
     };
 
+    // Run one segment (a scoped snapshot, a single full snapshot, or one keyset
+    // page) over its rows. The cumulative counters / firstError close over the
+    // whole run, so totals accumulate correctly across pages.
+    const processSegment = async (
+      reads: GridStoreShape,
+      rowIds: readonly string[],
+    ): Promise<void> => {
     if (batchMethod) {
       // Skip already-done cells up front so chunking groups only the rows we'll
       // actually call for, keeping the call count ~= pending-rows / batchSize.
@@ -312,7 +493,7 @@ export class Engine {
         try {
           const results = await this.runBatch(col, inputs);
           // Fan each ordered result back to its row's cell (order preserved).
-          for (let i = 0; i < rows.length; i++) await markDone(rows[i], simplify(results[i]));
+          for (let i = 0; i < rows.length; i++) await markDone(rows[i], simplify(results[i]), results[i]);
         } catch (e) {
           // A failed batch call fails every cell in that batch — never a silent done.
           for (const rowId of rows) await markError(rowId, e);
@@ -343,14 +524,15 @@ export class Engine {
             if (!pass) {
               // Mark the cell so the user can SEE why it's blank — gated off by the run
               // condition. We reuse the `error` text with status "empty" (not "error"), so
-              // the grid shows a muted "Condition not met" note instead of a bare dash.
-              // Skip the write when it already shows that note. (No progress event —
-              // CellProgress streams running/done/error transitions only.)
+              // the grid shows a muted "Run condition not met" note instead of a bare dash.
+              // Skip the write when it already shows that note, but ALWAYS stream the
+              // progress event so a live grid updates immediately instead of doing nothing.
               if (existing?.status !== "empty" || existing?.error !== CONDITION_SKIP_NOTE) {
                 await Effect.runPromise(
                   this.store.setCell(rowId, columnId, { value: null, status: "empty", error: CONDITION_SKIP_NOTE }),
                 );
               }
+              emit({ rowId, columnId, value: null, status: "empty", error: CONDITION_SKIP_NOTE });
               return;
             }
           } catch (e) {
@@ -366,16 +548,35 @@ export class Engine {
             ? await Effect.runPromise(this.resolveCells(col, rowId, reads))
             : await Effect.runPromise(this.resolveParams(col, rowId, reads));
           const result = await runFunction({ code, inputs, providers, dispatch: this.dispatch, prelude: formulaPrelude });
-          await markDone(rowId, simplify(result));
+          await markDone(rowId, simplify(result), result);
         } catch (e) {
           await markError(rowId, e);
         }
       });
     }
+    };
+
+    // Drive the segments. A paged full run walks keyset pages (bounded memory);
+    // everything else is a single segment over the scoped/full snapshot.
+    if (wantsPaging && firstPage && this.store.snapshotPage) {
+      await processSegment(firstPage.reads, firstPage.rowIds);
+      let cursor = firstPage.nextCursor;
+      while (cursor !== null && cursor !== undefined) {
+        const page = await Effect.runPromise(this.store.snapshotPage(cursor));
+        await processSegment(page.reads, page.rowIds);
+        cursor = page.nextCursor;
+      }
+    } else {
+      const rowIds =
+        opts.rowIds ??
+        (await Effect.runPromise(reads.listRows(col.table_id))).map((r) => r.id);
+      await processSegment(reads, rowIds);
+    }
+
     // Flush the final partial batch + await all in-flight writes (no-op for
     // synchronous stores).
     if (this.store.drain) await Effect.runPromise(this.store.drain());
-    return { ran: counters.ran, errors: counters.errors };
+    return { ran: counters.ran, errors: counters.errors, ...(firstError ? { firstError } : {}) };
   }
 
   /**
@@ -401,28 +602,59 @@ export class Engine {
       : this.config.ai
         ? [this.config.ai]
         : [];
-    return m.runBatch(inputs, {
-      secrets: cred?.secrets ?? {},
-      ai: this.config.ai,
-      aiProviders,
-      guardSsrf: this.config.guardSsrf,
-    });
-  }
-}
-
-/**
- * Assert a `Db` is present (the LOCAL path), throwing a clear error otherwise.
- * The CLOUD path injects `stores.store`/`stores.creds`, so no Db is required —
- * but if neither a Db nor an injected store is supplied for a given purpose the
- * engine cannot read/write, and this surfaces that as an explicit failure rather
- * than a `Cannot read properties of undefined` later in the run.
- */
-function requireDb(db: Db | undefined, purpose: string): Db {
-  if (!db)
-    throw new Error(
-      `Engine requires a Db for ${purpose}: pass a Db (local path) or inject stores.${purpose === "credentials" ? "creds" : "store"} (cloud path).`,
+    // A batch is ONE external call → one acquisition against the rate gate.
+    return this.throttle(col.provider ?? "", m, () =>
+      m.runBatch!(inputs, {
+        secrets: cred?.secrets ?? {},
+        ai: this.config.ai,
+        aiProviders,
+        guardSsrf: this.config.guardSsrf,
+        aiFallback: this.config.aiFallback,
+      }),
     );
-  return db;
+  }
+
+  /**
+   * Dry-run a not-yet-saved function column against the first `limit` rows and
+   * return each result WITHOUT persisting a column or writing any cell. Powers
+   * the "Try on N rows" preview: it resolves {{Column}} templates per row (same
+   * path as a real run) and dispatches the method, so what you see is what a run
+   * would store. A per-row failure is captured as `error`, never thrown.
+   */
+  async previewColumn(
+    spec: { provider: string; method: string; params: Record<string, unknown>; table_id: string },
+    limit = 5,
+  ): Promise<Array<{ rowId: string; value?: unknown; error?: string }>> {
+    const rows = (await Effect.runPromise(this.store.listRows(spec.table_id))).slice(0, Math.max(0, limit));
+    // A transient column object — never saved; `resolveParams` only reads
+    // `params` + `table_id`, so this is enough to interpolate per-row values.
+    const col: Column = {
+      id: "__preview__",
+      table_id: spec.table_id,
+      name: "__preview__",
+      type: "json",
+      kind: "function",
+      provider: spec.provider,
+      method: spec.method,
+      code: null,
+      params: spec.params,
+      condition: null,
+      position: 0,
+      created_at: 0,
+    };
+    // Bounded by `limit` (≤25 from the route), so a plain concurrent fan-out is fine.
+    return Promise.all(
+      rows.map(async (row) => {
+        try {
+          const input = await Effect.runPromise(this.resolveParams(col, row.id, this.store));
+          const value = await this.dispatch(spec.provider, spec.method, input);
+          return { rowId: row.id, value };
+        } catch (e) {
+          return { rowId: row.id, error: e instanceof Error ? e.message : String(e) };
+        }
+      }),
+    );
+  }
 }
 
 /** Unwrap a sole `{ text }` result so AI columns store the plain string. */
@@ -442,9 +674,78 @@ export function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
+/**
+ * The conservative safety-default throttle applied to any OUTBOUND connector that
+ * declares no `rateLimit` of its own (incl. user-uploaded manifests). It exists to
+ * guarantee an unconfigured connector can never fire an unbounded burst — when a
+ * provider's real limits are unknown, 2 req/s with ≤2 in flight is a safe floor
+ * (matches the "unknown provider" recommendation from the rate-limit research).
+ * Override per-engine via {@link EngineConfig.defaultRateLimit}.
+ */
+export const DEFAULT_RATE_LIMIT: RateLimit = { rps: 2, concurrency: 2 };
+
+/**
+ * A per-connector outbound throttle: spreads call STARTS by a minimum interval
+ * (derived from `rps`/`rpm`) and optionally caps in-flight calls (`concurrency`).
+ * This is what stops a 1,000-row run from firing 1,000 requests in a second — it
+ * paces them to the upstream API's documented limit regardless of the run's own
+ * fan-out concurrency. Construct one per connector and funnel every call through
+ * {@link run}. A limiter with no usable bounds is a passthrough.
+ */
+export class RateLimiter {
+  private readonly minIntervalMs: number;
+  private readonly maxConcurrent: number;
+  /** Earliest epoch-ms the next call may START (advanced by minIntervalMs each acquire). */
+  private nextStart = 0;
+  private active = 0;
+  private waiters: Array<() => void> = [];
+
+  constructor(rl: RateLimit) {
+    const rps = rl.rps ?? (rl.rpm ? rl.rpm / 60 : 0);
+    this.minIntervalMs = rps > 0 ? 1000 / rps : 0;
+    this.maxConcurrent = rl.concurrency && rl.concurrency > 0 ? rl.concurrency : Infinity;
+  }
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    await this.acquireSlot();
+    try {
+      const now = Date.now();
+      const start = Math.max(now, this.nextStart);
+      // Reserve this call's slot in the schedule; the next call starts one
+      // interval later, so concurrent acquirers are fanned out in time.
+      this.nextStart = start + this.minIntervalMs;
+      const wait = start - now;
+      if (wait > 0) await delay(wait);
+      return await fn();
+    } finally {
+      this.releaseSlot();
+    }
+  }
+
+  private acquireSlot(): Promise<void> {
+    if (this.active < this.maxConcurrent) {
+      this.active++;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) =>
+      this.waiters.push(() => {
+        this.active++;
+        resolve();
+      }),
+    );
+  }
+
+  private releaseSlot(): void {
+    this.active--;
+    this.waiters.shift()?.();
+  }
+}
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 /** Bounded-concurrency map (Revcode's `mapConcurrent`). */
 export async function mapConcurrent<T>(
-  items: T[],
+  items: readonly T[],
   limit: number,
   fn: (item: T, index: number) => Promise<void>,
 ): Promise<void> {

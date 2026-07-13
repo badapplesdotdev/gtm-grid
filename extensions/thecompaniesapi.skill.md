@@ -10,6 +10,14 @@
 ## Auth & cost
 - Base URL: `https://api.thecompaniesapi.com/v2` (manifest paths are relative to this).
 - Auth: header `Authorization` with Basic scheme — the connector sends `Authorization: Basic <apiKey>`. Key is set as the extension's `apiKey` secret.
+- **Rate limit:** the manifest sets a connector-level `rateLimit` of `{ rps: 50, concurrency: 5 }`, matching the documented entry/Startup-plan limit of 50 requests/sec (higher tiers allow 250/1000 rps). Exceeding it returns `429 Too Many Requests`. Bump `rps` if the account is on Scaleup/Enterprise.
+
+## Picker fields (live options)
+Two fields are name-pickers backed by the team's saved **company lists**, enumerated by `thecompaniesapi.fetchLists` (`GET /lists` → `{ lists: [{ id, name }], meta }`):
+- `searchByPrompt.listsToExclude` — exclude companies already in a chosen list. (Field is comma-separated; the picker stores the list id.)
+- `promptToSegmentation.listId` — scope the segmentation against a list.
+
+Options config: `method=fetchLists`, `itemsPath=lists`, `labelKey=name`, `valueKey=id`, `args={ size: 100 }`. The taxonomy resolvers (industries/technologies/countries/cities) are free-text search endpoints, not finite enumerable pickers, so they are NOT wired as options.
 - Credits: most enrichment = 1 credit. Search endpoints bill **1 credit per company returned**, so cap `size`. `refresh=true` on enrichment forces a recrawl and costs **+10 credits**. `countCompanies` and `checkUser` are cheap/free.
 - `simplified=true` returns a preview payload without full per-company billing — use it to scope before paying.
 
@@ -38,7 +46,8 @@
 - `thecompaniesapi.searchCountries` / `thecompaniesapi.searchCities` — resolve locations for location filters.
 - `thecompaniesapi.enrichJobTitles` — raw title → seniority/department/canonical role.
 
-### Account
+### Lists & account
+- `thecompaniesapi.fetchLists` — the team's saved company lists → `{ lists: [{ id, name }], meta }`. Backs the `listId` / `listsToExclude` pickers. Free.
 - `thecompaniesapi.checkUser` — account info + remaining credit balance. Free.
 
 ## Recipes

@@ -13,13 +13,15 @@
  * DECOUPLING: the engine package never imports a backend client. The cloud store
  * is fed an injected {@link CloudClientLike} whose "function refs" are just the
  * `/api/worker/*` route paths (see {@link CLOUD_REFS}); `query`/`mutation`/
- * `action` all POST the args as JSON to the matching route. The sidecar runs on
- * trusted localhost and authenticates to the worker endpoints with the shared
- * `WEBHOOK_WORKER_SECRET` bearer (the same `isAuthorizedWorker` boundary the
- * Inngest webhook worker uses).
+ * `action` all POST the args as JSON to the matching route. The sidecar
+ * authenticates to the worker endpoints as the SIGNED-IN MEMBER via the
+ * `X-Gtmgrid-Member` session token (the dual-auth `runWorkerSecretOrMember`
+ * boundary's member path) — never the server-only `WEBHOOK_WORKER_SECRET`, which
+ * a packaged desktop build does not have. The secret remains the boundary for the
+ * headless Inngest webhook worker only.
  */
 
-import { Effect } from "effect";
+import { Data, Effect } from "effect";
 import {
   CloudSchemaMapping,
   Engine,
@@ -41,6 +43,10 @@ import {
  */
 const CLOUD_REFS: CloudFunctionRefs = {
   getTable: "/api/worker/getTable",
+  // Scoped + keyset reads so a column run never loads a whole 50k-row grid: a
+  // row-scoped run fetches only its rows, a full run streams pages.
+  getTableForRows: "/api/worker/getTableForRows",
+  getTablePage: "/api/worker/getTablePage",
   setCell: "/api/worker/setCell",
   setCellStatus: "/api/worker/setCellStatus",
   // Batched cell writes: the cloud store buffers terminal writes and flushes
@@ -123,8 +129,9 @@ export interface CloudRunRequest {
 export interface CloudRunDeps {
   /**
    * Build a cloud-store client for an apps/web base URL + the member token. The
-   * default returns an HTTP client POSTing to `${apiUrl}/api/worker/*` with the
-   * shared worker secret; tests inject a fake.
+   * default returns an HTTP client POSTing to `${apiUrl}/api/worker/*`
+   * authenticated as the signed-in member (`X-Gtmgrid-Member`); tests inject a
+   * fake.
    */
   readonly makeClient: (apiUrl: string, token: string) => CloudClientLike;
   /** The connector/AI registry the engine runs functions against. */
@@ -133,21 +140,18 @@ export interface CloudRunDeps {
   readonly config: EngineConfig;
 }
 
-/** Resolve the shared worker bearer secret, failing closed when unset. */
-function workerSecret(): string {
-  const secret = process.env.WEBHOOK_WORKER_SECRET;
-  if (secret === undefined || secret === "") {
-    throw new Error("WEBHOOK_WORKER_SECRET is not configured");
-  }
-  return secret;
-}
-
 /**
  * Build the HTTP {@link CloudClientLike} the cloud store injects: every ref is an
  * `/api/worker/*` route path, and query/mutation/action POST the args as JSON to
- * `${apiUrl}<route>` with the worker bearer. A non-2xx response throws so the
- * engine maps it to a typed `GridStoreError`. The member `token` is forwarded so
- * the worker routes can attribute the run to the signed-in member.
+ * `${apiUrl}<route>`. A non-2xx response throws so the engine maps it to a typed
+ * `GridStoreError`.
+ *
+ * AUTH: the run authenticates as the SIGNED-IN MEMBER via the `X-Gtmgrid-Member`
+ * session token — NOT the shared `WEBHOOK_WORKER_SECRET`. The worker secret is a
+ * server-only secret the desktop never has (and must not ship), so the dual-auth
+ * worker routes (`runWorkerSecretOrMember`) take their member path and enforce
+ * workspace membership server-side. This is why a packaged prod build can run
+ * cloud columns at all — it has no secret to present.
  */
 export function makeWorkerClient(
   apiUrl: string,
@@ -171,16 +175,22 @@ export function makeWorkerClient(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${workerSecret()}`,
         "X-Gtmgrid-Member": token,
       },
       body: JSON.stringify(args),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      // The apps/web worker boundary maps CloudActionsLimitError → HTTP 402.
-      // Tag the thrown error so callers/engine can recognise the fatal stop.
-      const tag = res.status === 402 ? "CloudActionsLimitError: " : "";
+      // The apps/web worker boundary maps CloudActionsLimitError → 402 and
+      // PlanRequiredError (lapsed trial / Free plan) → 403. Tag the thrown error
+      // so callers/engine recognise each fatal stop and surface the right prompt
+      // (out-of-credits vs upgrade-required).
+      const tag =
+        res.status === 402
+          ? "CloudActionsLimitError: "
+          : res.status === 403
+            ? "PlanRequiredError: "
+            : "";
       throw new Error(
         `${tag}Worker route ${ref} failed: ${res.status} ${res.statusText} ${text}`.trim(),
       );
@@ -272,13 +282,20 @@ export async function buildCloudStore(
  * (TRI-3277). Surfaces the worker's 402 as a typed error so a caller can map it
  * back to a 402 for the desktop instead of treating it as a generic 5xx.
  */
-export class CloudActionsLimitError extends Error {
-  readonly _tag = "CloudActionsLimitError";
-  constructor(message: string) {
-    super(message);
-    this.name = "CloudActionsLimitError";
-  }
-}
+export class CloudActionsLimitError extends Data.TaggedError(
+  "CloudActionsLimitError",
+)<{ readonly message: string }> {}
+
+/**
+ * Raised when a cloud column run is rejected because the workspace has no active
+ * cloud plan — its trial has lapsed (by date or sync) or it is on Free. Surfaces
+ * the worker's 403 as a typed error so the desktop shows an UPGRADE prompt rather
+ * than a generic failure (distinct from {@link CloudActionsLimitError}, which is
+ * "out of cloud actions"). Both abort the run; this one means "add a plan".
+ */
+export class PlanRequiredError extends Data.TaggedError(
+  "PlanRequiredError",
+)<{ readonly message: string }> {}
 
 /**
  * Pre-flight quota gate (TRI-3277). POSTs the run shape to the server's
@@ -301,12 +318,19 @@ export async function assertColumnRunQuota(
       ...(req.force !== undefined ? { force: req.force } : {}),
     });
   } catch (e) {
-    if (e instanceof CloudActionsLimitError) throw e;
+    if (e instanceof CloudActionsLimitError || e instanceof PlanRequiredError) {
+      throw e;
+    }
     const message = e instanceof Error ? e.message : String(e);
-    // The worker boundary returns 402 for CloudActionsLimitError; the HTTP
-    // client folds the status into the thrown message.
+    // The worker boundary returns 402 for CloudActionsLimitError (out of cloud
+    // actions) and 403 for PlanRequiredError (lapsed trial / Free plan); the HTTP
+    // client folds the status + tag into the thrown message. Re-raise each as its
+    // typed error so the run aborts and the desktop shows the right prompt.
     if (message.includes("402") || message.includes("CloudActionsLimitError")) {
-      throw new CloudActionsLimitError(message);
+      throw new CloudActionsLimitError({ message });
+    }
+    if (message.includes("403") || message.includes("PlanRequiredError")) {
+      throw new PlanRequiredError({ message });
     }
     throw e;
   }
@@ -340,7 +364,7 @@ export async function runCloudColumn(
   await assertColumnRunQuota(client, req);
   const workspaceId = await resolveWorkspaceId(client, req.tableId);
   const store = await buildCloudStore(client, req.tableId, workspaceId);
-  const engine = new Engine(undefined, deps.config, deps.registry, undefined, {
+  const engine = new Engine(deps.config, deps.registry, {
     store,
     creds: store,
   });
@@ -351,4 +375,43 @@ export async function runCloudColumn(
     // `req.concurrency` cannot multiply worker POSTs / sandboxed executions.
     concurrency: clampConcurrency(req.concurrency),
   });
+}
+
+/** Inputs the desktop forwards to preview a not-yet-saved function column. */
+export interface CloudPreviewRequest {
+  /** The apps/web API base URL (the desktop's `VITE_API_URL`). */
+  readonly apiUrl: string;
+  /** The signed-in member's Better Auth bearer token (localhost trust boundary). */
+  readonly token: string;
+  /** The `tables.id` to preview against. */
+  readonly tableId: string;
+  /** The connector/AI provider the previewed method belongs to. */
+  readonly provider: string;
+  /** The method to dry-run. */
+  readonly method: string;
+  /** The (unsaved) column params, with {{Column}} templates resolved per row. */
+  readonly params: Record<string, unknown>;
+  /** How many rows to preview (defaults to the engine's own default). */
+  readonly limit?: number;
+}
+
+/**
+ * Dry-run a not-yet-saved function column on a CLOUD table (the "Try on N rows"
+ * preview). Mirrors {@link runCloudColumn} — a worker-backed client, the
+ * cloud-backed GridStore + an Engine over it — but persists/meters NOTHING, so
+ * there is NO quota gate: `Engine.previewColumn` only reads the first `limit`
+ * rows and returns per-row results without writing a column or any cell.
+ */
+export async function previewCloudColumn(
+  req: CloudPreviewRequest,
+  deps: CloudRunDeps,
+): Promise<Array<{ rowId: string; value?: unknown; error?: string }>> {
+  const client = deps.makeClient(req.apiUrl, req.token);
+  const workspaceId = await resolveWorkspaceId(client, req.tableId);
+  const store = await buildCloudStore(client, req.tableId, workspaceId);
+  const engine = new Engine(deps.config, deps.registry, { store, creds: store });
+  return engine.previewColumn(
+    { provider: req.provider, method: req.method, params: req.params, table_id: req.tableId },
+    req.limit ?? 5,
+  );
 }

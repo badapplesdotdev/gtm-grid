@@ -11,7 +11,9 @@
 - **Auth:** API key in `X-API-Key` header (manifest `auth.secretKey = apiKey`).
 - **Base URL:** `https://app.bettercontact.rocks/api/v2`
 - **Credits:** Charged on the **submit** call, billed per enriched contact (email and/or phone). Polling results is free. Lead-finder discovery is heavier (charged per lead returned). `checkCredits` is free.
-- **Rate/quota:** Account-level credit pool; check it with `bettercontact.checkCredits` before large batches.
+- **Rate limit:** 60 requests/minute per API key, applied across *all* endpoints (429 = Too Many Requests when exceeded). The connector enforces this with a connector-level `rateLimit: { rpm: 60 }`, so large submit/poll loops are spread out automatically.
+- **Quota:** Separate account-level credit pool; check it with `bettercontact.checkCredits` before large batches.
+- **No picker fields:** This is a stateless enrichment/discovery API — there are no enumerable resources (no lists/campaigns/accounts/owners/tags) to pick from. Every input is free-text lead data or a `filters` object, and `request_id`s are returned by the submit call (not enumerable). So no field has `options`.
 
 ## Endpoints by job
 

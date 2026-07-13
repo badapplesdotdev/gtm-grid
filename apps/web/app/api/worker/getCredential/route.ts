@@ -6,17 +6,12 @@
 
 import { WebhookService } from "@gtmgrid/services";
 import { Effect } from "effect";
-import { runWorker } from "../_lib";
+import { runWorkerSecretOrMember } from "../_lib";
+import { GetCredentialSchema } from "../_schemas";
 
 export const runtime = "nodejs";
-
-interface GetCredentialBody {
-  workspaceId: string;
-  extensionId: string;
-}
-
 export function POST(req: Request): Promise<Response> {
-  return runWorker(req, (body: GetCredentialBody) =>
+  return runWorkerSecretOrMember(req, GetCredentialSchema, (body) =>
     Effect.gen(function* () {
       const svc = yield* WebhookService;
       return yield* svc.getCredential({

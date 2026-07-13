@@ -61,8 +61,64 @@
     {
       "idx": 8,
       "version": "7",
-      "when": 1781077381884,
-      "tag": "0008_smooth_sheva_callister",
+      "when": 1781165337470,
+      "tag": "0008_clear_sleepwalker",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1781262099162,
+      "tag": "0009_young_invaders",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1781600289113,
+      "tag": "0010_sturdy_the_renegades",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1781892751803,
+      "tag": "0011_red_mephisto",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1782819752481,
+      "tag": "0012_equal_mephisto",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1783161936276,
+      "tag": "0013_redundant_lady_bullseye",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1783177316364,
+      "tag": "0014_marvelous_solo",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1783178603957,
+      "tag": "0015_robust_lady_mastermind",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1783941016134,
+      "tag": "0016_thankful_bloodaxe",
       "breakpoints": true
     }
   ]

@@ -6,7 +6,15 @@
   "description": "Find verified work emails and phone numbers from names, domains or LinkedIn URLs.",
   "baseUrl": "https://app.findymail.com/api",
   "logo": "https://www.google.com/s2/favicons?domain=findymail.com&sz=128",
-  "auth": { "type": "apiKey", "header": "Authorization", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "Authorization",
+    "secretKey": "apiKey"
+  },
+  "rateLimit": {
+    "rpm": 300,
+    "concurrency": 3
+  },
   "methods": [
     {
       "id": "findFromName",
@@ -17,12 +25,22 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["name", "domain"],
+        "required": [
+          "name",
+          "domain"
+        ],
         "properties": {
-          "name": { "type": "string", "description": "Full name, e.g. 'Jane Doe'" },
-          "domain": { "type": "string", "description": "Company domain, e.g. 'acme.com'" }
+          "name": {
+            "type": "string",
+            "description": "Full name, e.g. 'Jane Doe'"
+          },
+          "domain": {
+            "type": "string",
+            "description": "Company domain, e.g. 'acme.com'"
+          }
         }
-      }
+      },
+      "category": "Find email"
     },
     {
       "id": "findFromLinkedin",
@@ -33,11 +51,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["linkedin_url"],
+        "required": [
+          "linkedin_url"
+        ],
         "properties": {
-          "linkedin_url": { "type": "string", "description": "Full LinkedIn profile URL" }
+          "linkedin_url": {
+            "type": "string",
+            "description": "Full LinkedIn profile URL"
+          }
         }
-      }
+      },
+      "category": "Find email"
     },
     {
       "id": "findPhone",
@@ -48,10 +72,20 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["linkedin_url"],
+        "required": [
+          "linkedin_url"
+        ],
         "properties": {
-          "linkedin_url": { "type": "string", "description": "Full LinkedIn profile URL" }
+          "linkedin_url": {
+            "type": "string",
+            "description": "Full LinkedIn profile URL"
+          }
         }
+      },
+      "category": "Find phone",
+      "rateLimit": {
+        "rpm": 60,
+        "concurrency": 2
       }
     },
     {
@@ -63,9 +97,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["email"],
-        "properties": { "email": { "type": "string", "description": "Email to look up" } }
-      }
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email to look up"
+          }
+        }
+      },
+      "category": "Enrich people"
     },
     {
       "id": "verify",
@@ -76,9 +118,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["email"],
-        "properties": { "email": { "type": "string", "description": "Email to verify" } }
-      }
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email to verify"
+          }
+        }
+      },
+      "category": "Verify email"
     },
     {
       "id": "credits",
@@ -87,7 +137,77 @@
       "verb": "GET",
       "path": "/credits",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "id": "listContactLists",
+      "label": "List Contact Lists",
+      "description": "List the saved contact lists in your Findymail account. Returns { lists: [{ id, name }] }. Free.",
+      "verb": "GET",
+      "path": "/lists",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {}
+      },
+      "category": "Contact lists"
+    },
+    {
+      "id": "createContactList",
+      "label": "Create Contact List",
+      "description": "Create a new contact list. Input: name. Returns the created list. Free.",
+      "verb": "POST",
+      "path": "/lists",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name for the new contact list"
+          }
+        }
+      },
+      "category": "Contact lists"
+    },
+    {
+      "id": "getContacts",
+      "label": "Get Contacts In List",
+      "description": "Get the contacts saved in a specific list. Returns { contacts: [...] }. Free.",
+      "verb": "GET",
+      "path": "/lists/{id}/contacts",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Contact list id (pick by name)"
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number for pagination"
+          }
+        }
+      },
+      "options": {
+        "id": {
+          "method": "listContactLists",
+          "itemsPath": "lists",
+          "labelKey": "name",
+          "valueKey": "id"
+        }
+      },
+      "category": "Contact lists"
     }
   ]
 }

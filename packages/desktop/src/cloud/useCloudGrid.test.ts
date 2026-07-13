@@ -18,6 +18,7 @@ import {
   mergePagesToSnapshot,
   patchGridCache,
   patchPagedGridCache,
+  wasEventDropped,
   toCloudDelivery,
   toCloudWebhook,
 } from "./useCloudGrid";
@@ -28,7 +29,7 @@ type Snapshot = Parameters<typeof patchGridCache>[0];
 
 const baseSnapshot = (): NonNullable<Snapshot> =>
   ({
-    table: { _id: "t1", name: "Leads" },
+    table: { _id: "t1", name: "Leads", dedupe: null },
     columns: [
       {
         _id: "c1",
@@ -309,7 +310,7 @@ describe("createIncrementalTableView — incremental derivation + row identity",
   /** A snapshot with `rows`×`cols` cells (every cell populated). */
   const grid = (rows: number, cols: number): NonNullable<Snapshot> =>
     ({
-      table: { _id: "t1", name: "Grid" },
+      table: { _id: "t1", name: "Grid", dedupe: null },
       columns: Array.from({ length: cols }, (_, c) => ({
         _id: `c${c}`,
         name: `C${c}`,
@@ -402,7 +403,7 @@ const page = (
   nextCursor: Page["nextCursor"],
 ): Page =>
   ({
-    table: { _id: "t1", name: "Leads" },
+    table: { _id: "t1", name: "Leads", dedupe: null },
     columns: [
       {
         _id: "c1",
@@ -443,7 +444,7 @@ describe("mergePagesToSnapshot — flatten loaded pages (TRI-3272)", () => {
     expect(snap?.rows.map((r) => r._id)).toEqual(["r1", "r2", "r3"]);
     expect(snap?.cells.map((c) => c.rowId)).toEqual(["r1", "r2", "r3"]);
     expect(snap?.columns.map((c) => c._id)).toEqual(["c1"]);
-    expect(snap?.table).toEqual({ _id: "t1", name: "Leads" });
+    expect(snap?.table).toEqual({ _id: "t1", name: "Leads", dedupe: null });
   });
 });
 
@@ -530,5 +531,31 @@ describe("patchPagedGridCache — page-aware realtime patch (TRI-3272)", () => {
     });
     expect(next[0]?.nextCursor).toEqual(cursor("r1"));
     expect(next[1]?.nextCursor).toBeNull();
+  });
+});
+
+describe("wasEventDropped — the realtime drop-backstop predicate", () => {
+  it("row.insert is dropped while the loaded tail still has a next page", () => {
+    const pages = [page(["r1"], { position: 1, createdAt: 1, id: "r1" })];
+    expect(wasEventDropped(pages, { type: "row.insert", row: { _id: "rX" }, cells: [] })).toBe(true);
+  });
+
+  it("row.insert applies when the tail is the final page", () => {
+    const pages = [page(["r1"], null)];
+    expect(wasEventDropped(pages, { type: "row.insert", row: { _id: "rX" }, cells: [] })).toBe(false);
+  });
+
+  it("cell.upsert is dropped only when the row is not loaded", () => {
+    const pages = [page(["r1"], null)];
+    expect(
+      wasEventDropped(pages, { type: "cell.upsert", cell: { rowId: "r1", columnId: "c1", value: "v", status: "done", error: null } }),
+    ).toBe(false);
+    expect(
+      wasEventDropped(pages, { type: "cell.upsert", cell: { rowId: "missing", columnId: "c1", value: "v", status: "done", error: null } }),
+    ).toBe(true);
+  });
+
+  it("no loaded pages → nothing to drop (seed will fetch)", () => {
+    expect(wasEventDropped([], { type: "row.insert", row: { _id: "rX" }, cells: [] })).toBe(false);
   });
 });

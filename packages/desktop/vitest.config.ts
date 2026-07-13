@@ -12,6 +12,10 @@ export default defineConfig({
   test: {
     name: "desktop",
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    // The app is cloud-only: cloud/client.tsx requires VITE_API_URL at module
+    // load (a misconfig guard). Tests import it transitively, so give them a
+    // dummy base URL — they mock the network, the value just has to be present.
+    env: { VITE_API_URL: "http://localhost:3000" },
   },
 });

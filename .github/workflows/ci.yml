@@ -42,3 +42,39 @@ jobs:
       # Unit/integration tests (vitest across all packages; in-memory, no DB).
       - name: Test
         run: pnpm test
+
+      # Build the web app so a broken `next build` (bad route, server-component
+      # error, missing env reference) is caught in CI instead of at release time.
+      # The PostHog public vars come from repo Variables; unset → analytics degrade
+      # gracefully (build still passes), so this is safe in forks too.
+      - name: Build web
+        run: pnpm --filter @gtmgrid/web build
+        env:
+          NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN: ${{ vars.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN }}
+          NEXT_PUBLIC_POSTHOG_HOST: ${{ vars.NEXT_PUBLIC_POSTHOG_HOST }}
+
+  e2e:
+    name: Desktop E2E (Electron)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # System libraries Electron/Chromium need on a headless runner (nss, gtk,
+      # gbm, alsa, …). Playwright ships an installer that covers exactly these.
+      - name: Install Electron system deps
+        run: pnpm --filter @gtmgrid/desktop exec playwright install-deps chromium
+
+      # Electron opens a real window, so run the suite under a virtual display.
+      # global-setup builds the renderer + main and starts the mock cloud.
+      - name: Electron E2E
+        run: xvfb-run -a pnpm --filter @gtmgrid/desktop e2e

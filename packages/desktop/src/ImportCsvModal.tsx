@@ -21,7 +21,7 @@ import {
   type CsvColumnType,
   type ParsedCsv,
 } from "@gtmgrid/cloud";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   importTable,
   type ImportProgress,
@@ -160,6 +160,11 @@ export interface ImportCsvModalProps {
    * overlay. The app mounts this inside `.main`, so it defaults to `true`.
    */
   inline?: boolean;
+  /**
+   * A file to ingest immediately on mount (from a window drag-and-drop), so the
+   * flow opens straight on the "Map your columns" review instead of the dropzone.
+   */
+  initialFile?: File | null;
 }
 
 export function ImportCsvModal({
@@ -168,6 +173,7 @@ export function ImportCsvModal({
   onImported,
   onOpenTable,
   inline = true,
+  initialFile = null,
 }: ImportCsvModalProps) {
   const [stage, setStage] = useState<"drop" | "review" | "done">("drop");
   const [dragOver, setDragOver] = useState(false);
@@ -212,6 +218,17 @@ export function ImportCsvModal({
     },
     [ingest],
   );
+
+  // A file handed in via window drag-and-drop: ingest it once on mount so the
+  // flow lands on the review stage. Guarded by a ref so a re-render with the
+  // same File doesn't re-process it.
+  const consumedFile = useRef<File | null>(null);
+  useEffect(() => {
+    if (initialFile && consumedFile.current !== initialFile) {
+      consumedFile.current = initialFile;
+      onFile(initialFile);
+    }
+  }, [initialFile, onFile]);
 
   const toggleHeader = useCallback(
     (next: boolean) => {
@@ -383,7 +400,12 @@ export function ImportCsvModal({
               <span className="import-mono">{progress.done}/{progress.total}</span>
             </span>
           )}
-          <button className="btn btn-primary btn-lg" disabled={!includedCols.length || importing}
+          {includedCols.length > 0 && !importing && (
+            <span className="import-cta-hint" aria-hidden="true"><I.ArrowRight s={18} /></span>
+          )}
+          <button
+            className={`btn btn-primary btn-lg${includedCols.length > 0 && !importing ? " import-cta-glow" : ""}`}
+            disabled={!includedCols.length || importing}
             onClick={() => void runImport()}>
             {importing ? "Creating…" : <>Create table <I.ArrowRight s={15} /></>}
           </button>

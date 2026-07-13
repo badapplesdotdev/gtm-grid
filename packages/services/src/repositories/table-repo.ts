@@ -22,15 +22,31 @@ export interface Table {
   readonly name: string;
   readonly position: number;
   readonly createdAt: number;
+  /** Dedupe config: the column rows are deduped on (null = off). */
+  readonly dedupeColumn: string | null;
+  /** Which duplicate to keep ("oldest" | "newest"); null when dedupe is off. */
+  readonly dedupeKeep: string | null;
+  /** Sidebar folder this table is filed under (null = root). */
+  readonly folderId: string | null;
+  /** Workspace-shared favourite/pin flag (any member's pin shows for all). */
+  readonly favorite: boolean;
 }
 
 /** Fields a `createTable` insert supplies. */
 export interface NewTable {
+  /**
+   * Client-supplied primary key. Optional: the DB generates one when omitted.
+   * Supplied by the cloud grid so an optimistic table insert matches the
+   * server's id and the realtime self-echo converges instead of duplicating.
+   */
+  readonly id?: string;
   readonly workspaceId: string;
   readonly projectId: string;
   readonly name: string;
   readonly position: number;
   readonly createdAt: number;
+  /** Sidebar folder to file the new table under (omitted/null = root). */
+  readonly folderId?: string | null;
 }
 
 /** Raised when a table read/write fails (DB/transport error). */
@@ -72,8 +88,32 @@ export class TableRepo extends Context.Tag("TableRepo")<
     readonly insert: (
       values: NewTable,
     ) => Effect.Effect<string, TableRepoError>;
+    /** Rename a table (name only; position/dedupe/etc. unchanged). */
+    readonly rename: (
+      id: string,
+      name: string,
+    ) => Effect.Effect<void, TableRepoError>;
+    /** Pin/unpin a table (workspace-shared favourite flag). */
+    readonly setFavorite: (
+      id: string,
+      favorite: boolean,
+    ) => Effect.Effect<void, TableRepoError>;
     /** Delete a table (FK cascade drops its columns/rows/cells/webhooks). */
     readonly remove: (id: string) => Effect.Effect<void, TableRepoError>;
+    /** Set (or clear) a table's dedupe config. `column: null` disables it. */
+    readonly setDedupe: (
+      id: string,
+      config: { readonly column: string | null; readonly keep: string | null },
+    ) => Effect.Effect<void, TableRepoError>;
+    /**
+     * File a table under a folder (`folderId: null` → root), optionally with a
+     * new sort position (drag-reorder passes a fractional midpoint).
+     */
+    readonly setFolder: (
+      id: string,
+      folderId: string | null,
+      position?: number,
+    ) => Effect.Effect<void, TableRepoError>;
   }
 >() {}
 
@@ -90,6 +130,10 @@ export const TableRepoLive: Layer.Layer<TableRepo, never, DbClient> =
         name: schema.tables.name,
         position: schema.tables.position,
         createdAt: schema.tables.createdAt,
+        dedupeColumn: schema.tables.dedupeColumn,
+        dedupeKeep: schema.tables.dedupeKeep,
+        folderId: schema.tables.folderId,
+        favorite: schema.tables.favorite,
       } as const;
       return {
         findById: (id) =>
@@ -150,12 +194,58 @@ export const TableRepoLive: Layer.Layer<TableRepo, never, DbClient> =
             },
             catch: fail("table insert"),
           }),
+        rename: (id, name) =>
+          Effect.tryPromise({
+            try: async () => {
+              await db
+                .update(schema.tables)
+                .set({ name })
+                .where(eq(schema.tables.id, id));
+            },
+            catch: fail("table rename"),
+          }),
+        setFavorite: (id, favorite) =>
+          Effect.tryPromise({
+            try: async () => {
+              await db
+                .update(schema.tables)
+                .set({ favorite })
+                .where(eq(schema.tables.id, id));
+            },
+            catch: fail("table set favorite"),
+          }),
         remove: (id) =>
           Effect.tryPromise({
             try: async () => {
               await db.delete(schema.tables).where(eq(schema.tables.id, id));
             },
             catch: fail("table delete"),
+          }),
+        setDedupe: (id, config) =>
+          Effect.tryPromise({
+            try: async () => {
+              await db
+                .update(schema.tables)
+                .set({
+                  dedupeColumn: config.column,
+                  dedupeKeep: config.column === null ? null : config.keep,
+                })
+                .where(eq(schema.tables.id, id));
+            },
+            catch: fail("table set dedupe"),
+          }),
+        setFolder: (id, folderId, position) =>
+          Effect.tryPromise({
+            try: async () => {
+              await db
+                .update(schema.tables)
+                .set({
+                  folderId,
+                  ...(position !== undefined ? { position } : {}),
+                })
+                .where(eq(schema.tables.id, id));
+            },
+            catch: fail("table set folder"),
           }),
       };
     }),
@@ -182,9 +272,42 @@ export const tableRepoLayer = (store: GridStore): Layer.Layer<TableRepo> =>
       ),
     insert: (values) =>
       Effect.sync(() => {
-        const id = store.nextId("table");
-        store.tables.push({ id, ...values });
+        const id = values.id ?? store.nextId("table");
+        store.tables.push({
+          ...values,
+          id,
+          dedupeColumn: null,
+          dedupeKeep: null,
+          folderId: values.folderId ?? null,
+          favorite: false,
+        });
         return id;
       }),
+    rename: (id, name) =>
+      Effect.sync(() => {
+        const t = store.tables.find((x) => x.id === id);
+        if (t) t.name = name;
+      }),
+    setFavorite: (id, favorite) =>
+      Effect.sync(() => {
+        const t = store.tables.find((x) => x.id === id);
+        if (t) t.favorite = favorite;
+      }),
     remove: (id) => Effect.sync(() => cascadeDeleteTable(store, id)),
+    setDedupe: (id, config) =>
+      Effect.sync(() => {
+        const t = store.tables.find((x) => x.id === id);
+        if (t) {
+          t.dedupeColumn = config.column;
+          t.dedupeKeep = config.column === null ? null : config.keep;
+        }
+      }),
+    setFolder: (id, folderId, position) =>
+      Effect.sync(() => {
+        const t = store.tables.find((x) => x.id === id);
+        if (t) {
+          t.folderId = folderId;
+          if (position !== undefined) t.position = position;
+        }
+      }),
   });

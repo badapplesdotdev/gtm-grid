@@ -12,10 +12,15 @@ export const githubConnector = defineHttpConnector({
   baseUrl: "https://api.github.com",
   auth: { type: "apiKey", header: "authorization" },
   secretKey: "token",
+  // GitHub REST: authed 5,000 req/hr (anon only 60/hr), plus a secondary limit of
+  // ≤100 concurrent requests. Pace conservatively (1 req/s, ≤2 in flight) — well
+  // under both ceilings and safe for the anonymous case. GitHub honours `retry-after`.
+  rateLimit: { rps: 1, concurrency: 2 },
   methods: [
     {
       id: "getUser",
       label: "Get GitHub User",
+      category: "Enrich people",
       description:
         "Fetch a public GitHub user profile by username. Returns login, name, company, bio, blog, location, followers, and public_repos.",
       verb: "GET",

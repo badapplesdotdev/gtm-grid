@@ -6,7 +6,14 @@
   "description": "Waterfall email & phone enrichment across 20+ providers. Async: enrich, then poll for the result.",
   "baseUrl": "https://app.bettercontact.rocks/api/v2",
   "logo": "https://www.google.com/s2/favicons?domain=bettercontact.rocks&sz=128",
-  "auth": { "type": "apiKey", "header": "X-API-Key", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "X-API-Key",
+    "secretKey": "apiKey"
+  },
+  "rateLimit": {
+    "rpm": 60
+  },
   "methods": [
     {
       "id": "enrich",
@@ -17,18 +24,32 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["data"],
+        "required": [
+          "data"
+        ],
         "properties": {
           "data": {
             "type": "array",
             "description": "Array of leads (1-100). Each: { first_name, last_name, company, company_domain, linkedin_url, custom_fields }",
-            "items": { "type": "object" }
+            "items": {
+              "type": "object"
+            }
           },
-          "enrich_email_address": { "type": "boolean", "description": "Find a verified work email (default true)" },
-          "enrich_phone_number": { "type": "boolean", "description": "Find a direct phone number" },
-          "webhook": { "type": "string", "description": "Optional webhook URL POSTed when enrichment finishes" }
+          "enrich_email_address": {
+            "type": "boolean",
+            "description": "Find a verified work email (default true)"
+          },
+          "enrich_phone_number": {
+            "type": "boolean",
+            "description": "Find a direct phone number"
+          },
+          "webhook": {
+            "type": "string",
+            "description": "Optional webhook URL POSTed when enrichment finishes"
+          }
         }
-      }
+      },
+      "category": "Find email"
     },
     {
       "id": "getResult",
@@ -39,9 +60,92 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["request_id"],
-        "properties": { "request_id": { "type": "string", "description": "The id returned by Enrich" } }
-      }
+        "required": [
+          "request_id"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "description": "The id returned by Enrich"
+          }
+        }
+      },
+      "category": "Find email"
+    },
+    {
+      "id": "findLeads",
+      "label": "Find Leads (submit)",
+      "description": "Submit a People/Company search to discover net-new leads (no input list). `filters` carries company criteria (company domains, company_industry, company_technology, company_headcount_min/max) and people criteria (lead_fullname, lead_linkedin_url, lead_department, lead_function, lead_skills, lead_job_title [+exact_match], lead_location, lead_seniority) — each an { include:[...], exclude:[...] } object. Returns { success, message, request_id } — poll Get Found Leads with request_id. ASYNC: results are not ready immediately.",
+      "verb": "POST",
+      "path": "/lead_finder/async",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": [
+          "filters"
+        ],
+        "properties": {
+          "filters": {
+            "type": "object",
+            "description": "Company + people filter object (see description). Each people field is { include:[...], exclude:[...] }."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Leads to return, 1-200 (default 100)"
+          },
+          "offset": {
+            "type": "integer",
+            "description": "Pagination offset; increase to page through results"
+          },
+          "webhook": {
+            "type": "string",
+            "description": "Optional webhook URL POSTed when the search finishes"
+          }
+        }
+      },
+      "category": "Find leads"
+    },
+    {
+      "id": "getFoundLeads",
+      "label": "Get Found Leads (poll)",
+      "description": "Fetch lead-finder results by request id (the `request_id` from Find Leads). Returns { id, status, credits_consumed, credits_left, summary:{ leads_found }, leads[] } where status is 'pending' until done then 'terminated'. Each lead has contact (name, job_title, seniority, linkedin_url, location, email, phone) + company (name, domain, industry, headcount, hq, founded) fields. Do NOT poll this with an Enrich id — use Get Result for those.",
+      "verb": "GET",
+      "path": "/lead_finder/async/{request_id}",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": [
+          "request_id"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "description": "The request_id returned by Find Leads"
+          }
+        }
+      },
+      "category": "Find leads"
+    },
+    {
+      "id": "checkCredits",
+      "label": "Check Credits",
+      "description": "Get the remaining credit balance for the account. Requires the account `email` as a query param (alongside the API key). Returns { success, credits_left, email }. Free — call before large enrichment or lead-finder batches.",
+      "verb": "GET",
+      "path": "/account",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The account email (query param)"
+          }
+        }
+      },
+      "category": "Account"
     }
   ]
 }

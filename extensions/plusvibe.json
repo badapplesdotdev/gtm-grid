@@ -6,7 +6,15 @@
   "description": "Cold email at scale — manage campaigns, push leads, read stats. Most calls need workspace_id.",
   "baseUrl": "https://api.plusvibe.ai/api/v1",
   "logo": "https://www.google.com/s2/favicons?domain=plusvibe.ai&sz=128",
-  "auth": { "type": "apiKey", "header": "x-api-key", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "x-api-key",
+    "secretKey": "apiKey"
+  },
+  "rateLimit": {
+    "rps": 5,
+    "concurrency": 3
+  },
   "methods": [
     {
       "id": "listWorkspaces",
@@ -15,7 +23,10 @@
       "verb": "GET",
       "path": "/authenticate",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     },
     {
       "id": "listCampaigns",
@@ -26,15 +37,55 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id"],
+        "required": [
+          "workspace_id"
+        ],
         "properties": {
-          "workspace_id": { "type": "string", "description": "Workspace id (required on almost every call)" },
-          "campaign_id": { "type": "string", "description": "Filter by a single campaign id" },
-          "parent_camp_id": { "type": "string", "description": "Filter by parent campaign id" },
-          "status": { "type": "string", "description": "ACTIVE | PAUSED | COMPLETED | ARCHIVED" },
-          "campaign_type": { "type": "string", "description": "all | parent | subseq" },
-          "skip": { "type": "integer", "description": "Records to skip (default 0)" },
-          "limit": { "type": "integer", "description": "Max records (default 10, max 100)" }
+          "workspace_id": {
+            "type": "string",
+            "description": "Workspace id (required on almost every call)"
+          },
+          "campaign_id": {
+            "type": "string",
+            "description": "Filter by a single campaign id"
+          },
+          "parent_camp_id": {
+            "type": "string",
+            "description": "Filter by parent campaign id"
+          },
+          "status": {
+            "type": "string",
+            "description": "ACTIVE | PAUSED | COMPLETED | ARCHIVED"
+          },
+          "campaign_type": {
+            "type": "string",
+            "description": "all | parent | subseq"
+          },
+          "skip": {
+            "type": "integer",
+            "description": "Records to skip (default 0)"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max records (default 10, max 100)"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
+        },
+        "parent_camp_id": {
+          "method": "listCampaigns",
+          "labelKey": "camp_name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
         }
       }
     },
@@ -47,10 +98,26 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id", "camp_name"],
+        "required": [
+          "workspace_id",
+          "camp_name"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "camp_name": { "type": "string", "description": "Campaign name" }
+          "workspace_id": {
+            "type": "string"
+          },
+          "camp_name": {
+            "type": "string",
+            "description": "Campaign name"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
         }
       }
     },
@@ -63,10 +130,34 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id", "campaign_id"],
+        "required": [
+          "workspace_id",
+          "campaign_id"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "campaign_id": { "type": "string" }
+          "workspace_id": {
+            "type": "string"
+          },
+          "campaign_id": {
+            "type": "string"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
+        },
+        "campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "camp_name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
         }
       }
     },
@@ -79,10 +170,34 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id", "campaign_id"],
+        "required": [
+          "workspace_id",
+          "campaign_id"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "campaign_id": { "type": "string" }
+          "workspace_id": {
+            "type": "string"
+          },
+          "campaign_id": {
+            "type": "string"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
+        },
+        "campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "camp_name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
         }
       }
     },
@@ -95,10 +210,34 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id", "campaign_id"],
+        "required": [
+          "workspace_id",
+          "campaign_id"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "campaign_id": { "type": "string" }
+          "workspace_id": {
+            "type": "string"
+          },
+          "campaign_id": {
+            "type": "string"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
+        },
+        "campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "camp_name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
         }
       }
     },
@@ -111,21 +250,113 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["workspace_id", "campaign_id", "leads"],
+        "required": [
+          "workspace_id",
+          "campaign_id",
+          "leads"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "campaign_id": { "type": "string" },
+          "workspace_id": {
+            "type": "string"
+          },
+          "campaign_id": {
+            "type": "string"
+          },
           "leads": {
             "type": "array",
-            "description": "Array of leads. Each: { email, first_name, last_name, notes, address_line, city, country, country_code, phone_number, company_name, company_website, linkedin_person_url, linkedin_company_url, custom_variables }",
-            "items": { "type": "object" }
+            "description": "Array of leads. Run per-row, one lead is built from the mapped columns.",
+            "items": {
+              "type": "object",
+              "required": [
+                "email"
+              ],
+              "properties": {
+                "email": {
+                  "type": "string"
+                },
+                "first_name": {
+                  "type": "string"
+                },
+                "last_name": {
+                  "type": "string"
+                },
+                "company_name": {
+                  "type": "string"
+                },
+                "company_website": {
+                  "type": "string"
+                },
+                "phone_number": {
+                  "type": "string"
+                },
+                "linkedin_person_url": {
+                  "type": "string"
+                },
+                "linkedin_company_url": {
+                  "type": "string"
+                },
+                "address_line": {
+                  "type": "string"
+                },
+                "city": {
+                  "type": "string"
+                },
+                "country": {
+                  "type": "string"
+                },
+                "country_code": {
+                  "type": "string"
+                },
+                "notes": {
+                  "type": "string"
+                },
+                "custom_variables": {
+                  "type": "object",
+                  "description": "Custom personalization variables as a { key: value } map. Map a grid column into each value to reference it as a merge tag in your sequence. Add as many as you need."
+                }
+              }
+            }
           },
-          "skip_if_in_workspace": { "type": "boolean", "description": "Skip leads already present anywhere in the workspace" },
-          "skip_lead_in_active_pause_camp": { "type": "boolean", "description": "Skip leads already in an active or paused campaign" },
-          "skip_lead_for_active_only_camp": { "type": "boolean", "description": "Skip leads already in an active campaign" },
-          "resume_camp_if_completed": { "type": "boolean" },
-          "is_overwrite": { "type": "boolean", "description": "Overwrite existing lead data for matching emails" }
+          "skip_if_in_workspace": {
+            "type": "boolean",
+            "description": "Skip leads already present anywhere in the workspace"
+          },
+          "skip_lead_in_active_pause_camp": {
+            "type": "boolean",
+            "description": "Skip leads already in an active or paused campaign"
+          },
+          "skip_lead_for_active_only_camp": {
+            "type": "boolean",
+            "description": "Skip leads already in an active campaign"
+          },
+          "resume_camp_if_completed": {
+            "type": "boolean"
+          },
+          "is_overwrite": {
+            "type": "boolean",
+            "description": "Overwrite existing lead data for matching emails"
+          }
         }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
+        },
+        "campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "camp_name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        }
+      },
+      "rateLimit": {
+        "rps": 2
       }
     },
     {
@@ -137,13 +368,47 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id", "email"],
+        "required": [
+          "workspace_id",
+          "email"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "email": { "type": "string", "description": "Lead's email address" },
-          "campaign_id": { "type": "string", "description": "Omit to search all campaigns" },
-          "skip": { "type": "integer", "description": "Pagination offset (min 0)" },
-          "limit": { "type": "integer", "description": "Results per page (1-100)" }
+          "workspace_id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "description": "Lead's email address"
+          },
+          "campaign_id": {
+            "type": "string",
+            "description": "Omit to search all campaigns"
+          },
+          "skip": {
+            "type": "integer",
+            "description": "Pagination offset (min 0)"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Results per page (1-100)"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
+        },
+        "campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "camp_name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
         }
       }
     },
@@ -156,19 +421,64 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id"],
+        "required": [
+          "workspace_id"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "campaign_id": { "type": "string" },
-          "status": { "type": "string", "description": "NOT_CONTACTED | CONTACTED | COMPLETED | REPLIED | BOUNCED | UNSUBSCRIBED | RESCHEDULED | SKIPPED | PENDING" },
-          "label": { "type": "string", "description": "INTERESTED | NOT_INTERESTED | custom label" },
-          "email": { "type": "string" },
-          "first_name": { "type": "string" },
-          "last_name": { "type": "string" },
-          "page": { "type": "integer" },
-          "limit": { "type": "integer" },
-          "sort": { "type": "string", "description": "Field to sort by" },
-          "direction": { "type": "string", "description": "asc | desc" }
+          "workspace_id": {
+            "type": "string"
+          },
+          "campaign_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "NOT_CONTACTED | CONTACTED | COMPLETED | REPLIED | BOUNCED | UNSUBSCRIBED | RESCHEDULED | SKIPPED | PENDING"
+          },
+          "label": {
+            "type": "string",
+            "description": "INTERESTED | NOT_INTERESTED | custom label"
+          },
+          "email": {
+            "type": "string"
+          },
+          "first_name": {
+            "type": "string"
+          },
+          "last_name": {
+            "type": "string"
+          },
+          "page": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "sort": {
+            "type": "string",
+            "description": "Field to sort by"
+          },
+          "direction": {
+            "type": "string",
+            "description": "asc | desc"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
+        },
+        "campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "camp_name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
         }
       }
     },
@@ -181,12 +491,44 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id", "email", "variables"],
+        "required": [
+          "workspace_id",
+          "email",
+          "variables"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "email": { "type": "string", "description": "Lead's email address" },
-          "variables": { "type": "object", "description": "Key-value custom fields to set/add (may include label)" },
-          "campaign_id": { "type": "string", "description": "Optional campaign scope" }
+          "workspace_id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "description": "Lead's email address"
+          },
+          "variables": {
+            "type": "object",
+            "description": "Key-value custom fields to set/add (may include label)"
+          },
+          "campaign_id": {
+            "type": "string",
+            "description": "Optional campaign scope"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
+        },
+        "campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "camp_name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
         }
       }
     },
@@ -199,12 +541,43 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id", "campaign_id", "email", "new_status"],
+        "required": [
+          "workspace_id",
+          "campaign_id",
+          "email",
+          "new_status"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "campaign_id": { "type": "string" },
-          "email": { "type": "string" },
-          "new_status": { "type": "string", "description": "Must be 'COMPLETED'" }
+          "workspace_id": {
+            "type": "string"
+          },
+          "campaign_id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "new_status": {
+            "type": "string",
+            "description": "Must be 'COMPLETED'"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
+        },
+        "campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "camp_name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
         }
       }
     },
@@ -217,13 +590,49 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id", "delete_list"],
+        "required": [
+          "workspace_id",
+          "delete_list"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "delete_list": { "type": "array", "description": "Email addresses to remove (min 1)", "items": { "type": "string" } },
-          "campaign_id": { "type": "string" },
-          "delete_all_from_company": { "type": "boolean", "description": "Remove all leads sharing the same domain" },
-          "delete_parent_lead": { "type": "boolean", "description": "Default true; set false for subsequence leads" }
+          "workspace_id": {
+            "type": "string"
+          },
+          "delete_list": {
+            "type": "array",
+            "description": "Email addresses to remove (min 1)",
+            "items": {
+              "type": "string"
+            }
+          },
+          "campaign_id": {
+            "type": "string"
+          },
+          "delete_all_from_company": {
+            "type": "boolean",
+            "description": "Remove all leads sharing the same domain"
+          },
+          "delete_parent_lead": {
+            "type": "boolean",
+            "description": "Default true; set false for subsequence leads"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
+        },
+        "campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "camp_name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
         }
       }
     },
@@ -236,10 +645,34 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id"],
+        "required": [
+          "workspace_id"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "campaign_id": { "type": "string", "description": "Optional campaign filter" }
+          "workspace_id": {
+            "type": "string"
+          },
+          "campaign_id": {
+            "type": "string",
+            "description": "Optional campaign filter"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
+        },
+        "campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "camp_name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
         }
       }
     },
@@ -252,10 +685,34 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id", "campaign_id"],
+        "required": [
+          "workspace_id",
+          "campaign_id"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "campaign_id": { "type": "string" }
+          "workspace_id": {
+            "type": "string"
+          },
+          "campaign_id": {
+            "type": "string"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
+        },
+        "campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "camp_name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
         }
       }
     },
@@ -268,12 +725,43 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id", "start_date"],
+        "required": [
+          "workspace_id",
+          "start_date"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "campaign_id": { "type": "string", "description": "Omit for all campaigns" },
-          "start_date": { "type": "string", "description": "Period start, e.g. 2024-01-01" },
-          "end_date": { "type": "string", "description": "Period end, e.g. 2024-03-14" }
+          "workspace_id": {
+            "type": "string"
+          },
+          "campaign_id": {
+            "type": "string",
+            "description": "Omit for all campaigns"
+          },
+          "start_date": {
+            "type": "string",
+            "description": "Period start, e.g. 2024-01-01"
+          },
+          "end_date": {
+            "type": "string",
+            "description": "Period end, e.g. 2024-03-14"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
+        },
+        "campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "camp_name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
         }
       }
     },
@@ -286,11 +774,31 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id", "start_date", "end_date"],
+        "required": [
+          "workspace_id",
+          "start_date",
+          "end_date"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "start_date": { "type": "string", "description": "e.g. 2024-01-01" },
-          "end_date": { "type": "string", "description": "e.g. 2024-03-14" }
+          "workspace_id": {
+            "type": "string"
+          },
+          "start_date": {
+            "type": "string",
+            "description": "e.g. 2024-01-01"
+          },
+          "end_date": {
+            "type": "string",
+            "description": "e.g. 2024-03-14"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
         }
       }
     },
@@ -303,13 +811,43 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id"],
+        "required": [
+          "workspace_id"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "email": { "type": "string", "description": "Filter by email address" },
-          "tags": { "type": "string", "description": "Comma-separated tag ids" },
-          "skip": { "type": "integer" },
-          "limit": { "type": "integer" }
+          "workspace_id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "description": "Filter by email address"
+          },
+          "tags": {
+            "type": "string",
+            "description": "Comma-separated tag ids"
+          },
+          "skip": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
+        },
+        "tags": {
+          "method": "listTags",
+          "labelKey": "name",
+          "valueKey": "_id",
+          "args": {
+            "limit": 100
+          }
         }
       }
     },
@@ -322,10 +860,29 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id", "accounts"],
+        "required": [
+          "workspace_id",
+          "accounts"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "accounts": { "type": "array", "description": "Email addresses to test", "items": { "type": "string" } }
+          "workspace_id": {
+            "type": "string"
+          },
+          "accounts": {
+            "type": "array",
+            "description": "Email addresses to test",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
         }
       }
     },
@@ -338,15 +895,53 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id"],
+        "required": [
+          "workspace_id"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "lead": { "type": "string", "description": "Filter to a specific lead email" },
-          "campaign_id": { "type": "string" },
-          "email_type": { "type": "string", "description": "all | received | sent" },
-          "label": { "type": "string", "description": "Label in CAPS_WITH_UNDERSCORES" },
-          "preview_only": { "type": "boolean", "description": "Return only the content preview" },
-          "page_trail": { "type": "string", "description": "Pagination token from a previous response" }
+          "workspace_id": {
+            "type": "string"
+          },
+          "lead": {
+            "type": "string",
+            "description": "Filter to a specific lead email"
+          },
+          "campaign_id": {
+            "type": "string"
+          },
+          "email_type": {
+            "type": "string",
+            "description": "all | received | sent"
+          },
+          "label": {
+            "type": "string",
+            "description": "Label in CAPS_WITH_UNDERSCORES"
+          },
+          "preview_only": {
+            "type": "boolean",
+            "description": "Return only the content preview"
+          },
+          "page_trail": {
+            "type": "string",
+            "description": "Pagination token from a previous response"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
+        },
+        "campaign_id": {
+          "method": "listCampaigns",
+          "labelKey": "camp_name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
         }
       }
     },
@@ -359,8 +954,22 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id"],
-        "properties": { "workspace_id": { "type": "string" } }
+        "required": [
+          "workspace_id"
+        ],
+        "properties": {
+          "workspace_id": {
+            "type": "string"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
+        }
       }
     },
     {
@@ -372,17 +981,65 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["workspace_id", "reply_to_id", "subject", "from", "to", "body"],
+        "required": [
+          "workspace_id",
+          "reply_to_id",
+          "subject",
+          "from",
+          "to",
+          "body"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "reply_to_id": { "type": "string", "description": "Email id being replied to" },
-          "subject": { "type": "string" },
-          "from": { "type": "string", "description": "Sender address (must be a connected account)" },
-          "to": { "type": "string", "description": "Recipient address" },
-          "body": { "type": "string", "description": "HTML or text body" },
-          "cc": { "type": "string" },
-          "bcc": { "type": "string" }
+          "workspace_id": {
+            "type": "string"
+          },
+          "reply_to_id": {
+            "type": "string",
+            "description": "Email id being replied to"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string",
+            "description": "Sender address (must be a connected account)"
+          },
+          "to": {
+            "type": "string",
+            "description": "Recipient address"
+          },
+          "body": {
+            "type": "string",
+            "description": "HTML or text body"
+          },
+          "cc": {
+            "type": "string"
+          },
+          "bcc": {
+            "type": "string"
+          }
         }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
+        },
+        "from": {
+          "method": "listEmailAccounts",
+          "itemsPath": "accounts",
+          "labelKey": "email",
+          "valueKey": "email",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        }
+      },
+      "rateLimit": {
+        "rps": 2
       }
     },
     {
@@ -394,11 +1051,29 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id"],
+        "required": [
+          "workspace_id"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "skip": { "type": "integer", "description": "Default 0" },
-          "limit": { "type": "integer", "description": "Default 100" }
+          "workspace_id": {
+            "type": "string"
+          },
+          "skip": {
+            "type": "integer",
+            "description": "Default 0"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Default 100"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
         }
       }
     },
@@ -411,10 +1086,29 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id", "entries"],
+        "required": [
+          "workspace_id",
+          "entries"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "entries": { "type": "array", "description": "Emails or domains to blocklist", "items": { "type": "string" } }
+          "workspace_id": {
+            "type": "string"
+          },
+          "entries": {
+            "type": "array",
+            "description": "Emails or domains to blocklist",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
         }
       }
     },
@@ -427,11 +1121,27 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id"],
+        "required": [
+          "workspace_id"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "skip": { "type": "integer" },
-          "limit": { "type": "integer" }
+          "workspace_id": {
+            "type": "string"
+          },
+          "skip": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
         }
       }
     },
@@ -444,8 +1154,22 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id"],
-        "properties": { "workspace_id": { "type": "string" } }
+        "required": [
+          "workspace_id"
+        ],
+        "properties": {
+          "workspace_id": {
+            "type": "string"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
+        }
       }
     },
     {
@@ -457,16 +1181,67 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["workspace_id", "name", "url", "camp_ids", "event_types"],
+        "required": [
+          "workspace_id",
+          "name",
+          "url",
+          "camp_ids",
+          "event_types"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
-          "name": { "type": "string" },
-          "url": { "type": "string", "description": "Destination endpoint for events" },
-          "camp_ids": { "type": "array", "description": "Campaign ids, or ['ALL']", "items": { "type": "string" } },
-          "event_types": { "type": "array", "description": "e.g. ALL_EMAIL_REPLIES, LEAD_MARKED_AS_INTERESTED", "items": { "type": "string" } },
-          "secret": { "type": "string", "description": "Signing secret for payload verification" },
-          "ignore_ooo": { "type": "integer", "description": "1 to exclude out-of-office replies" },
-          "ignore_automatic": { "type": "integer", "description": "1 to exclude automatic replies" }
+          "workspace_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "description": "Destination endpoint for events"
+          },
+          "camp_ids": {
+            "type": "array",
+            "description": "Campaign ids, or ['ALL']",
+            "items": {
+              "type": "string"
+            }
+          },
+          "event_types": {
+            "type": "array",
+            "description": "e.g. ALL_EMAIL_REPLIES, LEAD_MARKED_AS_INTERESTED",
+            "items": {
+              "type": "string"
+            }
+          },
+          "secret": {
+            "type": "string",
+            "description": "Signing secret for payload verification"
+          },
+          "ignore_ooo": {
+            "type": "integer",
+            "description": "1 to exclude out-of-office replies"
+          },
+          "ignore_automatic": {
+            "type": "integer",
+            "description": "1 to exclude automatic replies"
+          }
+        }
+      },
+      "options": {
+        "workspace_id": {
+          "method": "listWorkspaces",
+          "itemsPath": "workspaces",
+          "labelKey": "name",
+          "valueKey": "_id"
+        },
+        "camp_ids": {
+          "method": "listCampaigns",
+          "labelKey": "camp_name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
         }
       }
     }

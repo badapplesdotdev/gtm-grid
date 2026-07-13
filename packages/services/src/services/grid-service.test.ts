@@ -27,6 +27,7 @@ import {
   type StoreRow,
   type StoreTable,
 } from "../repositories/grid-store.js";
+import { folderRepoLayer } from "../repositories/folder-repo.js";
 import { projectRepoLayer } from "../repositories/project-repo.js";
 import { rowRepoLayer } from "../repositories/row-repo.js";
 import { tableRepoLayer } from "../repositories/table-repo.js";
@@ -36,8 +37,13 @@ import {
 } from "../repositories/workspace-repo.js";
 import { EntitlementService } from "./entitlement-service.js";
 import { GridService } from "./grid-service.js";
+import type { GridSnapshot } from "../realtime/events.js";
+import { WORKSPACE_ROOM_TABLE_ID } from "../realtime/events.js";
+import { applyGridEvent } from "../realtime/reducer.js";
 import { type MeterQuota, meterServiceLayer } from "./meter-service.js";
 import {
+  RealtimePublisher,
+  RealtimePublisherError,
   type RecordedGridEvent,
   recordingRealtimePublisherLayer,
 } from "./realtime-publisher.js";
@@ -45,6 +51,9 @@ import {
 const WS = "ws-1";
 const memberships: readonly Membership[] = [
   { workspaceId: WS, userId: "member", role: "member" },
+  // A second member, used to prove favourites are WORKSPACE-SHARED (one member's
+  // pin is visible to the other).
+  { workspaceId: WS, userId: "member2", role: "member" },
 ];
 
 function harness(opts: {
@@ -53,6 +62,11 @@ function harness(opts: {
   currentUserId?: string | null;
   /** The workspace's cached plan; `undefined` defaults to "team" (cloud on). */
   plan?: string | null;
+  /**
+   * Override the realtime publisher layer. Defaults to the recording layer that
+   * captures events; pass a failing layer to prove publish is best-effort.
+   */
+  realtime?: Layer.Layer<RealtimePublisher>;
 }) {
   const store = opts.store ?? makeGridStore();
   const quotas = opts.quotas ?? new Map<string, MeterQuota>();
@@ -87,13 +101,14 @@ function harness(opts: {
   const layer = GridService.Default.pipe(
     Layer.provide(projectRepoLayer(store)),
     Layer.provide(tableRepoLayer(store)),
+    Layer.provide(folderRepoLayer(store)),
     Layer.provide(columnRepoLayer(store)),
     Layer.provide(rowRepoLayer(store, meterIncrement)),
     Layer.provide(cellRepoLayer(store)),
     Layer.provide(CellMerge.Default),
     Layer.provide(membership),
     Layer.provide(meterServiceLayer(quotas)),
-    Layer.provide(recordingRealtimePublisherLayer(events)),
+    Layer.provide(opts.realtime ?? recordingRealtimePublisherLayer(events)),
     Layer.provide(entitlement),
   );
   const run = <A, E>(program: Effect.Effect<A, E, GridService>) =>
@@ -108,7 +123,8 @@ const failTag = (exit: Exit.Exit<unknown, unknown>): string | undefined => {
 };
 
 const table = (over: Partial<StoreTable> = {}): StoreTable => ({
-  id: "t1", workspaceId: WS, projectId: "p1", name: "T1", position: 0, createdAt: 1, ...over,
+  id: "t1", workspaceId: WS, projectId: "p1", name: "T1", position: 0, createdAt: 1,
+  dedupeColumn: null, dedupeKeep: null, folderId: null, favorite: false, ...over,
 });
 const column = (over: Partial<StoreColumn> = {}): StoreColumn => ({
   id: "c1", workspaceId: WS, tableId: "t1", name: "A", type: "text",
@@ -133,7 +149,7 @@ describe("GridService.getTable", () => {
     const exit = await run(Effect.flatMap(GridService, (s) => s.getTable("t1")));
     expect(Exit.isSuccess(exit)).toBe(true);
     if (Exit.isSuccess(exit)) {
-      expect(exit.value.table).toEqual({ _id: "t1", name: "T1" });
+      expect(exit.value.table).toEqual({ _id: "t1", name: "T1", dedupe: null });
       expect(exit.value.columns[0]).toMatchObject({ _id: "c1", name: "A", type: "text", kind: "manual" });
       expect(exit.value.rows).toEqual([{ _id: "r1" }]);
       expect(exit.value.cells[0]).toEqual({ rowId: "r1", columnId: "c1", value: "x", status: "done", error: null });
@@ -151,6 +167,89 @@ describe("GridService.getTable", () => {
     const { run } = harness({});
     const exit = await run(Effect.flatMap(GridService, (s) => s.getTable("missing")));
     expect(failTag(exit)).toBe("GridNotFoundError");
+  });
+});
+
+describe("GridService.dedupe (cloud parity with the local engine)", () => {
+  const dupStore = (keep: "oldest" | "newest") =>
+    makeGridStore({
+      tables: [table({ dedupeColumn: "c1", dedupeKeep: keep })],
+      columns: [column()],
+      rows: [
+        row({ id: "r1", position: 0 }),
+        row({ id: "r2", position: 1 }),
+        row({ id: "r3", position: 2 }),
+      ],
+      cells: [
+        // r1 & r3 share value "a" (duplicates); r2 is unique "b".
+        { id: "x1", workspaceId: WS, tableId: "t1", rowId: "r1", columnId: "c1", value: "a", status: "done", error: null, updatedAt: 1 },
+        { id: "x2", workspaceId: WS, tableId: "t1", rowId: "r2", columnId: "c1", value: "b", status: "done", error: null, updatedAt: 1 },
+        { id: "x3", workspaceId: WS, tableId: "t1", rowId: "r3", columnId: "c1", value: "a", status: "done", error: null, updatedAt: 1 },
+      ],
+    });
+
+  it("keep=oldest deletes the later duplicate (keeps the first in table order)", async () => {
+    const store = dupStore("oldest");
+    const { run, events } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.dedupeTable("t1")));
+    expect(Exit.isSuccess(exit) && exit.value).toEqual({ deleted: 1 });
+    expect(store.rows.map((r) => r.id).sort()).toEqual(["r1", "r2"]);
+    // The deletion is broadcast so other clients live-update.
+    expect(events.some((e) => e.event.type === "row.delete" && e.event.rowId === "r3")).toBe(true);
+  });
+
+  it("keep=newest deletes the earlier duplicate (keeps the last)", async () => {
+    const store = dupStore("newest");
+    const { run } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.dedupeTable("t1")));
+    expect(store.rows.map((r) => r.id).sort()).toEqual(["r2", "r3"]);
+  });
+
+  it("reads ONLY the dedupe column (a sibling column's dup never affects grouping)", async () => {
+    // Proves the narrowed `listByTableColumn` read didn't change semantics: the
+    // sweep groups by the dedupe column alone, ignoring another column's cells.
+    const store = makeGridStore({
+      tables: [table({ dedupeColumn: "c1", dedupeKeep: "oldest" })],
+      columns: [column(), column({ id: "c2", name: "Other", position: 1 })],
+      rows: [row({ id: "r1", position: 0 }), row({ id: "r2", position: 1 })],
+      cells: [
+        // Dedupe column c1: DISTINCT values → no duplicates.
+        { id: "a1", workspaceId: WS, tableId: "t1", rowId: "r1", columnId: "c1", value: "x", status: "done", error: null, updatedAt: 1 },
+        { id: "a2", workspaceId: WS, tableId: "t1", rowId: "r2", columnId: "c1", value: "y", status: "done", error: null, updatedAt: 1 },
+        // Sibling column c2: SAME value on both rows — must NOT cause a delete.
+        { id: "b1", workspaceId: WS, tableId: "t1", rowId: "r1", columnId: "c2", value: "same", status: "done", error: null, updatedAt: 1 },
+        { id: "b2", workspaceId: WS, tableId: "t1", rowId: "r2", columnId: "c2", value: "same", status: "done", error: null, updatedAt: 1 },
+      ],
+    });
+    const { run } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.dedupeTable("t1")));
+    expect(Exit.isSuccess(exit) && exit.value).toEqual({ deleted: 0 });
+    expect(store.rows).toHaveLength(2);
+  });
+
+  it("setDedupe persists config and sweeps immediately", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [column()],
+      rows: [row({ id: "r1", position: 0 }), row({ id: "r2", position: 1 })],
+      cells: [
+        { id: "x1", workspaceId: WS, tableId: "t1", rowId: "r1", columnId: "c1", value: "dup", status: "done", error: null, updatedAt: 1 },
+        { id: "x2", workspaceId: WS, tableId: "t1", rowId: "r2", columnId: "c1", value: "dup", status: "done", error: null, updatedAt: 1 },
+      ],
+    });
+    const { run } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.setDedupe({ tableId: "t1", column: "c1", keep: "oldest" })));
+    expect(Exit.isSuccess(exit) && exit.value).toEqual({ dedupe: { column: "c1", keep: "oldest" }, deleted: 1 });
+    expect(store.tables[0].dedupeColumn).toBe("c1");
+    expect(store.rows).toHaveLength(1);
+  });
+
+  it("setDedupe with column:null disables dedupe and sweeps nothing", async () => {
+    const store = makeGridStore({ tables: [table({ dedupeColumn: "c1", dedupeKeep: "oldest" })] });
+    const { run } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.setDedupe({ tableId: "t1", column: null, keep: "oldest" })));
+    expect(Exit.isSuccess(exit) && exit.value).toEqual({ dedupe: null, deleted: 0 });
+    expect(store.tables[0].dedupeColumn).toBe(null);
   });
 });
 
@@ -181,7 +280,7 @@ describe("GridService.getTablePage — keyset pagination (TRI-3272)", () => {
       expect(exit.value.rows).toEqual([{ _id: "r1" }, { _id: "r2" }]);
       expect(exit.value.cells.map((c) => c.value).sort()).toEqual(["a", "b"]);
       expect(exit.value.columns[0]).toMatchObject({ _id: "c1" });
-      expect(exit.value.table).toEqual({ _id: "t1", name: "T1" });
+      expect(exit.value.table).toEqual({ _id: "t1", name: "T1", dedupe: null });
       expect(exit.value.nextCursor).not.toBeNull();
     }
   });
@@ -227,6 +326,54 @@ describe("GridService.getTablePage — keyset pagination (TRI-3272)", () => {
       Effect.flatMap(GridService, (s) => s.getTablePage({ tableId: "missing" })),
     );
     expect(failTag(exit)).toBe("GridNotFoundError");
+  });
+});
+
+describe("GridService.setCell — CRM-synced column backstop", () => {
+  it("refuses member writes to a synced column with human copy (cell untouched)", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [
+        column({
+          config: { synced: true, crmBindingId: "b1", attrSlug: "name", attrType: "personal-name" },
+        }),
+      ],
+      rows: [row()],
+      cells: [
+        { id: "cell1", workspaceId: WS, tableId: "t1", rowId: "r1", columnId: "c1", value: "Sarah Chen", status: "done", error: null, updatedAt: 1 },
+      ],
+    });
+    const { run } = harness({ store });
+    // The "clear cell" shape any client could send — value "" over CRM data.
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.setCell({ rowId: "r1", columnId: "c1", hasValue: true, value: "" })),
+    );
+    expect(failTag(exit)).toBe("InvalidCellError");
+    expect(JSON.stringify(exit)).toContain("synced from your CRM");
+    expect(store.cells.find((c) => c.rowId === "r1")?.value).toBe("Sarah Chen");
+  });
+
+  it("setCellStatus is refused on synced columns too", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [column({ config: { synced: true, crmBindingId: "b1", attrSlug: "name", attrType: "personal-name" } })],
+      rows: [row()],
+    });
+    const { run } = harness({ store });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.setCellStatus({ rowId: "r1", columnId: "c1", status: "running" })),
+    );
+    expect(failTag(exit)).toBe("InvalidCellError");
+  });
+
+  it("ordinary user columns are unaffected by the guard", async () => {
+    const store = makeGridStore({ tables: [table()], columns: [column()], rows: [row()] });
+    const { run } = harness({ store });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.setCell({ rowId: "r1", columnId: "c1", hasValue: true, value: "hello" })),
+    );
+    expect(failTag(exit)).toBeUndefined();
+    expect(store.cells.find((c) => c.rowId === "r1")?.value).toBe("hello");
   });
 });
 
@@ -354,6 +501,32 @@ describe("GridService.addRowsWithCells — bulk quota + meter", () => {
     expect(Exit.isSuccess(exit)).toBe(true);
     expect(store.rows).toHaveLength(1);
   });
+
+  it("SELF-HOST: a Free workspace over its cloud-actions limit still imports (entitlement + quota gates bypassed)", async () => {
+    // The end-to-end self-host proof at the service boundary: a workspace that is
+    // BOTH Free (plan: null → requireCloudAccess would throw PlanRequiredError)
+    // AND over its cloud-actions limit (would throw CloudActionsLimitError) still
+    // succeeds when GTMGRID_SELF_HOST=1, writing every row.
+    const prev = process.env.GTMGRID_SELF_HOST;
+    process.env.GTMGRID_SELF_HOST = "1";
+    try {
+      const store = makeGridStore({ tables: [table()], columns: [column()] });
+      const quotas = new Map<string, MeterQuota>([
+        [WS, { cloudActionsUsed: 9, cloudActionsLimit: 10 }],
+      ]);
+      const { run } = harness({ store, quotas, plan: null });
+      const exit = await run(
+        Effect.flatMap(GridService, (s) =>
+          s.addRowsWithCells({ tableId: "t1", rows: [{ c1: "a" }, { c1: "b" }] }),
+        ),
+      );
+      expect(Exit.isSuccess(exit)).toBe(true);
+      expect(store.rows).toHaveLength(2);
+    } finally {
+      if (prev === undefined) delete process.env.GTMGRID_SELF_HOST;
+      else process.env.GTMGRID_SELF_HOST = prev;
+    }
+  });
 });
 
 describe("GridService deletes — cascade + meter", () => {
@@ -363,13 +536,19 @@ describe("GridService deletes — cascade + meter", () => {
       cells: [{ id: "cell1", workspaceId: WS, tableId: "t1", rowId: "r1", columnId: "c1", value: "x", status: "done", error: null, updatedAt: 1 }],
     });
     const quotas = new Map<string, MeterQuota>();
-    const { run } = harness({ store, quotas });
+    const { run, events } = harness({ store, quotas });
     await run(Effect.flatMap(GridService, (s) => s.deleteTable("t1")));
     expect(store.tables).toHaveLength(0);
     expect(store.columns).toHaveLength(0);
     expect(store.rows).toHaveLength(0);
     expect(store.cells).toHaveLength(0);
     expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
+    // Live sidebar (E): a table.delete is broadcast on the workspace room too.
+    expect(
+      events.some(
+        (e) => e.tableId === WORKSPACE_ROOM_TABLE_ID && e.event.type === "table.delete",
+      ),
+    ).toBe(true);
   });
 
   it("deleteRow cascades to that row's cells only", async () => {
@@ -402,6 +581,20 @@ describe("GridService deletes — cascade + meter", () => {
     expect(store.columns.map((c) => c.id)).toEqual(["c2"]);
     expect(store.cells.map((c) => c.columnId)).toEqual(["c2"]);
   });
+
+  it("updateColumn patches only the provided fields and meters one action", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [column({ name: "A", type: "text", condition: "keep" })],
+    });
+    const quotas = new Map<string, MeterQuota>();
+    const { run } = harness({ store, quotas });
+    await run(
+      Effect.flatMap(GridService, (s) => s.updateColumn("c1", { name: "Renamed", type: "number" })),
+    );
+    expect(store.columns[0]).toMatchObject({ name: "Renamed", type: "number", condition: "keep" });
+    expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
+  });
 });
 
 describe("GridService structural inserts — meter + position", () => {
@@ -411,11 +604,17 @@ describe("GridService structural inserts — meter + position", () => {
       tables: [table({ position: 3 })],
     });
     const quotas = new Map<string, MeterQuota>();
-    const { run } = harness({ store, quotas });
+    const { run, events } = harness({ store, quotas });
     const exit = await run(Effect.flatMap(GridService, (s) => s.createTable({ projectId: "p1", name: "New" })));
     expect(Exit.isSuccess(exit)).toBe(true);
     expect(store.tables.find((t) => t.name === "New")?.position).toBe(4);
     expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
+    // Live sidebar (E): a table.insert is broadcast on the workspace room too.
+    expect(
+      events.some(
+        (e) => e.tableId === WORKSPACE_ROOM_TABLE_ID && e.event.type === "table.insert",
+      ),
+    ).toBe(true);
   });
 
   it("createProject is NOT metered", async () => {
@@ -483,6 +682,16 @@ describe("GridService realtime publishing (TRI-3251)", () => {
     });
   });
 
+  it("updateColumn publishes a column.update with the updated projection", async () => {
+    const store = makeGridStore({ tables: [table()], columns: [column({ name: "A" })] });
+    const { run, events } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.updateColumn("c1", { name: "Renamed", type: "number" })));
+    expect(events[0].event).toMatchObject({
+      type: "column.update",
+      column: { _id: "c1", name: "Renamed", type: "number" },
+    });
+  });
+
   it("createTable publishes a table.insert", async () => {
     const store = makeGridStore({ projects: [{ id: "p1", workspaceId: WS, name: "P", createdAt: 1 }] });
     const { run, events } = harness({ store });
@@ -529,6 +738,27 @@ describe("GridService realtime publishing (TRI-3251)", () => {
     await run(Effect.flatMap(GridService, (s) => s.deleteRow("r1")));
     expect(events).toHaveLength(0);
   });
+
+  // Regression (TRI: realtime 401 → 500 on every webhook record): a publish
+  // failure must NEVER fail an already-committed write. The publisher raises a
+  // typed RealtimePublisherError on any non-2xx/transport error; the service
+  // helpers swallow it so the surrounding mutation still succeeds.
+  it("succeeds the write even when the realtime publish fails (best-effort)", async () => {
+    const failingRealtime = Layer.succeed(RealtimePublisher, {
+      publish: () =>
+        Effect.fail(
+          new RealtimePublisherError({
+            message: "party publish failed: 401 Unauthorized",
+          }),
+        ),
+    });
+    const store = makeGridStore({ tables: [table()] });
+    const { run } = harness({ store, realtime: failingRealtime });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.addRow("t1")));
+    expect(Exit.isSuccess(exit)).toBe(true);
+    // The row was actually committed despite the realtime broadcast failing.
+    expect(store.rows).toHaveLength(1);
+  });
 });
 
 describe("cloud-access gate (lapsed trial / Free workspace)", () => {
@@ -565,6 +795,30 @@ describe("cloud-access gate (lapsed trial / Free workspace)", () => {
     const { run } = harness({ store, plan: null });
     const exit = await run(Effect.flatMap(GridService, (s) => s.listTables("p1")));
     expect(Exit.isSuccess(exit)).toBe(true);
+  });
+
+  it("attaches each table's row count (one grouped query, 0 when empty)", async () => {
+    const store = makeGridStore({
+      projects: [{ id: "p1", workspaceId: WS, name: "P", createdAt: 1 }],
+      tables: [
+        table({ id: "t1", name: "T1", position: 0 }),
+        table({ id: "t2", name: "T2", position: 1 }),
+      ],
+      rows: [
+        row({ id: "r1", tableId: "t1", position: 0 }),
+        row({ id: "r2", tableId: "t1", position: 1 }),
+        row({ id: "r3", tableId: "t1", position: 2 }),
+      ],
+    });
+    const { run } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.listTables("p1")));
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.map((t) => ({ id: t.id, rows: t.rows }))).toEqual([
+        { id: "t1", rows: 3 },
+        { id: "t2", rows: 0 },
+      ]);
+    }
   });
 });
 
@@ -629,5 +883,744 @@ describe("GridService.listTablesWithCounts (project-wide list for the agent — 
     const { run } = harness({ store, quotas });
     await run(Effect.flatMap(GridService, (s) => s.listTablesWithCounts("p1")));
     expect(quotas.get(WS)?.cloudActionsUsed ?? 0).toBe(0);
+  });
+});
+
+describe("GridService.renameTable", () => {
+  it("renames the table, meters one, and broadcasts table.rename (table + workspace room)", async () => {
+    const store = makeGridStore({ tables: [table({ name: "Old" })] });
+    const { run, events, quotas } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.renameTable("t1", "New")));
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) expect(exit.value).toEqual({ name: "New" });
+    expect(store.tables[0]!.name).toBe("New");
+    expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
+    const renames = events.filter((e) => e.event.type === "table.rename");
+    expect(renames.map((e) => e.tableId).sort()).toEqual(["_workspace", "t1"]);
+    expect(renames[0]!.event).toMatchObject({ type: "table.rename", tableId: "t1", name: "New" });
+  });
+
+  it("ignores a blank name (keeps the current one)", async () => {
+    const store = makeGridStore({ tables: [table({ name: "Keep" })] });
+    const { run } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.renameTable("t1", "   ")));
+    if (Exit.isSuccess(exit)) expect(exit.value).toEqual({ name: "Keep" });
+    expect(store.tables[0]!.name).toBe("Keep");
+  });
+
+  it("rejects a non-member before touching data", async () => {
+    const store = makeGridStore({ tables: [table()] });
+    const { run } = harness({ store, currentUserId: "stranger" });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.renameTable("t1", "X")));
+    expect(failTag(exit)).toBe("NotAMemberError");
+  });
+});
+
+describe("GridService.setTableFavorite (cloud mirror of local favourites)", () => {
+  const favStore = () =>
+    makeGridStore({
+      projects: [{ id: "p1", workspaceId: WS, name: "P", createdAt: 1 }],
+      tables: [table({ id: "t1", name: "T1" })],
+    });
+
+  it("pins a table (shared column) and surfaces favorite:true in listTables", async () => {
+    const store = favStore();
+    const { run } = harness({ store });
+    const set = await run(
+      Effect.flatMap(GridService, (s) => s.setTableFavorite("t1", true)),
+    );
+    expect(Exit.isSuccess(set)).toBe(true);
+    if (Exit.isSuccess(set)) expect(set.value).toEqual({ favorite: true });
+    expect(store.tables[0]!.favorite).toBe(true);
+    const list = await run(Effect.flatMap(GridService, (s) => s.listTables("p1")));
+    if (Exit.isSuccess(list)) {
+      expect(list.value.map((t) => ({ id: t.id, favorite: t.favorite }))).toEqual([
+        { id: "t1", favorite: true },
+      ]);
+    }
+  });
+
+  it("unpinning clears the flag (favorite:false)", async () => {
+    const store = favStore();
+    const { run } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.setTableFavorite("t1", true)));
+    await run(Effect.flatMap(GridService, (s) => s.setTableFavorite("t1", false)));
+    expect(store.tables[0]!.favorite).toBe(false);
+    const list = await run(Effect.flatMap(GridService, (s) => s.listTables("p1")));
+    if (Exit.isSuccess(list)) expect(list.value[0]!.favorite).toBe(false);
+  });
+
+  it("does NOT meter (a pin is not a billable action)", async () => {
+    const store = favStore();
+    const quotas = new Map<string, MeterQuota>();
+    const { run } = harness({ store, quotas });
+    await run(Effect.flatMap(GridService, (s) => s.setTableFavorite("t1", true)));
+    expect(quotas.get(WS)?.cloudActionsUsed ?? 0).toBe(0);
+  });
+
+  it("favourites are WORKSPACE-SHARED — another member sees the same pin", async () => {
+    const store = favStore();
+    // `member` pins t1…
+    await harness({ store }).run(
+      Effect.flatMap(GridService, (s) => s.setTableFavorite("t1", true)),
+    );
+    // …and `member2` listing the same project sees it pinned too.
+    const list = await harness({ store, currentUserId: "member2" }).run(
+      Effect.flatMap(GridService, (s) => s.listTables("p1")),
+    );
+    if (Exit.isSuccess(list)) expect(list.value[0]!.favorite).toBe(true);
+  });
+
+  it("broadcasts table.favorite on the workspace room so sidebars restyle live", async () => {
+    const store = favStore();
+    const { run, events } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.setTableFavorite("t1", true)));
+    const favs = events.filter((e) => e.event.type === "table.favorite");
+    expect(favs.map((e) => e.tableId)).toEqual(["_workspace"]);
+    expect(favs[0]!.event).toMatchObject({ type: "table.favorite", tableId: "t1", favorite: true });
+  });
+
+  it("blocks a lapsed/Free workspace with PlanRequiredError", async () => {
+    const store = favStore();
+    const { run } = harness({ store, plan: null });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.setTableFavorite("t1", true)),
+    );
+    expect(failTag(exit)).toBe("PlanRequiredError");
+  });
+
+  it("rejects a non-member before touching data", async () => {
+    const store = favStore();
+    const { run } = harness({ store, currentUserId: "stranger" });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.setTableFavorite("t1", true)),
+    );
+    expect(failTag(exit)).toBe("NotAMemberError");
+  });
+});
+
+describe("GridService.reorderColumn / reorderRow", () => {
+  const threeColStore = () =>
+    makeGridStore({
+      tables: [table()],
+      columns: [
+        column({ id: "c1", name: "A", position: 0 }),
+        column({ id: "c2", name: "B", position: 1 }),
+        column({ id: "c3", name: "C", position: 2 }),
+      ],
+    });
+
+  it("reorderColumn moves the column, reindexes positions, returns the new order", async () => {
+    const store = threeColStore();
+    const { run, events, quotas } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.reorderColumn("c3", 0)));
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) expect(exit.value).toEqual({ columnIds: ["c3", "c1", "c2"] });
+    // Positions now match the new order.
+    const posOf = (id: string) => store.columns.find((c) => c.id === id)!.position;
+    expect([posOf("c3"), posOf("c1"), posOf("c2")]).toEqual([0, 1, 2]);
+    expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
+    const reorder = events.find((e) => e.event.type === "column.reorder");
+    expect(reorder?.event).toEqual({ type: "column.reorder", columnIds: ["c3", "c1", "c2"] });
+  });
+
+  it("reorderColumn clamps an out-of-range index to the last slot", async () => {
+    const store = threeColStore();
+    const { run } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.reorderColumn("c1", 99)));
+    if (Exit.isSuccess(exit)) expect(exit.value).toEqual({ columnIds: ["c2", "c3", "c1"] });
+  });
+
+  it("reorderRow moves the row and broadcasts row.reorder", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      rows: [
+        row({ id: "r1", position: 0 }),
+        row({ id: "r2", position: 1 }),
+        row({ id: "r3", position: 2 }),
+      ],
+    });
+    const { run, events } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.reorderRow("r3", 0)));
+    if (Exit.isSuccess(exit)) expect(exit.value).toEqual({ rowIds: ["r3", "r1", "r2"] });
+    const reorder = events.find((e) => e.event.type === "row.reorder");
+    expect(reorder?.event).toEqual({ type: "row.reorder", rowIds: ["r3", "r1", "r2"] });
+  });
+});
+
+describe("GridService DAG-aware column placement", () => {
+  const threeColStore = () =>
+    makeGridStore({
+      tables: [table()],
+      columns: [
+        column({ id: "c1", name: "A", position: 0 }),
+        column({ id: "c2", name: "B", position: 1 }),
+        column({ id: "c3", name: "C", position: 2 }),
+      ],
+    });
+
+  const orderedIds = (store: GridStore) =>
+    [...store.columns]
+      .filter((c) => c.tableId === "t1")
+      .sort((a, b) => a.position - b.position)
+      .map((c) => c.id);
+
+  it("addColumn slots a dependent column right after the column it references", async () => {
+    const store = threeColStore();
+    const { run, events } = harness({ store });
+    // New column D reads {{A}} (c1) — must land immediately after A, before B/C.
+    const exit = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({
+          tableId: "t1",
+          name: "D",
+          type: "text",
+          kind: "function",
+          provider: "formula",
+          params: { expression: "{{A}}" },
+          id: "cD",
+        }),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(orderedIds(store)).toEqual(["c1", "cD", "c2", "c3"]);
+    // Viewers are told the full new order via column.reorder.
+    const reorder = events.find((e) => e.event.type === "column.reorder");
+    expect(reorder?.event).toEqual({
+      type: "column.reorder",
+      columnIds: ["c1", "cD", "c2", "c3"],
+    });
+  });
+
+  it("addColumn with no references still appends to the tail (no reorder)", async () => {
+    const store = threeColStore();
+    const { run, events } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({ tableId: "t1", name: "D", type: "text", kind: "manual", id: "cD" }),
+      ),
+    );
+    expect(orderedIds(store)).toEqual(["c1", "c2", "c3", "cD"]);
+    expect(events.find((e) => e.event.type === "column.reorder")).toBeUndefined();
+  });
+
+  it("addColumn referencing the last column appends without a reorder event", async () => {
+    const store = threeColStore();
+    const { run, events } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({
+          tableId: "t1",
+          name: "D",
+          type: "text",
+          kind: "function",
+          provider: "formula",
+          params: { expression: "{{C}}" },
+          id: "cD",
+        }),
+      ),
+    );
+    expect(orderedIds(store)).toEqual(["c1", "c2", "c3", "cD"]);
+    expect(events.find((e) => e.event.type === "column.reorder")).toBeUndefined();
+  });
+
+  it("updateColumn repositions a column after a reference it gains to its right", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [
+        column({ id: "c1", name: "A", kind: "function", provider: "formula", position: 0 }),
+        column({ id: "c2", name: "B", position: 1 }),
+      ],
+    });
+    const { run, events } = harness({ store });
+    // A now reads {{B}}, which sits to its right → A must move after B.
+    const exit = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.updateColumn("c1", { params: { expression: "{{B}}" } }),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(orderedIds(store)).toEqual(["c2", "c1"]);
+    const reorder = events.find((e) => e.event.type === "column.reorder");
+    expect(reorder?.event).toEqual({ type: "column.reorder", columnIds: ["c2", "c1"] });
+  });
+
+  it("updateColumn rejects a circular dependency and leaves the column unchanged", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [
+        // A already reads B; making B read A would close the cycle.
+        column({ id: "c1", name: "A", kind: "function", provider: "formula", position: 0, params: { expression: "{{B}}" } }),
+        column({ id: "c2", name: "B", kind: "function", provider: "formula", position: 1, params: {} }),
+      ],
+    });
+    const { run, events } = harness({ store });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.updateColumn("c2", { params: { expression: "{{A}}" } }),
+      ),
+    );
+    expect(failTag(exit)).toBe("ColumnCycleError");
+    // Not persisted: B's params are untouched and no events were published.
+    expect(store.columns.find((c) => c.id === "c2")!.params).toEqual({});
+    expect(events.find((e) => e.event.type === "column.update")).toBeUndefined();
+    expect(events.find((e) => e.event.type === "column.reorder")).toBeUndefined();
+  });
+
+  it("updateColumn that only renames does not reposition columns", async () => {
+    const store = threeColStore();
+    const { run, events } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.updateColumn("c2", { name: "Bee" })));
+    expect(orderedIds(store)).toEqual(["c1", "c2", "c3"]);
+    expect(events.find((e) => e.event.type === "column.reorder")).toBeUndefined();
+  });
+
+  it("addColumn slots after the RIGHTMOST of several dependencies", async () => {
+    const store = threeColStore();
+    const { run } = harness({ store });
+    // D reads {{A}} and {{B}}; rightmost dep is B (idx 1) → lands between B and C.
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({
+          tableId: "t1",
+          name: "D",
+          type: "text",
+          kind: "function",
+          provider: "formula",
+          params: { expression: "{{A}} + {{B}}" },
+          id: "cD",
+        }),
+      ),
+    );
+    expect(orderedIds(store)).toEqual(["c1", "c2", "cD", "c3"]);
+  });
+
+  it("addColumn detects a dependency that lives in the run condition", async () => {
+    const store = threeColStore();
+    const { run } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({
+          tableId: "t1",
+          name: "D",
+          type: "text",
+          kind: "function",
+          provider: "leadmagic",
+          method: "enrich",
+          params: {},
+          condition: "{{A}} != ''",
+          id: "cD",
+        }),
+      ),
+    );
+    expect(orderedIds(store)).toEqual(["c1", "cD", "c2", "c3"]);
+  });
+
+  it("addColumn gives the dependent column a fractional position between its neighbours", async () => {
+    const store = threeColStore();
+    const { run } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({
+          tableId: "t1",
+          name: "D",
+          type: "text",
+          kind: "function",
+          provider: "formula",
+          params: { expression: "{{A}}" },
+          id: "cD",
+        }),
+      ),
+    );
+    const posOf = (id: string) => store.columns.find((c) => c.id === id)!.position;
+    // Strictly between A (0) and B (1); A/B/C positions are untouched.
+    expect(posOf("cD")).toBeGreaterThan(posOf("c1"));
+    expect(posOf("cD")).toBeLessThan(posOf("c2"));
+    expect([posOf("c1"), posOf("c2"), posOf("c3")]).toEqual([0, 1, 2]);
+  });
+
+  it("addColumn meters exactly ONE action even when it also broadcasts a reorder", async () => {
+    const store = threeColStore();
+    const { run, quotas } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({
+          tableId: "t1",
+          name: "D",
+          type: "text",
+          kind: "function",
+          provider: "formula",
+          params: { expression: "{{A}}" },
+          id: "cD",
+        }),
+      ),
+    );
+    expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
+  });
+
+  it("addColumn ignores a {{ref}} to a non-existent column and appends", async () => {
+    const store = threeColStore();
+    const { run, events } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({
+          tableId: "t1",
+          name: "D",
+          type: "text",
+          kind: "function",
+          provider: "formula",
+          params: { expression: "{{Nonexistent}}" },
+          id: "cD",
+        }),
+      ),
+    );
+    expect(orderedIds(store)).toEqual(["c1", "c2", "c3", "cD"]);
+    expect(events.find((e) => e.event.type === "column.reorder")).toBeUndefined();
+  });
+
+  it("updateColumn cascades: a moved column drags its dependents to stay ordered", async () => {
+    // Layout [X, Z, Y]; Z reads X (valid). X then reads Y (to its right) → the
+    // dependency-correct order is [Y, X, Z].
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [
+        column({ id: "cx", name: "X", kind: "function", provider: "formula", position: 0 }),
+        column({ id: "cz", name: "Z", kind: "function", provider: "formula", position: 1, params: { expression: "{{X}}" } }),
+        column({ id: "cy", name: "Y", position: 2 }),
+      ],
+    });
+    const { run, events } = harness({ store });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.updateColumn("cx", { params: { expression: "{{Y}}" } }),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(orderedIds(store)).toEqual(["cy", "cx", "cz"]);
+    const reorder = events.find((e) => e.event.type === "column.reorder");
+    expect(reorder?.event).toEqual({ type: "column.reorder", columnIds: ["cy", "cx", "cz"] });
+  });
+
+  it("updateColumn gaining a ref already to its LEFT does not reorder", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [
+        column({ id: "c1", name: "A", position: 0 }),
+        column({ id: "c2", name: "B", kind: "function", provider: "formula", position: 1 }),
+      ],
+    });
+    const { run, events } = harness({ store });
+    // B reads {{A}}; A is already to B's left, so the order is already valid.
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.updateColumn("c2", { params: { expression: "{{A}}" } }),
+      ),
+    );
+    expect(orderedIds(store)).toEqual(["c1", "c2"]);
+    expect(events.find((e) => e.event.type === "column.reorder")).toBeUndefined();
+  });
+
+  it("updateColumn repositions on a condition-only dependency change", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [
+        column({ id: "c1", name: "A", kind: "function", provider: "leadmagic", method: "enrich", position: 0 }),
+        column({ id: "c2", name: "B", position: 1 }),
+      ],
+    });
+    const { run } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.updateColumn("c1", { condition: "{{B}} != ''" }),
+      ),
+    );
+    expect(orderedIds(store)).toEqual(["c2", "c1"]);
+  });
+
+  it("updateColumn blocks a longer cycle (A->B->C, then C->A)", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [
+        column({ id: "ca", name: "A", kind: "function", provider: "formula", position: 0, params: { expression: "{{B}}" } }),
+        column({ id: "cb", name: "B", kind: "function", provider: "formula", position: 1, params: { expression: "{{C}}" } }),
+        column({ id: "cc", name: "C", kind: "function", provider: "formula", position: 2, params: {} }),
+      ],
+    });
+    const { run } = harness({ store });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.updateColumn("cc", { params: { expression: "{{A}}" } }),
+      ),
+    );
+    expect(failTag(exit)).toBe("ColumnCycleError");
+    expect(store.columns.find((c) => c.id === "cc")!.params).toEqual({});
+  });
+
+  it("updateColumn cycle rejection does NOT meter or move any column", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [
+        column({ id: "c1", name: "A", kind: "function", provider: "formula", position: 0, params: { expression: "{{B}}" } }),
+        column({ id: "c2", name: "B", kind: "function", provider: "formula", position: 1, params: {} }),
+      ],
+    });
+    const { run, quotas } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.updateColumn("c2", { params: { expression: "{{A}}" } }),
+      ),
+    );
+    expect(orderedIds(store)).toEqual(["c1", "c2"]);
+    expect(quotas.get(WS)?.cloudActionsUsed ?? 0).toBe(0);
+  });
+
+  it("updateColumn meters exactly one action on a successful reposition", async () => {
+    const store = makeGridStore({
+      tables: [table()],
+      columns: [
+        column({ id: "c1", name: "A", kind: "function", provider: "formula", position: 0 }),
+        column({ id: "c2", name: "B", position: 1 }),
+      ],
+    });
+    const { run, quotas } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.updateColumn("c1", { params: { expression: "{{B}}" } }),
+      ),
+    );
+    expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
+  });
+
+  // End-to-end proof: replaying the events the service emits through the realtime
+  // reducer leaves a remote viewer's column order IDENTICAL to the server's.
+  it("a viewer converges to the dependency-correct order via the broadcast events", async () => {
+    const store = threeColStore();
+    const { run, events } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({
+          tableId: "t1",
+          name: "D",
+          type: "text",
+          kind: "function",
+          provider: "formula",
+          params: { expression: "{{A}}" },
+          id: "cD",
+        }),
+      ),
+    );
+    // A viewer's snapshot before the events arrive: A, B, C in order.
+    let snap: GridSnapshot | null = {
+      table: { _id: "t1", name: "T1" },
+      columns: [
+        { _id: "c1", name: "A", type: "text", kind: "manual", provider: null, method: null, code: null, params: {} },
+        { _id: "c2", name: "B", type: "text", kind: "manual", provider: null, method: null, code: null, params: {} },
+        { _id: "c3", name: "C", type: "text", kind: "manual", provider: null, method: null, code: null, params: {} },
+      ],
+      rows: [],
+      cells: [],
+    };
+    // Apply the recorded grid events in broadcast order (insert, then reorder).
+    for (const e of events) snap = applyGridEvent(snap, e.event);
+    expect(snap?.columns.map((c) => c._id)).toEqual(["c1", "cD", "c2", "c3"]);
+  });
+
+  it("a viewer converges even if the reorder is delivered BEFORE the insert", async () => {
+    const store = threeColStore();
+    const { run, events } = harness({ store });
+    await run(
+      Effect.flatMap(GridService, (s) =>
+        s.addColumn({
+          tableId: "t1",
+          name: "D",
+          type: "text",
+          kind: "function",
+          provider: "formula",
+          params: { expression: "{{A}}" },
+          id: "cD",
+        }),
+      ),
+    );
+    let snap: GridSnapshot | null = {
+      table: { _id: "t1", name: "T1" },
+      columns: [
+        { _id: "c1", name: "A", type: "text", kind: "manual", provider: null, method: null, code: null, params: {} },
+        { _id: "c2", name: "B", type: "text", kind: "manual", provider: null, method: null, code: null, params: {} },
+        { _id: "c3", name: "C", type: "text", kind: "manual", provider: null, method: null, code: null, params: {} },
+      ],
+      rows: [],
+      cells: [],
+    };
+    // Out-of-order delivery: reorder first (cD unknown → ignored), then insert
+    // appends cD, then a duplicate reorder splices it into place. Converges.
+    const insert = events.find((e) => e.event.type === "column.insert")!;
+    const reorder = events.find((e) => e.event.type === "column.reorder")!;
+    for (const e of [reorder, insert, reorder]) snap = applyGridEvent(snap, e.event);
+    expect(snap?.columns.map((c) => c._id)).toEqual(["c1", "cD", "c2", "c3"]);
+  });
+});
+
+describe("GridService folders (sidebar table groups)", () => {
+  const proj = { id: "p1", workspaceId: WS, name: "P", createdAt: 1 };
+
+  it("creates, lists (position order), and renames folders — never metered", async () => {
+    const store = makeGridStore({ projects: [proj] });
+    const quotas = new Map<string, MeterQuota>();
+    const { run } = harness({ store, quotas });
+    const created = await run(
+      Effect.flatMap(GridService, (s) =>
+        Effect.all([
+          s.createFolder({ projectId: "p1", name: "Pipeline" }),
+          s.createFolder({ projectId: "p1", name: "Inbound" }),
+        ]),
+      ),
+    );
+    expect(Exit.isSuccess(created)).toBe(true);
+    const listed = await run(Effect.flatMap(GridService, (s) => s.listFolders("p1")));
+    expect(Exit.isSuccess(listed)).toBe(true);
+    if (Exit.isSuccess(listed)) {
+      expect(listed.value.map((f) => f.name)).toEqual(["Pipeline", "Inbound"]);
+    }
+    const renamed = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.renameFolder({ folderId: store.folders[0]!.id, name: "Outbound" }),
+      ),
+    );
+    expect(Exit.isSuccess(renamed)).toBe(true);
+    expect(store.folders[0]?.name).toBe("Outbound");
+    // Folder ops are organizational — zero cloud actions metered.
+    expect(quotas.get(WS)?.cloudActionsUsed ?? 0).toBe(0);
+  });
+
+  it("moveTable files a table into a folder (and validates the folder's project)", async () => {
+    const store = makeGridStore({
+      projects: [proj, { id: "p2", workspaceId: WS, name: "Q", createdAt: 1 }],
+      tables: [table()],
+      folders: [
+        { id: "f1", workspaceId: WS, projectId: "p1", name: "F", position: 0, createdAt: 1, parentId: null },
+        { id: "f2", workspaceId: WS, projectId: "p2", name: "Other", position: 0, createdAt: 1, parentId: null },
+      ],
+    });
+    const { run } = harness({ store });
+    const moved = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.moveTable({ tableId: "t1", folderId: "f1", position: 2.5 }),
+      ),
+    );
+    expect(Exit.isSuccess(moved)).toBe(true);
+    expect(store.tables[0]).toMatchObject({ folderId: "f1", position: 2.5 });
+    // A folder in ANOTHER project is rejected typed.
+    const cross = await run(
+      Effect.flatMap(GridService, (s) => s.moveTable({ tableId: "t1", folderId: "f2" })),
+    );
+    expect(failTag(cross)).toBe("GridNotFoundError");
+  });
+
+  it("createTable files the new table under the given folder", async () => {
+    const store = makeGridStore({
+      projects: [proj],
+      folders: [{ id: "f1", workspaceId: WS, projectId: "p1", name: "F", position: 0, createdAt: 1, parentId: null }],
+    });
+    const { run } = harness({ store });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.createTable({ projectId: "p1", name: "Leads", folderId: "f1" }),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(store.tables[0]?.folderId).toBe("f1");
+  });
+
+  it("deleteFolder unfiles its tables to the root (SET NULL semantics)", async () => {
+    const store = makeGridStore({
+      projects: [proj],
+      tables: [table({ folderId: "f1" })],
+      folders: [{ id: "f1", workspaceId: WS, projectId: "p1", name: "F", position: 0, createdAt: 1, parentId: null }],
+    });
+    const { run, events } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.deleteFolder("f1")));
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(store.folders).toEqual([]);
+    expect(store.tables[0]?.folderId).toBeNull();
+    // The workspace room hears folders.changed so teammates' sidebars refetch.
+    expect(events.some((e) => e.event.type === "folders.changed")).toBe(true);
+  });
+
+  it("createFolder nests a sub-folder under a parent (scoped position)", async () => {
+    const store = makeGridStore({
+      projects: [proj],
+      folders: [{ id: "f1", workspaceId: WS, projectId: "p1", name: "Parent", position: 0, createdAt: 1, parentId: null }],
+    });
+    const { run, events } = harness({ store });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) =>
+        s.createFolder({ projectId: "p1", name: "Child", parentId: "f1" }),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    const child = store.folders.find((f) => f.name === "Child");
+    expect(child?.parentId).toBe("f1");
+    // Position is scoped to the (empty) child sibling group → starts at 0.
+    expect(child?.position).toBe(0);
+    expect(events.some((e) => e.event.type === "folders.changed")).toBe(true);
+  });
+
+  it("moveFolder reparents a folder and rejects cycles + cross-project parents", async () => {
+    const store = makeGridStore({
+      projects: [proj, { id: "p2", workspaceId: WS, name: "Q", createdAt: 1 }],
+      folders: [
+        { id: "a", workspaceId: WS, projectId: "p1", name: "A", position: 0, createdAt: 1, parentId: null },
+        { id: "b", workspaceId: WS, projectId: "p1", name: "B", position: 1, createdAt: 1, parentId: "a" },
+        { id: "other", workspaceId: WS, projectId: "p2", name: "Other", position: 0, createdAt: 1, parentId: null },
+      ],
+    });
+    const { run, events } = harness({ store });
+    // Reparent A under B → would create a cycle (B is A's descendant): rejected.
+    const cycle = await run(
+      Effect.flatMap(GridService, (s) => s.moveFolder({ folderId: "a", parentId: "b" })),
+    );
+    expect(failTag(cycle)).toBe("GridNotFoundError");
+    // Into itself: rejected.
+    const self = await run(
+      Effect.flatMap(GridService, (s) => s.moveFolder({ folderId: "a", parentId: "a" })),
+    );
+    expect(failTag(self)).toBe("GridNotFoundError");
+    // A parent in another project: rejected.
+    const cross = await run(
+      Effect.flatMap(GridService, (s) => s.moveFolder({ folderId: "b", parentId: "other" })),
+    );
+    expect(failTag(cross)).toBe("GridNotFoundError");
+    // Legal: move B to the top level with a new position.
+    const ok = await run(
+      Effect.flatMap(GridService, (s) => s.moveFolder({ folderId: "b", parentId: null, position: 5 })),
+    );
+    expect(Exit.isSuccess(ok)).toBe(true);
+    expect(store.folders.find((f) => f.id === "b")).toMatchObject({ parentId: null, position: 5 });
+    expect(events.some((e) => e.event.type === "folders.changed")).toBe(true);
+  });
+
+  it("deleteFolder promotes child folders to the root (SET NULL on parent_id)", async () => {
+    const store = makeGridStore({
+      projects: [proj],
+      folders: [
+        { id: "a", workspaceId: WS, projectId: "p1", name: "A", position: 0, createdAt: 1, parentId: null },
+        { id: "b", workspaceId: WS, projectId: "p1", name: "B", position: 0, createdAt: 1, parentId: "a" },
+      ],
+    });
+    const { run } = harness({ store });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.deleteFolder("a")));
+    expect(Exit.isSuccess(exit)).toBe(true);
+    // A is gone; its child B survives, promoted to the top level (parentId null).
+    expect(store.folders.map((f) => f.id)).toEqual(["b"]);
+    expect(store.folders[0]?.parentId).toBeNull();
+  });
+
+  it("rejects a non-member's folder write (authz before data)", async () => {
+    const store = makeGridStore({ projects: [proj] });
+    const { run } = harness({ store, currentUserId: "stranger" });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.createFolder({ projectId: "p1", name: "X" })),
+    );
+    expect(failTag(exit)).toBe("NotAMemberError");
   });
 });

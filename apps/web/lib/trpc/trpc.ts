@@ -32,8 +32,13 @@ export const createCallerFactory = t.createCallerFactory;
 /** Base procedure — open to anyone. */
 export const publicProcedure = t.procedure;
 
-/** Maps a typed Effect failure (`Data.TaggedError`) to a `TRPCError` code. */
-function toTrpcError(tag: string | undefined, message: string): TRPCError {
+/**
+ * Maps a typed Effect failure (`Data.TaggedError`) to a `TRPCError` code.
+ * Exported so a domain router with its own error translation (e.g. `crm`, which
+ * runs CRM failures through `crmErrorCopy` for user-safe copy) can still fall
+ * back to this shared mapping for the authz tags every procedure can raise.
+ */
+export function toTrpcError(tag: string | undefined, message: string): TRPCError {
   switch (tag) {
     case "UnauthenticatedError":
       return new TRPCError({ code: "UNAUTHORIZED", message });
@@ -70,6 +75,8 @@ function toTrpcError(tag: string | undefined, message: string): TRPCError {
     case "InvalidMappingError":
     case "InvalidConfigError":
     case "InvalidCellError":
+    // Grid domain: a column edit that would create a circular {{column}} reference.
+    case "ColumnCycleError":
     // Social Signals domain: bad source id, missing Trigify key, Trigify API error.
     case "SignalError":
     // Share domain: a too-large snapshot, or a malformed snapshot on clone.
@@ -101,9 +108,14 @@ export async function runEffect<A, E>(
     const err = failure.value as { _tag?: string; message?: string };
     throw toTrpcError(err._tag, err.message ?? "Request failed.");
   }
+  // A non-typed defect (a real crash). Preserve the ORIGINAL error as `cause` —
+  // `Cause.pretty` flattens it to a readable string for the message, but the route
+  // `onError` hook forwards `error.cause ?? error` to PostHog Error Tracking, so
+  // attaching the squashed defect keeps the real stack/grouping instead of a string.
   throw new TRPCError({
     code: "INTERNAL_SERVER_ERROR",
     message: Cause.pretty(exit.cause),
+    cause: Cause.squash(exit.cause),
   });
 }
 

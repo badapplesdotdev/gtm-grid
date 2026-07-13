@@ -4,10 +4,17 @@
   "version": "1.0.0",
   "category": "social-intelligence",
   "description": "LinkedIn outbound + engagement intelligence — search people/companies, find emails, and pull post engagers.",
-  "featured": true,
   "baseUrl": "https://smuggler.dev/api/v1",
   "logo": "https://www.google.com/s2/favicons?domain=smuggler.dev&sz=128",
-  "auth": { "type": "apiKey", "header": "x-api-key", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "x-api-key",
+    "secretKey": "apiKey"
+  },
+  "rateLimit": {
+    "rpm": 120,
+    "concurrency": 3
+  },
   "methods": [
     {
       "id": "searchPersons",
@@ -19,14 +26,29 @@
       "input": {
         "type": "object",
         "properties": {
-          "query": { "type": "string", "description": "Free-text search (name/headline)" },
-          "company": { "type": "string" },
-          "title": { "type": "string" },
-          "location": { "type": "string" },
-          "limit": { "type": "integer", "description": "Max 100 (default 50)" },
-          "offset": { "type": "integer" }
+          "query": {
+            "type": "string",
+            "description": "Free-text search (name/headline)"
+          },
+          "company": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max 100 (default 50)"
+          },
+          "offset": {
+            "type": "integer"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "getPerson",
@@ -37,9 +59,17 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string", "description": "Smuggler person id" } }
-      }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Smuggler person id"
+          }
+        }
+      },
+      "category": "Enrich people"
     },
     {
       "id": "findEmail",
@@ -50,8 +80,19 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string", "description": "Smuggler person id" } }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Smuggler person id"
+          }
+        }
+      },
+      "category": "Find email",
+      "rateLimit": {
+        "rps": 2
       }
     },
     {
@@ -63,10 +104,22 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["personIds"],
+        "required": [
+          "personIds"
+        ],
         "properties": {
-          "personIds": { "type": "array", "items": { "type": "string" }, "description": "1-500 person ids" }
+          "personIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "1-500 person ids"
+          }
         }
+      },
+      "category": "Find email",
+      "rateLimit": {
+        "rps": 2
       }
     },
     {
@@ -79,11 +132,20 @@
       "input": {
         "type": "object",
         "properties": {
-          "query": { "type": "string", "description": "Company name" },
-          "limit": { "type": "integer", "description": "Max 100" },
-          "offset": { "type": "integer" }
+          "query": {
+            "type": "string",
+            "description": "Company name"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "offset": {
+            "type": "integer"
+          }
         }
-      }
+      },
+      "category": "Search"
     },
     {
       "id": "getCompany",
@@ -94,9 +156,97 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string" } }
-      }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "category": "Enrich company"
+    },
+    {
+      "id": "listCampaigns",
+      "label": "List Campaigns",
+      "description": "List engagement-monitoring campaigns. Returns data[] of { id, name, status, profileCount, leadCount }. Use a campaign id to filter listLeads.",
+      "verb": "GET",
+      "path": "/campaigns",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "search": {
+            "type": "string",
+            "description": "Filter by campaign name"
+          }
+        }
+      },
+      "category": "Signals"
+    },
+    {
+      "id": "listProfiles",
+      "label": "List Monitored Profiles",
+      "description": "List LinkedIn profiles being monitored for engagement. Returns data[] of { id, fullName, headline, linkedinUrl, status, lastSyncedAt }. Use a profile id with topEngagers or to filter listLeads.",
+      "verb": "GET",
+      "path": "/profiles",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "campaignId": {
+            "type": "string",
+            "description": "Filter by campaign"
+          },
+          "search": {
+            "type": "string"
+          }
+        }
+      },
+      "category": "Signals"
+    },
+    {
+      "id": "listPosts",
+      "label": "List Monitored Posts",
+      "description": "List LinkedIn posts being tracked for engagement. Returns data[] of { id, title, authorName, postUrl, engagementCount, postedAt }. Use a post id with postEngagements.",
+      "verb": "GET",
+      "path": "/posts",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "profileId": {
+            "type": "string",
+            "description": "Filter by monitored profile"
+          },
+          "search": {
+            "type": "string"
+          }
+        }
+      },
+      "category": "Signals"
     },
     {
       "id": "listLeads",
@@ -108,11 +258,43 @@
       "input": {
         "type": "object",
         "properties": {
-          "limit": { "type": "integer", "description": "Max 100" },
-          "offset": { "type": "integer" },
-          "campaignId": { "type": "string" },
-          "profileId": { "type": "string" },
-          "search": { "type": "string" }
+          "limit": {
+            "type": "integer",
+            "description": "Max 100"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "campaignId": {
+            "type": "string"
+          },
+          "profileId": {
+            "type": "string"
+          },
+          "search": {
+            "type": "string"
+          }
+        }
+      },
+      "category": "Signals",
+      "options": {
+        "campaignId": {
+          "method": "listCampaigns",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status",
+          "args": {
+            "limit": 100
+          }
+        },
+        "profileId": {
+          "method": "listProfiles",
+          "labelKey": "fullName",
+          "valueKey": "id",
+          "sublabelKey": "headline",
+          "args": {
+            "limit": 100
+          }
         }
       }
     },
@@ -125,8 +307,27 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string", "description": "Smuggler post id" } }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Smuggler post id"
+          }
+        }
+      },
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listPosts",
+          "labelKey": "title",
+          "valueKey": "id",
+          "sublabelKey": "authorName",
+          "args": {
+            "limit": 100
+          }
+        }
       }
     },
     {
@@ -138,8 +339,27 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
-        "properties": { "id": { "type": "string", "description": "Smuggler profile id" } }
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Smuggler profile id"
+          }
+        }
+      },
+      "category": "Signals",
+      "options": {
+        "id": {
+          "method": "listProfiles",
+          "labelKey": "fullName",
+          "valueKey": "id",
+          "sublabelKey": "headline",
+          "args": {
+            "limit": 100
+          }
+        }
       }
     },
     {
@@ -149,7 +369,10 @@
       "verb": "GET",
       "path": "/billing/credits",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     }
   ]
 }

@@ -1,0 +1,110 @@
+appId: app.gtmgrid.desktop
+productName: GTM Grid
+copyright: © GTM Grid
+
+directories:
+  output: release
+  buildResources: build-resources
+
+# We rebuild the only native module (better-sqlite3) ourselves in the sidecar
+# (extraResources) via `pnpm electron:bundle`, so electron-builder must NOT try to
+# rebuild app deps — its native-rebuild step chokes on the pnpm workspace symlinks
+# (@gtmgrid/*) and there is no native module in the app asar anyway.
+npmRebuild: false
+buildDependenciesFromSource: false
+# The renderer is fully bundled into dist/ by Vite and the main into
+# build/electron/main.cjs by esbuild (electron-updater kept external), so the
+# packaged app needs only electron-updater from node_modules.
+includeSubNodeModules: false
+
+# What goes INTO the app (asar). The forked engine + native deps ship as
+# extraResources (outside asar) so the native better_sqlite3.node loads cleanly.
+files:
+  - build/electron/**/*
+  - dist/**/*
+  - package.json
+
+# The bundled engine (server.mjs + mcp.mjs + extensions + native node_modules,
+# better-sqlite3 already rebuilt for Electron's ABI by `pnpm electron:bundle`).
+# Exclude the copied stock-node binary — Electron runs the engine via its own Node.
+extraResources:
+  - from: sidecar
+    to: sidecar
+    filter:
+      - "**/*"
+      - "!node"
+      - "!node.exe"
+      - "!package-lock.json"
+  # Runtime icons (tray + window) — shipped so the main process can load them.
+  # Colored green brand tray icon + its @2x retina rep (menu bar / system tray).
+  - from: build-resources/trayIcon.png
+    to: trayIcon.png
+  - from: build-resources/trayIcon@2x.png
+    to: trayIcon@2x.png
+  - from: build-resources/icon.png
+    to: icon.png
+
+# gtmgrid:// deep-link scheme (mac CFBundleURLTypes + win registry via NSIS).
+protocols:
+  - name: GTM Grid
+    schemes:
+      - gtmgrid
+
+publish:
+  provider: github
+  owner: badapplesdotdev
+  repo: gtm-grid
+
+mac:
+  category: public.app-category.productivity
+  icon: build-resources/icon.icns
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build-resources/entitlements.mac.plist
+  entitlementsInherit: build-resources/entitlements.mac.plist
+  # electron-updater needs the zip target on macOS (the dmg is for first install).
+  # Arch is selected per-runner in CI (--arm64 / --x64); local builds use the host.
+  target:
+    - dmg
+    - zip
+  # Notarization runs automatically when the app is code-signed AND the App Store
+  # Connect API key env (APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER) is
+  # present (CI). Local/unsigned builds skip it.
+
+win:
+  icon: build-resources/icon.ico
+  # We have no Windows Authenticode cert yet, so the NSIS installer ships unsigned
+  # (by Windows' trust model). Without this, electron-updater runs
+  # Get-AuthenticodeSignature on the downloaded installer and rejects anything that
+  # doesn't carry a trusted Windows publisher signature — which silently breaks
+  # auto-update for every Windows user. Re-enable (delete this line) once a real
+  # Windows code-signing certificate is wired into CI.
+  verifyUpdateCodeSignature: false
+  target:
+    - target: nsis
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+  # Branded assisted installer (from the claude.ai/design "Windows Installer" design):
+  # navy welcome/finish sidebar + green-mark header, rendered to 24-bit BMP from the
+  # SVG sources (scripts/build-installer-assets.mjs — committed since sips is mac-only).
+  installerSidebar: build-resources/installerSidebar.bmp
+  installerHeader: build-resources/installerHeader.bmp
+  installerIcon: build-resources/icon.ico
+  uninstallerIcon: build-resources/icon.ico
+  uninstallDisplayName: GTM Grid
+
+linux:
+  icon: build-resources/icon.png
+  category: Office
+  # Default deb/AppImage artifactName uses the package name (@gtmgrid/desktop); the
+  # '/' makes fpm try to write into a non-existent release/@gtmgrid/ dir. Use the
+  # productName-based name (matching the mac/win convention) so there's no slash.
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  target:
+    - AppImage
+    - deb

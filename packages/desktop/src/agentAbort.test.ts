@@ -1,92 +1,105 @@
 import { describe, expect, it } from "vitest";
-import { abortInFlight, agentAbortKey, type AbortRef } from "./agentAbort";
+import {
+  abortAllRuns,
+  abortRun,
+  type AbortControllers,
+  tableAbortKey,
+} from "./agentAbort";
 
-// The panel calls `abortInFlight(abortRef)` from a `useEffect` cleanup, so it
-// fires on unmount (closing the panel) and on agent/table/cloud context change.
-// A full React render harness isn't set up here (the desktop suite covers
-// client LOGIC only), so we cover the extracted abort-lifecycle unit directly —
-// this is the regression test for the "no unmount abort" leak (TRI-3305).
+// Per-agent abort lifecycle. The panel keeps a controller per agent so a turn on
+// one tab survives switching to another; only an unmount or a TABLE switch tears
+// runs down. These cover the extracted units (the desktop suite is logic-only).
 
-describe("abortInFlight — abort the in-flight agent turn on unmount/context change", () => {
-  it("aborts the active controller (the unmount-while-streaming case)", () => {
+describe("abortRun — abort ONE agent's in-flight turn", () => {
+  it("aborts that agent's controller and clears its slot", () => {
     const controller = new AbortController();
-    const ref: AbortRef = { current: controller };
+    const map: AbortControllers = { claude: controller, codex: null, cursor: null };
 
-    expect(controller.signal.aborted).toBe(false);
-    abortInFlight(ref);
+    abortRun(map, "claude");
 
     expect(controller.signal.aborted).toBe(true);
+    expect(map.claude).toBeNull();
   });
 
-  it("clears the ref so a second cleanup can't abort a stale controller", () => {
-    const controller = new AbortController();
-    const ref: AbortRef = { current: controller };
+  it("leaves OTHER agents' runs untouched (the agent-switch regression)", () => {
+    const claude = new AbortController();
+    const codex = new AbortController();
+    const map: AbortControllers = { claude, codex, cursor: null };
 
-    abortInFlight(ref);
-    expect(ref.current).toBeNull();
+    // Switching away from Claude must not abort Codex's live turn (or vice versa).
+    abortRun(map, "claude");
 
-    // A later unmount after a context-change must be a safe no-op.
-    expect(() => abortInFlight(ref)).not.toThrow();
+    expect(claude.signal.aborted).toBe(true);
+    expect(codex.signal.aborted).toBe(false);
+    expect(map.codex).toBe(codex);
   });
 
-  it("is a no-op when no request is in flight", () => {
-    const ref: AbortRef = { current: null };
-    expect(() => abortInFlight(ref)).not.toThrow();
+  it("is a no-op when the agent has no live turn", () => {
+    const map: AbortControllers = { claude: null, codex: null, cursor: null };
+    expect(() => abortRun(map, "claude")).not.toThrow();
   });
 
-  it("only aborts the current controller, not one swapped in afterwards", () => {
+  it("does not abort a controller swapped in after the slot was cleared", () => {
     const first = new AbortController();
-    const ref: AbortRef = { current: first };
-    abortInFlight(ref); // first turn torn down
+    const map: AbortControllers = { claude: first, codex: null, cursor: null };
+    abortRun(map, "claude"); // first turn torn down, slot cleared
 
-    // A new turn installs a fresh controller; the prior cleanup must not touch it.
     const second = new AbortController();
-    ref.current = second;
+    map.claude = second; // a fresh turn installs a new controller
     expect(second.signal.aborted).toBe(false);
   });
 });
 
-// `agentAbortKey` is the STABLE dependency the panel's abort effect keys off
-// (TRI-3306). The regression: TRI-3305 keyed the effect on the `activeTable`
-// OBJECT identity, which App.tsx recreates on every re-render (cloud polling),
-// so the cleanup aborted the live turn on every unrelated re-render. The key
-// must change ONLY on a real agent/table switch — never just because a new
-// object literal with the same contents was passed.
-describe("agentAbortKey — abort iff the agent/table context actually changes", () => {
+describe("abortAllRuns — abort EVERY agent (unmount / table switch)", () => {
+  it("aborts all live controllers and clears every slot", () => {
+    const claude = new AbortController();
+    const codex = new AbortController();
+    const map: AbortControllers = { claude, codex, cursor: null };
+
+    abortAllRuns(map);
+
+    expect(claude.signal.aborted).toBe(true);
+    expect(codex.signal.aborted).toBe(true);
+    expect(map.claude).toBeNull();
+    expect(map.codex).toBeNull();
+  });
+});
+
+// `tableAbortKey` is the STABLE dependency the panel's abort effect keys off. It
+// must change ONLY on a real TABLE switch — never on an unrelated re-render, and
+// (unlike the old key) NOT on an agent switch, since agent runs now persist.
+describe("tableAbortKey — abort iff the active TABLE actually changes", () => {
   it("is STABLE across new object identities for the same table (the regression)", () => {
-    const agent = "claude";
-    // Two distinct object literals — what App.tsx produces each re-render.
     const renderA = { name: "Leads", columns: ["a", "b"] };
     const renderB = { name: "Leads", columns: ["a", "b"] };
-    expect(renderA).not.toBe(renderB); // different identity (would churn old deps)
-
-    // Same key → no dep change → effect cleanup does NOT fire → live turn lives.
-    expect(agentAbortKey(agent, renderA)).toBe(agentAbortKey(agent, renderB));
+    expect(renderA).not.toBe(renderB);
+    expect(tableAbortKey(renderA)).toBe(tableAbortKey(renderB));
   });
 
-  it("changes when the user switches agent (turn must abort)", () => {
-    const table = { name: "Leads", columns: ["a"] };
-    expect(agentAbortKey("claude", table)).not.toBe(agentAbortKey("codex", table));
-  });
-
-  it("changes when the user switches table / cloud project (turn must abort)", () => {
-    expect(agentAbortKey("claude", { name: "Leads", columns: ["a"] })).not.toBe(
-      agentAbortKey("claude", { name: "Accounts", columns: ["a"] }),
+  it("changes when the user switches table / cloud project (turns must abort)", () => {
+    expect(tableAbortKey({ name: "Leads", columns: ["a"] })).not.toBe(
+      tableAbortKey({ name: "Accounts", columns: ["a"] }),
     );
   });
 
   it("is stable when only the column set changes but the table name does not", () => {
-    // Column edits don't switch context, so they must not tear down the turn.
-    expect(agentAbortKey("claude", { name: "Leads", columns: ["a"] })).toBe(
-      agentAbortKey("claude", { name: "Leads", columns: ["a", "b", "c"] }),
+    expect(tableAbortKey({ name: "Leads", columns: ["a"] })).toBe(
+      tableAbortKey({ name: "Leads", columns: ["a", "b", "c"] }),
     );
   });
 
   it("distinguishes a null table (local) from a named table", () => {
-    expect(agentAbortKey("claude", null)).not.toBe(
-      agentAbortKey("claude", { name: "Leads", columns: [] }),
+    expect(tableAbortKey(null)).not.toBe(tableAbortKey({ name: "Leads", columns: [] }));
+    expect(tableAbortKey(null)).toBe(tableAbortKey(null));
+  });
+
+  it("changes when switching between two CLOUD tables (the cloud-stuck-table fix)", () => {
+    // In cloud mode `activeTable` now follows the active cloud table, so a switch
+    // between two cloud tables yields a new key — tearing down the prior turn and
+    // re-orienting the agent. Previously the cloud hint never moved off the last
+    // local table, so the agent stayed stuck on one table.
+    expect(tableAbortKey({ name: "Trigify mentions", columns: ["a"] })).not.toBe(
+      tableAbortKey({ name: "Brand mentions", columns: ["a"] }),
     );
-    // ...and two local (null) renders share a key.
-    expect(agentAbortKey("claude", null)).toBe(agentAbortKey("claude", null));
   });
 });

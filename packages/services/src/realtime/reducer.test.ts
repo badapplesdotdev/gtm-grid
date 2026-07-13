@@ -136,6 +136,30 @@ describe("applyGridEvent · column.insert / column.delete", () => {
   });
 });
 
+describe("applyGridEvent · column.update", () => {
+  it("replaces the column in place by id (order preserved, cells untouched)", () => {
+    const base = snapshot({
+      columns: [column({ _id: "c1", name: "A" }), column({ _id: "c2", name: "B" })],
+    });
+    const next = applyGridEvent(base, {
+      type: "column.update",
+      column: column({ _id: "c1", name: "Renamed", type: "number" }),
+    });
+    expect(next?.columns.map((c) => c._id)).toEqual(["c1", "c2"]);
+    expect(next?.columns[0]).toMatchObject({ name: "Renamed", type: "number" });
+    expect(next?.cells).toEqual(base.cells);
+  });
+
+  it("is a no-op (same reference) when the column isn't loaded", () => {
+    const input = snapshot();
+    const next = applyGridEvent(input, {
+      type: "column.update",
+      column: column({ _id: "gone", name: "X" }),
+    });
+    expect(next).toBe(input);
+  });
+});
+
 describe("applyGridEvent · table.insert / table.delete", () => {
   it("table.insert leaves a getTable snapshot unchanged", () => {
     const input = snapshot();
@@ -264,5 +288,95 @@ describe("applyGridEvent · cell.upsert is O(1) + preserves untouched identity",
     expect(largeBuilds).toBeLessThanOrEqual(1);
     // And crucially: the count does NOT grow with the 200×-larger grid.
     expect(largeBuilds).toBe(smallBuilds);
+  });
+});
+
+describe("applyGridEvent · column.reorder", () => {
+  const threeCol = () =>
+    snapshot({
+      columns: [column({ _id: "c1" }), column({ _id: "c2" }), column({ _id: "c3" })],
+    });
+
+  it("reorders columns to match the event's id order", () => {
+    const next = applyGridEvent(threeCol(), {
+      type: "column.reorder",
+      columnIds: ["c3", "c1", "c2"],
+    });
+    expect(next?.columns.map((c) => c._id)).toEqual(["c3", "c1", "c2"]);
+  });
+
+  it("keeps columns the event omits, appended in prior order", () => {
+    const next = applyGridEvent(threeCol(), {
+      type: "column.reorder",
+      columnIds: ["c2"],
+    });
+    expect(next?.columns.map((c) => c._id)).toEqual(["c2", "c1", "c3"]);
+  });
+
+  it("is a no-op (same reference) when the order already matches", () => {
+    const snap = threeCol();
+    const next = applyGridEvent(snap, {
+      type: "column.reorder",
+      columnIds: ["c1", "c2", "c3"],
+    });
+    expect(next).toBe(snap);
+  });
+});
+
+describe("applyGridEvent · row.reorder", () => {
+  it("reorders rows to match the event's id order", () => {
+    const snap = snapshot({ rows: [{ _id: "r1" }, { _id: "r2" }, { _id: "r3" }] });
+    const next = applyGridEvent(snap, {
+      type: "row.reorder",
+      rowIds: ["r3", "r2", "r1"],
+    });
+    expect(next?.rows.map((r) => r._id)).toEqual(["r3", "r2", "r1"]);
+  });
+
+  it("ignores unknown ids and converges (idempotent re-delivery)", () => {
+    const snap = snapshot({ rows: [{ _id: "r1" }, { _id: "r2" }] });
+    const once = applyGridEvent(snap, { type: "row.reorder", rowIds: ["r2", "ghost", "r1"] });
+    expect(once?.rows.map((r) => r._id)).toEqual(["r2", "r1"]);
+    const twice = applyGridEvent(once, { type: "row.reorder", rowIds: ["r2", "r1"] });
+    expect(twice).toBe(once); // already in order → same reference
+  });
+});
+
+describe("applyGridEvent · table.rename", () => {
+  it("relabels the table in place when it is the viewed table", () => {
+    const next = applyGridEvent(snapshot(), {
+      type: "table.rename",
+      tableId: "t1",
+      name: "Renamed",
+    });
+    expect(next?.table.name).toBe("Renamed");
+    // Rows/columns/cells untouched.
+    expect(next?.rows).toHaveLength(1);
+  });
+
+  it("ignores a rename for a different table", () => {
+    const snap = snapshot();
+    const next = applyGridEvent(snap, {
+      type: "table.rename",
+      tableId: "other",
+      name: "Nope",
+    });
+    expect(next).toBe(snap);
+  });
+
+  it("tolerates a missing snapshot (null AND undefined) for every event type", () => {
+    // react-query's setQueryData updater passes `undefined` when the cache key
+    // has no entry — the unpaged snapshot usually doesn't while the grid pages.
+    // REGRESSION: optimistic column.delete crashed with
+    // "undefined is not an object (evaluating 'snapshot.columns')".
+    const events = [
+      { type: "column.delete", columnId: "c1" },
+      { type: "row.delete", rowId: "r1" },
+      { type: "cell.upsert", cell: { rowId: "r1", columnId: "c1", value: 1, status: "done", error: null } },
+    ] as const;
+    for (const event of events) {
+      expect(applyGridEvent(null, event)).toBeNull();
+      expect(applyGridEvent(undefined, event)).toBeNull();
+    }
   });
 });

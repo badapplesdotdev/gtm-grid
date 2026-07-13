@@ -221,7 +221,26 @@ describe("BillingService.syncPlan", () => {
       autumn: { activePlanIds: ["free"] },
     });
     if (!Exit.isSuccess(exit)) throw new Error("expected success");
-    expect(exit.value).toEqual({ id: null, name: "Free", trialEndsAt: null });
+    expect(exit.value).toEqual({
+      id: null,
+      name: "Free",
+      trialEndsAt: null,
+    });
+  });
+
+  it("preserves a lapsed trial's past trialEndsAt (expired-trial vs Free)", async () => {
+    // A workspace that WAS trialing keeps its now-past trialEndsAt when the sub
+    // lapses, so it reads as "trial expired" (not a never-trialed Free workspace).
+    const pastTrialEnd = 1_700_000_000_000;
+    const exit = await runSync({
+      workspaces: [{ id: WS_ID, name: "Alpha", ownerId: "user_owner", trialEndsAt: pastTrialEnd }],
+      users,
+      memberships: ownerMembership,
+      currentUserId: "user_owner",
+      autumn: { activePlanIds: ["free"] },
+    });
+    if (!Exit.isSuccess(exit)) throw new Error("expected success");
+    expect(exit.value).toEqual({ id: null, name: "Free", trialEndsAt: pastTrialEnd });
   });
 
   it("allows any member (not only owner/admin) to refresh the plan", async () => {
@@ -246,6 +265,66 @@ describe("BillingService.syncPlan", () => {
       autumn: { activePlanIds: ["team"] },
     });
     expect(failureTag(exit)).toBe("NotAMemberError");
+  });
+});
+
+describe("BillingService.syncPlanFromWebhook", () => {
+  const runWebhookSync = (fixtures: TestLayerFixtures) =>
+    Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const svc = yield* BillingService;
+        return yield* svc.syncPlanFromWebhook(WS_ID);
+      }).pipe(Effect.provide(TestLayer(fixtures))),
+    );
+
+  it("reflects the active paid plan WITHOUT any member identity (secret-trusted webhook)", async () => {
+    // No memberships, no current user — the webhook has no session. syncPlan would
+    // reject (NotAMemberError / UnauthenticatedError); syncPlanFromWebhook must NOT.
+    const exit = await runWebhookSync({
+      workspaces,
+      users,
+      memberships: [],
+      currentUserId: null,
+      autumn: { activePlanIds: ["business"] },
+    });
+    if (!Exit.isSuccess(exit)) throw new Error("expected success");
+    expect(exit.value).toEqual({
+      id: "business",
+      name: planName("business"),
+      trialEndsAt: null,
+      // Fixture workspace has no cached plan → this reconcile is a FIRST
+      // subscription (null -> paid), which the webhook route turns into the
+      // subscription-confirmed email + `subscription_started`.
+      previousPlanId: null,
+    });
+  });
+
+  it("REVOKES to Free (id null) when Autumn reports no active paid plan — the out-of-app cancellation path", async () => {
+    const exit = await runWebhookSync({
+      workspaces,
+      users,
+      memberships: [],
+      currentUserId: null,
+      autumn: { activePlanIds: ["free"] },
+    });
+    if (!Exit.isSuccess(exit)) throw new Error("expected success");
+    expect(exit.value).toEqual({
+      id: null,
+      name: "Free",
+      trialEndsAt: null,
+      previousPlanId: null,
+    });
+  });
+
+  it("does NOT fail with NotAMemberError for a non-member workspace id (no authz on this path)", async () => {
+    const exit = await runWebhookSync({
+      workspaces,
+      users,
+      memberships: [],
+      currentUserId: "user_stranger",
+      autumn: { activePlanIds: ["team"] },
+    });
+    expect(failureTag(exit)).toBeUndefined();
   });
 });
 

@@ -340,6 +340,47 @@ code, .mono {
   background: var(--accent-press);
 }
 
+/* Download button feedback — see DownloadButton.tsx (twin of the homepage
+   DownloadCTA). The per-platform download 302s to a binary so the page never
+   changes; these acknowledge the click. The hint is absolutely positioned so
+   it never reflows surrounding layout. */
+.dl-btn {
+  position: relative;
+  display: inline-flex;
+}
+.btn[aria-disabled="true"] {
+  cursor: default;
+  pointer-events: none;
+  opacity: 0.9;
+}
+.dl-btn__spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  border-top-color: currentColor;
+  animation: dl-spin 0.6s linear infinite;
+}
+@keyframes dl-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.dl-btn__hint {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  max-width: 260px;
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  color: var(--text-muted);
+  text-align: left;
+}
+.dl-btn__hint a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
 .btn--ghost {
   background: var(--surface-card);
   color: var(--text-body);
@@ -884,3 +925,20 @@ code, .mono {
 .download__link { color: var(--accent); font-weight: var(--weight-medium); }
 .download__link:hover { color: var(--accent-hover); }
 .download__sep { color: var(--text-subtle); }
+
+/* ── Prose pages (/docs/*, /terms) — long-form reading, download-page kin ── */
+.prose { max-width: 720px; padding-bottom: var(--space-10, 96px); }
+.prose__home { margin-bottom: var(--space-8); display: inline-flex; }
+.prose__head { margin-bottom: var(--space-8); }
+.prose__head h1 { font-size: var(--text-2xl); letter-spacing: var(--track-tight); margin: var(--space-3) 0; }
+.prose__lede { color: var(--text-muted); font-size: var(--text-lg); line-height: var(--leading-body); max-width: 60ch; }
+.prose h2 { font-size: var(--text-xl); margin: var(--space-8) 0 var(--space-3); letter-spacing: var(--track-tight); }
+.prose p, .prose li { color: var(--text-muted); font-size: var(--text-md, 15px); line-height: 1.65; }
+.prose p { margin: 0 0 var(--space-4); }
+.prose ul, .prose ol { margin: 0 0 var(--space-4); padding-left: 1.4em; display: grid; gap: var(--space-2); }
+.prose ul ul { margin: var(--space-2) 0 0; }
+.prose strong, .prose em { color: var(--text, inherit); }
+.prose a { color: var(--green-700); text-decoration: underline; text-underline-offset: 2px; }
+/* Out-specify `.prose a` (0,1,1) so the button keeps its own colour and has no underline. */
+.prose a.prose__cta { margin-top: var(--space-5); color: var(--text-on-accent); text-decoration: none; }
+.prose__foot { margin-top: var(--space-8); padding-top: var(--space-5); border-top: 1px solid var(--line); }

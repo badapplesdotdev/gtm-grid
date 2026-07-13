@@ -62,7 +62,11 @@ interface UseColumnWindowArgs {
   scrollRef: RefObject<HTMLElement | null>;
   /** Resolve the pixel width of the column at `index`. */
   getColumnWidth: (index: number) => number;
-  /** Columns rendered left/right of the viewport to avoid blank flashes. */
+  /**
+   * Columns rendered left/right of the viewport. Kept small (see
+   * {@link VirtualGridBody}'s `overscan`): a wider buffer renders more cells per
+   * scroll step, lengthening the paint-in blank rather than shortening it.
+   */
   overscan?: number;
 }
 

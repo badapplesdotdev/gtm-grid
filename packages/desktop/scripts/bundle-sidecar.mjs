@@ -25,7 +25,7 @@ import { execSync } from "node:child_process";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "..", "..", ".."); // packages/desktop/scripts -> repo root
-const out = resolve(here, "..", "src-tauri", "sidecar");
+const out = resolve(here, "..", "sidecar");
 
 const isWin = process.platform === "win32";
 const targetArch = process.env.GTMGRID_SIDECAR_ARCH || process.arch; // "arm64" | "x64"
@@ -85,17 +85,11 @@ const extDst = resolve(out, "extensions");
 rmSync(extDst, { recursive: true, force: true });
 if (existsSync(extSrc)) cpSync(extSrc, extDst, { recursive: true });
 
-// Bundled MCP launcher: runs the bundled node + mcp.mjs (used by the agent panel
-// so Claude Code / Codex connect to gtmgrid's MCP server inside the packaged app).
-// Unix only — a bash script; the agent panel's CLI integration is unix-focused.
-if (!isWin) {
-  const launcher = resolve(out, "gtmgrid-mcp");
-  writeFileSync(
-    launcher,
-    `#!/bin/bash\nDIR="$(cd "$(dirname "$0")" && pwd)"\nexec "$DIR/node" "$DIR/mcp.mjs" "$@"\n`,
-    { mode: 0o755 },
-  );
-}
+// No MCP launcher script is written: the agent panel mounts gtmgrid's MCP server
+// by spawning the bundled `node` directly with `mcp.mjs` (above) as a script arg
+// — see `mcpLaunch` in agent.ts and GTMGRID_MCP_NODE/GTMGRID_MCP_SCRIPT in the
+// Rust shell. A `#!/bin/bash` launcher couldn't run on Windows, so the grid tools
+// never loaded there; spawning node directly works on every platform.
 
 // Install native/wasm deps (better-sqlite3 builds/fetches prebuilt, quickjs ships
 // wasm) — only the first time, so incremental builds stay fast. When cross-
@@ -123,6 +117,11 @@ if (!existsSync(nodeDst)) {
 }
 
 console.log(`Sidecar ready at ${out} (target arch: ${targetArch})`);
+
+// Note: no per-binary codesigning here. Under Electron, electron-builder signs the
+// WHOLE app — including the sidecar shipped via `extraResources` and its native
+// better_sqlite3.node — with the mac entitlements (build-resources/entitlements.mac.plist),
+// so the old Tauri-era signMacSidecar() loop is gone.
 
 /** Download the official node binary for a platform+arch and place it at dest. */
 function downloadNode(platform, arch, version, dest) {

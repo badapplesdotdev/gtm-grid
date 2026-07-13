@@ -8,9 +8,10 @@ import type { AiConfig, MethodContext } from "../types.js";
 
 // vi.mock factories are hoisted above imports, so the spies they reference must
 // be created with vi.hoisted (not plain top-level consts).
-const { openaiCtor, createMock, anthropicCreate } = vi.hoisted(() => ({
+const { openaiCtor, createMock, anthropicCtor, anthropicCreate } = vi.hoisted(() => ({
   openaiCtor: vi.fn(),
   createMock: vi.fn(),
+  anthropicCtor: vi.fn(),
   anthropicCreate: vi.fn(),
 }));
 
@@ -22,7 +23,10 @@ vi.mock("openai", () => ({
 }));
 
 vi.mock("@anthropic-ai/sdk", () => ({
-  default: vi.fn().mockImplementation(() => ({ messages: { create: anthropicCreate } })),
+  default: vi.fn().mockImplementation((opts: unknown) => {
+    anthropicCtor(opts);
+    return { messages: { create: anthropicCreate } };
+  }),
 }));
 
 import { aiConnector } from "./ai.js";
@@ -41,8 +45,32 @@ const OPENAI: AiConfig = { provider: "openai", apiKey: "oa-key", model: "gpt-4o-
 beforeEach(() => {
   openaiCtor.mockClear();
   createMock.mockClear();
+  anthropicCtor.mockClear();
   anthropicCreate.mockClear();
   createMock.mockResolvedValue({ choices: [{ message: { content: "ok" } }] });
+  anthropicCreate.mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+});
+
+const ANTHROPIC: AiConfig = { provider: "anthropic", apiKey: "an-key", model: "claude-haiku-4-5" };
+
+describe("ai.generate — SDK resilience + connector throttle", () => {
+  it("declares a moderate connector-level rate limit", () => {
+    expect(aiConnector.rateLimit).toEqual({ rps: 3, concurrency: 5 });
+  });
+
+  it("constructs the OpenAI client with explicit maxRetries + timeout (SDK owns retry)", async () => {
+    await generate.run({ prompt: "hi", model: "gpt-4o" }, ctx([OPENAI]));
+    expect(openaiCtor).toHaveBeenCalledWith(
+      expect.objectContaining({ maxRetries: 4, timeout: 60_000 }),
+    );
+  });
+
+  it("constructs the Anthropic client with explicit maxRetries + timeout (SDK owns retry)", async () => {
+    await generate.run({ prompt: "hi", model: "claude-haiku-4-5" }, ctx([ANTHROPIC]));
+    expect(anthropicCtor).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "an-key", maxRetries: 4, timeout: 60_000 }),
+    );
+  });
 });
 
 describe("ai.generate — Hermes routing", () => {
@@ -90,5 +118,26 @@ describe("ai.generate — Hermes routing", () => {
       ctx([{ provider: "hermes", apiKey: "", model: "hermes-4", baseURL: "http://gw/v1" }]),
     );
     expect(openaiCtor).toHaveBeenCalledWith(expect.objectContaining({ apiKey: "hermes" }));
+  });
+});
+
+describe("ai.generate — no-key agent fallback", () => {
+  it("routes through aiFallback (the user's agent model) when no provider is connected", async () => {
+    const aiFallback = vi.fn().mockResolvedValue("agent says hi");
+    const out = await generate.run(
+      { prompt: "hi", system: "be terse" },
+      { secrets: {}, aiProviders: [], aiFallback },
+    );
+    expect(aiFallback).toHaveBeenCalledWith({ prompt: "hi", system: "be terse", model: undefined });
+    expect(out).toEqual({ text: "agent says hi" });
+    // It must NOT have touched a real provider client.
+    expect(openaiCtor).not.toHaveBeenCalled();
+    expect(anthropicCreate).not.toHaveBeenCalled();
+  });
+
+  it("throws the connect-a-key error when there is neither a provider nor a fallback", async () => {
+    await expect(generate.run({ prompt: "hi" }, { secrets: {}, aiProviders: [] })).rejects.toThrow(
+      /No AI provider connected/,
+    );
   });
 });

@@ -21,9 +21,14 @@ import {
   useQuery as useRqQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { applyGridEvent, subscribeToGrid } from "@gtmgrid/services/realtime";
+import {
+  applyGridEvent,
+  subscribeToGrid,
+  WORKSPACE_ROOM_TABLE_ID,
+} from "@gtmgrid/services/realtime";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { Id } from "./ids";
+import { gridPresenceStore } from "./presenceStore";
 import type { Cell, CellStatus, Column, FullTable } from "../api";
 import { apiClient, queryClient } from "./client";
 import type { CloudSession } from "./cloud-run";
@@ -36,7 +41,7 @@ import { useApiAuthToken } from "./useApiAuth";
  * token (`realtime.token`) that the party validates against the room — all
  * reads/writes still go through tRPC.
  */
-const PARTY_URL: string | undefined =
+export const PARTY_URL: string | undefined =
   (import.meta.env.VITE_PARTY_URL as string | undefined) || undefined;
 
 /**
@@ -79,6 +84,31 @@ export interface CloudTableSummary {
   readonly name: string;
   readonly position: number;
   readonly createdAt: number;
+  /** Sidebar folder this table is filed under (null = root). */
+  readonly folderId: string | null;
+  /**
+   * The table's row count, surfaced by `grid.listTables` so the sidebar / Tables
+   * page shows a real count for cloud tables (not "—"). `null` when the server
+   * did not report a count (older API), so the UI falls back to the dash.
+   */
+  readonly rows: number | null;
+  /**
+   * Whether this table is pinned to favourites. WORKSPACE-SHARED (any teammate's
+   * pin shows for everyone), drives the sidebar star + favourites-first ordering,
+   * mirroring local tables.
+   */
+  readonly favorite: boolean;
+}
+
+/** A cloud sidebar folder (the `listFolders` query shape). */
+export interface CloudFolderSummary {
+  readonly _id: string;
+  readonly projectId: Id<"projects">;
+  readonly name: string;
+  readonly position: number;
+  readonly createdAt: number;
+  /** The folder this folder nests under (null = top level). */
+  readonly parentId: string | null;
 }
 
 // ───────────────────────────── react-query keys ─────────────────────────────
@@ -91,6 +121,7 @@ export interface CloudTableSummary {
 export const gridQueryKeys = {
   projects: (workspaceId: string) => ["grid", "projects", workspaceId] as const,
   tables: (projectId: string) => ["grid", "tables", projectId] as const,
+  folders: (projectId: string) => ["grid", "folders", projectId] as const,
   table: (tableId: string) => ["grid", "table", tableId] as const,
   /** The keyset-paginated grid (an infinite query of {@link gridRouter.getTablePage}). */
   tablePaged: (tableId: string) => ["grid", "tablePaged", tableId] as const,
@@ -126,9 +157,10 @@ type GridPageCursor = GridPage["nextCursor"];
 /**
  * Mint the Supabase realtime JWT via the tRPC `realtime.token` MUTATION. Thrown
  * if the cloud layer is disabled (callers guard on `apiClient` first). Extracted
- * so the realtime-token plumbing is a single named seam.
+ * so the realtime-token plumbing is a single named seam. Exported for the agent
+ * presence controller (agentPresence.ts), which opens its OWN party connection.
  */
-async function mintRealtimeToken(workspaceId: string): Promise<string> {
+export async function mintRealtimeToken(workspaceId: string): Promise<string> {
   if (apiClient === null) throw new Error("API client unavailable");
   const { token } = await apiClient.realtime.token.mutate({ workspaceId });
   return token;
@@ -195,6 +227,35 @@ export function useCloudTables(
         name: t.name,
         position: t.position,
         createdAt: t.createdAt,
+        folderId: t.folderId ?? null,
+        rows: t.rows ?? null,
+        favorite: t.favorite ?? false,
+      })),
+    [q.data],
+  );
+}
+
+/**
+ * Reactive list of a cloud project's sidebar folders. `undefined` while
+ * loading; issues zero calls when cloud is off or no cloud project is active.
+ */
+export function useCloudFolders(
+  projectId: Id<"projects"> | null,
+): CloudFolderSummary[] | undefined {
+  const q = useRqQuery({
+    queryKey: gridQueryKeys.folders(projectId ?? ""),
+    enabled: apiClient !== null && projectId !== null,
+    queryFn: () => apiClient!.grid.listFolders.query({ projectId: projectId! }),
+  });
+  return useMemo<CloudFolderSummary[] | undefined>(
+    () =>
+      q.data?.map((f) => ({
+        _id: f.id,
+        projectId: f.projectId as Id<"projects">,
+        name: f.name,
+        position: f.position,
+        createdAt: f.createdAt,
+        parentId: f.parentId ?? null,
       })),
     [q.data],
   );
@@ -205,17 +266,54 @@ export function useCloudTables(
  * the grid-cell mutations so the switcher/sidebar can create without subscribing
  * to a table.
  */
+/** The raw `grid.listTables` cache shape (an array of table summaries). */
+type TablesListCache = Awaited<
+  ReturnType<NonNullable<typeof apiClient>["grid"]["listTables"]["query"]>
+>;
+/** The raw `grid.listFolders` cache shape. */
+type FoldersListCache = Awaited<
+  ReturnType<NonNullable<typeof apiClient>["grid"]["listFolders"]["query"]>
+>;
+
 export function useCloudProjectMutations() {
   const qc = useQueryClient();
+
+  /**
+   * Optimistically patch EVERY loaded tables list (the sidebar lists are keyed
+   * `["grid","tables",projectId]`; a structural edit carries only the tableId,
+   * so patch them all by prefix). Snapshots the matched caches and returns a
+   * `rollback`. The trailing `invalidate` reconciles with server truth (and the
+   * realtime workspace broadcast already refreshes other members).
+   */
+  const patchTablesLists = useCallback(
+    (update: (list: TablesListCache) => TablesListCache): (() => void) => {
+      const prev = qc.getQueriesData<TablesListCache>({
+        predicate: (q) =>
+          q.queryKey[0] === "grid" && q.queryKey[1] === "tables",
+      });
+      qc.setQueriesData<TablesListCache>(
+        {
+          predicate: (q) =>
+            q.queryKey[0] === "grid" && q.queryKey[1] === "tables",
+        },
+        (list) => (list ? update(list) : list),
+      );
+      return () => {
+        for (const [key, data] of prev) qc.setQueryData(key, data);
+      };
+    },
+    [qc],
+  );
+
   const createProject = useCallback(
     async (
       workspaceId: Id<"workspaces">,
       name: string,
     ): Promise<Id<"projects">> => {
-      const id = await apiClient!.grid.createProject.mutate({
-        workspaceId,
-        name,
-      });
+      // Client-supplied id: deterministic, so the caller can route to the new
+      // project the instant the mutation resolves and the realtime echo converges.
+      const id = crypto.randomUUID();
+      await apiClient!.grid.createProject.mutate({ workspaceId, name, id });
       await qc.invalidateQueries({
         queryKey: gridQueryKeys.projects(workspaceId),
       });
@@ -229,10 +327,14 @@ export function useCloudProjectMutations() {
     async (
       projectId: Id<"projects">,
       name: string,
+      folderId?: string | null,
     ): Promise<Id<"tables">> => {
-      const id = await apiClient!.grid.createTable.mutate({
+      const id = crypto.randomUUID();
+      await apiClient!.grid.createTable.mutate({
         projectId,
         name,
+        folderId: folderId ?? null,
+        id,
       });
       await qc.invalidateQueries({
         queryKey: gridQueryKeys.tables(projectId),
@@ -243,19 +345,209 @@ export function useCloudProjectMutations() {
   );
   const deleteTable = useCallback(
     async (tableId: Id<"tables">) => {
-      await apiClient!.grid.deleteTable.mutate({ tableId });
-      // Refresh the sidebar list (the delete only carries the tableId, so
-      // invalidate every loaded tables list by key prefix) and drop the now-gone
-      // table's own query.
-      await qc.invalidateQueries({
-        predicate: (query) =>
-          query.queryKey[0] === "grid" && query.queryKey[1] === "tables",
-      });
+      // Optimistic: drop the table from every loaded sidebar list instantly.
+      const rollback = patchTablesLists((list) =>
+        list.filter((t) => t.id !== tableId),
+      );
       qc.removeQueries({ queryKey: gridQueryKeys.table(tableId) });
+      try {
+        await apiClient!.grid.deleteTable.mutate({ tableId });
+      } catch (e) {
+        rollback();
+        throw e;
+      } finally {
+        await qc.invalidateQueries({
+          predicate: (query) =>
+            query.queryKey[0] === "grid" && query.queryKey[1] === "tables",
+        });
+      }
+    },
+    [qc, patchTablesLists],
+  );
+  const renameTable = useCallback(
+    async (tableId: Id<"tables">, name: string) => {
+      // Optimistic: relabel the sidebar list(s) and the open grid header instantly.
+      const rollback = patchTablesLists((list) =>
+        list.map((t) => (t.id === tableId ? { ...t, name } : t)),
+      );
+      try {
+        await apiClient!.grid.renameTable.mutate({ tableId, name });
+      } catch (e) {
+        rollback();
+        throw e;
+      } finally {
+        await qc.invalidateQueries({
+          predicate: (query) =>
+            query.queryKey[0] === "grid" && query.queryKey[1] === "tables",
+        });
+        await qc.invalidateQueries({ queryKey: gridQueryKeys.table(tableId) });
+      }
+    },
+    [qc, patchTablesLists],
+  );
+  const setTableFavorite = useCallback(
+    async (tableId: Id<"tables">, favorite: boolean) => {
+      // Optimistic: flip the pin instantly (favourites-first ordering reconciles
+      // on the refetch / the workspace broadcast).
+      const rollback = patchTablesLists((list) =>
+        list.map((t) => (t.id === tableId ? { ...t, favorite } : t)),
+      );
+      try {
+        await apiClient!.grid.setTableFavorite.mutate({ tableId, favorite });
+      } catch (e) {
+        rollback();
+        throw e;
+      } finally {
+        await qc.invalidateQueries({
+          predicate: (query) =>
+            query.queryKey[0] === "grid" && query.queryKey[1] === "tables",
+        });
+      }
+    },
+    [qc, patchTablesLists],
+  );
+  // ── Sidebar folders ───────────────────────────────────────────────────────
+  // Folder CRUD + table moves refresh BOTH the folders and tables lists for the
+  // project (a move changes a table's folderId; a folder delete unfiles tables).
+  const invalidateFolderLists = useCallback(
+    (projectId: Id<"projects">) =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: gridQueryKeys.folders(projectId) }),
+        qc.invalidateQueries({ queryKey: gridQueryKeys.tables(projectId) }),
+      ]),
+    [qc],
+  );
+  /** Optimistically patch one project's folders list; returns a `rollback`. */
+  const patchFoldersList = useCallback(
+    (
+      projectId: Id<"projects">,
+      update: (list: FoldersListCache) => FoldersListCache,
+    ): (() => void) => {
+      const key = gridQueryKeys.folders(projectId);
+      const prev = qc.getQueryData<FoldersListCache>(key);
+      qc.setQueryData<FoldersListCache>(key, (list) =>
+        list ? update(list) : list,
+      );
+      return () => qc.setQueryData(key, prev);
     },
     [qc],
   );
-  return { createProject, createTable, deleteTable };
+
+  const createFolder = useCallback(
+    async (
+      projectId: Id<"projects">,
+      name: string,
+      parentId: string | null = null,
+    ): Promise<string> => {
+      const id = crypto.randomUUID();
+      await apiClient!.grid.createFolder.mutate({ projectId, name, id, parentId });
+      await invalidateFolderLists(projectId);
+      return id;
+    },
+    [invalidateFolderLists],
+  );
+  const renameFolder = useCallback(
+    async (projectId: Id<"projects">, folderId: string, name: string) => {
+      const rollback = patchFoldersList(projectId, (list) =>
+        list.map((f) => (f.id === folderId ? { ...f, name } : f)),
+      );
+      try {
+        await apiClient!.grid.renameFolder.mutate({ folderId, name });
+      } catch (e) {
+        rollback();
+        throw e;
+      } finally {
+        await invalidateFolderLists(projectId);
+      }
+    },
+    [invalidateFolderLists, patchFoldersList],
+  );
+  const deleteFolder = useCallback(
+    async (projectId: Id<"projects">, folderId: string) => {
+      // Optimistic: remove the folder AND unfile its tables to the root (the
+      // server's FK is ON DELETE SET NULL), so the sidebar reshapes instantly.
+      const rollbackFolders = patchFoldersList(projectId, (list) =>
+        list.filter((f) => f.id !== folderId),
+      );
+      const rollbackTables = patchTablesLists((list) =>
+        list.map((t) => (t.folderId === folderId ? { ...t, folderId: null } : t)),
+      );
+      try {
+        await apiClient!.grid.deleteFolder.mutate({ folderId });
+      } catch (e) {
+        rollbackTables();
+        rollbackFolders();
+        throw e;
+      } finally {
+        await invalidateFolderLists(projectId);
+      }
+    },
+    [invalidateFolderLists, patchFoldersList, patchTablesLists],
+  );
+  const moveTable = useCallback(
+    async (
+      projectId: Id<"projects">,
+      tableId: Id<"tables">,
+      folderId: string | null,
+      position?: number,
+    ) => {
+      // Optimistic: refile the table (and reposition) in the sidebar instantly.
+      const rollback = patchTablesLists((list) =>
+        list.map((t) =>
+          t.id === tableId
+            ? { ...t, folderId, ...(position !== undefined ? { position } : {}) }
+            : t,
+        ),
+      );
+      try {
+        await apiClient!.grid.moveTable.mutate({ tableId, folderId, position });
+      } catch (e) {
+        rollback();
+        throw e;
+      } finally {
+        await invalidateFolderLists(projectId);
+      }
+    },
+    [invalidateFolderLists, patchTablesLists],
+  );
+  const moveFolder = useCallback(
+    async (
+      projectId: Id<"projects">,
+      folderId: string,
+      parentId: string | null,
+      position?: number,
+    ) => {
+      // Optimistic: reparent (and reposition) the folder in the sidebar instantly.
+      const rollback = patchFoldersList(projectId, (list) =>
+        list.map((f) =>
+          f.id === folderId
+            ? { ...f, parentId, ...(position !== undefined ? { position } : {}) }
+            : f,
+        ),
+      );
+      try {
+        await apiClient!.grid.moveFolder.mutate({ folderId, parentId, position });
+      } catch (e) {
+        rollback();
+        throw e;
+      } finally {
+        await invalidateFolderLists(projectId);
+      }
+    },
+    [invalidateFolderLists, patchFoldersList],
+  );
+  return {
+    createProject,
+    createTable,
+    deleteTable,
+    renameTable,
+    setTableFavorite,
+    createFolder,
+    renameFolder,
+    deleteFolder,
+    moveFolder,
+    moveTable,
+  };
 }
 
 /**
@@ -315,6 +607,7 @@ function toColumn(c: {
   code: string | null;
   params?: unknown;
   condition?: string | null;
+  config?: unknown;
 }): Column {
   return {
     id: c._id,
@@ -328,6 +621,9 @@ function toColumn(c: {
     fn: c.provider ? `${c.provider}.${c.method}` : c.code ? "code" : null,
     params: (c.params ?? {}) as Record<string, unknown>,
     condition: c.condition ?? null,
+    // Behaviour flags (CRM-synced columns carry `{ synced: true, … }`), carried
+    // through so the grid can render synced columns read-only.
+    config: c.config ?? null,
   };
 }
 
@@ -346,7 +642,11 @@ function toCell(c: {
 
 /** The `getTable`-shaped snapshot {@link createIncrementalTableView} projects. */
 type GetTableData = {
-  table: { _id: string; name: string };
+  table: {
+    _id: string;
+    name: string;
+    dedupe?: { column: string; keep: "oldest" | "newest" } | null;
+  };
   columns: readonly {
     _id: string;
     name: string;
@@ -357,6 +657,7 @@ type GetTableData = {
     code: string | null;
     params?: unknown;
     condition?: string | null;
+    config?: unknown;
   }[];
   rows: readonly { _id: string }[];
   cells: readonly {
@@ -459,7 +760,13 @@ export function createIncrementalTableView(): {
     });
 
     prevByRow = nextByRow;
-    return { id: data.table._id, name: data.table.name, columns, rows };
+    return {
+      id: data.table._id,
+      name: data.table.name,
+      dedupe: data.table.dedupe ?? null,
+      columns,
+      rows,
+    };
   };
 
   return { derive };
@@ -665,14 +972,24 @@ function useGridRealtime(
           buffer.push(event);
           flush.schedule();
         },
+        onPresence: (states) => gridPresenceStore.setRoster(states),
       });
+      // Publish this client's cursor/identity through the SAME socket (no second
+      // connection); CloudGrid feeds local cursor moves into the store.
+      gridPresenceStore.setPublisher((state) => void sub.updatePresence(state));
       teardown = sub.unsubscribe;
-      if (disposed) void sub.unsubscribe();
+      if (disposed) {
+        gridPresenceStore.setPublisher(null);
+        gridPresenceStore.clear();
+        void sub.unsubscribe();
+      }
     })();
 
     return () => {
       disposed = true;
       flush.cancel();
+      gridPresenceStore.setPublisher(null);
+      gridPresenceStore.clear();
       if (teardown) void teardown();
     };
   }, [tableId, workspaceId]);
@@ -707,18 +1024,45 @@ function usePagedGridRealtime(
     let teardown: (() => Promise<void>) | null = null;
 
     const buffer: Array<Parameters<typeof patchPagedGridCache>[1]> = [];
+    // Dropped-event backstop: events the paged cache can't place (rows past
+    // the loaded tail — the norm during a large CRM pull) trigger a THROTTLED
+    // refetch of the paged grid + the sidebar table list, so rows appear in
+    // order and counts stay fresh without a render storm.
+    let lastInvalidateAt = 0;
+    let invalidateTimer: ReturnType<typeof setTimeout> | null = null;
+    const INVALIDATE_EVERY_MS = 2000;
+    const invalidateForDrops = () => {
+      if (disposed) return;
+      lastInvalidateAt = Date.now();
+      void qcRef.current.invalidateQueries({ queryKey: gridQueryKeys.tablePaged(tableId) });
+      void qcRef.current.invalidateQueries({ queryKey: gridQueryKeys.table(tableId) });
+      void qcRef.current.invalidateQueries({ queryKey: ["grid", "tables"] });
+    };
+    const scheduleDropInvalidate = () => {
+      if (invalidateTimer !== null) return;
+      const wait = Math.max(0, INVALIDATE_EVERY_MS - (Date.now() - lastInvalidateAt));
+      invalidateTimer = setTimeout(() => {
+        invalidateTimer = null;
+        invalidateForDrops();
+      }, wait);
+    };
     const flush = scheduleFlush(() => {
       if (disposed || buffer.length === 0) return;
       const events = buffer.splice(0, buffer.length);
+      let sawDrop = false;
       qcRef.current.setQueryData<{
         pages: GridPage[];
         pageParams: unknown[];
       }>(gridQueryKeys.tablePaged(tableId), (prev) => {
         if (prev === undefined) return prev;
         let pages: readonly GridPage[] = prev.pages;
-        for (const event of events) pages = patchPagedGridCache(pages, event);
+        for (const event of events) {
+          if (!sawDrop && wasEventDropped(pages, event)) sawDrop = true;
+          pages = patchPagedGridCache(pages, event);
+        }
         return pages === prev.pages ? prev : { ...prev, pages: [...pages] };
       });
+      if (sawDrop) scheduleDropInvalidate();
     });
 
     void (async () => {
@@ -733,6 +1077,71 @@ function usePagedGridRealtime(
           buffer.push(event);
           flush.schedule();
         },
+        onPresence: (states) => gridPresenceStore.setRoster(states),
+      });
+      // Publish this client's cursor/identity through the SAME socket (no second
+      // connection); CloudGrid feeds local cursor moves into the store.
+      gridPresenceStore.setPublisher((state) => void sub.updatePresence(state));
+      teardown = sub.unsubscribe;
+      if (disposed) {
+        gridPresenceStore.setPublisher(null);
+        gridPresenceStore.clear();
+        void sub.unsubscribe();
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      if (invalidateTimer !== null) clearTimeout(invalidateTimer);
+      flush.cancel();
+      gridPresenceStore.setPublisher(null);
+      gridPresenceStore.clear();
+      if (teardown) void teardown();
+    };
+  }, [tableId, workspaceId]);
+}
+
+/**
+ * Subscribe to the WORKSPACE realtime room (`${workspaceId}:_workspace`) and
+ * refresh the sidebar's cloud table + project lists when ANY member creates,
+ * syncs, or deletes a table — so a teammate's change shows up live without an
+ * app restart. We don't patch the list in place (table create/delete is rare and
+ * the events don't carry the list's count metadata); we invalidate the
+ * `grid/tables` + `grid/projects` queries and let them refetch. Opens its own
+ * socket (separate from any open table's grid socket). No-op when realtime is
+ * unconfigured or no workspace is active.
+ */
+export function useWorkspaceRealtime(
+  workspaceId: Id<"workspaces"> | null,
+): void {
+  const qc = useQueryClient();
+  const qcRef = useRef(qc);
+  qcRef.current = qc;
+
+  useEffect(() => {
+    if (!realtimeConfigured || workspaceId === null || PARTY_URL === undefined) {
+      return;
+    }
+    let disposed = false;
+    let teardown: (() => Promise<void>) | null = null;
+
+    void (async () => {
+      const token = await mintRealtimeToken(workspaceId).catch(() => null);
+      if (token === null || disposed) return;
+      const sub = subscribeToGrid({
+        url: PARTY_URL,
+        token,
+        workspaceId,
+        tableId: WORKSPACE_ROOM_TABLE_ID,
+        onEvent: () => {
+          qcRef.current.invalidateQueries({
+            predicate: (query) =>
+              query.queryKey[0] === "grid" &&
+              (query.queryKey[1] === "tables" ||
+                query.queryKey[1] === "folders" ||
+                query.queryKey[1] === "projects"),
+          });
+        },
       });
       teardown = sub.unsubscribe;
       if (disposed) void sub.unsubscribe();
@@ -740,10 +1149,9 @@ function usePagedGridRealtime(
 
     return () => {
       disposed = true;
-      flush.cancel();
       if (teardown) void teardown();
     };
-  }, [tableId, workspaceId]);
+  }, [workspaceId]);
 }
 
 /**
@@ -855,6 +1263,29 @@ export function mergePagesToSnapshot(
  * Returns the next pages array (new identity only for changed pages). Pure +
  * unit-tested without React or Supabase.
  */
+/**
+ * Whether `event` would be DROPPED by {@link patchPagedGridCache} against the
+ * currently loaded pages: a `row.insert` while the loaded tail still has a
+ * next page (the row belongs past what's paged in), or a `cell.upsert` for a
+ * row that isn't loaded. Dropped events mean the server has rows the cache
+ * can't place — the subscriber reacts by (throttled) refetching so synced
+ * rows still appear live during large pulls.
+ */
+export function wasEventDropped(
+  pages: readonly GridPage[],
+  event: Parameters<typeof applyGridEvent>[1],
+): boolean {
+  if (pages.length === 0) return false;
+  if (event.type === "row.insert") {
+    const last = pages[pages.length - 1];
+    return last === undefined || last.nextCursor !== null;
+  }
+  if (event.type === "cell.upsert") {
+    return !pages.some((p) => p.rows.some((r) => r._id === event.cell.rowId));
+  }
+  return false;
+}
+
 export function patchPagedGridCache(
   pages: readonly GridPage[],
   event: Parameters<typeof applyGridEvent>[1],
@@ -941,50 +1372,206 @@ function applyEventToPage(
  * the exact snapshot, so the manual refetch is redundant — removed per TRI-3274
  * (C5) to keep manual writes O(1) on a large table instead of O(loaded tables).
  */
+/** A tRPC "… not found" error — the row/column was already deleted server-side. */
+function isNotFoundError(e: unknown): boolean {
+  return e instanceof Error && /not found/i.test(e.message);
+}
+
 export function useCloudGridMutations() {
   const qc = useQueryClient();
+  // Invalidate BOTH the unpaged (`grid.getTable`) and the paged
+  // (`grid.getTablePage`) caches for a table. The live grid renders the PAGED
+  // query, so invalidating only `table` (the old behavior) left structural
+  // edits — delete/edit column, delete row — invisible until remount when the
+  // realtime broadcast was unconfigured or dropped. Invalidating the paged key
+  // too makes every mutation authoritatively reflect, broadcast or not.
   const refresh = useCallback(
-    (tableId: string) =>
-      qc.invalidateQueries({ queryKey: gridQueryKeys.table(tableId) }),
+    (tableId: string, opts?: { refetchType?: "active" | "none" }) =>
+      qc.invalidateQueries({
+        predicate: (q) =>
+          q.queryKey[0] === "grid" &&
+          (q.queryKey[1] === "table" || q.queryKey[1] === "tablePaged") &&
+          q.queryKey[2] === tableId,
+        // `refetchType: "none"` marks the cache stale WITHOUT an immediate
+        // refetch — used after an optimistic column save so a slow background
+        // refetch can't land a pre-run snapshot that clobbers the cells a
+        // just-started run is streaming in via realtime. A natural refetch
+        // (window focus / staleTime) reconciles later.
+        ...(opts?.refetchType ? { refetchType: opts.refetchType } : {}),
+      }),
     [qc],
   );
 
-  const setCell = useCallback(
-    async (rowId: Id<"rows">, columnId: Id<"columns">, value: unknown) => {
-      const res = await apiClient!.grid.setCell.mutate({
-        rowId,
-        columnId,
-        value,
-        status: "done",
-        error: null,
-      });
-      return res;
+  // Optimistically apply a structural event to both caches so the change shows
+  // INSTANTLY (no waiting on the refetch round-trip), then `refresh` reconciles
+  // with server truth. Reuses the same pure reducers the realtime path uses.
+  const applyOptimistic = useCallback(
+    (tableId: string, event: Parameters<typeof patchGridCache>[1]) => {
+      // The unpaged snapshot is usually ABSENT (the grid loads paged) — an
+      // undefined cache entry must stay undefined, not be patched into being
+      // (and the reducer must never see undefined.columns).
+      qc.setQueryData(gridQueryKeys.table(tableId), (prev) =>
+        prev == null
+          ? prev
+          : patchGridCache(prev as Parameters<typeof patchGridCache>[0], event),
+      );
+      qc.setQueryData<{ pages: GridPage[]; pageParams: unknown[] }>(
+        gridQueryKeys.tablePaged(tableId),
+        (prev) =>
+          prev === undefined
+            ? prev
+            : { ...prev, pages: [...patchPagedGridCache(prev.pages, event)] },
+      );
     },
-    [],
+    [qc],
+  );
+
+  /**
+   * Read a column's CURRENT cached projection (for building an optimistic
+   * `column.update`, which carries the FULL column, not just the patch). Prefers
+   * the paged cache the live grid renders; falls back to the unpaged snapshot.
+   */
+  const currentColumn = useCallback(
+    (
+      tableId: string,
+      columnId: string,
+    ): GridPage["columns"][number] | undefined => {
+      const paged = qc.getQueryData<{ pages: GridPage[] }>(
+        gridQueryKeys.tablePaged(tableId),
+      );
+      const fromPaged = paged?.pages[0]?.columns.find((c) => c._id === columnId);
+      if (fromPaged) return fromPaged;
+      const unpaged = qc.getQueryData<GridCacheSnapshot>(
+        gridQueryKeys.table(tableId),
+      );
+      return unpaged?.columns.find((c) => c._id === columnId);
+    },
+    [qc],
+  );
+
+  /**
+   * Begin an optimistic mutation: cancel any in-flight refetch for this table (so
+   * a late response can't clobber the patch), SNAPSHOT both caches, then apply the
+   * event(s) immediately. Returns a `rollback` to restore the snapshot if the
+   * server write fails.
+   *
+   * Because the writer is itself a realtime subscriber, the server's broadcast
+   * echoes the SAME id-keyed event back ~1 RTT later; `applyGridEvent` is
+   * idempotent (de-dupes inserts by `_id`, keys cells by `rowId:columnId`), so a
+   * successful optimistic write and its echo CONVERGE rather than duplicate —
+   * which is exactly why inserts carry a CLIENT-supplied id (the optimistic id IS
+   * the persisted id).
+   */
+  const beginOptimistic = useCallback(
+    (
+      tableId: string,
+      events: ReadonlyArray<Parameters<typeof patchGridCache>[1]>,
+    ): (() => void) => {
+      void qc.cancelQueries({
+        predicate: (q) =>
+          q.queryKey[0] === "grid" &&
+          (q.queryKey[1] === "table" || q.queryKey[1] === "tablePaged") &&
+          q.queryKey[2] === tableId,
+      });
+      const prevTable = qc.getQueryData(gridQueryKeys.table(tableId));
+      const prevPaged = qc.getQueryData(gridQueryKeys.tablePaged(tableId));
+      for (const event of events) applyOptimistic(tableId, event);
+      return () => {
+        qc.setQueryData(gridQueryKeys.table(tableId), prevTable);
+        qc.setQueryData(gridQueryKeys.tablePaged(tableId), prevPaged);
+      };
+    },
+    [qc, applyOptimistic],
+  );
+
+  const setCell = useCallback(
+    async (
+      tableId: Id<"tables">,
+      rowId: Id<"rows">,
+      columnId: Id<"columns">,
+      value: unknown,
+    ) => {
+      // Optimistic: cells are keyed by (rowId, columnId), so the patch needs no
+      // new id and the realtime echo of the SAME cell converges. No refetch — a
+      // cell edit is the hottest path and the echo already reconciles (TRI-3274).
+      const rollback = beginOptimistic(tableId, [
+        { type: "cell.upsert", cell: { rowId, columnId, value, status: "done", error: null } },
+      ]);
+      try {
+        return await apiClient!.grid.setCell.mutate({
+          rowId,
+          columnId,
+          value,
+          status: "done",
+          error: null,
+        });
+      } catch (e) {
+        rollback();
+        throw e;
+      }
+    },
+    [beginOptimistic],
   );
   const addRow = useCallback(
     async (tableId: Id<"tables">) => {
-      const res = await apiClient!.grid.addRow.mutate({ tableId });
-      await refresh(tableId);
-      return res;
+      // Client-supplied id → the optimistic row IS the persisted row (the echo
+      // converges). The new row appears instantly when the final page is loaded;
+      // the trailing refetch reconciles server-derived fields (position) and the
+      // tail-page case.
+      const id = crypto.randomUUID();
+      const rollback = beginOptimistic(tableId, [
+        { type: "row.insert", row: { _id: id }, cells: [] },
+      ]);
+      try {
+        const res = await apiClient!.grid.addRow.mutate({ tableId, id });
+        await refresh(tableId);
+        return res;
+      } catch (e) {
+        rollback();
+        throw e;
+      }
     },
-    [refresh],
+    [beginOptimistic, refresh],
   );
   /**
    * Bulk insert rows + cells for CSV import. Each row is a `{ columnId: value }`
    * map; metered as one cloud action per row. Throws when the import would
-   * exceed the plan's quota.
+   * exceed the plan's quota. Client-supplied row ids make the import optimistic
+   * and echo-convergent.
    */
   const addRowsWithCells = useCallback(
     async (tableId: Id<"tables">, rows: Array<Record<string, unknown>>) => {
-      const res = await apiClient!.grid.addRowsWithCells.mutate({
-        tableId,
-        rows,
-      });
-      await refresh(tableId);
-      return res;
+      const rowIds = rows.map(() => crypto.randomUUID());
+      const events = rows.map((cellMap, i) => ({
+        type: "row.insert" as const,
+        row: { _id: rowIds[i]! },
+        // Mirror the server's filter (drop empty values) so the optimistic cells
+        // match what gets persisted.
+        cells: Object.entries(cellMap)
+          .filter(([, v]) => v !== "" && v !== null && v !== undefined)
+          .map(([columnId, value]) => ({
+            rowId: rowIds[i]!,
+            columnId,
+            value,
+            status: "done",
+            error: null,
+          })),
+      }));
+      const rollback = beginOptimistic(tableId, events);
+      try {
+        const res = await apiClient!.grid.addRowsWithCells.mutate({
+          tableId,
+          rows,
+          rowIds,
+        });
+        await refresh(tableId);
+        return res;
+      } catch (e) {
+        rollback();
+        throw e;
+      }
     },
-    [refresh],
+    [beginOptimistic, refresh],
   );
   /**
    * Add a column. `fn` ("provider.method") maps onto provider/method/kind the
@@ -1002,36 +1589,192 @@ export function useCloudGridMutations() {
       },
     ) => {
       const { provider, method, kind } = deriveColumnKind(body);
-      const res = await apiClient!.grid.addColumn.mutate({
-        tableId,
-        name: body.name,
-        type: (body.type ?? "text") as
-          | "text"
-          | "number"
-          | "boolean"
-          | "date"
-          | "json",
-        kind,
-        provider,
-        method,
-        code: body.code ?? null,
-        params: body.params ?? {},
-      });
-      await refresh(tableId);
-      return res;
+      const type = (body.type ?? "text") as
+        | "text"
+        | "number"
+        | "boolean"
+        | "date"
+        | "json";
+      const id = crypto.randomUUID();
+      const rollback = beginOptimistic(tableId, [
+        {
+          type: "column.insert",
+          column: {
+            _id: id,
+            name: body.name,
+            type,
+            kind,
+            provider,
+            method,
+            code: body.code ?? null,
+            params: body.params ?? {},
+            condition: null,
+          },
+        },
+      ]);
+      try {
+        const res = await apiClient!.grid.addColumn.mutate({
+          tableId,
+          name: body.name,
+          type,
+          kind,
+          provider,
+          method,
+          code: body.code ?? null,
+          params: body.params ?? {},
+          id,
+        });
+        // The optimistic patch (client id == persisted id) AND the realtime
+        // `column.insert` echo already show the column instantly. Reconcile in the
+        // BACKGROUND so the save resolves immediately instead of blocking on a
+        // full multi-page refetch (the bulk of the "add column takes 20–30s").
+        void refresh(tableId, { refetchType: "none" });
+        return res;
+      } catch (e) {
+        rollback();
+        throw e;
+      }
+    },
+    [beginOptimistic, refresh],
+  );
+  const deleteRow = useCallback(
+    async (tableId: Id<"tables">, rowId: Id<"rows">) => {
+      const rollback = beginOptimistic(tableId, [{ type: "row.delete", rowId }]);
+      try {
+        await apiClient!.grid.deleteRow.mutate({ rowId });
+      } catch (e) {
+        if (!isNotFoundError(e)) {
+          rollback(); // real failure → restore the row
+          throw e;
+        }
+        // already gone → optimistic delete is right; keep it
+      } finally {
+        await refresh(tableId);
+      }
+    },
+    [beginOptimistic, refresh],
+  );
+  const deleteColumn = useCallback(
+    async (tableId: Id<"tables">, columnId: Id<"columns">) => {
+      const rollback = beginOptimistic(tableId, [
+        { type: "column.delete", columnId },
+      ]);
+      try {
+        await apiClient!.grid.deleteColumn.mutate({ columnId });
+      } catch (e) {
+        if (!isNotFoundError(e)) {
+          rollback(); // real failure → restore the column
+          throw e;
+        }
+        // already gone → optimistic delete is right; keep it
+      } finally {
+        await refresh(tableId);
+      }
+    },
+    [beginOptimistic, refresh],
+  );
+  /**
+   * Patch a column's definition (rename / type / function config). Invalidates
+   * the table's grid queries so the edit reflects even when the realtime
+   * `column.update` broadcast is unconfigured or dropped.
+   */
+  const updateColumn = useCallback(
+    async (
+      tableId: Id<"tables">,
+      columnId: Id<"columns">,
+      patch: {
+        name?: string;
+        type?: "text" | "number" | "boolean" | "date" | "json";
+        kind?: "manual" | "function";
+        provider?: string | null;
+        method?: string | null;
+        code?: string | null;
+        params?: Record<string, unknown>;
+        condition?: string | null;
+      },
+    ) => {
+      // Optimistic: a `column.update` carries the FULL column, so merge the patch
+      // onto the current cached projection and patch instantly. Skip if the
+      // column isn't cached (the refetch still reflects the edit).
+      const current = currentColumn(tableId, columnId);
+      const rollback = current
+        ? beginOptimistic(tableId, [
+            {
+              type: "column.update",
+              column: {
+                _id: columnId,
+                name: patch.name ?? current.name,
+                type: patch.type ?? current.type,
+                kind: patch.kind ?? current.kind,
+                provider:
+                  patch.provider !== undefined ? patch.provider : current.provider,
+                method: patch.method !== undefined ? patch.method : current.method,
+                code: patch.code !== undefined ? patch.code : current.code,
+                params: patch.params !== undefined ? patch.params : current.params,
+                condition:
+                  patch.condition !== undefined
+                    ? patch.condition
+                    : current.condition,
+              },
+            },
+          ])
+        : null;
+      try {
+        return await apiClient!.grid.updateColumn.mutate({ columnId, ...patch });
+      } catch (e) {
+        rollback?.();
+        throw e;
+      } finally {
+        // Optimistic `column.update` + the realtime echo already reflect the edit;
+        // reconcile in the BACKGROUND so saving a mapped field returns instantly
+        // instead of blocking on a full multi-page refetch.
+        void refresh(tableId, { refetchType: "none" });
+      }
+    },
+    [beginOptimistic, currentColumn, refresh],
+  );
+
+  /** Set (or clear) the table's dedupe config; the server sweeps immediately. */
+  const setDedupe = useCallback(
+    async (
+      tableId: Id<"tables">,
+      body: { column: string | null; keep?: "oldest" | "newest" },
+    ) => {
+      try {
+        return await apiClient!.grid.setDedupe.mutate({
+          tableId,
+          column: body.column,
+          ...(body.keep ? { keep: body.keep } : {}),
+        });
+      } finally {
+        await refresh(tableId);
+      }
     },
     [refresh],
   );
-  const deleteRow = useCallback(async (rowId: Id<"rows">) => {
-    const res = await apiClient!.grid.deleteRow.mutate({ rowId });
-    return res;
-  }, []);
-  const deleteColumn = useCallback(async (columnId: Id<"columns">) => {
-    const res = await apiClient!.grid.deleteColumn.mutate({ columnId });
-    return res;
-  }, []);
+  /** Run a one-shot dedup sweep using the table's saved config. */
+  const dedupeTable = useCallback(
+    async (tableId: Id<"tables">) => {
+      try {
+        return await apiClient!.grid.dedupe.mutate({ tableId });
+      } finally {
+        await refresh(tableId);
+      }
+    },
+    [refresh],
+  );
 
-  return { setCell, addRow, addRowsWithCells, addColumn, deleteRow, deleteColumn };
+  return {
+    setCell,
+    addRow,
+    addRowsWithCells,
+    addColumn,
+    updateColumn,
+    deleteRow,
+    deleteColumn,
+    setDedupe,
+    dedupeTable,
+  };
 }
 
 /**
@@ -1394,6 +2137,17 @@ export function useWebhookMutations() {
     },
     [refresh],
   );
+  const setAuth = useCallback(
+    async (webhookId: Id<"webhooks">, enabled: boolean) => {
+      const res = await apiClient!.webhooks.setAuth.mutate({
+        webhookId,
+        enabled,
+      });
+      await refresh();
+      return res;
+    },
+    [refresh],
+  );
   const deleteWebhook = useCallback(
     async (webhookId: Id<"webhooks">) => {
       const res = await apiClient!.webhooks.deleteWebhook.mutate({
@@ -1411,6 +2165,7 @@ export function useWebhookMutations() {
     updateConfig,
     toggleEnabled,
     rotateSecret,
+    setAuth,
     deleteWebhook,
   };
 }

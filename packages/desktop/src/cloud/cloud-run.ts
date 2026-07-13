@@ -15,6 +15,7 @@
  */
 
 import { Context, Data, Effect, Layer } from "effect";
+import { API_BASE } from "../api";
 
 /** A request to run one column on a cloud project via the local sidecar. */
 export interface CloudRunInput {
@@ -109,10 +110,12 @@ export const CloudRunServiceLive: Layer.Layer<CloudRunService, never, CloudRunne
     }),
   );
 
-/** The sidecar base URL (matches packages/desktop/src/api.ts `API_BASE`). */
+/** The sidecar base URL (matches packages/desktop/src/api.ts `API_BASE`).
+ * 127.0.0.1, not "localhost": the sidecar binds IPv4 loopback only and Windows
+ * resolves "localhost" to ::1 first, which would read as unreachable. */
 const SIDECAR_BASE: string =
   (import.meta as unknown as { env?: { VITE_API?: string } }).env?.VITE_API ??
-  "http://localhost:8787";
+  "http://127.0.0.1:8787";
 
 /**
  * A {@link CloudRunner} that POSTs to the sidecar's `/api/cloud/columns/run`.
@@ -156,6 +159,62 @@ export const HttpCloudRunnerLive: Layer.Layer<CloudRunner> = Layer.succeed(
       }),
   },
 );
+
+/** One previewed row from the "Try on N rows" cloud dry-run. */
+export interface CloudPreviewRow {
+  readonly rowId: string;
+  readonly value?: unknown;
+  readonly error?: string;
+}
+
+/**
+ * "Try on N rows" preview for a CLOUD table: POST the (unsaved) function column
+ * to the sidecar's `/api/cloud/preview-function`, which dry-runs it against the
+ * first `limit` rows WITHOUT persisting or metering anything, and return the
+ * per-row results. Throws {@link CloudRunError} when there is no signed-in
+ * session/token (preview needs auth to reach the cloud table) or the sidecar
+ * rejects the call. Plain Promise (matches the `previewFunction` shape the
+ * column-authoring modals expect).
+ */
+export async function runCloudPreview(
+  session: CloudSession | null,
+  input: {
+    readonly tableId: string;
+    readonly provider: string;
+    readonly method: string;
+    readonly params: Record<string, unknown>;
+    readonly limit?: number;
+  },
+): Promise<{ results: CloudPreviewRow[] }> {
+  if (session === null || session.token.trim() === "") {
+    throw new CloudRunError({
+      message: "Sign in to a workspace to preview a cloud column.",
+    });
+  }
+  const res = await fetch(`${API_BASE}/api/cloud/preview-function`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      apiUrl: session.apiUrl,
+      token: session.token,
+      tableId: input.tableId,
+      provider: input.provider,
+      method: input.method,
+      params: input.params,
+      limit: input.limit,
+    }),
+  });
+  const json = (await res.json().catch(() => ({}))) as
+    | { results?: CloudPreviewRow[] }
+    | { error?: string };
+  if (!res.ok || "error" in json) {
+    throw new CloudRunError({
+      message:
+        ("error" in json && json.error) || res.statusText || "Cloud preview failed",
+    });
+  }
+  return { results: ("results" in json && json.results) || [] };
+}
 
 /** The full Live wiring: the orchestration over the HTTP transport. */
 export const CloudRunLive: Layer.Layer<CloudRunService> = CloudRunServiceLive.pipe(

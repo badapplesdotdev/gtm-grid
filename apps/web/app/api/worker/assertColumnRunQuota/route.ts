@@ -4,25 +4,19 @@
  * `{ tableId, columnId, rowIds?, force }`; the service computes how many cells
  * the run would actually meter (candidate rows minus already-`done` skips unless
  * force) and asserts the workspace has the headroom. Over-quota fails with
- * `CloudActionsLimitError`, which `runWorker` maps to a 402 — so the run is
+ * `CloudActionsLimitError`, which `runWorkerSecretOrMember` maps to a 402 — so the run is
  * rejected up-front instead of over-metering silently. Secret-gated bearer.
  */
 
 import { WebhookService } from "@gtmgrid/services";
 import { Effect } from "effect";
-import { runWorker } from "../_lib";
+import { runWorkerSecretOrMember } from "../_lib";
+import { AssertColumnRunQuotaSchema } from "../_schemas";
 
 export const runtime = "nodejs";
 
 export function POST(req: Request): Promise<Response> {
-  return runWorker(
-    req,
-    (body: {
-      tableId: string;
-      columnId: string;
-      rowIds?: string[];
-      force?: boolean;
-    }) =>
+  return runWorkerSecretOrMember(req, AssertColumnRunQuotaSchema, (body) =>
       Effect.gen(function* () {
         const svc = yield* WebhookService;
         return yield* svc.assertColumnRunQuota({

@@ -1,16 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ServerResponse } from "node:http";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   appendCapped,
   codexEnvToml,
+  codexSandboxFlags,
+  codexUserModelDefaults,
+  claudePermissionMode,
+  contextPreamble,
   manageChildLifecycle,
   mcpEnv,
   parseAgentCloud,
-  streamHermes,
+  parseClaudeInit,
+  permissionEventFromToolResult,
+  questionEventFromToolResult,
   STDERR_CAP,
   type AgentCloud,
-  type HermesChild,
-  type HermesTransport,
   type ManagedChild,
   type ProcessControl,
 } from "./agent.js";
@@ -34,9 +40,13 @@ describe("parseAgentCloud — validate the chat body's cloud block (TRI-3296)", 
     );
   });
 
-  it("returns undefined for a missing/blank field (no half-activation)", () => {
+  it("returns undefined for a missing/blank REQUIRED field (no half-activation)", () => {
     expect(parseAgentCloud({ ...CLOUD, token: "" })).toBeUndefined();
-    expect(parseAgentCloud({ ...CLOUD, tableId: undefined })).toBeUndefined();
+    expect(parseAgentCloud({ ...CLOUD, projectId: undefined })).toBeUndefined();
+  });
+
+  it("tableId is OPTIONAL — a cloud context resolves with no active table loaded", () => {
+    expect(parseAgentCloud({ ...CLOUD, tableId: undefined })).toEqual({ ...CLOUD, tableId: undefined });
   });
 
   it("returns undefined for non-object / absent input (local mode)", () => {
@@ -47,13 +57,17 @@ describe("parseAgentCloud — validate the chat body's cloud block (TRI-3296)", 
 });
 
 describe("mcpEnv — the env the spawned MCP receives (data-source selection)", () => {
-  it("LOCAL: only GTMGRID_PROJECT, byte-identical to before", () => {
-    expect(mcpEnv("my-project")).toEqual({ GTMGRID_PROJECT: "my-project" });
+  it("LOCAL: GTMGRID_PROJECT plus the sidecar port (for background-run delegation)", () => {
+    expect(mcpEnv("my-project")).toEqual({
+      GTMGRID_PROJECT: "my-project",
+      GTMGRID_PORT: "8787",
+    });
   });
 
   it("CLOUD: threads mode + apiUrl/token/workspace/project/table", () => {
     expect(mcpEnv("my-project", CLOUD)).toEqual({
       GTMGRID_PROJECT: "my-project",
+      GTMGRID_PORT: "8787",
       GTMGRID_MODE: "cloud",
       GTMGRID_API_URL: "https://app.test",
       GTMGRID_TOKEN: "secret-bearer",
@@ -62,11 +76,65 @@ describe("mcpEnv — the env the spawned MCP receives (data-source selection)", 
       GTMGRID_CLOUD_TABLE: "tbl_1",
     });
   });
+
+  it("adds GTMGRID_PERMISSION_MODE when a mode is given, omits approval vars when absent", () => {
+    const env = mcpEnv("p", undefined, "auto");
+    expect(env.GTMGRID_PERMISSION_MODE).toBe("auto");
+    expect(env.GTMGRID_APPROVED_TOOL).toBeUndefined();
+  });
+
+  it("threads a human approval into GTMGRID_APPROVED_* (the model-inaccessible unlock)", () => {
+    const env = mcpEnv("p", undefined, "acceptEdits", { tool: "delete_rows", argsHash: "abc123" });
+    expect(env).toMatchObject({
+      GTMGRID_PERMISSION_MODE: "acceptEdits",
+      GTMGRID_APPROVED_TOOL: "delete_rows",
+      GTMGRID_APPROVED_ARGS_HASH: "abc123",
+    });
+  });
+});
+
+describe("permissionEventFromToolResult — confirmationRequired → permission_request SSE", () => {
+  it("builds a permission_request event from a gate's approvalRequest payload", () => {
+    const raw = JSON.stringify({
+      confirmationRequired: true,
+      approvalRequest: { pendingId: "pr_x", tool: "delete_rows", argsHash: "h", mode: "auto", action: "Delete rows", willAffect: 4200, target: "Leads" },
+    });
+    expect(permissionEventFromToolResult(raw)).toEqual({
+      type: "permission_request",
+      pendingId: "pr_x",
+      tool: "delete_rows",
+      argsHash: "h",
+      mode: "auto",
+      action: "Delete rows",
+      willAffect: 4200,
+      target: "Leads",
+    });
+  });
+  it("returns null for an ordinary tool result or non-JSON", () => {
+    expect(permissionEventFromToolResult(JSON.stringify({ added: 5 }))).toBeNull();
+    expect(permissionEventFromToolResult("not json")).toBeNull();
+    expect(permissionEventFromToolResult(JSON.stringify({ confirmationRequired: true }))).toBeNull();
+  });
+});
+
+describe("questionEventFromToolResult — ask_user_question → ask_user SSE", () => {
+  it("builds an ask_user event from an askUserQuestion payload", () => {
+    const questions = [
+      { header: "AI model", question: "Which model?", options: [{ label: "Haiku" }, { label: "Sonnet" }] },
+    ];
+    const raw = JSON.stringify({ askUserQuestion: true, questions, message: "STOP." });
+    expect(questionEventFromToolResult(raw)).toEqual({ type: "ask_user", questions });
+  });
+  it("returns null for an ordinary tool result, non-JSON, or a malformed payload", () => {
+    expect(questionEventFromToolResult(JSON.stringify({ added: 5 }))).toBeNull();
+    expect(questionEventFromToolResult("not json")).toBeNull();
+    expect(questionEventFromToolResult(JSON.stringify({ askUserQuestion: true }))).toBeNull();
+  });
 });
 
 describe("codexEnvToml — safe inline-TOML rendering for the codex -c flag", () => {
   it("renders the local env as a quoted TOML table", () => {
-    expect(codexEnvToml(mcpEnv("p"))).toBe('{ GTMGRID_PROJECT = "p" }');
+    expect(codexEnvToml(mcpEnv("p"))).toBe('{ GTMGRID_PROJECT = "p", GTMGRID_PORT = "8787" }');
   });
 
   it("escapes double-quotes and backslashes in a value so a token cannot break out", () => {
@@ -78,6 +146,48 @@ describe("codexEnvToml — safe inline-TOML rendering for the codex -c flag", ()
     const toml = codexEnvToml(mcpEnv("p", CLOUD));
     expect(toml).toContain('GTMGRID_MODE = "cloud"');
     expect(toml).toContain('GTMGRID_CLOUD_TABLE = "tbl_1"');
+  });
+});
+
+// streamCodex passes --ignore-user-config (so Codex ignores the user's other MCP
+// servers, the cause of the rmcp AuthRequired crash) which also drops the user's
+// model defaults — these are read back from config.toml and re-injected.
+describe("codexUserModelDefaults — re-injecting the user's model after --ignore-user-config", () => {
+  const withConfig = (toml: string, fn: (home: string) => void) => {
+    const home = mkdtempSync(join(tmpdir(), "codex-cfg-"));
+    try {
+      writeFileSync(join(home, "config.toml"), toml);
+      fn(home);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  };
+
+  it("reads the top-level model and reasoning effort", () => {
+    withConfig('model = "gpt-5.5"\nmodel_reasoning_effort = "high"\n', (home) => {
+      expect(codexUserModelDefaults(home)).toEqual({ model: "gpt-5.5", reasoningEffort: "high" });
+    });
+  });
+
+  it("ignores `model` keys nested under a [table] (profiles / model_providers)", () => {
+    withConfig('model = "gpt-5.5"\n\n[profiles.fast]\nmodel = "gpt-5.1-codex"\n', (home) => {
+      expect(codexUserModelDefaults(home).model).toBe("gpt-5.5");
+    });
+  });
+
+  it("does not confuse model_reasoning_effort for model", () => {
+    withConfig('model_reasoning_effort = "high"\n', (home) => {
+      expect(codexUserModelDefaults(home)).toEqual({ model: undefined, reasoningEffort: "high" });
+    });
+  });
+
+  it("returns {} when no config.toml exists", () => {
+    const home = mkdtempSync(join(tmpdir(), "codex-empty-"));
+    try {
+      expect(codexUserModelDefaults(home)).toEqual({});
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 
@@ -253,119 +363,76 @@ describe("manageChildLifecycle — group-kill cleanup (TRI-3305)", () => {
   });
 });
 
-// ── streamHermes spawn/cleanup (TRI-3305 regression) ──────────────────────
-// The Hermes ACP bridge spawns a detached `hermes` child + its MCP server. On
-// cleanup it must group-kill the WHOLE tree (negative pid: SIGTERM→SIGKILL), not
-// `child.kill()` the parent alone — the leak that previously shipped untested.
-// We inject a fake spawn (so no process is launched), a fake ProcessControl with
-// hand-driven timers, and a fake transport (so no `hermes` binary is required).
+describe("manageChildLifecycle — idle vs ceiling turn timeouts", () => {
+  const OPTS = { graceMs: 3000, idleMs: 60_000, maxRunMs: 600_000 } as const;
 
-/** A fake HermesChild whose close/error listeners + stdout/stderr we drive. */
-function fakeHermesChild(pid: number | undefined = 7373): HermesChild & {
-  close: () => void;
-  error: (err: Error) => void;
-} {
-  // Real ChildProcess is an EventEmitter — BOTH manageChildLifecycle (dispose)
-  // and streamHermes (failAllPending) subscribe to "close", so we keep arrays.
-  const closeListeners: Array<() => void> = [];
-  const errorListeners: Array<(err: Error) => void> = [];
-  const noop = { on() {} } as { on(event: "data", listener: (chunk: Buffer | string) => void): unknown };
-  const child: HermesChild & { close: () => void; error: (err: Error) => void } = {
-    pid,
-    stdin: { write: () => true },
-    stdout: noop,
-    stderr: noop,
-    on(event: "close" | "error", listener: (...a: any[]) => void) {
-      if (event === "close") closeListeners.push(listener as () => void);
-      else if (event === "error") errorListeners.push(listener as (err: Error) => void);
-      return this;
-    },
-    close() {
-      for (const l of closeListeners) l();
-    },
-    error(err: Error) {
-      for (const l of errorListeners) l(err);
-    },
-  };
-  return child;
-}
-
-/** A fake ServerResponse: records SSE writes + lets the test fire `res.close`. */
-function fakeRes(): ServerResponse & { closeRes: () => void } {
-  let onClose: (() => void) | null = null;
-  const res = {
-    writeHead() {
-      return res;
-    },
-    write() {
-      return true;
-    },
-    end() {
-      return res;
-    },
-    on(event: string, listener: () => void) {
-      if (event === "close") onClose = listener;
-      return res;
-    },
-    closeRes() {
-      onClose?.();
-    },
-  };
-  return res as unknown as ServerResponse & { closeRes: () => void };
-}
-
-const FAKE_TRANSPORT: HermesTransport = {
-  argv: ["/fake/hermes", "acp"],
-  gtmgridMcp: { name: "gtmgrid", command: "/fake/launcher", args: [], env: [{ name: "GTMGRID_PROJECT", value: "p" }] },
-  label: "local",
-};
-
-function runStreamHermes(child: HermesChild, control: ProcessControl, res: ServerResponse) {
-  streamHermes(
-    res,
-    { message: "hi", project: "p", repoRoot: "/repo" },
-    { spawn: () => child, control, resolveTransport: () => FAKE_TRANSPORT },
-  );
-}
-
-describe("streamHermes — group-kill cleanup (TRI-3305 regression)", () => {
-  it("group-kills the WHOLE tree (negative pid SIGTERM→SIGKILL) on res close, not child.kill()", () => {
-    const child = fakeHermesChild(7373);
+  it("idle timeout terminates the group and reports reason 'idle' when the child goes quiet", () => {
+    const child = fakeChild(4242);
     const control = fakeControl();
-    const res = fakeRes();
-    runStreamHermes(child, control, res);
+    const onTimeout = vi.fn();
+    manageChildLifecycle(child, { onTimeout, control, ...OPTS });
 
-    res.closeRes(); // panel unmount / Stop / new send
-    expect(control.kills).toEqual([{ pid: -7373, signal: "SIGTERM" }]);
+    control.runTimer(60_000); // idle window elapses with no output
 
-    control.runTimer(3000); // child ignores SIGTERM through the grace
-    expect(control.kills).toEqual([
-      { pid: -7373, signal: "SIGTERM" },
-      { pid: -7373, signal: "SIGKILL" },
-    ]);
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+    expect(onTimeout).toHaveBeenCalledWith("idle");
+    expect(control.kills).toEqual([{ pid: -4242, signal: "SIGTERM" }]);
   });
 
-  it("sends NO kill once the hermes child has already exited (avoids killing a recycled pid)", () => {
-    const child = fakeHermesChild(7373);
+  it("touch() keeps exactly one idle timer armed (no leak) and doesn't fire while streaming", () => {
+    const child = fakeChild(4242);
     const control = fakeControl();
-    const res = fakeRes();
-    runStreamHermes(child, control, res);
+    const onTimeout = vi.fn();
+    const { touch } = manageChildLifecycle(child, { onTimeout, control, ...OPTS });
 
-    child.close(); // hermes exits on its own
-    res.closeRes(); // late cleanup must be a no-op
-    control.runTimer(3000);
+    touch();
+    touch();
+    touch();
 
-    expect(control.kills).toEqual([]);
+    // One idle (60s) timer, not three — touch must clear before re-arming.
+    expect(control.pending().filter((ms) => ms === 60_000)).toHaveLength(1);
+    expect(onTimeout).not.toHaveBeenCalled();
   });
 
-  it("max-run timeout group-kills the tree exactly once", () => {
-    const child = fakeHermesChild(7373);
+  it("ceiling timeout still fires while the child keeps streaming (touch resets idle only)", () => {
+    const child = fakeChild(4242);
     const control = fakeControl();
-    const res = fakeRes();
-    runStreamHermes(child, control, res);
+    const onTimeout = vi.fn();
+    const { touch } = manageChildLifecycle(child, { onTimeout, control, ...OPTS });
 
-    control.runTimer(5 * 60_000); // MAX_RUN_MS elapses
-    expect(control.kills).toEqual([{ pid: -7373, signal: "SIGTERM" }]);
+    touch(); // resets idle but never the ceiling
+    control.runTimer(600_000); // absolute ceiling elapses
+
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+    expect(onTimeout).toHaveBeenCalledWith("ceiling");
+    expect(control.kills).toEqual([{ pid: -4242, signal: "SIGTERM" }]);
+  });
+
+  it("the first turn timeout cancels its sibling so onTimeout fires exactly once", () => {
+    const child = fakeChild(4242);
+    const control = fakeControl();
+    const onTimeout = vi.fn();
+    manageChildLifecycle(child, { onTimeout, control, ...OPTS });
+
+    control.runTimer(60_000); // idle fires first
+    control.runTimer(600_000); // ceiling was cancelled — must be a no-op
+
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+    expect(onTimeout).toHaveBeenCalledWith("idle");
+  });
+
+  it("touch() after the child closes does not re-arm the idle timer", () => {
+    const child = fakeChild(4242);
+    const control = fakeControl();
+    const onTimeout = vi.fn();
+    const { touch } = manageChildLifecycle(child, { onTimeout, control, ...OPTS });
+
+    child.close(); // dispose clears both turn timers
+    touch(); // must be a no-op now that the child has exited
+
+    expect(control.pending().filter((ms) => ms === 60_000)).toHaveLength(0);
+    control.runTimer(60_000);
+    expect(onTimeout).not.toHaveBeenCalled();
   });
 });
 
@@ -383,5 +450,118 @@ describe("appendCapped — bound the stderr buffer (TRI-3305)", () => {
     let buf = "";
     for (let i = 0; i < 1000; i++) buf = appendCapped(buf, "x".repeat(1024));
     expect(buf.length).toBe(STDERR_CAP);
+  });
+});
+
+describe("contextPreamble — bakes in the /goal slash-command protocol", () => {
+  it("teaches /goal in the base manual (always injected, no context needed)", () => {
+    const p = contextPreamble();
+    expect(p).toContain("## Slash commands");
+    expect(p).toContain("/goal");
+    // The protocol's spine — plan then execute autonomously.
+    expect(p).toMatch(/objective/i);
+    expect(p).toMatch(/Execute autonomously/i);
+  });
+
+  it("keeps the /goal protocol when an active table is present", () => {
+    const p = contextPreamble({ tableName: "Leads", columns: ["Email"] });
+    expect(p).toContain("/goal");
+    expect(p).toContain('viewing **"Leads"**');
+  });
+
+  it("does NOT teach /help or /start in the preamble (handled client-side; they collide with CLI built-ins)", () => {
+    const p = contextPreamble();
+    expect(p).not.toContain("/help");
+    expect(p).not.toContain("/start");
+  });
+});
+
+describe("parseClaudeInit — read MCP connection status from Claude's init event (Windows debug signal)", () => {
+  it("reports gtmgrid connected + counts only its tools", () => {
+    const e = {
+      type: "system",
+      subtype: "init",
+      mcp_servers: [{ name: "gtmgrid", status: "connected" }],
+      tools: ["Bash", "mcp__gtmgrid__get_table", "mcp__gtmgrid__add_rows", "Read"],
+    };
+    expect(parseClaudeInit(e)).toEqual({
+      mcpConnected: true,
+      gtmgridTools: 2,
+      mcpServersRaw: '[{"name":"gtmgrid","status":"connected"}]',
+    });
+  });
+
+  it("reports NOT connected + captures the raw status when gtmgrid failed (the Windows failure)", () => {
+    const e = {
+      type: "system",
+      subtype: "init",
+      mcp_servers: [{ name: "gtmgrid", status: "failed" }],
+      tools: ["Bash", "Read"],
+    };
+    // mcpServersRaw is the "why" payload — it preserves whatever Claude reported.
+    expect(parseClaudeInit(e)).toEqual({
+      mcpConnected: false,
+      gtmgridTools: 0,
+      mcpServersRaw: '[{"name":"gtmgrid","status":"failed"}]',
+    });
+  });
+
+  it("reports NOT connected when gtmgrid is absent from mcp_servers", () => {
+    expect(parseClaudeInit({ type: "system", subtype: "init", mcp_servers: [], tools: [] })).toEqual({
+      mcpConnected: false,
+      gtmgridTools: 0,
+      mcpServersRaw: "[]",
+    });
+  });
+
+  it("returns null for any non-init event (so the turn loop ignores it)", () => {
+    expect(parseClaudeInit({ type: "assistant" })).toBeNull();
+    expect(parseClaudeInit({ type: "system", subtype: "other" })).toBeNull();
+    expect(parseClaudeInit(null)).toBeNull();
+    expect(parseClaudeInit("not an object")).toBeNull();
+  });
+
+  it("is defensive about missing/malformed fields", () => {
+    expect(parseClaudeInit({ type: "system", subtype: "init" })).toEqual({
+      mcpConnected: false,
+      gtmgridTools: 0,
+      mcpServersRaw: "[]",
+    });
+  });
+});
+
+describe("codexSandboxFlags — codex exec uses the resume-compatible bypass for every mode", () => {
+  it("returns the full-bypass flag regardless of mode (works on exec AND exec resume)", () => {
+    for (const m of ["plan", "auto", "acceptEdits", "bypassPermissions", undefined, "weird"]) {
+      expect(codexSandboxFlags(m as string | undefined)).toEqual(["--dangerously-bypass-approvals-and-sandbox"]);
+    }
+  });
+});
+
+describe("claudePermissionMode — composer mode → claude --permission-mode", () => {
+  it("plan maps to bypassPermissions (research tools must not be denied)", () => {
+    expect(claudePermissionMode("plan")).toBe("bypassPermissions");
+  });
+  it("auto maps to the valid CLI 'default' (NOT the invalid 'auto' flag)", () => {
+    expect(claudePermissionMode("auto")).toBe("default");
+  });
+  it("acceptEdits/bypassPermissions pass through; absent → bypass", () => {
+    expect(claudePermissionMode("acceptEdits")).toBe("acceptEdits");
+    expect(claudePermissionMode("bypassPermissions")).toBe("bypassPermissions");
+    expect(claudePermissionMode(undefined)).toBe("bypassPermissions");
+  });
+});
+
+describe("contextPreamble — PLAN MODE note", () => {
+  it("injects the plan-only protocol only when mode is 'plan'", () => {
+    expect(contextPreamble(undefined, "plan")).toContain("PLAN MODE (active)");
+    expect(contextPreamble(undefined, "plan")).toMatch(/do NOT.*ExitPlanMode/i);
+    expect(contextPreamble(undefined, "bypassPermissions")).not.toContain("PLAN MODE (active)");
+    expect(contextPreamble(undefined)).not.toContain("PLAN MODE (active)");
+  });
+  it("keeps the plan note alongside an active table", () => {
+    const p = contextPreamble({ tableName: "Leads", columns: ["Email"] }, "plan");
+    expect(p).toContain("PLAN MODE (active)");
+    expect(p).toContain('viewing **"Leads"**');
   });
 });

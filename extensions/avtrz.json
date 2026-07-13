@@ -6,7 +6,15 @@
   "description": "Profile-photo enrichment — resolve a person's real LinkedIn avatar image from their profile URL or handle.",
   "baseUrl": "https://www.avtrz.dev/v1",
   "logo": "https://www.google.com/s2/favicons?domain=avtrz.dev&sz=128",
-  "auth": { "type": "apiKey", "header": "x-api-key", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "x-api-key",
+    "secretKey": "apiKey"
+  },
+  "rateLimit": {
+    "rpm": 120,
+    "concurrency": 3
+  },
   "methods": [
     {
       "id": "getAvatar",
@@ -15,14 +23,27 @@
       "verb": "GET",
       "path": "/avatar",
       "credits": 1,
+      "rateLimit": {
+        "rps": 2
+      },
       "input": {
         "type": "object",
         "properties": {
-          "linkedin_url": { "type": "string", "description": "Full LinkedIn profile URL" },
-          "username": { "type": "string", "description": "LinkedIn handle (the part after /in/)" },
-          "size": { "type": "integer", "description": "32 | 64 | 128 | 256 | 512 (default 128)" }
+          "linkedin_url": {
+            "type": "string",
+            "description": "Full LinkedIn profile URL"
+          },
+          "username": {
+            "type": "string",
+            "description": "LinkedIn handle (the part after /in/)"
+          },
+          "size": {
+            "type": "integer",
+            "description": "32 | 64 | 128 | 256 | 512 (default 128)"
+          }
         }
-      }
+      },
+      "category": "Enrich people"
     }
   ]
 }

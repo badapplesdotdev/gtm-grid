@@ -29,6 +29,7 @@
 
 import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   bigint,
   boolean,
   doublePrecision,
@@ -116,6 +117,19 @@ export const users = pgTable("users", {
   emailVerified: boolean("email_verified").notNull().default(false),
   /** Avatar URL (from OAuth providers or upload). */
   image: text("image"),
+  /**
+   * Last time this user was ACTIVE in a client (desktop heartbeat / realtime
+   * connect), as opposed to merely holding a session. Drives the lifecycle
+   * email crons ("app currently open" = within ~5 min; dormant = >7 days).
+   * Null = never heartbeated (pre-feature accounts).
+   */
+  lastActiveAt: timestamp("last_active_at", { withTimezone: true, mode: "date" }),
+  /**
+   * Lifecycle-email category opt-outs, e.g. `{"digest": false}`. Absent key or
+   * null column = subscribed. Categories: activation | status | digest.
+   * Transactional mail (receipts, dunning, teammate-joined) ignores this.
+   */
+  emailPrefs: jsonb("email_prefs").$type<Record<string, boolean>>(),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull(),
 });
@@ -352,6 +366,41 @@ export const projects = pgTable(
   (t) => [index("projects_by_workspace").on(t.workspaceId)],
 );
 
+/**
+ * A sidebar folder grouping a project's tables. Folders NEST: a folder may sit
+ * inside another folder via the self-referencing `parent_id`. Deleting a folder
+ * unfiles its tables back to the root (`tables.folder_id` ON DELETE SET NULL)
+ * and promotes its child folders to the root (`folders.parent_id` ON DELETE SET
+ * NULL) — neither tables nor sub-folders are ever cascade-deleted.
+ */
+export const folders = pgTable(
+  "folders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    position: doublePrecision("position").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    // The folder this folder is nested under (null = top level). SET NULL on
+    // parent delete so removing a folder promotes its children to the root
+    // rather than cascade-deleting the subtree. The `(): AnyPgColumn`
+    // annotation breaks the self-referential type cycle.
+    parentId: uuid("parent_id").references((): AnyPgColumn => folders.id, {
+      onDelete: "set null",
+    }),
+  },
+  (t) => [
+    index("folders_by_project").on(t.projectId),
+    index("folders_by_workspace").on(t.workspaceId),
+    index("folders_by_parent").on(t.parentId),
+  ],
+);
+
 /** A grid/table within a project (convex/schema.ts:206). */
 export const tables = pgTable(
   "tables",
@@ -366,6 +415,24 @@ export const tables = pgTable(
     name: text("name").notNull(),
     position: doublePrecision("position").notNull(),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    // Whether this table is pinned to the sidebar's favourites. WORKSPACE-SHARED
+    // (the cloud counterpart of the local engine's favourites): any member's pin
+    // is visible to every teammate, so it lives on the table row, not a per-user
+    // join.
+    favorite: boolean("favorite").notNull().default(false),
+    // The sidebar folder this table is filed under (null = root). SET NULL on
+    // folder delete so removing a folder unfiles its tables, never deletes them.
+    folderId: uuid("folder_id").references(() => folders.id, {
+      onDelete: "set null",
+    }),
+    // Optional row-deduplication config (mirrors the local engine): the column
+    // whose value rows are deduped on, and which duplicate to keep. Null = off.
+    // The `(): AnyPgColumn` annotation breaks the tables↔columns circular type
+    // reference (columns.table_id → tables, tables.dedupe_column → columns).
+    dedupeColumn: uuid("dedupe_column").references((): AnyPgColumn => columns.id, {
+      onDelete: "set null",
+    }),
+    dedupeKeep: text("dedupe_keep"),
   },
   (t) => [
     index("tables_by_project").on(t.projectId),
@@ -397,6 +464,13 @@ export const columns = pgTable(
     params: jsonb("params"),
     /** Optional "only run if" boolean expression; null/empty means always run. */
     condition: text("condition"),
+    /**
+     * Column-level behaviour flags (jsonb, nullable). Today only CRM sync uses
+     * it: `{ synced: true, crmBindingId, attrSlug, attrType }` marks a column
+     * whose cells are owned by a CRM pull — read-only in the grid, written only
+     * by the sync worker. User manual/function columns leave this null.
+     */
+    config: jsonb("config"),
     position: doublePrecision("position").notNull(),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
   },
@@ -423,6 +497,18 @@ export const rows = pgTable(
   (t) => [
     index("rows_by_table").on(t.tableId),
     index("rows_by_workspace").on(t.workspaceId),
+    // The grid loads rows in (position, createdAt, id) order — both the full
+    // `listByTable` and the keyset `listKeysetByTable` (row-repo.ts) ORDER BY
+    // exactly this tuple. `rows_by_table` alone finds the table's rows but
+    // can't supply the ordering, so Postgres sorts all matching rows in memory
+    // every load (and deep keyset pages degrade). This composite turns both
+    // into an index-ordered scan with no sort step.
+    index("rows_by_table_position").on(
+      t.tableId,
+      t.position,
+      t.createdAt,
+      t.id,
+    ),
   ],
 );
 
@@ -600,15 +686,139 @@ export const signalSeenKeys = pgTable(
 );
 
 /**
- * A shareable, FROZEN snapshot of a cloud table — the "share a table via URL"
- * feature. `token` is the public capability in the `/share/<token>` URL; the
- * `snapshot` jsonb is a secret-free table snapshot (see
- * packages/services/src/share-snapshot.ts) captured at create time, so later
- * edits to the source table never change what a recipient sees. `tableId` is
- * `set null` (NOT cascade) so deleting the source table leaves the frozen
- * snapshot intact. Anyone with the token can read it until it is disabled
- * (`enabled=false`) or `expiresAt` passes; the unique `token` index backs the
- * by-token public lookup.
+ * A cloud table fed by a scheduled CRM pull (TRI: crm-sync). The daily Inngest
+ * cron (and manual "Sync now") pages records out of the provider (v1: Attio),
+ * maps attributes through `columns`, and inserts/updates rows — the CRM
+ * analogue of `signalBindings`. Pull-only: GTM Grid never writes back.
+ */
+export const crmBindings = pgTable(
+  "crm_bindings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    tableId: uuid("table_id")
+      .notNull()
+      .references(() => tables.id, { onDelete: "cascade" }),
+    /** CRM provider id, e.g. "attio" (matches the credentials extensionId). */
+    provider: text("provider").notNull(),
+    /** "object" | "list" — which Attio API surface the source lives on. */
+    sourceKind: text("source_kind").notNull(),
+    /** Attio object slug (e.g. "people") or list id. */
+    sourceId: text("source_id").notNull(),
+    /** Human label of the source at bind time, e.g. "People", "MQLs — Q3". */
+    sourceLabel: text("source_label").notNull(),
+    /** Synced attribute → column mapping: [{ attrSlug, attrType, columnId }] (jsonb). */
+    columns: jsonb("columns").notNull(),
+    /** { filters, dedupeMode: "update"|"skip"|"create", matchKeyAttr } (jsonb). */
+    config: jsonb("config").notNull(),
+    /** "daily" | "manual". */
+    schedule: text("schedule").notNull(),
+    enabled: boolean("enabled").notNull(),
+    /**
+     * Set when syncing is halted for a reason the USER must resolve
+     * ("auth_revoked" | "source_gone"); null while healthy. A paused binding is
+     * skipped by the cron and surfaces a reconnect/repair banner in the app.
+     */
+    pausedReason: text("paused_reason"),
+    lastSyncedAt: bigint("last_synced_at", { mode: "number" }),
+    /** Human-readable copy of the last failure (already user-safe), or null. */
+    lastError: text("last_error"),
+    rowsSynced: integer("rows_synced"),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  },
+  (t) => [
+    index("crm_bindings_by_workspace").on(t.workspaceId),
+    index("crm_bindings_by_table").on(t.tableId),
+  ],
+);
+
+/**
+ * CRM record → grid row identity map, one row per external record a binding
+ * has ever ingested. Richer than `signalSeenKeys` because CRM sync needs more
+ * than "have I seen this?": update-mode upserts must find WHICH row holds a
+ * record, and stale marking must find rows whose record vanished upstream
+ * (`lastSeenRunId` older than the completed run). Rows are never deleted by
+ * sync — a stale row keeps its user enrichment.
+ */
+export const crmSyncedRows = pgTable(
+  "crm_synced_rows",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    bindingId: uuid("binding_id")
+      .notNull()
+      .references(() => crmBindings.id, { onDelete: "cascade" }),
+    rowId: uuid("row_id")
+      .notNull()
+      .references(() => rows.id, { onDelete: "cascade" }),
+    /** The provider's record id (Attio record_id / list entry parent record). */
+    externalId: text("external_id").notNull(),
+    /** Flattened match-key value at last sync (e.g. the email), for upsert lookups. */
+    matchKey: text("match_key"),
+    /**
+     * Hash of the record's flattened synced values at last write. Update-mode
+     * re-syncs skip the cell writes when this is unchanged, so a daily sync of
+     * a mostly-static CRM costs reads, not tens of thousands of cell upserts.
+     */
+    valuesHash: text("values_hash"),
+    /** syncRunId of the last run that saw this record upstream. */
+    lastSeenRunId: uuid("last_seen_run_id"),
+    /** True once a completed run no longer found the record upstream. */
+    stale: boolean("stale").notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("crm_synced_rows_by_binding_external").on(t.bindingId, t.externalId),
+    index("crm_synced_rows_by_binding_match").on(t.bindingId, t.matchKey),
+    index("crm_synced_rows_by_row").on(t.rowId),
+  ],
+);
+
+/**
+ * Per-run CRM sync history (the user-visible "Sync log" panel; TRI: crm-sync).
+ * One row per sync attempt — cron, manual, or post-create warm-up. `error`
+ * holds ONLY pre-translated human copy (crm/error-copy.ts), never raw
+ * statuses/tags: this table renders directly in the desktop app.
+ */
+export const crmSyncRuns = pgTable(
+  "crm_sync_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    bindingId: uuid("binding_id")
+      .notNull()
+      .references(() => crmBindings.id, { onDelete: "cascade" }),
+    tableId: uuid("table_id")
+      .notNull()
+      .references(() => tables.id, { onDelete: "cascade" }),
+    /** "running" while in flight; finalized to "ok" | "partial" | "warn" | "failed". */
+    status: text("status").notNull(),
+    /** "cron" | "manual" | "warmup". */
+    trigger: text("trigger").notNull(),
+    rowsCreated: integer("rows_created").notNull(),
+    rowsUpdated: integer("rows_updated").notNull(),
+    rowsSkipped: integer("rows_skipped").notNull(),
+    rowsStaled: integer("rows_staled").notNull(),
+    /** Labels of mapped attributes missing upstream this run (jsonb string[]), or null. */
+    fieldsDropped: jsonb("fields_dropped"),
+    /** Human-readable failure copy (user-safe), or null on ok. */
+    error: text("error"),
+    startedAt: bigint("started_at", { mode: "number" }).notNull(),
+    finishedAt: bigint("finished_at", { mode: "number" }),
+  },
+  (t) => [
+    index("crm_sync_runs_by_binding").on(t.bindingId),
+    index("crm_sync_runs_by_workspace").on(t.workspaceId),
+  ],
+);
+
+/**
+ * A shareable, frozen snapshot of a cloud table. The token is the public
+ * capability in `/share/<token>`; deleting the source table does not delete the
+ * snapshot.
  */
 export const tableShares = pgTable(
   "table_shares",
@@ -617,28 +827,19 @@ export const tableShares = pgTable(
     workspaceId: uuid("workspace_id")
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
-    /** Source table; null once that table is deleted (snapshot survives). */
     tableId: uuid("table_id").references(() => tables.id, {
       onDelete: "set null",
     }),
-    /** High-entropy public token (the URL segment). */
     token: text("token").notNull(),
-    /** Optional human label for the share. */
     name: text("name"),
-    /** Frozen secret-free table snapshot. v.any() -> jsonb. */
     snapshot: jsonb("snapshot").notNull(),
-    /** Snapshot format version (SHARE_SNAPSHOT_VERSION at create time). */
     snapshotVersion: integer("snapshot_version").notNull(),
-    /** Revocation flag — false hides the share without deleting the row. */
     enabled: boolean("enabled").notNull(),
-    /** Optional epoch-ms expiry; null never expires. */
     expiresAt: bigint("expires_at", { mode: "number" }),
-    /** Better Auth user id of the creator; null once that user is deleted. */
     createdBy: text("created_by").references(() => users.id, {
       onDelete: "set null",
     }),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
-    /** Epoch ms the share was revoked, or null while still live. */
     revokedAt: bigint("revoked_at", { mode: "number" }),
   },
   (t) => [
@@ -676,6 +877,38 @@ export const webhookDeliveries = pgTable(
   (t) => [
     index("webhook_deliveries_by_webhook").on(t.webhookId),
     index("webhook_deliveries_by_workspace").on(t.workspaceId),
+  ],
+);
+
+/**
+ * Idempotency log for LIFECYCLE emails (#8–#20, TRI: lifecycle-emails). One row
+ * per delivered send; the unique (user, template, dedupe_key) triple is what
+ * makes every trigger safe to re-run — crons pass a window key ("2026-W27"),
+ * one-shots pass a stable key ("once", or the run/invoice id). Rows are tiny
+ * and kept forever (they double as a send-history audit).
+ */
+export const lifecycleEmailSends = pgTable(
+  "lifecycle_email_sends",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** Workspace context of the send (nullable: some emails are user-scoped). */
+    workspaceId: uuid("workspace_id").references(() => workspaces.id, {
+      onDelete: "set null",
+    }),
+    /** Template slug, e.g. "run-finished", "weekly-digest". */
+    template: text("template").notNull(),
+    /** Idempotency scope within (user, template) — window or entity key. */
+    dedupeKey: text("dedupe_key").notNull(),
+    sentAt: timestamp("sent_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("lifecycle_sends_once").on(t.userId, t.template, t.dedupeKey),
+    index("lifecycle_sends_by_user").on(t.userId),
   ],
 );
 

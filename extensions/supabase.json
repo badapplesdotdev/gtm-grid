@@ -6,7 +6,15 @@
   "description": "Query and manage your Supabase Postgres projects via the Management API.",
   "logo": "https://www.google.com/s2/favicons?domain=supabase.com&sz=128",
   "baseUrl": "https://api.supabase.com",
-  "auth": { "type": "apiKey", "header": "Authorization", "secretKey": "apiKey" },
+  "auth": {
+    "type": "apiKey",
+    "header": "Authorization",
+    "secretKey": "apiKey"
+  },
+  "rateLimit": {
+    "rpm": 120,
+    "concurrency": 3
+  },
   "methods": [
     {
       "id": "runQuery",
@@ -17,12 +25,36 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["ref", "query"],
+        "required": [
+          "ref",
+          "query"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref (the 20-char id in the dashboard URL / from listProjects)" },
-          "query": { "type": "string", "description": "The SQL to run, e.g. \"SELECT * FROM users WHERE email = 'a@b.com' LIMIT 50\". Single string." },
-          "read_only": { "type": "boolean", "description": "Run in a read-only transaction so writes are rejected (safer for SELECTs)" },
-          "parameters": { "type": "array", "items": {}, "description": "Optional positional bind parameters for the query" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref (the 20-char id in the dashboard URL / from listProjects)"
+          },
+          "query": {
+            "type": "string",
+            "description": "The SQL to run, e.g. \"SELECT * FROM users WHERE email = 'a@b.com' LIMIT 50\". Single string."
+          },
+          "read_only": {
+            "type": "boolean",
+            "description": "Run in a read-only transaction so writes are rejected (safer for SELECTs)"
+          },
+          "parameters": {
+            "type": "array",
+            "items": {},
+            "description": "Optional positional bind parameters for the query"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -35,11 +67,32 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ref", "query"],
+        "required": [
+          "ref",
+          "query"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" },
-          "query": { "type": "string", "description": "Read-only SQL, e.g. a SELECT or an information_schema lookup" },
-          "parameters": { "type": "array", "items": {}, "description": "Optional positional bind parameters" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          },
+          "query": {
+            "type": "string",
+            "description": "Read-only SQL, e.g. a SELECT or an information_schema lookup"
+          },
+          "parameters": {
+            "type": "array",
+            "items": {},
+            "description": "Optional positional bind parameters"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -52,9 +105,26 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          }
+        }
+      },
+      "rateLimit": {
+        "rpm": 10,
+        "rps": 1
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -67,9 +137,22 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -82,12 +165,35 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["ref", "query"],
+        "required": [
+          "ref",
+          "query"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" },
-          "query": { "type": "string", "description": "The migration SQL to apply" },
-          "name": { "type": "string", "description": "Human-readable migration name" },
-          "rollback": { "type": "string", "description": "Optional rollback SQL" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          },
+          "query": {
+            "type": "string",
+            "description": "The migration SQL to apply"
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable migration name"
+          },
+          "rollback": {
+            "type": "string",
+            "description": "Optional rollback SQL"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -100,12 +206,35 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["ref", "query"],
+        "required": [
+          "ref",
+          "query"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" },
-          "query": { "type": "string", "description": "The migration SQL" },
-          "name": { "type": "string", "description": "Migration name" },
-          "rollback": { "type": "string", "description": "Optional rollback SQL" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          },
+          "query": {
+            "type": "string",
+            "description": "The migration SQL"
+          },
+          "name": {
+            "type": "string",
+            "description": "Migration name"
+          },
+          "rollback": {
+            "type": "string",
+            "description": "Optional rollback SQL"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -118,9 +247,22 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -133,10 +275,26 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" },
-          "included_schemas": { "type": "string", "description": "Comma-separated schemas to include, e.g. 'public,auth' (default 'public')" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          },
+          "included_schemas": {
+            "type": "string",
+            "description": "Comma-separated schemas to include, e.g. 'public,auth' (default 'public')"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -149,9 +307,22 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -164,9 +335,22 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -179,13 +363,25 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
-
     {
       "id": "listProjects",
       "label": "List Projects",
@@ -193,7 +389,10 @@
       "verb": "GET",
       "path": "/v1/projects",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     },
     {
       "id": "getProject",
@@ -204,9 +403,22 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -219,15 +431,47 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["name", "organization_slug", "db_pass"],
+        "required": [
+          "name",
+          "organization_slug",
+          "db_pass"
+        ],
         "properties": {
-          "name": { "type": "string", "description": "Project name" },
-          "organization_slug": { "type": "string", "description": "Slug of the org to create it in (see listOrganizations)" },
-          "db_pass": { "type": "string", "description": "Password for the project's Postgres database" },
-          "region": { "type": "string", "description": "Region, e.g. 'us-east-1' (see availableRegions)" },
-          "plan": { "type": "string", "description": "Billing plan, e.g. 'free' | 'pro'" },
-          "desired_instance_size": { "type": "string", "description": "Compute size, e.g. 'micro','small','medium'" },
-          "template_url": { "type": "string", "description": "Optional template repo URL to seed the project" }
+          "name": {
+            "type": "string",
+            "description": "Project name"
+          },
+          "organization_slug": {
+            "type": "string",
+            "description": "Slug of the org to create it in (see listOrganizations)"
+          },
+          "db_pass": {
+            "type": "string",
+            "description": "Password for the project's Postgres database"
+          },
+          "region": {
+            "type": "string",
+            "description": "Region, e.g. 'us-east-1' (see availableRegions)"
+          },
+          "plan": {
+            "type": "string",
+            "description": "Billing plan, e.g. 'free' | 'pro'"
+          },
+          "desired_instance_size": {
+            "type": "string",
+            "description": "Compute size, e.g. 'micro','small','medium'"
+          },
+          "template_url": {
+            "type": "string",
+            "description": "Optional template repo URL to seed the project"
+          }
+        }
+      },
+      "options": {
+        "organization_slug": {
+          "method": "listOrganizations",
+          "labelKey": "name",
+          "valueKey": "slug"
         }
       }
     },
@@ -240,9 +484,22 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -255,9 +512,22 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -270,9 +540,22 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -285,10 +568,26 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" },
-          "services": { "type": "string", "description": "Comma-separated services to check, e.g. 'db,auth,rest,realtime,storage'" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          },
+          "services": {
+            "type": "string",
+            "description": "Comma-separated services to check, e.g. 'db,auth,rest,realtime,storage'"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -301,10 +600,26 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" },
-          "reveal": { "type": "boolean", "description": "Reveal the actual key values (default false)" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          },
+          "reveal": {
+            "type": "boolean",
+            "description": "Reveal the actual key values (default false)"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -317,13 +632,40 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["ref", "type", "name"],
+        "required": [
+          "ref",
+          "type",
+          "name"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" },
-          "type": { "type": "string", "description": "Key type, e.g. 'publishable' | 'secret'" },
-          "name": { "type": "string", "description": "Key name" },
-          "description": { "type": "string", "description": "Optional description" },
-          "secret_jwt_template": { "type": "object", "description": "Optional JWT template config for the key" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          },
+          "type": {
+            "type": "string",
+            "description": "Key type, e.g. 'publishable' | 'secret'"
+          },
+          "name": {
+            "type": "string",
+            "description": "Key name"
+          },
+          "description": {
+            "type": "string",
+            "description": "Optional description"
+          },
+          "secret_jwt_template": {
+            "type": "object",
+            "description": "Optional JWT template config for the key"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -336,9 +678,22 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -351,9 +706,22 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -366,9 +734,22 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -379,9 +760,11 @@
       "verb": "GET",
       "path": "/v1/projects/available-regions",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     },
-
     {
       "id": "listOrganizations",
       "label": "List Organizations",
@@ -389,7 +772,10 @@
       "verb": "GET",
       "path": "/v1/organizations",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     },
     {
       "id": "getOrganization",
@@ -400,9 +786,21 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["slug"],
+        "required": [
+          "slug"
+        ],
         "properties": {
-          "slug": { "type": "string", "description": "Organization slug (from listOrganizations)" }
+          "slug": {
+            "type": "string",
+            "description": "Organization slug (from listOrganizations)"
+          }
+        }
+      },
+      "options": {
+        "slug": {
+          "method": "listOrganizations",
+          "labelKey": "name",
+          "valueKey": "slug"
         }
       }
     },
@@ -415,9 +813,21 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["slug"],
+        "required": [
+          "slug"
+        ],
         "properties": {
-          "slug": { "type": "string", "description": "Organization slug" }
+          "slug": {
+            "type": "string",
+            "description": "Organization slug"
+          }
+        }
+      },
+      "options": {
+        "slug": {
+          "method": "listOrganizations",
+          "labelKey": "name",
+          "valueKey": "slug"
         }
       }
     },
@@ -430,9 +840,21 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["slug"],
+        "required": [
+          "slug"
+        ],
         "properties": {
-          "slug": { "type": "string", "description": "Organization slug" }
+          "slug": {
+            "type": "string",
+            "description": "Organization slug"
+          }
+        }
+      },
+      "options": {
+        "slug": {
+          "method": "listOrganizations",
+          "labelKey": "name",
+          "valueKey": "slug"
         }
       }
     },
@@ -445,13 +867,17 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["name"],
+        "required": [
+          "name"
+        ],
         "properties": {
-          "name": { "type": "string", "description": "Organization name" }
+          "name": {
+            "type": "string",
+            "description": "Organization name"
+          }
         }
       }
     },
-
     {
       "id": "listSecrets",
       "label": "List Secrets",
@@ -461,9 +887,22 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -476,10 +915,29 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" },
-          "secrets": { "type": "array", "items": { "type": "object" }, "description": "Array of { name, value } secrets (the API body is this array)" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          },
+          "secrets": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Array of { name, value } secrets (the API body is this array)"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -492,14 +950,32 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" },
-          "names": { "type": "array", "items": { "type": "string" }, "description": "Array of secret names to delete (the API body is this array)" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          },
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Array of secret names to delete (the API body is this array)"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
-
     {
       "id": "listFunctions",
       "label": "List Edge Functions",
@@ -509,9 +985,22 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -524,10 +1013,27 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ref", "function_slug"],
+        "required": [
+          "ref",
+          "function_slug"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" },
-          "function_slug": { "type": "string", "description": "The function's slug" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          },
+          "function_slug": {
+            "type": "string",
+            "description": "The function's slug"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -540,10 +1046,27 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ref", "function_slug"],
+        "required": [
+          "ref",
+          "function_slug"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" },
-          "function_slug": { "type": "string", "description": "The function's slug" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          },
+          "function_slug": {
+            "type": "string",
+            "description": "The function's slug"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -556,13 +1079,46 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["ref", "slug", "name", "body"],
+        "required": [
+          "ref",
+          "slug",
+          "name",
+          "body"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" },
-          "slug": { "type": "string", "description": "URL slug for the function" },
-          "name": { "type": "string", "description": "Display name" },
-          "body": { "type": "string", "description": "The function source code (TypeScript/Deno)" },
-          "verify_jwt": { "type": "boolean", "description": "Require a valid JWT to invoke (default true)" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          },
+          "slug": {
+            "type": "string",
+            "description": "URL slug for the function"
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name"
+          },
+          "body": {
+            "type": "string",
+            "description": "The function source code (TypeScript/Deno)"
+          },
+          "verify_jwt": {
+            "type": "boolean",
+            "description": "Require a valid JWT to invoke (default true)"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
+        },
+        "slug": {
+          "method": "listOrganizations",
+          "labelKey": "name",
+          "valueKey": "slug"
         }
       }
     },
@@ -575,13 +1131,39 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["ref", "function_slug"],
+        "required": [
+          "ref",
+          "function_slug"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" },
-          "function_slug": { "type": "string", "description": "The function's slug" },
-          "name": { "type": "string", "description": "New display name" },
-          "body": { "type": "string", "description": "New source code" },
-          "verify_jwt": { "type": "boolean", "description": "Require a valid JWT to invoke" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          },
+          "function_slug": {
+            "type": "string",
+            "description": "The function's slug"
+          },
+          "name": {
+            "type": "string",
+            "description": "New display name"
+          },
+          "body": {
+            "type": "string",
+            "description": "New source code"
+          },
+          "verify_jwt": {
+            "type": "boolean",
+            "description": "Require a valid JWT to invoke"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -594,14 +1176,30 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["ref", "function_slug"],
+        "required": [
+          "ref",
+          "function_slug"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" },
-          "function_slug": { "type": "string", "description": "The function's slug" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          },
+          "function_slug": {
+            "type": "string",
+            "description": "The function's slug"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
-
     {
       "id": "listBuckets",
       "label": "List Storage Buckets",
@@ -611,13 +1209,25 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Project ref" }
+          "ref": {
+            "type": "string",
+            "description": "Project ref"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
-
     {
       "id": "listBranches",
       "label": "List Database Branches",
@@ -627,9 +1237,22 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["ref"],
+        "required": [
+          "ref"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Parent project ref" }
+          "ref": {
+            "type": "string",
+            "description": "Parent project ref"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -642,14 +1265,43 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["ref", "branch_name"],
+        "required": [
+          "ref",
+          "branch_name"
+        ],
         "properties": {
-          "ref": { "type": "string", "description": "Parent project ref" },
-          "branch_name": { "type": "string", "description": "Name for the new branch" },
-          "git_branch": { "type": "string", "description": "Git branch to link the preview to" },
-          "region": { "type": "string", "description": "Region for the branch's database" },
-          "persistent": { "type": "boolean", "description": "Keep the branch alive between deploys" },
-          "with_data": { "type": "boolean", "description": "Clone data from the parent into the branch" }
+          "ref": {
+            "type": "string",
+            "description": "Parent project ref"
+          },
+          "branch_name": {
+            "type": "string",
+            "description": "Name for the new branch"
+          },
+          "git_branch": {
+            "type": "string",
+            "description": "Git branch to link the preview to"
+          },
+          "region": {
+            "type": "string",
+            "description": "Region for the branch's database"
+          },
+          "persistent": {
+            "type": "boolean",
+            "description": "Keep the branch alive between deploys"
+          },
+          "with_data": {
+            "type": "boolean",
+            "description": "Clone data from the parent into the branch"
+          }
+        }
+      },
+      "options": {
+        "ref": {
+          "method": "listProjects",
+          "labelKey": "name",
+          "valueKey": "id",
+          "sublabelKey": "status"
         }
       }
     },
@@ -662,9 +1314,14 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["branch_id_or_ref"],
+        "required": [
+          "branch_id_or_ref"
+        ],
         "properties": {
-          "branch_id_or_ref": { "type": "string", "description": "Branch ref or (deprecated) branch id" }
+          "branch_id_or_ref": {
+            "type": "string",
+            "description": "Branch ref or (deprecated) branch id"
+          }
         }
       }
     },
@@ -677,14 +1334,21 @@
       "credits": 1,
       "input": {
         "type": "object",
-        "required": ["branch_id_or_ref"],
+        "required": [
+          "branch_id_or_ref"
+        ],
         "properties": {
-          "branch_id_or_ref": { "type": "string", "description": "Branch ref or (deprecated) branch id" },
-          "force": { "type": "boolean", "description": "Force-delete even if the branch is busy" }
+          "branch_id_or_ref": {
+            "type": "string",
+            "description": "Branch ref or (deprecated) branch id"
+          },
+          "force": {
+            "type": "boolean",
+            "description": "Force-delete even if the branch is busy"
+          }
         }
       }
     },
-
     {
       "id": "listSnippets",
       "label": "List SQL Snippets",
@@ -695,9 +1359,18 @@
       "input": {
         "type": "object",
         "properties": {
-          "project_ref": { "type": "string", "description": "Filter snippets to a project ref" },
-          "cursor": { "type": "string", "description": "Pagination cursor" },
-          "limit": { "type": "string", "description": "Page size" }
+          "project_ref": {
+            "type": "string",
+            "description": "Filter snippets to a project ref"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Pagination cursor"
+          },
+          "limit": {
+            "type": "string",
+            "description": "Page size"
+          }
         }
       }
     },
@@ -710,13 +1383,17 @@
       "credits": 0,
       "input": {
         "type": "object",
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
-          "id": { "type": "string", "description": "Snippet id" }
+          "id": {
+            "type": "string",
+            "description": "Snippet id"
+          }
         }
       }
     },
-
     {
       "id": "getProfile",
       "label": "Get Authenticated User",
@@ -724,7 +1401,10 @@
       "verb": "GET",
       "path": "/v1/profile",
       "credits": 0,
-      "input": { "type": "object", "properties": {} }
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
     }
   ]
 }

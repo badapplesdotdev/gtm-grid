@@ -10,7 +10,14 @@
 ## Auth & cost
 - Auth: header `x-api-key: <apiKey>`. Base URL `https://api.plusvibe.ai/api/v1`.
 - **`workspace_id` is required on almost every call.** It is NOT global config — resolve it first with `plusvibe.listWorkspaces` (calls `GET /authenticate`) and reuse the `_id`.
-- Rate limit: **5 requests/second** per key. Batch leads into one `addLeads` call rather than one call per row.
+- Rate limit: **5 requests/second** per key (documented). The manifest sets connector-level `rateLimit { rps: 5, concurrency: 3 }`, with a stricter per-method `rps: 2` on the credit-consuming `addLeads` and `replyEmail`. Batch leads into one `addLeads` call rather than one call per row.
+
+## Picker fields (live options)
+The manifest wires `options` so these inputs are picked by name from a live list (the engine stores the id/email; `workspace_id` is read from a sibling field on the same call):
+- `workspace_id` (on every method except `listWorkspaces`) → `listWorkspaces` (envelope `workspaces`, label `name`, value `_id`).
+- `campaign_id` / `parent_camp_id` / `camp_ids[]` → `listCampaigns` (**bare array** response — no `itemsPath`; label `camp_name`, value `id`, sublabel `status`).
+- `from` (reply sending account) → `listEmailAccounts` (envelope `accounts`, label+value `email`).
+- `tags` (email-account filter) → `listTags` (bare array; label `name`, value `_id`).
 - Most calls are free (credits: 0). Credit cost lands on actual sending: `addLeads` and `replyEmail` consume sending volume.
 
 ## Endpoints by job

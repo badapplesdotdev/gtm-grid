@@ -38,7 +38,12 @@ interface VirtualGridBodyProps<Row> {
   scrollRef: RefObject<HTMLElement | null>;
   /** Pixel height of one row (matches the CSS `--row-h` for the density). */
   rowHeight: number;
-  /** Rows rendered above/below the viewport to avoid blank flashes on scroll. */
+  /**
+   * Rows rendered above/below the viewport. Kept SMALL on purpose: the paint-in
+   * lag on a fast scroll is the COST of rendering the newly-windowed rows, so a
+   * bigger buffer renders MORE cells per scroll step and BLANKS LONGER, not less.
+   * The lever that shortens it is cheaper per-cell rendering, not overscan.
+   */
   overscan?: number;
   /**
    * Number of trailing `<td>`s a spacer row must span so the spacer keeps the

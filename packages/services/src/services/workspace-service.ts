@@ -47,6 +47,7 @@ import {
   WorkspaceRepo,
   type WorkspaceRepoError,
 } from "../repositories/workspace-repo.js";
+import { isSelfHost } from "../self-host.js";
 
 /** Seat usage for a workspace: members used vs. the plan limit (null = free). */
 export interface SeatUsage {
@@ -74,6 +75,13 @@ export interface MeWorkspace {
   readonly seatUsage: SeatUsage;
   readonly plan: WorkspacePlan;
   readonly cloudActions: SeatUsage;
+  /**
+   * True when this is a SELF-HOSTED deployment (`GTMGRID_SELF_HOST=1`). The
+   * desktop uses it to NEVER lock the cloud UI: a self-host instance has no
+   * billing, so plan/trial-based lock-out does not apply (the server-side
+   * `EntitlementService` is bypassed too). Omitted/false on the hosted product.
+   */
+  readonly selfHost?: boolean;
 }
 
 /** The authenticated user as `me` returns it (auth.ts:68 `MeUser`). */
@@ -81,6 +89,7 @@ export interface MeUser {
   readonly _id: string;
   readonly name: string | null;
   readonly email: string | null;
+  readonly image: string | null;
 }
 
 /** The full `me` result (auth.ts:75 `Me`). */
@@ -97,6 +106,7 @@ export interface WorkspaceMember {
   readonly createdAt: number;
   readonly name: string | null;
   readonly email: string | null;
+  readonly image: string | null;
 }
 
 /** The `listMembers` result (auth.ts:91 `WorkspaceMembers`). */
@@ -169,6 +179,7 @@ const toWorkspaceMember = (m: MemberWithUser): WorkspaceMember => ({
   createdAt: m.createdAt,
   name: m.name,
   email: m.email,
+  image: m.image,
 });
 
 /**
@@ -269,6 +280,7 @@ export class WorkspaceService extends Effect.Service<WorkspaceService>()(
                   name: planName(planId),
                   trialEndsAt: ws.trialEndsAt ?? null,
                 },
+                selfHost: isSelfHost(),
               },
             ];
           });
@@ -283,6 +295,10 @@ export class WorkspaceService extends Effect.Service<WorkspaceService>()(
               email: Option.match(userOpt, {
                 onNone: () => null,
                 onSome: (u) => u.email,
+              }),
+              image: Option.match(userOpt, {
+                onNone: () => null,
+                onSome: (u) => u.image,
               }),
             },
             workspaces,

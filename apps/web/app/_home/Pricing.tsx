@@ -10,6 +10,7 @@
 // desktop app, NOT a cloud-actions allowance. Cloud actions start at Team.
 
 import { useState } from "react";
+import posthog from "posthog-js";
 
 type Billing = "monthly" | "annual";
 
@@ -119,6 +120,11 @@ export function Pricing() {
   const [billing, setBilling] = useState<Billing>("monthly");
   const annual = billing === "annual";
 
+  function handleBillingToggle(period: Billing) {
+    setBilling(period);
+    posthog.capture("billing_period_toggled", { period });
+  }
+
   return (
     <>
       <div className="bill-toggle" role="tablist" aria-label="Billing period">
@@ -127,7 +133,7 @@ export function Pricing() {
           className={`bill-opt${!annual ? " is-active" : ""}`}
           role="tab"
           aria-selected={!annual}
-          onClick={() => setBilling("monthly")}
+          onClick={() => handleBillingToggle("monthly")}
         >
           Monthly
         </button>
@@ -136,7 +142,7 @@ export function Pricing() {
           className={`bill-opt${annual ? " is-active" : ""}`}
           role="tab"
           aria-selected={annual}
-          onClick={() => setBilling("annual")}
+          onClick={() => handleBillingToggle("annual")}
         >
           Annual <span className="bill-save">2 months free</span>
         </button>
@@ -161,7 +167,11 @@ export function Pricing() {
             </div>
             <p className="price-over"><b>Cloud actions</b> — paid plans only</p>
           </div>
-          <a className="btn btn-outline" href="/download">Start free</a>
+          <a
+            className="btn btn-outline"
+            href="/download"
+            onClick={() => posthog.capture("pricing_plan_cta_clicked", { plan: "Free", billing_period: billing })}
+          >Start free</a>
           <ul className="price-list">
             <li><Tick /> <span className="li-strong">The full source-available desktop app</span></li>
             <li><Tick /> Unlimited rows, tables &amp; functions</li>
@@ -190,7 +200,11 @@ export function Pricing() {
               </div>
               <p className="price-over"><b>Overage</b> — {p.over}</p>
             </div>
-            <a className={`btn ${p.featured ? "btn-primary" : "btn-outline"}`} href="/download">{p.cta}</a>
+            <a
+              className={`btn ${p.featured ? "btn-primary" : "btn-outline"}`}
+              href="/download"
+              onClick={() => posthog.capture("pricing_plan_cta_clicked", { plan: p.name, billing_period: billing, price_monthly: annual ? p.annualMonthly : p.monthly })}
+            >{p.cta}</a>
             <ul className="price-list">
               {p.features.map((f) => (
                 <li key={f.text}>

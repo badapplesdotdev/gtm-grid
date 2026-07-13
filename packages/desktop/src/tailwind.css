@@ -1,0 +1,48 @@
+/**
+ * Tailwind v4 + shadcn entry for the desktop app.
+ *
+ * Layering strategy — the app's `styles.css` is UNLAYERED and ships an aggressive
+ * reset (`* { margin:0; padding:0 }`). Cascade layers always lose to unlayered
+ * rules, so:
+ *   - Tailwind's `theme` + `preflight` are kept in their layers (theme/base) so
+ *     they STAY WEAK and never override the existing hand-rolled UI.
+ *   - Tailwind `utilities` are imported UNLAYERED, and this file is imported AFTER
+ *     `styles.css` (see main.tsx), so utility classes (padding, negative-margin
+ *     `-space-x`, ring…) win over the app reset on the shadcn components — without
+ *     touching the rest of the app, which uses no utility class names.
+ */
+@layer theme, base, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
+@import "tailwindcss/utilities.css";
+@import "tw-animate-css";
+
+/* Streamdown renders agent markdown with Tailwind utility classes. node_modules
+   isn't scanned by default, so point the scanner at its dist to generate them. */
+@source "../node_modules/streamdown/dist";
+
+/* The app toggles dark mode via `data-theme="dark"` on <html>, not a `.dark`
+   class — point shadcn's `dark:` variant at it. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* Map shadcn's token utilities (bg-popover, text-popover-foreground, border,
+   ring, bg-primary…) onto the app's existing variables, which already flip
+   under [data-theme="dark"] — so shadcn primitives inherit theme + dark mode. */
+@theme inline {
+  --color-popover: var(--surface);
+  --color-popover-foreground: var(--text);
+  --color-primary: var(--text);
+  --color-primary-foreground: var(--surface);
+  --color-muted: var(--surface-2);
+  --color-muted-foreground: var(--text-3);
+  --color-accent: var(--accent-soft);
+  --color-accent-foreground: var(--accent);
+  --color-border: var(--border);
+  --color-ring: var(--accent);
+  --color-background: var(--surface);
+  --color-foreground: var(--text);
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+}

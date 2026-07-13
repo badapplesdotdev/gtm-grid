@@ -1,5 +1,918 @@
 # @gtmgrid/services
 
+## 1.7.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.7.0
+- @gtmgrid/db@1.7.0
+- @gtmgrid/email@1.7.0
+
+## 1.6.1
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.6.1
+- @gtmgrid/db@1.6.1
+- @gtmgrid/email@1.6.1
+
+## 1.6.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.6.0
+- @gtmgrid/db@1.6.0
+- @gtmgrid/email@1.6.0
+
+## 1.5.2
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.5.2
+- @gtmgrid/db@1.5.2
+- @gtmgrid/email@1.5.2
+
+## 1.5.1
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.5.1
+- @gtmgrid/db@1.5.1
+- @gtmgrid/email@1.5.1
+
+## 1.5.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.5.0
+- @gtmgrid/db@1.5.0
+- @gtmgrid/email@1.5.0
+
+## 1.4.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.4.0
+- @gtmgrid/db@1.4.0
+- @gtmgrid/email@1.4.0
+
+## 1.3.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.3.0
+- @gtmgrid/db@1.3.0
+- @gtmgrid/email@1.3.0
+
+## 1.2.1
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.2.1
+- @gtmgrid/db@1.2.1
+- @gtmgrid/email@1.2.1
+
+## 1.2.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.2.0
+- @gtmgrid/db@1.2.0
+- @gtmgrid/email@1.2.0
+
+## 1.1.1
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.1.1
+- @gtmgrid/db@1.1.1
+- @gtmgrid/email@1.1.1
+
+## 1.1.0
+
+### Minor Changes
+
+- 3e33da9: Hard-block credited actions when a trial expires, plus trial-status notifications.
+
+  Previously `EntitlementService.requireCloudAccess` only checked the cached
+  `currentPlanId`, so a trial that lapsed by date kept running credited actions until
+  Autumn's webhook/desktop sync flipped the plan to null. And the credit-heavy column
+  enrichment run path was gated by quota only, never by cloud access.
+  - **Time-based backstop:** `requireCloudAccess` now also fails the instant
+    `trialEndsAt` is in the past, regardless of the cached plan id — the server-side
+    guarantee that an expired trial cannot run any credited action.
+  - **Enrichment path gated:** `assertColumnRunQuota` and the `setCell` / `setCellStatus`
+    / `insertRow` / `upsertRow` worker writes now call `requireCloudAccess`, so a lapsed
+    workspace cannot complete runs server-side even with quota headroom. The worker
+    boundary maps `PlanRequiredError` → 403 (distinct from the 402 quota error) and the
+    sidecar re-raises it as a typed error so the run aborts cleanly with an upgrade prompt.
+  - **Expired stays distinguishable:** the plan sync preserves a lapsed trial's past
+    `trialEndsAt` so "trial expired" reads apart from a cancelled paid plan / Free.
+  - **Desktop locks by date too:** the cloud UI now locks the instant the trial expires
+    (not only after sync), closing the window where buttons looked enabled but the server
+    rejected the action.
+  - **Notifications along the way:** new bell items for trial started (welcome), trial
+    expired, and low cloud-actions — alongside the existing countdown — all routing to the
+    upgrade flow. New on-brand `trialWelcomeEmail` (on workspace creation) and
+    `trialExpiredEmail` (daily "just-ended" reminder window) reuse the existing email shell.
+
+### Patch Changes
+
+- Updated dependencies [3e33da9]
+  - @gtmgrid/email@1.1.0
+  - @gtmgrid/cloud@1.1.0
+  - @gtmgrid/db@1.1.0
+
+## 1.0.6
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.0.6
+- @gtmgrid/db@1.0.6
+- @gtmgrid/email@1.0.6
+
+## 1.0.5
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.0.5
+- @gtmgrid/db@1.0.5
+- @gtmgrid/email@1.0.5
+
+## 1.0.4
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.0.4
+- @gtmgrid/db@1.0.4
+- @gtmgrid/email@1.0.4
+
+## 1.0.3
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.0.3
+- @gtmgrid/db@1.0.3
+- @gtmgrid/email@1.0.3
+
+## 1.0.2
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.0.2
+- @gtmgrid/db@1.0.2
+- @gtmgrid/email@1.0.2
+
+## 1.0.1
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.0.1
+- @gtmgrid/db@1.0.1
+- @gtmgrid/email@1.0.1
+
+## 1.0.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.0.0
+- @gtmgrid/db@1.0.0
+- @gtmgrid/email@1.0.0
+
+## 0.22.12
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.22.12
+- @gtmgrid/db@0.22.12
+- @gtmgrid/email@0.22.12
+
+## 0.22.11
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.22.11
+- @gtmgrid/db@0.22.11
+- @gtmgrid/email@0.22.11
+
+## 0.22.10
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.22.10
+- @gtmgrid/db@0.22.10
+- @gtmgrid/email@0.22.10
+
+## 0.22.9
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.22.9
+- @gtmgrid/db@0.22.9
+- @gtmgrid/email@0.22.9
+
+## 0.22.8
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.22.8
+- @gtmgrid/db@0.22.8
+- @gtmgrid/email@0.22.8
+
+## 0.22.7
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.22.7
+- @gtmgrid/db@0.22.7
+- @gtmgrid/email@0.22.7
+
+## 0.22.6
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.22.6
+- @gtmgrid/db@0.22.6
+- @gtmgrid/email@0.22.6
+
+## 0.22.5
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.22.5
+- @gtmgrid/db@0.22.5
+- @gtmgrid/email@0.22.5
+
+## 0.22.4
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.22.4
+- @gtmgrid/db@0.22.4
+- @gtmgrid/email@0.22.4
+
+## 0.22.3
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.22.3
+- @gtmgrid/db@0.22.3
+- @gtmgrid/email@0.22.3
+
+## 0.22.2
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.22.2
+- @gtmgrid/db@0.22.2
+- @gtmgrid/email@0.22.2
+
+## 0.22.1
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.22.1
+- @gtmgrid/db@0.22.1
+- @gtmgrid/email@0.22.1
+
+## 0.22.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.22.0
+- @gtmgrid/db@0.22.0
+- @gtmgrid/email@0.22.0
+
+## 0.21.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.21.0
+- @gtmgrid/db@0.21.0
+- @gtmgrid/email@0.21.0
+
+## 0.20.1
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.20.1
+- @gtmgrid/db@0.20.1
+- @gtmgrid/email@0.20.1
+
+## 0.20.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.20.0
+- @gtmgrid/db@0.20.0
+- @gtmgrid/email@0.20.0
+
+## 0.19.1
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.19.1
+- @gtmgrid/db@0.19.1
+- @gtmgrid/email@0.19.1
+
+## 0.19.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.19.0
+- @gtmgrid/db@0.19.0
+- @gtmgrid/email@0.19.0
+
+## 0.18.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.18.0
+- @gtmgrid/db@0.18.0
+- @gtmgrid/email@0.18.0
+
+## 0.17.4
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.17.4
+- @gtmgrid/db@0.17.4
+- @gtmgrid/email@0.17.4
+
+## 0.17.3
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.17.3
+- @gtmgrid/db@0.17.3
+- @gtmgrid/email@0.17.3
+
+## 0.17.2
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.17.2
+- @gtmgrid/db@0.17.2
+- @gtmgrid/email@0.17.2
+
+## 0.17.1
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.17.1
+- @gtmgrid/db@0.17.1
+- @gtmgrid/email@0.17.1
+
+## 0.17.0
+
+### Minor Changes
+
+- b2fbbee: Remove the "local" paradigm — Postgres is now the only source of truth.
+
+  GTM Grid was built local-first: each project was a `better-sqlite3` `.db` file served by the desktop sidecar, with cloud (Postgres) as an optional team tier. That produced two parallel data worlds and pervasive local-vs-cloud branching. This change removes the local paradigm entirely:
+  - **Single data path.** The execution engine is always cloud-store-backed (`new Engine(config, registry, { store, creds })`); the SQLite `GridStore` layers, the engine's grid tables, the desktop's local `DataGrid`/`inCloud` fork, and the sidecar's local grid CRUD routes are gone. Every grid table operation goes through Postgres via tRPC. The one-way local→cloud push/sync apparatus and the `@gtmgrid/cli` package are deleted.
+  - **The sidecar stays as the execution host.** It still runs connector/AI/formula columns locally and keeps a small **secrets-only** local vault (encrypted connector/AI keys, extension manifests) — but it no longer owns grid data; it proxies grid I/O to the `apps/web` worker endpoints. A new `/api/cloud/preview-function` route powers "Try on N rows" against cloud data.
+  - **Login required.** `VITE_API_URL` is now mandatory (the build fails fast without it); the cloud/auth layer is always on; the "Continue locally — no account" escape hatches are removed; signed-out users hit a hard auth gate. Self-hosting = run your own Postgres + `apps/web`.
+  - **Optimistic UI on every mutation.** To keep the local-first _feel_, every cloud grid mutation now patches the React Query cache instantly and reconciles with the server. Inserts carry a client-supplied UUID so the optimistic id is the persisted id and the realtime self-echo converges idempotently instead of duplicating; failures roll back.
+
+  Note: the sidecar's local Trigify "signals" routes were local-grid-backed and have been removed pending a cloud-backed replacement (recurring signal refresh already runs as an Inngest cloud job).
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.17.0
+- @gtmgrid/db@0.17.0
+- @gtmgrid/email@0.17.0
+
+## 0.16.2
+
+### Patch Changes
+
+- c297b2a: Make realtime grid/webhook broadcasts genuinely best-effort so a publish failure can't fail an already-committed write. The `process-webhook-record` worker was 500ing on every record: after `insertRow` committed and metered the row, the PartyKit publish returned 401 and the resulting `RealtimePublisherError` propagated out and mapped to a 500 — halting ingestion and risking duplicate rows on Inngest retries (the row commits before the publish). Despite doc comments claiming the publish swallowed transport errors, nothing did. Both GridService and the webhook service now wrap their `publish` / `publishWorkspaceTablesChanged` helpers in `catchTag("RealtimePublisherError", () => Effect.void)`, so a realtime outage can never fail a grid mutation. Regression tests prove a failing publisher leaves the write committed and successful. (Live broadcasts stay down until `PARTY_PUBLISH_SECRET` is realigned across web/worker and the party deployment — an env/infra change, not code.)
+  - @gtmgrid/cloud@0.16.2
+  - @gtmgrid/db@0.16.2
+  - @gtmgrid/email@0.16.2
+
+## 0.16.1
+
+### Patch Changes
+
+- a9ba3ac: Fix the scheduled Social Signals poll cron failing on every run. `SignalService.listDuePage` built its due-filter as a parameterised `CASE` whose branches were all untyped bound params (or `NULL`), so Postgres couldn't resolve the CASE result type and the outer `last_synced_at <= CASE(...)` comparison failed at execution (`Error: Failed query`) on every hourly tick — meaning no enabled binding had been synced for any workspace. Anchor the CASE type by casting each threshold to `::bigint`. Adds a real-Postgres (in-process PGlite) test that executes `listDuePage` with mixed schedules, so this regression is caught instead of passing on the in-memory path.
+  - @gtmgrid/cloud@0.16.1
+  - @gtmgrid/db@0.16.1
+  - @gtmgrid/email@0.16.1
+
+## 0.16.0
+
+### Minor Changes
+
+- 735d94c: Full PostHog Error Tracking observability so bugs surface as they occur. All telemetry now points at the GTM Grid **US** project (`us.i.posthog.com`). New `@gtmgrid/observability` package shares one error-tracking + structured-logging convention across the sidecar, MCP server, and CLI (process-level crash handlers + exception capture).
+
+  Closed the remaining blind spots:
+  - **Engine run failures** — connector/AI/enrichment errors now feed Error Tracking via an injected, dependency-free `reportError` hook on the engine, **deduped per run** (a large run with one failure mode raises one exception, not thousands), plus a `column_run_failed` analytics event for failure-rate dashboards.
+  - **tRPC** — non-typed defects keep their original stack (attached as the `TRPCError` cause) instead of being flattened to a string.
+  - **Services** — a new injectable `ErrorReporter` port surfaces deliberately-swallowed best-effort failures (e.g. a failed invite email) without coupling the package to a telemetry client.
+  - **Signals** — per-binding sync/warm-up failures in the cron worker are now reported (previously `console.error` only).
+  - **Desktop shell** — a Rust panic hook reports Tauri-side panics (sidecar spawn, updater, window setup) to Error Tracking.
+  - **PartyKit** — realtime handlers capture unexpected exceptions.
+
+  No behaviour change when PostHog is unconfigured — every surface no-ops without a key.
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.16.0
+- @gtmgrid/db@0.16.0
+- @gtmgrid/email@0.16.0
+
+## 0.15.0
+
+### Minor Changes
+
+- f414614: Respect third-party API rate limits across all connectors. Every outbound connector call is now paced by a per-connector throttle (requests/second + max in-flight) at the engine's dispatch choke point, with researched limits baked into all bundled extensions and a conservative safety default (2 req/s, 2 concurrent) for any connector that declares none — so a large run can no longer fire an unbounded burst at a provider. Pure-local connectors (formatting/formula) are exempt.
+
+  Transient failures (429/503/5xx and network blips) now retry with capped exponential backoff + jitter, honouring `Retry-After`: the manifest connector routes through the shared `fetchWithRetry`, the AI connector uses the vendor SDKs' own retry (maxRetries + timeout), and the cloud Trigify signal sync retries transient failures via an Effect schedule.
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.15.0
+- @gtmgrid/db@0.15.0
+- @gtmgrid/email@0.15.0
+
+## 0.14.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.14.0
+- @gtmgrid/db@0.14.0
+- @gtmgrid/email@0.14.0
+
+## 0.13.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.13.0
+- @gtmgrid/db@0.13.0
+- @gtmgrid/email@0.13.0
+
+## 0.12.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.12.0
+- @gtmgrid/db@0.12.0
+- @gtmgrid/email@0.12.0
+
+## 0.11.1
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.11.1
+- @gtmgrid/db@0.11.1
+- @gtmgrid/email@0.11.1
+
+## 0.11.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.11.0
+- @gtmgrid/db@0.11.0
+- @gtmgrid/email@0.11.0
+
+## 0.10.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.10.0
+- @gtmgrid/db@0.10.0
+- @gtmgrid/email@0.10.0
+
+## 0.9.24
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.24
+- @gtmgrid/db@0.9.24
+- @gtmgrid/email@0.9.24
+
+## 0.9.23
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.23
+- @gtmgrid/db@0.9.23
+- @gtmgrid/email@0.9.23
+
+## 0.9.22
+
+### Patch Changes
+
+- d2a41c5: Fix the Tables page showing duplicate tables and no row counts for cloud tables.
+  - **Row counts**: `grid.listTables` now attaches each table's row count from a
+    single grouped `countByTableIds` query (the efficient primitive existed but was
+    never wired in; the in-memory repo was also missing it — a latent type error).
+    The Tables page and sidebar now show real cloud row counts ("124 rows") instead
+    of "Cloud table"/"—"; a table whose count an older server doesn't report falls
+    back gracefully.
+  - **Duplicates**: removed the sidebar "Recent" group, which repeated the 5 most-
+    recent tables already shown in the full list below it. The Tables page already
+    de-dupes by name.
+  - The sidebar table rows now show a row count (hidden on hover, like folders).
+  - @gtmgrid/cloud@0.9.22
+  - @gtmgrid/db@0.9.22
+  - @gtmgrid/email@0.9.22
+
+## 0.9.21
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.21
+- @gtmgrid/db@0.9.21
+- @gtmgrid/email@0.9.21
+
+## 0.9.20
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.20
+- @gtmgrid/db@0.9.20
+- @gtmgrid/email@0.9.20
+
+## 0.9.19
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.19
+- @gtmgrid/db@0.9.19
+- @gtmgrid/email@0.9.19
+
+## 0.9.18
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.18
+- @gtmgrid/db@0.9.18
+- @gtmgrid/email@0.9.18
+
+## 0.9.17
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.17
+- @gtmgrid/db@0.9.17
+- @gtmgrid/email@0.9.17
+
+## 0.9.16
+
+### Patch Changes
+
+- 9f01681: Fix "undefined is not an object (evaluating 'snapshot.columns')" when
+  deleting a column (or row) on a cloud table: the optimistic cache patch fed
+  react-query's `undefined` (no cached unpaged snapshot — the normal state
+  while the grid loads paged) into the grid reducer, which only guarded
+  `null`. The reducer now tolerates both, and the optimistic path skips absent
+  cache entries entirely.
+  - @gtmgrid/cloud@0.9.16
+  - @gtmgrid/db@0.9.16
+  - @gtmgrid/email@0.9.16
+
+## 0.9.15
+
+### Patch Changes
+
+- be203b9: Fix every cloud column run failing silently: the worker `getTable` payload
+  shipped columns as `{id}` only, but the engine's cloud store finds the run
+  column by `_id`, the agent's cloud tools resolve columns by `name`, and the
+  webhook enricher filters by `kind` — so GUI column runs, agent cloud
+  get_table/run_column, and webhook auto-run enrichment were all dead on the
+  Postgres tier (promoted mapping columns stayed "—" forever). The payload now
+  carries full Convex-doc-shaped columns/rows (`_id` + name/kind/code/params/
+  condition/position, with `id` kept for legacy readers).
+  - @gtmgrid/cloud@0.9.15
+  - @gtmgrid/db@0.9.15
+  - @gtmgrid/email@0.9.15
+
+## 0.9.14
+
+### Patch Changes
+
+- 7eda629: Agent grid mutation tools + chat UX: the agent can now rename tables,
+  reorder columns/rows, run a whole table, and use the full mutation surface
+  on CLOUD tables (member-gated worker routes, metered, with confirm-protocol
+  dry-runs for destructive ops). Chat gains slash commands, /goal, permission
+  modes (bypass/auto/accept-edits/plan), a plan drawer, per-agent threads, and
+  table rename/reorder realtime events.
+- 17ea929: Sidebar folders for tables, on both local and cloud projects: create, rename,
+  and delete folders, file tables into them ("New table here" included), and
+  drag to reorder. Deleting a folder unfiles its tables (never deletes them).
+  Folder changes broadcast on the workspace room so teammates' sidebars update
+  live. Cloud adds a `folders` table + `tables.folder_id` (migration 0009);
+  local SQLite upgrades in place.
+- Updated dependencies [17ea929]
+  - @gtmgrid/db@0.9.14
+  - @gtmgrid/cloud@0.9.14
+  - @gtmgrid/email@0.9.14
+
+## 0.9.13
+
+### Patch Changes
+
+- 891e3b8: Agent presence (Co-Pilot cursor): the in-app AI agent now appears in cloud
+  tables like a teammate. As it reads or writes — get_table, run_column,
+  update_cells, add_rows — the grid shows "<Your name>'s Agent" in the avatar
+  stack (bot glyph, brand-accent ring), rings the cell or column it's working
+  on, and labels the activity ("reading the table", "updating 2 cells",
+  "running Email"). Visible to everyone in the table's room, clears when the
+  turn ends. Works against the already-deployed realtime party.
+  - @gtmgrid/cloud@0.9.13
+  - @gtmgrid/db@0.9.13
+  - @gtmgrid/email@0.9.13
+
+## 0.9.12
+
+### Patch Changes
+
+- 9bf183f: Webhook rows and column-run results now appear in the grid in real time.
+  Worker-path writes (webhook insertRow/upsertRow and the engine's cell
+  writes during cloud column runs) previously hit Postgres without
+  broadcasting, so open grids stayed stale until a refetch. They now publish
+  the same realtime events member edits do — `row.insert` with the mapped
+  cells when a record lands, `cell.upsert` with the post-merge state on
+  every worker cell write.
+  - @gtmgrid/cloud@0.9.12
+  - @gtmgrid/db@0.9.12
+  - @gtmgrid/email@0.9.12
+
+## 0.9.11
+
+### Patch Changes
+
+- 2ddf117: Clay-style webhook tables: every webhook now lands records in a dedicated
+  "Webhook" column, so received data is always visible — even on a table with
+  no other columns and no field mappings. Cells render as "Received <date>";
+  clicking opens the payload in the cell-details panel, where each field has
+  an "Add to column" action that promotes it to a real column applied to all
+  existing and future rows. Re-enabling an existing webhook heals it with the
+  new column. Mapping replaces never drop the raw-payload entry.
+  - @gtmgrid/cloud@0.9.11
+  - @gtmgrid/db@0.9.11
+  - @gtmgrid/email@0.9.11
+
+## 0.9.10
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.10
+- @gtmgrid/db@0.9.10
+- @gtmgrid/email@0.9.10
+
+## 0.9.9
+
+### Patch Changes
+
+- 67f3d44: Agent sessions can now use your saved provider keys, and webhook signature
+  auth is opt-in:
+  - Provider CLIs and skills the agent runs (trigify-cli, gh, …) authenticate
+    automatically: saved credentials are injected as conventional env vars
+    (`TRIGIFY_API_KEY`, `GITHUB_TOKEN`, …) at agent spawn — cloud workspace
+    credentials in cloud mode, the local credential store in local mode. An
+    explicitly exported env var still wins, and values never appear in args
+    or logs.
+  - Inbound webhooks no longer force HMAC signing: new webhooks accept
+    unsigned posts (the unguessable token URL is the credential), with a
+    "Require signed requests" toggle to opt in to `X-GTMGrid-Signature`
+    verification. Existing webhooks keep their secrets and behave as before.
+  - @gtmgrid/cloud@0.9.9
+  - @gtmgrid/db@0.9.9
+  - @gtmgrid/email@0.9.9
+
+## 0.9.8
+
+### Patch Changes
+
+- 3cbb8b2: Fix every poll-trigify-signals run failing at the due-bindings query. The
+  SQL due-filter bound `-Infinity` as the CASE fallback threshold, but
+  `last_synced_at` is a bigint column and Postgres rejects `-Infinity` for
+  integer types — so the query errored on every execution and no scheduled
+  signal binding was ever polled. The fallback is now `NULL` (never due),
+  matching the intended semantics.
+  - @gtmgrid/cloud@0.9.8
+  - @gtmgrid/db@0.9.8
+  - @gtmgrid/email@0.9.8
+
+## 0.9.7
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.7
+- @gtmgrid/db@0.9.7
+- @gtmgrid/email@0.9.7
+
+## 0.9.6
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.6
+- @gtmgrid/db@0.9.6
+- @gtmgrid/email@0.9.6
+
+## 0.9.5
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.5
+- @gtmgrid/db@0.9.5
+- @gtmgrid/email@0.9.5
+
+## 0.9.4
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.4
+- @gtmgrid/db@0.9.4
+- @gtmgrid/email@0.9.4
+
+## 0.9.3
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.3
+- @gtmgrid/db@0.9.3
+- @gtmgrid/email@0.9.3
+
+## 0.9.2
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.2
+- @gtmgrid/db@0.9.2
+- @gtmgrid/email@0.9.2
+
+## 0.9.1
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.1
+- @gtmgrid/db@0.9.1
+- @gtmgrid/email@0.9.1
+
+## 0.9.0
+
+### Patch Changes
+
+- a6d488d: Two cloud-parity improvements:
+  - **Live sidebar** — when a teammate creates, syncs, or deletes a table in your
+    workspace, your sidebar table list now updates in real time (no app restart).
+    Table create/delete events are broadcast on a per-workspace realtime room that
+    the sidebar subscribes to.
+  - **Deduplication on cloud tables** — the Dedupe control (previously local-only)
+    now works on cloud tables: pick a column and keep-oldest/newest, and the server
+    removes duplicate rows and broadcasts the deletions live to everyone viewing the
+    table. Adds a nullable `dedupe_column` / `dedupe_keep` to the cloud `tables`
+    schema (migration included).
+
+- Updated dependencies [a6d488d]
+  - @gtmgrid/db@0.9.0
+  - @gtmgrid/cloud@0.9.0
+  - @gtmgrid/email@0.9.0
+
+## 0.8.0
+
+### Patch Changes
+
+- c3eb12d: Add live multiplayer presence to the cloud grid. You can now see who else is in a
+  table in real time:
+  - **Live users avatar stack** in the grid toolbar — everyone currently viewing the
+    table, with their profile photo (or initials), capped at 5 with a **"+N more"**
+    overflow. Hover an avatar to see the member's name.
+  - **Cell cursors** — each other member's selected cell gets a colored ring and a
+    small avatar chip (Airtable-style), so you can see where teammates are working.
+  - **Editing indicator** — a member actively editing a cell shows a pulsing ring.
+  - **Follow a teammate** — click their avatar to jump the grid to their current cell.
+
+  Presence rides the existing per-table PartyKit channel (no extra connection) and
+  each member's name/photo come from the workspace (the `me`/`listMembers` APIs now
+  expose the user's avatar image). Built on shadcn/ui avatar + tooltip primitives.
+  - @gtmgrid/cloud@0.8.0
+  - @gtmgrid/db@0.8.0
+  - @gtmgrid/email@0.8.0
+
+## 0.7.8
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.7.8
+- @gtmgrid/db@0.7.8
+- @gtmgrid/email@0.7.8
+
+## 0.7.7
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.7.7
+- @gtmgrid/db@0.7.7
+- @gtmgrid/email@0.7.7
+
+## 0.7.6
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.7.6
+- @gtmgrid/db@0.7.6
+- @gtmgrid/email@0.7.6
+
+## 0.7.5
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.7.5
+- @gtmgrid/db@0.7.5
+- @gtmgrid/email@0.7.5
+
+## 0.7.4
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.7.4
+- @gtmgrid/db@0.7.4
+- @gtmgrid/email@0.7.4
+
+## 0.7.3
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.7.3
+- @gtmgrid/db@0.7.3
+- @gtmgrid/email@0.7.3
+
+## 0.7.2
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.7.2
+- @gtmgrid/db@0.7.2
+- @gtmgrid/email@0.7.2
+
+## 0.7.1
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.7.1
+- @gtmgrid/db@0.7.1
+- @gtmgrid/email@0.7.1
+
+## 0.7.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.7.0
+- @gtmgrid/db@0.7.0
+- @gtmgrid/email@0.7.0
+
+## 0.6.1
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.6.1
+- @gtmgrid/db@0.6.1
+- @gtmgrid/email@0.6.1
+
+## 0.6.0
+
+### Minor Changes
+
+- ee40d02: One shared grid for local & cloud, with clear local/cloud separation.
+  - **One grid, no divergence** — the local grid and the cloud grid now render the
+    same `DataGrid` component, driven by an injected controller. Cloud no longer
+    silently deletes a column on header right-click and no longer has a
+    stripped-down add-column; it gets the identical header context menu
+    (Edit / Delete), the full add-column popover (manual types + AI / function /
+    formula), add-row, and run.
+  - **Clear local/cloud separation** — the sidebar shows ONE environment's tables:
+    only cloud tables in a cloud project, only local tables in local mode. This
+    removes the dual-selection bug where a cloud and a local table were both
+    highlighted at once. The sync affordances (sync-all, per-row dots, auto-sync
+    toggle/nudge, auto-push) now appear only in local mode while signed into cloud.
+  - **Cloud column editing (parity)** — new `grid.updateColumn` tRPC procedure
+    (`GridService.updateColumn` → `ColumnRepo.update`) broadcasts a `column.update`
+    realtime event so a rename / type / function-config change reflects live across
+    clients with no refetch. The shared edit-column modal now persists in cloud.
+  - **Cloud AI/formula authoring** — the cloud add-column flow reuses the local
+    sidecar's AI providers + formula generation (which is what runs cloud columns),
+    so function / AI / formula columns can be authored in cloud too.
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.6.0
+- @gtmgrid/db@0.6.0
+- @gtmgrid/email@0.6.0
+
+## 0.5.1
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.5.1
+- @gtmgrid/db@0.5.1
+- @gtmgrid/email@0.5.1
+
 ## 0.5.0
 
 ### Patch Changes
@@ -145,7 +1058,6 @@
   `tsc -b`, only by `apps/web`'s own typecheck / the Vercel build).
 
 - 1628165: Proactively prompt users to upgrade before the 7-day trial hard-locks the cloud:
-
   - **In-app countdown banner**: a new `workspaces.trialEndsAt` column is synced from
     Autumn (`getActiveSubscriptions`) by `syncPlan` and seeded on trial start; `me`
     surfaces it, and the desktop shows a "Your trial ends in N days — upgrade" banner
@@ -176,7 +1088,6 @@
 - 63629aa: New-signup onboarding: auto-enrol every new workspace in a 7-day, no-card **Team
   free trial** so owners can invite teammates from day one (least-friction), and
   auto-enrol invited users instead of prompting them to create their own workspace.
-
   - `createWorkspace` now starts a Team trial in Autumn (`SeatsService.startTrial` →
     `attach` with `customize.freeTrial` (7 days, `cardRequired: false`) + a prepaid
     seat grant, since the Team plan's seats are prepaid). Best-effort: a billing
@@ -208,7 +1119,6 @@
 ### Patch Changes
 
 - d8affce: Fix two cloud-state staleness bugs:
-
   - **Sign-up via the sidebar left the app "signed out".** The `me` query (user +
     workspaces + plan) was cached as `null` while signed out and never refetched
     when a bearer token appeared, so the UI stayed unauthenticated after an in-app

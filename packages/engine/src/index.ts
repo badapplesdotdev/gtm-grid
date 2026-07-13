@@ -1,18 +1,16 @@
 // Public API for the gtmgrid engine.
 
 import { homedir } from "node:os";
-import { join, basename } from "node:path";
-import { mkdirSync, existsSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { mkdirSync, existsSync } from "node:fs";
 import { Db } from "./db.js";
 import type { AiConfig } from "./types.js";
-import { Engine, aiConfigFromEnv, type EngineConfig } from "./execute.js";
-import { defaultRegistry, Registry } from "./registry.js";
-import { parseManifest, connectorFromManifest } from "./connectors/manifest.js";
+import type { EngineConfig } from "./execute.js";
 
 export { Db } from "./db.js";
-export { Engine, mapConcurrent, aiConfigFromEnv } from "./execute.js";
-export type { EngineConfig, RunColumnOptions, EngineStores, CellProgress } from "./execute.js";
-export { Registry, defaultRegistry } from "./registry.js";
+export { Engine, mapConcurrent, RateLimiter, DEFAULT_RATE_LIMIT, aiConfigFromEnv } from "./execute.js";
+export type { EngineConfig, RunColumnOptions, EngineStores, CellProgress, RunErrorContext } from "./execute.js";
+export { Registry, defaultRegistry, bundledConnectors } from "./registry.js";
 export { runFunction, normalizeCode } from "./sandbox.js";
 export { defineHttpConnector } from "./connectors/http.js";
 // Default Hermes gateway base URL — shared so the server's provider routes and
@@ -25,7 +23,7 @@ export {
   parseRetryAfter,
   type RetryOptions,
 } from "./http-retry.js";
-export { parseManifest, connectorFromManifest, manifestSchema, type ExtensionManifest } from "./connectors/manifest.js";
+export { parseManifest, connectorFromManifest, manifestSchema, extractOptions, type ExtensionManifest, type FieldOption } from "./connectors/manifest.js";
 export { assertPublicUrl, isBlockedIp, SsrfBlockedError, type SsrfOptions } from "./ssrf.js";
 export * from "./types.js";
 // Canonical Effect-TS service pattern (see docs/effect-conventions.md). Later
@@ -40,15 +38,12 @@ export {
   type CloudCredentialScope,
 } from "./cloud-schema.js";
 // GridStore — the engine's async storage abstraction (Effect service + typed
-// errors + Layer). SqliteGridStore is the local implementation; the cloud store
-// adds a cloud-client-backed Layer for the same tag.
+// errors + Layer). The engine is always cloud-store-backed; the cloud store
+// (`store-cloud.ts`) provides the cloud-client-backed Layer for the same tag.
 export {
   GridStore,
   CredentialStore,
   GridStoreError,
-  sqliteGridStore,
-  sqliteCredentialStore,
-  sqliteGridStoreShape,
   type GridStoreShape,
   type CellPatch,
 } from "./store.js";
@@ -65,39 +60,15 @@ export {
   type CloudCredentialResolution,
   type CloudCredentialForRunResult,
 } from "./store-cloud.js";
-// The local→cloud one-way table push orchestrator (TRI-3295). A scoped Effect
-// service owning its own resilience (retry/jitter/timeout/rate-limit/bounded
-// concurrency) over a THIN, NON-retrying injected transport — so the engine
-// build stays backend-agnostic and the sidecar wires the tRPC grid surface.
-export {
-  CloudPushService,
-  TransientPushError,
-  FatalPushError,
-  CloudActionsLimitError,
-  LinkConflictError,
-  PUSH_ROW_CHUNK,
-  PUSH_MAX_CONCURRENCY,
-  PUSH_RATE_LIMIT,
-  PUSH_TIMEOUT,
-  PUSH_MAX_RETRIES,
-  type CloudPushTransport,
-  type CloudPushError,
-  type CloudPushConfig,
-  type CloudCellMap,
-  type CloudColumnSpec,
-  type PushOutcome,
-  type PushResult,
-  type PushTableInput,
-} from "./cloud-push.js";
 
-export interface OpenProjectResult {
-  db: Db;
-  engine: Engine;
-}
-
-/** Root directory for all project + global .db files. */
+/**
+ * Root directory for all project + global .db files. Defaults to `~/gtmgrid`;
+ * `GTMGRID_HOME` overrides it (used to sandbox tests/CI so they never touch the
+ * real global db, and to relocate state in containerised deploys).
+ */
 export function gtmgridDir(): string {
-  const dir = join(homedir(), "gtmgrid");
+  const override = process.env.GTMGRID_HOME;
+  const dir = override && override.length > 0 ? override : join(homedir(), "gtmgrid");
   mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -110,28 +81,6 @@ export function projectPath(name: string): string {
 /** The shared global db holding credentials, extensions, and AI config. */
 export function globalDbPath(): string {
   return join(gtmgridDir(), "global.db");
-}
-
-export interface ProjectInfo {
-  name: string;
-  path: string;
-  mtimeMs: number;
-}
-
-/** List projects in ~/gtmgrid (every *.db except the shared global.db), newest first. */
-export function listProjects(): ProjectInfo[] {
-  const dir = gtmgridDir();
-  const out: ProjectInfo[] = [];
-  for (const file of readdirSync(dir)) {
-    if (!file.endsWith(".db") || file === "global.db") continue;
-    const path = join(dir, file);
-    try {
-      out.push({ name: basename(file, ".db"), path, mtimeMs: statSync(path).mtimeMs });
-    } catch {
-      /* skip unreadable */
-    }
-  }
-  return out.sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
 /**
@@ -165,27 +114,6 @@ export function migrateGlobals(globalDb: Db, legacyPath: string): void {
   } finally {
     legacy.close();
   }
-}
-
-/** Open (or create) a project and return a wired engine. AI config: env first, then stored (encrypted). */
-export function openProject(
-  pathOrName: string,
-  opts: { config?: EngineConfig; registry?: Registry } = {},
-): OpenProjectResult {
-  const path = pathOrName.endsWith(".db") || pathOrName.includes("/") ? pathOrName : projectPath(pathOrName);
-  const db = new Db(path);
-  const config = opts.config ?? { ai: aiConfigFromEnv() ?? storedAiConfig(db), aiProviders: storedAiProviders(db) };
-  const registry = opts.registry ?? defaultRegistry();
-  // Load any uploaded JSON-manifest extensions into the registry.
-  for (const manifest of db.listExtensions()) {
-    try {
-      registry.add(connectorFromManifest(parseManifest(manifest)));
-    } catch (err) {
-      console.error(`Skipping invalid extension "${(manifest as any)?.id}": ${err instanceof Error ? err.message : err}`);
-    }
-  }
-  const engine = new Engine(db, config, registry);
-  return { db, engine };
 }
 
 const DEFAULT_MODEL = {

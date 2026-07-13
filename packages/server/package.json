@@ -1,6 +1,6 @@
 {
   "name": "@gtmgrid/server",
-  "version": "0.5.0",
+  "version": "1.7.0",
   "private": true,
   "type": "module",
   "bin": {
@@ -8,6 +8,8 @@
   },
   "dependencies": {
     "@gtmgrid/engine": "workspace:*",
-    "effect": "^3.21.3"
+    "@gtmgrid/observability": "workspace:*",
+    "effect": "^3.21.3",
+    "posthog-node": "^5.37.0"
   }
 }

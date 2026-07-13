@@ -24,11 +24,25 @@ const generateInput = z.object({
   maxTokens: z.coerce.number().optional().describe("Max output tokens (default 512)."),
 });
 
+/**
+ * Per-attempt request timeout and retry budget handed to the vendor SDKs. Both
+ * `@anthropic-ai/sdk` and `openai` do their OWN capped exponential backoff with
+ * jitter and honour `retry-after`, so the SDK is the single owner of retry on the
+ * AI path — we only raise the defaults (SDK default is `maxRetries: 2`). Do NOT
+ * wrap these calls in `fetchWithRetry` as well (that would nest two retry loops).
+ */
+const AI_MAX_RETRIES = 4;
+const AI_TIMEOUT_MS = 60_000;
+
 export const aiConnector: Connector = {
   id: "ai",
   name: "AI",
   category: "ai",
   auth: null,
+  // Moderate default throttle: AI keys are bring-your-own and tier-dependent, so a
+  // conservative pace (3 req/s, ≤5 in flight) keeps a large run under typical
+  // tier-1 RPM limits without clamping it to the tight unknown-provider default.
+  rateLimit: { rps: 3, concurrency: 5 },
   methods: [
     {
       id: "generate",
@@ -40,10 +54,23 @@ export const aiConnector: Connector = {
       run: async (raw: Record<string, unknown>, ctx: MethodContext) => {
         const input = generateInput.parse(raw);
         const all = ctx.aiProviders?.length ? ctx.aiProviders : ctx.ai ? [ctx.ai] : [];
-        if (all.length === 0)
+        if (all.length === 0) {
+          // No BYO key — fall back to the user's already-authenticated coding
+          // agent (Claude Code / Codex) so AI columns work off the model they're
+          // already using. If no agent is available either, the original error
+          // tells them to connect a key.
+          if (ctx.aiFallback) {
+            const text = await ctx.aiFallback({
+              prompt: input.prompt,
+              system: input.system,
+              model: input.model,
+            });
+            return { text };
+          }
           throw new Error(
             "No AI provider connected. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY.",
           );
+        }
         const wantModel = input.model?.trim();
         // Route to the provider that owns the requested model. An explicit
         // `provider` wins; otherwise infer from the model id. Order preserves the
@@ -67,18 +94,44 @@ export const aiConnector: Connector = {
         const model = wantModel || ai.model;
 
         if (ai.provider === "anthropic") {
-          const client = new Anthropic({ apiKey: ai.apiKey });
-          const msg = await client.messages.create({
-            model,
-            max_tokens: maxTokens,
-            system: input.system,
-            messages: [{ role: "user", content: input.prompt }],
+          const client = new Anthropic({
+            apiKey: ai.apiKey,
+            maxRetries: AI_MAX_RETRIES,
+            timeout: AI_TIMEOUT_MS,
           });
-          const text = msg.content
-            .filter((b): b is Anthropic.TextBlock => b.type === "text")
-            .map((b) => b.text)
-            .join("");
-          return { text };
+          const startedAt = Date.now();
+          try {
+            const msg = await client.messages.create({
+              model,
+              max_tokens: maxTokens,
+              system: input.system,
+              messages: [{ role: "user", content: input.prompt }],
+            });
+            ctx.onAiGeneration?.({
+              provider: "anthropic",
+              model,
+              traceId: ctx.aiTraceId,
+              inputTokens: msg.usage?.input_tokens,
+              outputTokens: msg.usage?.output_tokens,
+              latencyMs: Date.now() - startedAt,
+              isError: false,
+            });
+            const text = msg.content
+              .filter((b): b is Anthropic.TextBlock => b.type === "text")
+              .map((b) => b.text)
+              .join("");
+            return { text };
+          } catch (e) {
+            ctx.onAiGeneration?.({
+              provider: "anthropic",
+              model,
+              traceId: ctx.aiTraceId,
+              latencyMs: Date.now() - startedAt,
+              isError: true,
+              error: e instanceof Error ? e.message : String(e),
+            });
+            throw e;
+          }
         }
 
         // OpenRouter and Hermes are OpenAI-API-compatible — same client, different
@@ -93,17 +146,41 @@ export const aiConnector: Connector = {
               : undefined;
         const client = new OpenAI({
           apiKey: ai.apiKey || "hermes",
+          maxRetries: AI_MAX_RETRIES,
+          timeout: AI_TIMEOUT_MS,
           ...(baseURL ? { baseURL } : {}),
         });
-        const r = await client.chat.completions.create({
-          model,
-          max_tokens: maxTokens,
-          messages: [
-            ...(input.system ? [{ role: "system" as const, content: input.system }] : []),
-            { role: "user" as const, content: input.prompt },
-          ],
-        });
-        return { text: r.choices[0]?.message?.content ?? "" };
+        const startedAt = Date.now();
+        try {
+          const r = await client.chat.completions.create({
+            model,
+            max_tokens: maxTokens,
+            messages: [
+              ...(input.system ? [{ role: "system" as const, content: input.system }] : []),
+              { role: "user" as const, content: input.prompt },
+            ],
+          });
+          ctx.onAiGeneration?.({
+            provider: ai.provider,
+            model,
+            traceId: ctx.aiTraceId,
+            inputTokens: r.usage?.prompt_tokens,
+            outputTokens: r.usage?.completion_tokens,
+            latencyMs: Date.now() - startedAt,
+            isError: false,
+          });
+          return { text: r.choices[0]?.message?.content ?? "" };
+        } catch (e) {
+          ctx.onAiGeneration?.({
+            provider: ai.provider,
+            model,
+            traceId: ctx.aiTraceId,
+            latencyMs: Date.now() - startedAt,
+            isError: true,
+            error: e instanceof Error ? e.message : String(e),
+          });
+          throw e;
+        }
       },
     },
   ],

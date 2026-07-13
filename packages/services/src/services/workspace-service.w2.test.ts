@@ -41,7 +41,12 @@ const run = <A, E>(
 
 describe("WorkspaceService.me", () => {
   const users: readonly WorkspaceUser[] = [
-    { id: "user_owner", name: "Olive Owner", email: "olive@example.com" },
+    {
+      id: "user_owner",
+      name: "Olive Owner",
+      email: "olive@example.com",
+      image: "https://avatars.example.com/olive.png",
+    },
   ];
   const workspaces: readonly Workspace[] = [
     {
@@ -81,7 +86,12 @@ describe("WorkspaceService.me", () => {
     expect(Exit.isSuccess(exit)).toBe(true);
     if (!Exit.isSuccess(exit)) return;
     expect(exit.value).toEqual({
-      user: { _id: "user_owner", name: "Olive Owner", email: "olive@example.com" },
+      user: {
+        _id: "user_owner",
+        name: "Olive Owner",
+        email: "olive@example.com",
+        image: "https://avatars.example.com/olive.png",
+      },
       workspaces: [
         {
           _id: WS_ID,
@@ -93,9 +103,27 @@ describe("WorkspaceService.me", () => {
           cloudActions: { used: 42, limit: 2000 },
           // plan id + derived human name.
           plan: { id: "team", name: "Team", trialEndsAt: null },
+          // not a self-hosted deployment (GTMGRID_SELF_HOST unset).
+          selfHost: false,
         },
       ],
     });
+  });
+
+  it("surfaces selfHost=true on every workspace when GTMGRID_SELF_HOST=1", async () => {
+    const prev = process.env.GTMGRID_SELF_HOST;
+    process.env.GTMGRID_SELF_HOST = "1";
+    try {
+      const exit = await run(
+        { users, workspaces, members, currentUserId: "user_owner" },
+        (s) => s.me(),
+      );
+      if (!Exit.isSuccess(exit)) throw new Error("expected success");
+      expect(exit.value.workspaces[0]?.selfHost).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.GTMGRID_SELF_HOST;
+      else process.env.GTMGRID_SELF_HOST = prev;
+    }
   });
 
   it("defaults cloudActions to 0/unlimited and plan to Free when unset", async () => {
@@ -167,6 +195,7 @@ describe("WorkspaceService.listMembers", () => {
       createdAt: 100,
       name: "Olive",
       email: "olive@example.com",
+      image: null,
     },
     {
       id: "m_member",
@@ -176,6 +205,7 @@ describe("WorkspaceService.listMembers", () => {
       createdAt: 50,
       name: "Mira",
       email: "mira@example.com",
+      image: "https://avatars.example.com/mira.png",
     },
   ];
 
@@ -194,6 +224,7 @@ describe("WorkspaceService.listMembers", () => {
       createdAt: 50,
       name: "Mira",
       email: "mira@example.com",
+      image: "https://avatars.example.com/mira.png",
     });
     expect(exit.value.seatUsage).toEqual({ used: 2, limit: null });
   });

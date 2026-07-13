@@ -15,10 +15,22 @@
 
 import type { InMemoryUser, Invitation, Membership } from "@gtmgrid/services";
 import { TestLayer, type TestLayerFixtures } from "@gtmgrid/services";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestContext } from "./context";
 import { appRouter } from "./root";
 import { createCallerFactory } from "./trpc";
+
+// The accept mutation notifies the inviter out of band via `inngest.send`
+// (the teammate-joined email #19). Mock the client so we can spy on WHEN it
+// fires without any real queue — the router imports it as `../../inngest/client`
+// (resolved from `lib/trpc/routers/`), which is this file's `../inngest/client`.
+const { sendMock } = vi.hoisted(() => ({ sendMock: vi.fn() }));
+vi.mock("../inngest/client", () => ({ inngest: { send: sendMock } }));
+
+beforeEach(() => {
+  sendMock.mockReset();
+  sendMock.mockResolvedValue(undefined);
+});
 
 const createCaller = createCallerFactory(appRouter);
 
@@ -203,7 +215,51 @@ describe("invitations.accept", () => {
       autumn: { allowed: true, balance: 5 },
     });
     const res = await caller.invitations.accept({ token: TOKEN });
-    expect(res).toEqual({ status: "accepted", workspaceId: WS_ID });
+    expect(res).toEqual({
+      status: "accepted",
+      workspaceId: WS_ID,
+      // New-membership accept → surfaces the fields the teammate-joined email
+      // event (#19) is keyed on.
+      newMember: true,
+      invitedBy: "user_owner",
+    });
+  });
+
+  it("emits ONE workspace/member.joined event on a fresh accept", async () => {
+    const caller = callerFor({
+      workspaces,
+      users,
+      memberships: [ownerMembership],
+      invitations: [liveInvite()],
+      currentUserId: INVITEE,
+      autumn: { allowed: true, balance: 5 },
+    });
+    await caller.invitations.accept({ token: TOKEN });
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledWith({
+      name: "workspace/member.joined",
+      data: {
+        workspaceId: WS_ID,
+        joinedUserId: INVITEE,
+        invitedBy: OWNER,
+      },
+    });
+  });
+
+  it("does NOT emit when the caller is ALREADY a member (re-accept stays silent)", async () => {
+    const caller = callerFor({
+      workspaces,
+      users,
+      // INVITEE is already in the workspace → acceptInsert returns alreadyMember,
+      // so newMember is false and no teammate-joined email should fire.
+      memberships: [ownerMembership, { workspaceId: WS_ID, userId: INVITEE, role: "member" }],
+      invitations: [liveInvite()],
+      currentUserId: INVITEE,
+      autumn: { allowed: true, balance: 5 },
+    });
+    const res = await caller.invitations.accept({ token: TOKEN });
+    expect(res).toMatchObject({ status: "accepted", newMember: false });
+    expect(sendMock).not.toHaveBeenCalled();
   });
 
   it("returns wrong_account on an email mismatch", async () => {
@@ -219,6 +275,24 @@ describe("invitations.accept", () => {
       status: "wrong_account",
       invitedEmail: INVITEE_EMAIL,
     });
+    // A non-membership outcome never emails the inviter.
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("still returns accepted when inngest.send REJECTS (Effect.ignore swallows it)", async () => {
+    sendMock.mockRejectedValue(new Error("inngest queue down"));
+    const caller = callerFor({
+      workspaces,
+      users,
+      memberships: [ownerMembership],
+      invitations: [liveInvite()],
+      currentUserId: INVITEE,
+      autumn: { allowed: true, balance: 5 },
+    });
+    const res = await caller.invitations.accept({ token: TOKEN });
+    // The accept succeeds regardless — a queue hiccup must never fail the join.
+    expect(res).toMatchObject({ status: "accepted", newMember: true });
+    expect(sendMock).toHaveBeenCalledTimes(1);
   });
 
   it("rejects an unauthenticated caller with UNAUTHORIZED", async () => {

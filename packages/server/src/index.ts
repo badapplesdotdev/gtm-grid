@@ -1,17 +1,25 @@
 #!/usr/bin/env node
 // gtmgrid HTTP server — the engine sidecar the desktop UI talks to.
-// Plain node:http, JSON REST. Project via GTMGRID_PROJECT (name or .db path).
+// Plain node:http, JSON REST.
+//
+// The sidecar is now an EXECUTION host + a SECRETS-ONLY vault. Grid data lives in
+// the cloud (Postgres); there is no local SQLite project store. The sidecar:
+//   - runs columns on a CLOUD project via the cloud run path (cloud-run.ts), and
+//   - serves the vault-backed endpoints (AI providers, extensions, skills,
+//     options, health) off the shared `global.db` secrets vault.
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { isProcessAlive, reclaimPort } from "./port.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import {
   Db,
   Engine,
   defaultRegistry,
   parseManifest,
   connectorFromManifest,
+  extractOptions,
   connectAi,
   storedAiConfig,
   storedAiProviders,
@@ -19,32 +27,45 @@ import {
   globalDbPath,
   projectPath,
   migrateGlobals,
-  listProjects,
   DEFAULT_HERMES_BASE_URL,
+  GridStoreError,
+  type AiConfig,
+  type Credential,
+  type EngineConfig,
+  type GridStoreShape,
 } from "@gtmgrid/engine";
-import type { CellProgress } from "@gtmgrid/engine";
-import { detectAgents, streamClaude, streamCodex, streamHermes, setAgentPath, rescanAgents, generateWithAgent, parseAgentCloud, type AgentKind } from "./agent.js";
+import { Effect } from "effect";
+import type { RunErrorContext, AiGenerationEvent } from "@gtmgrid/engine";
+import { randomUUID } from "node:crypto";
+import { detectAgents, streamClaude, streamCodex, streamCursor, setAgentPath, rescanAgents, generateWithAgent, parseAgentCloud, type AgentKind } from "./agent.js";
+import { localProviderEnv, resolveCloudProviderEnv } from "./provider-env.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
-import { runCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
-import { runCloudPush, defaultCloudPushDeps } from "./cloud-push.js";
+import { runCloudColumn, previewCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
+import { requiredInputKeys, resolveOptionArgs } from "./option-args.js";
 import { corsHeadersFor, isLoopbackHost, isOriginAllowed } from "./cors.js";
 import { Semaphore } from "./semaphore.js";
-import {
-  SIGNAL_SOURCES,
-  getSource,
-  listBindings,
-  upsertBinding,
-  deleteBinding,
-  newBinding,
-  syncBinding,
-  warmUpBinding,
-  type SignalDeps,
-  type SignalSchedule,
-} from "./signals.js";
+import { captureException, captureServerEvent, flushObservability, installProcessHandlers, log } from "./observability.js";
+
+// Install last-gasp crash handlers ASAP so an error during boot/init is reported.
+installProcessHandlers();
 
 const PORT = Number(process.env.GTMGRID_PORT ?? 8787);
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = join(SERVER_DIR, "..", "..", "..");
+// The working directory the agent CLIs (claude/codex/cursor) are spawned in.
+// MUST be a stable, real, user-writable dir that is identical across launches AND
+// byte-identical on the spawn side (agent.ts) and the history-read side
+// (agent-history.ts) — the agents key their transcripts by encoded cwd, so any
+// drift silently breaks "Resume". The desktop shell passes GTMGRID_AGENT_CWD (a
+// per-user ~/.gtmgrid/workspace). The old `join(SERVER_DIR, "../../..")` pointed
+// INTO the install bundle: read-only on Windows, and a different (possibly `\\?\`
+// verbatim) path than the read side — the Windows resume bug. Falls back to the
+// repo root only for dev/non-packaged runs.
+const REPO_ROOT = process.env.GTMGRID_AGENT_CWD ?? join(SERVER_DIR, "..", "..", "..");
+try {
+  mkdirSync(REPO_ROOT, { recursive: true });
+} catch {
+  /* best-effort — the agents will surface a clearer error if cwd is unusable */
+}
 
 // ── Process-wide run limiter (M6). The engine's per-run `mapConcurrent` only
 // bounds ONE column run's row fan-out; it does NOT cap how many runs execute at
@@ -64,6 +85,13 @@ migrateGlobals(globalDb, projectPath("default")); // one-time: pull legacy keys 
 
 // Registry of callable functions (built-ins + uploaded manifests in globalDb).
 const registry = defaultRegistry();
+
+// Curated "featured" tools for the Browse-all gallery. This is the single source
+// of truth — driven by code, NOT by the manifest/db — so the featured set is
+// identical everywhere and can't drift with stale local db rows left behind by
+// branch-switching (which previously made tools like Slack/Notion show as
+// featured locally but not on prod).
+const FEATURED_TOOLS = new Set(["trigify", "smuggler", "leadmagic", "avtrz"]);
 
 // Seed bundled connector manifests (extensions/*.json shipped next to the server
 // in the packaged app, or repo/extensions in dev) into the GLOBAL db + registry.
@@ -115,18 +143,6 @@ function saveCustomSkills(skills: CustomSkill[]): void {
   globalDb.setMeta("custom_skills", JSON.stringify(skills));
 }
 
-// ── Auto-sync setting (TRI-3298): a GLOBAL meta flag, like custom_skills above.
-//    When ON, the desktop auto-links + pushes local tables on create/edit. It
-//    DEFAULTS OFF: only the canonical string "true" enables it, so an unset or
-//    non-"true" value can NEVER silently turn auto-sync on. The desktop mirrors
-//    this exact parse (packages/desktop/src/cloudSync.ts parseAutoSyncFlag).
-const AUTO_SYNC_META_KEY = "auto_sync_offline_tables";
-function getAutoSync(): boolean {
-  return globalDb.getMeta(AUTO_SYNC_META_KEY) === "true";
-}
-function setAutoSync(on: boolean): void {
-  globalDb.setMeta(AUTO_SYNC_META_KEY, on ? "true" : "false");
-}
 function wordCount(s: string): number {
   return s.trim() ? s.trim().split(/\s+/).length : 0;
 }
@@ -139,37 +155,102 @@ for (const manifest of globalDb.listExtensions()) {
   }
 }
 
-// AI config resolved from the global db (env wins for the active provider).
-function aiConfig() {
-  return { ai: aiConfigFromEnv() ?? storedAiConfig(globalDb), aiProviders: storedAiProviders(globalDb) };
+/**
+ * `ai.generate` fallback when no AI provider key is connected — route the prompt
+ * through the user's already-authenticated coding agent (Claude Code / Codex), so
+ * AI columns work off the model they're already using. Throws (→ the cell errors
+ * with this message) when no agent is connected either.
+ */
+async function aiAgentFallback(req: { prompt: string; system?: string }): Promise<string> {
+  const r = await generateWithAgent(req.prompt, req.system ?? "");
+  if ("error" in r) throw new Error(r.error);
+  return r.text;
 }
 
-// ── Current project (swappable in-process, no sidecar restart).
-interface Current {
-  name: string;
-  path: string;
-  projectDb: Db;
-  engine: Engine;
-}
-let current!: Current;
-
-function switchTo(name: string): Current {
-  const path = projectPath(name);
-  const projectDb = new Db(path);
-  const engine = new Engine(projectDb, aiConfig(), registry, globalDb);
-  current = { name, path, projectDb, engine };
-  globalDb.setMeta("current_project", name);
-  let recents: string[] = [];
-  try {
-    recents = JSON.parse(globalDb.getMeta("recent_projects") || "[]");
-  } catch {
-    /* ignore */
-  }
-  globalDb.setMeta("recent_projects", JSON.stringify([name, ...recents.filter((r) => r !== name)].slice(0, 12)));
-  return current;
+// AI config resolved from the global db (env wins for the active provider); the
+// agent fallback covers the no-key case in-process.
+/** Emit a PostHog LLM-observability `$ai_generation` event for an ai.generate run.
+ *  Server-side delivery (the reliable path); one trace id per generation. */
+function emitAiGeneration(e: AiGenerationEvent): void {
+  captureServerEvent("$ai_generation", {
+    // Run-scoped when inside a column run (groups the run's generations into one
+    // trace); a fresh id for a standalone generation (preview / one-off).
+    $ai_trace_id: e.traceId ?? randomUUID(),
+    $ai_provider: e.provider,
+    $ai_model: e.model,
+    $ai_input_tokens: e.inputTokens,
+    $ai_output_tokens: e.outputTokens,
+    $ai_latency: e.latencyMs / 1000, // PostHog expects seconds
+    $ai_is_error: e.isError,
+    ...(e.error ? { $ai_error: e.error } : {}),
+    platform: process.platform,
+  });
 }
 
-switchTo(process.env.GTMGRID_PROJECT ?? globalDb.getMeta("current_project") ?? "default");
+function aiConfig(): EngineConfig {
+  return {
+    ai: aiConfigFromEnv() ?? storedAiConfig(globalDb),
+    aiProviders: storedAiProviders(globalDb),
+    aiFallback: aiAgentFallback,
+    onAiGeneration: emitAiGeneration,
+    // Surface systemic run failures (connector/AI bugs) to PostHog Error Tracking,
+    // deduped per run by the engine. Per-cell errors still land as cell status.
+    reportError: (error: unknown, ctx: RunErrorContext) =>
+      captureException(error, { source: "engine-run", ...ctx }),
+  };
+}
+
+// ── Credential-only GridStore (no grid table) backed by the secrets vault.
+// The sidecar no longer owns grid data — the cloud (Postgres) tier does. But a
+// few routes still dispatch a connector DIRECTLY with no table (the
+// `/api/options` name-picker resolves an option source through `engine.dispatch`).
+// That path only needs the credential resolver, so we back a table-free
+// GridStoreShape with the vault's `getCredential` and stub the grid reads/writes
+// (they are never reached on a table-free dispatch). The engine is always
+// store-backed, so this satisfies its constructor without opening a grid Db.
+function vaultGridStore(): GridStoreShape {
+  const unsupported = (operation: string) =>
+    Effect.fail(
+      new GridStoreError({
+        message: `${operation} is not available on the secrets vault (no local grid)`,
+        operation,
+      }),
+    );
+  return {
+    getColumn: () => unsupported("getColumn"),
+    listColumns: () => unsupported("listColumns"),
+    listRows: () => unsupported("listRows"),
+    rowCells: () => unsupported("rowCells"),
+    getCell: () => unsupported("getCell"),
+    setCell: () => unsupported("setCell"),
+    getCredential: (provider: string) =>
+      Effect.try({
+        try: (): Credential | undefined => globalDb.getCredential(provider),
+        catch: (cause) =>
+          new GridStoreError({
+            message: cause instanceof Error ? cause.message : String(cause),
+            operation: "getCredential",
+            cause,
+          }),
+      }),
+  };
+}
+
+// A standing engine for the table-free dispatch path (`/api/options`): no grid,
+// credentials resolve from the vault. Its config is refreshed in place when AI
+// keys change (see the ai-providers/connect route).
+const dispatchStore = vaultGridStore();
+const engine = new Engine(aiConfig(), registry, { store: dispatchStore, creds: dispatchStore });
+
+// The sidecar drives a single CLOUD project; the display name is purely
+// cosmetic (agent chat banner / repo context), the grid itself lives in the
+// cloud and is addressed per-request by the cloud run path.
+const PROJECT_NAME = process.env.GTMGRID_PROJECT ?? "gtmgrid";
+
+// Resolve the AI provider config the `/api/ai-providers` route reports on.
+function aiProviderConfigs(): AiConfig[] {
+  return engine.config.aiProviders ?? [];
+}
 
 type Handler = (params: Record<string, string>, body: any) => Promise<unknown> | unknown;
 interface Route {
@@ -212,48 +293,6 @@ function normScope(s: unknown): "personal" | "team" | "local" {
   return s === "team" || s === "local" || s === "personal" ? s : "personal";
 }
 
-const tableSummary = (t: { id: string; name: string }) => ({
-  id: t.id,
-  name: t.name,
-  columns: current.projectDb.listColumns(t.id).length,
-  rows: current.projectDb.listRows(t.id).length,
-  favorite: current.projectDb.isFavorite(t.id),
-});
-
-function fullTable(tableId: string) {
-  const t = current.projectDb.getTable(tableId);
-  if (!t) return null;
-  const columns = current.projectDb.listColumns(t.id).map((c) => ({
-    id: c.id,
-    name: c.name,
-    type: c.type,
-    kind: c.kind,
-    provider: c.provider,
-    method: c.method,
-    fn: c.provider ? `${c.provider}.${c.method}` : c.code ? "code" : null,
-    params: c.params,
-    condition: c.condition,
-  }));
-  const rows = current.projectDb.listRows(t.id).map((r) => {
-    const cells = current.projectDb.rowCells(r.id);
-    const out: Record<string, { value: unknown; status: string; error: string | null }> = {};
-    for (const c of columns) {
-      const cell = cells.get(c.id);
-      out[c.id] = cell
-        ? { value: cell.value, status: cell.status, error: cell.error }
-        : { value: null, status: "empty", error: null };
-    }
-    return { id: r.id, cells: out };
-  });
-  return { id: t.id, name: t.name, columns, rows };
-}
-
-/** Treat a blank "only run if" input as no condition (always run). */
-function normalizeCondition(v: unknown): string | null {
-  const s = typeof v === "string" ? v.trim() : "";
-  return s ? s : null;
-}
-
 /** Strip Markdown fences / leading `return` / trailing `;` an LLM may wrap output in. */
 function cleanFormulaOutput(text: string): string {
   let s = text.trim();
@@ -293,52 +332,12 @@ function formulaSystemPrompt(mode: "formula" | "condition", columns: string[]): 
 
 // --- routes ---
 //
-// METERING (C26): these are the LOCAL sidecar routes — `/api/cells`,
-// `/api/columns/:id/run`, `/api/tables/:id/rows`, etc. They operate on the local
-// SQLite project (`current.projectDb` / `current.engine`) entirely on the user's
-// machine and NEVER touch Convex or our cost. They are INTENTIONALLY UNMETERED:
-// local actions are unlimited and unmetered on EVERY tier (free included) and
-// MUST NEVER increment the cloud_actions meter. The meter lives ONLY inside the
-// Convex CLOUD mutations (convex/cells.ts, convex/tables.ts), which local
-// projects never call — do NOT add any cloud_actions counting here or in the
-// local engine. The ONE exception below (`/api/cloud/columns/run`) drives a
-// CLOUD project: it writes via the Convex setCell/setCellStatus mutations, which
-// do the metering once on the Convex side — so it stays unmetered HERE too (no
-// double-count, and the sidecar holds no Autumn secret).
-route("GET", "/api/health", () => ({ ok: true, project: current.name }));
-
-// --- projects ---
-route("GET", "/api/projects", () => {
-  let recents: string[] = [];
-  try {
-    recents = JSON.parse(globalDb.getMeta("recent_projects") || "[]");
-  } catch {
-    /* ignore */
-  }
-  const projects = listProjects();
-  // ensure the current project shows even if its file was just created
-  if (!projects.some((p) => p.name === current.name)) {
-    projects.unshift({ name: current.name, path: current.path, mtimeMs: Date.now() });
-  }
-  const rank = (n: string) => { const i = recents.indexOf(n); return i === -1 ? 1e9 : i; };
-  return projects
-    .map((p) => ({ ...p, current: p.name === current.name }))
-    .sort((a, b) => rank(a.name) - rank(b.name));
-});
-
-route("POST", "/api/projects", (_p, body) => {
-  const name = String(body?.name ?? "").trim().replace(/[/\\]/g, "");
-  if (!name) return { error: "name required" };
-  switchTo(name);
-  return { ok: true, project: current.name };
-});
-
-route("POST", "/api/projects/switch", (_p, body) => {
-  const name = String(body?.name ?? "").trim().replace(/[/\\]/g, "");
-  if (!name) return { error: "name required" };
-  switchTo(name);
-  return { ok: true, project: current.name };
-});
+// METERING: grid data lives in the cloud (Postgres); the sidecar holds NO local
+// grid. The CLOUD run route (`/api/cloud/columns/run`) writes via the apps/web
+// worker mutations, which meter once on the cloud side — so the sidecar stays
+// unmetered (no double-count, and it holds no billing secret). The remaining
+// routes serve the secrets vault (AI providers, extensions, skills, options).
+route("GET", "/api/health", () => ({ ok: true, project: PROJECT_NAME }));
 
 route("GET", "/api/functions", () =>
   registry.list().map((c) => {
@@ -353,8 +352,11 @@ route("GET", "/api/functions", () =>
         method: m.id,
         label: m.label,
         description: m.description,
+        category: m.category ?? null,
         credits: m.credits,
         input: m.inputSchema ?? null,
+        // Fields the UI should render as a live name-picker (field → option source).
+        options: m.options ?? null,
         source: m.source ?? null,
         batchSize: m.batchSize ?? 1,
         output: m.output ?? "text",
@@ -369,7 +371,7 @@ route("GET", "/api/extensions", () =>
     name: e.name,
     category: e.category,
     description: e.description ?? null,
-    featured: !!e.featured,
+    featured: FEATURED_TOOLS.has(e.id),
     methods: (e.methods ?? []).length,
     connected: !!globalDb.getCredential(e.id),
     logo: e.logo ?? logoFor(e.baseUrl),
@@ -513,91 +515,11 @@ route("DELETE", "/api/skills/:id", (p) => {
   return { ok: true };
 });
 
-// Auto-sync setting (TRI-3298): read/write the global flag. Default OFF.
-route("GET", "/api/settings/auto-sync", () => ({ enabled: getAutoSync() }));
-route("POST", "/api/settings/auto-sync", (_p, body) => {
-  const enabled = (body as { enabled?: unknown } | null)?.enabled === true;
-  setAutoSync(enabled);
-  return { ok: true, enabled };
-});
-
-// --- Signals: bind a table to a Trigify saved search + poll new results in ---
-function signalDeps(): SignalDeps {
-  return { dispatch: (pr, m, i) => current.engine.dispatch(pr, m, i), projectDb: current.projectDb };
-}
-
-// Catalog of signal sources + each one's input schema (for the config form).
-route("GET", "/api/signals/sources", () => ({
-  trigifyConnected: !!globalDb.getCredential("trigify"),
-  sources: SIGNAL_SOURCES.map((s) => {
-    const m = registry.method("trigify", s.method);
-    return {
-      id: s.id,
-      label: s.label,
-      group: s.group,
-      kind: s.kind,
-      description: s.description,
-      columns: s.columns,
-      inputSchema: (m as any)?.inputSchema ?? null,
-    };
-  }),
-}));
-
-// Bindings in the current project (without the heavy `seen` dedupe window).
-route("GET", "/api/signals", () =>
-  listBindings(current.projectDb).map(({ seen: _seen, ...b }) => b),
-);
-
-// Create: table + columns + Trigify search + binding + initial pull.
-route("POST", "/api/signals", async (_p, body) => {
-  const source = getSource(String(body?.sourceId ?? ""));
-  if (!source) return { error: "unknown signal source" };
-  if (!globalDb.getCredential("trigify")) return { error: "Connect Trigify first (Tools → Trigify)." };
-  const name = (String(body?.name ?? "").trim() || source.label).slice(0, 80);
-  const config = (body?.config ?? {}) as Record<string, unknown>;
-  const schedule = (["manual", "hourly", "daily", "weekly"].includes(body?.schedule) ? body.schedule : "daily") as SignalSchedule;
-
-  const table = current.projectDb.createTable(name);
-  for (const col of source.columns) {
-    current.projectDb.createColumn({ tableId: table.id, name: col.name, type: "text", kind: "manual", provider: null, method: null, code: null, params: {} });
-  }
-
-  let searchId: string | null = null;
-  try {
-    const created: any = await current.engine.dispatch("trigify", source.method, { name, ...config });
-    searchId = created?.id ?? created?.search_id ?? created?.data?.id ?? created?.search?.id ?? null;
-  } catch (e) {
-    current.projectDb.deleteTable(table.id);
-    return { error: `Could not create the Trigify search: ${e instanceof Error ? e.message : String(e)}` };
-  }
-
-  const binding = newBinding({ tableId: table.id, source, config: { name, ...config }, schedule, searchId });
-  upsertBinding(current.projectDb, binding);
-  const sync = await syncBinding(signalDeps(), binding);
-  // Results populate async — keep retrying in the background until rows land.
-  if (!sync.error && sync.added === 0) void warmUpBinding(signalDeps(), binding.id);
-  return { tableId: table.id, bindingId: binding.id, searchId, added: sync.added, error: sync.error ?? null };
-});
-
-// Manual "pull now".
-route("POST", "/api/signals/:id/sync", async (p) => {
-  const b = listBindings(current.projectDb).find((x) => x.id === p.id);
-  if (!b) return { error: "not found" };
-  const r = await syncBinding(signalDeps(), b);
-  return { ok: !r.error, added: r.added, error: r.error ?? null };
-});
-
-route("POST", "/api/signals/:id/toggle", (p, body) => {
-  const b = listBindings(current.projectDb).find((x) => x.id === p.id);
-  if (!b) return { error: "not found" };
-  b.enabled = (body as any)?.enabled !== false;
-  upsertBinding(current.projectDb, b);
-  return { ok: true, enabled: b.enabled };
-});
-
-route("DELETE", "/api/signals/:id", (p) =>
-  deleteBinding(current.projectDb, p.id) ? { ok: true } : { error: "not found" },
-);
+// NOTE: the local-grid SIGNALS routes (bind a Trigify saved search to a local
+// SQLite table + poll results in) were removed with the local grid paradigm —
+// they wrote tables/columns/rows into the project Db, which no longer exists.
+// Recurring/scheduled signal refresh is a CLOUD-only feature (the Inngest cron
+// worker). See the workstream summary for the owner decision.
 
 // --- AI providers (bring-your-own-key for AI step functions) ---
 // `fallbackModels` is only used if the live /v1/models fetch fails (offline,
@@ -708,7 +630,7 @@ async function fetchModels(
 route("GET", "/api/ai-providers", async () => {
   // Each provider connects independently (per-provider credential slot), so any
   // number can be connected at once and all their models pull through.
-  const connectedProviders = new Set((current.engine.config.aiProviders ?? []).map((a) => a.provider));
+  const connectedProviders = new Set(aiProviderConfigs().map((a) => a.provider));
   const envProvider = process.env.ANTHROPIC_API_KEY
     ? "anthropic"
     : process.env.OPENAI_API_KEY
@@ -737,14 +659,14 @@ route("GET", "/api/ai-providers", async () => {
       // Prefer the engine-resolved key (handles the legacy single-slot credential
       // for keys connected before per-provider storage existed).
       const apiKey =
-        (current.engine.config.aiProviders ?? []).find((a) => a.provider === p.id)?.apiKey ??
+        aiProviderConfigs().find((a) => a.provider === p.id)?.apiKey ??
         cred?.secrets.apiKey ??
         (viaEnv ? envKeyFor(p.id) : undefined);
       // Hermes is a configurable gateway — resolve its base URL (stored cred,
       // then env, then the default tunnel) so live model fetch + the UI prefill work.
       const baseUrl =
         p.id === "hermes"
-          ? ((current.engine.config.aiProviders ?? []).find((a) => a.provider === "hermes")?.baseURL ??
+          ? (aiProviderConfigs().find((a) => a.provider === "hermes")?.baseURL ??
             cred?.secrets.baseUrl ??
             process.env.HERMES_BASE_URL ??
             DEFAULT_HERMES_BASE_URL)
@@ -786,118 +708,103 @@ route("POST", "/api/ai-providers/:id/connect", (p, body) => {
   connectAi(globalDb, p.id, apiKey || "hermes", undefined, normScope(body?.scope), baseURL);
   // Refresh the live engine so AI columns work immediately — both the active
   // provider and the full set used for model-based routing.
-  current.engine.config.ai = storedAiConfig(globalDb);
-  current.engine.config.aiProviders = storedAiProviders(globalDb);
+  engine.config.ai = storedAiConfig(globalDb);
+  engine.config.aiProviders = storedAiProviders(globalDb);
   return { ok: true };
 });
 
-// Persisted local↔cloud sync links for the CURRENT project (TRI-3311). Returns
-// `{ [localTableId]: cloudTableId }` straight from the project's SQLite meta
-// (the authoritative store `setCloudTableLink` writes on push), so the desktop
-// hydrates synced-table status from the source of truth instead of a localStorage
-// mirror that can drift. A plain JSON route — it inherits the loopback-`Host` /
-// allowed-`Origin` gate every route is wrapped in (the server's request handler),
-// so it is not LAN-reachable and not callable from a disallowed browser origin.
-route("GET", "/api/cloud/tables/links", () => current.projectDb.listCloudTableLinks());
+// Copy a LOCAL connector/AI key up to the shared CLOUD (workspace) key — the
+// desktop "Use my local key" action. SECURITY: the plaintext is revealed ONLY
+// inside this sidecar process (the user's own machine) and forwarded to the cloud
+// over TLS; it is never returned to the caller (the renderer), never logged, and
+// stored only as ciphertext server-side. The cloud save is member-authenticated
+// (the forwarded Better Auth bearer in `X-Gtmgrid-Member`), so a non-member is
+// rejected server-side. This route inherits the loopback-`Host` / allowed-`Origin`
+// gate every route is wrapped in, so it is not LAN-reachable.
+route("POST", "/api/credentials/copy-to-cloud", async (_p, body) => {
+  const credId = String(body?.credId ?? "").trim();
+  const extensionId = String(body?.extensionId ?? credId).trim() || credId;
+  const apiUrl = String(body?.apiUrl ?? "").trim();
+  const token = String(body?.token ?? "").trim();
+  const workspaceId = String(body?.workspaceId ?? "").trim();
+  const name = String(body?.name ?? extensionId).trim() || extensionId;
+  if (!credId || !apiUrl || !token || !workspaceId)
+    return { error: "credId, apiUrl, token and workspaceId are required" };
 
-route("GET", "/api/tables", () => current.projectDb.listTables().map(tableSummary));
-route("POST", "/api/tables", (_p, body) => tableSummary(current.projectDb.createTable(body?.name ?? "Untitled")));
-route("GET", "/api/tables/:id", (p) => fullTable(p.id) ?? { error: "not found" });
+  // Reveal the LOCAL plaintext — only ever in this process; never returned/logged.
+  const secrets = globalDb.getCredential(credId)?.secrets ?? null;
+  if (!secrets || Object.keys(secrets).length === 0)
+    return { error: "No local key found to copy to the cloud." };
 
-route("POST", "/api/tables/:id/update", (p, body) => {
-  const name = typeof body?.name === "string" ? body.name.trim() : "";
-  if (!name) return { error: "name required" };
-  current.projectDb.renameTable(p.id, name);
-  return { ok: true };
-});
-
-route("POST", "/api/tables/:id/delete", (p) => {
-  current.projectDb.deleteTable(p.id);
-  return { ok: true };
-});
-
-route("POST", "/api/tables/:id/favorite", (p, body) => {
-  current.projectDb.setFavorite(p.id, body?.favorite !== false);
-  return { ok: true, favorite: current.projectDb.isFavorite(p.id) };
-});
-
-route("POST", "/api/tables/:id/columns", (p, body) => {
-  const provider = body.fn ? String(body.fn).split(".")[0] : null;
-  const method = body.fn ? String(body.fn).split(".")[1] : null;
-  const kind = provider || body.code ? "function" : "manual";
-  const col = current.projectDb.createColumn({
-    tableId: p.id,
-    name: body.name ?? "Column",
-    type: body.type ?? "text",
-    kind,
-    provider,
-    method,
-    code: body.code ?? null,
-    params: body.params ?? {},
-    condition: normalizeCondition(body.condition),
+  // Server-to-server save over TLS, authenticated as the signed-in member. The
+  // cloud worker route encrypts the map at rest (CredentialService.saveCredential).
+  const base = apiUrl.replace(/\/+$/, "");
+  const res = await fetch(`${base}/api/worker/saveCredential`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Gtmgrid-Member": token },
+    body: JSON.stringify({ workspaceId, extensionId, name, secrets }),
   });
-  return { id: col.id };
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    return {
+      error:
+        `Cloud save failed (${res.status} ${res.statusText}). ${text}`.trim(),
+    };
+  }
+  return { ok: true };
 });
 
-route("POST", "/api/tables/:id/rows", (p, body) => {
-  const row = current.projectDb.createRow(p.id);
-  if (body?.cells) {
-    for (const [colId, value] of Object.entries(body.cells)) {
-      current.projectDb.setCell(row.id, colId, { value, status: "done" });
+// NOTE: the LOCAL grid CRUD/run routes (`/api/tables*`, `/api/folders*`,
+// `/api/columns/:id/run[/async]`, `/api/cells*`, `/api/tables/:id/rows[/bulk]`,
+// dedupe, preview-function, cloud-table-links) were removed with the local grid
+// paradigm. Grid data lives in the cloud (Postgres); column runs go through the
+// CLOUD run route below (`/api/cloud/columns/run`).
+
+// Live options for a pick-field: resolve `provider.method`'s declared option
+// source for `field`, call the source list endpoint with the connector's stored
+// credential, and return `{ label, value }[]`. Powers the column-editor's
+// name-dropdown so a user picks an Instantly campaign / HeyReach sender by NAME
+// and the id is stored — no hand-pasted UUIDs. `search` is forwarded to the
+// source call (most list endpoints accept a search/keyword filter).
+route("POST", "/api/options", async (_p, body) => {
+  const provider = String(body?.provider ?? "");
+  const ownerMethod = String(body?.method ?? "");
+  const field = String(body?.field ?? "");
+  if (!provider || !ownerMethod || !field) throw new Error("provider, method and field are required");
+  const m = registry.method(provider, ownerMethod);
+  const source = m?.options?.[field];
+  if (!source) return { error: `no option source for ${provider}.${ownerMethod}.${field}` };
+  // Dependent dropdowns: inject any sibling value the SOURCE method (e.g.
+  // listCampaigns) declares required (e.g. workspace_id) from the in-progress
+  // field values the column editor sends. See ./option-args for the rules.
+  const srcRequired = requiredInputKeys(registry.method(provider, source.method)?.inputSchema);
+  const values = (body?.values ?? {}) as Record<string, unknown>;
+  const { args, missing } = resolveOptionArgs(source.args ?? {}, srcRequired, values);
+  // Surface a clear prompt instead of letting the upstream API reject with a raw 400.
+  if (missing.length) return { error: `Select ${missing.join(", ")} first to load options` };
+  const search = typeof body?.search === "string" ? body.search.trim() : "";
+  // Best-effort search passthrough: forward under whichever filter key the
+  // source endpoint exposes (its input schema tells us). Harmless if unused.
+  if (search) {
+    const srcMethod = registry.method(provider, source.method);
+    const props = ((srcMethod?.inputSchema as any)?.properties ?? {}) as Record<string, unknown>;
+    for (const key of ["search", "keyword", "query", "q", "name"]) {
+      if (key in props) {
+        args[key] = search;
+        break;
+      }
     }
   }
-  return { id: row.id };
-});
-
-// Bulk row insert for CSV import: create many rows + their cells in ONE
-// better-sqlite3 transaction (fast + atomic). Each row is a `{ columnId: value }`
-// map; empty values are skipped so the cell stays empty. LOCAL projects only —
-// never metered (local is unlimited on every tier).
-route("POST", "/api/tables/:id/rows/bulk", (p, body) => {
-  const inputRows: Array<Record<string, unknown>> = Array.isArray(body?.rows)
-    ? body.rows
-    : [];
-  const rowIds: string[] = [];
-  const insertAll = current.projectDb.raw.transaction(
-    (rows: Array<Record<string, unknown>>) => {
-      for (const cells of rows) {
-        const row = current.projectDb.createRow(p.id);
-        rowIds.push(row.id);
-        if (cells) {
-          for (const [colId, value] of Object.entries(cells)) {
-            if (value === "" || value === null || value === undefined) continue;
-            current.projectDb.setCell(row.id, colId, { value, status: "done" });
-          }
-        }
-      }
-    },
-  );
-  insertAll(inputRows);
-  return { rowIds };
-});
-
-route("POST", "/api/cells", (_p, body) => {
-  current.projectDb.setCell(body.rowId, body.columnId, { value: body.value, status: "done" });
-  return { ok: true };
-});
-
-route("POST", "/api/columns/:id/run", async (p, body) => {
-  const rowIds = Array.isArray(body?.rowIds) && body.rowIds.length ? (body.rowIds as string[]) : undefined;
-  // Bound the number of simultaneous runs process-wide (M6): a run waits for a
-  // permit before fanning out, so concurrent runs queue instead of all spiking
-  // the single sidecar at once.
-  return runLimiter.run(() =>
-    current.engine.runColumn(p.id, { force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds }),
-  );
+  const raw = await runLimiter.run(() => engine.dispatch(provider, source.method, args));
+  return { options: extractOptions(raw, source) };
 });
 
 // --- cloud run path (T9) ---
 // Running a column on a CLOUD project: build an Engine whose store is the
 // cloud-backed GridStore (POSTing to the apps/web `/api/worker/*` endpoints), so
 // inputs are read from Postgres and statuses/results stream back live to all
-// members via the realtime broadcast the server emits. LOCAL projects keep the
-// route above unchanged. The registry + AI config are the sidecar's existing
-// ones, so connectors/AI columns behave identically.
+// members via the realtime broadcast the server emits. The registry + AI config
+// are the sidecar's existing ones, so connectors/AI columns behave identically.
 route("POST", "/api/cloud/columns/run", async (_p, body) => {
   const apiUrl = String(body?.apiUrl ?? "").trim();
   const token = String(body?.token ?? "").trim();
@@ -920,11 +827,25 @@ route("POST", "/api/cloud/columns/run", async (_p, body) => {
   );
 });
 
-route("POST", "/api/columns/:id/update", (p, body) => {
-  const patch = { ...body };
-  if ("condition" in patch) patch.condition = normalizeCondition(patch.condition);
-  const col = current.projectDb.updateColumn(p.id, patch);
-  return col ? { ok: true, tableId: col.table_id, id: col.id } : { error: "not found" };
+// "Try on N rows" preview for a CLOUD table: dry-run a not-yet-saved function
+// column and return per-row results WITHOUT persisting or metering anything
+// (no quota gate). Same worker-backed store as the cloud run path; bounded by
+// the same process-wide run semaphore.
+route("POST", "/api/cloud/preview-function", async (_p, body) => {
+  const apiUrl = String(body?.apiUrl ?? "").trim();
+  const token = String(body?.token ?? "").trim();
+  const tableId = String(body?.tableId ?? "").trim();
+  const provider = String(body?.provider ?? "").trim();
+  const method = String(body?.method ?? "").trim();
+  if (!apiUrl || !token || !tableId || !provider || !method)
+    return { error: "apiUrl, token, tableId, provider and method are required" };
+  const params = (body?.params ?? {}) as Record<string, unknown>;
+  const limit = typeof body?.limit === "number" ? body.limit : undefined;
+  const deps = defaultCloudRunDeps(registry, aiConfig());
+  const results = await runLimiter.run(() =>
+    previewCloudColumn({ apiUrl, token, tableId, provider, method, params, limit }, deps),
+  );
+  return { results };
 });
 
 // Generate a formula expression (or an "only run if" boolean) from a natural-language
@@ -933,6 +854,16 @@ route("POST", "/api/columns/:id/update", (p, body) => {
 // connected coding agent (Claude Code or Codex) — the model the user has already
 // authenticated, NOT a separate API AI key. Returns a "connect an agent" error when
 // neither CLI is available.
+// Generic one-shot AI generation via the user's connected coding agent (no API
+// key) — the MCP's `ai.generate` fallback POSTs here when no AI provider is set.
+route("POST", "/api/ai/generate", async (_p, body) => {
+  const prompt = String(body?.prompt ?? "").trim();
+  if (!prompt) return { error: "prompt is required" };
+  const r = await generateWithAgent(prompt, String(body?.system ?? ""));
+  if ("error" in r) return { error: r.error };
+  return { text: r.text };
+});
+
 route("POST", "/api/ai/generate-formula", async (_p, body) => {
   const description = String(body?.description ?? "").trim();
   if (!description) return { error: "description is required" };
@@ -941,21 +872,6 @@ route("POST", "/api/ai/generate-formula", async (_p, body) => {
   const r = await generateWithAgent(description, formulaSystemPrompt(mode, columns));
   if ("error" in r) return { error: r.error };
   return { formula: cleanFormulaOutput(r.text) };
-});
-
-route("POST", "/api/columns/:id/delete", (p) => {
-  current.projectDb.deleteColumn(p.id);
-  return { ok: true };
-});
-
-route("POST", "/api/rows/:id/delete", (p) => {
-  current.projectDb.deleteRow(p.id);
-  return { ok: true };
-});
-
-route("POST", "/api/cells/delete", (_p, body) => {
-  if (body?.rowId && body?.columnId) current.projectDb.deleteCell(body.rowId, body.columnId);
-  return { ok: true };
 });
 
 route("POST", "/api/extensions/:id/connect", (p, body) => {
@@ -979,7 +895,7 @@ route("GET", "/api/agent/sessions/:agent/:id", (p) => ({
 // Manually connect a CLI (set its path) and/or rescan after install.
 route("POST", "/api/agents/connect", (_p, body) => {
   const agent = body?.agent as AgentKind;
-  if ((agent === "claude" || agent === "codex" || agent === "hermes") && typeof body?.path === "string" && body.path.trim()) {
+  if ((agent === "claude" || agent === "codex" || agent === "cursor") && typeof body?.path === "string" && body.path.trim()) {
     setAgentPath(agent, body.path.trim());
   }
   rescanAgents();
@@ -1049,7 +965,7 @@ const server = createServer(async (req, res) => {
       // Snapshot the live connector registry so the skill's "Connectors
       // currently installed" section reflects whatever extensions the user
       // has registered, including ones added since the last app launch.
-      const providers = current.engine.registry.list().map((c) => ({
+      const providers = registry.list().map((c) => ({
         id: c.id,
         name: c.name,
         category: c.category,
@@ -1058,7 +974,7 @@ const server = createServer(async (req, res) => {
       // Inject the operating playbook for every CONNECTED tool (so the agent
       // stops guessing endpoints), plus any enabled custom skills. Only connected
       // tools are included to keep the system prompt bounded.
-      const toolSkills = current.engine.registry
+      const toolSkills = registry
         .list()
         .filter((c) => !!globalDb.getCredential(c.id))
         .map((c) => ({ id: c.id, name: c.name, body: loadToolSkill(c.id) }))
@@ -1071,117 +987,46 @@ const server = createServer(async (req, res) => {
       // Pass `origin` through so the SSE stream emits the allowlisted CORS
       // header on this privileged route (#22).
       const model = typeof body?.model === "string" && body.model.trim() ? body.model.trim() : undefined;
-      // CLOUD context (TRI-3296): when the desktop is operating a CLOUD project
-      // it forwards apiUrl/token/workspace/project/table so the spawned MCP's
-      // table tools read/write Supabase. A partial/absent block ⇒ undefined,
-      // and the MCP opens the local SQLite project exactly as before. The token
-      // rides the MCP child env (set by agent.ts), never a log line here.
+      // Permission mode the user picked in the composer → Claude's --permission-mode.
+      // Validated against the headless-safe set; unknown/absent ⇒ undefined (the
+      // claude bridge then applies its bypass default).
+      const ALLOWED_MODES = new Set(["bypassPermissions", "auto", "acceptEdits", "plan"]);
+      const mode = typeof body?.mode === "string" && ALLOWED_MODES.has(body.mode) ? body.mode : undefined;
+      // HITL approval: on a resumed-after-Approve turn the desktop sends the
+      // human-approved { tool, argsHash }. It's threaded into the MCP env
+      // (agent.ts → mcpEnv), a channel the model can't reach, so the gated tool
+      // runs only for the exact action the user approved. Validated shape only.
+      const approval =
+        body?.approval &&
+        typeof body.approval === "object" &&
+        typeof body.approval.tool === "string" &&
+        typeof body.approval.argsHash === "string"
+          ? { tool: body.approval.tool as string, argsHash: body.approval.argsHash as string }
+          : undefined;
+      // CLOUD context (TRI-3296): the desktop operates a CLOUD project and
+      // forwards apiUrl/token/workspace/project/table so the spawned MCP's table
+      // tools read/write the cloud grid. The token rides the MCP child env (set by
+      // agent.ts), never a log line here.
       const cloud = parseAgentCloud(body?.cloud);
-      // Hermes is LOCAL-only by design — it drives the local SQLite project via
-      // ACP and is never threaded the cloud context.
-      if (agent === "hermes") streamHermes(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model });
-      else if (agent === "codex") streamCodex(res, { message, project: current.name, repoRoot: REPO_ROOT, threadId: body?.sessionId, context, origin, model, cloud });
-      else streamClaude(res, { message, project: current.name, repoRoot: REPO_ROOT, sessionId: body?.sessionId, context, origin, model, cloud });
+      // Saved provider keys → conventional env vars (TRIGIFY_API_KEY etc.) so
+      // the CLIs/skills the agent shells out to authenticate with the user's
+      // stored credential. CLOUD: the workspace credential store via the
+      // member's bearer; otherwise the local secrets vault. Fail-open — a
+      // resolution error spawns the agent without injected keys.
+      const providerEnv = cloud
+        ? await resolveCloudProviderEnv(cloud)
+        : localProviderEnv(
+            registry.list().map((c) => c.id),
+            (id) => globalDb.getCredential(id)?.secrets ?? null,
+          );
+      const newChat = body?.newChat === true;
+      if (agent === "cursor") streamCursor(res, { message, project: PROJECT_NAME, repoRoot: REPO_ROOT, sessionId: body?.sessionId, newChat, context, origin, model, mode, cloud, providerEnv, approval });
+      else if (agent === "codex") streamCodex(res, { message, project: PROJECT_NAME, repoRoot: REPO_ROOT, threadId: body?.sessionId, newChat, context, origin, model, mode, cloud, providerEnv, approval });
+      else streamClaude(res, { message, project: PROJECT_NAME, repoRoot: REPO_ROOT, sessionId: body?.sessionId, newChat, context, origin, model, mode, cloud, providerEnv, approval });
     } catch (e) {
       send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
     }
     return;
-  }
-
-  // LOCAL run progress stream (TRI-3275): run a function column on the local
-  // SQLite project and stream per-cell progress as Server-Sent Events so the
-  // desktop patches only the changed cells as they complete — instead of running
-  // blind then refetching+replacing the whole grid. This is the SSE twin of the
-  // JSON `POST /api/columns/:id/run` route, handled here because the JSON router
-  // can't keep a streaming response open. CORS stays allowlisted, never `*` (#22).
-  {
-    const m = req.method === "POST" && url.pathname.match(/^\/api\/columns\/([^/]+)\/run\/stream$/);
-    if (m) {
-      const columnId = decodeURIComponent(m[1]);
-      const body = await readBody(req);
-      const rowIds =
-        Array.isArray(body?.rowIds) && body.rowIds.length ? (body.rowIds as string[]) : undefined;
-      res.writeHead(200, {
-        "content-type": "text/event-stream",
-        "cache-control": "no-cache",
-        connection: "keep-alive",
-        ...corsHeadersFor(origin),
-      });
-      const write = (event: unknown) => res.write(`data: ${JSON.stringify(event)}\n\n`);
-      try {
-        const summary = await current.engine.runColumn(columnId, {
-          force: !!body?.force,
-          concurrency: body?.concurrency ?? 5,
-          rowIds,
-          onCell: (cell: CellProgress) =>
-            write({
-              type: "cell",
-              rowId: cell.rowId,
-              columnId: cell.columnId,
-              cell: { value: cell.value, status: cell.status, error: cell.error },
-            }),
-        });
-        write({ type: "done", ran: summary.ran, errors: summary.errors });
-      } catch (e) {
-        write({ type: "error", error: e instanceof Error ? e.message : String(e) });
-      }
-      res.end();
-      return;
-    }
-  }
-
-  // --- cloud push path (TRI-3295) ---
-  // Push the CURRENT local project's table to the active cloud project. The
-  // engine's CloudPushService orchestrator owns all resilience (retry/jitter/
-  // timeout/rate-limit/bounded-concurrency) over a thin tRPC transport that
-  // reuses the SAME `grid` mutations the CSV cloud import uses. Handled here
-  // (not via the JSON router) so we can return the right status code per typed
-  // error: 402 (quota), 409 (link conflict / overwrite-needs-confirmation), 404
-  // (local table missing), 200 with the structured result otherwise.
-  if (req.method === "POST" && url.pathname === "/api/cloud/tables/push") {
-    const body = await readBody(req);
-    const apiUrl = String(body?.apiUrl ?? "").trim();
-    const token = String(body?.token ?? "").trim();
-    const projectId = String(body?.projectId ?? "").trim();
-    const localTableId = String(body?.localTableId ?? "").trim();
-    if (!apiUrl || !token || !projectId || !localTableId) {
-      return send(
-        res,
-        400,
-        { error: "apiUrl, token, projectId and localTableId are required" },
-        origin,
-      );
-    }
-    try {
-      const result = await runCloudPush(
-        {
-          apiUrl,
-          token,
-          projectId,
-          localTableId,
-          confirmOverwrite: body?.confirmOverwrite === true,
-        },
-        defaultCloudPushDeps(current.projectDb),
-      );
-      return send(res, 200, result, origin);
-    } catch (e) {
-      // The orchestrator surfaces typed engine push errors; map each to the
-      // status the desktop expects so it can warn correctly.
-      const tag =
-        e !== null && typeof e === "object" && "_tag" in e
-          ? String((e as { _tag?: unknown })._tag)
-          : undefined;
-      const message = e instanceof Error ? e.message : String(e);
-      const status =
-        tag === "CloudActionsLimitError"
-          ? 402
-          : tag === "LinkConflictError"
-            ? 409
-            : tag === "FatalPushError" && /not found/i.test(message)
-              ? 404
-              : 500;
-      return send(res, status, { error: message, code: tag ?? null }, origin);
-    }
   }
 
   for (const r of routes) {
@@ -1195,6 +1040,7 @@ const server = createServer(async (req, res) => {
       const result = await r.handler(params, body);
       return send(res, 200, result, origin);
     } catch (e) {
+      captureException(e, { source: "sidecar-route", path: url.pathname, method: req.method });
       return send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
     }
   }
@@ -1203,18 +1049,24 @@ const server = createServer(async (req, res) => {
 
 // Parent-death watchdog. The desktop app spawns this sidecar as a child; if the
 // app dies WITHOUT killing us — notably an auto-update `relaunch()`, which
-// hard-exits and never fires the window-destroyed handler — we'd otherwise linger
-// as an orphan holding the port. The NEW app's sidecar would then hit EADDRINUSE
-// and the stale (older) process would keep serving outdated routes, so the
-// refreshed UI sees 404s and reports "server not reachable". When orphaned we get
-// reparented to init/launchd (ppid 1), so exit on that transition. (Skipped when
-// launched directly from a shell in dev, where there is no parent app to outlive.)
+// hard-exits and never fires the window-destroyed handler, or a crash / Task
+// Manager kill / reinstall — we'd otherwise linger as an orphan holding the port.
+// The NEW app's sidecar would then hit EADDRINUSE and the stale (older) process
+// would keep serving outdated routes, so the refreshed UI sees 404s / "server not
+// reachable".
+//
+// CROSS-PLATFORM liveness: the old check relied on Unix reparent-to-init (ppid → 1),
+// which NEVER happens on Windows — there the orphan's ppid keeps pointing at the
+// dead parent, so the watchdog never fired and engines lived forever (the Windows
+// "engine unreachable / port in use" bug). `process.kill(pid, 0)` throws when the
+// parent is gone — on Windows too — so probe THAT instead. (Skipped in dev, where
+// there is no parent app to outlive.)
 const PARENT_PID = process.ppid;
 if (PARENT_PID > 1) {
   setInterval(() => {
-    if (process.ppid !== PARENT_PID || process.ppid <= 1) {
-      console.error("gtmgrid server: parent app exited — shutting down sidecar.");
-      process.exit(0);
+    if (!isProcessAlive(PARENT_PID) || process.ppid <= 1) {
+      log.info("parent app exited — shutting down sidecar");
+      void flushObservability().finally(() => process.exit(0));
     }
   }, 1500).unref();
 }
@@ -1226,13 +1078,21 @@ const HOST = "127.0.0.1";
 
 // On EADDRINUSE, RETRY rather than give up: right after an app relaunch the
 // previous sidecar may still be releasing the port (its watchdog is exiting), so
-// brief contention is expected. Retry for a few seconds before failing, so the
-// new (current-version) sidecar reliably wins the port.
+// brief contention is expected. After a few failed retries the holder is NOT
+// transiently releasing — it's a stale orphan — so reclaim the port once, then
+// keep retrying, so the new (current-version) sidecar reliably wins.
 let bindAttempts = 0;
+let reclaimAttempted = false;
 const MAX_BIND_ATTEMPTS = 15;
+const RECLAIM_AFTER_ATTEMPTS = 5;
 server.on("error", (err: NodeJS.ErrnoException) => {
   if (err.code === "EADDRINUSE") {
     bindAttempts += 1;
+    if (bindAttempts >= RECLAIM_AFTER_ATTEMPTS && !reclaimAttempted) {
+      reclaimAttempted = true;
+      console.error(`gtmgrid server: port ${PORT} held after ${bindAttempts} attempts — reclaiming from stale holder`);
+      reclaimPort(PORT, log);
+    }
     if (bindAttempts >= MAX_BIND_ATTEMPTS) {
       console.error(`gtmgrid server: port ${PORT} still in use after ${bindAttempts} attempts — giving up.`);
       process.exit(0);
@@ -1244,7 +1104,24 @@ server.on("error", (err: NodeJS.ErrnoException) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.error(`gtmgrid server on http://${HOST}:${PORT} (project: ${current.name})`);
+  console.error(`gtmgrid server on http://${HOST}:${PORT} (project: )`);
+  // Boot-success signal over posthog-node — the only desktop telemetry channel
+  // that delivers from packaged builds (the renderer's posthog-js is blocked by
+  // the Tauri webview origin, and the Rust shell only reports failures). Tagged
+  // with platform/arch so we can see whether the sidecar actually boots per OS —
+  // the missing signal that left a Windows "engine unreachable" invisible.
+  captureServerEvent("sidecar_listening", {
+    platform: process.platform,
+    arch: process.arch,
+    node: process.versions.node,
+    port: PORT,
+    // The resolved agent working directory + whether it came from the desktop
+    // shell's GTMGRID_AGENT_CWD (the defined ~/.gtmgrid/workspace) or fell back to
+    // the install-relative dir — surfaces the old Windows "agent ran out of a random
+    // repo" drift directly in PostHog, on every boot.
+    repo_root: REPO_ROOT,
+    agent_cwd_source: process.env.GTMGRID_AGENT_CWD ? "env" : "fallback",
+  });
 });
 
 // NOTE: the LOCAL desktop does NOT run a recurring poller — a social-signal table

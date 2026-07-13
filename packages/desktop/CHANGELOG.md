@@ -1,5 +1,1550 @@
 # @gtmgrid/desktop
 
+## 1.7.0
+
+### Minor Changes
+
+- 827a099: A redesigned update experience: the update dialog now shows what's actually in the release (new features vs fixes, with version chips), a live download progress bar, and clear verify/restart steps — downloads start when you choose, not silently. After updating, a "What's new" welcome recaps the release, and a new full Changelog (⌘K → "What's new / Changelog") shows every release on a version timeline.
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.7.0
+- @gtmgrid/cloud@1.7.0
+- @gtmgrid/services@1.7.0
+
+## 1.6.1
+
+### Patch Changes
+
+- 2af6c57: Failed auto-updates are no longer silent: if an update can't install (e.g. the app is running from the DMG or a location it can't replace itself in), the update dialog now says so and offers a manual download — instead of endlessly re-offering the same version. Install failures are also reported to error tracking so we can diagnose them remotely.
+  - @gtmgrid/analytics@1.6.1
+  - @gtmgrid/cloud@1.6.1
+  - @gtmgrid/services@1.6.1
+
+## 1.6.0
+
+### Minor Changes
+
+- 53ccedf: Add more CRM fields to a synced table after creation: the add-column menu now has a "From HubSpot" / "From Attio" section listing the source's unmapped fields — one click adds the field as a new read-only synced column and backfills every row on the next sync.
+- 309ac60: HubSpot CRM sync: connect HubSpot alongside Attio and pull Contacts, Companies, or any list into a live synced table — same read-only OAuth flow, daily refresh + Sync now, filters, dedupe modes, and plan caps as Attio. The wizard's HubSpot card is now active, the table strip and Tools panel show the right CRM everywhere, and both connections can coexist in one workspace. Under the hood the sync engine is now provider-neutral (one engine, per-CRM clients) with proactive token refresh for HubSpot's short-lived tokens.
+
+### Patch Changes
+
+- 53ccedf: Empty CRM lists now configure and sync correctly: a list's parent object is resolved from list metadata instead of its first member, so HubSpot's default lists (and any empty Attio list) describe their fields instead of erroring — and syncing an empty list no longer risks dropping mapped columns.
+  - @gtmgrid/analytics@1.6.0
+  - @gtmgrid/cloud@1.6.0
+  - @gtmgrid/services@1.6.0
+
+## 1.5.2
+
+### Patch Changes
+
+- 9ef9754: CRM sync live-review fixes: rows and cells now insert atomically (no more blank "—" rows mid-sync), the status strip shows a live server-derived syncing indicator ("Pulling records from Attio… N so far") for background and cron runs, trial/plan lapse pauses syncing with an in-strip upgrade banner instead of silently retrying, and dropped realtime inserts trigger throttled refetches so sidebar, header, and strip counts stay in agreement during large syncs.
+  - @gtmgrid/analytics@1.5.2
+  - @gtmgrid/cloud@1.5.2
+  - @gtmgrid/services@1.5.2
+
+## 1.5.1
+
+### Patch Changes
+
+- e02d94d: CRM sync fixes from the first live Attio connection.
+  - A missing Attio scope now pauses the sync with a clear "Reconnect
+    Attio" banner instead of silently completing with zero records.
+  - New "Reconnect" link on the wizard's connected banner, so re-granting
+    scopes or refreshing the authorization never requires revoking the app.
+  - Reference-name lookups tolerate Attio rejecting bulk id filters.
+  - "Connect with Attio" button renders icon and label on one row.
+  - Tools → Attio now has a dedicated "CRM sync · OAuth connection" card
+    to reconnect or disconnect the sync authorization — kept fully
+    separate from the API key that powers Attio cell actions.
+  - @gtmgrid/analytics@1.5.1
+  - @gtmgrid/cloud@1.5.1
+  - @gtmgrid/services@1.5.1
+
+## 1.5.0
+
+### Minor Changes
+
+- e6ede70: Grid from CRM sync (Attio v1).
+  - New-table chooser gains "From your CRM": a 3-step wizard connects Attio
+    via OAuth (read-only scopes — GTM Grid never writes back), picks an
+    object or list, maps fields to columns with recommended defaults and
+    live sample values, adds filters, and chooses how duplicates are
+    handled (update on a match key / skip / always create).
+  - Synced tables pull daily at 09:00 UTC with a manual "Sync now", show a
+    sync status strip + human-readable sync log (partial runs, retries,
+    reconnect prompts), and cap at 10k rows (Team) / 50k (higher plans).
+  - Records deleted in Attio never delete grid rows — rows are marked
+    "no longer in Attio" and all user enrichment survives. Synced columns
+    are read-only; your own columns (including AI/function columns over
+    synced rows) work as usual and are preserved across syncs.
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.5.0
+- @gtmgrid/cloud@1.5.0
+- @gtmgrid/services@1.5.0
+
+## 1.4.0
+
+### Minor Changes
+
+- 8bf65b5: Lifecycle email system + deep links into the app.
+  - 13 lifecycle emails (#8–#20 from the activation-sequence design): activation
+    nudges, run-finished / new-signals status emails, weekly digest, dormant
+    re-engagement, trial win-back, dunning, credit warning, teammate-joined and
+    subscription receipts — all behind the `LIFECYCLE_EMAILS_ENABLED` kill-switch
+    with per-category unsubscribe and four-layer send idempotency.
+  - Email CTAs deep-link into the desktop app via the new `/open` bounce page and
+    `gtmgrid://open/<destination>` routing: specific tables, the new-table
+    chooser, AI-provider settings, invite/members and billing.
+  - Desktop: presence heartbeat (`users.last_active_at`) powering the email
+    presence gates; dev runs no longer register the `gtmgrid://` scheme on macOS
+    (a dev launch could hijack deep links from the installed app system-wide).
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.4.0
+- @gtmgrid/cloud@1.4.0
+- @gtmgrid/services@1.4.0
+
+## 1.3.0
+
+### Minor Changes
+
+- 6f02489: Grid 1.3.0
+  - **Custom & multiple campaign variables** — connector pushes to campaigns/lead lists (HeyReach, Smartlead, Instantly, PlusVibe) now support custom variables and multiple variables per push. (#158)
+  - **Searchable model picker** — AI columns get a searchable model picker grouped by provider. (#165)
+  - **Nested sub-folders** — drag a folder into another folder to nest tables in the sidebar. (#169)
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.3.0
+- @gtmgrid/cloud@1.3.0
+- @gtmgrid/services@1.3.0
+
+## 1.2.1
+
+### Patch Changes
+
+- b4e687c: Draw the eye to the next step on CSV import. On the "Map your columns" review
+  screen, the primary **Create table** button now pulses with an accent glow and an
+  arrow nudges toward it while the button is actionable — making the action to
+  proceed obvious after a drop/upload. The effect pauses on hover, only shows while
+  the button is enabled (hidden mid-import), and is disabled under
+  `prefers-reduced-motion`. Covered by a new Electron E2E spec (`csv-import-cta`)
+  asserting the glow/arrow appear and animate on review, are scoped to that step,
+  and respect reduced-motion.
+- a7e740f: Fix broken Windows auto-update caused by mis-signing the NSIS installer.
+
+  The release workflow set `CSC_LINK` / `CSC_KEY_PASSWORD` / `CSC_IDENTITY_AUTO_DISCOVERY`
+  on every matrix runner, but these are repo secrets present everywhere — so on the
+  Windows runner electron-builder grabbed the Apple `.p12` and signed the NSIS installer
+  with the macOS "Developer ID Application" cert. Windows doesn't trust that cert, so
+  electron-updater's `verifySignature` (Get-AuthenticodeSignature) rejected every
+  download and silently stranded 100% of Windows users on their installed version.
+
+  The signing env vars are now gated on the mac runners (`matrix.os == 'macos'`) so the
+  Windows installer is no longer Apple-signed, and `win.verifyUpdateCodeSignature: false`
+  is set in electron-builder.yml until a real Windows Authenticode certificate is wired
+  into CI.
+  - @gtmgrid/analytics@1.2.1
+  - @gtmgrid/cloud@1.2.1
+  - @gtmgrid/services@1.2.1
+
+## 1.2.0
+
+### Minor Changes
+
+- f2023a4: Self-host support + a one-command local-run flow.
+
+  A self-hosted instance (`GTMGRID_SELF_HOST=1`) now works indefinitely and is never
+  locked out: the env flag bypasses the paid cloud-access gate
+  (`EntitlementService.requireCloudAccess` — the plan/trial hard-block that otherwise
+  threw `PlanRequiredError` on every cloud path once a workspace fell to Free or its
+  trial lapsed) and the cloud-actions usage caps (the bulk-import and webhook
+  `assertQuota` pre-checks). The desktop UI honors it too — `workspaces.me` now
+  reports `selfHost` per workspace, and the renderer never shows the "Cloud is
+  locked" / upgrade prompts when it is set, so a self-hoster's grid stays fully
+  usable while the backend serves every request.
+
+  Running locally is now straightforward: a `docker-compose.yml` brings up just
+  Postgres, and the README documents the three-step flow (Postgres → migrate → run
+  backend + sidecar + desktop). Positioning is corrected to match reality
+  (source-available + self-hostable, with managed cloud as the zero-ops option)
+  rather than the previous "local-first" claim.
+
+  Covered by new unit tests (the `isSelfHost` helper, the entitlement bypass for
+  Free/lapsed/missing workspaces, the over-quota import/run bypasses, and
+  `workspaces.me` surfacing `selfHost`) and a new Electron E2E spec
+  (`self-host.spec.ts`) asserting Free, expired-by-date, and fully-lapsed workspaces
+  all stay unlocked under self-host — with the existing trial/boot lock specs still
+  passing when self-host is off.
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.2.0
+- @gtmgrid/cloud@1.2.0
+- @gtmgrid/services@1.2.0
+
+## 1.1.1
+
+### Patch Changes
+
+- 3a5fcb1: Grid toolbar: collapse action buttons into a "⋯" overflow menu on narrow widths.
+
+  When the toolbar is squeezed — e.g. the agent panel open beside the grid — the
+  action buttons (Dedupe, Webhook, Export CSV, Add row) used to crowd together and
+  the long table name wrapped onto multiple lines. The toolbar now measures its own
+  width (via a `ResizeObserver` `useElementWidth` hook) and, below a threshold,
+  folds those actions into a single overflow menu while keeping the primary Run
+  button and the LIVE/presence status inline. The table name also truncates with an
+  ellipsis instead of wrapping. Covered by unit tests for the hook and Electron E2E
+  tests for the wide/compact layouts and the overflow menu.
+  - @gtmgrid/analytics@1.1.1
+  - @gtmgrid/cloud@1.1.1
+  - @gtmgrid/services@1.1.1
+
+## 1.1.0
+
+### Minor Changes
+
+- 3e33da9: Hard-block credited actions when a trial expires, plus trial-status notifications.
+
+  Previously `EntitlementService.requireCloudAccess` only checked the cached
+  `currentPlanId`, so a trial that lapsed by date kept running credited actions until
+  Autumn's webhook/desktop sync flipped the plan to null. And the credit-heavy column
+  enrichment run path was gated by quota only, never by cloud access.
+  - **Time-based backstop:** `requireCloudAccess` now also fails the instant
+    `trialEndsAt` is in the past, regardless of the cached plan id — the server-side
+    guarantee that an expired trial cannot run any credited action.
+  - **Enrichment path gated:** `assertColumnRunQuota` and the `setCell` / `setCellStatus`
+    / `insertRow` / `upsertRow` worker writes now call `requireCloudAccess`, so a lapsed
+    workspace cannot complete runs server-side even with quota headroom. The worker
+    boundary maps `PlanRequiredError` → 403 (distinct from the 402 quota error) and the
+    sidecar re-raises it as a typed error so the run aborts cleanly with an upgrade prompt.
+  - **Expired stays distinguishable:** the plan sync preserves a lapsed trial's past
+    `trialEndsAt` so "trial expired" reads apart from a cancelled paid plan / Free.
+  - **Desktop locks by date too:** the cloud UI now locks the instant the trial expires
+    (not only after sync), closing the window where buttons looked enabled but the server
+    rejected the action.
+  - **Notifications along the way:** new bell items for trial started (welcome), trial
+    expired, and low cloud-actions — alongside the existing countdown — all routing to the
+    upgrade flow. New on-brand `trialWelcomeEmail` (on workspace creation) and
+    `trialExpiredEmail` (daily "just-ended" reminder window) reuse the existing email shell.
+
+### Patch Changes
+
+- Updated dependencies [3e33da9]
+  - @gtmgrid/services@1.1.0
+  - @gtmgrid/analytics@1.1.0
+  - @gtmgrid/cloud@1.1.0
+
+## 1.0.6
+
+### Patch Changes
+
+- 2bd1835: Fix: a goal could spin up a brand-new table instead of using the one in view.
+
+  When the app auto-selects a table on open, the agent's "active table" hint was
+  sourced only from a paged fetch that lags the synchronously-set selection. A goal
+  sent in that window reached the agent with the MCP's table default but no table
+  NAME, so the preamble dropped its "Active table" section and the agent, not knowing
+  which table it was on, created a new one. The hint now falls back to the table name
+  from the already-loaded tables list, so it's populated the instant a table is
+  selected (auto-default on open or manual click). Covered by a unit suite on the
+  resolver and an end-to-end test that boots the app, lets it auto-default, and
+  asserts the goal request carries the active table.
+  - @gtmgrid/analytics@1.0.6
+  - @gtmgrid/cloud@1.0.6
+  - @gtmgrid/services@1.0.6
+
+## 1.0.5
+
+### Patch Changes
+
+- 93d0352: The agent now works with no table loaded, and the native `/goal` + skills are back.
+
+  Root cause of the "agent has no GTM Grid tools / falls back to other tools" reports:
+  the agent's cloud context required an active table, so with nothing open the MCP
+  failed to start and the agent had zero grid tools. The active table is now optional —
+  the agent gets its tools as soon as you're signed in with a cloud project, and can
+  `list_tables` / `create_table` / operate by id. With tools always available we also
+  re-enabled your Claude/Codex skills (including the looping `/goal`), with a "use only
+  GTM Grid tools" guardrail.
+  - @gtmgrid/analytics@1.0.5
+  - @gtmgrid/cloud@1.0.5
+  - @gtmgrid/services@1.0.5
+
+## 1.0.4
+
+### Patch Changes
+
+- 9cc6ff5: Fully disable the user's personal Claude skills in the agent (follow-up to the
+  isolation fix). `--setting-sources project` alone only thinned the user's skills, so
+  a third-party skill (e.g. `deepline-gtm`) was still invokable and kept running
+  instead of gtmgrid's tools. Add `--disable-slash-commands`, which disables all of the
+  user's skills; gtmgrid's own playbooks (injected via the system prompt) and tools
+  (via MCP) are unaffected, and the user's login is preserved.
+  - @gtmgrid/analytics@1.0.4
+  - @gtmgrid/cloud@1.0.4
+  - @gtmgrid/services@1.0.4
+
+## 1.0.3
+
+### Patch Changes
+
+- cf8144d: Isolate the spawned agent CLIs from the user's personal Claude/Codex setup.
+
+  The gtmgrid agent ran inside the user's own Claude/Codex config, so it loaded their
+  global skills, plugins, hooks, and instructions — e.g. a `deepline` Claude plugin
+  whose startup hook fired inside our turns, pulled the agent off gtmgrid's tools, and
+  forced approval prompts despite bypass mode. The agent now runs with each CLI's
+  isolation flag (`--setting-sources project` for claude, `--ignore-user-config` for
+  codex), which drops the personal config while keeping the user's login and model.
+  Cursor stays isolated via its app-owned workspace. This also removes a failing
+  third-party startup hook that may have been interfering with MCP connection.
+  - @gtmgrid/analytics@1.0.3
+  - @gtmgrid/cloud@1.0.3
+  - @gtmgrid/services@1.0.3
+
+## 1.0.2
+
+### Patch Changes
+
+- d908d79: Windows agents: forward the OS environment to the spawned GTM Grid MCP server so it
+  can start, and capture the exact reason when it can't.
+
+  Telemetry showed the MCP server process never starts on Windows (so the agent's tool
+  set has no `gtmgrid` tools and it falls back to shell/other skills), while macOS works
+  and the agent working directory is correct. The agent CLI hands the MCP child an
+  explicit env map; on Windows the Electron-as-Node child needs the OS vars
+  (`SystemRoot`, `PATH`, …) to even launch. We now forward those. Agent telemetry also
+  records the MCP server's raw status + stderr on any turn where it fails to connect, so
+  the precise failure is visible if more work is needed.
+  - @gtmgrid/analytics@1.0.2
+  - @gtmgrid/cloud@1.0.2
+  - @gtmgrid/services@1.0.2
+
+## 1.0.1
+
+### Patch Changes
+
+- 747c4ee: Fix the Windows "engine unreachable / port 8787 still in use" failure.
+
+  The engine's parent-death watchdog detected orphaning via a Unix-only signal
+  (reparent-to-init), which never happens on Windows — so a crashed, killed, or
+  reinstalled app left the engine orphaned, holding the port, and every later launch's
+  engine gave up. Now the watchdog uses a cross-platform liveness probe
+  (`process.kill(pid, 0)`), and on persistent port contention the new engine reclaims
+  the port from the stale holder (netstat+taskkill / lsof+kill), so a machine that
+  already has a stuck orphan self-heals on the next launch. Covered by a regression
+  test that reproduces the orphaned port-holder and verifies the reclaim.
+  - @gtmgrid/analytics@1.0.1
+  - @gtmgrid/cloud@1.0.1
+  - @gtmgrid/services@1.0.1
+
+## 1.0.0
+
+### Major Changes
+
+- 324520b: Migrate the desktop app from Tauri (Rust shell + bundled Node sidecar) to Electron
+  (the engine runs as Electron's own Node via `utilityProcess.fork`).
+
+  This is a major release: it replaces the entire app shell and updater. The new
+  installers carry a new app identity (`app.gtmgrid.desktop`) and a new update feed
+  (electron-updater `latest*.yml` replacing the Tauri `latest.json`), so **existing
+  Tauri installs do not auto-update across to Electron — a fresh install is required.**
+
+  Highlights:
+  - The Rust↔Node sidecar boundary (the source of most Windows bugs — the `\\?\`
+    path crash, console-less spawn failures, the NSIS "file in use" update lock) is
+    gone; the engine is Electron's own Node.
+  - First-class PostHog observability: the key is baked at build time as plain JS (no
+    more cargo-cache defeating `option_env!`), and `sidecar_listening`,
+    `agent_turn_completed` (with `mcp_connected`/`gtmgrid_tools`/`cwd`), `mcp_started`
+    and `$ai_generation` LLM traces all deliver server-side.
+  - The agent working directory is now a stable, user-writable `~/.gtmgrid/workspace`
+    (passed as `GTMGRID_AGENT_CWD`), fixing the Windows "agent ran out of a random
+    repo" + broken-Resume bug.
+  - Electron main-process logic is structured as composable Effect services
+    (Engine / Updater / Observability).
+  - Branded NSIS installer, green brand tray icon, and an `app://gtmgrid` renderer
+    origin (allow-listed for cloud auth/tRPC CORS, with legacy Tauri origins kept for
+    the cut-over).
+
+### Patch Changes
+
+- 46b6550: Fix the Windows updater failing with "Error opening file for writing" for
+  `sidecar\node.exe` and `better_sqlite3.node`. The bundled engine was still running
+  (holding those files open) when the NSIS installer tried to overwrite them. The
+  app now stops the engine and waits for it to fully exit before downloading and
+  installing an update, releasing the locks.
+  - @gtmgrid/analytics@1.0.0
+  - @gtmgrid/cloud@1.0.0
+  - @gtmgrid/services@1.0.0
+
+## 0.22.12
+
+### Patch Changes
+
+- 018b623: Fix the loading screen no longer being centered (logo stuck at the top, label
+  floating in the middle). The previous release made `.app-shell` a CSS grid for the
+  Windows layout fix, but the loader and error screens borrow `.app-shell` for their
+  full-viewport sizing — so they inherited the grid and their centered content got
+  unstacked. They now keep their own flex centering.
+- 018b623: Make the `/start` onboarding command actually work, and drop `/help`. Previously
+  both were forwarded to the agent CLI, which intercepted them as its OWN built-in
+  slash commands ("Unknown command: /start", "/help isn't available"). GTM Grid now
+  answers `/start` itself with a local onboarding tour and never forwards it to the
+  CLI. The dead onboarding instructions are removed from the agent system preamble.
+  - @gtmgrid/analytics@0.22.12
+  - @gtmgrid/cloud@0.22.12
+  - @gtmgrid/services@0.22.12
+
+## 0.22.11
+
+### Patch Changes
+
+- fff9a21: Show the signed-in user's profile picture in the account menu (sidebar footer and
+  the open-menu header) when one is available, falling back to the initial letter.
+- fff9a21: Add `/help` and `/start` onboarding commands to the agent chat. New users get a
+  short, friendly orientation — what GTM Grid is, how to get data in (create a table
+  or import/drag a CSV), what the agent can do, and a few example prompts to try.
+  Both appear in the `/` command menu.
+- fff9a21: Drag a CSV file anywhere onto the app to import it. A drop overlay appears while
+  dragging a file, and releasing opens the import flow straight on the "Map your
+  columns" review. Non-CSV files are ignored.
+- fff9a21: Closing the window now hides GTM Grid to the system tray instead of quitting, so
+  the engine and any in-flight agent runs keep going in the background. A tray icon
+  with **Show GTM Grid** / **Quit** is the deliberate exit path (Quit tears down the
+  sidecar). Relaunching while hidden re-shows the window. Previously closing the
+  window killed the engine and lost all session state.
+- fff9a21: Fix the center content pane collapsing to content size on Windows. The "No table
+  selected" empty state and the CSV "Map your columns" review sat in a small band
+  with large empty gaps instead of filling the pane (macOS was fine). The app shell
+  now uses a CSS grid (`grid-template-rows: auto 1fr`) so the main row gets a
+  definite height that WebView2 propagates to the nested `flex:1` panes — plain
+  flex-column stretch did not. The optional invite banner still takes its own row,
+  so the pane correctly fills the remaining height when it shows.
+  - @gtmgrid/analytics@0.22.11
+  - @gtmgrid/cloud@0.22.11
+  - @gtmgrid/services@0.22.11
+
+## 0.22.10
+
+### Patch Changes
+
+- 6c1e498: Fix the GTM Grid table tools (`get_table`, `add_rows`, `run_function`,
+  `list_providers`, …) never loading inside the agent panel on Windows.
+
+  Root cause: the spawned coding-agent CLI (claude / codex / cursor) was told to
+  launch gtmgrid's MCP server via an extensionless `#!/bin/bash` launcher script
+  (`gtmgrid-mcp`). That script was only ever written on macOS/Linux, and even when
+  present Windows cannot execute it — so the agent connected with **no** grid tools
+  while the app otherwise looked healthy.
+
+  Fix: spawn the bundled `node` binary directly with `mcp.mjs` as a script
+  argument — the one launch shape every MCP client starts identically on macOS,
+  Linux and Windows. The Rust shell now exports `GTMGRID_MCP_NODE` +
+  `GTMGRID_MCP_SCRIPT` (both already de-verbatim'd), `mcpConfig` emits
+  `command` + `args`, and the Codex `-c mcp_servers=…` TOML now escapes the
+  backslashes in Windows paths (the old inline form produced invalid TOML on
+  Windows). The unused bash launcher is no longer bundled.
+  - @gtmgrid/analytics@0.22.10
+  - @gtmgrid/cloud@0.22.10
+  - @gtmgrid/services@0.22.10
+
+## 0.22.9
+
+### Patch Changes
+
+- da602f1: Fix the Windows engine crash-on-launch (`EISDIR: lstat 'C:'`). The bundled Node
+  engine exited immediately on every affected Windows machine, so the app read as
+  `engine: unreachable` and never loaded.
+
+  Root cause (surfaced by the new boot diagnostics): Tauri's `resource_dir()`
+  returns a Windows **verbatim / extended-length path** (`\\?\C:\…`). We passed that
+  straight to `node.exe` as the script argument, and Node's main-module resolver
+  can't parse the `\\?\` prefix — it mis-splits the path and calls `lstat('C:')`,
+  which is a directory, so it dies with `EISDIR` before ever loading `server.mjs`.
+
+  Fix: simplify the resolved sidecar dir with `dunce::simplified` to a plain
+  `C:\…` path before spawning, so the script arg, cwd, MCP launcher and extension
+  dir are all non-verbatim. No-op on macOS/Linux.
+  - @gtmgrid/analytics@0.22.9
+  - @gtmgrid/cloud@0.22.9
+  - @gtmgrid/services@0.22.9
+
+## 0.22.8
+
+### Patch Changes
+
+- 7994258: Make "Copy diagnostics" self-report a dead engine. When the sidecar fails to
+  start, telemetry has been silent on some Windows machines, leaving us to guess at
+  the cause. The renderer previously had no visibility into the engine's boot at
+  all — and its version line read a never-set env var, so every build showed
+  "(dev)".
+
+  The Tauri shell now records boot facts in every spawn branch (including failures)
+  and exposes them via a new `sidecar_diagnostics` command: real installed version,
+  OS/arch, resolved node/server paths and whether they exist, the spawn outcome
+  (`spawned` / `dir_missing` / `binary_missing` / `spawn_error` / `exited`), any
+  early-exit code, and the engine's OWN captured stderr — i.e. the actual crash.
+  "Copy diagnostics" folds all of this in, so a stuck user's paste now contains the
+  root cause instead of just `engine: unreachable`. The version line is fixed to use
+  the real build version.
+  - @gtmgrid/analytics@0.22.8
+  - @gtmgrid/cloud@0.22.8
+  - @gtmgrid/services@0.22.8
+
+## 0.22.7
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.22.7
+- @gtmgrid/cloud@0.22.7
+- @gtmgrid/services@0.22.7
+
+## 0.22.6
+
+### Patch Changes
+
+- b31c8b7: Fix the Windows "couldn't start the engine" failure: the bundled Node sidecar
+  never spawned, leaving the app stuck on the engine-error screen.
+
+  The shell is built `windows_subsystem = "windows"` (no console), so its
+  `STD_INPUT_HANDLE` is null. `spawn_sidecar` piped stdout/stderr but left **stdin
+  as the default `inherit()`**. On Windows, piping any stream switches the child to
+  `STARTF_USESTDHANDLES`, and `CreateProcessW` then requires a valid handle for all
+  three streams — inheriting the null stdin makes the spawn fail with
+  `ERROR_INVALID_HANDLE`, so `node.exe` never launched and the engine read as
+  unreachable. (It worked from a console and in the CI smoke test because those have
+  a real stdin; only the console-less GUI spawn hit the null handle.)
+
+  Spawn the sidecar with `stdin(Stdio::null())` so it always gets a valid handle,
+  plus `CREATE_NO_WINDOW` (no transient console flash) and an explicit
+  `current_dir` matching the smoke harness.
+  - @gtmgrid/analytics@0.22.6
+  - @gtmgrid/cloud@0.22.6
+  - @gtmgrid/services@0.22.6
+
+## 0.22.5
+
+### Patch Changes
+
+- 8ddbed1: Fix the Windows "Server not reachable" / engine-unreachable failure: connect the
+  renderer to the sidecar over `127.0.0.1` instead of `localhost`.
+
+  The sidecar binds IPv4 loopback only (`server.listen(8787, "127.0.0.1")`), but the
+  renderer + cloud-run defaulted to `http://localhost:8787`. On Windows `localhost`
+  resolves to `::1` (IPv6) first, so the WebView2 fetch hit `[::1]:8787` where nothing
+  listens and the engine read as unreachable — even though the server was up and
+  healthy. macOS resolves `localhost`→`127.0.0.1`, which is why this only bit Windows.
+  Defaulting to `127.0.0.1` deterministically matches the bind on every platform.
+
+  Also adds a `sidecar_listening` server-side event (over the posthog-node channel,
+  the only desktop telemetry path that delivers from packaged builds) tagged with
+  platform/arch, so sidecar boot-health is finally visible per-OS — confirming the
+  engine actually starts on Windows rather than leaving that invisible.
+  - @gtmgrid/analytics@0.22.5
+  - @gtmgrid/cloud@0.22.5
+  - @gtmgrid/services@0.22.5
+
+## 0.22.4
+
+### Patch Changes
+
+- 6d42953: Hold the branded app loader until the local engine is reachable on launch, and
+  show a full-screen error if it fails to start — instead of briefly flashing the
+  "Server not reachable" topbar during the sidecar's normal cold start.
+
+  The render gates previously held the loader only on auth + cloud-project
+  resolution, not on engine health, so on a warm machine the shell (and its offline
+  banner) rendered for the ~1-2s gap before the sidecar answered `/api/health`. The
+  loader now also waits on the engine; if it stays unreachable past the cold-start
+  grace, a dedicated full-screen error screen (`AppError`) offers Retry + Copy
+  diagnostics and auto-recovers when the engine comes up. The lightweight topbar
+  banner is retained only for a mid-session engine drop (gated on having connected
+  at least once), so a working session is never thrown back to a splash.
+  - @gtmgrid/analytics@0.22.4
+  - @gtmgrid/cloud@0.22.4
+  - @gtmgrid/services@0.22.4
+
+## 0.22.3
+
+### Patch Changes
+
+- fbcb535: Make desktop engine (sidecar) failures observable, and stop the offline banner
+  from showing end users a dev command.
+
+  The desktop shell now reports the bundled engine's lifecycle to PostHog: every
+  `spawn_sidecar` failure path emits `sidecar_spawn_failed`, and a new liveness
+  monitor emits `sidecar_exited` (with exit code + a tail of the captured stderr)
+  when the engine dies unexpectedly soon after launch — e.g. a native module that
+  won't load on a user's OS/arch. Previously these only `eprintln!`d to a stderr
+  the packaged app discards, so a dead engine was invisible until a user reported
+  it. The renderer's boot poll now emits `server_ready` (with cold-start time) and
+  `server_unreachable` (once a sustained failure passes the cold-start grace), and
+  every desktop event carries a `platform: "desktop"` super-property so desktop
+  health is filterable/alertable.
+
+  The "Server not reachable" banner no longer tells packaged users to run
+  `pnpm --filter @gtmgrid/server dev` (that command only exists in a dev checkout).
+  Packaged builds show a calm "Starting the local engine…" during a normal cold
+  start, escalating to a real recovery message with a "Copy diagnostics" button
+  only if the engine stays down.
+
+- Updated dependencies [fbcb535]
+  - @gtmgrid/analytics@0.22.3
+  - @gtmgrid/cloud@0.22.3
+  - @gtmgrid/services@0.22.3
+
+## 0.22.2
+
+### Patch Changes
+
+- 325e90b: Enable PostHog Session Replay in the desktop app. `posthog-js` now initializes
+  with `session_recording` (inputs masked, displayed grid text captured), so
+  sessions record once the project's "Record user sessions" toggle is on. The
+  Tauri webview already permits the recorder (no CSP, absolute `api_host`); add the
+  `ph-no-capture` class to hide a specific element from replays.
+- Updated dependencies [325e90b]
+  - @gtmgrid/analytics@0.22.2
+  - @gtmgrid/cloud@0.22.2
+  - @gtmgrid/services@0.22.2
+
+## 0.22.1
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.22.1
+- @gtmgrid/cloud@0.22.1
+- @gtmgrid/services@0.22.1
+
+## 0.22.0
+
+### Minor Changes
+
+- 8951841: Cell details ("map it out") now treats array fields as first-class: each element is mappable on its own (`email[0]`, `email[1]`, …), arrays of objects drill all the way in (`phones[0].number`), and the whole array can still be mapped as a single value. Element drill-in is capped at 100 with the array container as the escape hatch.
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.22.0
+- @gtmgrid/cloud@0.22.0
+- @gtmgrid/services@0.22.0
+
+## 0.21.0
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.21.0
+- @gtmgrid/cloud@0.21.0
+- @gtmgrid/services@0.21.0
+
+## 0.20.1
+
+### Patch Changes
+
+- 5e613d7: polish(desktop): interface detail pass across the grid app
+
+  Small craft fixes that compound into a more polished feel, all in the
+  hand-rolled CSS design system (`styles.css` + onboarding `onboarding.css`):
+  - **Tactile buttons**: `.btn` now gives a subtle `scale(0.96)` press feedback,
+    guarded by `prefers-reduced-motion`.
+  - **Tabular numbers**: live-updating counts (row/col meta, selection count,
+    sidebar table counts, connector method counts, notification badge, bulk-select
+    count) use `font-variant-numeric: tabular-nums` so they no longer shift width
+    as digits change.
+  - **Specific transitions**: replaced four `transition: all` declarations
+    (schedule buttons, output-type picker, formula generate button, onboarding
+    step dots) with explicit property lists.
+  - **Image edges**: rendered markdown images in the agent panel get a subtle 1px
+    ring (pure black/white at low opacity, light/dark aware) via `box-shadow` so it
+    tracks the border radius.
+  - **Text wrapping**: large display headings (onboarding screen title, CSV import
+    title, perks title) use `text-wrap: balance`; descriptive subtext uses
+    `text-wrap: pretty` to avoid orphans.
+  - @gtmgrid/analytics@0.20.1
+  - @gtmgrid/cloud@0.20.1
+  - @gtmgrid/services@0.20.1
+
+## 0.20.0
+
+### Minor Changes
+
+- dd2bfd5: feat(grid): place dependent columns in dependency (DAG) order
+
+  Columns reference other columns by `{{Column Name}}` in their params or run
+  condition. New and edited columns are now positioned to the RIGHT of every
+  column they reference, so a table reads left-to-right in dependency order
+  instead of always appending to the end.
+  - **Create**: a new column with references takes a fractional slot immediately
+    after its rightmost dependency; independent columns still append to the tail.
+  - **Edit**: when a column's references change, it (and any dependents now out of
+    order) reposition via a minimal-movement topological sort — unrelated columns
+    and manual arrangements are left untouched.
+  - **Circular references are blocked**: an edit that would make columns depend on
+    each other (A↔B) is rejected before it is saved, with a clear error.
+
+  Placement is computed server-side in `GridService`, so it applies uniformly
+  across the desktop app, the agent, and MCP, and reuses the existing realtime
+  reorder path so every viewer converges on the same order.
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.20.0
+- @gtmgrid/cloud@0.20.0
+- @gtmgrid/services@0.20.0
+
+## 0.19.1
+
+### Patch Changes
+
+- bfd358c: perf(grid): bound every server-side grid read so large tables (50k+ rows) stay fast
+
+  The desktop render path was already keyset-paginated, but the server-side compute
+  paths still loaded the whole grid per operation. This eliminates the unbounded
+  full-grid `getTable` from those paths and adds the index that keeps row loads
+  sort-free:
+  - **Index**: new `rows(table_id, position, created_at, id)` composite so the
+    ordered + keyset row loads are index-ordered scans (no in-memory sort of 50k rows).
+  - **Engine column runs** now scope to the run's rows (`getTableForRows`) and stream
+    full-column runs one keyset page at a time (`getTablePage`) — bounded memory.
+  - **Webhook enrichment** reads columns-only, and the per-run **quota pre-flight**
+    reads just the run column's cells instead of the whole grid.
+  - **Dedupe** reads only the dedupe column's cells (rides `cells_by_table_column`).
+  - **MCP `get_table`** is now genuinely server-paged (walks keyset pages) instead of
+    fetching the whole grid and slicing in memory.
+  - The legacy unbounded `getTable` remains only behind a guarded, telemetry-logged
+    fallback.
+  - @gtmgrid/analytics@0.19.1
+  - @gtmgrid/cloud@0.19.1
+  - @gtmgrid/services@0.19.1
+
+## 0.19.0
+
+### Minor Changes
+
+- 4a710f2: feat(agent): replace the Hermes coding agent with Cursor (`cursor-agent`) as the third side-panel AI agent, alongside Claude and Codex. It drives the grid over MCP using your Cursor subscription (`cursor-agent login` once). Hermes is retained as an AI model provider for AI columns. The cloud member token cursor-agent needs is written to an owner-only (0600) MCP config that is deleted after each turn.
+
+### Patch Changes
+
+- f8125f0: fix(connectors): pass sibling field values to dependent dropdowns. A connector dropdown whose option source requires a parent field (e.g. a PlusVibe campaign list that needs `workspace_id`) now receives the in-progress sibling values from the column editor, so it loads instead of failing with a raw upstream 400. The injection is generic — keyed off each source method's own required schema — and surfaces a clear "Select <field> first" prompt when a required parent is still unset.
+- dcaba83: perf(grid): make cloud column save/map feel instant. Saving or mapping a column no longer blocks on a full multi-page refetch (the optimistic patch + realtime echo already reflect it; reconcile happens in the background without an immediate refetch that could clobber a just-started run's cells), the Autumn usage flush is bounded to 2s so a slow billing call can't stall a grid write, and the edit rail / cell-details drawer close immediately. A column run now renders its unresolved cells as loading right away (done/error cells keep their result, so a re-run never flickers finished cells). A background save failure now surfaces in the grid's error banner instead of failing silently.
+  - @gtmgrid/analytics@0.19.0
+  - @gtmgrid/cloud@0.19.0
+  - @gtmgrid/services@0.19.0
+
+## 0.18.0
+
+### Minor Changes
+
+- 21b8437: feat(grid): column data cascade — running a column or cell now automatically runs every column that depends on it (via `{{Column}}` references), in dependency order, for the affected rows. A chain like _Get API data → map a field in a sibling → compute a value in the next sibling_ populates end-to-end from a single run, and independent siblings run in parallel. `Run all` / `Run selected rows` now execute in dependency order instead of authored order. Server-side enrichment matches: webhook-delivered and Signal-pulled rows are enriched in dependency order (Signal rows were previously not enriched at all).
+
+  fix(engine): server-side enrichment could throw "cannot read property …" for any column that calls a connector (e.g. an email finder). A connector column runs `sdk[provider][method](...)` in the sandbox, but the cloud worker built its engine with only the built-in connectors. It now loads the workspace's installed connector manifests, so connector columns enrich correctly in webhook/Signal runs.
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.18.0
+- @gtmgrid/cloud@0.18.0
+- @gtmgrid/services@0.18.0
+
+## 0.17.4
+
+### Patch Changes
+
+- 431f761: perf(grid): revert the overscan escalation that was making large-grid scrolling worse. Benchmarking the real render cost (full DataGrid + CellContent) proved the paint-in blank is the cost of the cell COUNT per scroll step, not the cell content — so a bigger overscan buffer makes it worse, not better. The velocity-adaptive 8→100 expansion rendered ~3,100 cells in a single commit (~197ms) — the catastrophic blank in the bug report. Reverting to a small constant overscan renders only the ~680 cells entering view per fast-scroll step (~45ms, a 4.3× reduction) and eliminates the expansion spike entirely; normal/slow scrolling is now ~2.4ms.
+  - @gtmgrid/analytics@0.17.4
+  - @gtmgrid/cloud@0.17.4
+  - @gtmgrid/services@0.17.4
+
+## 0.17.3
+
+### Patch Changes
+
+- b5a0e7e: perf(grid): make the virtualization buffer velocity-adaptive so scrolling a large grid no longer paints rows/columns in. A flat overscan made scrolling worse because WebKit composites every windowed row on each scroll frame; instead the buffer now stays small at rest and during slow scrolling (cheap frames) and balloons to a large window only during a fast fling, where blank paint-in actually happens and the extra rows are imperceptible — then collapses back when scrolling settles. Rows window 8→100, columns 3→24 under fling.
+  - @gtmgrid/analytics@0.17.3
+  - @gtmgrid/cloud@0.17.3
+  - @gtmgrid/services@0.17.3
+
+## 0.17.2
+
+### Patch Changes
+
+- b29b00c: perf(grid): eliminate the paint-in flicker when scrolling a large grid and the laggy hover highlight. Raised the virtualization overscan buffer so ~one viewport of rows and columns is pre-rendered on each side — WebKit's momentum scroll no longer reaches the blank spacer before React commits the next rows, so rows/columns no longer visibly paint in as they scroll into view. The scroll container now matches the cell background so any momentary gap blends instead of flashing. Removed the cell background transition so the row-hover highlight tracks the cursor instantly instead of fading in over 80ms.
+  - @gtmgrid/analytics@0.17.2
+  - @gtmgrid/cloud@0.17.2
+  - @gtmgrid/services@0.17.2
+
+## 0.17.1
+
+### Patch Changes
+
+- f8cf334: perf(grid): memoize the data-grid row/cell tree so the existing row + column virtualization actually pays off. Extracted `React.memo` `GridRow`/`GridCell` from the inline render-prop and decoupled the rows from the controller via stable action/interaction bundles. Fast scrolling and single-cell edits no longer re-render the whole viewport, and the row-hover highlight tracks the cursor. Measured on a 2,000×40 table: an unrelated re-render goes from 25,000 cell renders to 0, a single cell edit from 25,000 to 1, and a scroll step from 250 to ~10 — 4.5–13× less render scripting per frame.
+  - @gtmgrid/analytics@0.17.1
+  - @gtmgrid/cloud@0.17.1
+  - @gtmgrid/services@0.17.1
+
+## 0.17.0
+
+### Minor Changes
+
+- b2fbbee: Remove the "local" paradigm — Postgres is now the only source of truth.
+
+  GTM Grid was built local-first: each project was a `better-sqlite3` `.db` file served by the desktop sidecar, with cloud (Postgres) as an optional team tier. That produced two parallel data worlds and pervasive local-vs-cloud branching. This change removes the local paradigm entirely:
+  - **Single data path.** The execution engine is always cloud-store-backed (`new Engine(config, registry, { store, creds })`); the SQLite `GridStore` layers, the engine's grid tables, the desktop's local `DataGrid`/`inCloud` fork, and the sidecar's local grid CRUD routes are gone. Every grid table operation goes through Postgres via tRPC. The one-way local→cloud push/sync apparatus and the `@gtmgrid/cli` package are deleted.
+  - **The sidecar stays as the execution host.** It still runs connector/AI/formula columns locally and keeps a small **secrets-only** local vault (encrypted connector/AI keys, extension manifests) — but it no longer owns grid data; it proxies grid I/O to the `apps/web` worker endpoints. A new `/api/cloud/preview-function` route powers "Try on N rows" against cloud data.
+  - **Login required.** `VITE_API_URL` is now mandatory (the build fails fast without it); the cloud/auth layer is always on; the "Continue locally — no account" escape hatches are removed; signed-out users hit a hard auth gate. Self-hosting = run your own Postgres + `apps/web`.
+  - **Optimistic UI on every mutation.** To keep the local-first _feel_, every cloud grid mutation now patches the React Query cache instantly and reconciles with the server. Inserts carry a client-supplied UUID so the optimistic id is the persisted id and the realtime self-echo converges idempotently instead of duplicating; failures roll back.
+
+  Note: the sidecar's local Trigify "signals" routes were local-grid-backed and have been removed pending a cloud-backed replacement (recurring signal refresh already runs as an Inngest cloud job).
+
+### Patch Changes
+
+- Updated dependencies [b2fbbee]
+  - @gtmgrid/services@0.17.0
+  - @gtmgrid/analytics@0.17.0
+  - @gtmgrid/cloud@0.17.0
+
+## 0.16.2
+
+### Patch Changes
+
+- Updated dependencies [c297b2a]
+  - @gtmgrid/services@0.16.2
+  - @gtmgrid/analytics@0.16.2
+  - @gtmgrid/cloud@0.16.2
+
+## 0.16.1
+
+### Patch Changes
+
+- 9ce6189: Track the active cloud table in the agent co-pilot's system-prompt context. Previously the "Active table" hint was derived only from local SQLite `tableData`, so in cloud mode the agent stayed stuck reasoning about a stale table while its MCP tools (keyed off `GTMGRID_CLOUD_TABLE`) operated on the correct one. `activeTable` now sources from the active cloud table via `useCloudTablePaged` when in cloud mode (sharing CloudGrid's paged query key, so no extra fetch), falling back to `tableData` locally.
+- 9ce6189: Re-enable in-app HTML5 drag-and-drop (drag tables into sidebar folders, CSV file-drop import). Tauri's webview intercepts OS-level drag-drop by default (`dragDropEnabled`), which swallowed all HTML5 `dragover`/`drop` events inside the app. The app uses only HTML5 DnD with no Tauri-native drop handlers, so disabling Tauri's interception safely restores folder filing for local and cloud tables plus CSV drop import.
+- Updated dependencies [a9ba3ac]
+  - @gtmgrid/services@0.16.1
+  - @gtmgrid/analytics@0.16.1
+  - @gtmgrid/cloud@0.16.1
+
+## 0.16.0
+
+### Patch Changes
+
+- Updated dependencies [735d94c]
+  - @gtmgrid/services@0.16.0
+  - @gtmgrid/analytics@0.16.0
+  - @gtmgrid/cloud@0.16.0
+
+## 0.15.0
+
+### Patch Changes
+
+- Updated dependencies [f414614]
+  - @gtmgrid/services@0.15.0
+  - @gtmgrid/analytics@0.15.0
+  - @gtmgrid/cloud@0.15.0
+
+## 0.14.0
+
+### Minor Changes
+
+- 651e34b: Cloud tables now support rename and pin-to-favourites in the sidebar, matching local tables. Renames persist via a new `grid.renameTable` mutation and broadcast `table.rename` so every member's sidebar and the open grid relabel live. Favourites are workspace-shared (a `favorite` column on the table row): any member's pin is visible to the whole workspace, sorts favourites to the top, and broadcasts `table.favorite` so sidebars restyle and reorder in real time.
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.14.0
+- @gtmgrid/cloud@0.14.0
+- @gtmgrid/services@0.14.0
+
+## 0.13.0
+
+### Minor Changes
+
+- 21230d3: Rework update notifications. App-update alerts now live in a dedicated download button next to the notification bell (animated when an update is available, with a "Download version X" tooltip) instead of the notification center. On launch with a pending update, an upgrade dialog offers to download & restart; choosing "Later" keeps it behind the download button. After installing a new version, a "What's new" changelog dialog is shown on first launch.
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.13.0
+- @gtmgrid/cloud@0.13.0
+- @gtmgrid/services@0.13.0
+
+## 0.12.0
+
+### Minor Changes
+
+- 4f0cede: Add drag-to-resize to the agent panel, matching the app sidebar. Drag the panel's left edge to set its width (clamped 320–720px); the width persists across launches and keeps the plan drawer aligned.
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.12.0
+- @gtmgrid/cloud@0.12.0
+- @gtmgrid/services@0.12.0
+
+## 0.11.1
+
+### Patch Changes
+
+- 2fdb753: Make the column edit panel keyboard-accessible: convert it from an inline side rail to a shadcn Sheet, so it closes on Escape and traps focus while open (matching the cell-details drawer).
+  - @gtmgrid/analytics@0.11.1
+  - @gtmgrid/cloud@0.11.1
+  - @gtmgrid/services@0.11.1
+
+## 0.11.0
+
+### Minor Changes
+
+- 6d2bc93: Clay-style column UX
+  - Reworked column authoring/editing into a dedicated `ColumnEditPanel` (identity, edit rail, run menus) replacing the old column-settings modal.
+  - Mouse range cell-selection in the grid (click-drag to select a rectangle, shift-click to extend) with selection-aware right-click menu and copy.
+  - Per-cell run metadata (ran-at / run duration) surfaced in the cell-details drawer, plus a "waiting for inputs" cell state for columns with unmet input mappings.
+  - Connector manifest + extensions refresh (per-method categories) and engine run-metadata plumbing.
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.11.0
+- @gtmgrid/cloud@0.11.0
+- @gtmgrid/services@0.11.0
+
+## 0.10.0
+
+### Minor Changes
+
+- 898ab3e: Full keyboard accessibility for the desktop app
+  - Spreadsheet-style grid navigation: arrow keys, Home/End, Cmd/Ctrl+Arrow, PageUp/PageDown, roving tabindex, `role="grid"` + ARIA indices, with scroll-into-view that survives row/column virtualization.
+  - Type-to-edit (any character), Enter/F2 to edit, Escape to cancel, with focus returning to the cell; Space / Shift+Arrow / Cmd+A for row selection.
+  - Migrated every overlay to shadcn/Radix Dialog/Popover/Sheet primitives, so dialogs, popovers and drawers all close on Escape, trap focus, and restore focus to their trigger.
+  - Command palette (Cmd/Ctrl+K) for jumping to tables and common actions.
+  - Skip-to-content link and keyboard-focusable sidebar navigation (table rows, section/folder headers, provider/tool rows) with a global focus-visible ring.
+
+### Patch Changes
+
+- @gtmgrid/analytics@0.10.0
+- @gtmgrid/cloud@0.10.0
+- @gtmgrid/services@0.10.0
+
+## 0.9.24
+
+### Patch Changes
+
+- 5e85887: Add AskUserQuestion answer cards to the Agent panel for all providers.
+
+  When an agent needs the user to choose between options (which AI model, cohort
+  size, ambiguous intent), it can now pose a structured multiple-choice question
+  and the bottom of the chat replaces the composer with selectable answer cards —
+  pick with a click or hotkeys `1,2,3,4`, or choose "Other" to type a custom
+  answer. Works across all three CLI providers (Claude / Codex / Hermes), reusing
+  the existing permission-gate pattern.
+  - **mcp**: new `ask_user_question` tool returning a non-blocking questions payload.
+  - **server**: `questionEventFromToolResult` converts the payload into an `ask_user`
+    SSE event, wired into the Claude, Codex, and Hermes bridges. Claude's _native_
+    `AskUserQuestion` tool_use is intercepted directly (headless `-p` stubs the result
+    and ends the turn), and HITL payloads are detected against the untruncated Hermes
+    tool-result text so a larger question payload can't be clipped.
+  - **desktop**: an `AskCards` component (step-through, hotkeys, multiSelect, "Other"
+    free-text) replaces the composer while a question is pending; the answer resumes
+    the session.
+  - @gtmgrid/cloud@0.9.24
+  - @gtmgrid/services@0.9.24
+
+## 0.9.23
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.23
+- @gtmgrid/services@0.9.23
+
+## 0.9.22
+
+### Patch Changes
+
+- d2a41c5: Fix the Tables page showing duplicate tables and no row counts for cloud tables.
+  - **Row counts**: `grid.listTables` now attaches each table's row count from a
+    single grouped `countByTableIds` query (the efficient primitive existed but was
+    never wired in; the in-memory repo was also missing it — a latent type error).
+    The Tables page and sidebar now show real cloud row counts ("124 rows") instead
+    of "Cloud table"/"—"; a table whose count an older server doesn't report falls
+    back gracefully.
+  - **Duplicates**: removed the sidebar "Recent" group, which repeated the 5 most-
+    recent tables already shown in the full list below it. The Tables page already
+    de-dupes by name.
+  - The sidebar table rows now show a row count (hidden on hover, like folders).
+
+- Updated dependencies [d2a41c5]
+  - @gtmgrid/services@0.9.22
+  - @gtmgrid/cloud@0.9.22
+
+## 0.9.21
+
+### Patch Changes
+
+- 8e16910: Rebuild the Tables page as a full management hub matching the GTM Grid Tables
+  design: a header with title + table-count subtitle, a controls row with search,
+  status-filter chips (All / Favorites / Synced / Local only, each with a count), a
+  sort dropdown (recently added / name / row count), and a list/grid view toggle.
+  The list view shows each table with a checkbox, accent table icon, name + favorite
+  star + column/row meta, row count, and a sync pill; the card view mirrors it.
+  Multi-select reveals a bulk-action bar with an inline-confirm delete, and each row
+  has a favorite toggle and an actions menu (open / rename / delete). Styled with the
+  app's tokens (the design's green accent), reusing the existing open/rename/delete/
+  favorite handlers.
+- 2e48ab4: Add a Tables page for searching and managing tables, mirroring the connectors
+  gallery. Reachable via "Browse all" in the sidebar's Tables section, it shows
+  every table as a card (column/row counts for local tables, a cloud badge for
+  cloud ones), with search and inline actions — open, favorite, rename (local), and
+  delete (local + cloud) — reusing the existing table handlers and confirm dialogs.
+  The sidebar also gains a compact "Recent" group of the 5 most-recent tables (shown
+  once there are more than 5) for quick access.
+  - @gtmgrid/cloud@0.9.21
+  - @gtmgrid/services@0.9.21
+
+## 0.9.20
+
+### Patch Changes
+
+- f464186: Make the 4 agent permission modes real and add enforced human-in-the-loop (HITL)
+  approval, uniformly across all three providers (claude/codex/hermes).
+  - **Modes are enforced at the MCP tool gate** (the one layer all providers share),
+    driven by a per-tool risk class: `bypass` runs everything; `auto` asks for
+    destructive ops and large/expensive runs; `acceptEdits` asks for every delete
+    and every credit spend; `plan` blocks all mutations (reads still run). The
+    composer mode is threaded to the MCP via env (`GTMGRID_PERMISSION_MODE`).
+  - **Enforced approval (no model self-confirm):** a gated tool returns
+    `confirmationRequired` and does NOT execute; it can only be unlocked by a HUMAN
+    approval delivered through the MCP env (`GTMGRID_APPROVED_TOOL`/`_ARGS_HASH`) — a
+    channel the model can't reach. The approval is hash-bound to the exact action
+    the user saw and single-use, so the model setting `confirm:true` itself never
+    bypasses a gate.
+  - **HITL chat UX:** a new `permission_request` SSE event (emitted by all three
+    bridges) drives an Approve/Deny card showing the action, affected count, credit
+    estimate, and mode; Approve resends the turn carrying the approval. Plan mode is
+    now actually enforced, not just suggested.
+  - Default mode is now **Auto** (was bypass) so destructive ops and spends ask for a
+    one-click approval out of the box. Claude's invalid `auto` flag is mapped to
+    `default`.
+  - @gtmgrid/cloud@0.9.20
+  - @gtmgrid/services@0.9.20
+
+## 0.9.19
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.19
+- @gtmgrid/services@0.9.19
+
+## 0.9.18
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.18
+- @gtmgrid/services@0.9.18
+
+## 0.9.17
+
+### Patch Changes
+
+- 8b29845: Render the agent chat with Streamdown so assistant replies get proper markdown
+  — GFM tables, lists, code fences and inline formatting — streamed safely as
+  incomplete tokens arrive (replacing the hand-rolled renderer). Typography is
+  scoped to the copilot panel so headings stay small and bold rather than
+  prose-sized. Tool calls now interleave with text in the order the agent emits
+  them, instead of bunching every tool call above the reply.
+  - @gtmgrid/cloud@0.9.17
+  - @gtmgrid/services@0.9.17
+
+## 0.9.16
+
+### Patch Changes
+
+- 9f01681: Fix "undefined is not an object (evaluating 'snapshot.columns')" when
+  deleting a column (or row) on a cloud table: the optimistic cache patch fed
+  react-query's `undefined` (no cached unpaged snapshot — the normal state
+  while the grid loads paged) into the grid reducer, which only guarded
+  `null`. The reducer now tolerates both, and the optimistic path skips absent
+  cache entries entirely.
+- Updated dependencies [9f01681]
+  - @gtmgrid/services@0.9.16
+  - @gtmgrid/cloud@0.9.16
+
+## 0.9.15
+
+### Patch Changes
+
+- Updated dependencies [be203b9]
+  - @gtmgrid/services@0.9.15
+  - @gtmgrid/cloud@0.9.15
+
+## 0.9.14
+
+### Patch Changes
+
+- 7eda629: Agent grid mutation tools + chat UX: the agent can now rename tables,
+  reorder columns/rows, run a whole table, and use the full mutation surface
+  on CLOUD tables (member-gated worker routes, metered, with confirm-protocol
+  dry-runs for destructive ops). Chat gains slash commands, /goal, permission
+  modes (bypass/auto/accept-edits/plan), a plan drawer, per-agent threads, and
+  table rename/reorder realtime events.
+- 0cbab23: Cascade auto-run: when a column runs (or a cell is edited), dependent mapped
+  columns now auto-populate — free columns (formulas and no-provider code)
+  always cascade; billed enrichment columns cascade only when Auto-run is on.
+  Cycles are guarded (each column runs at most once per cascade).
+- c7bd3fc: Async-job connectors (e.g. Firecrawl extract) now block-poll until the job
+  completes — with a wall-clock timeout and typed fail states — instead of
+  returning a job id the grid can't use. Cells whose value carries an `error`
+  field render an honest red error pill (with the real status code when one
+  exists) instead of a fabricated "Status Code: 200".
+- f5851bc: Run selected rows + export to CSV: row checkboxes with shift-click range
+  select, a "Run N selected" action (dependency-aware, non-force — done cells
+  aren't re-billed), context-menu actions on the selection, and a CSV export
+  of mapped scalar values (RFC-4180, UTF-8 BOM for Excel, and spreadsheet
+  formula-injection neutralized with the OWASP apostrophe guard).
+- 17ea929: Sidebar folders for tables, on both local and cloud projects: create, rename,
+  and delete folders, file tables into them ("New table here" included), and
+  drag to reorder. Deleting a folder unfiles its tables (never deletes them).
+  Folder changes broadcast on the workspace room so teammates' sidebars update
+  live. Cloud adds a `folders` table + `tables.folder_id` (migration 0009);
+  local SQLite upgrades in place.
+- Updated dependencies [7eda629]
+- Updated dependencies [17ea929]
+  - @gtmgrid/services@0.9.14
+  - @gtmgrid/cloud@0.9.14
+
+## 0.9.13
+
+### Patch Changes
+
+- 891e3b8: Agent presence (Co-Pilot cursor): the in-app AI agent now appears in cloud
+  tables like a teammate. As it reads or writes — get_table, run_column,
+  update_cells, add_rows — the grid shows "<Your name>'s Agent" in the avatar
+  stack (bot glyph, brand-accent ring), rings the cell or column it's working
+  on, and labels the activity ("reading the table", "updating 2 cells",
+  "running Email"). Visible to everyone in the table's room, clears when the
+  turn ends. Works against the already-deployed realtime party.
+- Updated dependencies [891e3b8]
+  - @gtmgrid/services@0.9.13
+  - @gtmgrid/cloud@0.9.13
+
+## 0.9.12
+
+### Patch Changes
+
+- fee2724: Fix the cell-details (field mapping) drawer in dark mode: the panel kept a
+  hardcoded light backdrop while its title, pills, and footer used dark-theme
+  colors — making the title invisible and the panel clash with the app. The
+  drawer now uses theme tokens throughout, and the number/boolean type glyphs
+  brighten on dark for contrast.
+- Updated dependencies [9bf183f]
+  - @gtmgrid/services@0.9.12
+  - @gtmgrid/cloud@0.9.12
+
+## 0.9.11
+
+### Patch Changes
+
+- 2ddf117: Clay-style webhook tables: every webhook now lands records in a dedicated
+  "Webhook" column, so received data is always visible — even on a table with
+  no other columns and no field mappings. Cells render as "Received <date>";
+  clicking opens the payload in the cell-details panel, where each field has
+  an "Add to column" action that promotes it to a real column applied to all
+  existing and future rows. Re-enabling an existing webhook heals it with the
+  new column. Mapping replaces never drop the raw-payload entry.
+- Updated dependencies [2ddf117]
+  - @gtmgrid/services@0.9.11
+  - @gtmgrid/cloud@0.9.11
+
+## 0.9.10
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.9.10
+- @gtmgrid/services@0.9.10
+
+## 0.9.9
+
+### Patch Changes
+
+- Updated dependencies [67f3d44]
+  - @gtmgrid/services@0.9.9
+  - @gtmgrid/cloud@0.9.9
+
+## 0.9.8
+
+### Patch Changes
+
+- Updated dependencies [3cbb8b2]
+  - @gtmgrid/services@0.9.8
+  - @gtmgrid/cloud@0.9.8
+
+## 0.9.7
+
+### Patch Changes
+
+- b49517c: Fix cloud Trigify signal tables staying empty, end to end:
+  - The prod Inngest app sync was rejected ("A concurrency key must be specified
+    for Account scoped limits"), leaving every background function — including the
+    hourly signal poll — unregistered. Account-scoped concurrency caps now carry
+    the required key, so the cron actually runs.
+  - A fresh Trigify search takes ~10–30s to return results, but the create-time
+    pull stamped the binding as synced, deferring the next pull by the full
+    schedule (a daily binding sat empty for 24h). A new durable warm-up retries
+    the pull until first data lands (~15–60s, like local), and still-empty
+    bindings stay due for the hourly cron as a safety net.
+  - The cloud grid now shows a signal status strip (waiting / rows pulled / last
+    synced / errors) with a "Sync now" button — previously an empty signal table
+    gave no visibility or recourse.
+  - @gtmgrid/cloud@0.9.7
+  - @gtmgrid/services@0.9.7
+
+## 0.9.6
+
+### Patch Changes
+
+- ba86bc8: Fix two cloud credential/connector issues so cloud behaves like local:
+  - The cloud agent (spawned MCP) only loaded the built-in connectors
+    (ai/formatting/formula/github/http), so it reported extension connectors like
+    Trigify and Apollo as "not available" — diverging from a local project. The
+    cloud agent now loads the SAME JSON-manifest extensions from the global db that
+    `openProject` loads locally, so every connector is available to
+    `list_functions` / `run_column` in cloud mode (credentials resolve via the
+    shared workspace key).
+  - After saving a shared Cloud connector key, the Cloud tab kept showing "No X
+    credentials yet" until app restart because the save path didn't refresh the
+    credential listing. It now refreshes immediately, flipping the panel to
+    "connected".
+  - @gtmgrid/cloud@0.9.6
+  - @gtmgrid/services@0.9.6
+
+## 0.9.5
+
+### Patch Changes
+
+- b1fed4b: Add "Use my local key" — one-click copy of a connector/AI provider's local API
+  key up to the shared Cloud (workspace) key. Shown in each connector's Cloud tab
+  when a local key exists. Security-first: the sidecar decrypts the local key
+  in-process and forwards the plaintext to the cloud over TLS authenticated as the
+  signed-in member; the plaintext never enters the renderer, is never logged, and is
+  never returned in the response. The cloud save encrypts at rest and is
+  member-gated (only a workspace member can write the shared key).
+  - @gtmgrid/cloud@0.9.5
+  - @gtmgrid/services@0.9.5
+
+## 0.9.4
+
+### Patch Changes
+
+- 296e4cd: Fix: the agent (and the UI cloud column run) failed on cloud tables in a packaged
+  prod build with `WEBHOOK_WORKER_SECRET is not configured`. The desktop sidecar and
+  the MCP it spawns authenticated to the cloud `/api/worker/*` endpoints with the
+  shared worker secret, which a prod build does not ship (it is a server-only
+  secret) — so it only ever worked in dev. The worker routes the desktop calls
+  (getTable / getTableMeta / setCell / setCellStatus / setCells / getCredential /
+  assertColumnRunQuota, plus the create/list tools) now authenticate as the
+  signed-in MEMBER via the session token and enforce workspace membership
+  server-side (a non-member is rejected). The shared secret remains the boundary for
+  the headless inngest webhook worker only. This makes the agent run/create columns
+  and the UI run columns on cloud tables in prod, and the agent-derived column logic
+  persists and is re-runnable.
+  - @gtmgrid/cloud@0.9.4
+  - @gtmgrid/services@0.9.4
+
+## 0.9.3
+
+### Patch Changes
+
+- e476861: Fix: running a function/code column on a cloud table that was synced from local did
+  nothing — it flicked to "running" and immediately exited without computing. A
+  local→cloud synced table arrives with every cell marked `done`, and a non-forced
+  run skips `done` cells, so there was nothing left to run. An explicit column Run in
+  the cloud now force-recomputes the column (per-cell run already forced), so Run
+  actually executes the logic over the synced data.
+  - @gtmgrid/cloud@0.9.3
+  - @gtmgrid/services@0.9.3
+
+## 0.9.2
+
+### Patch Changes
+
+- a1756d5: You can now click a cell in a **cloud** table to view its full response (the
+  status-code / JSON fields), just like local tables. The cloud grid was never
+  wiring the cell-details drawer or the expanded editor, so synced responses
+  (e.g. "Status Code: 200") weren't inspectable even though the data was present.
+  The drawer is view-only in the cloud for now (no promote-field-to-column yet).
+  - @gtmgrid/cloud@0.9.2
+  - @gtmgrid/services@0.9.2
+
+## 0.9.1
+
+### Patch Changes
+
+- 5882678: Show the full-screen branded loader on launch while a signed-in user's cloud
+  workspace loads, instead of flashing the local app and then switching to cloud.
+  The loader holds until the cloud project is open, with a short minimum display
+  window so an instant (warm-cache) load still reads as an intentional splash
+  rather than a flicker, and a safety timeout so it can never get stuck.
+  - @gtmgrid/cloud@0.9.1
+  - @gtmgrid/services@0.9.1
+
+## 0.9.0
+
+### Minor Changes
+
+- a6d488d: Two cloud-parity improvements:
+  - **Live sidebar** — when a teammate creates, syncs, or deletes a table in your
+    workspace, your sidebar table list now updates in real time (no app restart).
+    Table create/delete events are broadcast on a per-workspace realtime room that
+    the sidebar subscribes to.
+  - **Deduplication on cloud tables** — the Dedupe control (previously local-only)
+    now works on cloud tables: pick a column and keep-oldest/newest, and the server
+    removes duplicate rows and broadcasts the deletions live to everyone viewing the
+    table. Adds a nullable `dedupe_column` / `dedupe_keep` to the cloud `tables`
+    schema (migration included).
+
+### Patch Changes
+
+- ae68646: Cloud grid niceties:
+  - **You now appear in the presence avatar stack** (labeled "you"), so you can see
+    at a glance that you're connected — even when you're the only one in the table.
+    Your own selected cell is still left un-ringed; only teammates' cells get a
+    presence cursor.
+  - **The app version is shown** at the bottom of the account menu ("GTM Grid
+    vX.Y.Z"), so it's easy to tell which build you're on.
+  - **Cloud data refreshes when you return to the app** — queries now refetch on
+    window focus (gated by a 30s stale time), so tables, integration keys, and other
+    changes made elsewhere or by teammates show up without restarting the app.
+
+- Updated dependencies [a6d488d]
+  - @gtmgrid/services@0.9.0
+  - @gtmgrid/cloud@0.9.0
+
+## 0.8.0
+
+### Minor Changes
+
+- c3eb12d: Add live multiplayer presence to the cloud grid. You can now see who else is in a
+  table in real time:
+  - **Live users avatar stack** in the grid toolbar — everyone currently viewing the
+    table, with their profile photo (or initials), capped at 5 with a **"+N more"**
+    overflow. Hover an avatar to see the member's name.
+  - **Cell cursors** — each other member's selected cell gets a colored ring and a
+    small avatar chip (Airtable-style), so you can see where teammates are working.
+  - **Editing indicator** — a member actively editing a cell shows a pulsing ring.
+  - **Follow a teammate** — click their avatar to jump the grid to their current cell.
+
+  Presence rides the existing per-table PartyKit channel (no extra connection) and
+  each member's name/photo come from the workspace (the `me`/`listMembers` APIs now
+  expose the user's avatar image). Built on shadcn/ui avatar + tooltip primitives.
+
+### Patch Changes
+
+- Updated dependencies [c3eb12d]
+  - @gtmgrid/services@0.8.0
+  - @gtmgrid/cloud@0.8.0
+
+## 0.7.8
+
+### Patch Changes
+
+- 6ab6cf9: Simplify integration credential scopes to **Local** and **Cloud**. The connector
+  and AI-provider panels previously showed up to four confusing tabs (Workspace,
+  Personal, Team, Local) where three of them all saved to the same machine. They now
+  show just two:
+  - **Local** — the key is stored on this machine only.
+  - **Cloud** — the key is encrypted server-side and **shared with the whole team**
+    (everyone in the workspace uses it). Shown only when signed into a cloud workspace.
+
+  Pushing a local table to the cloud no longer fails when an integration is connected
+  only locally: credentials are never synced, so a cloud run resolves the team's
+  shared Cloud key (or surfaces a connect-integration error at run time if none is
+  set). This also fixes the case where having both a local and a Cloud key wrongly
+  blocked the push.
+  - @gtmgrid/cloud@0.7.8
+  - @gtmgrid/services@0.7.8
+
+## 0.7.7
+
+### Patch Changes
+
+- c64cbf5: Fix two desktop bugs:
+  - **In-app updater / notification popover was unclickable.** The transparent
+    full-viewport `.popover-scrim` (z-index 100) sat _above_ the bell notification
+    popover (z-index 61), so clicking "Update & restart" (or any action) hit the
+    scrim and just closed the popover instead of firing the button. Raised the
+    notification popover — and the dedupe popover, which had the same z-index 50 <
+    scrim bug — above the scrim.
+
+  - **Pushing a local table to the cloud dropped function-column config.** The
+    local→cloud push only sent each column's name/type (and the sidecar hardcoded
+    `kind: "manual"`), so a function/formula/code column landed in the cloud as a
+    plain manual column and its cells could no longer be run/enriched. The push now
+    carries the full config (kind/provider/method/code/params/condition); the
+    `grid.addColumn` tRPC mutation also accepts `condition` so the "only run if"
+    rule survives the push.
+  - @gtmgrid/cloud@0.7.7
+  - @gtmgrid/services@0.7.7
+
+## 0.7.6
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.7.6
+- @gtmgrid/services@0.7.6
+
+## 0.7.5
+
+### Patch Changes
+
+- ef7c5da: Fix the macOS DMG upload on the self-hosted runner by adding Homebrew's bin to
+  PATH so `gh` is found (the runner's service PATH is minimal). The DMG already
+  builds + signs + notarizes + staples correctly; only the upload step failed with
+  `gh: command not found`.
+  - @gtmgrid/cloud@0.7.5
+  - @gtmgrid/services@0.7.5
+
+## 0.7.4
+
+### Patch Changes
+
+- c13f497: Package the macOS DMG without Finder so it builds on the self-hosted runner.
+  Tauri's bundle_dmg.sh drives Finder via AppleScript (times out headless), so the
+  macOS build now produces the signed+notarized .app (+ updater) and a later step
+  wraps it in a DMG via hdiutil, then signs + notarizes + staples the DMG.
+  - @gtmgrid/cloud@0.7.4
+  - @gtmgrid/services@0.7.4
+
+## 0.7.3
+
+### Patch Changes
+
+- bb5aef3: Fix macOS signing on the self-hosted runner: delete the leftover `signing_temp`
+  keychain before importing the Developer ID cert. The Mac mini persists state
+  between runs (and between the two macOS jobs of one run), so the lingering
+  keychain made `import-codesign-certs` fail with `security` exit code 48.
+  - @gtmgrid/cloud@0.7.3
+  - @gtmgrid/services@0.7.3
+
+## 0.7.2
+
+### Patch Changes
+
+- 6be1500: Build macOS releases on a self-hosted Apple-silicon runner.
+
+  The two macOS targets now build on the self-hosted Mac mini (runs-on:
+  [self-hosted, macOS]) instead of GitHub-hosted macOS runners, so the lengthy
+  Apple notarization waits no longer consume GitHub-hosted macOS minutes. Linux
+  and Windows continue to build on GitHub-hosted runners. No change to the shipped
+  app.
+  - @gtmgrid/cloud@0.7.2
+  - @gtmgrid/services@0.7.2
+
+## 0.7.1
+
+### Patch Changes
+
+- 4127808: Sign + notarize the macOS app so downloads open without a Gatekeeper warning.
+
+  The release now signs the app with a Developer ID Application certificate and
+  notarizes it via the App Store Connect API. The bundled Node sidecar (`node`
+  runtime + `better-sqlite3` native addon) is codesigned under the Hardened
+  Runtime with JIT/library-validation entitlements so it runs in a notarized
+  build. Signing is driven by repository secrets (`APPLE_CERTIFICATE`,
+  `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_API_ISSUER`,
+  `APPLE_API_KEY_ID`, `APPLE_API_KEY_P8`); releases still build unsigned when they
+  are absent.
+  - @gtmgrid/cloud@0.7.1
+  - @gtmgrid/services@0.7.1
+
+## 0.7.0
+
+### Minor Changes
+
+- accf1a9: Grid at scale: dedup + full agent control (bundles #53, #54, #55).
+  - **Global-db credentials & extensions** (#53) — resolve credentials _and_
+    extensions from the global db in `openProject`, fixing Exa/Firecrawl keys and
+    the agent missing connectors (firecrawl/notion/supabase).
+  - **HTTP request column** (#54) — generic HTTP request column (full request
+    builder + try-on-N-rows) plus a LeadMagic 38-endpoint mapping.
+  - **Agent session continuity** (#55) — resume the CLI's native session so chat
+    survives Stop/restart, with stdin/transient-id fixes.
+  - **Table deduplication** — Clay-style dedup: engine + `set_dedupe` agent tool +
+    `add_rows` auto-dedup + a Deduplication panel in the table toolbar (toggle,
+    column picker, keep oldest/newest, one-shot sweep).
+  - **Full agent CRUD + safety** — `find_rows`, `get_column`, paginated
+    `get_table` with row ids, `update_cells`/`update_column`/`rename_table`,
+    `delete_rows`/`delete_column`/`delete_table`; destructive/large ops return a
+    `{confirmationRequired, willAffect, estimatedCredits}` preview and require
+    `confirm:true` to execute. `get_table` truncates large cell values to bound the
+    agent's token budget.
+
+### Patch Changes
+
+- @gtmgrid/cloud@0.7.0
+- @gtmgrid/services@0.7.0
+
+## 0.6.1
+
+### Patch Changes
+
+- dcb9297: Fix cloud grid not reflecting column/row deletes and column edits.
+
+  The live grid renders the PAGED query (`grid.getTablePage`), but the cloud
+  mutations either didn't refetch or invalidated only the unpaged `grid.getTable`
+  cache — so deleting a column/row or editing a column left the change invisible
+  (and a re-delete surfaced a scary "Column … not found") whenever the realtime
+  broadcast was unconfigured or dropped.
+  - `deleteColumn` / `deleteRow` now optimistically drop the column/row from the
+    cache for instant feedback, then invalidate both the paged and unpaged grid
+    queries to reconcile with the server.
+  - `updateColumn` (edit column) now invalidates the table's grid queries so the
+    edit reflects without relying on the realtime `column.update` event.
+  - A "… not found" delete is treated as already-done (no error banner) — the
+    refetch drops the stale row/column.
+  - @gtmgrid/cloud@0.6.1
+  - @gtmgrid/services@0.6.1
+
+## 0.6.0
+
+### Minor Changes
+
+- ee40d02: One shared grid for local & cloud, with clear local/cloud separation.
+  - **One grid, no divergence** — the local grid and the cloud grid now render the
+    same `DataGrid` component, driven by an injected controller. Cloud no longer
+    silently deletes a column on header right-click and no longer has a
+    stripped-down add-column; it gets the identical header context menu
+    (Edit / Delete), the full add-column popover (manual types + AI / function /
+    formula), add-row, and run.
+  - **Clear local/cloud separation** — the sidebar shows ONE environment's tables:
+    only cloud tables in a cloud project, only local tables in local mode. This
+    removes the dual-selection bug where a cloud and a local table were both
+    highlighted at once. The sync affordances (sync-all, per-row dots, auto-sync
+    toggle/nudge, auto-push) now appear only in local mode while signed into cloud.
+  - **Cloud column editing (parity)** — new `grid.updateColumn` tRPC procedure
+    (`GridService.updateColumn` → `ColumnRepo.update`) broadcasts a `column.update`
+    realtime event so a rename / type / function-config change reflects live across
+    clients with no refetch. The shared edit-column modal now persists in cloud.
+  - **Cloud AI/formula authoring** — the cloud add-column flow reuses the local
+    sidecar's AI providers + formula generation (which is what runs cloud columns),
+    so function / AI / formula columns can be authored in cloud too.
+
+### Patch Changes
+
+- Updated dependencies [ee40d02]
+  - @gtmgrid/services@0.6.0
+  - @gtmgrid/cloud@0.6.0
+
+## 0.5.1
+
+### Patch Changes
+
+- a06b5aa: Sync UX feedback fixes (TRI-3313 + TRI-3314).
+  - **One unified table list** — the separate "Tables (cloud)" and "Tables" sidebar sections are merged into a single list with per-table cloud-sync status icons and a single selection (no more one-local-plus-one-cloud dual selection leaving the grid bound to the wrong table).
+  - **Local tables viewable from cloud env** — selecting a local table while in a cloud project now renders it (and its sync options) instead of a dead panel.
+  - **Push works from the local env** — pushing a local table to your cloud workspace no longer fails with "not found" when triggered outside the cloud project context.
+  - **Environment switcher in the account menu** — the bottom account bar now shows the current environment (cloud project / local) with one-click "Switch to cloud/local" and "Switch project".
+  - **Popover fixes** — the notification popover and the sync popover are no longer clipped by the sidebar; the push button is always fully visible.
+  - @gtmgrid/cloud@0.5.1
+  - @gtmgrid/services@0.5.1
+
 ## 0.5.0
 
 ### Minor Changes
@@ -17,7 +1562,6 @@
 ### Minor Changes
 
 - 396127a: Cloud table sync, agent environment routing, notification center, plus agent + security hardening.
-
   - **Sync local tables to your cloud workspace**: per-table status dots, a sync popover (push / progress / overwrite-confirm), a "Sync all" control, and an opt-in **auto-sync** setting (default off) with an enable-time overwrite warning and a dismissible nudge. One-way push (local is the source of truth); re-sync is **atomic** (create-new-then-swap) so a failed push never destroys the cloud copy, and every overwrite is explicitly confirmed.
   - **Agents on the right environment**: in cloud mode the in-app Claude/Codex agents' table tools read _and_ write the cloud (Supabase) project instead of the local SQLite one (new worker routes back the write tools, gated by membership + cloud-actions quota).
   - **Notification center**: a bell with an unread badge consolidates the trial / auto-sync / update alerts — no more stacked full-width banners.
@@ -186,7 +1730,6 @@
   section + local "New table" stay hidden and all tables go to the cloud. Skipped
   when the workspace's cloud access is locked (lapsed trial).
 - 8513552: Fix + polish the team-invite acceptance flow:
-
   - **Not-authed invites now guide sign-up.** A `gtmgrid://invite/<token>` deep link
     (or `?invite=` URL) is captured into a pending-invite store; while signed out it
     FORCES the sign-in/sign-up flow even if the user previously chose "continue
@@ -225,7 +1768,6 @@
   `tsc -b`, only by `apps/web`'s own typecheck / the Vercel build).
 
 - 1628165: Proactively prompt users to upgrade before the 7-day trial hard-locks the cloud:
-
   - **In-app countdown banner**: a new `workspaces.trialEndsAt` column is synced from
     Autumn (`getActiveSubscriptions`) by `syncPlan` and seeded on trial start; `me`
     surfaces it, and the desktop shows a "Your trial ends in N days — upgrade" banner
@@ -252,7 +1794,6 @@
 - 63629aa: New-signup onboarding: auto-enrol every new workspace in a 7-day, no-card **Team
   free trial** so owners can invite teammates from day one (least-friction), and
   auto-enrol invited users instead of prompting them to create their own workspace.
-
   - `createWorkspace` now starts a Team trial in Autumn (`SeatsService.startTrial` →
     `attach` with `customize.freeTrial` (7 days, `cardRequired: false`) + a prepaid
     seat grant, since the Team plan's seats are prepaid). Best-effort: a billing
@@ -283,7 +1824,6 @@
 ### Patch Changes
 
 - d8affce: Fix two cloud-state staleness bugs:
-
   - **Sign-up via the sidebar left the app "signed out".** The `me` query (user +
     workspaces + plan) was cached as `null` while signed out and never refetched
     when a bearer token appeared, so the UI stayed unauthenticated after an in-app
@@ -326,7 +1866,6 @@
 ### Patch Changes
 
 - 7c4631b: Fix desktop cloud sign-in and make local use free + unauthed.
-
   - **Local-first gate:** the cloud build no longer hard-blocks the app behind sign-in. The welcome screen now offers **"Continue locally — no account"** → use the app fully offline (local SQLite engine, your tables/runs) with no cloud features. Signing in (via the account bar) unlocks cloud workspaces, sync & realtime at any time.
   - **Cloud auth fix:** the packaged Tauri app calls the apps/web API cross-origin (`tauri://localhost`), which was blocked by missing CORS and broken third-party cookies ("Couldn't create your account"). Add CORS for the desktop origins, switch the desktop session to Better Auth **Bearer tokens** (persisted + replayed on auth/tRPC/sidecar calls), and trust the desktop origins.
   - @gtmgrid/cloud@0.3.1

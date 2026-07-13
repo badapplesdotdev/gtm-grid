@@ -1,0 +1,1 @@
+CREATE INDEX "rows_by_table_position" ON "rows" USING btree ("table_id","position","created_at","id");

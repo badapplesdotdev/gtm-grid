@@ -38,6 +38,7 @@ import {
   GridStore,
   GridStoreError,
   type CellPatch,
+  type GridStorePage,
   type GridStoreShape,
 } from "./store.js";
 import type {
@@ -76,6 +77,20 @@ export interface CloudClientLike {
 export interface CloudFunctionRefs {
   /** `api.tables.getTable` — returns `{ table, columns, rows, cells }`. */
   readonly getTable: unknown;
+  /**
+   * Optional SCOPED grid read — `{ tableId, rowIds }` → the grid restricted to
+   * those rows (all columns + only those rows' cells). When wired, a row-scoped
+   * run (cascade / run-cell / run-rows) fetches only the rows it touches instead
+   * of the whole grid. Falls back to {@link getTable} when omitted.
+   */
+  readonly getTableForRows?: unknown;
+  /**
+   * Optional KEYSET grid page — `{ tableId, cursor, limit }` → one page of rows
+   * (+ their cells) and a `nextCursor`. When wired, a full-column run streams the
+   * grid page-by-page (bounded memory) instead of one unbounded {@link getTable}.
+   * Falls back to {@link getTable} when omitted.
+   */
+  readonly getTablePage?: unknown;
   /** `api.cells.setCell` — upsert value/status/error for a cell. */
   readonly setCell: unknown;
   /** `api.cells.setCellStatus` — status-only upsert (run lifecycle). */
@@ -298,6 +313,38 @@ export const cloudGridStoreShape = (
       ).pipe(Effect.map((r) => r as ConvexGetTableResult));
 
     /**
+     * Fetch the grid SCOPED to specific rows via the `getTableForRows` ref —
+     * all columns plus only those rows' cells. Falls back to the full
+     * {@link fetchGrid} when the ref is not wired (older worker), so behaviour
+     * degrades gracefully rather than failing.
+     */
+    const fetchGridForRows = (
+      operation: string,
+      rowIds: readonly string[],
+    ): Effect.Effect<ConvexGetTableResult, GridStoreError> =>
+      refs.getTableForRows === undefined
+        ? fetchGrid(operation)
+        : fromClient(operation, () =>
+            client.query(refs.getTableForRows, { tableId, rowIds }),
+          ).pipe(Effect.map((r) => r as ConvexGetTableResult));
+
+    /** One keyset page of the grid via the `getTablePage` ref. */
+    const fetchGridPage = (
+      cursor: unknown,
+    ): Effect.Effect<
+      { grid: ConvexGetTableResult; nextCursor: unknown },
+      GridStoreError
+    > =>
+      fromClient("snapshotPage", () =>
+        client.query(refs.getTablePage, { tableId, cursor }),
+      ).pipe(
+        Effect.map((r) => {
+          const payload = r as ConvexGetTableResult & { nextCursor: unknown };
+          return { grid: payload, nextCursor: payload.nextCursor ?? null };
+        }),
+      );
+
+    /**
      * Batched-write state for a run. Buffers terminal cell writes and flushes
      * them in chunks of {@link FLUSH_CHUNK} through the `setCells` ref, with at
      * most {@link MAX_IN_FLIGHT} POSTs in flight. Plain TS (the engine is not
@@ -487,6 +534,21 @@ export const cloudGridStoreShape = (
         }),
     });
 
+    /**
+     * Build the run-snapshot {@link GridStoreShape} from a fetched grid: the
+     * in-memory reads plus the LIVE writers (so cell status still streams) and
+     * the batched-write hooks. Shared by `snapshot` (scoped or full) and
+     * `snapshotPage` (one keyset page).
+     */
+    const snapshotShape = (grid: ConvexGetTableResult): GridStoreShape => ({
+      ...readsFromGrid(grid),
+      setCell: (rowId, columnId, patch) => writeCell(rowId, columnId, patch),
+      getCredential,
+      ...(refs.setCells !== undefined
+        ? { coalesceRunningWrites: true, drain }
+        : {}),
+    });
+
     return {
       getColumn: (columnId) =>
         fetchGrid("getColumn").pipe(
@@ -516,24 +578,32 @@ export const cloudGridStoreShape = (
       ...(refs.setCells !== undefined
         ? { coalesceRunningWrites: true, drain }
         : {}),
-      // Snapshot the grid ONCE for a run: every per-row read below is served
-      // from this in-memory grid, so an N-row `runColumn` issues one getTable
-      // query instead of one-per-read (O(N) total, not O(N^2)). Writes and
-      // credential reads stay live so cell status streams during the run.
-      snapshot: () =>
-        fetchGrid("snapshot").pipe(
-          Effect.map(
-            (grid): GridStoreShape => ({
-              ...readsFromGrid(grid),
-              setCell: (rowId, columnId, patch) =>
-                writeCell(rowId, columnId, patch),
-              getCredential,
-              ...(refs.setCells !== undefined
-                ? { coalesceRunningWrites: true, drain }
-                : {}),
-            }),
-          ),
-        ),
+      // Snapshot the grid for a run: every per-row read is served from this
+      // in-memory grid, so an N-row `runColumn` issues one read instead of
+      // one-per-read (O(N) total, not O(N^2)). When `rowIds` is given (a
+      // row-scoped run), fetch ONLY those rows via `getTableForRows` so a
+      // scoped run never loads the whole 50k-row grid. Writes + credential
+      // reads stay live so cell status still streams during the run.
+      snapshot: (rowIds) =>
+        (rowIds !== undefined && rowIds.length > 0
+          ? fetchGridForRows("snapshot", rowIds)
+          : fetchGrid("snapshot")
+        ).pipe(Effect.map(snapshotShape)),
+      // Paged full-column run: one keyset page of rows (+ their cells) at a
+      // time, so resident memory stays bounded to a page instead of the whole
+      // grid. Only wired when the worker exposes `getTablePage`.
+      ...(refs.getTablePage !== undefined
+        ? {
+            snapshotPage: (cursor: unknown) =>
+              fetchGridPage(cursor).pipe(
+                Effect.map(({ grid, nextCursor }): GridStorePage => ({
+                  reads: snapshotShape(grid),
+                  rowIds: grid.rows.map((r) => r._id),
+                  nextCursor,
+                })),
+              ),
+          }
+        : {}),
     } satisfies GridStoreShape;
   });
 

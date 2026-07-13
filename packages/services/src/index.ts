@@ -15,6 +15,9 @@
 // --- The per-request DB seam -------------------------------------------------
 export { DbClient, DbClientLive, dbClientLayer } from "./db-client.js";
 
+// --- Self-host detection (GTMGRID_SELF_HOST) ---------------------------------
+export { isSelfHost } from "./self-host.js";
+
 // --- Repositories (Effect <-> Drizzle adapters) ------------------------------
 export {
   type NewWorkspace,
@@ -27,6 +30,28 @@ export {
   type WorkspaceUser,
 } from "./repositories/workspace-repo.js";
 export { MemberRepoLive } from "./repositories/member-repo.js";
+export {
+  LifecycleEmailRepo,
+  LifecycleEmailRepoLive,
+  lifecycleEmailRepoLayer,
+  LifecycleEmailRepoError,
+  type LifecycleCategory,
+  type LifecycleRecipient,
+  type LifecycleSendClaim,
+} from "./repositories/lifecycle-email-repo.js";
+export {
+  LifecycleCronRepo,
+  LifecycleCronRepoLive,
+  lifecycleCronRepoLayer,
+  LifecycleCronRepoError,
+  type CronOwnerTarget,
+  type ColumnsFunctionTarget,
+  type InviteTeamTarget,
+  type CreditWarningTarget,
+  type WeeklyDigestTarget,
+  type DormantTarget,
+  type TrialWinbackTarget,
+} from "./repositories/lifecycle-cron-repo.js";
 export {
   type MemberRow,
   type MemberWithUser,
@@ -108,6 +133,7 @@ export {
   makeGridStore,
   type StoreCell,
   type StoreColumn,
+  type StoreFolder,
   type StoreProject,
   type StoreRow,
   type StoreTable,
@@ -128,6 +154,14 @@ export {
   TableRepoLive,
   tableRepoLayer,
 } from "./repositories/table-repo.js";
+export {
+  type Folder,
+  FolderRepo,
+  FolderRepoError,
+  FolderRepoLive,
+  folderRepoLayer,
+  type NewFolder,
+} from "./repositories/folder-repo.js";
 export {
   type Column,
   type ColumnKind,
@@ -202,6 +236,11 @@ export {
   inviteEmailPortLayer,
 } from "./services/invite-email.js";
 export {
+  ErrorReporter,
+  errorReporterLayer,
+  errorReporterNoop,
+} from "./services/error-reporter.js";
+export {
   CryptoService,
   CryptoServiceLive,
   cryptoServiceLayer,
@@ -224,6 +263,8 @@ export {
   InvalidConfigError,
   InvalidMappingError,
   type ResolvedWebhook,
+  WEBHOOK_COLUMN_NAME,
+  WEBHOOK_PAYLOAD_PATH,
   WebhookNotFoundError,
   WebhookService,
   type WorkerGrid,
@@ -387,4 +428,19 @@ export {
 
 export * from "./signals/catalog.js";
 export { SignalRepo, SignalRepoLive, signalRepoLayer, SignalRepoError, type SignalBinding, type SignalBindingColumn, type SignalBindingInsert, type SignalBindingPatch, type SignalDueCursor, type DueBinding, type DueBindingPage } from "./repositories/signal-repo.js";
+export { CrmBindingRepo, CrmBindingRepoLive, crmBindingRepoLayer, CrmSyncedRowRepo, CrmSyncedRowRepoLive, crmSyncedRowRepoLayer, CrmSyncRunRepo, CrmSyncRunRepoLive, crmSyncRunRepoLayer, CrmRepoError, CRM_DAILY_DUE_MS, type CrmBinding, type CrmBindingColumn, type CrmBindingInsert, type CrmBindingPatch, type CrmDueCursor, type CrmDueBinding, type CrmDueBindingPage, type CrmSyncedRow, type CrmSyncedRowUpsert, type CrmSyncRun, type CrmSyncRunFinish } from "./repositories/crm-repo.js";
+export { CrmRateLimitError, CrmServerError, CrmNetworkError, CrmAuthRevoked, CrmConnectionMissing, CrmSchemaDriftError, CrmSourceGoneError, RowCapReached, CrmRequestError, CrmSyncError, isTransientCrmError, type CrmError } from "./crm/errors.js";
+export { crmErrorCopy, type CrmErrorPresentation, type CrmRunStatus } from "./crm/error-copy.js";
+export { AttioAuth, AttioOAuthNotConfigured, type AttioTokens, type AttioOAuthState } from "./services/attio-auth.js";
+export { AttioClient, ATTIO_PAGE_LIMIT, type AttioSession } from "./services/attio-client.js";
+export { CRM_DISPLAY_NAMES, type CrmProvider, type CrmClientApi, type CrmSession, type CrmTokens, type CrmObjectSummary, type CrmListSummary, type CrmAttribute, type CrmAttrRef, type CrmRecord, type CrmListEntry, type CrmPage } from "./services/crm-client.js";
+export { CrmClientRegistry } from "./services/crm-client-registry.js";
+export { CrmAuthRegistry } from "./services/crm-auth-registry.js";
+export { HubspotAuth, HubspotOAuthNotConfigured, HUBSPOT_SCOPES, type HubspotOAuthState } from "./services/hubspot-auth.js";
+export { HubspotClient, HUBSPOT_PAGE_LIMIT } from "./services/hubspot-client.js";
+export { mapHubspotPropertyType, flattenHubspotValue, toHubspotSearchBody, type HubspotPropertyMeta } from "./crm/hubspot-attributes.js";
+export { CrmConnectionService, ATTIO_EXTENSION_ID, crmConnectionSlot, type CrmConnectionMeta } from "./services/crm-connection-service.js";
+export { CrmSyncService, planRowCap, parseBindingConfig, CRM_ROW_CAP_TEAM, CRM_ROW_CAP_SCALE, type CrmBindingConfig, type CrmDedupeMode, type CrmSyncOutcome, type CrmSourceSummary, type CrmSourceField, type CrmSourceDescription, type CrmEstimate, type CreateCrmBindingArgs, type CrmBindingWithRun } from "./services/crm-sync-service.js";
+export { flattenAttrValue, toAttioFilter, toAttioFilterBody, type AttioAttrType, type AttioValueEntry } from "./crm/attio-attributes.js";
+export { matchesFilter, matchesAllFilters, isSupportedAttrType, SUPPORTED_ATTR_TYPES, FILTER_OPS, type CrmAttrType, type FlatValue, type CrmFilter, type FilterOp } from "./crm/crm-values.js";
 export { SignalService, SignalError } from "./services/signal-service.js";

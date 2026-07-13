@@ -70,7 +70,17 @@ export interface SyncedPlan {
   readonly name: string;
   /** Epoch ms the trial ends, or null when not trialing. */
   readonly trialEndsAt: number | null;
+  /**
+   * The CACHED plan id from before this reconcile (webhook variant only).
+   * `previousPlanId === null && id !== null` marks a FIRST paid subscription —
+   * the trigger for the subscription-confirmed email + `subscription_started`.
+   */
+  readonly previousPlanId?: string | null;
 }
+
+/** The error channel of {@link BillingService.syncPlanFromWebhook} — no authz
+ *  tags, since a secret-gated webhook has no member identity. */
+export type SyncPlanFromWebhookError = WorkspaceRepoError | AutumnError;
 
 /** The error channel of {@link BillingService.previewSeatChange}. */
 export type PreviewSeatChangeError =
@@ -107,6 +117,37 @@ export class BillingService extends Effect.Service<BillingService>()(
       const autumn = yield* AutumnClient;
 
       /**
+       * Persist the reconciled plan, PRESERVING a lapsed trial's `trialEndsAt`.
+       *
+       * When a paid/trialing sub is active we cache its own `trialEndsAt` (a future
+       * date while trialing, `null` once converted to paid). But when the sub
+       * lapses (`planId === null`, so the resolved `trialEndsAt` is `null` too) we
+       * must NOT blindly null the column: an EXPIRED TRIAL keeps its (now-past)
+       * `trialEndsAt` so both the server backstop (`EntitlementService` blocks on
+       * `trialEndsAt <= now`) and the desktop can tell "trial expired" apart from a
+       * cancelled paid plan / never-trialed Free workspace (both of which already
+       * have `trialEndsAt === null`). We therefore fall back to the workspace's
+       * existing `trialEndsAt` whenever the resolved one is null.
+       */
+      const persistResolvedPlan = (
+        workspaceId: string,
+        planId: string | null,
+        resolvedTrialEndsAt: number | null,
+      ): Effect.Effect<number | null, WorkspaceRepoError> =>
+        Effect.gen(function* () {
+          let trialEndsAt = resolvedTrialEndsAt;
+          if (trialEndsAt === null) {
+            const ws = yield* repo.findById(workspaceId);
+            trialEndsAt = Option.match(ws, {
+              onNone: () => null,
+              onSome: (w) => w.trialEndsAt ?? null,
+            });
+          }
+          yield* repo.updatePlan(workspaceId, planId, trialEndsAt);
+          return trialEndsAt;
+        });
+
+      /**
        * Begin a checkout/upgrade for `workspaceId` on the chosen `planId`,
        * returning the Autumn billing URL the UI opens. Owner/admin only. The
        * workspace id IS the Autumn customer id. `planId` is validated inside the
@@ -141,7 +182,8 @@ export class BillingService extends Effect.Service<BillingService>()(
        * view (billing CHANGES stay owner/admin in {@link checkout}). We pick the
        * first ACTIVE paid subscription (monthly or annual) from Autumn, cache its
        * plan id + trial end, and return `{ id, name, trialEndsAt }`; no active
-       * paid plan → `null` (Free, trialEndsAt null).
+       * paid plan → `null`. A lapsed trial keeps its (now-past) `trialEndsAt` (see
+       * {@link persistResolvedPlan}) so it reads as "trial expired", not Free.
        */
       const syncPlan = (
         workspaceId: string,
@@ -154,9 +196,47 @@ export class BillingService extends Effect.Service<BillingService>()(
           const paidPlanIds: readonly string[] = ALL_PAID_PLAN_IDS;
           const paid = subs.find((s) => paidPlanIds.includes(s.planId)) ?? null;
           const planId = paid?.planId ?? null;
-          const trialEndsAt = paid?.trialEndsAt ?? null;
-          yield* repo.updatePlan(workspaceId, planId, trialEndsAt);
+          const trialEndsAt = yield* persistResolvedPlan(
+            workspaceId,
+            planId,
+            paid?.trialEndsAt ?? null,
+          );
           return { id: planId, name: planName(planId), trialEndsAt };
+        });
+
+      /**
+       * Webhook variant of {@link syncPlan}: reconcile the cached plan with the
+       * live Autumn subscription WITHOUT a member-identity check. The caller (the
+       * billing webhook route) is gated by a shared secret, so there is no session
+       * to run `requireMember` against — exactly like the secret-trusted worker
+       * routes that run with `userId: null`. This is what revokes cloud access when
+       * a subscription is cancelled / lapses OUTSIDE the app (no active paid sub →
+       * plan id `null`; a lapsed trial keeps its past `trialEndsAt`, a cancelled
+       * paid plan stays `null` — see {@link persistResolvedPlan}).
+       */
+      const syncPlanFromWebhook = (
+        workspaceId: string,
+      ): Effect.Effect<SyncedPlan, SyncPlanFromWebhookError> =>
+        Effect.gen(function* () {
+          // Snapshot the cached plan BEFORE reconciling so the webhook route can
+          // detect the null -> paid transition (first subscription).
+          const prior = yield* repo.findById(workspaceId);
+          const previousPlanId = Option.match(prior, {
+            onNone: () => null,
+            onSome: (w) => w.currentPlanId ?? null,
+          });
+          const subs = yield* autumn.getActiveSubscriptions({
+            customerId: workspaceId,
+          });
+          const paidPlanIds: readonly string[] = ALL_PAID_PLAN_IDS;
+          const paid = subs.find((s) => paidPlanIds.includes(s.planId)) ?? null;
+          const planId = paid?.planId ?? null;
+          const trialEndsAt = yield* persistResolvedPlan(
+            workspaceId,
+            planId,
+            paid?.trialEndsAt ?? null,
+          );
+          return { id: planId, name: planName(planId), trialEndsAt, previousPlanId };
         });
 
       /**
@@ -191,7 +271,7 @@ export class BillingService extends Effect.Service<BillingService>()(
           };
         });
 
-      return { checkout, syncPlan, previewSeatChange } as const;
+      return { checkout, syncPlan, syncPlanFromWebhook, previewSeatChange } as const;
     }),
     dependencies: [],
   },

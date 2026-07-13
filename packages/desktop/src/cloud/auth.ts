@@ -12,18 +12,19 @@
  * desktop app uses the native Tauri deep-link flow: `signInWithProvider` opens
  * the provider in the system browser and the session is completed from the
  * `gtmgrid://auth/callback` deep link (see ./useDeepLinkOAuth.ts). The runtime
- * branch is selected by `isTauri()` (see ./desktop-oauth.ts).
+ * branch is selected by `isDesktop()` (see ./desktop-oauth.ts).
  *
- * The local-only app is untouched: every hook degrades to a signed-out / null
- * shape when no apps/web API is configured (`cloudEnabled` false), and nothing
- * here runs unless the user explicitly signs in.
+ * The desktop app is cloud-only: `apiClient` / `authClient` are always
+ * constructed, so the hooks here always run (a signed-out user resolves to a
+ * `null` `me` and an `isAuthenticated: false` auth state).
  */
 
 import { useQuery as useReactQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { Id } from "./ids";
-import { apiClient, authClient, cloudEnabled, setStoredAuthToken } from "./client";
-import { chooseOAuthFlow, isTauri } from "./desktop-oauth";
+import { apiClient, authClient, setStoredAuthToken } from "./client";
+import { electron } from "../electron";
+import { chooseOAuthFlow, isDesktop } from "./desktop-oauth";
 import { apiOAuthCallbackUrl, unwrapAuthResult } from "./api-auth";
 
 // ─── Shared types (mirror the tRPC `workspaces.me` query result) ────────────
@@ -58,6 +59,13 @@ export interface WorkspaceSummary {
    * billing view can show "actions used / limit".
    */
   readonly cloudActions: SeatUsage;
+  /**
+   * True on a SELF-HOSTED backend (`GTMGRID_SELF_HOST=1`). When set, the cloud UI
+   * is NEVER locked by plan/trial state — a self-host instance has no billing, so
+   * the server bypasses its entitlement gate and the desktop must not show the
+   * "Cloud is locked" / upgrade prompts. Omitted/false on the hosted product.
+   */
+  readonly selfHost?: boolean;
 }
 
 /** The authenticated user as returned by the `me` query. */
@@ -65,6 +73,7 @@ export interface MeUser {
   readonly _id: Id<"users">;
   readonly name: string | null;
   readonly email: string | null;
+  readonly image: string | null;
 }
 
 /** The full `me` result: the user plus the workspaces they can access. */
@@ -81,6 +90,7 @@ export interface WorkspaceMember {
   readonly createdAt: number;
   readonly name: string | null;
   readonly email: string | null;
+  readonly image: string | null;
 }
 
 /** The `listMembers` result: the roster + seat usage for the settings view. */
@@ -104,13 +114,6 @@ export interface EnabledProviders {
   /** Whether email verification + password reset are active (Resend configured). */
   readonly emailAuth: boolean;
 }
-
-/** When the providers query is unavailable (loading / cloud off), nothing is enabled. */
-const NO_PROVIDERS: EnabledProviders = {
-  github: false,
-  google: false,
-  emailAuth: false,
-};
 
 /**
  * The list of enabled OAuth providers, in display order, derived from the
@@ -136,13 +139,11 @@ export function enabledProviderList(
  * signed out / cloud-disabled, or `undefined` while loading.
  */
 export function useMe(): Me | null | undefined {
-  // Read `workspaces.me` through the tRPC client via react-query. When the cloud
-  // layer is off (`apiClient` null) the query is disabled, so a local-only build
-  // issues zero cloud calls and the hook resolves to `null` (signed out).
+  // Read `workspaces.me` through the tRPC client via react-query. A signed-out
+  // user resolves to `null`.
   const { data, isPending } = useReactQuery({
     queryKey: ["workspaces", "me"],
-    queryFn: () => apiClient!.workspaces.me.query(),
-    enabled: apiClient !== null,
+    queryFn: () => apiClient.workspaces.me.query(),
     // `me` carries the Autumn plan/seat state, which can change OUTSIDE the app
     // (a manual upgrade in Autumn, a teammate's change). Refetch when the user
     // returns to the window and keep it briefly stale, so the plan badge and
@@ -151,36 +152,30 @@ export function useMe(): Me | null | undefined {
     refetchOnWindowFocus: true,
     staleTime: 10_000,
   });
-  if (apiClient === null) return null;
   return isPending ? undefined : (data as unknown as Me | null);
 }
 
 /**
  * The OAuth providers enabled on the deployment (C17), as a stable list in
  * display order. Reactively reads `auth.enabledProviders`; returns `[]` while
- * loading or when cloud is off, so the OAuth row is hidden until we know a
- * provider is actually configured. No secrets are ever read — booleans only.
+ * loading, so the OAuth row is hidden until we know a provider is actually
+ * configured. No secrets are ever read — booleans only.
  */
 export function useEnabledProviders(): readonly OAuthProvider[] {
   const providers = useApiEnabledProviders();
-  return useMemo(
-    () => enabledProviderList(cloudEnabled ? providers : NO_PROVIDERS),
-    [providers],
-  );
+  return useMemo(() => enabledProviderList(providers), [providers]);
 }
 
 /**
  * The enabled-providers read: the booleans-only flags from the tRPC
  * `auth.enabledProviders` query via react-query, or `undefined` while loading
- * (so the OAuth row stays hidden until we know a provider is configured). The
- * query is disabled when the cloud layer is off. Shared by
- * {@link useEnabledProviders} and {@link useEmailAuthEnabled}.
+ * (so the OAuth row stays hidden until we know a provider is configured). Shared
+ * by {@link useEnabledProviders} and {@link useEmailAuthEnabled}.
  */
 function useApiEnabledProviders(): EnabledProviders | undefined {
   const { data } = useReactQuery({
     queryKey: ["auth", "enabledProviders"],
-    queryFn: () => apiClient!.auth.enabledProviders.query(),
-    enabled: apiClient !== null,
+    queryFn: () => apiClient.auth.enabledProviders.query(),
   });
   return data ?? undefined;
 }
@@ -189,11 +184,11 @@ function useApiEnabledProviders(): EnabledProviders | undefined {
  * Whether email-backed account flows (sign-up VERIFICATION + password RESET) are
  * active on the deployment (Resend configured). The UI shows the verification
  * code step + "Forgot password?" only when true — otherwise no email would ever
- * arrive. Defaults to false while loading / when cloud is off.
+ * arrive. Defaults to false while loading.
  */
 export function useEmailAuthEnabled(): boolean {
   const providers = useApiEnabledProviders();
-  return cloudEnabled ? (providers?.emailAuth ?? false) : false;
+  return providers?.emailAuth ?? false;
 }
 
 /**
@@ -207,37 +202,26 @@ export function useMembers(
   const { data } = useReactQuery({
     queryKey: ["workspaces", "listMembers", workspaceId],
     queryFn: () =>
-      apiClient!.workspaces.listMembers.query({
+      apiClient.workspaces.listMembers.query({
         workspaceId: workspaceId as string,
       }),
-    // Disabled (so it issues no call) until the cloud layer is on AND a
-    // workspace is selected.
-    enabled: apiClient !== null && workspaceId !== null,
+    // Disabled (so it issues no call) until a workspace is selected.
+    enabled: workspaceId !== null,
   });
   return (data as unknown as WorkspaceMembers | undefined) ?? undefined;
 }
 
 /**
- * Auth state: whether we are signed in and whether it is still loading. On the
- * NEW path this reflects the Better Auth session (`authClient.useSession`); on
- * When no cloud backend is configured at all (`authClient` null), a stable
- * signed-out/loaded state is returned without calling any hook.
+ * Auth state: whether we are signed in and whether it is still loading. Reflects
+ * the Better Auth session (`authClient.useSession`), which is reactive
+ * (re-renders on sign in/out and OAuth completion).
  */
 export function useAuthState(): { isAuthenticated: boolean; isLoading: boolean } {
-  // Derive from the Better Auth session. `authClient` is non-null whenever the
-  // cloud layer is on; `useSession` is reactive (re-renders on sign in/out and
-  // OAuth completion). `authClient` is a module constant, so the hook order is
-  // stable across renders.
-  if (authClient !== null) {
-    // eslint-disable-next-line react-hooks/rules-of-hooks -- module-constant branch.
-    const session = authClient.useSession();
-    return {
-      isAuthenticated: session.data != null,
-      isLoading: session.isPending,
-    };
-  }
-  // No cloud layer configured → stable signed-out/loaded state, no hook called.
-  return { isAuthenticated: false, isLoading: false };
+  const session = authClient.useSession();
+  return {
+    isAuthenticated: session.data != null,
+    isLoading: session.isPending,
+  };
 }
 
 const ACTIVE_WS_KEY = "gtmgrid:activeWorkspace";
@@ -417,12 +401,10 @@ export interface AccountActions {
  *
  * Better Auth RESOLVES `{ error }` instead of throwing, so every call is run
  * through {@link unwrapAuthResult}, which re-raises a real `Error` — preserving
- * the UI's `try/catch` + {@link friendlyAuthError} contract. `authClient` is
- * non-null whenever the cloud layer is on; the account bar only renders the
- * sign-in UI when it is.
+ * the UI's `try/catch` + {@link friendlyAuthError} contract.
  */
 export function useAccountActions(): AccountActions {
-  const client = authClient!;
+  const client = authClient;
 
   const signInWithPassword = useCallback(
     async (
@@ -476,7 +458,7 @@ export function useAccountActions(): AccountActions {
 
   const signInWithProvider = useCallback(
     async (provider: OAuthProvider): Promise<void> => {
-      if (chooseOAuthFlow(isTauri()) === "web") {
+      if (chooseOAuthFlow(isDesktop()) === "web") {
         // Web: same-window redirect to the provider, completed by Better Auth's
         // callback which sets the session cookie and returns to the app.
         unwrapAuthResult(await client.signIn.social({ provider }));
@@ -496,8 +478,7 @@ export function useAccountActions(): AccountActions {
       if (url == null || url.length === 0) {
         throw new Error("OAuth provider did not return a redirect URL.");
       }
-      const { openUrl } = await import("@tauri-apps/plugin-opener");
-      await openUrl(url);
+      await electron()?.openExternal(url);
     },
     [client],
   );
@@ -531,7 +512,7 @@ export function useCreateWorkspace(): (
 ) => Promise<Id<"workspaces">> {
   return useCallback(
     async (name: string) =>
-      (await apiClient!.workspaces.createWorkspace.mutate({
+      (await apiClient.workspaces.createWorkspace.mutate({
         name,
       })) as Id<"workspaces">,
     [],

@@ -32,6 +32,7 @@ import {
 } from "@gtmgrid/cloud";
 import { Data, Effect } from "effect";
 import { EntitlementService } from "./entitlement-service.js";
+import { isSelfHost } from "../self-host.js";
 import { mintSigningSecret, mintToken } from "../webhook-mint.js";
 import {
   type DeliveryCursor,
@@ -43,9 +44,23 @@ import {
   type Webhook,
   type WebhookMappingEntry,
   type WebhookMode,
+  type GridCell,
+  type GridRow,
   WebhookRepo,
   type WebhookRepoError,
+  type WorkerRowCursor,
 } from "../repositories/webhook-repo.js";
+import { type Column, ColumnRepo } from "../repositories/column-repo.js";
+import type { GridChangeEvent, GridEventCell } from "../realtime/events.js";
+import { RealtimePublisher } from "./realtime-publisher.js";
+
+/** Name of the Clay-style raw-payload column every webhook lands records in. */
+export const WEBHOOK_COLUMN_NAME = "Webhook";
+
+/** The mapping path that means "the whole request body" — the receiver writes
+ *  `{ receivedAt, payload }` into the mapped column for this entry, so every
+ *  record is visible in the grid even before any field mapping exists. */
+export const WEBHOOK_PAYLOAD_PATH = "$";
 
 /** Max delivery-log rows retained PER WEBHOOK (convex/webhooks.ts:676). */
 export const DELIVERY_RETENTION = 50;
@@ -111,9 +126,40 @@ export interface WorkerTableMeta {
 
 /** The grid payload `getTable` returns to the worker. */
 export interface WorkerGrid {
-  readonly table: { readonly id: string; readonly workspaceId: string };
-  readonly columns: readonly { readonly id: string }[];
-  readonly rows: readonly { readonly id: string; readonly position: number }[];
+  readonly table: {
+    readonly _id: string;
+    readonly id: string;
+    readonly workspaceId: string;
+  };
+  /**
+   * FULL Convex-doc-shaped column projection. The engine's cloud store
+   * (packages/engine/src/store-cloud.ts `ConvexColumnDoc`), the MCP cloud
+   * source, and the Inngest enricher all key on `_id` and read
+   * name/kind/code/params — a narrower projection silently breaks every cloud
+   * column run. `id` is carried alongside for legacy worker-grid readers.
+   */
+  readonly columns: readonly {
+    readonly _id: string;
+    readonly id: string;
+    readonly tableId: string;
+    readonly name: string;
+    readonly type: string;
+    readonly kind: string;
+    readonly provider: string | null;
+    readonly method: string | null;
+    readonly code: string | null;
+    readonly params: Record<string, unknown>;
+    readonly condition: string | null;
+    readonly position: number;
+    readonly createdAt: number;
+  }[];
+  readonly rows: readonly {
+    readonly _id: string;
+    readonly id: string;
+    readonly tableId: string;
+    readonly position: number;
+    readonly createdAt: number;
+  }[];
   readonly cells: readonly {
     readonly id: string;
     readonly rowId: string;
@@ -121,6 +167,24 @@ export interface WorkerGrid {
     readonly value: unknown;
   }[];
 }
+
+/**
+ * One keyset PAGE of the worker grid — the {@link WorkerGrid} shape (columns +
+ * this page's rows + their cells) plus the cursor to fetch the next page
+ * (`null` on the last). Powers the engine's paged full-column run so a 50k-row
+ * table is read one bounded page at a time, never the whole grid at once.
+ */
+export interface WorkerGridPage extends WorkerGrid {
+  readonly nextCursor: WorkerRowCursor | null;
+}
+
+/**
+ * Soft ceiling above which the UNPAGED full-grid worker `getTable` logs a
+ * warning — a full-grid read at this size means a caller bypassed the scoped
+ * (`getTableForRows`) / paged (`getTablePage`) reads. Surfaces the regression
+ * without breaking the (still-served) response.
+ */
+export const FULL_GRID_ROW_WARN_CAP = 20_000;
 
 /**
  * Webhook domain service. CRUD methods assert membership first; worker methods
@@ -137,6 +201,73 @@ export class WebhookService extends Effect.Service<WebhookService>()(
       const membership = yield* MembershipService;
       const crypto = yield* CredentialCryptoService;
       const entitlement = yield* EntitlementService;
+      const columnRepo = yield* ColumnRepo;
+      const realtime = yield* RealtimePublisher;
+
+      /**
+       * Broadcast a grid change on the table's party room so open grids patch
+       * live — the worker analogue of GridService's publish. Best-effort by
+       * construction: the live publisher swallows transport errors, so realtime
+       * never fails a write that already succeeded.
+       */
+      const publish = (
+        workspaceId: string,
+        tableId: string,
+        event: GridChangeEvent,
+      ) =>
+        realtime
+          .publish({ workspaceId, tableId, event })
+          .pipe(Effect.catchTag("RealtimePublisherError", () => Effect.void));
+
+      /** The cells {@link writeCells} will actually persist, as realtime event
+       *  payloads (same skip rules: blank values and foreign columns dropped). */
+      const eventCells = (
+        rowId: string,
+        cells: CellMap,
+        validColumnIds: ReadonlySet<string>,
+      ): GridEventCell[] =>
+        Object.entries(cells)
+          .filter(
+            ([columnId, value]) =>
+              value !== "" &&
+              value !== null &&
+              value !== undefined &&
+              validColumnIds.has(columnId),
+          )
+          .map(([columnId, value]) => ({
+            rowId,
+            columnId,
+            value,
+            status: "done",
+            error: null,
+          }));
+
+      /** Find-or-create the table's "Webhook" raw-payload column (json, manual).
+       *  Records land here via the `$` mapping entry, so a webhook table always
+       *  shows its received data — even with zero user-configured mappings. */
+      const ensureWebhookColumn = (tableId: string, workspaceId: string) =>
+        Effect.gen(function* () {
+          const cols = yield* columnRepo.listByTable(tableId);
+          const existing = cols.find(
+            (c) => c.name === WEBHOOK_COLUMN_NAME && c.type === "json",
+          );
+          if (existing !== undefined) return existing.id;
+          const position = yield* columnRepo.nextPosition(tableId);
+          return yield* columnRepo.insert({
+            workspaceId,
+            tableId,
+            name: WEBHOOK_COLUMN_NAME,
+            type: "json",
+            kind: "manual",
+            provider: null,
+            method: null,
+            code: null,
+            params: {},
+            condition: null,
+            position,
+            createdAt: Date.now(),
+          });
+        });
 
       /** Load a webhook or fail typed. */
       const requireWebhook = (
@@ -180,6 +311,10 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         readonly tableId: string;
         readonly name?: string | null;
         readonly mapping?: readonly WebhookMappingEntry[];
+        /** OPT-IN signature auth: mint a signing secret only when true. The
+         *  default is an unauthenticated endpoint (the unguessable token URL is
+         *  the credential), so senders that can't compute an HMAC still work. */
+        readonly auth?: boolean;
       }) =>
         Effect.gen(function* () {
           const table = yield* repo.findTable(args.tableId);
@@ -205,13 +340,23 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             }
           }
 
+          // Clay-style raw-payload column: every record lands here via the `$`
+          // entry, so the table shows received data with zero configuration.
+          const webhookColumnId = yield* ensureWebhookColumn(
+            args.tableId,
+            table.value.workspaceId,
+          );
+
           return yield* repo.insert({
             workspaceId: table.value.workspaceId,
             tableId: args.tableId,
             name: args.name ?? null,
             token: mintToken(),
-            signingSecret: mintSigningSecret(),
-            mapping,
+            signingSecret: args.auth === true ? mintSigningSecret() : null,
+            mapping: [
+              { path: WEBHOOK_PAYLOAD_PATH, columnId: webhookColumnId },
+              ...mapping.filter((m) => m.path !== WEBHOOK_PAYLOAD_PATH),
+            ],
             enabled: true,
             autoRun: true,
             mode: "create",
@@ -288,10 +433,22 @@ export class WebhookService extends Effect.Service<WebhookService>()(
               );
             }
           }
-          yield* repo.patch(args.webhookId, { mapping: args.mapping });
+          // A mapping replace must never drop the `$` raw-payload entry — it is
+          // what keeps every record visible in the Webhook column.
+          const payloadEntry = webhook.mapping.find(
+            (m) => m.path === WEBHOOK_PAYLOAD_PATH,
+          );
+          yield* repo.patch(args.webhookId, {
+            mapping: [
+              ...(payloadEntry === undefined ? [] : [payloadEntry]),
+              ...args.mapping.filter((m) => m.path !== WEBHOOK_PAYLOAD_PATH),
+            ],
+          });
         });
 
-      /** Enable/disable a webhook. */
+      /** Enable/disable a webhook. Enabling also HEALS a legacy webhook that
+       *  predates the raw-payload column: it gains the "Webhook" column + `$`
+       *  mapping entry, so records become visible without recreating it. */
       const toggleEnabled = (args: {
         readonly webhookId: string;
         readonly enabled: boolean;
@@ -299,18 +456,49 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         Effect.gen(function* () {
           const webhook = yield* requireWebhook(args.webhookId);
           yield* membership.requireMember(webhook.workspaceId);
+          if (
+            args.enabled &&
+            !webhook.mapping.some((m) => m.path === WEBHOOK_PAYLOAD_PATH)
+          ) {
+            const webhookColumnId = yield* ensureWebhookColumn(
+              webhook.tableId,
+              webhook.workspaceId,
+            );
+            yield* repo.patch(args.webhookId, {
+              mapping: [
+                { path: WEBHOOK_PAYLOAD_PATH, columnId: webhookColumnId },
+                ...webhook.mapping,
+              ],
+            });
+          }
           yield* repo.patch(args.webhookId, { enabled: args.enabled });
         });
 
-      /** Rotate a webhook's token + signing secret (revokes the old pair). */
+      /** Rotate a webhook's token (+ signing secret when auth is enabled —
+       *  rotation preserves the opt-in/opt-out state, it never enables auth). */
       const rotateSecret = (webhookId: string) =>
         Effect.gen(function* () {
           const webhook = yield* requireWebhook(webhookId);
           yield* membership.requireMember(webhook.workspaceId);
           const token = mintToken();
-          const signingSecret = mintSigningSecret();
+          const signingSecret = webhook.signingSecret === null ? null : mintSigningSecret();
           yield* repo.patch(webhookId, { token, signingSecret });
           return { token, signingSecret };
+        });
+
+      /** Opt a webhook in to (or out of) signature auth. Opting in mints a
+       *  fresh signing secret and returns it; opting out clears it so the
+       *  receiver accepts unsigned posts again. */
+      const setAuth = (args: {
+        readonly webhookId: string;
+        readonly enabled: boolean;
+      }) =>
+        Effect.gen(function* () {
+          const webhook = yield* requireWebhook(args.webhookId);
+          yield* membership.requireMember(webhook.workspaceId);
+          const signingSecret = args.enabled ? mintSigningSecret() : null;
+          yield* repo.patch(args.webhookId, { signingSecret });
+          return { signingSecret };
         });
 
       /** A KEYSET page of a webhook's deliveries (newest first). */
@@ -346,7 +534,32 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           yield* repo.remove(webhookId);
         });
 
-      // ── WORKER PATHS (secret-gated upstream, NOT member-gated) ────────────
+      // ── WORKER PATHS (dual-auth upstream: secret OR member) ───────────────
+
+      /**
+       * Membership gate for the dual-auth worker routes (the desktop sidecar +
+       * spawned MCP reach these via `runWorkerSecretOrMember`). Two cases:
+       *
+       *  - MEMBER path: the request carried a member SESSION token, so the route
+       *    runs with that member's identity — assert they belong to `workspaceId`
+       *    (else `NotAMemberError` → 403). This is what lets the prod desktop, which
+       *    ships no worker secret, authenticate cloud reads/runs as the signed-in
+       *    member instead of a shared client secret.
+       *  - HEADLESS path: the request was authorized by the `WEBHOOK_WORKER_SECRET`
+       *    bearer (the inngest webhook worker), so there is NO current user;
+       *    `requireMember` fails `UnauthenticatedError`, which we SWALLOW — the
+       *    secret is the trust boundary, exactly as before.
+       *
+       * Safe because the route wrapper guarantees a null identity reaches here ONLY
+       * on the secret path: a member request whose token does not resolve is
+       * rejected 401 at the route, never reaching the service. So swallowing
+       * `UnauthenticatedError` cannot bypass the member-path membership check.
+       */
+      const assertMemberIfIdentified = (workspaceId: string) =>
+        membership.requireMember(workspaceId).pipe(
+          Effect.asVoid,
+          Effect.catchTag("UnauthenticatedError", () => Effect.void),
+        );
 
       /** Resolve a token to its (enabled) webhook, or `null`. */
       const resolveToken = (token: string) =>
@@ -385,6 +598,8 @@ export class WebhookService extends Effect.Service<WebhookService>()(
        */
       const assertQuota = (workspaceId: string, n: number, message: string) =>
         Effect.gen(function* () {
+          // Self-host is never metered (no billing backend) — never cap it.
+          if (isSelfHost()) return;
           if (n <= 0) return;
           const q = yield* repo.findWorkspaceQuota(workspaceId);
           if (q._tag === "None") return;
@@ -491,6 +706,9 @@ export class WebhookService extends Effect.Service<WebhookService>()(
               }),
             );
           }
+          // Cloud-access gate (plan/trial) BEFORE the quota gate: a lapsed trial
+          // or Free workspace cannot ingest, even with quota headroom.
+          yield* entitlement.requireCloudAccess(table.value.workspaceId);
           yield* assertQuota(table.value.workspaceId, 1, WEBHOOK_QUOTA_MESSAGE);
 
           const validColumnIds = yield* tableColumnIds(webhook.tableId);
@@ -520,6 +738,12 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           });
           // Exactly ONE billable cloud action per received record.
           yield* repo.meterActions(table.value.workspaceId, 1);
+          // Open grids see the record land live (row + its mapped cells).
+          yield* publish(table.value.workspaceId, webhook.tableId, {
+            type: "row.insert",
+            row: { _id: rowId },
+            cells: eventCells(rowId, args.cells, validColumnIds),
+          });
           return { rowId };
         });
 
@@ -540,6 +764,9 @@ export class WebhookService extends Effect.Service<WebhookService>()(
               }),
             );
           }
+          // Cloud-access gate (plan/trial) BEFORE the quota gate: a lapsed trial
+          // or Free workspace cannot ingest, even with quota headroom.
+          yield* entitlement.requireCloudAccess(table.value.workspaceId);
           yield* assertQuota(table.value.workspaceId, 1, WEBHOOK_QUOTA_MESSAGE);
 
           const validColumnIds = yield* tableColumnIds(webhook.tableId);
@@ -600,8 +827,67 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             receivedAt: now,
           });
           yield* repo.meterActions(table.value.workspaceId, 1);
+          // Open grids see the upsert live: a fresh row inserts whole; a matched
+          // row patches each written cell in place.
+          const written = eventCells(rowId, args.cells, validColumnIds);
+          if (matchedRowId === null) {
+            yield* publish(table.value.workspaceId, webhook.tableId, {
+              type: "row.insert",
+              row: { _id: rowId },
+              cells: written,
+            });
+          } else {
+            for (const cell of written) {
+              yield* publish(table.value.workspaceId, webhook.tableId, {
+                type: "cell.upsert",
+                cell,
+              });
+            }
+          }
           return { rowId };
         });
+
+      /**
+       * Project repo columns/rows/cells into the worker grid shape. Shared by
+       * {@link getTable} (whole grid), {@link getTableForRows} (scoped), and
+       * {@link getTablePage} (one keyset page) so every consumer sees the SAME
+       * doc shape — `_id` (engine/MCP/Inngest) + `id` (legacy readers).
+       */
+      const buildWorkerGrid = (
+        table: { id: string; workspaceId: string },
+        columns: readonly Column[],
+        rows: readonly GridRow[],
+        cells: readonly GridCell[],
+      ): WorkerGrid => ({
+        table: { _id: table.id, id: table.id, workspaceId: table.workspaceId },
+        // FULL column projection: the engine's cloud store, the MCP cloud source,
+        // and the Inngest enricher all consume this as Convex-shaped docs
+        // (`_id`, name, kind, code, params…). A narrower projection makes every
+        // cloud column run fail closed (lookup by `_id` never matches).
+        columns: columns.map((c) => ({
+          _id: c.id,
+          id: c.id,
+          tableId: c.tableId,
+          name: c.name,
+          type: c.type,
+          kind: c.kind,
+          provider: c.provider,
+          method: c.method,
+          code: c.code,
+          params: (c.params ?? {}) as Record<string, unknown>,
+          condition: c.condition,
+          position: c.position,
+          createdAt: c.createdAt,
+        })),
+        rows: rows.map((r) => ({
+          _id: r.id,
+          id: r.id,
+          tableId: r.tableId,
+          position: r.position,
+          createdAt: r.createdAt ?? 0,
+        })),
+        cells,
+      });
 
       /** Full grid for a table (worker getTable shape). */
       const getTable = (tableId: string) =>
@@ -612,17 +898,78 @@ export class WebhookService extends Effect.Service<WebhookService>()(
               new WebhookNotFoundError({ message: `Table ${tableId} not found.` }),
             );
           }
-          const [columns, rows, cells] = [
-            yield* repo.listColumns(tableId),
-            yield* repo.listRows(tableId),
-            yield* repo.listCellsByTable(tableId),
-          ];
+          yield* assertMemberIfIdentified(table.value.workspaceId);
+          const columns = yield* columnRepo.listByTable(tableId);
+          const rows = yield* repo.listRows(tableId);
+          const cells = yield* repo.listCellsByTable(tableId);
+          // Guard: a full-grid worker read at scale means a caller bypassed the
+          // scoped/paged reads (getTableForRows / getTablePage). Warn but serve.
+          if (rows.length > FULL_GRID_ROW_WARN_CAP) {
+            yield* Effect.logWarning(
+              `WebhookService.getTable loaded ${rows.length} rows for table ${tableId} — full-grid read above ${FULL_GRID_ROW_WARN_CAP}; prefer getTableForRows / getTablePage at scale.`,
+            );
+          }
+          return buildWorkerGrid(table.value, columns, rows, cells);
+        });
+
+      /**
+       * The grid scoped to a SPECIFIC set of rows (worker getTable shape, no
+       * cursor). All columns, plus only the requested rows and their cells —
+       * bounded by `rowIds.length`, never the whole table. Used by the engine's
+       * row-scoped run (cascade / run-cell / run-rows) and the webhook
+       * single-row enricher, so neither loads a 50k-row grid to touch a handful
+       * of rows. Same membership/ownership gate as {@link getTable}.
+       */
+      const getTableForRows = (tableId: string, rowIds: readonly string[]) =>
+        Effect.gen(function* () {
+          const table = yield* repo.findTable(tableId);
+          if (table._tag === "None") {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({ message: `Table ${tableId} not found.` }),
+            );
+          }
+          yield* assertMemberIfIdentified(table.value.workspaceId);
+          const columns = yield* columnRepo.listByTable(tableId);
+          const rows = yield* repo.listRowsByIds(rowIds);
+          const cells = yield* repo.listCellsByRowIds(rowIds);
+          return buildWorkerGrid(table.value, columns, rows, cells);
+        });
+
+      /**
+       * One keyset PAGE of the grid (worker getTable shape + `nextCursor`). All
+       * columns plus ONLY this page's rows and their cells; `nextCursor` is
+       * `null` on the last page. The engine walks these pages for a full-column
+       * run so resident memory stays bounded to one page. Same gate as
+       * {@link getTable}.
+       */
+      const getTablePage = (args: {
+        readonly tableId: string;
+        readonly cursor: WorkerRowCursor | null;
+        readonly limit: number;
+      }) =>
+        Effect.gen(function* () {
+          const table = yield* repo.findTable(args.tableId);
+          if (table._tag === "None") {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({
+                message: `Table ${args.tableId} not found.`,
+              }),
+            );
+          }
+          yield* assertMemberIfIdentified(table.value.workspaceId);
+          const columns = yield* columnRepo.listByTable(args.tableId);
+          const page = yield* repo.listRowsKeyset({
+            tableId: args.tableId,
+            limit: args.limit,
+            cursor: args.cursor,
+          });
+          const cells = yield* repo.listCellsByRowIds(
+            page.rows.map((r) => r.id),
+          );
           return {
-            table: { id: table.value.id, workspaceId: table.value.workspaceId },
-            columns: columns.map((c) => ({ id: c.id })),
-            rows: rows.map((r) => ({ id: r.id, position: r.position })),
-            cells,
-          } satisfies WorkerGrid;
+            ...buildWorkerGrid(table.value, columns, page.rows, cells),
+            nextCursor: page.nextCursor,
+          } satisfies WorkerGridPage;
         });
 
       /**
@@ -640,6 +987,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
               new WebhookNotFoundError({ message: `Table ${tableId} not found.` }),
             );
           }
+          yield* assertMemberIfIdentified(table.value.workspaceId);
           return {
             table: { id: table.value.id, workspaceId: table.value.workspaceId },
           } satisfies WorkerTableMeta;
@@ -678,6 +1026,12 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             );
           }
           const workspaceId = table.value.workspaceId;
+          yield* assertMemberIfIdentified(workspaceId);
+          // Cloud-access gate (plan/trial): block the WHOLE run up-front for a
+          // lapsed trial / Free workspace, before any cell fans out — the run is
+          // the heaviest credit spender, so it must be gated on access, not just
+          // on remaining quota.
+          yield* entitlement.requireCloudAccess(workspaceId);
 
           const candidateRowIds =
             args.rowIds ??
@@ -690,7 +1044,13 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           let cellsToRun = candidateRowIds.length;
           if (args.force !== true && candidateRowIds.length > 0) {
             const candidateSet = new Set(candidateRowIds);
-            const cells = yield* repo.listCellsByTable(args.tableId);
+            // Only the RUN column's cells are inspected, so read just that column
+            // (rides `cells_by_table_column`) — never the whole rows×columns grid.
+            // For a scoped run, the bounded by-row read is tighter still.
+            const cells =
+              args.rowIds !== undefined
+                ? yield* repo.listCellsByRowIds(candidateRowIds)
+                : yield* repo.listCellsByTableColumn(args.tableId, args.columnId);
             const doneRows = new Set<string>();
             for (const cell of cells) {
               if (
@@ -741,6 +1101,33 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         });
 
       /**
+       * Broadcast a cell's POST-MERGE state (one point read-back after the
+       * COALESCE upsert, so the event carries the kept value/status, not just
+       * the partial patch). This is what makes engine column runs over cloud
+       * tables paint live — their cell writes land through this worker path.
+       */
+      const publishMergedCell = (
+        workspaceId: string,
+        tableId: string,
+        rowId: string,
+        columnId: string,
+      ) =>
+        Effect.gen(function* () {
+          const merged = yield* repo.findCell(rowId, columnId);
+          if (merged._tag === "None") return;
+          yield* publish(workspaceId, tableId, {
+            type: "cell.upsert",
+            cell: {
+              rowId,
+              columnId,
+              value: merged.value.value,
+              status: merged.value.status,
+              error: merged.value.error,
+            },
+          });
+        });
+
+      /**
        * Worker cell upsert (COALESCE merge; meters only terminal). Two queries:
        * resolveCell (validate + workspace) then a single
        * INSERT…ON CONFLICT DO UPDATE that merges value/status/error and folds the
@@ -759,7 +1146,11 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             args.rowId,
             args.columnId,
           );
-          return yield* repo.upsertCell({
+          yield* assertMemberIfIdentified(workspaceId);
+          // Defense-in-depth: even a run that cleared the pre-flight gate must not
+          // keep writing/metering cells after the trial lapses mid-run.
+          yield* entitlement.requireCloudAccess(workspaceId);
+          const id = yield* repo.upsertCell({
             workspaceId,
             tableId,
             rowId: args.rowId,
@@ -773,6 +1164,8 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             meter: true,
             updatedAt: Date.now(),
           });
+          yield* publishMergedCell(workspaceId, tableId, args.rowId, args.columnId);
+          return id;
         });
 
       /** Worker status-only cell write (meters only terminal). */
@@ -787,7 +1180,11 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             args.rowId,
             args.columnId,
           );
-          return yield* repo.upsertCell({
+          yield* assertMemberIfIdentified(workspaceId);
+          // Defense-in-depth: even a run that cleared the pre-flight gate must not
+          // keep writing/metering cells after the trial lapses mid-run.
+          yield* entitlement.requireCloudAccess(workspaceId);
+          const id = yield* repo.upsertCell({
             workspaceId,
             tableId,
             rowId: args.rowId,
@@ -800,6 +1197,8 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             meter: true,
             updatedAt: Date.now(),
           });
+          yield* publishMergedCell(workspaceId, tableId, args.rowId, args.columnId);
+          return id;
         });
 
       /**
@@ -838,9 +1237,17 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         readonly extensionId: string;
       }): Effect.Effect<
         { readonly secrets: SecretMap } | null,
-        WebhookRepoError | import("@gtmgrid/cloud").DecryptError
+        | WebhookRepoError
+        | import("@gtmgrid/cloud").DecryptError
+        | import("@gtmgrid/cloud").NotAMemberError
+        | import("@gtmgrid/cloud").MemberRepoError
       > =>
         Effect.gen(function* () {
+          // Decrypting a workspace's SHARED credential is member-gated on the
+          // member path (a non-member gets 403); on the headless secret path the
+          // assertion is skipped. Especially important here — this returns
+          // plaintext connector secrets for a run.
+          yield* assertMemberIfIdentified(args.workspaceId);
           const enc = yield* repo.findSharedCredentialEnc(
             args.workspaceId,
             args.extensionId,
@@ -857,12 +1264,15 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         updateWebhookMapping,
         toggleEnabled,
         rotateSecret,
+        setAuth,
         listDeliveriesPaged,
         deleteWebhook,
         resolveToken,
         insertRow,
         upsertRow,
         getTable,
+        getTableForRows,
+        getTablePage,
         getTableMeta,
         assertColumnRunQuota,
         setCell,

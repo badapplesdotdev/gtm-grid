@@ -17,6 +17,10 @@
  *     worker has no member identity and the secret (not membership) is the trust
  *     boundary. This test pins that current behaviour.
  *
+ * Also covers the zod body-validation gate added with `runWorker(req, schema,
+ * build)`: a valid bearer + valid-JSON-but-wrong-SHAPE body is rejected 400 by
+ * the schema BEFORE any service/DB access — the new input-validation boundary.
+ *
  * Run OFFLINE: the reject + bad-body paths never reach the dynamic
  * `@gtmgrid/db/client` import (which happens only after a valid body), so NO
  * DATABASE_URL / live database is required.
@@ -24,9 +28,14 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Effect } from "effect";
-import { runWorker } from "../../app/api/worker/_lib";
+import { z } from "zod";
+import { runWorker, runWorkerSecretOrMember } from "../../app/api/worker/_lib";
+import { GetTableSchema } from "../../app/api/worker/_schemas";
 
 const SECRET = "whk_secret_value";
+
+/** A passthrough schema for the auth-gate tests (body shape is not the subject). */
+const anySchema = z.unknown();
 
 /** Build a worker POST Request with optional Authorization + member header. */
 function workerRequest(opts: {
@@ -59,7 +68,7 @@ afterEach(() => {
 
 describe("worker shared-secret gate (runWorker)", () => {
   it("rejects a request with NO Authorization header (401)", async () => {
-    const res = await runWorker(workerRequest({ auth: null }), succeedBuild);
+    const res = await runWorker(workerRequest({ auth: null }), anySchema, succeedBuild);
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: "Unauthorized" });
   });
@@ -67,6 +76,7 @@ describe("worker shared-secret gate (runWorker)", () => {
   it("rejects a WRONG bearer secret (401)", async () => {
     const res = await runWorker(
       workerRequest({ auth: "Bearer not-the-secret" }),
+      anySchema,
       succeedBuild,
     );
     expect(res.status).toBe(401);
@@ -75,6 +85,7 @@ describe("worker shared-secret gate (runWorker)", () => {
   it("rejects a non-Bearer (Basic) Authorization scheme (401)", async () => {
     const res = await runWorker(
       workerRequest({ auth: `Basic ${SECRET}` }),
+      anySchema,
       succeedBuild,
     );
     expect(res.status).toBe(401);
@@ -84,6 +95,7 @@ describe("worker shared-secret gate (runWorker)", () => {
     process.env.WEBHOOK_WORKER_SECRET = "";
     const res = await runWorker(
       workerRequest({ auth: `Bearer ${SECRET}` }),
+      anySchema,
       succeedBuild,
     );
     expect(res.status).toBe(401);
@@ -92,6 +104,7 @@ describe("worker shared-secret gate (runWorker)", () => {
   it("ACCEPTS the correct bearer: passes the gate, then 400 on an invalid body (no DB opened)", async () => {
     const res = await runWorker(
       workerRequest({ auth: `Bearer ${SECRET}`, body: "{ not json" }),
+      anySchema,
       succeedBuild,
     );
     // 400 (not 401) proves the gate let the authorized caller THROUGH; the
@@ -106,10 +119,12 @@ describe("worker shared-secret gate (runWorker)", () => {
         member: "spoofed-member-token",
         body: "{ not json",
       }),
+      anySchema,
       succeedBuild,
     );
     const withoutMember = await runWorker(
       workerRequest({ auth: `Bearer ${SECRET}`, body: "{ not json" }),
+      anySchema,
       succeedBuild,
     );
     // Same outcome with or without the member header — runWorker never reads it
@@ -121,8 +136,80 @@ describe("worker shared-secret gate (runWorker)", () => {
   it("a bogus X-Gtmgrid-Member does NOT bypass the secret gate (401)", async () => {
     const res = await runWorker(
       workerRequest({ auth: null, member: "spoofed-member-token" }),
+      anySchema,
       succeedBuild,
     );
     expect(res.status).toBe(401);
+  });
+});
+
+describe("worker dual-auth boundary (runWorkerSecretOrMember)", () => {
+  it("HEADLESS path: a valid worker secret passes the gate, then 400 on bad body (no DB / no member resolve)", async () => {
+    const res = await runWorkerSecretOrMember(
+      workerRequest({ auth: `Bearer ${SECRET}`, body: "{ not json" }),
+      anySchema,
+      succeedBuild,
+    );
+    // Secret authorized → headless path → body parse runs BEFORE any member
+    // resolution or the dynamic @gtmgrid/db/client import, so this is a clean 400.
+    expect(res.status).toBe(400);
+  });
+
+  it("MEMBER path: NO worker secret AND NO member token → 401 (fail-closed before Better Auth / DB)", async () => {
+    // No Authorization (so not the headless path) and no X-Gtmgrid-Member, so
+    // resolveMemberUserId returns null WITHOUT calling Better Auth → 401 here,
+    // before the service ever runs. This is the path the prod desktop must NOT
+    // hit: it always forwards a member token.
+    const res = await runWorkerSecretOrMember(
+      workerRequest({ auth: null }),
+      anySchema,
+      succeedBuild,
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "Unauthorized" });
+  });
+
+  it("MEMBER path: a wrong worker secret is NOT headless — falls through, and with no member token → 401", async () => {
+    const res = await runWorkerSecretOrMember(
+      workerRequest({ auth: "Bearer not-the-secret" }),
+      anySchema,
+      succeedBuild,
+    );
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("worker body validation (zod schema gate)", () => {
+  it("rejects valid JSON that FAILS the schema with 400 BEFORE any service/DB (missing required field)", async () => {
+    // Authorized + well-formed JSON, but missing the required `tableId`. The zod
+    // gate returns 400 before workerRuntime()/the db import, so this runs offline.
+    const res = await runWorker(
+      workerRequest({ auth: `Bearer ${SECRET}`, body: JSON.stringify({}) }),
+      GetTableSchema,
+      succeedBuild,
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/Invalid request body/);
+    expect(body.error).toMatch(/tableId/);
+  });
+
+  it("rejects an empty-string id (min(1)) with 400", async () => {
+    const res = await runWorker(
+      workerRequest({ auth: `Bearer ${SECRET}`, body: JSON.stringify({ tableId: "" }) }),
+      GetTableSchema,
+      succeedBuild,
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/Invalid request body/);
+  });
+
+  it("rejects a wrong-typed field with 400", async () => {
+    const res = await runWorker(
+      workerRequest({ auth: `Bearer ${SECRET}`, body: JSON.stringify({ tableId: 123 }) }),
+      GetTableSchema,
+      succeedBuild,
+    );
+    expect(res.status).toBe(400);
   });
 });

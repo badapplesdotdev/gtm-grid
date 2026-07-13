@@ -25,6 +25,14 @@
 /** The Realtime Broadcast event name every grid change event is sent under. */
 export const GRID_EVENT_NAME = "grid_change" as const;
 
+/**
+ * Reserved sentinel "table id" for the WORKSPACE-level realtime room
+ * (`${workspaceId}:_workspace`). Used to broadcast tables-list changes (a table
+ * created / synced / deleted) so members refresh their sidebar live without
+ * having that table open. No real table is ever created with this id.
+ */
+export const WORKSPACE_ROOM_TABLE_ID = "_workspace" as const;
+
 /** A column as it appears in the `getTable` snapshot (mirrors `FullGrid.columns`). */
 export interface GridEventColumn {
   readonly _id: string;
@@ -78,10 +86,39 @@ export interface ColumnInsertEvent {
   readonly column: GridEventColumn;
 }
 
+/**
+ * A column's definition changed (updateColumn): rename, type change, or a
+ * function column's provider/method/code/params/condition. The payload is the
+ * FULL updated column projection, so the reducer replaces it in place by `_id`
+ * (cells are unaffected — only the column metadata changed).
+ */
+export interface ColumnUpdateEvent {
+  readonly type: "column.update";
+  readonly column: GridEventColumn;
+}
+
 /** A column was deleted (its cells cascade out of the snapshot too). */
 export interface ColumnDeleteEvent {
   readonly type: "column.delete";
   readonly columnId: string;
+}
+
+/**
+ * Columns were reordered (the agent's `reorder_columns` tool / a drag in the
+ * grid). The payload is the FULL new column-id order so the reducer is a stable
+ * splice independent of which column moved — idempotent under at-least-once /
+ * out-of-order delivery (any id the snapshot doesn't hold is ignored; any column
+ * the event omits is kept, appended after the listed ones in its prior order).
+ */
+export interface ColumnReorderEvent {
+  readonly type: "column.reorder";
+  readonly columnIds: readonly string[];
+}
+
+/** Rows were reordered (the agent's `reorder_rows` tool / a drag). Full new id order. */
+export interface RowReorderEvent {
+  readonly type: "row.reorder";
+  readonly rowIds: readonly string[];
 }
 
 /**
@@ -107,6 +144,42 @@ export interface TableDeleteEvent {
 }
 
 /**
+ * A table was renamed. Carried on BOTH the table's own channel (so an open grid
+ * patches its header live) and the workspace room (so a member's sidebar list
+ * relabels without that table open). The reducer updates `table.name` in place
+ * when the viewed snapshot is this table; cells/rows/columns are untouched.
+ */
+export interface TableRenameEvent {
+  readonly type: "table.rename";
+  readonly tableId: string;
+  readonly name: string;
+}
+
+/**
+ * A project's sidebar folders changed (folder created/renamed/deleted, or a
+ * table moved between folders). Broadcast on the WORKSPACE room only — it does
+ * not mutate any `getTable` snapshot (folders are list-organization metadata),
+ * so the reducer passes it through; the sidebar refetches its folder/table
+ * lists instead.
+ */
+export interface FoldersChangedEvent {
+  readonly type: "folders.changed";
+  readonly projectId: string;
+}
+
+/**
+ * A table was pinned/unpinned (the workspace-shared favourite flag). Broadcast
+ * on the WORKSPACE room so every member's sidebar restyles + reorders live. It
+ * carries no `getTable` data, so the reducer passes it through; the sidebar
+ * refetches its tables list.
+ */
+export interface TableFavoriteEvent {
+  readonly type: "table.favorite";
+  readonly tableId: string;
+  readonly favorite: boolean;
+}
+
+/**
  * The discriminated union of every grid change the publisher emits and the
  * reducer applies. Discriminated on `type` so a `switch` is exhaustive.
  */
@@ -114,18 +187,34 @@ export type GridChangeEvent =
   | CellUpsertEvent
   | RowInsertEvent
   | RowDeleteEvent
+  | RowReorderEvent
   | ColumnInsertEvent
+  | ColumnUpdateEvent
   | ColumnDeleteEvent
+  | ColumnReorderEvent
   | TableInsertEvent
-  | TableDeleteEvent;
+  | TableDeleteEvent
+  | TableRenameEvent
+  | FoldersChangedEvent
+  | TableFavoriteEvent;
 
 /**
  * The `getTable`-shaped client cache the reducer patches. Identical in shape to
  * `FullGrid` (services/grid-service.ts) so W4 can store the tRPC `getTable`
  * result directly and feed it back through {@link applyGridEvent}.
  */
+/** A table's row-dedup config in the `getTable` snapshot (null = off). */
+export interface GridDedupe {
+  readonly column: string;
+  readonly keep: "oldest" | "newest";
+}
+
 export interface GridSnapshot {
-  readonly table: { readonly _id: string; readonly name: string };
+  readonly table: {
+    readonly _id: string;
+    readonly name: string;
+    readonly dedupe?: GridDedupe | null;
+  };
   readonly columns: readonly GridEventColumn[];
   readonly rows: readonly GridEventRow[];
   readonly cells: readonly GridEventCell[];

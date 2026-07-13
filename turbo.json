@@ -1,5 +1,18 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalEnv": [
+    "NODE_ENV",
+    "NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN",
+    "NEXT_PUBLIC_POSTHOG_HOST",
+    "VITE_POSTHOG_KEY",
+    "VITE_POSTHOG_HOST",
+    "GTMGRID_POSTHOG_KEY",
+    "GTMGRID_POSTHOG_HOST",
+    "POSTHOG_KEY",
+    "POSTHOG_HOST",
+    "PARTY_URL",
+    "PARTY_PUBLISH_SECRET"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

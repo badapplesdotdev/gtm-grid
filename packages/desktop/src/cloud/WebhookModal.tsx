@@ -168,6 +168,7 @@ export function WebhookModal({
     updateConfig,
     toggleEnabled,
     rotateSecret,
+    setAuth,
   } = useWebhookMutations();
 
   // The single webhook for this table (the panel manages exactly one). When the
@@ -232,7 +233,9 @@ export function WebhookModal({
   const autoRun = webhook?.autoRun ?? true;
   const upsertKey = webhook?.upsertKey ?? null;
   const token = webhook?.token ?? "whk_pending";
-  const signingSecret = webhook?.signingSecret ?? "whsec_pending";
+  // Signature auth is OPT-IN: a secret exists only when the user enabled it.
+  const signingSecret = webhook?.signingSecret;
+  const authOn = signingSecret !== undefined;
 
   const url = `${INNGEST_URL}/api/webhooks/${token}`;
   const maskedSecret = `whsec_${"•".repeat(24)}`;
@@ -249,8 +252,7 @@ export function WebhookModal({
 
   const curl = `curl -X POST ${url} \\
   -H "Content-Type: application/json" \\
-  -H "X-GTMGrid-Signature: $SIG" \\
-  -d '${sampleBody.replace(/\s+/g, " ")}'`;
+${authOn ? '  -H "X-GTMGrid-Signature: $SIG" \\\n' : ""}  -d '${sampleBody.replace(/\s+/g, " ")}'`;
 
   // ── Mapping editing (live-persisted on valid change) ──
   const persistMapping = useCallback(
@@ -377,7 +379,7 @@ export function WebhookModal({
                 <CopyBtn text={url} />
                 <button
                   className="copy-btn"
-                  title="Rotate URL & secret"
+                  title={authOn ? "Rotate URL & secret" : "Rotate URL"}
                   onClick={() => handle(() => rotateSecret(webhook._id))}
                 >
                   <WI.RotateCw s={13} />
@@ -385,29 +387,46 @@ export function WebhookModal({
               </div>
             </div>
 
-            {/* signing secret */}
+            {/* signature auth (opt-in) */}
             <div className="wh-field">
-              <label className="field-label">
-                Signing secret <span className="opt">· HMAC-SHA256</span>
+              <label className="field-label" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                Require signed requests{" "}
+                <span className="opt">· HMAC-SHA256 · optional</span>
+                <span style={{ marginLeft: "auto" }}>
+                  <Switch
+                    checked={authOn}
+                    onChange={(next) => void handle(() => setAuth(webhook._id, next))}
+                  />
+                </span>
               </label>
-              <div className="code-row">
-                <code className="code-inline">
-                  {revealSecret ? signingSecret : maskedSecret}
-                </code>
-                <button
-                  className="copy-btn"
-                  onClick={() => setRevealSecret((v) => !v)}
-                  title={revealSecret ? "Hide" : "Reveal"}
-                >
-                  {revealSecret ? <WI.EyeOff s={14} /> : <WI.Eye s={14} />}
-                </button>
-                <CopyBtn text={signingSecret} />
-              </div>
-              <div className="field-hint">
-                We sign every request — verify the{" "}
-                <span className="import-mono">X-GTMGrid-Signature</span> header to
-                confirm it came from us.
-              </div>
+              {authOn && signingSecret !== undefined ? (
+                <>
+                  <div className="code-row">
+                    <code className="code-inline">
+                      {revealSecret ? signingSecret : maskedSecret}
+                    </code>
+                    <button
+                      className="copy-btn"
+                      onClick={() => setRevealSecret((v) => !v)}
+                      title={revealSecret ? "Hide" : "Reveal"}
+                    >
+                      {revealSecret ? <WI.EyeOff s={14} /> : <WI.Eye s={14} />}
+                    </button>
+                    <CopyBtn text={signingSecret} />
+                  </div>
+                  <div className="field-hint">
+                    Requests must carry an{" "}
+                    <span className="import-mono">X-GTMGrid-Signature</span> header —
+                    hex(HMAC-SHA256(secret, body)) — or they're rejected with 401.
+                  </div>
+                </>
+              ) : (
+                <div className="field-hint">
+                  Off — anyone with this URL can post (the unguessable token is the
+                  credential). Turn on to also require an HMAC-signed{" "}
+                  <span className="import-mono">X-GTMGrid-Signature</span> header.
+                </div>
+              )}
             </div>
 
             <div className="wh-cols">
