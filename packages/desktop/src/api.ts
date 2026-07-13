@@ -231,6 +231,8 @@ export const api = {
     http<{ ok: boolean }>(`/api/extensions/${extId}/connect`, { method: "POST", body: JSON.stringify({ secrets, scope }) }),
   agents: () =>
     http<{ claude: AgentStatus; codex: AgentStatus; cursor: AgentStatus }>("/api/agents"),
+  agentModels: (agent: "codex") =>
+    http<AgentModelsResponse>(`/api/agent/models/${agent}`),
   connectAgent: (agent: "claude" | "codex" | "cursor", path?: string) =>
     http<{ claude: AgentStatus; codex: AgentStatus; cursor: AgentStatus }>("/api/agents/connect", {
       method: "POST",
@@ -242,6 +244,18 @@ export const api = {
   agentSession: (agent: "claude" | "codex", id: string) =>
     http<{ messages: AgentHistoryMessage[] }>(`/api/agent/sessions/${agent}/${encodeURIComponent(id)}`),
 };
+
+export interface AgentModelOption {
+  value: string;
+  label: string;
+}
+
+export interface AgentModelsResponse {
+  models: AgentModelOption[];
+  defaultModel?: string;
+  source: "cache" | "default";
+  fetchedAt?: string;
+}
 
 /** A past conversation summary (from the agent's native transcript store). */
 export interface AgentSession {

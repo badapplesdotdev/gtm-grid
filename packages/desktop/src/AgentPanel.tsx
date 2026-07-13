@@ -5,14 +5,14 @@
 // supports stop + multi-turn, collapses to a slim logo rail, and refreshes the
 // grid live as the agent calls mutating tools.
 
-import { useEffect, useRef, useState, type FC, type ReactNode, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FC, type ReactNode, type MouseEvent as ReactMouseEvent } from "react";
 import { Streamdown as StreamdownImpl } from "streamdown";
 
 // Streamdown ships its own bundled React types; under this app's @types/react 18
 // their JSX element types don't line up with ours (TS2786 "cannot be used as a
 // JSX component"). Retype it to the props we actually pass.
 const Streamdown = StreamdownImpl as unknown as FC<{ className?: string; children?: ReactNode }>;
-import { api, API_BASE, type AgentSession, type AgentStatus } from "./api";
+import { api, API_BASE, type AgentModelOption, type AgentSession, type AgentStatus } from "./api";
 import { onActivateKey } from "./lib/utils";
 import { capture } from "./analytics";
 import { abortAllRuns, abortRun, tableAbortKey, type AbortControllers } from "./agentAbort";
@@ -225,8 +225,8 @@ function loadModels(): Record<AgentKind, string> {
   }
 }
 
-/** Selectable models per agent ("" = the CLI's default for your plan). */
-const MODEL_OPTIONS: Record<AgentKind, { value: string; label: string }[]> = {
+/** Static fallbacks for agents that don't expose a local model catalog. */
+const MODEL_OPTIONS: Record<AgentKind, AgentModelOption[]> = {
   claude: [
     { value: "", label: "Default" },
     { value: "claude-fable-5", label: "Fable 5" },
@@ -238,11 +238,6 @@ const MODEL_OPTIONS: Record<AgentKind, { value: string; label: string }[]> = {
   ],
   codex: [
     { value: "", label: "Default" },
-    { value: "gpt-5-codex", label: "GPT-5 Codex" },
-    { value: "gpt-5", label: "GPT-5" },
-    { value: "gpt-5-mini", label: "GPT-5 mini" },
-    { value: "o3", label: "o3" },
-    { value: "o4-mini", label: "o4-mini" },
   ],
   // Cursor's model lineup, passed via `cursor-agent --model` (slugs follow
   // Cursor's documented kebab convention, e.g. `claude-4.6-sonnet`, `composer-2.5`).
@@ -479,7 +474,7 @@ function ToolCall({ tool, running }: { tool: ToolCallT; running: boolean }) {
 }
 
 /** Bottom-of-composer model picker — a pill button that opens a menu UPWARD (Claude-Code style). */
-function ModelPicker({ agent, value, onChange }: { agent: AgentKind; value: string; onChange: (v: string) => void }) {
+function ModelPicker({ agent, value, options, onChange, onOpen }: { agent: AgentKind; value: string; options: AgentModelOption[]; onChange: (v: string) => void; onOpen?: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -490,7 +485,9 @@ function ModelPicker({ agent, value, onChange }: { agent: AgentKind; value: stri
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, [open]);
-  const opts = MODEL_OPTIONS[agent];
+  const opts = options.some((o) => o.value === value) || !value
+    ? options
+    : [...options, { value, label: `${value} (saved)` }];
   const current = opts.find((o) => o.value === value) ?? opts[0];
   return (
     <div className="agent-model-picker" ref={ref}>
@@ -509,7 +506,7 @@ function ModelPicker({ agent, value, onChange }: { agent: AgentKind; value: stri
           ))}
         </div>
       )}
-      <button className="agent-model-btn" onClick={() => setOpen((o) => !o)} title="Choose model">
+      <button className="agent-model-btn" onClick={() => setOpen((o) => { if (!o) onOpen?.(); return !o; })} title="Choose model">
         {current.label}
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
       </button>
@@ -769,6 +766,9 @@ export default function AgentPanel({
   const [agent, setAgent] = useState<AgentKind>("claude");
   // Which model each agent's CLI runs with ("" = the plan's default). Persisted.
   const [models, setModels] = useState<Record<AgentKind, string>>(loadModels);
+  const [codexModelOptions, setCodexModelOptions] = useState<AgentModelOption[]>(
+    MODEL_OPTIONS.codex,
+  );
   // Permission mode (global across agents), persisted. Maps to --permission-mode.
   const [mode, setMode] = useState<PermMode>(loadMode);
   const [status, setStatus] = useState<{ claude?: AgentStatus; codex?: AgentStatus; cursor?: AgentStatus }>({});
@@ -805,6 +805,24 @@ export default function AgentPanel({
   const historyRef = useRef<HTMLDivElement>(null);
 
   const messages = threads[agent];
+
+  const refreshCodexModels = useCallback(() => {
+    void api.agentModels("codex").then((result) => {
+      const defaultLabel = result.defaultModel
+        ? `Default · ${result.models.find((m) => m.value === result.defaultModel)?.label ?? result.defaultModel}`
+        : "Default";
+      setCodexModelOptions([
+        { value: "", label: defaultLabel },
+        ...result.models,
+      ]);
+    }).catch(() => {
+      // Codex may not have run yet; Default remains valid through config.toml.
+    });
+  }, []);
+
+  useEffect(() => {
+    refreshCodexModels();
+  }, [refreshCodexModels]);
 
   // The agent asked a structured question on its last turn — surface answer cards
   // in place of the composer until the user replies (which appends a new message).
@@ -1426,7 +1444,13 @@ export default function AgentPanel({
             </div>
             <ModePicker value={mode} onChange={setMode} />
             <span style={{ marginLeft: "auto" }} />
-            <ModelPicker agent={agent} value={models[agent]} onChange={(v) => setModels((p) => ({ ...p, [agent]: v }))} />
+            <ModelPicker
+              agent={agent}
+              value={models[agent]}
+              options={agent === "codex" ? codexModelOptions : MODEL_OPTIONS[agent]}
+              onOpen={agent === "codex" ? refreshCodexModels : undefined}
+              onChange={(v) => setModels((p) => ({ ...p, [agent]: v }))}
+            />
           </div>
         </>
       )}
