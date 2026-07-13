@@ -54,6 +54,33 @@ describe("manifest apiKey pre-flight guard", () => {
     );
   });
 
+  it("maps HeyReach's draft-campaign 400 to actionable guidance", async () => {
+    const draftManifest = parseManifest({
+      id: "heyreach",
+      name: "HeyReach",
+      baseUrl: "https://api.heyreach.io/api/public",
+      auth: { type: "apiKey", header: "X-API-KEY" },
+      methods: [
+        {
+          id: "addLeadsToCampaign",
+          description: "Push leads into a campaign",
+          verb: "POST",
+          path: "/campaign/AddLeadsToCampaignV2",
+          input: { type: "object", required: ["campaignId"], properties: { campaignId: { type: "integer" } } },
+        },
+      ],
+    });
+    const m = connectorFromManifest(draftManifest).methods.find((x) => x.id === "addLeadsToCampaign")!;
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      json({ errorMessage: "You cannot add new leads to a draft campaign." }, 400),
+    );
+    const ctx: MethodContext = { secrets: { apiKey: "good-key" } };
+
+    await expect(m.run({ campaignId: 1 }, ctx)).rejects.toThrow(
+      /HeyReach campaign is still a draft — activate the campaign/i,
+    );
+  });
+
   it("sends the Authorization header when a secret is present", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
