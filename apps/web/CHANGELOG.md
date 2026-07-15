@@ -1,5 +1,17 @@
 # @gtmgrid/web
 
+## 1.7.2
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.7.2
+- @gtmgrid/auth@1.7.2
+- @gtmgrid/cloud@1.7.2
+- @gtmgrid/db@1.7.2
+- @gtmgrid/email@1.7.2
+- @gtmgrid/engine@1.7.2
+- @gtmgrid/services@1.7.2
+
 ## 1.7.1
 
 ### Patch Changes
