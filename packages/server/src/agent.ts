@@ -1335,6 +1335,74 @@ export function codexUserModelDefaults(
   }
 }
 
+export interface AgentModelOption {
+  value: string;
+  label: string;
+}
+
+export interface CodexModelOptions {
+  models: AgentModelOption[];
+  defaultModel?: string;
+  source: "cache" | "default";
+  fetchedAt?: string;
+}
+
+/**
+ * Models currently available to the authenticated Codex CLI.
+ *
+ * Codex refreshes `models_cache.json` from the user's plan, so reading that file
+ * keeps the desktop picker current without maintaining another static model
+ * list or requiring an OpenAI API key. Hidden/internal entries are excluded.
+ */
+export function codexModelOptions(
+  home = process.env.CODEX_HOME ?? join(homedir(), ".codex"),
+): CodexModelOptions {
+  const defaultModel = codexUserModelDefaults(home).model;
+  try {
+    const raw = JSON.parse(readFileSync(join(home, "models_cache.json"), "utf8")) as {
+      fetched_at?: unknown;
+      models?: unknown;
+    };
+    if (!Array.isArray(raw.models)) throw new Error("models must be an array");
+    const seen = new Set<string>();
+    const models: AgentModelOption[] = [];
+    for (const entry of raw.models) {
+      if (!entry || typeof entry !== "object") continue;
+      const model = entry as {
+        slug?: unknown;
+        display_name?: unknown;
+        visibility?: unknown;
+      };
+      const value = typeof model.slug === "string" ? model.slug.trim() : "";
+      if (!value || seen.has(value) || model.visibility === "hide") continue;
+      seen.add(value);
+      models.push({
+        value,
+        label:
+          typeof model.display_name === "string" && model.display_name.trim()
+            ? model.display_name.trim()
+            : value,
+      });
+    }
+    if (models.length > 0) {
+      return {
+        models,
+        ...(defaultModel ? { defaultModel } : {}),
+        source: "cache",
+        ...(typeof raw.fetched_at === "string" ? { fetchedAt: raw.fetched_at } : {}),
+      };
+    }
+  } catch {
+    // A fresh install may not have a cache until Codex has run once. Default is
+    // still usable because streamCodex passes the configured model explicitly.
+  }
+  return {
+    models: [],
+    ...(defaultModel ? { defaultModel } : {}),
+    source: "default",
+  };
+}
+
 export function streamCodex(
   res: ServerResponse,
   opts: { message: string; project: string; repoRoot: string; threadId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; mode?: string; cloud?: AgentCloud; providerEnv?: Record<string, string>; approval?: AgentApproval },

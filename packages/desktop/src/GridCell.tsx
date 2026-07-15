@@ -51,6 +51,7 @@ export interface GridCellProps {
   readonly isActiveCell: boolean;
   readonly running: boolean;
   readonly waiting: boolean;
+  readonly pinnedLeft: number | undefined;
   readonly editSignal: number;
   readonly editSeed: string | undefined;
   readonly tabIndex: 0 | -1;
@@ -82,6 +83,7 @@ function GridCellInner({
   isActiveCell,
   running,
   waiting,
+  pinnedLeft,
   editSignal,
   editSeed,
   tabIndex,
@@ -100,8 +102,8 @@ function GridCellInner({
     : col.kind === "function"
       ? () => actions.runCell(rowId, col.id)
       : undefined;
-  const tdStyle: PresenceTdStyle | undefined = here
-    ? { "--presence-color": here[0].color }
+  const tdStyle: PresenceTdStyle | undefined = here || pinnedLeft !== undefined
+    ? { ...(here ? { "--presence-color": here[0].color } : {}), ...(pinnedLeft !== undefined ? { left: pinnedLeft } : {}) }
     : undefined;
   return (
     <td
@@ -110,7 +112,7 @@ function GridCellInner({
       aria-selected={inSel || undefined}
       data-cell={cellDomId(rowIdx, colIndex)}
       tabIndex={tabIndex}
-      className={`grid-td${here ? " cell-presence" : ""}${isEditingHere ? " presence-editing" : ""}${flash ? " presence-flash" : ""}${inSel ? " cell-selected" : ""}${isAnchor ? " cell-sel-anchor" : ""}`}
+      className={`grid-td${pinnedLeft !== undefined ? " pinned-column" : ""}${here ? " cell-presence" : ""}${isEditingHere ? " presence-editing" : ""}${flash ? " presence-flash" : ""}${inSel ? " cell-selected" : ""}${isAnchor ? " cell-sel-anchor" : ""}`}
       style={tdStyle}
       onMouseDown={(e) => {
         if (e.button !== 0) return;

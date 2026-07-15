@@ -932,6 +932,194 @@ html, body, #root {
   flex-shrink: 0;
 }
 
+/* Clay-style view controls: dense, quiet controls that read as part of the
+   spreadsheet chrome rather than primary application actions. */
+.grid-view-trigger {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font: 500 11.5px var(--font-sans);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background .1s, border-color .1s, color .1s, box-shadow .1s;
+}
+.grid-view-trigger:hover { background: var(--surface-2); color: var(--text); }
+.grid-view-trigger.active {
+  color: var(--accent);
+  background: var(--accent-bg);
+  border-color: var(--accent-ring);
+}
+.grid-view-count {
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 700 10px var(--font-mono);
+}
+.grid-view-backdrop { position: fixed; inset: 0; z-index: 74; }
+.grid-view-panel {
+  position: fixed;
+  z-index: 75;
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: 10px;
+  box-shadow: 0 14px 42px rgba(15, 23, 42, .16), 0 2px 8px rgba(15, 23, 42, .08);
+  animation: cdSlide .12s ease;
+  overflow: hidden;
+}
+.column-view-panel { width: 370px; max-height: min(560px, calc(100vh - 90px)); }
+.grid-view-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  margin: 8px;
+  padding: 0 10px;
+  color: var(--text-3);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.grid-view-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.grid-view-search input { all: unset; flex: 1; min-width: 0; font: 12.5px var(--font-sans); color: var(--text); }
+.grid-view-search input::placeholder { color: var(--text-3); }
+.column-view-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 13px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: 11px;
+}
+.column-view-summary button, .filter-clear { all: unset; color: var(--accent); cursor: pointer; font-weight: 600; }
+.column-view-summary button:hover, .filter-clear:hover { text-decoration: underline; }
+.column-view-list { max-height: 455px; overflow: auto; padding: 5px; }
+.column-view-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 7px;
+  border-radius: 6px;
+  color: var(--text);
+  transition: background .12s ease, color .12s ease, opacity .12s ease;
+}
+.column-view-row:hover { background: var(--bg); }
+.column-view-row.is-hidden {
+  color: var(--text-3);
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+}
+.column-view-row.is-hidden:hover { background: var(--surface-2); }
+.column-view-row.is-hidden .column-type-pill {
+  color: var(--text-3);
+  background: transparent;
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+}
+.column-view-row.is-hidden .column-view-name { opacity: .62; }
+.column-view-row.is-hidden .column-visibility-btn { color: var(--text-3); }
+.column-view-row.is-hidden .column-visibility-btn:hover { color: var(--accent); background: var(--accent-bg); }
+.column-visibility-btn, .column-pin-btn, .filter-remove {
+  all: unset;
+  width: 25px;
+  height: 25px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 5px;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.column-visibility-btn:hover, .column-pin-btn:hover, .filter-remove:hover { background: var(--surface-3); color: var(--text); }
+.column-pin-btn { opacity: 0; }
+.column-view-row:hover .column-pin-btn, .column-pin-btn.pinned { opacity: 1; }
+.column-pin-btn.pinned { color: var(--accent); background: var(--accent-bg); }
+.column-pin-btn:disabled { opacity: 0; cursor: default; }
+.column-type-pill {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+  background: var(--surface);
+  font: 600 11px var(--font-mono);
+  flex-shrink: 0;
+}
+.column-view-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.column-view-type { font-size: 10.5px; color: var(--text-3); }
+.column-view-type.is-hidden {
+  color: var(--text-3);
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+
+.filter-view-panel { width: min(740px, calc(100vw - 24px)); max-height: min(590px, calc(100vh - 90px)); display: flex; flex-direction: column; }
+.filter-view-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 16px 11px;
+  border-bottom: 1px solid var(--border);
+}
+.filter-view-header > div { display: flex; align-items: baseline; gap: 9px; }
+.filter-view-header strong { font-size: 13px; color: var(--text); }
+.filter-view-header span { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.filter-clear { font-size: 11.5px; }
+.filter-groups { overflow: auto; padding: 10px 12px; min-height: 96px; }
+.filter-group { position: relative; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.filter-group + .filter-group { margin-top: 26px; }
+.filter-group-join { position: absolute; top: -22px; left: 14px; height: 17px; display: flex; align-items: center; }
+.filter-group-join span { padding: 2px 6px; border-radius: 4px; background: var(--surface-3); color: var(--text-3); font: 700 9px var(--font-mono); }
+.filter-group-top { height: 24px; display: flex; align-items: center; gap: 8px; margin-bottom: 4px; color: var(--text-3); font-size: 11px; }
+.filter-group-top select { all: unset; cursor: pointer; color: var(--accent); font-weight: 600; }
+.filter-rule { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(150px, 1fr) minmax(150px, 1.25fr) 28px; gap: 8px; align-items: center; margin-top: 7px; }
+.filter-rule select, .filter-rule input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 34px;
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 0 9px;
+  font: 12px var(--font-sans);
+  outline: none;
+}
+.filter-rule select:focus, .filter-rule input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.filter-rule .filter-remove { align-self: center; }
+.filter-rule > .filter-remove { grid-column: 4; }
+.filter-add-inline { all: unset; margin: 9px 0 0 3px; color: var(--text-2); font: 600 11.5px var(--font-sans); cursor: pointer; }
+.filter-add-inline:hover { color: var(--accent); }
+.filter-empty { height: 92px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; color: var(--text-3); }
+.filter-empty strong { color: var(--text-2); font-size: 12px; }
+.filter-empty span { font-size: 11px; }
+.filter-view-footer { display: flex; gap: 18px; padding: 11px 15px; border-top: 1px solid var(--border); background: var(--surface); }
+.filter-view-footer button { all: unset; cursor: pointer; color: var(--text); font: 600 12px var(--font-sans); }
+.filter-view-footer button:hover { color: var(--accent); }
+
+@media (max-width: 720px) {
+  .grid-view-trigger span:not(.grid-view-count) { display: none; }
+  .filter-rule { grid-template-columns: 1fr 1fr 28px; }
+  .filter-value-input { grid-column: 1 / 3; }
+  .filter-rule > .filter-remove { grid-column: 3; grid-row: 1; }
+}
+
 /* Icon-only "⋯" overflow button shown when the toolbar collapses its actions. */
 .toolbar-overflow-btn {
   display: inline-flex;
@@ -1113,6 +1301,18 @@ html, body, #root {
   width: 44px;
   min-width: 44px;
 }
+
+/* Pinned data columns sit after the sticky row-number gutter. While any pin is
+   active the grid keeps all data cells mounted so these sticky cells never
+   disappear when their original horizontal range leaves the viewport. */
+.grid-th.pinned-column { z-index: 7; box-shadow: 1px 0 0 var(--border); }
+.grid-td.pinned-column {
+  position: sticky;
+  z-index: 3;
+  background: var(--surface);
+  box-shadow: 1px 0 0 var(--border);
+}
+.grid-tr.is-selected .grid-td.pinned-column { background: var(--accent-bg); }
 
 .th-inner {
   display: flex;
@@ -2759,8 +2959,9 @@ body.resizing-agent .agent-panel { transition: none; }
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
-/* column resize handle */
-.grid-th { position: relative; }
+/* column resize handle. Headers remain sticky; sticky positioning still creates
+   the containing block the absolutely-positioned resize handle needs. */
+.grid-th { position: sticky; }
 .col-resize {
   position: absolute; top: 0; right: -3px; width: 7px; height: 100%; cursor: col-resize; z-index: 2;
 }

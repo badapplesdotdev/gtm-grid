@@ -6,6 +6,7 @@ import {
   appendCapped,
   codexEnvToml,
   codexSandboxFlags,
+  codexModelOptions,
   codexUserModelDefaults,
   claudePermissionMode,
   claudeTaskMessage,
@@ -188,6 +189,51 @@ describe("codexUserModelDefaults — re-injecting the user's model after --ignor
     const home = mkdtempSync(join(tmpdir(), "codex-empty-"));
     try {
       expect(codexUserModelDefaults(home)).toEqual({});
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("codexModelOptions — live Codex CLI model discovery", () => {
+  it("reads visible models in provider order and reports the configured default", () => {
+    const home = mkdtempSync(join(tmpdir(), "codex-models-"));
+    try {
+      writeFileSync(join(home, "config.toml"), 'model = "gpt-5.6-sol"\n');
+      writeFileSync(
+        join(home, "models_cache.json"),
+        JSON.stringify({
+          fetched_at: "2026-07-13T11:16:19Z",
+          models: [
+            { slug: "gpt-5.6-sol", display_name: "GPT-5.6-Sol", visibility: "list" },
+            { slug: "codex-auto-review", display_name: "Auto Review", visibility: "hide" },
+            { slug: "gpt-next", display_name: "GPT Next", visibility: "list" },
+          ],
+        }),
+      );
+      expect(codexModelOptions(home)).toEqual({
+        models: [
+          { value: "gpt-5.6-sol", label: "GPT-5.6-Sol" },
+          { value: "gpt-next", label: "GPT Next" },
+        ],
+        defaultModel: "gpt-5.6-sol",
+        source: "cache",
+        fetchedAt: "2026-07-13T11:16:19Z",
+      });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the configured default before Codex creates its cache", () => {
+    const home = mkdtempSync(join(tmpdir(), "codex-models-empty-"));
+    try {
+      writeFileSync(join(home, "config.toml"), 'model = "gpt-default"\n');
+      expect(codexModelOptions(home)).toEqual({
+        models: [],
+        defaultModel: "gpt-default",
+        source: "default",
+      });
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

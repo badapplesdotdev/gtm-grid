@@ -38,7 +38,7 @@ import {
 import { Effect } from "effect";
 import type { RunErrorContext, AiGenerationEvent } from "@gtmgrid/engine";
 import { randomUUID } from "node:crypto";
-import { detectAgents, streamClaude, streamCodex, streamCursor, setAgentPath, rescanAgents, generateWithAgent, parseAgentCloud, type AgentKind } from "./agent.js";
+import { codexModelOptions, detectAgents, streamClaude, streamCodex, streamCursor, setAgentPath, rescanAgents, generateWithAgent, parseAgentCloud, type AgentKind } from "./agent.js";
 import { localProviderEnv, resolveCloudProviderEnv } from "./provider-env.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, previewCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
@@ -897,6 +897,14 @@ route("POST", "/api/extensions/:id/connect", (p, body) => {
 });
 
 route("GET", "/api/agents", () => detectAgents());
+
+// Codex's authenticated-plan model catalog, refreshed by the Codex CLI itself.
+// This is separate from /api/ai-providers (API-key models used by AI columns).
+route("GET", "/api/agent/models/:agent", (p) =>
+  p.agent === "codex"
+    ? codexModelOptions()
+    : { models: [], source: "default" as const },
+);
 
 // Past conversations for the current project, read from the CLI's OWN native
 // transcript store (Claude Code project dir / Codex rollouts) — no local copy.

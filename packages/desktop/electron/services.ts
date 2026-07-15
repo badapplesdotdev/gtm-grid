@@ -141,15 +141,39 @@ export class EngineService extends Effect.Service<EngineService>()("EngineServic
     });
 
     // Kill the engine and BLOCK until it exits (releases file locks before update).
+    // A utilityProcess can ignore the graceful kill while it is handling work. On
+    // macOS that leaves a process from the old app bundle alive, so Squirrel's
+    // ShipIt helper waits forever and the next launch offers the same update again.
     const stop = Effect.async<void>((resume) => {
       shuttingDown = true;
       const e = engine;
       engine = null;
       if (!e) return resume(Effect.void);
-      const done = () => resume(Effect.void);
+
+      let finished = false;
+      let forceTimer: ReturnType<typeof setTimeout> | undefined;
+      let giveUpTimer: ReturnType<typeof setTimeout> | undefined;
+      const done = () => {
+        if (finished) return;
+        finished = true;
+        if (forceTimer) clearTimeout(forceTimer);
+        if (giveUpTimer) clearTimeout(giveUpTimer);
+        resume(Effect.void);
+      };
       e.once("exit", done);
       e.kill();
-      setTimeout(done, 3000);
+
+      forceTimer = setTimeout(() => {
+        // `UtilityProcess.kill()` is graceful. Escalate so the updater never
+        // inherits a live process from the bundle it is about to replace.
+        try {
+          if (e.pid) process.kill(e.pid, "SIGKILL");
+        } catch {
+          // The process exited between the timeout and kill call.
+        }
+        // Do not hang application shutdown if Electron never emits `exit`.
+        giveUpTimer = setTimeout(done, 1000);
+      }, 3000);
     });
 
     const diagnostics = Effect.sync(() => ({ ...facts, stderrTail: stderrTail.join("\n") }));
@@ -176,7 +200,12 @@ export class UpdaterService extends Effect.Service<UpdaterService>()("UpdaterSer
         // update-available, shows real progress, then offers Restart — so the
         // download starts on the user's click, not silently in the background.
         autoUpdater.autoDownload = false;
-        autoUpdater.autoInstallOnAppQuit = false;
+        // Squirrel.Mac must ingest and unpack the zip before Restart is clicked.
+        // Otherwise quitAndInstall starts that second stage during shutdown and
+        // can leave a pending ShipIt job which re-offers the same update forever.
+        // Keep the explicit install path elsewhere so Windows engine-file locks
+        // are still released before its installer starts.
+        autoUpdater.autoInstallOnAppQuit = process.platform === "darwin";
         autoUpdater.on("update-available", (i) =>
           send("updater:available", { version: i.version, notes: i.releaseNotes ?? null }),
         );
