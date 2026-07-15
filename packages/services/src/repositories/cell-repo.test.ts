@@ -8,7 +8,7 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { makeGridStore, type StoreCell } from "./grid-store.js";
-import { CellRepo, cellRepoLayer } from "./cell-repo.js";
+import { CellRepo, cellRepoLayer, sanitizeCellValue } from "./cell-repo.js";
 
 const cell = (
   id: string,
@@ -56,5 +56,35 @@ describe("CellRepo.listByTableColumn", () => {
 
   it("returns [] for a column with no cells", async () => {
     expect(await run(store, "cZ")).toEqual([]);
+  });
+});
+
+describe("sanitizeCellValue", () => {
+  it("leaves ordinary strings (incl. valid emoji pairs) untouched", () => {
+    expect(sanitizeCellValue("hello, world")).toBe("hello, world");
+    expect(sanitizeCellValue("emoji 😀 ok")).toBe("emoji 😀 ok");
+  });
+
+  it("strips NUL bytes that Postgres jsonb rejects", () => {
+    expect(sanitizeCellValue("a\u0000b\u0000c")).toBe("abc");
+  });
+
+  it("replaces lone surrogates (invalid UTF-8) with U+FFFD", () => {
+    // Lone high surrogate, then lone low surrogate.
+    expect(sanitizeCellValue("x\uD800y")).toBe("x\uFFFDy");
+    expect(sanitizeCellValue("x\uDC00y")).toBe("x\uFFFDy");
+  });
+
+  it("recurses into arrays and object values AND keys", () => {
+    expect(
+      sanitizeCellValue({ ["k\u0000ey"]: ["a\u0000", { z: "b\u0000" }] }),
+    ).toEqual({ key: ["a", { z: "b" }] });
+  });
+
+  it("leaves non-string primitives unchanged", () => {
+    expect(sanitizeCellValue(42)).toBe(42);
+    expect(sanitizeCellValue(true)).toBe(true);
+    expect(sanitizeCellValue(null)).toBe(null);
+    expect(sanitizeCellValue(undefined)).toBe(undefined);
   });
 });
