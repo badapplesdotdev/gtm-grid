@@ -32,6 +32,8 @@ export interface CloudContext {
    * table-scoped tools require an explicit `table` argument.
    */
   readonly tableId?: string;
+  /** The pipeline open on the canvas, used as the default target for pipeline tools. */
+  readonly pipelineId?: string;
 }
 
 /** The resolved data environment for an MCP run — always CLOUD. */
@@ -47,6 +49,7 @@ export interface McpEnv {
   readonly GTMGRID_WORKSPACE_ID?: string;
   readonly GTMGRID_CLOUD_PROJECT?: string;
   readonly GTMGRID_CLOUD_TABLE?: string;
+  readonly GTMGRID_CLOUD_PIPELINE?: string;
 }
 
 /** Trim a possibly-undefined env value to a non-empty string, else undefined. */
@@ -70,10 +73,11 @@ export function cloudContextFromEnv(env: McpEnv): CloudContext | undefined {
   const workspaceId = nonEmpty(env.GTMGRID_WORKSPACE_ID);
   const projectId = nonEmpty(env.GTMGRID_CLOUD_PROJECT);
   const tableId = nonEmpty(env.GTMGRID_CLOUD_TABLE); // optional — may be absent
+  const pipelineId = nonEmpty(env.GTMGRID_CLOUD_PIPELINE); // optional — may be absent
   if (apiUrl === undefined || token === undefined || workspaceId === undefined || projectId === undefined) {
     return undefined;
   }
-  return { apiUrl, token, workspaceId, projectId, tableId };
+  return { apiUrl, token, workspaceId, projectId, tableId, pipelineId };
 }
 
 /**
@@ -98,5 +102,6 @@ export function selectGridEnv(env: McpEnv): GridEnv {
  */
 export function describeGridEnv(env: GridEnv): string {
   const t = env.context.tableId;
-  return `cloud project ${env.context.projectId}${t ? ` (table ${t})` : " (no active table)"}`;
+  const p = env.context.pipelineId;
+  return `cloud project ${env.context.projectId}${t ? ` (table ${t})` : " (no active table)"}${p ? ` (pipeline ${p})` : ""}`;
 }

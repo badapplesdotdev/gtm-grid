@@ -55,6 +55,7 @@ export function toTrpcError(tag: string | undefined, message: string): TRPCError
     case "GridNotFoundError":
     // Share domain: a missing/invalid share (or its source table) is not found.
     case "ShareNotFoundError":
+    case "PipelineNotFoundError":
       return new TRPCError({ code: "NOT_FOUND", message });
     // Billing/seats domain (W2): a forged/unknown plan is a bad request; a
     // reached seat cap is a precondition failure; a misconfigured plan with no
@@ -82,9 +83,12 @@ export function toTrpcError(tag: string | undefined, message: string): TRPCError
     // Share domain: a too-large snapshot, or a malformed snapshot on clone.
     case "ShareTooLargeError":
     case "InvalidShareSnapshotError":
+    case "PipelineInvalidGraphError":
+    case "PipelineBindingError":
       return new TRPCError({ code: "BAD_REQUEST", message });
     // Webhooks domain (W2): exceeding the cloud-actions cap is a forbidden op.
     case "CloudActionsLimitError":
+    case "PipelineActionsLimitError":
       return new TRPCError({ code: "FORBIDDEN", message });
     default:
       return new TRPCError({ code: "INTERNAL_SERVER_ERROR", message });

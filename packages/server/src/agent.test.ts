@@ -8,6 +8,7 @@ import {
   codexSandboxFlags,
   codexUserModelDefaults,
   claudePermissionMode,
+  claudeTaskMessage,
   contextPreamble,
   manageChildLifecycle,
   mcpEnv,
@@ -27,6 +28,7 @@ const CLOUD: AgentCloud = {
   workspaceId: "ws_1",
   projectId: "proj_1",
   tableId: "tbl_1",
+  pipelineId: "pipe_1",
 };
 
 describe("parseAgentCloud — validate the chat body's cloud block (TRI-3296)", () => {
@@ -64,7 +66,7 @@ describe("mcpEnv — the env the spawned MCP receives (data-source selection)", 
     });
   });
 
-  it("CLOUD: threads mode + apiUrl/token/workspace/project/table", () => {
+  it("CLOUD: threads mode + apiUrl/token/workspace/project/table/pipeline", () => {
     expect(mcpEnv("my-project", CLOUD)).toEqual({
       GTMGRID_PROJECT: "my-project",
       GTMGRID_PORT: "8787",
@@ -74,6 +76,7 @@ describe("mcpEnv — the env the spawned MCP receives (data-source selection)", 
       GTMGRID_WORKSPACE_ID: "ws_1",
       GTMGRID_CLOUD_PROJECT: "proj_1",
       GTMGRID_CLOUD_TABLE: "tbl_1",
+      GTMGRID_CLOUD_PIPELINE: "pipe_1",
     });
   });
 
@@ -469,10 +472,35 @@ describe("contextPreamble — bakes in the /goal slash-command protocol", () => 
     expect(p).toContain('viewing **"Leads"**');
   });
 
+  it("identifies the active canvas and teaches complete and partial pipeline editing", () => {
+    const p = contextPreamble({ pipelineId: "pipe_1", pipelineName: "Lead router" });
+    expect(p).toContain('**"Lead router"** open on the workflow canvas');
+    expect(p).toContain("add, configure, update, move, connect, branch, re-branch, or delete");
+    expect(p).toContain("default to it");
+    expect(p).toContain("a deferred/removed schema does NOT mean the tools disconnected");
+  });
+
   it("does NOT teach /help or /start in the preamble (handled client-side; they collide with CLI built-ins)", () => {
     const p = contextPreamble();
     expect(p).not.toContain("/help");
     expect(p).not.toContain("/start");
+  });
+});
+
+describe("claudeTaskMessage — recover deferred pipeline tools", () => {
+  it("forces current-turn discovery for an active canvas", () => {
+    const message = claudeTaskMessage("Add an AI node after AI 3", {
+      pipelineId: "pipe_1",
+      pipelineName: "Lead router",
+    });
+    expect(message).toContain("Lead router (pipe_1)");
+    expect(message).toContain("mcp__gtmgrid__get_pipeline");
+    expect(message).toContain("mcp__gtmgrid__patch_pipeline");
+    expect(message).toContain("Add an AI node after AI 3");
+  });
+
+  it("leaves ordinary table turns unchanged", () => {
+    expect(claudeTaskMessage("Update this cell", { tableName: "Leads" })).toBe("Update this cell");
   });
 });
 

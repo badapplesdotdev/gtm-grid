@@ -93,6 +93,15 @@ import {
   projectRepoLayer,
 } from "./repositories/project-repo.js";
 import {
+  type PipelineBindingRecord,
+  type PipelineRecord,
+  PipelineRepo,
+  PipelineRepoLive,
+  pipelineRepoLayer,
+  type PipelineRunRecord,
+  type PipelineVersionRecord,
+} from "./repositories/pipeline-repo.js";
+import {
   RowRepo,
   RowRepoLive,
   rowRepoLayer,
@@ -212,6 +221,7 @@ import {
   inviteEmailPortLayer,
 } from "./services/invite-email.js";
 import { WorkspaceService } from "./services/workspace-service.js";
+import { PipelineService } from "./services/pipeline-service.js";
 
 /**
  * An {@link Identity} Layer backed by an already-resolved user id (or `null`
@@ -264,6 +274,7 @@ export const appLayer = (params: {
   );
   const extensionRepo = ExtensionRepoLive.pipe(Layer.provide(dbLayer));
   const projectRepo = ProjectRepoLive.pipe(Layer.provide(dbLayer));
+  const pipelineRepo = PipelineRepoLive.pipe(Layer.provide(dbLayer));
   const tableRepo = TableRepoLive.pipe(Layer.provide(dbLayer));
   const folderRepo = FolderRepoLive.pipe(Layer.provide(dbLayer));
   const columnRepo = ColumnRepoLive.pipe(Layer.provide(dbLayer));
@@ -396,6 +407,13 @@ export const appLayer = (params: {
     Layer.provide(membershipService),
     Layer.provide(identity),
   );
+  const pipelineService = PipelineService.Default.pipe(
+    Layer.provide(pipelineRepo),
+    Layer.provide(projectRepo),
+    Layer.provide(membershipService),
+    Layer.provide(identity),
+    Layer.provide(realtimePublisher),
+  );
   // Merge so callers can resolve any repo or service from one Layer.
   return Layer.mergeAll(
     entitlementService,
@@ -421,6 +439,8 @@ export const appLayer = (params: {
     gridService,
     shareService,
     shareRepo,
+    pipelineService,
+    pipelineRepo,
     workspaceRepo,
     lifecycleEmailRepo,
     lifecycleCronRepo,
@@ -508,6 +528,16 @@ export interface TestLayerFixtures {
   readonly crmSyncRuns?: CrmSyncRun[];
   /** Table shares visible to {@link ShareRepo} (MUTATED by insert/revoke). */
   readonly shares?: TableShare[];
+  /** Reusable pipelines and their immutable/draft versions. */
+  readonly pipelines?: PipelineRecord[];
+  readonly pipelineVersions?: PipelineVersionRecord[];
+  readonly pipelineBindings?: PipelineBindingRecord[];
+  readonly pipelineRuns?: PipelineRunRecord[];
+  readonly pipelineActionReceipts?: Set<string>;
+  readonly pipelineCloudActions?: Map<
+    string,
+    { used: number; limit: number | null }
+  >;
   /** Tables backing the webhook worker grid paths. */
   readonly tables?: GridTable[];
   /** Columns backing mapping validation + getTable. */
@@ -628,6 +658,17 @@ export const TestLayer = (
     cells: fixtures.gridCells,
   });
   const projectRepo = projectRepoLayer(gridStore);
+  const pipelineRepo = pipelineRepoLayer({
+    pipelines: fixtures.pipelines,
+    versions: fixtures.pipelineVersions,
+    bindings: fixtures.pipelineBindings,
+    runs: fixtures.pipelineRuns,
+    tableWorkspaces: new Map(
+      (fixtures.gridTables ?? []).map((table) => [table.id, table.workspaceId]),
+    ),
+    cloudActions: fixtures.pipelineCloudActions,
+    actionReceipts: fixtures.pipelineActionReceipts,
+  });
   const tableRepo = tableRepoLayer(gridStore);
   const folderRepo = folderRepoLayer(gridStore);
   const columnRepo = columnRepoLayer(gridStore);
@@ -789,6 +830,13 @@ export const TestLayer = (
     Layer.provide(membershipService),
     Layer.provide(identity),
   );
+  const pipelineService = PipelineService.Default.pipe(
+    Layer.provide(pipelineRepo),
+    Layer.provide(projectRepo),
+    Layer.provide(membershipService),
+    Layer.provide(identity),
+    Layer.provide(realtimePublisher),
+  );
   return Layer.mergeAll(
     workspaceService,
     billingService,
@@ -812,6 +860,8 @@ export const TestLayer = (
     gridService,
     shareService,
     shareRepo,
+    pipelineService,
+    pipelineRepo,
     entitlementService,
     workspaceRepo,
     lifecycleEmailRepo,
@@ -872,6 +922,8 @@ export type AppServices =
   | GridService
   | ShareService
   | ShareRepo
+  | PipelineService
+  | PipelineRepo
   | EntitlementService
   | ProjectRepo
   | TableRepo

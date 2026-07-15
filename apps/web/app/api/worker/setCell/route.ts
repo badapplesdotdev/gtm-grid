@@ -6,8 +6,9 @@
  * omitting it keeps the existing value. We forward that presence as `hasValue`.
  */
 
-import { WebhookService } from "@gtmgrid/services";
+import { PipelineService, WebhookService } from "@gtmgrid/services";
 import { Effect } from "effect";
+import { inngest } from "../../../../lib/inngest/client";
 import { runWorkerSecretOrMember } from "../_lib";
 import { SetCellSchema } from "../_schemas";
 
@@ -16,7 +17,7 @@ export function POST(req: Request): Promise<Response> {
   return runWorkerSecretOrMember(req, SetCellSchema, (body) =>
     Effect.gen(function* () {
       const svc = yield* WebhookService;
-      return yield* svc.setCell({
+      const result = yield* svc.setCell({
         rowId: body.rowId,
         columnId: body.columnId,
         hasValue: "value" in body,
@@ -24,6 +25,11 @@ export function POST(req: Request): Promise<Response> {
         ...(body.status !== undefined ? { status: body.status } : {}),
         ...(body.error !== undefined ? { error: body.error } : {}),
       });
+      if (!("value" in body) || body.status !== "done") return result;
+      const pipelines = yield* PipelineService;
+      const runs = yield* pipelines.createTriggeredRuns({ columnId: body.columnId, rowIds: [body.rowId], trigger: "row_updated" });
+      if (runs.length > 0) yield* Effect.tryPromise(() => inngest.send(runs.map((run) => ({ id: `pipeline-run:${run.id}`, name: "pipeline/run.requested" as const, data: { runId: run.id, workspaceId: run.workspaceId } }))));
+      return result;
     }),
   );
 }

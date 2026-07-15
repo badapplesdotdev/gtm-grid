@@ -9,6 +9,7 @@
   "dependencies": {
     "@gtmgrid/engine": "workspace:*",
     "@gtmgrid/observability": "workspace:*",
+    "@gtmgrid/pipelines": "workspace:*",
     "effect": "^3.21.3",
     "posthog-node": "^5.37.0"
   }

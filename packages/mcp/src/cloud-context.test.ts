@@ -14,6 +14,7 @@ const FULL_CLOUD: McpEnv = {
   GTMGRID_WORKSPACE_ID: "ws_1",
   GTMGRID_CLOUD_PROJECT: "proj_1",
   GTMGRID_CLOUD_TABLE: "tbl_1",
+  GTMGRID_CLOUD_PIPELINE: "pipe_1",
 };
 
 describe("cloudContextFromEnv — explicit, complete cloud context", () => {
@@ -24,6 +25,7 @@ describe("cloudContextFromEnv — explicit, complete cloud context", () => {
       workspaceId: "ws_1",
       projectId: "proj_1",
       tableId: "tbl_1",
+      pipelineId: "pipe_1",
     });
   });
 
@@ -56,6 +58,12 @@ describe("cloudContextFromEnv — explicit, complete cloud context", () => {
     expect(ctx).not.toBeUndefined();
     expect(ctx?.tableId).toBeUndefined();
     expect(ctx?.projectId).toBe("proj_1");
+  });
+
+  it("threads an optional active pipeline independently of the table", () => {
+    const ctx = cloudContextFromEnv({ ...FULL_CLOUD, GTMGRID_CLOUD_TABLE: undefined });
+    expect(ctx?.tableId).toBeUndefined();
+    expect(ctx?.pipelineId).toBe("pipe_1");
   });
 
   it("treats a blank/whitespace field as missing", () => {

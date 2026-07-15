@@ -861,6 +861,14 @@ export function useCloudTablePaged(tableId: Id<"tables"> | null): {
         cursor: pageParam,
       }),
     getNextPageParam: (last) => last.nextCursor,
+    // Realtime is the fast path. This targeted fallback keeps local builds and
+    // temporary socket outages live without polling settled tables.
+    refetchInterval: (query) => {
+      const cached = query.state.data as { pages?: readonly GridPage[] } | undefined;
+      return cached?.pages?.some((page) => page.cells.some((cell) => cell.status === "pending" || cell.status === "running"))
+        ? 750
+        : false;
+    },
   });
 
   // Subscribe once a page is loaded; patch the PAGED cache per event.
@@ -1401,6 +1409,7 @@ export function useCloudGridMutations() {
       }),
     [qc],
   );
+  const refreshTable = useCallback((tableId: string) => refresh(tableId), [refresh]);
 
   // Optimistically apply a structural event to both caches so the change shows
   // INSTANTLY (no waiting on the refetch round-trip), then `refresh` reconciles
@@ -1766,6 +1775,7 @@ export function useCloudGridMutations() {
 
   return {
     setCell,
+    refreshTable,
     addRow,
     addRowsWithCells,
     addColumn,

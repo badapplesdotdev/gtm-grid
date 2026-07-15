@@ -28,6 +28,8 @@ import {
   lifecycleTrialWinback,
   lifecycleWeeklyDigest,
 } from "../../../lib/inngest/functions/lifecycle-crons";
+import { executePipelineBatch, planPipelinePage, planPipelineRun } from "../../../lib/inngest/functions/pipeline-runs";
+import { cleanupPipelineRuns } from "../../../lib/inngest/functions/pipeline-retention";
 
 /**
  * The Inngest serve endpoint. Inngest invokes durable function steps by POSTing
@@ -63,5 +65,9 @@ export const { GET, POST, PUT } = serve({
     lifecycleWeeklyDigest,
     lifecycleDormant,
     lifecycleTrialWinback,
+    planPipelineRun,
+    planPipelinePage,
+    executePipelineBatch,
+    cleanupPipelineRuns,
   ],
 });

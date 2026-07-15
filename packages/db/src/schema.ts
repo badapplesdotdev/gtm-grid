@@ -88,6 +88,54 @@ export const invitationStatus = pgEnum("invitation_status", [
   "revoked",
 ]);
 
+/** Pipeline authoring lifecycle. Draft versions are mutable; deployed versions are immutable. */
+export const pipelineVersionStatus = pgEnum("pipeline_version_status", [
+  "draft",
+  "deployed",
+  "superseded",
+]);
+
+/** Where a pipeline's compute runs. Table data remains cloud-backed in either case. */
+export const pipelineExecutionTarget = pgEnum("pipeline_execution_target", [
+  "local",
+  "cloud",
+]);
+
+/** Durable pipeline invocation state. */
+export const pipelineRunStatus = pgEnum("pipeline_run_status", [
+  "queued",
+  "running",
+  "pausing",
+  "paused",
+  "cancelling",
+  "cancelled",
+  "succeeded",
+  "partial",
+  "failed",
+  "interrupted",
+]);
+
+/** Per-record and per-node terminal/execution state. */
+export const pipelineExecutionStatus = pgEnum("pipeline_execution_status", [
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "skipped",
+  "cancelled",
+]);
+
+/** Remote event sources that may invoke an immutable deployed version. */
+export const pipelineTriggerType = pgEnum("pipeline_trigger_type", [
+  "row_created",
+  "row_updated",
+  "schedule",
+  "webhook",
+  "api",
+  "crm",
+  "signal",
+]);
+
 // ---------------------------------------------------------------------------
 // Better Auth tables (W1 auth task) — users / sessions / accounts / verification
 // ---------------------------------------------------------------------------
@@ -546,6 +594,320 @@ export const cells = pgTable(
     // code. This (table_id, column_id) btree turns those hot paths into a
     // direct index range scan.
     index("cells_by_table_column").on(t.tableId, t.columnId),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Pipelines — reusable, versioned table automations
+// ---------------------------------------------------------------------------
+
+/** A reusable pipeline shown in the project's sidebar. Graphs live on versions. */
+export const pipelines = pgTable(
+  "pipelines",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description"),
+    archived: boolean("archived").notNull().default(false),
+    createdBy: text("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+  },
+  (t) => [
+    index("pipelines_by_project").on(t.projectId, t.archived, t.updatedAt),
+    index("pipelines_by_workspace").on(t.workspaceId),
+  ],
+);
+
+/** Draft and immutable deployed snapshots of one pipeline graph. */
+export const pipelineVersions = pgTable(
+  "pipeline_versions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    pipelineId: uuid("pipeline_id")
+      .notNull()
+      .references(() => pipelines.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    status: pipelineVersionStatus("status").notNull(),
+    /** Strict PipelineGraph JSON. The service parses and validates it on every mutation. */
+    graph: jsonb("graph").notNull(),
+    /** Server-derived execution plan/capability/cost snapshot. Never accepted from clients. */
+    compiledPlan: jsonb("compiled_plan").notNull(),
+    graphHash: text("graph_hash").notNull(),
+    createdBy: text("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    deployedAt: bigint("deployed_at", { mode: "number" }),
+  },
+  (t) => [
+    uniqueIndex("pipeline_versions_by_pipeline_version").on(t.pipelineId, t.version),
+    index("pipeline_versions_by_pipeline_status").on(t.pipelineId, t.status),
+    index("pipeline_versions_by_workspace").on(t.workspaceId),
+  ],
+);
+
+/** A deployed pipeline version attached to a table with stable input/output mappings. */
+export const pipelineBindings = pgTable(
+  "pipeline_bindings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    pipelineId: uuid("pipeline_id")
+      .notNull()
+      .references(() => pipelines.id, { onDelete: "cascade" }),
+    versionId: uuid("version_id")
+      .notNull()
+      .references(() => pipelineVersions.id, { onDelete: "restrict" }),
+    tableId: uuid("table_id")
+      .notNull()
+      .references(() => tables.id, { onDelete: "cascade" }),
+    inputMapping: jsonb("input_mapping").notNull(),
+    outputMapping: jsonb("output_mapping").notNull(),
+    executionTarget: pipelineExecutionTarget("execution_target").notNull(),
+    autoRun: boolean("auto_run").notNull().default(false),
+    enabled: boolean("enabled").notNull().default(true),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("pipeline_bindings_by_pipeline_table").on(t.pipelineId, t.tableId),
+    index("pipeline_bindings_by_table").on(t.tableId),
+    index("pipeline_bindings_by_workspace").on(t.workspaceId),
+  ],
+);
+
+/** A remote trigger pinned to one immutable deployed version. */
+export const pipelineTriggers = pgTable(
+  "pipeline_triggers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    pipelineId: uuid("pipeline_id")
+      .notNull()
+      .references(() => pipelines.id, { onDelete: "cascade" }),
+    versionId: uuid("version_id")
+      .notNull()
+      .references(() => pipelineVersions.id, { onDelete: "restrict" }),
+    bindingId: uuid("binding_id").references(() => pipelineBindings.id, {
+      onDelete: "cascade",
+    }),
+    type: pipelineTriggerType("type").notNull(),
+    config: jsonb("config").notNull(),
+    enabled: boolean("enabled").notNull().default(false),
+    createdBy: text("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+  },
+  (t) => [
+    index("pipeline_triggers_by_pipeline").on(t.pipelineId),
+    index("pipeline_triggers_by_workspace_enabled").on(t.workspaceId, t.enabled),
+  ],
+);
+
+/** One local or cloud invocation, with counters kept small enough for live progress reads. */
+export const pipelineRuns = pgTable(
+  "pipeline_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    pipelineId: uuid("pipeline_id")
+      .notNull()
+      .references(() => pipelines.id, { onDelete: "cascade" }),
+    versionId: uuid("version_id")
+      .notNull()
+      .references(() => pipelineVersions.id, { onDelete: "restrict" }),
+    bindingId: uuid("binding_id").references(() => pipelineBindings.id, {
+      onDelete: "set null",
+    }),
+    triggerId: uuid("trigger_id").references(() => pipelineTriggers.id, {
+      onDelete: "set null",
+    }),
+    tableId: uuid("table_id").references(() => tables.id, {
+      onDelete: "set null",
+    }),
+    executionTarget: pipelineExecutionTarget("execution_target").notNull(),
+    status: pipelineRunStatus("status").notNull(),
+    trigger: text("trigger").notNull(),
+    selection: jsonb("selection").notNull(),
+    requestedBy: text("requested_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    totalRecords: integer("total_records").notNull().default(0),
+    processedRecords: integer("processed_records").notNull().default(0),
+    succeededRecords: integer("succeeded_records").notNull().default(0),
+    failedRecords: integer("failed_records").notNull().default(0),
+    skippedRecords: integer("skipped_records").notNull().default(0),
+    estimatedActions: bigint("estimated_actions", { mode: "number" }).notNull().default(0),
+    reservedActions: bigint("reserved_actions", { mode: "number" }).notNull().default(0),
+    consumedActions: bigint("consumed_actions", { mode: "number" }).notNull().default(0),
+    firstError: text("first_error"),
+    orchestrationId: text("orchestration_id"),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    startedAt: bigint("started_at", { mode: "number" }),
+    finishedAt: bigint("finished_at", { mode: "number" }),
+  },
+  (t) => [
+    index("pipeline_runs_by_pipeline_created").on(t.pipelineId, t.createdAt),
+    index("pipeline_runs_by_workspace_status").on(t.workspaceId, t.status),
+    index("pipeline_runs_by_table_created").on(t.tableId, t.createdAt),
+  ],
+);
+
+/** A keyset-sized shard of a large run, claimed through a renewable worker lease. */
+export const pipelineRunBatches = pgTable(
+  "pipeline_run_batches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => pipelineRuns.id, { onDelete: "cascade" }),
+    ordinal: integer("ordinal").notNull(),
+    selector: jsonb("selector").notNull(),
+    status: pipelineExecutionStatus("status").notNull(),
+    leaseOwner: text("lease_owner"),
+    leaseExpiresAt: bigint("lease_expires_at", { mode: "number" }),
+    attempts: integer("attempts").notNull().default(0),
+    totalRecords: integer("total_records").notNull(),
+    processedRecords: integer("processed_records").notNull().default(0),
+    failedRecords: integer("failed_records").notNull().default(0),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+    finishedAt: bigint("finished_at", { mode: "number" }),
+  },
+  (t) => [
+    uniqueIndex("pipeline_run_batches_by_run_ordinal").on(t.runId, t.ordinal),
+    index("pipeline_run_batches_by_status").on(t.status, t.leaseExpiresAt),
+  ],
+);
+
+/** Per-record outcome. `rowId` is deliberately not an FK so history survives row deletion. */
+export const pipelineRowRuns = pgTable(
+  "pipeline_row_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => pipelineRuns.id, { onDelete: "cascade" }),
+    batchId: uuid("batch_id").references(() => pipelineRunBatches.id, {
+      onDelete: "set null",
+    }),
+    rowId: uuid("row_id").notNull(),
+    status: pipelineExecutionStatus("status").notNull(),
+    inputHash: text("input_hash"),
+    firstError: text("first_error"),
+    traceRef: text("trace_ref"),
+    actionsConsumed: integer("actions_consumed").notNull().default(0),
+    startedAt: bigint("started_at", { mode: "number" }).notNull(),
+    finishedAt: bigint("finished_at", { mode: "number" }),
+  },
+  (t) => [
+    uniqueIndex("pipeline_row_runs_by_run_row").on(t.runId, t.rowId),
+    index("pipeline_row_runs_by_run_status").on(t.runId, t.status),
+  ],
+);
+
+/** Minimal hot execution receipt; verbose input/output traces are stored separately. */
+export const pipelineNodeRuns = pgTable(
+  "pipeline_node_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => pipelineRuns.id, { onDelete: "cascade" }),
+    rowRunId: uuid("row_run_id")
+      .notNull()
+      .references(() => pipelineRowRuns.id, { onDelete: "cascade" }),
+    rowId: uuid("row_id").notNull(),
+    nodeId: text("node_id").notNull(),
+    generation: integer("generation").notNull().default(0),
+    status: pipelineExecutionStatus("status").notNull(),
+    error: text("error"),
+    inputData: jsonb("input_data"),
+    outputData: jsonb("output_data"),
+    durationMs: integer("duration_ms"),
+    actionConsumed: boolean("action_consumed").notNull().default(false),
+    startedAt: bigint("started_at", { mode: "number" }).notNull(),
+    finishedAt: bigint("finished_at", { mode: "number" }),
+  },
+  (t) => [
+    uniqueIndex("pipeline_node_runs_once").on(t.runId, t.rowId, t.nodeId, t.generation),
+    index("pipeline_node_runs_by_run_node_status").on(t.runId, t.nodeId, t.status),
+  ],
+);
+
+/** Exactly-once action receipts. Grid writes originating from these runs are not metered again. */
+export const pipelineActionLedger = pgTable(
+  "pipeline_action_ledger",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => pipelineRuns.id, { onDelete: "cascade" }),
+    receiptKey: text("receipt_key").notNull(),
+    rowId: uuid("row_id").notNull(),
+    nodeId: text("node_id").notNull(),
+    generation: integer("generation").notNull().default(0),
+    actions: integer("actions").notNull().default(1),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("pipeline_action_ledger_receipt").on(t.receiptKey),
+    index("pipeline_action_ledger_by_workspace_created").on(t.workspaceId, t.createdAt),
+    index("pipeline_action_ledger_by_run").on(t.runId),
+  ],
+);
+
+/** Quota held for the next bounded tranche of a large cloud run. */
+export const pipelineActionReservations = pgTable(
+  "pipeline_action_reservations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => pipelineRuns.id, { onDelete: "cascade" }),
+    actions: integer("actions").notNull(),
+    consumed: integer("consumed").notNull().default(0),
+    released: boolean("released").notNull().default(false),
+    expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  },
+  (t) => [
+    index("pipeline_action_reservations_by_workspace").on(t.workspaceId, t.released, t.expiresAt),
+    index("pipeline_action_reservations_by_run").on(t.runId),
   ],
 );
 

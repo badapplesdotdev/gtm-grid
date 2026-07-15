@@ -92,6 +92,14 @@ const SearchIcon = (
 const FnGlyph = (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>
 );
+const PipelineGlyph = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <circle cx="5" cy="6" r="2.25" />
+    <circle cx="19" cy="6" r="2.25" />
+    <circle cx="19" cy="18" r="2.25" />
+    <path d="M7.25 6h5.5a4 4 0 0 1 4 4v5.75" />
+  </svg>
+);
 
 // Category glyphs, the function icon, and the categorizer live in ./FnIcon
 // (eager module) so the DataGrid headers can render provider identity without
@@ -140,6 +148,7 @@ export function AddColumnPopover({
   onClose,
   onAdded,
   onUseFunction,
+  onUsePipeline,
   crm,
 }: {
   tableId: string;
@@ -147,6 +156,8 @@ export function AddColumnPopover({
   onClose: () => void;
   onAdded: () => void;
   onUseFunction: () => void;
+  /** Opens the pipeline library with this table retained as attachment context. */
+  onUsePipeline?: (outputColumnId: string) => void;
   /** Present only on synced tables — adds the "From {CRM}" section. */
   crm?: AddColumnCrmSource;
 }) {
@@ -194,6 +205,18 @@ export function AddColumnPopover({
       await gridApi.addColumn(tableId, { name: colName, type });
       onAdded();
       onClose();
+    } catch {
+      setSaving(false);
+    }
+  };
+
+  const addPipelineColumn = async () => {
+    if (!onUsePipeline || saving) return;
+    setSaving(true);
+    try {
+      const column = await gridApi.addColumn(tableId, { name: name.trim() || "Pipeline output", type: "json" });
+      onAdded();
+      onUsePipeline(column.id);
     } catch {
       setSaving(false);
     }
@@ -278,9 +301,19 @@ export function AddColumnPopover({
           </div>
         )}
 
-        {/* Actions — enrichment / AI route to the Functions browser */}
+        {/* Actions — pipelines retain this table as attachment context. */}
         <div className="acx-group">
-          <div className="acx-group-label">Enrichment &amp; AI</div>
+          <div className="acx-group-label">Automation &amp; enrichment</div>
+          {onUsePipeline && (
+            <button className="acx-item" onClick={() => void addPipelineColumn()} disabled={saving}>
+              <span className="acx-item-icon acx-icon-pipeline">{PipelineGlyph}</span>
+              <span className="acx-item-text">
+                <span className="acx-item-title">Pipeline</span>
+                <span className="acx-item-sub">Use an existing pipeline or create a new one</span>
+              </span>
+              <span className="acx-item-caret">{Chevron}</span>
+            </button>
+          )}
           <button className="acx-item" onClick={onUseFunction}>
             <span className="acx-item-icon acx-icon-accent">{CATEGORY_ICON.AI}</span>
             <span className="acx-item-text">
@@ -325,7 +358,7 @@ export function AddColumnPopover({
 
 // ─── Functions browser ───────────────────────────────────
 
-interface Fn {
+export interface FunctionChoice {
   fnKey: string;
   provider: string;
   providerName: string;
@@ -354,15 +387,19 @@ export function FunctionsModal({
   connectors,
   onClose,
   onAdded,
+  onSelected,
   onOpenAiSettings,
 }: {
-  tableId: string;
+  tableId?: string;
   connectors: ConnectorInfo[];
   onClose: () => void;
   /** Fired after the column is created. Carries the new column (desktop shape)
    *  so the parent can open the edit panel on it — the Clay flow: picking a
    *  function ADDS the column immediately, configuration happens in the rail. */
-  onAdded: (col?: Column) => void;
+  onAdded?: (col?: Column) => void;
+  /** Selection-only mode used by the pipeline canvas. Configuration continues
+   * in the workflow node inspector instead of creating a table column. */
+  onSelected?: (fn: FunctionChoice) => void;
   onOpenAiSettings?: () => void;
 }) {
   const gridApi = useColumnApi();
@@ -371,8 +408,14 @@ export function FunctionsModal({
 
   // Add the chosen function as a column with default config, then hand the new
   // column to the parent so the ColumnEditPanel opens for mapping/settings.
-  const useFn = async (f: Fn) => {
+  const useFn = async (f: FunctionChoice) => {
     if (adding) return;
+    if (onSelected) {
+      onSelected(f);
+      onClose();
+      return;
+    }
+    if (!tableId || !onAdded) return;
     setAdding(true);
     setAddErr("");
     try {
@@ -397,7 +440,7 @@ export function FunctionsModal({
       setAdding(false);
     }
   };
-  const fns: Fn[] = useMemo(
+  const fns: FunctionChoice[] = useMemo(
     () =>
       connectors.flatMap((c) =>
         c.methods.map((m) => ({
@@ -420,7 +463,7 @@ export function FunctionsModal({
 
   const [query, setQuery] = useState("");
   const [nav, setNav] = useState<string>("All"); // "All" | category | "__provider"
-  const [selected, setSelected] = useState<Fn | null>(null);
+  const [selected, setSelected] = useState<FunctionChoice | null>(null);
 
   const q = query.trim().toLowerCase();
   const matched = q
@@ -431,12 +474,12 @@ export function FunctionsModal({
   const presentCats = CATEGORY_ORDER.filter((cat) => fns.some((f) => f.category === cat));
 
   // Build the grouped middle list depending on the nav selection.
-  const groups: { label: string; items: Fn[] }[] = useMemo(() => {
+  const groups: { label: string; items: FunctionChoice[] }[] = useMemo(() => {
     let list = matched;
     if (nav !== "All" && nav !== "__provider") list = list.filter((f) => f.category === nav);
 
     if (nav === "__provider") {
-      const byProvider = new Map<string, Fn[]>();
+      const byProvider = new Map<string, FunctionChoice[]>();
       for (const f of list) {
         if (!byProvider.has(f.providerName)) byProvider.set(f.providerName, []);
         byProvider.get(f.providerName)!.push(f);
@@ -526,12 +569,14 @@ export function FunctionsModal({
                 busy={adding}
                 err={addErr}
                 onUse={() => void useFn(selected)}
+                actionLabel={onSelected ? "Add to pipeline" : "Add to table"}
+                actionHint={onSelected ? "Adds this function as a node, then opens its workflow configuration." : "Adds the column right away — map inputs and run settings in the editor that opens."}
                 onOpenAiSettings={onOpenAiSettings}
               />
             ) : (
               <div className="fnx-detail-empty">
                 <div className="fnx-detail-empty-title">Select a function</div>
-                <div className="fnx-detail-empty-sub">Choose from the list to see its inputs, then add it as a column and map it in the editor</div>
+                <div className="fnx-detail-empty-sub">{onSelected ? "Choose from the list to inspect its inputs, then add it as a workflow node." : "Choose from the list to see its inputs, then add it as a column and map it in the editor"}</div>
               </div>
             )}
           </div>
@@ -551,12 +596,16 @@ function FunctionDetail({
   busy,
   err,
   onUse,
+  actionLabel,
+  actionHint,
   onOpenAiSettings,
 }: {
-  fn: Fn;
+  fn: FunctionChoice;
   busy: boolean;
   err: string;
   onUse: () => void;
+  actionLabel: string;
+  actionHint: string;
   onOpenAiSettings?: () => void;
 }) {
   const props = (fn.input?.properties ?? {}) as Record<string, { description?: string; type?: string }>;
@@ -622,9 +671,9 @@ function FunctionDetail({
       {err && <div className="conn-err">{err}</div>}
 
       <button className="btn btn-primary fnx-cfg-add" onClick={onUse} disabled={busy}>
-        {busy ? "Adding…" : "Add to table"}
+        {busy ? "Adding…" : actionLabel}
       </button>
-      <p className="params-hint fnx-cfg-addhint">Adds the column right away — map inputs and run settings in the editor that opens.</p>
+      <p className="params-hint fnx-cfg-addhint">{actionHint}</p>
     </div>
   );
 }

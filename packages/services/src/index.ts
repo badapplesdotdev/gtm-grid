@@ -147,6 +147,20 @@ export {
   projectRepoLayer,
 } from "./repositories/project-repo.js";
 export {
+  type CompiledPipelineSnapshot,
+  type PipelineBindingRecord,
+  PipelineActionsLimitError,
+  type PipelineRecord,
+  PipelineRepo,
+  PipelineRepoError,
+  type PipelineRepoFixtures,
+  PipelineRepoLive,
+  pipelineRepoLayer,
+  type PipelineRunRecord,
+  type PipelineVersionRecord,
+  type PipelineVersionStatus,
+} from "./repositories/pipeline-repo.js";
+export {
   type NewTable,
   type Table,
   TableRepo,
@@ -271,6 +285,12 @@ export {
   type WorkerTableMeta,
 } from "./services/webhook-service.js";
 export { ExtensionService } from "./services/extension-service.js";
+export {
+  PipelineBindingError,
+  PipelineInvalidGraphError,
+  PipelineNotFoundError,
+  PipelineService,
+} from "./services/pipeline-service.js";
 // --- Cloud-access gate (entitlement) -----------------------------------------
 export {
   EntitlementService,

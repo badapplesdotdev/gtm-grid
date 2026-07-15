@@ -57,6 +57,7 @@ import {
   useCloudTablePaged,
 } from "./useCloudGrid";
 import { isCloudTableMissing } from "../tableTree";
+import { useTablePipelineBindings } from "./usePipelines";
 
 /** Fixed cloud column width (px) — cloud columns are not resizable. */
 const CLOUD_COL_W = 180;
@@ -176,6 +177,8 @@ interface CloudGridProps {
   connectors: ConnectorInfo[];
   /** Open the AI-provider settings (the Functions browser's "configure AI" link). */
   onOpenAiSettings?: () => void;
+  /** Open the pipeline picker in the context of this table. */
+  onAutomate?: (tableId: Id<"tables">, outputColumnId?: string) => void;
   /**
    * A monotonically-increasing token that, when it changes to a truthy value,
    * auto-opens the webhook setup form for the current table.
@@ -194,12 +197,17 @@ export function CloudGrid({
   workspaceId,
   connectors,
   onOpenAiSettings,
+  onAutomate,
   openWebhookToken,
   onMissing,
 }: CloudGridProps) {
   const { data, loadMore, hasMore, isLoadingMore } = useCloudTablePaged(tableId);
   const session = useCloudSession();
   const crmQc = useQueryClient();
+  const pipelineBindings = useTablePipelineBindings(tableId === null ? null : String(tableId));
+  const pipelineOutputColumnIds = useMemo(() => new Set(
+    (pipelineBindings.data ?? []).flatMap((binding) => Object.values(binding.outputMapping)),
+  ), [pipelineBindings.data]);
 
   // The table's CRM binding (if any) powers the add-column popover's
   // "From {CRM}" section — one more source field, server-backfilled by the
@@ -265,6 +273,7 @@ export function CloudGrid({
   }, [crmBinding, workspaceId, crmQc, tableId]);
   const {
     setCell,
+    refreshTable,
     addRow,
     addColumn,
     updateColumn,
@@ -286,7 +295,7 @@ export function CloudGrid({
   const [dedupeOpen, setDedupeOpen] = useState(false);
   // Cell-details drawer (view a function/HTTP cell's full response) + expanded
   // editor (long text). Mirrors the local grid so synced responses are inspectable.
-  const [detail, setDetail] = useState<{ columnName: string; value: unknown } | null>(null);
+  const [detail, setDetail] = useState<{ rowId: string; columnId: string; columnName: string; value: unknown } | null>(null);
   const [cellExpand, setCellExpand] = useState<{
     rowId: string;
     colId: string;
@@ -495,6 +504,16 @@ export function CloudGrid({
     [tableId, session, cascadeFrom],
   );
 
+  const runPipelineCell = useCallback((rowId: string, columnId: string) => {
+    const key = `${rowId}:${columnId}`;
+    setRunningCells((current) => new Set(current).add(key));
+    setActionError(null);
+    void apiClient.pipelines.runOutputCell.mutate({ rowId, columnId })
+      .then(() => tableId === null ? undefined : refreshTable(String(tableId)))
+      .catch((error) => setActionError(error instanceof Error ? error.message : "Failed to run pipeline"))
+      .finally(() => setRunningCells((current) => { const next = new Set(current); next.delete(key); return next; }));
+  }, [refreshTable, tableId]);
+
   // Run an explicit set of function cells (range selection's "Run N cells"):
   // one scoped force+rowIds run per column, then cascade the affected columns/rows.
   const runCells = useCallback(
@@ -541,27 +560,37 @@ export function CloudGrid({
   const handleSetCell = useCallback(
     (rowId: string, colId: string, value: string) => {
       if (tableId === null) return;
+      const startsPipeline = (pipelineBindings.data ?? []).some((binding) => Object.values(binding.inputMapping).includes(colId));
       void guard(
-        () => setCell(tableId, rowId as Id<"rows">, colId as Id<"columns">, value),
+        async () => {
+          await setCell(tableId, rowId as Id<"rows">, colId as Id<"columns">, value);
+          if (startsPipeline) await refreshTable(String(tableId));
+        },
         "set cell",
       );
     },
-    [guard, setCell, tableId],
+    [guard, pipelineBindings.data, refreshTable, setCell, tableId],
   );
   const handleClearCell = useCallback(
     (rowId: string, colId: string) => {
       if (tableId === null) return;
+      const startsPipeline = (pipelineBindings.data ?? []).some((binding) => Object.values(binding.inputMapping).includes(colId));
       void guard(
-        () => setCell(tableId, rowId as Id<"rows">, colId as Id<"columns">, ""),
+        async () => {
+          await setCell(tableId, rowId as Id<"rows">, colId as Id<"columns">, "");
+          if (startsPipeline) await refreshTable(String(tableId));
+        },
         "clear cell",
       );
     },
-    [guard, setCell, tableId],
+    [guard, pipelineBindings.data, refreshTable, setCell, tableId],
   );
-  const handleOpenCellDetails = useCallback((col: Column, cell: Cell | undefined) => {
+  const handleOpenCellDetails = useCallback((col: Column, cell: Cell | undefined, rowId?: string) => {
     // One right rail at a time: the details drawer overlaps the edit panel.
     setEditCol(null);
     setDetail({
+      rowId: rowId ?? "",
+      columnId: col.id,
       columnName: col.name,
       value: cell?.value ?? (cell?.error ? { error: cell.error } : null),
     });
@@ -768,6 +797,15 @@ export function CloudGrid({
     // menu when the toolbar is narrow (e.g. the agent panel squeezing the grid).
     toolbarActions: [
       {
+        id: "automate",
+        label: "Automate",
+        icon: (
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M7 6h10M6 8l5 8M18 8l-5 8"/></svg>
+        ),
+        onClick: () => onAutomate?.(table.id as Id<"tables">),
+        title: "Attach or create a reusable pipeline",
+      },
+      {
         id: "dedupe",
         label: "Dedupe",
         side: "left",
@@ -805,6 +843,8 @@ export function CloudGrid({
     runRows,
     runColumn,
     runCell,
+    pipelineOutputColumnIds,
+    runPipelineCell,
     runCells,
     setCell: handleSetCell,
     deleteRow: (rowId) => void guard(() => deleteRow(tableId, rowId as Id<"rows">), "delete row"),
@@ -841,7 +881,13 @@ export function CloudGrid({
 
       {detail && (
         <CellDetails
-          source={detail}
+          source={{
+            columnName: detail.columnName,
+            value: (() => {
+              const live = table.rows.find((row) => row.id === detail.rowId)?.cells[detail.columnId];
+              return live?.value ?? (live?.error ? { error: live.error } : detail.value);
+            })(),
+          }}
           columns={table.columns.map((c) => ({ id: c.id, name: c.name }))}
           onClose={() => setDetail(null)}
           onCreate={(path, label) => guard(() => promoteCreate(path, label), "add column")}
@@ -890,6 +936,10 @@ export function CloudGrid({
           onClose={() => setShowAddCol(false)}
           onAdded={() => setShowAddCol(false)}
           onUseFunction={() => { setShowAddCol(false); setShowFunctions(true); }}
+          onUsePipeline={(outputColumnId) => {
+            setShowAddCol(false);
+            onAutomate?.(table.id as Id<"tables">, outputColumnId);
+          }}
         />
       )}
 
