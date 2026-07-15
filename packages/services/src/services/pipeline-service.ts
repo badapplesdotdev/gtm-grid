@@ -4,6 +4,7 @@ import {
   PipelineCompileError,
   PipelinePatchError,
   applyPipelineGraphPatches,
+  chunkPipelineSelection,
   compilePipeline,
   PIPELINE_RESULT_OUTPUT_KEY,
   pipelineGraphSchema,
@@ -304,7 +305,7 @@ export class PipelineService extends Effect.Service<PipelineService>()(
           && binding.executionTarget === "cloud"
           && (input.columnId === undefined || Object.values(binding.inputMapping).includes(input.columnId)),
         );
-        return yield* Effect.forEach(runnable, (binding) => Effect.gen(function* () {
+        const triggered = yield* Effect.forEach(runnable, (binding) => Effect.gen(function* () {
           // Bindings retain their table mappings, while execution follows the
           // current deployed graph. This self-heals attachments created before
           // deployments automatically advanced their saved version id.
@@ -323,20 +324,29 @@ export class PipelineService extends Effect.Service<PipelineService>()(
             createdAt: binding.createdAt,
             updatedAt: Date.now(),
           });
-          const run = yield* createRun({
-            pipelineId: binding.pipelineId,
-            versionId,
-            bindingId: activeBinding.id,
-            tableId: binding.tableId,
-            executionTarget: binding.executionTarget,
-            trigger: input.trigger,
-            selection: { rowIds: [...input.rowIds] },
-            totalRecords: input.rowIds.length,
-          });
+          // Split a large trigger batch across several runs so no single
+          // `pipeline_runs.selection` jsonb column holds an unbounded row-id
+          // array. Each chunk covers a distinct slice; together they cover
+          // every triggered row exactly once.
+          const runs = yield* Effect.forEach(
+            chunkPipelineSelection(input.rowIds),
+            (chunk) => createRun({
+              pipelineId: binding.pipelineId,
+              versionId,
+              bindingId: activeBinding.id,
+              tableId: binding.tableId,
+              executionTarget: binding.executionTarget,
+              trigger: input.trigger,
+              selection: { rowIds: [...chunk] },
+              totalRecords: chunk.length,
+            }),
+            { concurrency: 1 },
+          );
           const cells = yield* repo.setOutputStatus({ workspaceId: binding.workspaceId, tableId: binding.tableId, rowIds: input.rowIds, columnIds: [...new Set(Object.values(binding.outputMapping))], status: "pending", now: Date.now() });
           yield* Effect.forEach(cells, (cell) => realtime.publish({ workspaceId: binding.workspaceId, tableId: binding.tableId, event: { type: "cell.upsert", cell } }).pipe(Effect.catchTag("RealtimePublisherError", () => Effect.void)), { concurrency: 20, discard: true });
-          return run;
+          return runs;
         }), { concurrency: 10 });
+        return triggered.flat();
       });
 
       const listTableBindings = (tableId: string) => Effect.gen(function* () {

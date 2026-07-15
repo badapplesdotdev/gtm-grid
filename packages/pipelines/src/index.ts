@@ -2,6 +2,7 @@ export * from "./types.js";
 export * from "./schema.js";
 export * from "./validate.js";
 export * from "./compile.js";
+export * from "./execute.js";
 export * from "./patch.js";
 export * from "./run.js";
 export * from "./batching.js";

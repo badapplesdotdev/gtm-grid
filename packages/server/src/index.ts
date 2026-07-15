@@ -42,8 +42,7 @@ import { detectAgents, streamClaude, streamCodex, streamCursor, setAgentPath, re
 import { localProviderEnv, resolveCloudProviderEnv } from "./provider-env.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, previewCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
-import { compilePipeline, pipelineGraphSchema, runPipelineRecord, type PipelineNodeExecutionContext, type PipelineNodeExecutor } from "@gtmgrid/pipelines";
-import { pipelineTemplateText } from "@gtmgrid/pipelines/template-text";
+import { compilePipeline, makePipelineNodeExecutor, pipelineGraphSchema, runPipelineRecord, type PipelineNodeExecutor } from "@gtmgrid/pipelines";
 import { requiredInputKeys, resolveOptionArgs } from "./option-args.js";
 import { corsHeadersFor, isLoopbackHost, isOriginAllowed } from "./cors.js";
 import { Semaphore } from "./semaphore.js";
@@ -808,51 +807,10 @@ route("POST", "/api/options", async (_p, body) => {
 // inputs are read from Postgres and statuses/results stream back live to all
 // members via the realtime broadcast the server emits. The registry + AI config
 // are the sidecar's existing ones, so connectors/AI columns behave identically.
-function pipelinePathValue(source: unknown, path: string): unknown {
-  return path.split(".").reduce<unknown>((value, key) =>
-    typeof value === "object" && value !== null ? (value as Record<string, unknown>)[key] : undefined, source);
-}
-
-function pipelineResolveTemplates(value: unknown, scope: Record<string, unknown>): unknown {
-  if (typeof value === "string") {
-    const exact = value.match(/^\{\{\s*([^}]+?)\s*\}\}$/);
-    if (exact?.[1]) return pipelinePathValue(scope, exact[1]);
-    return value.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_match, path: string) => String(pipelinePathValue(scope, path) ?? ""));
-  }
-  if (Array.isArray(value)) return value.map((item) => pipelineResolveTemplates(item, scope));
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, pipelineResolveTemplates(item, scope)]));
-  return value;
-}
-
-function pipelineResolveExpressionTemplates(expression: string, scope: Record<string, unknown>): string {
-  return expression.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_match, path: string) =>
-    JSON.stringify(pipelinePathValue(scope, path)) ?? "undefined",
-  );
-}
-
-const localPipelineExecutor: PipelineNodeExecutor = {
-  execute: async (context: PipelineNodeExecutionContext) => {
-    const scope = { ...context.rootInput, inputs: context.rootInput, input: context.rootInput, upstream: context.upstream, nodes: context.previousOutputs };
-    const inputs = { ...context.rootInput, ...context.upstream, nodes: context.previousOutputs };
-    const node = context.node;
-    if (node.type === "tool") return { output: await engine.dispatch(node.config.provider, node.config.method, pipelineResolveTemplates(node.config.params, scope) as Record<string, unknown>) };
-    if (node.type === "ai") {
-      const resolved = pipelineResolveTemplates({ provider: node.config.provider, model: node.config.model, prompt: node.config.prompt, system: node.config.system }, scope) as Record<string, unknown>;
-      const prompt = pipelineTemplateText(resolved.prompt);
-      if (!prompt.trim()) throw new Error(`AI node ${node.name} prompt resolved to an empty value. Choose a populated source column or earlier node output.`);
-      const output = await engine.dispatch("ai", "generate", { ...resolved, prompt, ...(resolved.system === undefined ? {} : { system: pipelineTemplateText(resolved.system) }) });
-      return { output: node.config.responseFormat !== "json" && output && typeof output === "object" && "text" in output ? (output as { text: unknown }).text : output };
-    }
-    if (node.type === "http") return { output: await engine.dispatch("http", "request", pipelineResolveTemplates(node.config, scope) as Record<string, unknown>) };
-    if (node.type === "formula" || node.type === "condition") {
-      const expression = pipelineResolveExpressionTemplates(node.config.expression, scope);
-      const output = await runFunction({ code: `function(inputs) { with (inputs) { return (${expression}); } }`, inputs, providers: registry.providerMap(), dispatch: engine.dispatch });
-      return node.type === "condition" ? { output, branch: output ? "true" : "false" } : { output };
-    }
-    if (node.type === "code") return { output: await runFunction({ code: node.config.source, inputs, providers: registry.providerMap(), dispatch: engine.dispatch }) };
-    throw new Error(`Pipeline node type ${node.type} is not supported by the local sidecar.`);
-  },
-};
+const localPipelineExecutor: PipelineNodeExecutor = makePipelineNodeExecutor(
+  { dispatch: engine.dispatch, providerMap: () => registry.providerMap(), runFunction },
+  { unsupportedMessage: (type) => `Pipeline node type ${type} is not supported by the local sidecar.` },
+);
 
 route("POST", "/api/pipelines/run-record", async (_p, body) => {
   const parsed = pipelineGraphSchema.safeParse(body?.graph);

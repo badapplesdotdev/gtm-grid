@@ -145,22 +145,8 @@ export function ShareModal({
 
         {error && <div className="import-error">{error}</div>}
 
-        <div
-          style={{
-            display: "flex",
-            gap: 10,
-            alignItems: "flex-start",
-            padding: "10px 14px",
-            margin: "16px 0",
-            borderRadius: 8,
-            background: "rgba(217, 119, 6, 0.10)",
-            border: "1px solid rgba(217, 119, 6, 0.30)",
-            color: "var(--text-2, #b88)",
-            fontSize: 13,
-            lineHeight: 1.5,
-          }}
-        >
-          <span aria-hidden style={{ fontSize: 15 }}>⚠️</span>
+        <div className="import-warn">
+          <span aria-hidden className="import-warn-icon">⚠️</span>
           <span>
             Anyone with the link can view <strong>all data</strong> in this
             table. It shows a snapshot frozen now — later edits won&apos;t change

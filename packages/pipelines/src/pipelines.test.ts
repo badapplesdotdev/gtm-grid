@@ -4,6 +4,7 @@ import {
   PIPELINE_RESULT_OUTPUT_KEY,
   PipelineCompileError,
   applyPipelineGraphPatches,
+  chunkPipelineSelection,
   compilePipeline,
   planPipelineBatchWindows,
   pipelineColumnVariables,
@@ -117,6 +118,16 @@ describe("pipeline batch planning", () => {
   it("clamps invalid and oversized batch sizes", () => {
     expect(planPipelineBatchWindows(3, 0)).toHaveLength(3);
     expect(planPipelineBatchWindows(1_001, 50_000)).toHaveLength(2);
+  });
+
+  it("caps an explicit selection into bounded, exhaustive, non-overlapping windows", () => {
+    expect(chunkPipelineSelection([], 3)).toEqual([]);
+    expect(chunkPipelineSelection(["a", "b"], 5)).toEqual([["a", "b"]]);
+    const ids = Array.from({ length: 12_000 }, (_, i) => `row-${i}`);
+    const chunks = chunkPipelineSelection(ids); // default 5_000
+    expect(chunks.map((c) => c.length)).toEqual([5_000, 5_000, 2_000]);
+    expect(chunks.flat()).toEqual(ids); // covers every row exactly once, in order
+    expect(chunks.every((c) => c.length <= 5_000)).toBe(true);
   });
 });
 

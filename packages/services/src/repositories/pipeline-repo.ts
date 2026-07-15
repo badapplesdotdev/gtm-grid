@@ -604,15 +604,28 @@ export const PipelineRepoLive: Layer.Layer<PipelineRepo, never, DbClient> =
           Effect.tryPromise({
             try: async () => {
               const startedAt = input.startedAt ?? input.finishedAt ?? Date.now();
+              // Persist the (potentially large) jsonb payload only on the
+              // terminal transition. The intermediate "running" write is a
+              // small status marker — skipping its input/output keeps a node's
+              // TOAST-backed columns written exactly once per generation instead
+              // of being rewritten (running -> terminal) on every node.
+              const isTerminal = input.status !== "running";
+              const inputData = isTerminal ? compactPipelineLogValue(input.input) : null;
+              const outputData = isTerminal ? compactPipelineLogValue(input.output) : null;
+              const durationMs = input.finishedAt === null ? null : Math.max(0, input.finishedAt - startedAt);
               await db.insert(schema.pipelineNodeRuns).values({
                 workspaceId: input.workspaceId, runId: input.runId, rowRunId: input.rowRunId, rowId: input.rowId,
                 nodeId: input.nodeId, status: input.status, error: input.error, actionConsumed: input.actionConsumed,
-                inputData: compactPipelineLogValue(input.input), outputData: compactPipelineLogValue(input.output),
+                inputData, outputData,
                 startedAt, finishedAt: input.finishedAt,
-                durationMs: input.finishedAt === null ? null : Math.max(0, input.finishedAt - startedAt),
+                durationMs,
               }).onConflictDoUpdate({
                 target: [schema.pipelineNodeRuns.runId, schema.pipelineNodeRuns.rowId, schema.pipelineNodeRuns.nodeId, schema.pipelineNodeRuns.generation],
-                set: { status: input.status, error: input.error ?? null, inputData: compactPipelineLogValue(input.input), outputData: compactPipelineLogValue(input.output), actionConsumed: input.actionConsumed, startedAt, finishedAt: input.finishedAt, durationMs: input.finishedAt === null ? null : Math.max(0, input.finishedAt - startedAt) },
+                // On the running -> terminal update, only the terminal write
+                // carries jsonb; the running upsert leaves prior columns intact.
+                set: isTerminal
+                  ? { status: input.status, error: input.error ?? null, inputData, outputData, actionConsumed: input.actionConsumed, startedAt, finishedAt: input.finishedAt, durationMs }
+                  : { status: input.status, error: input.error ?? null, actionConsumed: input.actionConsumed, startedAt, finishedAt: input.finishedAt, durationMs },
               });
             },
             catch: fail("pipeline node run record"),
@@ -629,16 +642,11 @@ export const PipelineRepoLive: Layer.Layer<PipelineRepo, never, DbClient> =
                 actionsConsumed: input.actionsConsumed, startedAt: input.startedAt, finishedAt: input.finishedAt,
               }).onConflictDoNothing({ target: [schema.pipelineRowRuns.runId, schema.pipelineRowRuns.rowId] }).returning({ id: schema.pipelineRowRuns.id }))[0];
               if (rowRun === undefined) return false;
-              if (input.traces.length > 0) await tx.insert(schema.pipelineNodeRuns).values(input.traces.map((trace) => ({
-                workspaceId: input.workspaceId, runId: input.runId, rowRunId: rowRun.id, rowId: input.rowId,
-                nodeId: trace.nodeId, status: trace.status, error: trace.error,
-                inputData: compactPipelineLogValue(trace.input), outputData: compactPipelineLogValue(trace.output),
-                durationMs: trace.startedAt === null || trace.finishedAt === null ? null : Math.max(0, trace.finishedAt - trace.startedAt),
-                actionConsumed: trace.actionConsumed, startedAt: trace.startedAt ?? input.startedAt, finishedAt: trace.finishedAt,
-              }))).onConflictDoUpdate({
-                target: [schema.pipelineNodeRuns.runId, schema.pipelineNodeRuns.rowId, schema.pipelineNodeRuns.nodeId, schema.pipelineNodeRuns.generation],
-                set: { status: sql`excluded.status`, error: sql`excluded.error`, inputData: sql`excluded.input_data`, outputData: sql`excluded.output_data`, durationMs: sql`excluded.duration_ms`, actionConsumed: sql`excluded.action_consumed`, startedAt: sql`excluded.started_at`, finishedAt: sql`excluded.finished_at` },
-              });
+              // Node-level rows (incl. their compacted input/output jsonb) are
+              // already persisted by `recordNodeRun` as each node reaches a
+              // terminal state, so we do NOT re-insert `input.traces` here.
+              // Re-writing them was a redundant third write per node and a
+              // needless source of TOAST churn on pipeline_node_runs.
               await tx.update(schema.pipelineRunBatches).set({
                 processedRecords: sql`${schema.pipelineRunBatches.processedRecords} + 1`,
                 failedRecords: input.status === "failed" ? sql`${schema.pipelineRunBatches.failedRecords} + 1` : schema.pipelineRunBatches.failedRecords,
