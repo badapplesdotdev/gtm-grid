@@ -48,6 +48,7 @@ export interface GridRowInteraction {
    *  before the per-cell `status: "running"` realtime patches arrive. */
   readonly runningColId: string | null;
   readonly waitingByCol: ReadonlyMap<string, string[]>;
+  readonly pinnedLeftByCol: ReadonlyMap<string, number>;
 }
 
 /** The stable callbacks the row + its cells fire (all referentially stable). */
@@ -89,7 +90,7 @@ function GridRowInner({
   interaction,
   handlers,
 }: GridRowProps) {
-  const { selRect, sel, activeCell, runningCells, runningColId, waitingByCol, presenceByCell } = interaction;
+  const { selRect, sel, activeCell, runningCells, runningColId, waitingByCol, presenceByCell, pinnedLeftByCol } = interaction;
   return (
     <tr
       role="row"
@@ -144,6 +145,7 @@ function GridRowInner({
             isActiveCell={isActiveCell}
             running={cellIsRunning(runningCells, runningColId, row.id, col.id, cell?.status)}
             waiting={waitingByCol.has(col.id)}
+            pinnedLeft={pinnedLeftByCol.get(col.id)}
             editSignal={isActiveCell ? interaction.editSignal : 0}
             editSeed={isActiveCell ? interaction.getEditSeed() : undefined}
             tabIndex={handlers.cellTabIndex(rowIdx, vc.index)}

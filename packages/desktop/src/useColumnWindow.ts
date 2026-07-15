@@ -68,6 +68,9 @@ interface UseColumnWindowArgs {
    * scroll step, lengthening the paint-in blank rather than shortening it.
    */
   overscan?: number;
+  /** Render every column. Used while sticky pinned columns are active because
+   *  a pinned cell must remain mounted after it leaves the horizontal viewport. */
+  forceAll?: boolean;
 }
 
 /**
@@ -81,6 +84,7 @@ export function useColumnWindow({
   scrollRef,
   getColumnWidth,
   overscan = 3,
+  forceAll = false,
 }: UseColumnWindowArgs): ColumnWindow {
   const virtualizer = useVirtualizer({
     horizontal: true,
@@ -95,8 +99,18 @@ export function useColumnWindow({
     paddingStart: 0,
   });
 
-  const virtualColumns = virtualizer.getVirtualItems();
   const totalDataWidth = virtualizer.getTotalSize();
+  if (forceAll) {
+    let start = 0;
+    const virtualColumns = Array.from({ length: count }, (_, index) => {
+      const size = getColumnWidth(index);
+      const item = { index, key: index, start, end: start + size, size, lane: 0 };
+      start += size;
+      return item;
+    });
+    return { virtualColumns, spacers: { left: 0, right: 0 }, totalDataWidth: start };
+  }
+  const virtualColumns = virtualizer.getVirtualItems();
   const spacers = computeColumnSpacers(virtualColumns, totalDataWidth);
 
   return { virtualColumns, spacers, totalDataWidth };
