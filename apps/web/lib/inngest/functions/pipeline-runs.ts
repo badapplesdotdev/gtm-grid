@@ -36,6 +36,17 @@ type RunEvent = z.infer<typeof runEventSchema>;
 type PageEvent = z.infer<typeof pageEventSchema>;
 type BatchEvent = z.infer<typeof batchEventSchema>;
 
+// The run's stored `selection` jsonb and a worker credential lookup are both
+// untyped at their boundary. Parse (fail-open via `.catch`) rather than cast, so
+// a malformed value degrades to the safe default instead of a bare `as`.
+const runSelectionSchema = z
+  .object({ rowIds: z.array(z.string()).optional(), writeOutputs: z.boolean().optional() })
+  .catch({});
+const workerCredentialSchema = z
+  .object({ secrets: z.record(z.string()).optional() })
+  .nullable()
+  .catch(null);
+
 const execute = async <A>(effect: Effect.Effect<A, unknown, PipelineRepo | RealtimePublisher>): Promise<A> => {
   const runtime = await workerRuntime();
   return runtime.runPromise(effect);
@@ -60,7 +71,7 @@ async function pipelineEngineConfig(workspaceId: string): Promise<EngineConfig> 
   const providers: AiConfig[] = [...(base.aiProviders ?? [])];
   for (const provider of Object.keys(AI_DEFAULTS) as AiConfig["provider"][]) {
     if (providers.some((item) => item.provider === provider)) continue;
-    const credential = await workerClient.query(WORKER_REFS.getCredential, { workspaceId, extensionId: `ai:${provider}` }) as { secrets?: Record<string, string> } | null;
+    const credential = workerCredentialSchema.parse(await workerClient.query(WORKER_REFS.getCredential, { workspaceId, extensionId: `ai:${provider}` }));
     const apiKey = credential?.secrets?.apiKey;
     if (!apiKey) continue;
     const baseURL = credential?.secrets?.baseUrl;
@@ -86,8 +97,7 @@ export const planPipelineRun = inngest.createFunction(
       yield* repo.markRunStarted(data.runId, event.id ?? data.runId, Date.now());
       return current;
     })));
-    const selection = typeof run.selection === "object" && run.selection !== null ? run.selection as { rowIds?: unknown } : {};
-    const selected = Array.isArray(selection.rowIds) ? selection.rowIds.filter((id): id is string => typeof id === "string") : null;
+    const selected = runSelectionSchema.parse(run.selection).rowIds ?? null;
     if (selected !== null) {
       for (let offset = 0, ordinal = 0; offset < selected.length; offset += DEFAULT_PIPELINE_BATCH_SIZE, ordinal += 1) {
         const rowIds = selected.slice(offset, offset + DEFAULT_PIPELINE_BATCH_SIZE);
@@ -160,8 +170,7 @@ export const executePipelineBatch = inngest.createFunction(
           ...Object.fromEntries(Object.entries(context.binding.inputMapping).map(([key, columnId]) => [key, cells.get(columnId)])),
           columns,
         };
-        const selection = typeof context.run.selection === "object" && context.run.selection !== null ? context.run.selection as { writeOutputs?: unknown } : {};
-        const writesOutputs = selection.writeOutputs !== false;
+        const writesOutputs = runSelectionSchema.parse(context.run.selection).writeOutputs !== false;
         const outputColumnIds = [...new Set(Object.values(context.binding.outputMapping))];
         if (writesOutputs) await execute(Effect.gen(function* () {
           const repo = yield* PipelineRepo;
