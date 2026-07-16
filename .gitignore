@@ -49,3 +49,6 @@ packages/desktop/.last-run.json
 # Stray root-level screenshots (testing artifacts)
 /*.png
 packages/desktop/e2e/.mock.pid
+
+# Stray compiler output (e.g. a leftover cc/clang a.out)
+a.out
