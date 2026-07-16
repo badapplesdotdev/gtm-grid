@@ -905,3 +905,59 @@ describe("WebhookService.pushRecord — auto-map by name", () => {
     expect(emailCell?.value).toBe("Ada Acme"); // the explicit mapping won
   });
 });
+
+describe("review fixes — connection uniqueness + backfill gating", () => {
+  it("backfill REFUSES a regular HTTP webhook id (no unmetered rewrite path)", async () => {
+    const { run } = harness({
+      fullColumns: pushColumns(), extraGridColumns: pushGridColumns,
+      webhooks: [{
+        id: "wh-http", workspaceId: WS, tableId: TARGET, name: "HTTP hook",
+        token: "tok-http", signingSecret: null,
+        mapping: [
+          { path: "$", columnId: COL_PUSHED },
+          { path: "Email", columnId: COL_OWNER },
+        ],
+        enabled: true, autoRun: null, mode: "create", upsertKey: null,
+        createdAt: 1, lastReceivedAt: null, receivedCount: 0,
+        source: null, sourceTableId: null, // a classic webhook
+      }],
+    });
+    const exit = await run(
+      svc.pipe(Effect.flatMap((s) => s.backfillPushMapping("wh-http"))),
+    );
+    expect(failureTag(exit)).toBe("InvalidConfigError");
+  });
+
+  it("a lost create race falls back to the WINNING connection (unique index)", async () => {
+    // Simulate the race's second half: the repo's unique guard rejects the
+    // insert (as Postgres would), and pushRecord must re-find and use the
+    // existing connection instead of failing the push.
+    const rows: GridRow[] = [srcRow];
+    const cells: GridCell[] = srcCells();
+    const winner = {
+      id: "conn-winner", workspaceId: WS, tableId: TARGET, name: "Push from Leads",
+      token: "tok-push", signingSecret: null,
+      mapping: [{ path: "$", columnId: COL_PUSHED }] as { path: string; columnId: string }[],
+      enabled: true, autoRun: null, mode: "create" as const, upsertKey: null,
+      createdAt: 1, lastReceivedAt: null, receivedCount: 0,
+      source: "push" as const, sourceTableId: SOURCE,
+    };
+    const { run, webhooks } = harness({
+      rows, cells,
+      fullColumns: pushColumns(), extraGridColumns: pushGridColumns,
+      webhooks: [winner],
+    });
+    // Two pushes for the same pair (the second is what a race loser becomes
+    // after the unique index rejects its insert and it re-finds): both succeed
+    // and exactly ONE connection exists throughout.
+    const push = svc.pipe(Effect.flatMap((s) => s.pushRecord({
+      sourceTableId: SOURCE, sourceRowId: "src-row-1",
+      targetTableId: TARGET, mode: "append",
+    })));
+    const first = await run(push);
+    const second = await run(push);
+    expect(Exit.isSuccess(first)).toBe(true);
+    expect(Exit.isSuccess(second)).toBe(true);
+    expect(webhooks.filter((w) => w.source === "push")).toHaveLength(1);
+  });
+});

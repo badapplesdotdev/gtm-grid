@@ -1736,25 +1736,41 @@ export class WebhookService extends Effect.Service<WebhookService>()(
               target.id,
               target.workspaceId,
             );
-            const id = yield* repo.insert({
-              workspaceId: target.workspaceId,
-              tableId: target.id,
-              name: `Push from ${source.name}`,
-              // Minted for schema parity only — resolveToken refuses source="push",
-              // so this connection is NEVER reachable as a public HTTP endpoint.
-              token: mintToken(),
-              signingSecret: null,
-              mapping: [{ path: PAYLOAD_PATH, columnId: payloadCol }],
-              enabled: true,
-              autoRun: null,
-              mode: args.mode === "upsert" ? "upsert" : "create",
-              upsertKey: keyColumnId,
-              createdAt: Date.now(),
-              source: "push",
-              sourceTableId: source.id,
-            });
-            const created = yield* requireWebhook(id);
-            connection = created;
+            // RACE-SAFE find-or-create: the partial unique index
+            // `webhooks_push_connection_unique` guarantees ONE connection per
+            // (source → target) pair, so when two concurrent FIRST pushes both
+            // miss the find above, the losing insert fails the unique check —
+            // re-find and use the winner's connection instead of failing the push.
+            const id = yield* repo
+              .insert({
+                workspaceId: target.workspaceId,
+                tableId: target.id,
+                name: `Push from ${source.name}`,
+                // Minted for schema parity only — resolveToken refuses source="push",
+                // so this connection is NEVER reachable as a public HTTP endpoint.
+                token: mintToken(),
+                signingSecret: null,
+                mapping: [{ path: PAYLOAD_PATH, columnId: payloadCol }],
+                enabled: true,
+                autoRun: null,
+                mode: args.mode === "upsert" ? "upsert" : "create",
+                upsertKey: keyColumnId,
+                createdAt: Date.now(),
+                source: "push",
+                sourceTableId: source.id,
+              })
+              .pipe(
+                Effect.catchTag("WebhookRepoError", (insertError) =>
+                  repo.findPushConnection(source.id, target.id).pipe(
+                    Effect.flatMap((refound) =>
+                      refound._tag === "Some"
+                        ? Effect.succeed(refound.value.id)
+                        : Effect.fail(insertError),
+                    ),
+                  ),
+                ),
+              );
+            connection = yield* requireWebhook(id);
           }
 
           // Project the payload through the connection's mapping; the dedupe key
@@ -1831,6 +1847,18 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         Effect.gen(function* () {
           const webhook = yield* requireWebhook(webhookId);
           yield* assertMemberIfIdentified(webhook.workspaceId);
+          // PUSH CONNECTIONS ONLY: backfill is the unmetered re-projection of
+          // already-billed push records. A regular HTTP webhook's rows were
+          // metered per record too, but its re-mapping semantics are the
+          // webhook panel's own concern — refusing here keeps this endpoint
+          // from becoming a general unmetered rewrite path for any webhook id.
+          if (webhook.source !== "push") {
+            return yield* Effect.fail(
+              new InvalidConfigError({
+                message: "Backfill is only available for push connections.",
+              }),
+            );
+          }
 
           const payloadEntry = webhook.mapping.find((m) => m.path === PAYLOAD_PATH);
           if (payloadEntry === undefined) {

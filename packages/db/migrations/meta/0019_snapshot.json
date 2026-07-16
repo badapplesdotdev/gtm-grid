@@ -1,5 +1,5 @@
 {
-  "id": "3ed7ffff-0afb-407e-88e7-8d40f036e37e",
+  "id": "6b02c1d0-860b-4687-a07c-4e9f72af8a84",
   "prevId": "f32fb58e-ce73-45c2-bb30-79ee984ce62a",
   "version": "7",
   "dialect": "postgresql",
@@ -5052,6 +5052,28 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "webhooks_push_connection_unique": {
+          "name": "webhooks_push_connection_unique",
+          "columns": [
+            {
+              "expression": "source_table_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "table_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"webhooks\".\"source\" = 'push'",
           "concurrently": false,
           "method": "btree",
           "with": {}

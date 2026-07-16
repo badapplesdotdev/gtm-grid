@@ -1353,7 +1353,27 @@ export const webhookRepoLayer = (fixtures: {
         ),
       ),
     insert: (values) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
+        // Mirror the DB's `webhooks_push_connection_unique` partial unique
+        // index: one push connection per (source → target) pair. The live repo
+        // surfaces the Postgres unique-violation as a WebhookRepoError; the
+        // fixture does the same so pushRecord's race fallback is testable.
+        if (
+          values.source === "push" &&
+          webhooks.some(
+            (w) =>
+              w.source === "push" &&
+              w.sourceTableId === values.sourceTableId &&
+              w.tableId === values.tableId,
+          )
+        ) {
+          return Effect.fail(
+            new WebhookRepoError({
+              message:
+                'duplicate key value violates unique constraint "webhooks_push_connection_unique"',
+            }),
+          );
+        }
         const id = nextId("webhook");
         webhooks.push({
           ...values,
@@ -1361,7 +1381,7 @@ export const webhookRepoLayer = (fixtures: {
           lastReceivedAt: null,
           receivedCount: 0,
         });
-        return id;
+        return Effect.succeed(id);
       }),
     patch: (id, patch) =>
       Effect.sync(() => {

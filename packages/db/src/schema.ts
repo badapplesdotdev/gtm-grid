@@ -988,6 +988,12 @@ export const webhooks = pgTable(
     index("webhooks_by_table").on(t.tableId),
     index("webhooks_by_token").on(t.token),
     index("webhooks_by_source_table").on(t.sourceTableId),
+    // ONE push connection per (source → target) pair. Enforced by the DB so two
+    // concurrent FIRST pushes cannot find-or-create duplicate connections — the
+    // losing insert fails the unique check and pushRecord re-finds the winner.
+    uniqueIndex("webhooks_push_connection_unique")
+      .on(t.sourceTableId, t.tableId)
+      .where(sql`${t.source} = 'push'`),
   ],
 );
 
