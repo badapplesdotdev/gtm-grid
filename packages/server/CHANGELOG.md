@@ -1,5 +1,13 @@
 # @gtmgrid/server
 
+## 1.8.0
+
+### Patch Changes
+
+- @gtmgrid/engine@1.8.0
+- @gtmgrid/observability@1.8.0
+- @gtmgrid/pipelines@1.8.0
+
 ## 1.7.2
 
 ### Patch Changes

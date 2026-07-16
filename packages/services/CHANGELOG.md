@@ -1,5 +1,14 @@
 # @gtmgrid/services
 
+## 1.8.0
+
+### Patch Changes
+
+- @gtmgrid/cloud@1.8.0
+- @gtmgrid/db@1.8.0
+- @gtmgrid/email@1.8.0
+- @gtmgrid/pipelines@1.8.0
+
 ## 1.7.2
 
 ### Patch Changes

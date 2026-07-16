@@ -1,5 +1,18 @@
 # @gtmgrid/web
 
+## 1.8.0
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.8.0
+- @gtmgrid/auth@1.8.0
+- @gtmgrid/cloud@1.8.0
+- @gtmgrid/db@1.8.0
+- @gtmgrid/email@1.8.0
+- @gtmgrid/engine@1.8.0
+- @gtmgrid/pipelines@1.8.0
+- @gtmgrid/services@1.8.0
+
 ## 1.7.2
 
 ### Patch Changes
