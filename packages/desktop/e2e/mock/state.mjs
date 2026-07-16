@@ -88,8 +88,12 @@ export function freshState() {
       },
     },
 
+    // Reusable pipelines (automation layer). Each carries its own draft +
+    // deployed version inline; the mock pipeline procedures mutate these.
+    pipelines: [],
+
     // monotonic id counters for created entities
-    seq: { table: 1, column: 2, row: 2, project: 1, folder: 0 },
+    seq: { table: 1, column: 2, row: 2, project: 1, folder: 0, pipeline: 0, version: 0 },
     now: FIXED_NOW,
   };
 }
