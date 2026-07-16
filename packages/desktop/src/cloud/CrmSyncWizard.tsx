@@ -8,10 +8,10 @@
 // human, non-technical) and is shown verbatim.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { openExternalUrl } from "./open-external";
 import { apiClient } from "./client";
 import { Dialog, DialogContent } from "../components/ui/dialog";
 import { BrandIcon } from "../BrandIcon";
-import { electron } from "../electron";
 
 /** Attribute types the sync supports (the server's neutral union — every provider maps into it). */
 const SUPPORTED_ATTR_TYPES = [
@@ -633,19 +633,6 @@ export function CrmSyncWizard({
 }
 
 /** Open a URL in the system browser (Electron when packaged, else a new tab). */
-export async function openExternalUrl(url: string): Promise<void> {
-  try {
-    const api = electron();
-    if (api) { await api.openExternal(url); return; }
-  } catch {
-    /* fall through to a browser tab */
-  }
-  const w = (globalThis as { window?: Window }).window;
-  if (!w) return;
-  const tab = w.open(url, "_blank", "noopener");
-  if (!tab) w.location.assign(url);
-}
-
 const LockIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
 );
@@ -655,3 +642,6 @@ const CheckIcon = ({ accent }: { accent?: boolean }) => (
 const CrossIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
 );
+
+/** @deprecated Import from "./open-external" — this re-export exists only for older call sites. */
+export { openExternalUrl };

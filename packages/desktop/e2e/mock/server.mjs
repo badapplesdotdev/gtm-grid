@@ -635,6 +635,9 @@ const server = createServer(async (req, res) => {
             .filter((manifest) => !detailedMockExtensionIds.has(manifest.id))
             .map(manifestSummary)
         : []),
+      // Slack: an OAUTH connector rather than an apiKey one — the panel must
+      // render the OAuth card and NO api-key section.
+      { id: "slack", name: "Slack", category: "messaging", description: "Slack — post messages and look up users.", featured: true, methods: 4, connected: false, logo: null },
     ]);
   if (pathname === "/api/extensions/zoominfo")
     return sendJson(res, {
@@ -756,6 +759,26 @@ const server = createServer(async (req, res) => {
         .filter((credential) => credential.extensionId === "lemlist" && credential.scope !== "workspace")
         .map((credential) => credential.scope),
       methods: lemlistMethods,
+    });
+  if (pathname === "/api/extensions/slack")
+    return sendJson(res, {
+      id: "slack",
+      name: "Slack",
+      category: "messaging",
+      description: "Slack — post messages and look up users.",
+      version: "1.0.0",
+      baseUrl: "https://slack.com/api",
+      logo: null,
+      // The shape extensions/slack.json declares: oauth, not apiKey.
+      auth: { type: "oauth", provider: "slack" },
+      connected: false,
+      connectedScopes: [],
+      methods: [
+        { id: "postMessage", label: "Post message", description: "POST /chat.postMessage", credits: 1 },
+        { id: "listChannels", label: "List channels", description: "GET /conversations.list", credits: 1 },
+        { id: "lookupUserByEmail", label: "Look up user by email", description: "GET /users.lookupByEmail", credits: 1 },
+        { id: "getUserInfo", label: "Get user info", description: "GET /users.info", credits: 1 },
+      ],
     });
   if (pathname === "/api/extensions/attio")
     return sendJson(res, {

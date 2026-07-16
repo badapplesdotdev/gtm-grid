@@ -4,6 +4,7 @@ import { captureServer } from "../../../../lib/posthog-server";
 import { clientIp, rateLimit } from "../../../../lib/rate-limit";
 import { resolveSiteUrl } from "../../../../lib/site-url";
 import { applyMapping, type MappingEntry } from "../../../../lib/webhook-mapping";
+import { resolveToken } from "../../../../lib/webhook-resolve";
 import { signatureCheckPasses } from "../../../../lib/webhook-signature";
 
 /**
@@ -33,57 +34,11 @@ import { signatureCheckPasses } from "../../../../lib/webhook-signature";
  */
 export const runtime = "nodejs";
 
-/** The resolved webhook config the worker route returns (or `null`). */
-interface ResolvedWebhook {
-  readonly webhookId: string;
-  readonly workspaceId: string;
-  readonly tableId: string;
-  readonly mapping: readonly MappingEntry[];
-  readonly signingSecret: string | null;
-  readonly autoRun: boolean;
-  readonly mode: "create" | "upsert";
-  readonly upsertKey: string | null;
-}
-
 const json = (body: unknown, status: number, extraHeaders?: Record<string, string>): Response =>
   new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json", ...extraHeaders },
   });
-
-/** Resolve the base URL of the apps/web deployment serving the worker endpoints
- *  — `SITE_URL` when configured, else the Vercel-injected deployment URL. */
-function workerBaseUrl(): string {
-  return resolveSiteUrl();
-}
-
-/** Resolve the shared worker bearer secret, failing closed when unset. */
-function workerSecret(): string {
-  const secret = process.env.WEBHOOK_WORKER_SECRET;
-  if (secret === undefined || secret === "") {
-    throw new Error("WEBHOOK_WORKER_SECRET is not configured");
-  }
-  return secret;
-}
-
-/** Resolve a token to its webhook config (or `null`) via the secret-gated endpoint. */
-async function resolveToken(token: string): Promise<ResolvedWebhook | null> {
-  const res = await fetch(`${workerBaseUrl()}/api/worker/resolveToken`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${workerSecret()}`,
-    },
-    body: JSON.stringify({ token }),
-  });
-  if (!res.ok) {
-    throw new Error(`resolveToken failed: ${res.status} ${res.statusText}`);
-  }
-  const text = await res.text();
-  if (text === "") return null;
-  const parsed = JSON.parse(text);
-  return parsed === null ? null : (parsed as ResolvedWebhook);
-}
 
 /**
  * Deterministic JSON stringify with sorted object keys, so two semantically

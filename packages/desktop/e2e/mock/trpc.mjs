@@ -279,6 +279,22 @@ export const procedures = {
   // (read-only) columns + a first-pull row, syncNow appends a history run.
   // Every handler reads the optional `provider` input (default attio) like
   // the real router.
+  // ── Slack (a plain OAuth connector — NOT a CRM) ───────────────────────────
+  // Deliberately its own router here too, mirroring apps/web: Slack has no sync
+  // bindings, no sources, and disconnecting pauses nothing.
+  "slack.connectionStatus": (_input, s) =>
+    s.slackConnected
+      ? { configured: true, connected: true, connectedByName: "Morgan", teamName: "Acme Slack", teamId: "T_ACME" }
+      : { configured: s.slackConfigured, connected: false },
+  "slack.authorizeUrl": () => ({
+    url: "https://slack.com/oauth/v2/authorize?client_id=e2e&state=fake&redirect_uri=https%3A%2F%2Fwww.gtmgrid.dev%2Fapi%2Foauth%2Fslack%2Fcallback&scope=chat%3Awrite%2Cchannels%3Aread%2Cusers%3Aread",
+  }),
+  "slack.disconnect": (_input, s) => {
+    const removed = s.slackConnected;
+    s.slackConnected = false;
+    return { removed };
+  },
+
   "crm.connectionStatus": (input, s) => {
     const provider = input?.provider ?? "attio";
     const connected = provider === "hubspot" ? s.hubspotConnected : s.crmConnected;

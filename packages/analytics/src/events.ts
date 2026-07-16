@@ -36,6 +36,8 @@ export interface AnalyticsEventMap {
     table_id: string;
     auto_run: boolean;
     mode: string;
+    /** Which ingress accepted it — "slack" for the Events API receiver, absent for the generic token webhook. */
+    source?: string;
   };
 
   // ── Desktop product surface (new) ────────────────────────────────────────────

@@ -10,7 +10,7 @@ import { aiProviderCredId } from "./cloud/credentials";
 import { Markdown } from "./AgentPanel";
 import { BrandIcon } from "./BrandIcon";
 import { apiClient } from "./cloud/client";
-import { openExternalUrl } from "./cloud/CrmSyncWizard";
+import { OAuthConnectCard, type OAuthCardStatus } from "./cloud/OAuthConnectCard";
 
 /**
  * The scope a credential is saved under in the panels. Extends the local-only
@@ -448,17 +448,13 @@ function ConnectionsSection({
  * OAuth management for the CRM SYNC connection — deliberately separate from
  * the API-key section below it: the key powers cell actions (engine methods),
  * the OAuth grant powers synced tables. Removing one never touches the other.
+ *
+ * The flow (server-minted state → openExternal → poll) lives in
+ * {@link OAuthConnectCard}; this supplies only what is CRM-specific.
  */
 function CrmOAuthSection({ workspaceId, provider }: { workspaceId: string; provider: "attio" | "hubspot" }) {
   const crmName = provider === "hubspot" ? "HubSpot" : "Attio";
-  type Status =
-    | { kind: "loading" }
-    | { kind: "disconnected"; configured: boolean }
-    | { kind: "connected"; byName: string; crmWorkspace: string };
-  const [status, setStatus] = useState<Status>({ kind: "loading" });
-  const [busy, setBusy] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
+  const [status, setStatus] = useState<OAuthCardStatus>({ kind: "loading" });
 
   const refresh = useCallback(async () => {
     if (!apiClient) return;
@@ -466,7 +462,11 @@ function CrmOAuthSection({ workspaceId, provider }: { workspaceId: string; provi
       const s = await apiClient.crm.connectionStatus.query({ workspaceId, provider });
       if (s == null) setStatus({ kind: "disconnected", configured: false });
       else if (s.connected) {
-        setStatus({ kind: "connected", byName: s.connectedByName, crmWorkspace: s.workspaceLabel ?? s.attioWorkspaceName });
+        setStatus({
+          kind: "connected",
+          byName: s.connectedByName,
+          accountLabel: s.workspaceLabel ?? s.attioWorkspaceName,
+        });
       } else setStatus({ kind: "disconnected", configured: s.configured });
     } catch {
       setStatus({ kind: "disconnected", configured: false });
@@ -475,89 +475,74 @@ function CrmOAuthSection({ workspaceId, provider }: { workspaceId: string; provi
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  // While an OAuth round-trip is in flight, poll for the connection landing.
-  useEffect(() => {
-    if (!busy) return;
-    const t = setInterval(() => { void refresh(); }, 2000);
-    const stop = setTimeout(() => setBusy(false), 120_000);
-    return () => { clearInterval(t); clearTimeout(stop); };
-  }, [busy, refresh]);
-  useEffect(() => {
-    if (busy && status.kind === "connected") { setBusy(false); setNote(`${crmName} connected.`); }
-  }, [busy, status]);
-
-  const authorize = async () => {
-    if (!apiClient) return;
-    setNote(null);
-    try {
-      const { url } = await apiClient.crm.authorizeUrl.query({ workspaceId, provider });
-      setBusy(true);
-      await openExternalUrl(url);
-    } catch (e) {
-      setNote(e instanceof Error ? e.message : `Could not start the ${crmName} connection.`);
-    }
-  };
-
-  const disconnect = async () => {
-    if (!apiClient) return;
-    setConfirming(false);
-    setNote(null);
-    try {
-      const res = await apiClient.crm.disconnect.mutate({ workspaceId, provider });
-      setNote(
-        res.bindingsPaused > 0
+  return (
+    <OAuthConnectCard
+      headText="CRM sync · OAuth connection"
+      providerName={crmName}
+      status={status}
+      refresh={refresh}
+      authorizeUrl={async () => {
+        if (!apiClient) throw new Error("Not signed in");
+        const { url } = await apiClient.crm.authorizeUrl.query({ workspaceId, provider });
+        return url;
+      }}
+      disconnect={async () => {
+        if (!apiClient) throw new Error("Not signed in");
+        const res = await apiClient.crm.disconnect.mutate({ workspaceId, provider });
+        return res.bindingsPaused > 0
           ? `Disconnected. ${res.bindingsPaused} synced table${res.bindingsPaused === 1 ? "" : "s"} paused — reconnect to resume.`
-          : "Disconnected.",
-      );
-      await refresh();
-    } catch (e) {
-      setNote(e instanceof Error ? e.message : `Could not disconnect ${crmName}.`);
+          : "Disconnected.";
+      }}
+      connectedSub="read-only · powers synced tables"
+      disconnectedSub={`Connect with OAuth to sync ${crmName} objects & lists into tables`}
+      footerNote={`The API key below is separate — it powers ${crmName} cell actions and is never used for syncing.`}
+    />
+  );
+}
+
+/**
+ * OAuth management for the SLACK connection.
+ *
+ * Note how much thinner this is than the CRM section: no bindings to pause on
+ * disconnect, and the account label is the Slack TEAM, which the token exchange
+ * already returned — no identify round trip.
+ */
+export function SlackOAuthSection({ workspaceId }: { workspaceId: string }) {
+  const [status, setStatus] = useState<OAuthCardStatus>({ kind: "loading" });
+
+  const refresh = useCallback(async () => {
+    if (!apiClient) return;
+    try {
+      const s = await apiClient.slack.connectionStatus.query({ workspaceId });
+      if (s.connected) {
+        setStatus({ kind: "connected", byName: s.connectedByName, accountLabel: s.teamName || "Slack" });
+      } else setStatus({ kind: "disconnected", configured: s.configured });
+    } catch {
+      setStatus({ kind: "disconnected", configured: false });
     }
-  };
+  }, [workspaceId]);
+
+  useEffect(() => { void refresh(); }, [refresh]);
 
   return (
-    <div className="crm-oauth-card">
-      <div className="crm-oauth-head">CRM sync · OAuth connection</div>
-      <div className="crm-oauth-body">
-        {status.kind === "loading" ? (
-          <span className="cell-spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
-        ) : status.kind === "connected" ? (
-          <>
-            <span className="crm-oauth-dot" />
-            <span className="crm-oauth-text">
-              Connected · {status.crmWorkspace}
-              <span className="crm-oauth-sub">read-only · connected by {status.byName} · powers synced tables</span>
-            </span>
-            <button className="skill-btn" disabled={busy} onClick={() => void authorize()}>
-              {busy ? `Waiting for ${crmName}…` : "Reconnect"}
-            </button>
-            {confirming ? (
-              <>
-                <button className="skill-btn danger" onClick={() => void disconnect()}>Confirm disconnect</button>
-                <button className="skill-btn" onClick={() => setConfirming(false)}>Cancel</button>
-              </>
-            ) : (
-              <button className="skill-btn" onClick={() => setConfirming(true)}>Disconnect</button>
-            )}
-          </>
-        ) : (
-          <>
-            <span className="crm-oauth-dot off" />
-            <span className="crm-oauth-text">
-              Not connected
-              <span className="crm-oauth-sub">Connect with OAuth to sync {crmName} objects &amp; lists into tables</span>
-            </span>
-            <button className="skill-btn primary" disabled={busy || !status.configured} onClick={() => void authorize()}>
-              {busy ? `Waiting for ${crmName}…` : `Connect ${crmName}`}
-            </button>
-          </>
-        )}
-      </div>
-      {note ? <div className="crm-oauth-note">{note}</div> : null}
-      <div className="crm-oauth-note subtle">
-        The API key below is separate — it powers {crmName} cell actions and is never used for syncing.
-      </div>
-    </div>
+    <OAuthConnectCard
+      headText="Slack · OAuth connection"
+      providerName="Slack"
+      status={status}
+      refresh={refresh}
+      authorizeUrl={async () => {
+        if (!apiClient) throw new Error("Not signed in");
+        const { url } = await apiClient.slack.authorizeUrl.query({ workspaceId });
+        return url;
+      }}
+      disconnect={async () => {
+        if (!apiClient) throw new Error("Not signed in");
+        const res = await apiClient.slack.disconnect.mutate({ workspaceId });
+        return res.removed ? "Disconnected." : "Nothing to disconnect.";
+      }}
+      connectedSub="powers Slack columns (post a message, look up a user)"
+      disconnectedSub="Connect with OAuth to post messages and look up users from a column"
+    />
   );
 }
 
@@ -612,6 +597,10 @@ export function ExtensionPanel({ id, onConnected, onBack, workspaceCreds, worksp
       {(detail.id === "attio" || detail.id === "hubspot") && workspaceId ? (
         <CrmOAuthSection workspaceId={workspaceId} provider={detail.id} />
       ) : null}
+
+      {/* Slack has NO api-key section below it — the OAuth grant is the whole
+          credential, which is why there is no "the key below is separate" note. */}
+      {detail.id === "slack" && workspaceId ? <SlackOAuthSection workspaceId={workspaceId} /> : null}
 
       <ConnectionsSection
         name={detail.name}

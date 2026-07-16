@@ -1,21 +1,40 @@
 /**
  * Per-provider OAuth adapters for the shared route cores (TRI: crm-sync).
  * `crm-authorize.ts` / `crm-callback.ts` are provider-agnostic — everything
- * provider-specific (which auth service, which client, which copy name, which
- * not-configured tag) lives here, so a new CRM is one more adapter + two thin
+ * provider-specific lives here, so a new provider is one more adapter + two thin
  * routes.
+ *
+ * The protocol half comes straight from `@gtmgrid/services`' `OAuthAdapter`,
+ * which is `R = never`, so `mintState`/`verifyState`/`authorizeUrl`/`exchangeCode`
+ * are passed through rather than re-wrapped per provider per method.
+ *
+ * What remains here is the part that is genuinely NOT protocol:
+ * {@link OAuthRouteAdapter.persistConnection} — identify the account we just
+ * connected to, store the tokens, and do whatever un-pausing that provider
+ * needs. That step used to be inlined in `crm-callback.ts` against
+ * `CrmConnectionService` + `CrmBindingRepo`, which silently made the "provider
+ * agnostic" core CRM-only: Slack has no sync bindings to un-pause and no CRM
+ * client to identify with. Handing the whole step to the adapter is what lets
+ * one callback core serve a CRM and a plain connector.
  */
 
 import {
-  type AppServices,
-  AttioAuth,
+  ATTIO_ADAPTER,
   AttioClient,
+  type AppServices,
+  CrmBindingRepo,
+  CrmConnectionService,
   type CrmProvider,
   type CrmSession,
-  type CrmTokens,
-  HubspotAuth,
+  HUBSPOT_ADAPTER,
   HubspotClient,
+  type OAuthAdapter,
+  type OAuthNotConfiguredError,
+  type OAuthTokens,
+  SLACK_ADAPTER,
+  SlackConnectionService,
 } from "@gtmgrid/services";
+import { CrmSyncError } from "@gtmgrid/services";
 import { Effect } from "effect";
 
 export interface CrmOAuthClaims {
@@ -23,42 +42,192 @@ export interface CrmOAuthClaims {
   readonly userId: string;
 }
 
-export interface CrmOAuthAdapter {
-  readonly provider: CrmProvider;
-  /** User-facing product name for page copy ("Attio", "HubSpot"). */
+/** What `persistConnection` receives once the code has been exchanged. */
+export interface PersistConnectionArgs {
+  readonly workspaceId: string;
+  readonly userId: string;
+  /** Resolved display name of the connecting user; "" when unknown. */
+  readonly connectedByName: string;
+  readonly tokens: OAuthTokens;
+}
+
+export interface OAuthRouteAdapter {
+  /** Stable provider id, used in copy and analytics. */
+  readonly provider: string;
+  /** User-facing product name for page copy ("Attio", "HubSpot", "Slack"). */
   readonly displayName: string;
   /** The auth service's not-configured error tag (drives the setup page). */
   readonly notConfiguredTag: string;
+  /** This provider's authorize route, for the "try again" link on error pages. */
+  readonly authorizePath: string;
+  /** Deep link fired by the success page to hand back to the desktop app. */
+  readonly connectedDeepLink: string;
+  /** Whether this provider's OAuth app env is configured (drives UI affordances). */
+  readonly isConfigured: () => Effect.Effect<boolean, never, AppServices>;
   readonly mintState: (claims: CrmOAuthClaims) => Effect.Effect<string | null, never, AppServices>;
   readonly verifyState: (token: string) => Effect.Effect<CrmOAuthClaims | null, never, AppServices>;
   readonly authorizeUrl: (state: string) => Effect.Effect<string, unknown, AppServices>;
-  readonly exchangeCode: (code: string) => Effect.Effect<CrmTokens, unknown, AppServices>;
-  readonly identifySelf: (
-    session: CrmSession,
-  ) => Effect.Effect<{ readonly workspaceId: string; readonly workspaceName: string }, unknown, AppServices>;
+  readonly exchangeCode: (code: string) => Effect.Effect<OAuthTokens, unknown, AppServices>;
+  /**
+   * Identify + store the connection. Returns the connected ACCOUNT's display
+   * name (an Attio/HubSpot workspace, a Slack team) for the success page, or ""
+   * when the provider doesn't name one.
+   */
+  readonly persistConnection: (args: PersistConnectionArgs) => Effect.Effect<string, unknown, AppServices>;
 }
 
-export const ATTIO_OAUTH: CrmOAuthAdapter = {
+/** @deprecated Use {@link OAuthRouteAdapter}; kept so existing imports keep compiling. */
+export type CrmOAuthAdapter = OAuthRouteAdapter;
+
+/** Lift a protocol adapter into the route-layer shape. */
+const routeAdapter = <E extends OAuthNotConfiguredError>(
+  adapter: OAuthAdapter<E>,
+  rest: Pick<OAuthRouteAdapter, "provider" | "authorizePath" | "connectedDeepLink" | "persistConnection">,
+): OAuthRouteAdapter => ({
+  displayName: adapter.displayName,
+  notConfiguredTag: adapter.notConfiguredTag,
+  isConfigured: adapter.isConfigured,
+  mintState: adapter.mintState,
+  verifyState: adapter.verifyState,
+  authorizeUrl: adapter.authorizeUrl,
+  exchangeCode: adapter.exchangeCode,
+  ...rest,
+});
+
+/** Identify + store + un-pause, for a CRM provider. */
+const crmPersist =
+  (provider: CrmProvider, identifySelf: (session: CrmSession) => Effect.Effect<
+    { readonly workspaceId: string; readonly workspaceName: string },
+    unknown,
+    AppServices
+  >) =>
+  (args: PersistConnectionArgs): Effect.Effect<string, unknown, AppServices> =>
+    Effect.gen(function* () {
+      const connection = yield* CrmConnectionService;
+      const bindings = yield* CrmBindingRepo;
+      // A throwaway session: `identifySelf` only needs a token, and persisting a
+      // rotation mid-identify would be pointless — we store the tokens below.
+      const session: CrmSession = {
+        workspaceId: args.workspaceId,
+        tokens: args.tokens,
+        persist: () => Effect.void,
+      };
+      const self = yield* identifySelf(session);
+      yield* connection.saveConnection({
+        workspaceId: args.workspaceId,
+        provider,
+        tokens: args.tokens,
+        meta: {
+          connectedByUserId: args.userId,
+          connectedByName: args.connectedByName,
+          crmWorkspaceId: self.workspaceId,
+          crmWorkspaceName: self.workspaceName,
+        },
+      });
+      // Reconnecting resolves a revoked-auth pause (NOT source_gone — a deleted
+      // source isn't fixed by re-authing).
+      yield* bindings.clearPause({ workspaceId: args.workspaceId, provider, reason: "auth_revoked" });
+      return self.workspaceName;
+    });
+
+export const ATTIO_OAUTH: OAuthRouteAdapter = routeAdapter(ATTIO_ADAPTER, {
   provider: "attio",
-  displayName: "Attio",
-  notConfiguredTag: "AttioOAuthNotConfigured",
-  mintState: (claims) => Effect.flatMap(AttioAuth, (a) => a.mintState(claims)),
-  verifyState: (token) => Effect.flatMap(AttioAuth, (a) => a.verifyState(token)),
-  authorizeUrl: (state) => Effect.flatMap(AttioAuth, (a) => a.authorizeUrl(state)),
-  exchangeCode: (code) => Effect.flatMap(AttioAuth, (a) => a.exchangeCode(code)),
-  identifySelf: (session) => Effect.flatMap(AttioClient, (c) => c.identifySelf(session)),
-};
+  authorizePath: "/api/crm/attio/authorize",
+  connectedDeepLink: "gtmgrid://open/crm-connected",
+  persistConnection: crmPersist("attio", (session) =>
+    Effect.flatMap(AttioClient, (c) => c.identifySelf(session)),
+  ),
+});
 
-export const HUBSPOT_OAUTH: CrmOAuthAdapter = {
+export const HUBSPOT_OAUTH: OAuthRouteAdapter = routeAdapter(HUBSPOT_ADAPTER, {
   provider: "hubspot",
-  displayName: "HubSpot",
-  notConfiguredTag: "HubspotOAuthNotConfigured",
-  mintState: (claims) => Effect.flatMap(HubspotAuth, (a) => a.mintState(claims)),
-  verifyState: (token) => Effect.flatMap(HubspotAuth, (a) => a.verifyState(token)),
-  authorizeUrl: (state) => Effect.flatMap(HubspotAuth, (a) => a.authorizeUrl(state)),
-  exchangeCode: (code) => Effect.flatMap(HubspotAuth, (a) => a.exchangeCode(code)),
-  identifySelf: (session) => Effect.flatMap(HubspotClient, (c) => c.identifySelf(session)),
+  authorizePath: "/api/crm/hubspot/authorize",
+  connectedDeepLink: "gtmgrid://open/crm-connected",
+  persistConnection: crmPersist("hubspot", (session) =>
+    Effect.flatMap(HubspotClient, (c) => c.identifySelf(session)),
+  ),
+});
+
+/**
+ * Slack. Note how much SMALLER this is than a CRM: no bindings to un-pause, no
+ * sync client to identify with. `oauth.v2.access` already returns the team id +
+ * name (carried on `tokens.extra` by `SLACK_SPEC.parseTokens`), so there is no
+ * second identify round trip either.
+ */
+export const SLACK_OAUTH: OAuthRouteAdapter = routeAdapter(SLACK_ADAPTER, {
+  provider: "slack",
+  authorizePath: "/api/oauth/slack/authorize",
+  connectedDeepLink: "gtmgrid://open/slack-connected",
+  persistConnection: (args) =>
+    Effect.gen(function* () {
+      const connection = yield* SlackConnectionService;
+      const extra = args.tokens.extra ?? {};
+      const teamName = extra.teamName ?? "";
+      yield* connection.saveConnection({
+        workspaceId: args.workspaceId,
+        tokens: args.tokens,
+        meta: {
+          connectedByUserId: args.userId,
+          connectedByName: args.connectedByName,
+          teamId: extra.teamId ?? "",
+          teamName,
+          botUserId: extra.botUserId ?? "",
+        },
+      });
+      return teamName;
+    }),
+});
+
+/**
+ * Provider → adapter. A `Record`, not a ternary.
+ *
+ * The previous `provider === "hubspot" ? HUBSPOT_OAUTH : ATTIO_OAUTH` routed
+ * EVERY non-hubspot value to Attio, so a typo'd or newly-added provider silently
+ * ran the Attio handshake instead of failing.
+ */
+export const OAUTH_ADAPTERS: Readonly<Record<string, OAuthRouteAdapter>> = {
+  attio: ATTIO_OAUTH,
+  hubspot: HUBSPOT_OAUTH,
+  slack: SLACK_OAUTH,
 };
 
-export const oauthAdapterFor = (provider: CrmProvider): CrmOAuthAdapter =>
-  provider === "hubspot" ? HUBSPOT_OAUTH : ATTIO_OAUTH;
+/** The CRM subset, for callers whose provider is a `CrmProvider`. */
+export const oauthAdapterFor = (provider: CrmProvider): OAuthRouteAdapter => OAUTH_ADAPTERS[provider];
+
+
+/**
+ * Mint a state and build the provider's authorize URL, as ONE step.
+ *
+ * The desktop needs this because its auth is bearer-based: an `openExternal`
+ * browser navigation carries no gtmgrid.dev cookie, so the web authorize
+ * route's session gate would dead-end the flow. The signed state IS the trust
+ * for the callback; the browser needs no session at all.
+ *
+ * This replaces two ~20-line `Effect.gen` blocks in the tRPC router that
+ * differed only by which service they resolved and which literal tag they
+ * caught. The not-configured error is narrowed by `"missing" in e` rather than
+ * by a literal `catchTag`, since the tag is per-provider data here — every
+ * provider's not-configured error shares that payload and no other OAuth error
+ * carries the key.
+ */
+export const authorizeUrlWithState = (
+  adapter: OAuthRouteAdapter,
+  claims: CrmOAuthClaims,
+): Effect.Effect<string, CrmSyncError, AppServices> =>
+  Effect.gen(function* () {
+    const state = yield* adapter.mintState(claims);
+    if (state === null) {
+      return yield* Effect.fail(
+        new CrmSyncError({ message: "OAuth state signing unavailable (no BETTER_AUTH_SECRET)" }),
+      );
+    }
+    return yield* adapter.authorizeUrl(state).pipe(
+      Effect.mapError((e) =>
+        typeof e === "object" && e !== null && "missing" in e
+          ? new CrmSyncError({
+              message: `${adapter.displayName} OAuth env missing: ${String(Reflect.get(e, "missing"))}`,
+            })
+          : new CrmSyncError({ message: `Could not build the ${adapter.displayName} authorize URL`, cause: e }),
+      ),
+    );
+  });
