@@ -25,6 +25,7 @@ import {
   flushObservability,
   installProcessHandlers,
 } from "@gtmgrid/observability";
+import { pipelineGraphPatchSchema, pipelineGraphSchema } from "@gtmgrid/pipelines";
 import { describeGridEnv, selectGridEnv } from "./cloud-context.js";
 import {
   decide,
@@ -118,6 +119,26 @@ const registry = cloudDeps.registry;
 const server = new McpServer({ name: "gtmgrid", version: "0.0.1" });
 
 const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] });
+
+async function pipelineRequest(body: Record<string, unknown>): Promise<unknown> {
+  const res = await fetch(`${gridEnv.context.apiUrl}/api/worker/pipelines`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "X-Gtmgrid-Member": gridEnv.context.token },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`Pipeline API failed: ${res.status} ${text}`);
+  return text === "" ? null : JSON.parse(text);
+}
+
+/** Resolve an explicit pipeline id, or the canvas currently open in the desktop. */
+function resolvePipelineId(pipelineId?: string): string {
+  const resolved = pipelineId?.trim() || gridEnv.context.pipelineId;
+  if (!resolved) {
+    throw new Error("No pipeline_id was supplied and no pipeline is open on the workflow canvas.");
+  }
+  return resolved;
+}
 
 /**
  * Standard "this is destructive or large — get the user's OK first" response.
@@ -386,6 +407,35 @@ server.tool(
 
 server.tool("list_tables", "List all tables in the project with their column and row counts.", {}, async () => {
   return ok(await cloudSource.listTables());
+});
+
+server.tool("list_pipelines", "List reusable pipelines in this project. Use this before creating one so you can reuse an existing automation.", {}, async () =>
+  ok(await pipelineRequest({ action: "list", projectId: gridEnv.context.projectId })),
+);
+
+server.tool("get_pipeline", "Read a pipeline's complete draft graph, deployed version, validation/compiled capabilities, and table bindings. Always inspect before editing. pipeline_id is optional when the user has a pipeline open on the canvas.", { pipeline_id: z.string().optional().describe("Pipeline id; omit to target the pipeline open on the canvas") }, async ({ pipeline_id }) =>
+  ok(await pipelineRequest({ action: "get", pipelineId: resolvePipelineId(pipeline_id) })),
+);
+
+server.tool("create_pipeline", "Create a reusable pipeline draft, optionally with a complete graph of nodes and edges in one call. Prefer ordinary/dependent columns for a one-table linear transform; use a pipeline for reuse, branching, multiple outputs, remote triggers, or independently versioned logic. If both approaches are genuinely viable and the choice materially affects visibility or reuse, ask the user to choose visible table columns or one reusable pipeline-backed column before creating anything.", { name: z.string(), description: z.string().optional(), graph: pipelineGraphSchema.optional().describe("Optional complete PipelineGraph containing nodes and edges") }, async ({ name, description, graph }) => {
+  const blocked = planGuard("create_pipeline", "Create pipeline", name);
+  if (blocked) return blocked;
+  return ok(await pipelineRequest({ action: "create", projectId: gridEnv.context.projectId, name, description, ...(graph === undefined ? {} : { graph }) }));
+});
+
+server.tool("patch_pipeline", "Build or edit any portion of a pipeline draft with one atomic, server-validated patch set. Supported ops: add_node, update_node, remove_node, add_edge, remove_edge, and replace_node_edges. Use these to add/configure/move/delete nodes and to create or change branches. Read first and preserve unaffected graph state. pipeline_id is optional when a pipeline is open on the canvas. This never deploys the draft.", { pipeline_id: z.string().optional().describe("Pipeline id; omit to target the pipeline open on the canvas"), patches: z.array(pipelineGraphPatchSchema).min(1).max(100).describe("Ordered graph patches; include related node and edge edits together so the final graph is valid") }, async ({ pipeline_id, patches }) => {
+  const resolvedPipelineId = resolvePipelineId(pipeline_id);
+  const blocked = planGuard("patch_pipeline", "Edit pipeline draft", resolvedPipelineId);
+  if (blocked) return blocked;
+  return ok(await pipelineRequest({ action: "patch", pipelineId: resolvedPipelineId, patches }));
+});
+
+server.tool("deploy_pipeline", "Deploy the current validated draft as an immutable version. pipeline_id is optional when a pipeline is open on the canvas. This is an approval-gated production change; never call it merely to test a draft.", { pipeline_id: z.string().optional().describe("Pipeline id; omit to target the pipeline open on the canvas"), confirm: z.boolean().optional() }, async ({ pipeline_id, confirm }) => {
+  const resolvedPipelineId = resolvePipelineId(pipeline_id);
+  const args = { pipeline_id: resolvedPipelineId, confirm };
+  const allowed = gate("deploy_pipeline", args, { affected: 1, action: "Deploy pipeline", target: resolvedPipelineId });
+  if (!allowed.ok) return allowed.result;
+  return ok(await pipelineRequest({ action: "deploy", pipelineId: resolvedPipelineId }));
 });
 
 server.tool("create_table", "Create a new table.", { name: z.string() }, async ({ name }) => {
@@ -705,6 +755,112 @@ server.tool(
       const hint = errorHint(msg);
       throw new Error(hint === msg ? msg : `${msg}\n\n${hint}`);
     }
+  },
+);
+
+server.tool(
+  "import_table_from_share",
+  "Set up a table from a GTM Grid SHARE LINK. Give it a share URL (https://…/share/<token>) or just the <token> that someone sent you; it rebuilds that table's columns — and, by default, all its rows — in THIS project so you can run them with your own connector credentials. Function columns are recreated with their setup intact but stay empty until you run them (use run_column). Reports any connectors you still need to connect.",
+  {
+    url_or_token: z
+      .string()
+      .describe("A gtmgrid share URL (https://…/share/<token>) or the bare <token>."),
+    table_name: z.string().optional().describe("Override the imported table's name."),
+    include_data: z
+      .boolean()
+      .optional()
+      .describe("Also copy all row data (default true). Set false for structure only."),
+  },
+  async ({ url_or_token, table_name, include_data }) => {
+    const blocked = planGuard("import_table_from_share", "Import shared table", table_name ?? "Shared table");
+    if (blocked) return blocked;
+    // A share token is base64url (no "/"); anything with a slash is a URL, so
+    // take the last non-empty path segment (stripping any query/hash).
+    const raw = url_or_token.trim();
+    const token = raw.includes("/")
+      ? (raw.split(/[?#]/)[0].split("/").filter(Boolean).pop() ?? raw)
+      : raw;
+
+    const apiBase = (process.env.GTMGRID_API_URL ?? "https://gtmgrid.com").replace(/\/+$/, "");
+    const res = await fetch(`${apiBase}/api/share/${encodeURIComponent(token)}`);
+    if (!res.ok) {
+      throw new Error(
+        `Couldn't fetch that share link (HTTP ${res.status}). Check the URL/token, or that it hasn't been revoked.`,
+      );
+    }
+    const body = (await res.json()) as {
+      valid?: boolean;
+      name?: string | null;
+      snapshot?: {
+        version?: number;
+        table?: { name?: string };
+        columns?: {
+          name?: string;
+          type?: string;
+          kind?: string;
+          provider?: string | null;
+          method?: string | null;
+          code?: string | null;
+          params?: unknown;
+        }[];
+        rows?: number;
+        cells?: { row?: number; column?: number; value?: unknown }[];
+      };
+    };
+    const snap = body.snapshot;
+    if (!body.valid || !snap) throw new Error("This share link is no longer valid.");
+    if (snap.version !== 1 || !Array.isArray(snap.columns) || !Array.isArray(snap.cells)) {
+      throw new Error("Unsupported share snapshot format.");
+    }
+
+    const COL_TYPES = ["text", "number", "boolean", "date", "json"];
+    const t = await cloudSource.createTable(table_name ?? snap.table?.name ?? "Imported table");
+    const colIds: string[] = [];
+    const missingProviders = new Set<string>();
+    for (const c of snap.columns) {
+      const provider = typeof c.provider === "string" ? c.provider : null;
+      const method = typeof c.method === "string" ? c.method : null;
+      if (provider && method && !registry.method(provider, method)) {
+        missingProviders.add(provider);
+      }
+      const col = await cloudSource.addColumn(t.id, {
+        name: String(c.name ?? "Column"),
+        type: (typeof c.type === "string" && COL_TYPES.includes(c.type)
+          ? c.type
+          : "text") as "text" | "number" | "boolean" | "date" | "json",
+        ...(provider && method ? { fn: `${provider}.${method}` } : {}),
+        ...(typeof c.code === "string" ? { code: c.code } : {}),
+        params: c.params && typeof c.params === "object" ? (c.params as Record<string, unknown>) : {},
+      });
+      colIds.push(col.id);
+    }
+
+    let rowsCreated = 0;
+    const rowCount = typeof snap.rows === "number" ? snap.rows : 0;
+    if (include_data !== false && rowCount > 0) {
+      const rows = Array.from({ length: rowCount }, () => ({} as Record<string, unknown>));
+      for (const cell of snap.cells) {
+        const column = typeof cell.column === "number" ? snap.columns[cell.column] : undefined;
+        const row = typeof cell.row === "number" ? rows[cell.row] : undefined;
+        if (column === undefined || row === undefined || column.kind === "function") continue;
+        row[String(column.name ?? "Column")] = cell.value;
+      }
+      for (let offset = 0; offset < rows.length; offset += 50) {
+        rowsCreated += (await cloudSource.addRows(t.id, rows.slice(offset, offset + 50))).added;
+      }
+    }
+
+    const missing = [...missingProviders];
+    return ok({
+      table: t.name,
+      columns: colIds.length,
+      rows: rowsCreated,
+      missingProviders: missing,
+      note:
+        missing.length > 0
+          ? `Connect these connectors, then run the function columns: ${missing.join(", ")}`
+          : "Imported. Run the function columns (run_column) to enrich the rows.",
+    });
   },
 );
 

@@ -24,6 +24,8 @@ import { gridRouter } from "./routers/grid";
 import { invitationsRouter } from "./routers/invitations";
 import { realtimeRouter } from "./routers/realtime";
 import { presenceRouter } from "./routers/presence";
+import { pipelinesRouter } from "./routers/pipelines";
+import { shareRouter } from "./routers/share";
 import { webhooksRouter } from "./routers/webhooks";
 import { signalsRouter } from "./routers/signals";
 import { workspacesRouter } from "./routers/workspaces";
@@ -97,6 +99,10 @@ export const appRouter = router({
    * server-gated PartyKit grid connection for live grid + presence (TRI-3261).
    */
   realtime: realtimeRouter,
+  /** Frozen, read-only table snapshots shared through public capability URLs. */
+  share: shareRouter,
+  /** Reusable pipeline drafts, immutable deployments, table bindings and runs. */
+  pipelines: pipelinesRouter,
 });
 
 /** The API type the typed client (W2) consumes. */

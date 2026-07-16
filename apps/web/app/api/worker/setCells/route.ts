@@ -10,8 +10,9 @@
  * `hasValue`.
  */
 
-import { WebhookService } from "@gtmgrid/services";
+import { PipelineService, WebhookService } from "@gtmgrid/services";
 import { Effect } from "effect";
+import { inngest } from "../../../../lib/inngest/client";
 import { runWorkerSecretOrMember } from "../_lib";
 import { SetCellsSchema } from "../_schemas";
 
@@ -20,7 +21,7 @@ export function POST(req: Request): Promise<Response> {
   return runWorkerSecretOrMember(req, SetCellsSchema, (body) =>
     Effect.gen(function* () {
       const svc = yield* WebhookService;
-      return yield* svc.setCells({
+      const result = yield* svc.setCells({
         cells: (body.cells ?? []).map((c) => ({
           rowId: c.rowId,
           columnId: c.columnId,
@@ -30,6 +31,16 @@ export function POST(req: Request): Promise<Response> {
           ...(c.error !== undefined ? { error: c.error } : {}),
         })),
       });
+      const byColumn = new Map<string, string[]>();
+      for (const cell of body.cells ?? []) {
+        if (!("value" in cell) || cell.status !== "done") continue;
+        byColumn.set(cell.columnId, [...(byColumn.get(cell.columnId) ?? []), cell.rowId]);
+      }
+      const pipelines = yield* PipelineService;
+      const runGroups = yield* Effect.forEach([...byColumn], ([columnId, rowIds]) => pipelines.createTriggeredRuns({ columnId, rowIds: [...new Set(rowIds)], trigger: "row_updated" }), { concurrency: 10 });
+      const runs = runGroups.flat();
+      if (runs.length > 0) yield* Effect.tryPromise(() => inngest.send(runs.map((run) => ({ id: `pipeline-run:${run.id}`, name: "pipeline/run.requested" as const, data: { runId: run.id, workspaceId: run.workspaceId } }))));
+      return result;
     }),
   );
 }

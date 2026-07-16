@@ -79,6 +79,8 @@ import { type SignalsCloud } from "./SignalsModal";
 import type { AgentCloudContext } from "./AgentPanel";
 import type { TableCard } from "./Panels";
 import type { ImportWriter } from "./csvImport";
+import { PipelineEditor, PipelineSidebar, PipelinesHub } from "./Pipelines";
+import { pipelineQueryKeys, usePipelines } from "./cloud/usePipelines";
 // NOTE: DataGrid / buildColumnMetaMap / resolveRowHeight were only used by the
 // removed local-sidecar grid render path; the cloud grid (CloudGrid) is
 // self-contained. They are intentionally no longer imported here.
@@ -140,6 +142,8 @@ function PanelFallback() {
 type View =
   | { kind: "table" }
   | { kind: "tables" }
+  | { kind: "pipelines"; attachTableId?: string; attachOutputColumnId?: string }
+  | { kind: "pipeline"; id: string; attachTableId?: string; attachOutputColumnId?: string }
   | { kind: "extensions" }
   | { kind: "extension"; id: string }
   | { kind: "skills" }
@@ -1294,6 +1298,13 @@ export default function App() {
   // silently. Both are cleared on the next attempt / success.
   const [cloudCreating, setCloudCreating] = useState(false);
   const [cloudCreateError, setCloudCreateError] = useState<string | null>(null);
+  const agentPipelines = usePipelines(cloudProject ? String(cloudProject._id) : null).data;
+  const activePipeline = useMemo(() => {
+    if (view.kind !== "pipeline") return null;
+    const item = agentPipelines?.find((pipeline) => pipeline.id === view.id);
+    return { id: view.id, name: item?.name ?? "Untitled pipeline" };
+  }, [view, agentPipelines]);
+
   // CLOUD context for the agent (TRI-3296): the signed-in session + the active
   // cloud workspace/project/table, so the agent's MCP table tools operate on
   // Supabase. Null unless ALL are present (a cloud project + table is open and
@@ -1313,8 +1324,9 @@ export default function App() {
       workspaceId: activeWorkspace._id,
       projectId: cloudProject._id,
       tableId: cloudTableId ?? undefined,
+      pipelineId: activePipeline?.id,
     };
-  }, [cloudSession, activeWorkspace, cloudProject, cloudTableId]);
+  }, [cloudSession, activeWorkspace, cloudProject, cloudTableId, activePipeline?.id]);
   // Active CLOUD table's live view. Shares CloudGrid's paged query key, so this
   // dedups with CloudGrid's own useCloudTablePaged (no extra fetch) and is a
   // safe no-op when passed `null`. Gives the agent's "Active table" hint the
@@ -2522,6 +2534,8 @@ export default function App() {
           { id: "new-table", label: "New table", keywords: "create add", run: () => { setNewTableFolderId(null); setShowNewTableChooser(true); } },
           { id: "import-csv", label: "Import CSV", keywords: "upload file", run: () => setImportMode("cloud") },
           { id: "browse-tables", label: "Browse all tables", keywords: "search manage", run: () => setView({ kind: "tables" }) },
+          { id: "browse-pipelines", label: "Browse pipelines", keywords: "automation workflow canvas", run: () => setView({ kind: "pipelines" }) },
+          { id: "new-pipeline", label: "New pipeline", keywords: "automation workflow", run: () => setView({ kind: "pipelines" }) },
           { id: "switch-project", label: "Switch project / workspace", keywords: "change", run: () => setShowProjects(true) },
           { id: "changelog", label: "What's new / Changelog", keywords: "release notes version updates", run: () => setChangelogModalOpen(true) },
           ...(activeWorkspace ? [{ id: "workspace-settings", label: "Workspace settings", keywords: "members seats billing", run: () => setShowWorkspaceSettings(true) } as PaletteAction] : []),
@@ -2696,6 +2710,14 @@ export default function App() {
               </div>
             )}
           </div>
+
+          <PipelineSidebar
+            projectId={cloudProject ? String(cloudProject._id) : null}
+            activeId={view.kind === "pipeline" ? view.id : null}
+            onBrowse={() => setView({ kind: "pipelines" })}
+            onOpen={(id) => setView({ kind: "pipeline", id })}
+            onDeleted={(id) => { if (view.kind === "pipeline" && view.id === id) setView({ kind: "pipelines" }); }}
+          />
 
           {/* AI Providers section — collapsible */}
           <div className="sidebar-section">
@@ -2972,6 +2994,7 @@ export default function App() {
               workspaceId={activeWorkspace?._id ?? null}
               connectors={connectors}
               onOpenAiSettings={() => setView({ kind: "ai", id: aiProviders[0]?.id ?? "anthropic" })}
+              onAutomate={(tableId, outputColumnId) => setView({ kind: "pipelines", attachTableId: String(tableId), attachOutputColumnId: outputColumnId })}
               openWebhookToken={openWebhookToken}
               onMissing={onCloudTableMissing}
               onUpgrade={() => setShowUpgrade(true)}
@@ -3015,6 +3038,22 @@ export default function App() {
               onBulkDelete={onBulkDeleteCards}
             />
           </Suspense>
+        )}
+        {!importMode && view.kind === "pipelines" && (
+          <PipelinesHub
+            projectId={cloudProject ? String(cloudProject._id) : null}
+            attachTableId={view.attachTableId}
+            onOpen={(id) => setView({ kind: "pipeline", id, attachTableId: view.attachTableId, attachOutputColumnId: view.attachOutputColumnId })}
+          />
+        )}
+        {!importMode && view.kind === "pipeline" && (
+          <PipelineEditor
+            pipelineId={view.id}
+            projectId={cloudProject ? String(cloudProject._id) : null}
+            attachTableId={view.attachTableId}
+            attachOutputColumnId={view.attachOutputColumnId}
+            onBack={() => setView({ kind: "pipelines", attachTableId: view.attachTableId, attachOutputColumnId: view.attachOutputColumnId })}
+          />
         )}
         {!importMode && view.kind === "extensions" && (
           <Suspense fallback={<PanelFallback />}>
@@ -3078,8 +3117,11 @@ export default function App() {
             // the open table so the UI reflects the agent's writes.
             void invalidateCloudTables();
             if (cloudTableId !== null) void invalidateCloudTable(cloudTableId);
+            if (cloudProject) void queryClient.invalidateQueries({ queryKey: pipelineQueryKeys.list(String(cloudProject._id)) });
+            if (activePipeline) void queryClient.invalidateQueries({ queryKey: pipelineQueryKeys.detail(activePipeline.id) });
           }}
           activeTable={activeTable}
+          activePipeline={activePipeline}
           cloud={agentCloud}
           onAgentEvent={onAgentEvent}
           onResizeStart={startAgentResize}

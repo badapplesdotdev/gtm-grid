@@ -9,6 +9,7 @@
     { "path": "./packages/email" },
     { "path": "./packages/auth" },
     { "path": "./packages/engine" },
+    { "path": "./packages/pipelines" },
     { "path": "./packages/server" },
     { "path": "./packages/mcp" }
   ]

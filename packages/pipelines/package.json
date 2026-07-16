@@ -1,0 +1,20 @@
+{
+  "name": "@gtmgrid/pipelines",
+  "version": "1.7.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./variables": "./src/variables.ts",
+    "./binding": "./src/binding.ts",
+    "./template-text": "./src/template-text.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -b",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  }
+}

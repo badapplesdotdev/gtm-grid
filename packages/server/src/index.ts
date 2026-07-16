@@ -29,6 +29,7 @@ import {
   migrateGlobals,
   DEFAULT_HERMES_BASE_URL,
   GridStoreError,
+  runFunction,
   type AiConfig,
   type Credential,
   type EngineConfig,
@@ -41,6 +42,7 @@ import { codexModelOptions, detectAgents, streamClaude, streamCodex, streamCurso
 import { localProviderEnv, resolveCloudProviderEnv } from "./provider-env.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, previewCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
+import { compilePipeline, makePipelineNodeExecutor, pipelineGraphSchema, runPipelineRecord, type PipelineNodeExecutor } from "@gtmgrid/pipelines";
 import { requiredInputKeys, resolveOptionArgs } from "./option-args.js";
 import { corsHeadersFor, isLoopbackHost, isOriginAllowed } from "./cors.js";
 import { Semaphore } from "./semaphore.js";
@@ -805,6 +807,21 @@ route("POST", "/api/options", async (_p, body) => {
 // inputs are read from Postgres and statuses/results stream back live to all
 // members via the realtime broadcast the server emits. The registry + AI config
 // are the sidecar's existing ones, so connectors/AI columns behave identically.
+const localPipelineExecutor: PipelineNodeExecutor = makePipelineNodeExecutor(
+  { dispatch: engine.dispatch, providerMap: () => registry.providerMap(), runFunction },
+  { unsupportedMessage: (type) => `Pipeline node type ${type} is not supported by the local sidecar.` },
+);
+
+route("POST", "/api/pipelines/run-record", async (_p, body) => {
+  const parsed = pipelineGraphSchema.safeParse(body?.graph);
+  if (!parsed.success) return { error: `Invalid pipeline graph: ${parsed.error.issues.map((issue) => issue.message).join("; ")}` };
+  const runId = String(body?.runId ?? "").trim();
+  const rowId = String(body?.rowId ?? "").trim();
+  if (!runId || !rowId) return { error: "runId and rowId are required" };
+  const input = body?.input && typeof body.input === "object" ? body.input as Record<string, unknown> : {};
+  return runLimiter.run(() => runPipelineRecord(compilePipeline(parsed.data), { runId, rowId, target: "local", input, executor: localPipelineExecutor }));
+});
+
 route("POST", "/api/cloud/columns/run", async (_p, body) => {
   const apiUrl = String(body?.apiUrl ?? "").trim();
   const token = String(body?.token ?? "").trim();

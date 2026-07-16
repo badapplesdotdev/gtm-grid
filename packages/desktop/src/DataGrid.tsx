@@ -20,7 +20,7 @@
  * by each parent and opened via controller intents.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type MouseEvent as ReactMouseEvent, type ReactNode, type SetStateAction } from "react";
 import { Icon } from "./App";
 import { FnIcon, type ColumnMeta } from "./FnIcon";
 import { missingInputs } from "./columnInputs";
@@ -35,6 +35,8 @@ import { csvFilename, downloadCsv, tableToCsv } from "./csvExport";
 import { PresenceAvatars } from "./PresenceAvatars";
 import { type GridPresenceView, presenceCellKey } from "./gridPresence";
 import { useGridKeyboardNav } from "./useGridKeyboardNav";
+import { GridViewControls } from "./GridViewControls";
+import { applyGridView, defaultOperatorForColumn, EMPTY_GRID_VIEW, sanitizeGridView, type GridViewState } from "./gridView";
 
 /** A `<td>` style that also carries the per-cell presence-ring color variable. */
 type PresenceTdStyle = CSSProperties & { "--presence-color"?: string };
@@ -109,6 +111,10 @@ export interface GridController {
    *  environment's default run (local: unrun + errored rows; cloud: force). */
   readonly runColumn: (colId: string, opts?: { force?: boolean; rowIds?: string[] }) => void;
   readonly runCell: (rowId: string, colId: string) => void;
+  /** Structured pipeline output columns get the same per-cell play affordance
+   * as function columns, but enqueue their attached workflow instead. */
+  readonly pipelineOutputColumnIds?: ReadonlySet<string>;
+  readonly runPipelineCell?: (rowId: string, colId: string) => void;
   /** Run an explicit set of function cells (the range-selection "Run N cells");
    *  grouped per column into force+rowIds runs. Omit to hide the menu item. */
   readonly runCells?: (cells: Array<{ rowId: string; colId: string }>) => void;
@@ -161,6 +167,8 @@ export type CellActions = Pick<
   GridController,
   | "setCell"
   | "runCell"
+  | "pipelineOutputColumnIds"
+  | "runPipelineCell"
   | "clearCell"
   | "openCellDetails"
   | "expandCell"
@@ -223,7 +231,43 @@ export function DataGrid({
   controller: GridController;
   bodyOverride?: ReactNode;
 }) {
-  const { table } = c;
+  const sourceTable = c.table;
+  const storageKey = `gtmgrid:grid-view:${sourceTable.id}`;
+  const [storedView, setStoredView] = useState<{ tableId: string; view: GridViewState }>(() => {
+    try {
+      return { tableId: sourceTable.id, view: sanitizeGridView(JSON.parse(localStorage.getItem(storageKey) ?? "null"), sourceTable) };
+    } catch { return { tableId: sourceTable.id, view: EMPTY_GRID_VIEW }; }
+  });
+  useEffect(() => {
+    if (storedView.tableId === sourceTable.id) return;
+    try {
+      setStoredView({ tableId: sourceTable.id, view: sanitizeGridView(JSON.parse(localStorage.getItem(storageKey) ?? "null"), sourceTable) });
+    } catch { setStoredView({ tableId: sourceTable.id, view: EMPTY_GRID_VIEW }); }
+  }, [sourceTable.id, storageKey, storedView.tableId]);
+  const view = storedView.tableId === sourceTable.id ? storedView.view : EMPTY_GRID_VIEW;
+  const setView = useCallback<Dispatch<SetStateAction<GridViewState>>>((update) => {
+    setStoredView((current) => {
+      const base = current.tableId === sourceTable.id ? current.view : EMPTY_GRID_VIEW;
+      return { tableId: sourceTable.id, view: typeof update === "function" ? update(base) : update };
+    });
+  }, [sourceTable.id]);
+  useEffect(() => {
+    if (storedView.tableId !== sourceTable.id) return;
+    try { localStorage.setItem(storageKey, JSON.stringify(storedView.view)); } catch { /* best-effort view preference */ }
+  }, [sourceTable.id, storageKey, storedView]);
+  const table = useMemo(() => applyGridView(sourceTable, view), [sourceTable, view]);
+  const pinnedCount = table.columns.filter((column) => view.pinnedColumnIds.includes(column.id)).length;
+  const pinnedLeftByCol = useMemo(() => {
+    const result = new Map<string, number>();
+    let left = GUTTER_W;
+    for (let index = 0; index < pinnedCount; index++) {
+      const column = table.columns[index];
+      if (!column) break;
+      result.set(column.id, left);
+      left += c.columnWidth(column.id);
+    }
+    return result;
+  }, [c, pinnedCount, table.columns]);
   const gridScrollRef = useRef<HTMLDivElement>(null);
   // Toolbar width drives the responsive collapse: below COMPACT_TOOLBAR_PX the
   // action buttons fold into the "⋯" overflow menu. We measure the CONTAINER (not
@@ -583,6 +627,7 @@ export function DataGrid({
       const col = table.columns[i];
       return col ? c.columnWidth(col.id) : c.minColWidth;
     },
+    forceAll: pinnedCount > 0,
   });
 
   // Tie lazy paging to the viewport: when scrolled within ~10 rows of the bottom
@@ -686,6 +731,7 @@ export function DataGrid({
       runningCells: c.runningCells,
       runningColId: c.runningColId,
       waitingByCol,
+      pinnedLeftByCol,
     }),
     [
       selRect,
@@ -699,6 +745,7 @@ export function DataGrid({
       c.runningColId,
       flashCell,
       waitingByCol,
+      pinnedLeftByCol,
     ],
   );
 
@@ -709,6 +756,8 @@ export function DataGrid({
     () => ({
       setCell: c.setCell,
       runCell: c.runCell,
+      pipelineOutputColumnIds: c.pipelineOutputColumnIds,
+      runPipelineCell: c.runPipelineCell,
       clearCell: c.clearCell,
       openCellDetails: c.openCellDetails,
       expandCell: c.expandCell,
@@ -719,6 +768,8 @@ export function DataGrid({
     [
       c.setCell,
       c.runCell,
+      c.pipelineOutputColumnIds,
+      c.runPipelineCell,
       c.clearCell,
       c.openCellDetails,
       c.expandCell,
@@ -761,6 +812,39 @@ export function DataGrid({
     if (c.duplicateColumn) {
       items.push({ label: "Duplicate", onClick: () => c.duplicateColumn!(col) });
     }
+    items.push(
+      { separator: true },
+      {
+        label: "Filter on this column",
+        onClick: () => setView((current) => {
+          const rule = { id: `rule-${Date.now()}`, columnId: col.id, operator: defaultOperatorForColumn(col), value: "" };
+          const first = current.filterGroups[0];
+          return {
+            ...current,
+            filterGroups: first
+              ? current.filterGroups.map((group, index) => index === 0 ? { ...group, rules: [...group.rules, rule] } : group)
+              : [{ id: `group-${Date.now()}`, mode: "all", rules: [rule] }],
+          };
+        }),
+      },
+      {
+        label: pinnedLeftByCol.has(col.id) ? "Unpin column" : "Pin column",
+        onClick: () => setView((current) => ({
+          ...current,
+          pinnedColumnIds: current.pinnedColumnIds.includes(col.id)
+            ? current.pinnedColumnIds.filter((id) => id !== col.id)
+            : [...current.pinnedColumnIds, col.id],
+        })),
+      },
+      {
+        label: "Hide column",
+        onClick: () => setView((current) => ({
+          ...current,
+          hiddenColumnIds: [...current.hiddenColumnIds.filter((id) => id !== col.id), col.id],
+          pinnedColumnIds: current.pinnedColumnIds.filter((id) => id !== col.id),
+        })),
+      },
+    );
     if (col.kind === "function") {
       items.push({ separator: true }, { header: "Run" });
       const busy = runDisabled || c.runningColId === col.id;
@@ -869,6 +953,13 @@ export function DataGrid({
         )}
 
         {c.toolbarLeftExtras}
+        <GridViewControls
+          columns={sourceTable.columns}
+          view={view}
+          setView={setView}
+          totalRows={sourceTable.rows.length}
+          visibleRows={table.rows.length}
+        />
         {/* Left-cluster actions inline only when there's room; otherwise they
             fold into the overflow menu below. */}
         {!compactToolbar && leftToolbarActions.map(renderToolbarAction)}
@@ -954,18 +1045,24 @@ export function DataGrid({
       ) : table.columns.length === 0 ? (
         <div className="empty-state">
           <div className="empty-icon"><Icon.Zap /></div>
-          <div className="empty-title">No columns yet</div>
+          <div className="empty-title">{sourceTable.columns.length ? "All columns are hidden" : "No columns yet"}</div>
           <p className="empty-sub">
-            Add columns to define your data structure. Use function columns to enrich rows automatically.
+            {sourceTable.columns.length
+              ? "Choose which columns to show from the columns menu above."
+              : "Add columns to define your data structure. Use function columns to enrich rows automatically."}
           </p>
           <button
             className="btn btn-primary"
             onClick={(e) => {
+              if (sourceTable.columns.length) {
+                setView((current) => ({ ...current, hiddenColumnIds: [] }));
+                return;
+              }
               const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
               c.openAddColumn({ left: r.left, top: r.bottom });
             }}
           >
-            <Icon.Plus /> Add first column
+            {sourceTable.columns.length ? "Show all columns" : <><Icon.Plus /> Add first column</>}
           </button>
         </div>
       ) : (
@@ -1006,6 +1103,7 @@ export function DataGrid({
                     minWidth: c.minColWidth,
                     maxWidth: c.maxColWidth,
                     ...(colHere ? { "--presence-color": colHere[0].color } : {}),
+                    ...(pinnedLeftByCol.has(col.id) ? { left: pinnedLeftByCol.get(col.id) } : {}),
                   };
                   const meta = col.kind === "function" ? c.columnMeta?.(col) ?? null : null;
                   const stats = fnStats.get(col.id);
@@ -1026,7 +1124,7 @@ export function DataGrid({
                       key={col.id}
                       role="columnheader"
                       aria-colindex={vc.index + 1}
-                      className={`grid-th${colHere ? " col-presence" : ""}`}
+                      className={`grid-th${pinnedLeftByCol.has(col.id) ? " pinned-column" : ""}${colHere ? " col-presence" : ""}`}
                       title={colHere ? colHere.map((u) => `${u.name ?? u.userId}${u.activity ? ` — ${u.activity}` : ""}`).join(", ") : undefined}
                       style={thStyle}
                       onContextMenu={(e) => openCtx(e, columnMenuItems(col))}

@@ -1,4 +1,7 @@
-node_modules/
+# Match node_modules in every form — a real directory OR a symlink (git
+# worktrees / pnpm can leave a `node_modules` symlink, which a trailing-slash
+# "node_modules/" pattern would NOT ignore, exposing it to `git add -A`).
+node_modules
 dist/
 *.tsbuildinfo
 *.db
@@ -46,3 +49,6 @@ packages/desktop/.last-run.json
 # Stray root-level screenshots (testing artifacts)
 /*.png
 packages/desktop/e2e/.mock.pid
+
+# Stray compiler output (e.g. a leftover cc/clang a.out)
+a.out

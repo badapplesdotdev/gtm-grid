@@ -15,9 +15,10 @@
  * shaped exactly as desktop useCloudGrid.ts:165 consumes it.
  */
 
-import { GridService } from "@gtmgrid/services";
+import { GridService, PipelineService } from "@gtmgrid/services";
 import { Effect } from "effect";
 import { z } from "zod";
+import { inngest } from "../../inngest/client";
 import { protectedProcedure, router, runEffect } from "../trpc";
 
 /** The cell-status lifecycle literals (mirrors the `cellStatus` enum). */
@@ -47,6 +48,15 @@ const rowCursor = z.object({
  * imports in chunks far smaller than this, so the cap only fires on abuse.
  */
 const MAX_ROWS_PER_IMPORT = 5000;
+
+async function dispatchPipelineRuns(runs: readonly { readonly id: string; readonly workspaceId: string }[]) {
+  if (runs.length === 0) return;
+  await inngest.send(runs.map((run) => ({
+    id: `pipeline-run:${run.id}`,
+    name: "pipeline/run.requested" as const,
+    data: { runId: run.id, workspaceId: run.workspaceId },
+  })));
+}
 
 export const gridRouter = router({
   // ── projects ────────────────────────────────────────────────────────────
@@ -371,19 +381,24 @@ export const gridRouter = router({
         rowIds: z.array(z.string().min(1)).optional(),
       }),
     )
-    .mutation(({ ctx, input }) =>
-      runEffect(
+    .mutation(async ({ ctx, input }) => {
+      const result = await runEffect(
         ctx.runtime,
         Effect.gen(function* () {
           const svc = yield* GridService;
-          return yield* svc.addRowsWithCells({
+          const added = yield* svc.addRowsWithCells({
             tableId: input.tableId,
             rows: input.rows,
             ...(input.rowIds !== undefined ? { rowIds: input.rowIds } : {}),
           });
+          const pipelines = yield* PipelineService;
+          const runs = yield* pipelines.createTriggeredRuns({ tableId: input.tableId, rowIds: added.rowIds, trigger: "row_created" });
+          return { added, runs };
         }),
-      ),
-    ),
+      );
+      await dispatchPipelineRuns(result.runs);
+      return result.added;
+    }),
 
   /** Delete a table (FK cascade drops children). Members-only. Metered. */
   deleteTable: protectedProcedure
@@ -548,12 +563,12 @@ export const gridRouter = router({
         error: z.string().nullish(),
       }),
     )
-    .mutation(({ ctx, input }) =>
-      runEffect(
+    .mutation(async ({ ctx, input }) => {
+      const result = await runEffect(
         ctx.runtime,
         Effect.gen(function* () {
           const svc = yield* GridService;
-          return yield* svc.setCell({
+          const cellId = yield* svc.setCell({
             rowId: input.rowId,
             columnId: input.columnId,
             hasValue: "value" in input,
@@ -561,9 +576,15 @@ export const gridRouter = router({
             ...(input.status !== undefined ? { status: input.status } : {}),
             ...(input.error !== undefined ? { error: input.error } : {}),
           });
+          if (!("value" in input)) return { cellId, runs: [] as const };
+          const pipelines = yield* PipelineService;
+          const runs = yield* pipelines.createTriggeredRuns({ columnId: input.columnId, rowIds: [input.rowId], trigger: "row_updated" });
+          return { cellId, runs };
         }),
-      ),
-    ),
+      );
+      await dispatchPipelineRuns(result.runs);
+      return result.cellId;
+    }),
 
   /** Set only a cell's status (COALESCE-preserve value). Members-only. Metered. */
   setCellStatus: protectedProcedure
