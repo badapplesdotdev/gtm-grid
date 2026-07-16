@@ -1180,6 +1180,14 @@ export default function App() {
     isAuthenticated,
     cloudSession,
   );
+  const connectedExtensions = useMemo(
+    () => extensions.map((extension) => ({
+      ...extension,
+      connected: extension.connected
+        || (workspaceCreds?.connectedExtensionIds.has(extension.id) ?? false),
+    })),
+    [extensions, workspaceCreds],
+  );
   const cloudProjects = useCloudProjects(activeWorkspace?._id ?? null);
   // Live sidebar: refresh the table/project lists when any teammate creates,
   // syncs, or deletes a table in this workspace.
@@ -2765,12 +2773,12 @@ export default function App() {
                 Browse all
               </button>
             </div>
-            {extSectionOpen && (extensions.length === 0 ? (
+            {extSectionOpen && (connectedExtensions.length === 0 ? (
               <div className="skeleton-row">
                 <div className="shimmer skeleton-bar" style={{ width: "70%", height: 13 }} />
               </div>
             ) : <>
-              {extensions.slice(0, NAV_PREVIEW_LIMIT).map(e => (
+              {connectedExtensions.slice(0, NAV_PREVIEW_LIMIT).map(e => (
                 <div
                   key={e.id}
                   className={`ext-item clickable${view.kind === "extension" && view.id === e.id ? " active" : ""}`}
@@ -2786,7 +2794,7 @@ export default function App() {
                   </span>
                 </div>
               ))}
-              {extensions.length > NAV_PREVIEW_LIMIT && (
+              {connectedExtensions.length > NAV_PREVIEW_LIMIT && (
                 <div
                   className="ext-item clickable ext-item-more"
                   onClick={() => setView({ kind: "extensions" })}
@@ -2795,7 +2803,7 @@ export default function App() {
                   tabIndex={0}
                   title="Browse all tools"
                 >
-                  +{extensions.length - NAV_PREVIEW_LIMIT} more
+                  +{connectedExtensions.length - NAV_PREVIEW_LIMIT} more
                 </div>
               )}
             </>)}
@@ -3058,7 +3066,7 @@ export default function App() {
         {!importMode && view.kind === "extensions" && (
           <Suspense fallback={<PanelFallback />}>
             <ExtensionsBrowse
-              extensions={extensions}
+              extensions={connectedExtensions}
               onOpen={(id) => setView({ kind: "extension", id })}
             />
           </Suspense>

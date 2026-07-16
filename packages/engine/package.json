@@ -9,7 +9,13 @@
   },
   "scripts": {
     "gen:formula-libs": "node scripts/gen-formula-libs.mjs",
-    "gen:bundled-manifests": "node scripts/gen-bundled-manifests.mjs"
+    "gen:bundled-manifests": "node scripts/gen-bundled-manifests.mjs",
+    "gen:linear": "node scripts/gen-linear-manifest.mjs",
+    "gen:zoominfo": "node scripts/gen-zoominfo-manifest.mjs",
+    "gen:surfe": "node scripts/gen-surfe-manifest.mjs",
+    "gen:theirstack": "node scripts/gen-theirstack-manifest.mjs",
+    "gen:peopledatalabs": "node scripts/gen-peopledatalabs-manifest.mjs",
+    "gen:lemlist": "node scripts/gen-lemlist-manifest.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",

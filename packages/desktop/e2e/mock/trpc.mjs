@@ -68,6 +68,27 @@ export const procedures = {
   "invitations.myPending": () => [],
   "auth.enabledProviders": () => ({ github: false, google: false, emailAuth: true }),
   "billing.syncPlan": () => ({ ok: true }),
+  "credentials.list": (input, s) =>
+    s.credentials
+      .filter((credential) => credential.workspaceId === input?.workspaceId)
+      .map(({ extensionId, scope }) => ({ extensionId, scope })),
+  "credentials.save": (input, s) => {
+    s.credentials = s.credentials.filter(
+      (credential) => !(
+        credential.workspaceId === input?.workspaceId
+        && credential.extensionId === input?.extensionId
+        && credential.scope === input?.scope
+      ),
+    );
+    s.credentials.push({
+      workspaceId: input?.workspaceId,
+      extensionId: input?.extensionId,
+      scope: input?.scope,
+      name: input?.name,
+      secrets: input?.secrets,
+    });
+    return { id: `cred_${s.credentials.length}` };
+  },
 
   // ── grid: reads ─────────────────────────────────────────────────────────
   "grid.listProjects": (input, s) =>

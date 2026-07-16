@@ -1,0 +1,1539 @@
+{
+  "id": "peopledatalabs",
+  "name": "People Data Labs",
+  "version": "1.0.0",
+  "category": "enrichment",
+  "description": "People, company, search, cleaning, autocomplete, IP, job-title, skill, job-posting, changelog, and privacy APIs (27 production operations).",
+  "baseUrl": "https://api.peopledatalabs.com",
+  "logo": "data:image/vnd.microsoft.icon;base64,AAABAAEAICAAAAEAIACoEAAAFgAAACgAAAAgAAAAQAAAAAEAIAAAAAAAABAAACMuAAAjLgAAAAAAAAAAAAD/////9Nbb/96Ck//UXHL/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/1Fxy/96Ck//01dv///////TW2//Zb4P/0lRs/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lRs/9lvg//01tv/3YGT/9JUa//SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0VRr/96Bk//TW3L/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/01xy/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/RVWz/0VRr/9JVbP/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lVs/9htgf/adYj/1WB1/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JUbP/YboL/9t3i//vx8//z1Nn/2G6C/9JVbP/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVWz/1Fxz/+/EzP/23eL/56Sx//vy8//eg5T/0VJp/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JVbP/moK3/++7x/96DlP/Yb4P/+/Hz//HL0v/adIf/0VVs/9JVbP/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JVbP/RUmr/3X+Q//rs7//oqbT/0lRs/9lvg//67vD/+/Hz//np7P/moa7/1WB1/9FUa//SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/RVGv/1F91/+OUo//45ej/8crR/9RedP/QUWn/12p+//nq7f/lnqv/56ez//rt8P/z0dj/3X6Q/9JWbf/SVW3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JVbP/RVGv/01lw/9+Glv/z0df/+/Hz/+/Dy//df5H/23eK/+CKmv/oqbX//PT1/+KRoP/RU2r/3HuN//LO1f/77/H/6Ki0/9Rccv/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/TWG//1mR5/9x8jv/uv8f//ff4///////78PP/9t7i//jl6f/89PX///39///+/v/12+D/2nWI/9FSav/TWnD/5qOv//77+//56ez/12l+/9JVbP/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/01lw/+mtuP/45Of/+u7w//rt8P/23uP/8czT/+u2wP/qsLv/9NXb//78/P/45+r/5qOv/9Zlev/RU2v/2nOG//DGzv/67vD/+ers//be4v/VYXb/0lVs/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JVbP/Ya3//+ejr/+y4wv/df5D/2GyA/9RfdP/UX3X/4Iyc//TV2//56u3/6rG7/9htgf/RU2r/01tx/+Sap//56Ov/9drf/96Elf/uvsb/8tDW/9NacP/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0VNr/+CJmf/67O//2XKF/9BRaf/SV27/3X+Q//HL0v/77/L/7sHJ/9t4iv/SVW3/0VNq/9pzhv/wx8//+/Dy/+qxu//WZXr/0lZt//LO1P/uvcb/0lVt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVGv/6q+5//Xa3//UXnT/1WB2/+y3wP/88/X/89PZ/92Akv/SWG7/0VJq/9Rcc//km6j/+ens//Xa3//ehZb/0ldu/9FUa//VY3j/9+Hl/+iptf/RVGv/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9Rccv/z09n/7LbA/9FTav/YboL/+u7w///+/v/0193/4pOh/9Zlev/adIb/8MfO//vw8v/qsbv/1mV6/9FUa//SVWz/01px/+qxu//67fD/3YGS/9FUa//SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVWz/1mZ7//jl6f/uv8j/01xy/9Vfdf/23eL/8czT/+7Ayf/67fD/+OPn//rt7//56ez/34iY/9JUbP/SVGv/0lVt/9NZb//oqrX/+/Dy/+OVo//SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SWG7/45im//vv8v/tusP/1WJ3//DFzf/vwsr/01lv/9p1iP/qr7r/+OTo//vx8//vw8v/4ImZ/9Vgdv/SV27/5qKv//vx8//lnKr/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/4Y+e//rt8P/vwsr/7bvE//Xb4P/UX3X/0VNq/9FTa//WZHn/4pOh//PR1//89PX/9Njd/+6+x//78PL/56Sw/9JXbv/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVWz/34aX//nn6v/89PX/+uzv/9lvgv/UXXP/2W+D/9+Glv/moq7/8cnQ//329////v7//PL0/+iotP/TWXD/0lVs/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/RVGv/3H2P//fi5v/+/Pz/89LY//Xa3//66+7/+u7w//fh5f/xyND/6Km0/+CLm//ZcYX/01lw/9JVbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/RVGv/23aJ//HL0v/yzNP/6a65/+GPn//adYj/1WN4/9NYb//RVGv/0VNr/9JUbP/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVWz/01tx/9NZcP/RVGv/0VNr/9FUa//SVWz/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9Nbcv/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/TXHL/3YGS/9JUa//SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lRr/96Bk//01tv/2W+D/9JUbP/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JUbP/Zb4P/9NXb///////01tv/3oGT/9Nccv/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/SVm3/0lZt/9JWbf/TXHL/3oGT//TV2///////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+  "auth": {
+    "type": "apiKey",
+    "header": "X-Api-Key",
+    "secretKey": "apiKey",
+    "credentialLabel": "API key",
+    "scheme": ""
+  },
+  "rateLimit": {
+    "rpm": 100,
+    "concurrency": 3
+  },
+  "methods": [
+    {
+      "id": "getPersonEnrichment",
+      "label": "Enrich Person (GET)",
+      "description": "/person/enrich. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Enrich people",
+      "verb": "GET",
+      "path": "/v5/person/enrich",
+      "query": [
+        "pdl_id",
+        "name",
+        "first_name",
+        "last_name",
+        "middle_name",
+        "location",
+        "street_address",
+        "locality",
+        "region",
+        "country",
+        "postal_code",
+        "company",
+        "school",
+        "phone",
+        "email",
+        "email_hash",
+        "profile",
+        "lid",
+        "birth_date",
+        "data_include",
+        "pretty",
+        "min_likelihood",
+        "include_if_matched",
+        "required",
+        "titlecase"
+      ],
+      "input": {
+        "type": "object",
+        "properties": {
+          "pdl_id": {
+            "type": "string",
+            "description": "The PDL ID of the person to enrich"
+          },
+          "name": {
+            "type": "string",
+            "description": "The person's full name, at least first and last"
+          },
+          "first_name": {
+            "type": "string",
+            "description": "The person's first name"
+          },
+          "last_name": {
+            "type": "string",
+            "description": "The person's last name"
+          },
+          "middle_name": {
+            "type": "string",
+            "description": "The person's middle name"
+          },
+          "location": {
+            "type": "string",
+            "description": "A location in which a person lives"
+          },
+          "street_address": {
+            "type": "string",
+            "description": "A street address in which the person lives"
+          },
+          "locality": {
+            "type": "string",
+            "description": "A locality in which the person lives"
+          },
+          "region": {
+            "type": "string",
+            "description": "A state or region in which the person lives"
+          },
+          "country": {
+            "type": "string",
+            "description": "A country in which the person lives"
+          },
+          "postal_code": {
+            "type": "string",
+            "description": "The postal code where the person lives. If there is no value for country, the postal code is assumed to be US"
+          },
+          "company": {
+            "type": "string",
+            "description": "A name, website, or social url of a company where the person has worked"
+          },
+          "school": {
+            "type": "string",
+            "description": "A name, website, or social url of a university or college the person has attended"
+          },
+          "phone": {
+            "type": "string",
+            "description": "A phone number the person has used"
+          },
+          "email": {
+            "type": "string",
+            "description": "An email the person has used"
+          },
+          "email_hash": {
+            "type": "string",
+            "description": "A SHA-256 or MD5 email hash"
+          },
+          "profile": {
+            "type": "string",
+            "description": "A social profile the person has used. https://docs.peopledatalabs.com/docs/social-networks"
+          },
+          "lid": {
+            "type": "string",
+            "description": "The person's LinkedIn ID"
+          },
+          "birth_date": {
+            "type": "string",
+            "description": "The person's birth date: either the year or a full birth date in the format YYYY-MM-DD"
+          },
+          "data_include": {
+            "type": "string",
+            "description": "A comma-separated string of fields that you would like the response to include. Begin the string with a - if you would instead like to exclude the specified fields. If you would like to exclude all data from being returned, use data_include=\"\""
+          },
+          "pretty": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the output should have human-readable indentation"
+          },
+          "min_likelihood": {
+            "type": "integer",
+            "format": "int32",
+            "default": 2,
+            "minimum": 0,
+            "maximum": 10,
+            "description": "The minimum likelihood score that a response must have in order to count as a match"
+          },
+          "include_if_matched": {
+            "type": "boolean",
+            "default": false,
+            "description": "If set to true, includes a top-level (alongside \"data\", \"status\", etc) field \"matched\" which includes a value for each queried field parameter that was \"matched-on\" during our internal query."
+          },
+          "required": {
+            "type": "string",
+            "description": "The fields a response must have in order to count as a match"
+          },
+          "titlecase": {
+            "type": "boolean",
+            "default": false,
+            "description": "Setting titlecase to true will titlecase the person data in 200 responses."
+          }
+        }
+      },
+      "credits": 1
+    },
+    {
+      "id": "identifyPerson",
+      "label": "Identify Person",
+      "description": "/person/identify. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Find people",
+      "verb": "GET",
+      "path": "/v5/person/identify",
+      "query": [
+        "name",
+        "first_name",
+        "last_name",
+        "middle_name",
+        "location",
+        "street_address",
+        "locality",
+        "region",
+        "country",
+        "postal_code",
+        "company",
+        "school",
+        "phone",
+        "email",
+        "email_hash",
+        "profile",
+        "lid",
+        "birth_date",
+        "pretty",
+        "titlecase",
+        "data_include",
+        "include_if_matched"
+      ],
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The person's full name, at least first and last"
+          },
+          "first_name": {
+            "type": "string",
+            "description": "The person's first name"
+          },
+          "last_name": {
+            "type": "string",
+            "description": "The person's last name"
+          },
+          "middle_name": {
+            "type": "string",
+            "description": "The person's middle name"
+          },
+          "location": {
+            "type": "string",
+            "description": "A location in which a person lives"
+          },
+          "street_address": {
+            "type": "string",
+            "description": "A street address in which the person lives"
+          },
+          "locality": {
+            "type": "string",
+            "description": "A locality in which the person lives"
+          },
+          "region": {
+            "type": "string",
+            "description": "A state or region in which the person lives"
+          },
+          "country": {
+            "type": "string",
+            "description": "A country in which the person lives"
+          },
+          "postal_code": {
+            "type": "string",
+            "description": "The postal code where the person lives. If there is no value for country, the postal code is assumed to be US"
+          },
+          "company": {
+            "type": "string",
+            "description": "A name, website, or social url of a company where the person has worked"
+          },
+          "school": {
+            "type": "string",
+            "description": "A name, website, or social url of a university or college the person has attended"
+          },
+          "phone": {
+            "type": "string",
+            "description": "A phone number the person has used"
+          },
+          "email": {
+            "type": "string",
+            "description": "An email the person has used"
+          },
+          "email_hash": {
+            "type": "string",
+            "description": "A sha256 email hash"
+          },
+          "profile": {
+            "type": "string",
+            "description": "A social profile the person has used. https://docs.peopledatalabs.com/docs/social-networks"
+          },
+          "lid": {
+            "type": "string",
+            "description": "The person's LinkedIn ID"
+          },
+          "birth_date": {
+            "type": "string",
+            "description": "The person's birth date: either the year or a full birth date in the format YYYY-MM-DD"
+          },
+          "pretty": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the output should have human-readable indentation"
+          },
+          "titlecase": {
+            "type": "boolean",
+            "default": false,
+            "description": "Setting titlecase to true will titlecase the person data in 200 responses."
+          },
+          "data_include": {
+            "type": "string",
+            "description": "A comma-separated string of fields that you would like the response to include. Begin the string with a - if you would instead like to exclude the specified fields. If you would like to exclude all data from being returned, use data_include=\"\""
+          },
+          "include_if_matched": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, the response will include the field matches.matched_on that contains a list of every query input that matched this profile"
+          }
+        }
+      },
+      "credits": 1
+    },
+    {
+      "id": "searchPeopleGet",
+      "label": "Search People (GET)",
+      "description": "/person/search. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Find people",
+      "verb": "GET",
+      "path": "/v5/person/search",
+      "query": [
+        "query",
+        "sql",
+        "size",
+        "scroll_token",
+        "dataset",
+        "titlecase",
+        "data_include",
+        "pretty"
+      ],
+      "input": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "An Elasticsearch (v7.7) query. See our underlying Elasticsearch mapping for reference. You can build a query using the Query Builder Tool (https://dashboard.peopledatalabs.com/tools/query-builder)"
+          },
+          "sql": {
+            "type": "string",
+            "description": "A SQL query of the format: SELECT * FROM person WHERE XXX, where XXX is a standard SQL boolean query involving our person fields"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int32",
+            "default": 1,
+            "minimum": 1,
+            "maximum": 100,
+            "description": "The number of matched records to return for this query if they exist*. Must be between 1 and 100"
+          },
+          "scroll_token": {
+            "type": "string",
+            "description": "An offset key for paginating between batches. Can be used for any number of records. Each search API response returns a scroll_token which can be used to fetch the next size records."
+          },
+          "dataset": {
+            "type": "string",
+            "default": "resume",
+            "description": "The dataset category to return records from. Can be multiple comma seperated categories or all"
+          },
+          "titlecase": {
+            "type": "boolean",
+            "default": false,
+            "description": "Setting titlecase to true will titlecase any records returned"
+          },
+          "data_include": {
+            "type": "string",
+            "description": "A comma-separated string of fields that you would like the response to include. Begin the string with a - if you would instead like to exclude the specified fields. If you would like to exclude all data from being returned, use data_include=\"\""
+          },
+          "pretty": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the output should have human-readable indentation."
+          }
+        }
+      },
+      "credits": 1
+    },
+    {
+      "id": "searchPeople",
+      "label": "Search People (POST)",
+      "description": "/person/search. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Find people",
+      "verb": "POST",
+      "path": "/v5/person/search",
+      "input": {
+        "type": "object",
+        "properties": {}
+      },
+      "credits": 1
+    },
+    {
+      "id": "retrievePerson",
+      "label": "Retrieve Person",
+      "description": "/person/retrieve. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Enrich people",
+      "verb": "GET",
+      "path": "/v5/person/retrieve/{person_id}",
+      "query": [
+        "titlecase"
+      ],
+      "input": {
+        "type": "object",
+        "properties": {
+          "person_id": {
+            "type": "string",
+            "description": "The ID of a person"
+          },
+          "titlecase": {
+            "type": "boolean",
+            "default": false,
+            "description": "Setting titlecase to true will titlecase the person data in 200 responses."
+          }
+        },
+        "required": [
+          "person_id"
+        ]
+      },
+      "credits": 1
+    },
+    {
+      "id": "retrievePeopleBulk",
+      "label": "Retrieve People in Bulk",
+      "description": "/person/retrieve/bulk. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Enrich people",
+      "verb": "POST",
+      "path": "/v5/person/retrieve/bulk",
+      "query": [
+        "titlecase"
+      ],
+      "input": {
+        "type": "object",
+        "properties": {
+          "titlecase": {
+            "type": "boolean",
+            "default": false,
+            "description": "Setting titlecase to true will titlecase the person data in 200 responses."
+          },
+          "requests": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "description": "PDL person IDs to retrieve, with optional response metadata.",
+            "items": {
+              "type": "object",
+              "required": [
+                "id"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "requests"
+        ]
+      },
+      "credits": 1
+    },
+    {
+      "id": "cleanCompanyGet",
+      "label": "Clean Company (GET)",
+      "description": "/company/clean. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Company data",
+      "verb": "GET",
+      "path": "/v5/company/clean",
+      "query": [
+        "name",
+        "website",
+        "profile",
+        "pretty"
+      ],
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name of the company"
+          },
+          "website": {
+            "type": "string",
+            "description": "A website the company uses"
+          },
+          "profile": {
+            "type": "string",
+            "description": "A social profile of the company (linkedin/facebook/twitter/crunchbase)"
+          },
+          "pretty": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the output should have human-readable indentation."
+          }
+        }
+      },
+      "credits": 0
+    },
+    {
+      "id": "cleanCompany",
+      "label": "Clean Company (POST)",
+      "description": "/company/clean. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Company data",
+      "verb": "POST",
+      "path": "/v5/company/clean",
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name of the company"
+          },
+          "website": {
+            "type": "string",
+            "description": "A website the company uses"
+          },
+          "profile": {
+            "type": "string",
+            "description": "A social profile used by the company (e.g. LinkedIn/Facebook/Twitter)"
+          },
+          "pretty": {
+            "type": "boolean",
+            "description": "Whether the output should have human-readable indentation",
+            "default": false
+          }
+        }
+      },
+      "credits": 0
+    },
+    {
+      "id": "cleanSchoolGet",
+      "label": "Clean School (GET)",
+      "description": "/school/clean. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Clean data",
+      "verb": "GET",
+      "path": "/v5/school/clean",
+      "query": [
+        "name",
+        "website",
+        "profile",
+        "pretty"
+      ],
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name of the school"
+          },
+          "website": {
+            "type": "string",
+            "description": "A website the school uses"
+          },
+          "profile": {
+            "type": "string",
+            "description": "A social profile used by the school (e.g. LinkedIn/Facebook/Twitter)"
+          },
+          "pretty": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the output should have human-readable indentation."
+          }
+        }
+      },
+      "credits": 0
+    },
+    {
+      "id": "cleanSchool",
+      "label": "Clean School (POST)",
+      "description": "/school/clean. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Clean data",
+      "verb": "POST",
+      "path": "/v5/school/clean",
+      "input": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name of the school"
+          },
+          "website": {
+            "type": "string",
+            "description": "A website the school uses"
+          },
+          "profile": {
+            "type": "string",
+            "description": "A social profile used by the school (e.g. LinkedIn/Facebook/Twitter)"
+          },
+          "pretty": {
+            "type": "boolean",
+            "description": "Whether the output should have human-readable indentation",
+            "default": false
+          }
+        }
+      },
+      "credits": 0
+    },
+    {
+      "id": "cleanLocationGet",
+      "label": "Clean Location (GET)",
+      "description": "/location/clean. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Clean data",
+      "verb": "GET",
+      "path": "/v5/location/clean",
+      "query": [
+        "location",
+        "pretty"
+      ],
+      "input": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The raw location to process"
+          },
+          "pretty": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the output should have human-readable indentation."
+          }
+        },
+        "required": [
+          "location"
+        ]
+      },
+      "credits": 0
+    },
+    {
+      "id": "cleanLocation",
+      "label": "Clean Location (POST)",
+      "description": "/location/clean. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Clean data",
+      "verb": "POST",
+      "path": "/v5/location/clean",
+      "input": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The raw location to process"
+          },
+          "pretty": {
+            "type": "boolean",
+            "description": "Whether the output should have human-readable indentation",
+            "default": false
+          }
+        }
+      },
+      "credits": 0
+    },
+    {
+      "id": "enrichCompany",
+      "label": "Enrich Company",
+      "description": "/company/enrich. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Company data",
+      "verb": "GET",
+      "path": "/v5/company/enrich",
+      "query": [
+        "pdl_id",
+        "name",
+        "profile",
+        "ticker",
+        "website",
+        "location",
+        "street_address",
+        "locality",
+        "region",
+        "country",
+        "postal_code",
+        "pretty",
+        "titlecase",
+        "include_if_matched",
+        "min_likelihood",
+        "required"
+      ],
+      "input": {
+        "type": "object",
+        "properties": {
+          "pdl_id": {
+            "type": "string",
+            "description": "The PDL ID of the company to enrich."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name of the company."
+          },
+          "profile": {
+            "type": "string",
+            "description": "A social profile of the company (linkedin/facebook/twitter/crunchbase)."
+          },
+          "ticker": {
+            "type": "string",
+            "description": "The company's stock ticker, if publicly traded."
+          },
+          "website": {
+            "type": "string",
+            "description": "A website the company uses."
+          },
+          "location": {
+            "type": "string",
+            "description": "The location of the company's headquarters. This can be anything from a street address to a country name."
+          },
+          "street_address": {
+            "type": "string",
+            "description": "The company HQ's street address."
+          },
+          "locality": {
+            "type": "string",
+            "description": "The company HQ's locality. e.g. San Francisco"
+          },
+          "region": {
+            "type": "string",
+            "description": "The company HQ's region. e.g. California"
+          },
+          "country": {
+            "type": "string",
+            "description": "The company HQ's country."
+          },
+          "postal_code": {
+            "type": "string",
+            "description": "The company HQ's postal code."
+          },
+          "pretty": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the output should have human-readable indentation."
+          },
+          "titlecase": {
+            "type": "boolean",
+            "default": false,
+            "description": "All text in API responses returns as lowercase by default. Setting titlecase to true will titlecase response data instead."
+          },
+          "include_if_matched": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, the response will include the top-level field matched that contains a list of every input that matched this profile."
+          },
+          "min_likelihood": {
+            "type": "integer",
+            "format": "int32",
+            "default": 2,
+            "minimum": 0,
+            "maximum": 10,
+            "description": "The minimum likelihood score a response must possess in order to return a 200."
+          },
+          "required": {
+            "type": "string",
+            "description": "The fields a response must have in order to count as a match."
+          }
+        }
+      },
+      "credits": 1
+    },
+    {
+      "id": "searchCompaniesGet",
+      "label": "Search Companies (GET)",
+      "description": "/company/search. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Find companies",
+      "verb": "GET",
+      "path": "/v5/company/search",
+      "query": [
+        "query",
+        "sql",
+        "size",
+        "from",
+        "scroll_token",
+        "titlecase",
+        "pretty"
+      ],
+      "input": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "An Elasticsearch (v7.7) query. See our underlying Elasticsearch mapping for reference."
+          },
+          "sql": {
+            "type": "string",
+            "description": "A SQL query of the format: SELECT * FROM company WHERE XXX, where XXX is a standard SQL boolean query involving PDL fields. Any use of column selections or the LIMIT keyword will be ignored."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int32",
+            "default": 1,
+            "minimum": 1,
+            "maximum": 100,
+            "description": "The number of matched records to return for this query if they exist*. Must be between 1 and 100"
+          },
+          "from": {
+            "type": "integer",
+            "format": "int32",
+            "default": 0,
+            "minimum": 0,
+            "maximum": 9999,
+            "description": "An offset value for pagination. Can be a number between 0 and 9999. Pagination can be executed up to a maximum of 10,000 records per query. Be sure to use the \"total\" response field to help discover how many total records exist in the dataset for your query"
+          },
+          "scroll_token": {
+            "type": "string",
+            "description": "Setting titlecase to true will titlecase any records returned"
+          },
+          "titlecase": {
+            "type": "boolean",
+            "default": false,
+            "description": "Setting titlecase to true will titlecase any records returned"
+          },
+          "pretty": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the output should have human-readable indentation."
+          }
+        }
+      },
+      "credits": 1
+    },
+    {
+      "id": "searchCompanies",
+      "label": "Search Companies (POST)",
+      "description": "/company/search. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Find companies",
+      "verb": "POST",
+      "path": "/v5/company/search",
+      "input": {
+        "type": "object",
+        "properties": {}
+      },
+      "credits": 1
+    },
+    {
+      "id": "autocompleteGet",
+      "label": "Autocomplete (GET)",
+      "description": "/autocomplete. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Data enrichment",
+      "verb": "GET",
+      "path": "/v5/autocomplete",
+      "query": [
+        "field",
+        "text",
+        "size",
+        "titlecase",
+        "pretty"
+      ],
+      "input": {
+        "type": "object",
+        "properties": {
+          "field": {
+            "type": "string",
+            "enum": [
+              "company",
+              "country",
+              "industry",
+              "location",
+              "major",
+              "region",
+              "role",
+              "school",
+              "sub_role",
+              "skill",
+              "title"
+            ],
+            "description": "An enumerated field that will be used to calculate the autocompletion"
+          },
+          "text": {
+            "type": "string",
+            "default": "",
+            "description": "Text that is used as the seed for autocompletion"
+          },
+          "size": {
+            "type": "integer",
+            "default": 10,
+            "description": "Numbers of results returned for autocompletion"
+          },
+          "titlecase": {
+            "type": "boolean",
+            "default": false,
+            "description": "Setting to `true` will titlecase any records returned"
+          },
+          "pretty": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the output should have human-readable indentation"
+          }
+        },
+        "required": [
+          "field"
+        ]
+      },
+      "credits": 0
+    },
+    {
+      "id": "autocomplete",
+      "label": "Autocomplete (POST)",
+      "description": "/autocomplete. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Data enrichment",
+      "verb": "POST",
+      "path": "/v5/autocomplete",
+      "input": {
+        "type": "object",
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "An enumerated field that will be used to calculate the autocompletion",
+            "enum": [
+              "company",
+              "country",
+              "industry",
+              "location",
+              "major",
+              "region",
+              "role",
+              "school",
+              "sub_role",
+              "skill",
+              "title"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "description": "Text that is used as the seed for autocompletion",
+            "default": ""
+          },
+          "size": {
+            "type": "integer",
+            "description": "The number of results returned for autocompletion",
+            "format": "int32",
+            "default": 10,
+            "minimum": 1,
+            "maximum": 100
+          },
+          "titlecase": {
+            "type": "boolean",
+            "description": "Setting titlecase to true will titlecase any records returned",
+            "default": false
+          },
+          "pretty": {
+            "type": "boolean",
+            "description": "Whether the output should have human-readable indentation",
+            "default": false
+          }
+        }
+      },
+      "credits": 0
+    },
+    {
+      "id": "enrichIp",
+      "label": "Enrich IP Address",
+      "description": "/ip/enrich. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Data enrichment",
+      "verb": "GET",
+      "path": "/v5/ip/enrich",
+      "query": [
+        "ip",
+        "return_ip_location",
+        "return_ip_metadata",
+        "return_person",
+        "return_if_unmatched",
+        "titlecase",
+        "pretty"
+      ],
+      "input": {
+        "type": "object",
+        "properties": {
+          "ip": {
+            "type": "string",
+            "description": "IP that will be enriched."
+          },
+          "return_ip_location": {
+            "type": "boolean",
+            "default": false,
+            "description": "IP responses will not include location data for the IP by default. Setting to `true` will return IP specific location info."
+          },
+          "return_ip_metadata": {
+            "type": "boolean",
+            "default": false,
+            "description": "IP responses will not include metadata for the IP by default. Setting to `true` will return IP specific metadata."
+          },
+          "return_person": {
+            "type": "boolean",
+            "default": false,
+            "description": "Setting to `true` will return person fields associated with the IP."
+          },
+          "return_if_unmatched": {
+            "type": "boolean",
+            "default": false,
+            "description": "Setting to `true` will return IP specific metadata or location data regardless of a company match."
+          },
+          "titlecase": {
+            "type": "boolean",
+            "default": false,
+            "description": "Setting to `true` will titlecase any records returned."
+          },
+          "pretty": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the output should have human-readable indentation."
+          }
+        },
+        "required": [
+          "ip"
+        ]
+      },
+      "credits": 1
+    },
+    {
+      "id": "enrichJobTitleGet",
+      "label": "Enrich Job Title (GET)",
+      "description": "/job_title/enrich. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Data enrichment",
+      "verb": "GET",
+      "path": "/v5/job_title/enrich",
+      "query": [
+        "job_title",
+        "titlecase",
+        "pretty"
+      ],
+      "input": {
+        "type": "object",
+        "properties": {
+          "job_title": {
+            "type": "string",
+            "description": "Job title that will be enriched"
+          },
+          "titlecase": {
+            "type": "boolean",
+            "default": false,
+            "description": "Setting to `true` will titlecase any records returned"
+          },
+          "pretty": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the output should have human-readable indentation"
+          }
+        },
+        "required": [
+          "job_title"
+        ]
+      },
+      "credits": 1
+    },
+    {
+      "id": "enrichJobTitle",
+      "label": "Enrich Job Title (POST)",
+      "description": "/job_title/enrich. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Data enrichment",
+      "verb": "POST",
+      "path": "/v5/job_title/enrich",
+      "input": {
+        "type": "object",
+        "properties": {
+          "job_title": {
+            "type": "string",
+            "description": "Job title that will be enriched"
+          },
+          "titlecase": {
+            "type": "boolean",
+            "description": "Setting titlecase to true will titlecase any records returned",
+            "default": false
+          },
+          "pretty": {
+            "type": "boolean",
+            "description": "Whether the output should have human-readable indentation",
+            "default": false
+          }
+        }
+      },
+      "credits": 1
+    },
+    {
+      "id": "enrichSkill",
+      "label": "Enrich Skill",
+      "description": "/skill/enrich. Official schema: https://raw.githubusercontent.com/peopledatalabs/openAPI-specifications/main/pdl-specs.json",
+      "category": "Data enrichment",
+      "verb": "GET",
+      "path": "/v5/skill/enrich",
+      "query": [
+        "skill",
+        "titlecase",
+        "pretty"
+      ],
+      "input": {
+        "type": "object",
+        "properties": {
+          "skill": {
+            "type": "string",
+            "description": "skill that will be enriched."
+          },
+          "titlecase": {
+            "type": "boolean",
+            "default": false,
+            "description": "Setting to `true` will titlecase any records returned."
+          },
+          "pretty": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the output should have human-readable indentation."
+          }
+        },
+        "required": [
+          "skill"
+        ]
+      },
+      "credits": 1
+    },
+    {
+      "verb": "POST",
+      "id": "postPersonEnrichment",
+      "label": "Enrich Person (POST)",
+      "path": "/v5/person/enrich",
+      "category": "Enrich people",
+      "description": "Enrich one person using a JSON request body. Official docs: https://docs.peopledatalabs.com/docs/reference-person-enrichment-api",
+      "input": {
+        "type": "object",
+        "properties": {
+          "pdl_id": {
+            "type": "string",
+            "description": "The PDL ID of the person to enrich"
+          },
+          "name": {
+            "type": "string",
+            "description": "The person's full name, at least first and last"
+          },
+          "first_name": {
+            "type": "string",
+            "description": "The person's first name"
+          },
+          "last_name": {
+            "type": "string",
+            "description": "The person's last name"
+          },
+          "middle_name": {
+            "type": "string",
+            "description": "The person's middle name"
+          },
+          "location": {
+            "type": "string",
+            "description": "A location in which a person lives"
+          },
+          "street_address": {
+            "type": "string",
+            "description": "A street address in which the person lives"
+          },
+          "locality": {
+            "type": "string",
+            "description": "A locality in which the person lives"
+          },
+          "region": {
+            "type": "string",
+            "description": "A state or region in which the person lives"
+          },
+          "country": {
+            "type": "string",
+            "description": "A country in which the person lives"
+          },
+          "postal_code": {
+            "type": "string",
+            "description": "The postal code where the person lives. If there is no value for country, the postal code is assumed to be US"
+          },
+          "company": {
+            "type": "string",
+            "description": "A name, website, or social url of a company where the person has worked"
+          },
+          "school": {
+            "type": "string",
+            "description": "A name, website, or social url of a university or college the person has attended"
+          },
+          "phone": {
+            "type": "string",
+            "description": "A phone number the person has used"
+          },
+          "email": {
+            "type": "string",
+            "description": "An email the person has used"
+          },
+          "email_hash": {
+            "type": "string",
+            "description": "A SHA-256 or MD5 email hash"
+          },
+          "profile": {
+            "type": "string",
+            "description": "A social profile the person has used. https://docs.peopledatalabs.com/docs/social-networks"
+          },
+          "lid": {
+            "type": "string",
+            "description": "The person's LinkedIn ID"
+          },
+          "birth_date": {
+            "type": "string",
+            "description": "The person's birth date: either the year or a full birth date in the format YYYY-MM-DD"
+          },
+          "data_include": {
+            "type": "string",
+            "description": "A comma-separated string of fields that you would like the response to include. Begin the string with a - if you would instead like to exclude the specified fields. If you would like to exclude all data from being returned, use data_include=\"\""
+          },
+          "pretty": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the output should have human-readable indentation"
+          },
+          "min_likelihood": {
+            "type": "integer",
+            "format": "int32",
+            "default": 2,
+            "minimum": 0,
+            "maximum": 10,
+            "description": "The minimum likelihood score that a response must have in order to count as a match"
+          },
+          "include_if_matched": {
+            "type": "boolean",
+            "default": false,
+            "description": "If set to true, includes a top-level (alongside \"data\", \"status\", etc) field \"matched\" which includes a value for each queried field parameter that was \"matched-on\" during our internal query."
+          },
+          "required": {
+            "type": "string",
+            "description": "The fields a response must have in order to count as a match"
+          },
+          "titlecase": {
+            "type": "boolean",
+            "default": false,
+            "description": "Setting titlecase to true will titlecase the person data in 200 responses."
+          }
+        }
+      },
+      "credits": 1
+    },
+    {
+      "verb": "POST",
+      "id": "bulkPersonEnrichment",
+      "label": "Bulk Person Enrichment",
+      "path": "/v5/person/bulk",
+      "category": "Enrich people",
+      "description": "Enrich 1–100 people in one request; credits are charged per successful match. Official docs: https://docs.peopledatalabs.com/docs/bulk-enrichment-api",
+      "input": {
+        "type": "object",
+        "required": [
+          "requests"
+        ],
+        "properties": {
+          "requests": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "required": [
+                "params"
+              ],
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "description": "Person enrichment parameters."
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "description": "Caller metadata returned with the matching response."
+                }
+              }
+            }
+          },
+          "data_include": {
+            "type": "string"
+          },
+          "required": {
+            "type": "string"
+          },
+          "min_likelihood": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10
+          },
+          "include_if_matched": {
+            "type": "boolean"
+          },
+          "titlecase": {
+            "type": "boolean"
+          },
+          "pretty": {
+            "type": "boolean"
+          }
+        }
+      },
+      "credits": 1
+    },
+    {
+      "verb": "POST",
+      "id": "bulkCompanyEnrichment",
+      "label": "Bulk Company Enrichment",
+      "path": "/v5/company/enrich/bulk",
+      "category": "Company data",
+      "description": "Enrich 1–100 companies in one request; credits are charged per successful match. Official docs: https://docs.peopledatalabs.com/docs/bulk-company-enrichment-api",
+      "input": {
+        "type": "object",
+        "required": [
+          "requests"
+        ],
+        "properties": {
+          "requests": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "required": [
+                "params"
+              ],
+              "properties": {
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "pdl_id": {
+                      "type": "string",
+                      "description": "The PDL ID of the company to enrich."
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "The name of the company."
+                    },
+                    "profile": {
+                      "type": "string",
+                      "description": "A social profile of the company (linkedin/facebook/twitter/crunchbase)."
+                    },
+                    "ticker": {
+                      "type": "string",
+                      "description": "The company's stock ticker, if publicly traded."
+                    },
+                    "website": {
+                      "type": "string",
+                      "description": "A website the company uses."
+                    },
+                    "location": {
+                      "type": "string",
+                      "description": "The location of the company's headquarters. This can be anything from a street address to a country name."
+                    },
+                    "street_address": {
+                      "type": "string",
+                      "description": "The company HQ's street address."
+                    },
+                    "locality": {
+                      "type": "string",
+                      "description": "The company HQ's locality. e.g. San Francisco"
+                    },
+                    "region": {
+                      "type": "string",
+                      "description": "The company HQ's region. e.g. California"
+                    },
+                    "country": {
+                      "type": "string",
+                      "description": "The company HQ's country."
+                    },
+                    "postal_code": {
+                      "type": "string",
+                      "description": "The company HQ's postal code."
+                    },
+                    "pretty": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "Whether the output should have human-readable indentation."
+                    },
+                    "titlecase": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "All text in API responses returns as lowercase by default. Setting titlecase to true will titlecase response data instead."
+                    },
+                    "include_if_matched": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "If true, the response will include the top-level field matched that contains a list of every input that matched this profile."
+                    },
+                    "min_likelihood": {
+                      "type": "integer",
+                      "format": "int32",
+                      "default": 2,
+                      "minimum": 0,
+                      "maximum": 10,
+                      "description": "The minimum likelihood score a response must possess in order to return a 200."
+                    },
+                    "required": {
+                      "type": "string",
+                      "description": "The fields a response must have in order to count as a match."
+                    }
+                  },
+                  "description": "Company enrichment parameters."
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      },
+      "credits": 1
+    },
+    {
+      "verb": "POST",
+      "id": "searchJobPostings",
+      "label": "Search Job Postings",
+      "path": "/v5/job_posting/search",
+      "category": "Job data",
+      "description": "Search PDL job postings with field filters or Elasticsearch; one credit is charged per record. Official docs: https://docs.peopledatalabs.com/docs/reference-job-posting-search-api",
+      "rateLimit": {
+        "rpm": 20,
+        "concurrency": 1
+      },
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "title_class": {
+            "type": "string"
+          },
+          "title_role": {
+            "type": "string"
+          },
+          "title_sub_role": {
+            "type": "string"
+          },
+          "title_levels": {
+            "type": "string"
+          },
+          "company_id": {
+            "type": "string"
+          },
+          "company_name": {
+            "type": "string"
+          },
+          "company_website": {
+            "type": "string"
+          },
+          "company_linkedin_url": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "salary_min": {
+            "type": "integer"
+          },
+          "salary_max": {
+            "type": "integer"
+          },
+          "salary_currency": {
+            "type": "string"
+          },
+          "salary_period": {
+            "type": "string"
+          },
+          "remote_work_policy": {
+            "type": "string"
+          },
+          "inferred_skills": {
+            "type": "string"
+          },
+          "active_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "query": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Elasticsearch 7.7 query; overrides field filters."
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 10
+          },
+          "scroll_token": {
+            "type": "string"
+          }
+        }
+      },
+      "credits": 1
+    },
+    {
+      "verb": "POST",
+      "id": "getPersonChangelog",
+      "label": "Get Person Changelog",
+      "path": "/v5/person/changelog",
+      "category": "Person data",
+      "description": "Get record changes between consecutive PDL dataset versions. Official docs: https://docs.peopledatalabs.com/docs/reference-person-changelog-api",
+      "input": {
+        "type": "object",
+        "required": [
+          "origin_version",
+          "current_version"
+        ],
+        "properties": {
+          "origin_version": {
+            "type": "number",
+            "description": "Older PDL dataset version."
+          },
+          "current_version": {
+            "type": "number",
+            "description": "Newer consecutive PDL dataset version."
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "added",
+              "deleted",
+              "updated",
+              "merged",
+              "opted_out"
+            ]
+          },
+          "ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 59999,
+            "items": {
+              "type": "string"
+            }
+          },
+          "fields_updated": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scroll_token": {
+            "type": "string"
+          }
+        }
+      },
+      "credits": 0
+    },
+    {
+      "verb": "GET",
+      "id": "getSubjectRequests",
+      "label": "Get Subject Requests",
+      "path": "/v5/person/subjectrequest",
+      "category": "Compliance",
+      "description": "Stream PDL IDs affected by privacy subject requests. Official docs: https://docs.peopledatalabs.com/docs/subject-request-api",
+      "input": {
+        "type": "object",
+        "properties": {}
+      },
+      "credits": 0
+    }
+  ]
+}

@@ -3179,16 +3179,16 @@ body.resizing-agent .agent-panel { transition: none; }
 .conn-connected .btn { margin-left: auto; }
 
 /* collapsible info sections */
-.collapse { border-top: 1px solid var(--border); }
-.collapse-head {
+.detail-collapse { border-top: 1px solid var(--border); }
+.detail-collapse-head {
   width: 100%; display: flex; align-items: center; justify-content: space-between;
   padding: 13px 2px; border: none; background: transparent; cursor: pointer;
   font: 500 13px var(--font-sans); color: var(--text);
 }
-.collapse-head:hover { color: var(--accent); }
-.collapse-caret { color: var(--text-3); transition: transform 0.15s; display: inline-flex; }
-.collapse-caret.open { transform: rotate(180deg); }
-.collapse-body { padding: 2px 2px 16px; }
+.detail-collapse-head:hover { color: var(--accent); }
+.detail-collapse-caret { color: var(--text-3); transition: transform 0.15s; display: inline-flex; }
+.detail-collapse-caret.open { transform: rotate(180deg); }
+.detail-collapse-body { padding: 2px 2px 16px; }
 
 /* available models chips */
 .models-list { display: flex; flex-wrap: wrap; gap: 6px; }

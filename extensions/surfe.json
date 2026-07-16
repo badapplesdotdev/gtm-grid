@@ -1,0 +1,1194 @@
+{
+  "id": "surfe",
+  "name": "Surfe",
+  "version": "1.0.0",
+  "category": "enrichment",
+  "description": "Surfe people and company search, enrichment, recommendations, credits, and filters (12 endpoints).",
+  "baseUrl": "https://api.surfe.com",
+  "logo": "data:image/png;base64,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",
+  "auth": {
+    "type": "apiKey",
+    "header": "Authorization",
+    "secretKey": "apiKey",
+    "credentialLabel": "API key",
+    "scheme": "Bearer "
+  },
+  "rateLimit": {
+    "rps": 10,
+    "concurrency": 3
+  },
+  "methods": [
+    {
+      "id": "searchPeople",
+      "label": "Search People",
+      "category": "Search",
+      "verb": "POST",
+      "path": "/v2/people/search",
+      "description": "Search people by persona and company filters. Uses pageToken pagination and charges at least one ICP search credit when charging is enabled. Official docs: https://developers.surfe.com/public-009-search-people-v2",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "properties": {
+          "companies": {
+            "type": "object",
+            "properties": {
+              "countries": {
+                "type": "array",
+                "description": "Country or Surfe region codes.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "departmentSizes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "department": {
+                      "type": "string"
+                    },
+                    "from": {
+                      "type": "integer"
+                    },
+                    "to": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
+              "domains": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "domainsExcluded": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "employeeCount": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "integer"
+                  },
+                  "to": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "industries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "industriesExcluded": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "keywords": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "keywordsExcluded": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "localities": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "countries": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "freeTexts": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "isExcluded": {
+                      "type": "boolean"
+                    },
+                    "isPrimary": {
+                      "type": "boolean"
+                    },
+                    "states": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "country": {
+                            "type": "string",
+                            "description": "ISO alpha-2 country code."
+                          },
+                          "countryAlpha2": {
+                            "type": "string",
+                            "description": "ISO alpha-2 country code."
+                          }
+                        }
+                      }
+                    },
+                    "zipCodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "countryCode": {
+                            "type": "string"
+                          },
+                          "zipCode": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "naicsCodes": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "naicsCodesExcluded": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "names": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "revenue": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "number"
+                  },
+                  "to": {
+                    "type": "number"
+                  }
+                }
+              },
+              "technologies": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "technologiesExcluded": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "technologyCategories": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "technologyCategoriesExcluded": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "yearFounded": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "integer"
+                  },
+                  "to": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 10
+          },
+          "organizationIDMappings": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "pageToken": {
+            "type": "string",
+            "description": "Token from nextPageToken; original filters are reused."
+          },
+          "people": {
+            "type": "object",
+            "properties": {
+              "countries": {
+                "type": "array",
+                "description": "Country or Surfe region codes.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "countriesExcluded": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "departments": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "exactJobTitles": {
+                "type": "array",
+                "description": "Exact titles without semantic expansion.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "jobChangePeriodInDays": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "jobTitles": {
+                "type": "array",
+                "description": "Titles are expanded through acronym and semantic matching.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "previousCompanyDomains": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "seniorities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "states": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "country": {
+                      "type": "string",
+                      "description": "ISO alpha-2 country code."
+                    },
+                    "countryAlpha2": {
+                      "type": "string",
+                      "description": "ISO alpha-2 country code."
+                    }
+                  }
+                }
+              },
+              "statesExcluded": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "country": {
+                      "type": "string",
+                      "description": "ISO alpha-2 country code."
+                    },
+                    "countryAlpha2": {
+                      "type": "string",
+                      "description": "ISO alpha-2 country code."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "peoplePerCompany": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 40
+          }
+        }
+      }
+    },
+    {
+      "id": "startPeopleEnrichment",
+      "label": "Enrich People (start)",
+      "category": "Enrich people",
+      "verb": "POST",
+      "path": "/v2/people/enrich",
+      "description": "Start an asynchronous enrichment job for up to 10,000 people. Returns enrichmentID and enrichmentCallbackURL; use the matching get method or a webhook for results. Official docs: https://developers.surfe.com/public-015-create-people-bulk-enrichment",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": [
+          "include",
+          "people"
+        ],
+        "properties": {
+          "enrichmentOptions": {
+            "type": "object",
+            "properties": {
+              "acceptedEmailType": {
+                "type": "string",
+                "enum": [
+                  "professional",
+                  "personal"
+                ]
+              },
+              "skipMobileEnrichmentIfNoEmailFound": {
+                "type": "boolean"
+              }
+            }
+          },
+          "include": {
+            "type": "object",
+            "description": "Select at least one enrichment field.",
+            "properties": {
+              "email": {
+                "type": "boolean"
+              },
+              "jobHistory": {
+                "type": "boolean"
+              },
+              "linkedInUrl": {
+                "type": "boolean"
+              },
+              "mobile": {
+                "type": "boolean"
+              }
+            }
+          },
+          "notificationOptions": {
+            "type": "object",
+            "properties": {
+              "webhookUrl": {
+                "type": "string",
+                "format": "uri",
+                "description": "HTTPS callback for completed enrichment results."
+              }
+            }
+          },
+          "people": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 10000,
+            "items": {
+              "type": "object",
+              "properties": {
+                "companyDomain": {
+                  "type": "string"
+                },
+                "companyName": {
+                  "type": "string"
+                },
+                "externalID": {
+                  "type": "string"
+                },
+                "firstName": {
+                  "type": "string"
+                },
+                "lastName": {
+                  "type": "string"
+                },
+                "linkedinUrl": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "getPeopleEnrichment",
+      "label": "Enrich People (get)",
+      "category": "Enrich people",
+      "verb": "GET",
+      "path": "/v2/people/enrich/{id}",
+      "description": "Get progress and completed results for an asynchronous people enrichment. Poll about once per second only when webhooks are unavailable. Official docs: https://developers.surfe.com/public-016-get-bulk-enrichment",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Enrichment ID returned by Enrich People (start)."
+          }
+        }
+      }
+    },
+    {
+      "id": "findPeopleByEmail",
+      "label": "Enrich People by Email (start)",
+      "category": "Enrich people",
+      "verb": "POST",
+      "path": "/v2/people/find-by-email",
+      "description": "Start asynchronous person lookup by email. Finding a LinkedIn URL costs 10 Search credits; retrieve results with Get People Enrichment or a webhook. Official docs: https://developers.surfe.com/public-018-v2-people-find-by-email-post",
+      "credits": 10,
+      "input": {
+        "type": "object",
+        "required": [
+          "people"
+        ],
+        "properties": {
+          "notificationOptions": {
+            "type": "object",
+            "properties": {
+              "webhookUrl": {
+                "type": "string",
+                "format": "uri",
+                "description": "HTTPS callback for completed enrichment results."
+              }
+            }
+          },
+          "people": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "email"
+              ],
+              "properties": {
+                "email": {
+                  "type": "string",
+                  "format": "email"
+                },
+                "externalID": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "searchCompanies",
+      "label": "Search Companies",
+      "category": "Search",
+      "verb": "POST",
+      "path": "/v2/companies/search",
+      "description": "Search companies by firmographic, location, technology, and keyword filters. Uses pageToken pagination and charges by results returned when enabled. Official docs: https://developers.surfe.com/public-011-search-companies",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": [
+          "filters"
+        ],
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "countries": {
+                "type": "array",
+                "description": "Country or Surfe region codes.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "departmentSizes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "department": {
+                      "type": "string"
+                    },
+                    "from": {
+                      "type": "integer"
+                    },
+                    "to": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
+              "domains": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "domainsExcluded": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "employeeCount": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "integer"
+                  },
+                  "to": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "industries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "industriesExcluded": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "keywords": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "keywordsExcluded": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "localities": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "countries": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "freeTexts": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "isExcluded": {
+                      "type": "boolean"
+                    },
+                    "isPrimary": {
+                      "type": "boolean"
+                    },
+                    "states": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "country": {
+                            "type": "string",
+                            "description": "ISO alpha-2 country code."
+                          },
+                          "countryAlpha2": {
+                            "type": "string",
+                            "description": "ISO alpha-2 country code."
+                          }
+                        }
+                      }
+                    },
+                    "zipCodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "countryCode": {
+                            "type": "string"
+                          },
+                          "zipCode": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "naicsCodes": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "naicsCodesExcluded": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "names": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "revenue": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "number"
+                  },
+                  "to": {
+                    "type": "number"
+                  }
+                }
+              },
+              "technologies": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "technologiesExcluded": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "technologyCategories": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "technologyCategoriesExcluded": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "yearFounded": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "integer"
+                  },
+                  "to": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 10
+          },
+          "pageToken": {
+            "type": "string",
+            "description": "Token from nextPageToken; original filters are reused."
+          }
+        }
+      }
+    },
+    {
+      "id": "startCompaniesEnrichment",
+      "label": "Enrich Companies (start)",
+      "category": "Enrich company",
+      "verb": "POST",
+      "path": "/v2/companies/enrich",
+      "description": "Start asynchronous enrichment for up to 500 company domains. Paid plans charge one credit for each company returned with annual revenue and industry. Official docs: https://developers.surfe.com/public-013-create-companies-enrichment",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": [
+          "companies"
+        ],
+        "properties": {
+          "companies": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "required": [
+                "domain"
+              ],
+              "properties": {
+                "domain": {
+                  "type": "string"
+                },
+                "externalID": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "notificationOptions": {
+            "type": "object",
+            "properties": {
+              "webhookUrl": {
+                "type": "string",
+                "format": "uri",
+                "description": "HTTPS callback for completed enrichment results."
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "getCompaniesEnrichment",
+      "label": "Enrich Companies (get)",
+      "category": "Enrich company",
+      "verb": "GET",
+      "path": "/v2/companies/enrich/{id}",
+      "description": "Get progress and completed results for an asynchronous company enrichment job. Official docs: https://developers.surfe.com/public-014-get-bulk-enrichment-organizations",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Enrichment ID returned by Enrich Companies (start)."
+          }
+        }
+      }
+    },
+    {
+      "id": "upsertRecommendationIcp",
+      "label": "Create or Update ICP",
+      "category": "Recommendations",
+      "verb": "POST",
+      "path": "/v2/recommendations/icp",
+      "description": "Create or replace an Ideal Customer Profile for the authenticated user or an externalUserId. Official docs: https://developers.surfe.com/public-019-v2-recommendations-icp-post",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "companies": {
+            "type": "object",
+            "properties": {
+              "departmentSizes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "department": {
+                      "type": "string"
+                    },
+                    "from": {
+                      "type": "integer"
+                    },
+                    "to": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
+              "employeeCount": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "integer"
+                  },
+                  "to": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "employeeCounts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "from": {
+                      "type": "integer"
+                    },
+                    "to": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
+              "excludeDomains": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "excludeIndustries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "excludeTechnologies": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "includeDomains": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "industries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "localities": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "countries": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "freeTexts": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "isExcluded": {
+                      "type": "boolean"
+                    },
+                    "isPrimary": {
+                      "type": "boolean"
+                    },
+                    "states": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "country": {
+                            "type": "string",
+                            "description": "ISO alpha-2 country code."
+                          },
+                          "countryAlpha2": {
+                            "type": "string",
+                            "description": "ISO alpha-2 country code."
+                          }
+                        }
+                      }
+                    },
+                    "zipCodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "countryCode": {
+                            "type": "string"
+                          },
+                          "zipCode": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "locations": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "primaryLocations": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "revenue": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "number"
+                  },
+                  "to": {
+                    "type": "number"
+                  }
+                }
+              },
+              "revenues": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "from": {
+                      "type": "number"
+                    },
+                    "to": {
+                      "type": "number"
+                    }
+                  }
+                }
+              },
+              "states": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "country": {
+                      "type": "string",
+                      "description": "ISO alpha-2 country code."
+                    },
+                    "countryAlpha2": {
+                      "type": "string",
+                      "description": "ISO alpha-2 country code."
+                    }
+                  }
+                }
+              },
+              "technologies": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "yearFounded": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "integer"
+                  },
+                  "to": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "zipCodes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "countryCode": {
+                      "type": "string"
+                    },
+                    "zipCode": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "externalUserId": {
+            "type": "string",
+            "maxLength": 250
+          },
+          "people": {
+            "type": "object",
+            "properties": {
+              "countries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "departments": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "exactJobTitles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "excludeDepartments": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "jobChangePeriodInDays": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "jobTitles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "previousCompanyDomains": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "seniorities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "states": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "country": {
+                      "type": "string",
+                      "description": "ISO alpha-2 country code."
+                    },
+                    "countryAlpha2": {
+                      "type": "string",
+                      "description": "ISO alpha-2 country code."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "fetchRecommendations",
+      "label": "Fetch Recommendations",
+      "category": "Recommendations",
+      "verb": "POST",
+      "path": "/v2/recommendations/fetch",
+      "description": "Fetch daily-stable company and people recommendations matching a saved ICP. Billing is based on unique companies fetched during the month. Official docs: https://developers.surfe.com/public-020-v2-recommendations-fetch-post",
+      "credits": 1,
+      "input": {
+        "type": "object",
+        "required": [
+          "pagination"
+        ],
+        "properties": {
+          "externalUserId": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "pagination": {
+            "type": "object",
+            "required": [
+              "from",
+              "to"
+            ],
+            "properties": {
+              "from": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "to": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "getRecommendationIcps",
+      "label": "Get Recommendation ICP Filters",
+      "category": "Recommendations",
+      "verb": "GET",
+      "path": "/v2/recommendations/icp",
+      "query": [
+        "externalUserId"
+      ],
+      "description": "Retrieve saved Ideal Customer Profile filters for the authenticated user or an externalUserId. Official docs: https://developers.surfe.com/public-021-v2-recommendations-icp-get",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {
+          "externalUserId": {
+            "type": "string",
+            "description": "External user whose saved ICPs should be returned."
+          }
+        }
+      }
+    },
+    {
+      "id": "getCredits",
+      "label": "Get Credits",
+      "category": "Data",
+      "verb": "GET",
+      "path": "/v1/credits",
+      "description": "Return remaining email, mobile, and search credit balances. Official docs: https://developers.surfe.com/public-017-get-credits",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "id": "getFilters",
+      "label": "Get Filters",
+      "category": "Data",
+      "verb": "GET",
+      "path": "/v1/people/search/filters",
+      "description": "Return Surfe's predefined department, employee-count, industry, revenue, seniority, and technology filter values. Official docs: https://developers.surfe.com/public-008-people-filters",
+      "credits": 0,
+      "input": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  ]
+}
