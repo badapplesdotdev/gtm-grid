@@ -393,7 +393,12 @@ route("GET", "/api/extensions/:id", (p) => {
     baseUrl: m.baseUrl ?? null,
     logo: m.logo ?? logoFor(m.baseUrl),
     auth: m.auth
-      ? { type: m.auth.type, header: m.auth.header ?? null, secretKey: m.auth.secretKey ?? "apiKey" }
+      ? {
+          type: m.auth.type,
+          header: m.auth.header ?? null,
+          secretKey: m.auth.secretKey ?? "apiKey",
+          credentialLabel: m.auth.credentialLabel ?? "API key",
+        }
       : null,
     connected: !!globalDb.getCredential(m.id),
     connectedScopes: globalDb.credentialScopes(m.id),

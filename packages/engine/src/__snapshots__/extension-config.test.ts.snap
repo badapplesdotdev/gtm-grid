@@ -1236,6 +1236,2766 @@ exports[`bundled extension rate-limit config > pins the rate-limit shape of ever
       },
     },
   },
+  "lemlist": {
+    "connector": {
+      "concurrency": 3,
+      "rps": 10,
+    },
+    "methods": {
+      "addLeadVariables": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "addStepToSequence": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "addUnsubscribeEmailOrDomain": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "addWebhook": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "associateScheduleWithCampaign": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "attachLabelsToConversations": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "bulkEnrichData": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "bulkUnsubscribeVariables": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "connectEmailAccount": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "createAbTestVariant": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "createAlert": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "createCampaign": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "createCompanyNote": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "createContactList": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "createDraft": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "createLabel": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "createLeadInCampaign": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "createSchedule": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "createTask": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "createWatchList": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "deleteAbTestVariant": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "deleteActivityRecordingTranscript": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "deleteAlert": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "deleteCompany": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "deleteContact": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "deleteDraft": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "deleteLead": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "deleteLeadVariables": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "deleteSchedule": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "deleteSequenceStep": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "deleteUnsubscribeEmail": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "deleteWatchList": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "deleteWebhook": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "disconnectEmailAccount": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "duplicateCampaign": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "enrichData": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "enrichLead": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "exportCampaignLeads": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "exportContactList": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "exportUnsubscribedContacts": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "exportUnsubscribedVariables": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "exportUnsubscribes": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getAbTestVariant": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getAlert": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getBatchCampaignStats": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getCampaign": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getCampaignExportStatus": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getCampaignLeads": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getCampaignReports": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getCampaignSchedules": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getCampaignSequences": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getCampaignStats": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getCampaignStatutes": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getCompanyNotes": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getContact": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getContactLists": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getContactMessages": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getContactSubscriptionStatus": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getCrmFilters": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getDatabaseFilters": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getDraft": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getEnrichmentResult": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getFilterValues": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getFilters": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getHistory": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getLabel": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getLeadByEmail": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getLeadByEmailOrId": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getLemwarmSettings": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getLibrary": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getManyActivities": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getManyCampaigns": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getManyCompanies": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getManyContacts": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getManyInboxes": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getManyLabels": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getManySchedules": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getManyTasks": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getManyUnsubscribes": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getManyWebhooks": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getSchedule": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getSignals": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getTeam": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getTeamCredits": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getTeamCrmUsers": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getTeamSenders": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getUnsubscribeByEmail": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getUnsubscribedVariable": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getUser": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getUserChannels": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "ignoreTasks": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "importLeadsFromCrm": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "launchLead": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "listAlerts": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "listDrafts": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "listFields": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "listUnsubscribedVariables": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "listWatchLists": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "manageContactListEntities": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "markLeadAsInterested": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "markLeadAsInterestedInCampaign": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "markLeadAsNotInterested": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "markLeadAsNotInterestedInCampaign": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "pauseCampaign": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "pauseLead": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "pauseLemwarm": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "pushExternalSignals": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "removeLabelsFromConversation": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "resubscribeContact": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "resubscribeVariable": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "resumePausedLead": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "searchCompaniesDatabase": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "searchPeopleDatabase": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "selectAbTestWinner": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "sendEmail": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "sendLinkedinMessage": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "sendWhatsappMessage": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "setExportEmailNotification": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "startCampaign": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "startCampaignExport": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "startLemwarm": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "testEmailAccount": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "unsubscribeAllCampaignLeads": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "unsubscribeContact": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "unsubscribeLeadFromCampaign": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "unsubscribeVariable": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "updateAbTestVariant": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "updateAlert": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "updateCampaign": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "updateDraft": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "updateLead": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "updateLeadVariables": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "updateLemwarmSettings": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "updateSchedule": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "updateSequenceStep": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "updateTask": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "updateWatchList": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "uploadAudioForVoiceMessageStep": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "upsertCompany": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "upsertContact": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+    },
+  },
+  "linear": {
+    "connector": {
+      "concurrency": 2,
+      "rpm": 40,
+    },
+    "methods": {
+      "executeGraphQL": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_agentActivityCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_agentActivityCreatePrompt": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_agentActivityDeleteQueued": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_agentActivitySendQueued": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_agentSessionCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_agentSessionCreateOnComment": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_agentSessionCreateOnIssue": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_agentSessionUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_agentSessionUpdateExternalUrl": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_agentSkillCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_agentSkillDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_agentSkillUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_airbyteIntegrationConnect": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_attachmentCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_attachmentDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_attachmentLinkDiscord": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_attachmentLinkFront": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_attachmentLinkGitHubIssue": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_attachmentLinkGitHubPR": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_attachmentLinkGitLabMR": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_attachmentLinkIntercom": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_attachmentLinkJiraIssue": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_attachmentLinkSalesforce": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_attachmentLinkSlack": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_attachmentLinkURL": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_attachmentLinkZendesk": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_attachmentSyncToSlack": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_attachmentUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_commentCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_commentDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_commentResolve": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_commentUnresolve": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_commentUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_contactCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_contactSalesCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_createCsvExportReport": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_createInitiativeUpdateReminder": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_createOrganizationFromOnboarding": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_createProjectUpdateReminder": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customViewCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customViewDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customViewUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customerCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customerDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customerMerge": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customerNeedArchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customerNeedCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customerNeedCreateFromAttachment": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customerNeedDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customerNeedUnarchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customerNeedUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customerStatusCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customerStatusDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customerStatusUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customerTierCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customerTierDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customerTierUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customerUnsync": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customerUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_customerUpsert": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_cycleArchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_cycleCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_cycleShiftAll": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_cycleStartUpcomingCycleToday": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_cycleUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_documentCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_documentDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_documentUnarchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_documentUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_emailIntakeAddressCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_emailIntakeAddressDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_emailIntakeAddressRefreshSesDomainStatus": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_emailIntakeAddressRotate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_emailIntakeAddressUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_emailTokenUserAccountAuth": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_emailUnsubscribe": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_emailUserAccountAuthChallenge": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_emojiCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_emojiDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_entityExternalLinkCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_entityExternalLinkDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_entityExternalLinkUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_favoriteCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_favoriteDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_favoriteUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_fileUpload": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_fileUploadDangerouslyDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_gitAutomationStateCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_gitAutomationStateDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_gitAutomationStateUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_gitAutomationTargetBranchCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_gitAutomationTargetBranchDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_gitAutomationTargetBranchUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_googleUserAccountAuth": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_imageUploadFromUrl": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_importFileUpload": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeAddLabel": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeArchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeLabelCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeLabelDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeLabelRestore": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeLabelRetire": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeLabelUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeLeadTeamUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeRelationCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeRelationDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeRelationUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeRemoveLabel": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeToProjectCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeToProjectDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeToProjectUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeUnarchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeUpdateArchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeUpdateCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeUpdateUnarchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_initiativeUpdateUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationArchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationAsksConnectChannel": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationCustomerDataAttributesRefresh": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationDiscord": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationFigma": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationFront": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationGitHubEnterpriseServerConnect": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationGitHubPersonal": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationGithubCommitCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationGithubConnect": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationGithubImportConnect": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationGithubImportRefresh": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationGithubRemoveCodeAccess": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationGitlabConnect": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationGitlabTestConnection": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationGong": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationGoogleCalendarPersonalConnect": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationGoogleSheets": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationIntercom": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationIntercomDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationJiraFetchProjectStatuses": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationJiraPersonal": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationJiraUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationLaunchDarklyConnect": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationLaunchDarklyPersonalConnect": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationMcpServerConnect": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationMcpServerPersonalConnect": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationMicrosoftPersonalConnect": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationMicrosoftTeams": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationMicrosoftTeamsProjectPost": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationOpsgenieConnect": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationOpsgenieRefreshScheduleMappings": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationPagerDutyConnect": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationPagerDutyRefreshScheduleMappings": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationRequest": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationSalesforce": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationSalesforceMetadataRefresh": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationSentryConnect": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationSlack": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationSlackAsks": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationSlackCustomViewNotifications": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationSlackCustomerChannelLink": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationSlackImportEmojis": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationSlackInitiativePost": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationSlackOrAsksUpdateSlackTeamName": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationSlackOrgInitiativeUpdatesPost": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationSlackOrgProjectUpdatesPost": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationSlackPersonal": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationSlackPost": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationSlackProjectPost": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationSlackWorkflowAccessUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationTemplateCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationTemplateDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationZendesk": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationsSettingsCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_integrationsSettingsUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueAddLabel": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueArchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueBatchCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueBatchUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueDescriptionUpdateFromFront": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueExternalSyncDisable": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueImportCreateAsana": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueImportCreateCSVJira": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueImportCreateClubhouse": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueImportCreateGithub": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueImportCreateJira": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueImportCreateLinearV2": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueImportDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueImportProcess": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueImportUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueLabelCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueLabelDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueLabelRestore": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueLabelRetire": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueLabelUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueRelationCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueRelationDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueRelationUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueReminder": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueRemoveLabel": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueShare": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueSubscribe": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueToReleaseCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueToReleaseDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueToReleaseDeleteByIssueAndRelease": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueUnarchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueUnshare": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueUnsubscribe": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_issueUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_jiraIntegrationConnect": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_joinOrganizationFromOnboarding": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_leaveOrganization": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_logout": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_logoutAllSessions": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_logoutOtherSessions": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_logoutSession": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_notificationArchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_notificationArchiveAll": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_notificationCategoryChannelSubscriptionUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_notificationMarkReadAll": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_notificationMarkUnreadAll": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_notificationSnoozeAll": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_notificationSubscriptionCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_notificationSubscriptionUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_notificationUnarchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_notificationUnsnoozeAll": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_notificationUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_oauthApplicationArchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_oauthApplicationCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_oauthApplicationRotateSecret": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_oauthApplicationRotateWebhookSecret": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_oauthApplicationUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_organizationCancelDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_organizationDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_organizationDeleteChallenge": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_organizationDomainClaim": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_organizationDomainCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_organizationDomainDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_organizationDomainUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_organizationDomainVerify": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_organizationInviteCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_organizationInviteDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_organizationInviteUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_organizationStartTrialForPlan": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_organizationUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_partnerApplicationCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_passkeyLoginFinish": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_passkeyLoginStart": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectAddLabel": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectCreateSlackChannel": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectExternalSyncDisable": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectLabelCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectLabelDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectLabelRestore": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectLabelRetire": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectLabelUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectMilestoneCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectMilestoneDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectMilestoneMove": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectMilestoneUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectReassignStatus": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectRelationCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectRelationDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectRelationUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectRemoveLabel": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectStatusArchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectStatusCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectStatusUnarchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectStatusUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectUnarchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectUpdateArchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectUpdateCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectUpdateUnarchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_projectUpdateUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_pushSubscriptionCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_pushSubscriptionDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_reactionCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_reactionDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_refreshGoogleSheetsData": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releaseArchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releaseComplete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releaseCompleteByAccessKey": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releaseCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releaseDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releaseNoteCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releaseNoteDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releaseNoteUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releasePipelineArchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releasePipelineCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releasePipelineDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releasePipelineUnarchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releasePipelineUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releaseStageArchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releaseStageCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releaseStageUnarchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releaseStageUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releaseSync": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releaseSyncByAccessKey": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releaseUnarchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releaseUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releaseUpdateByPipeline": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_releaseUpdateByPipelineByAccessKey": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_resendOrganizationInvite": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_resendOrganizationInviteByEmail": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_roadmapToProjectCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_roadmapToProjectDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_roadmapToProjectUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_samlTokenUserAccountAuth": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_teamCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_teamCyclesDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_teamDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_teamKeyDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_teamMembershipCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_teamMembershipDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_teamMembershipUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_teamUnarchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_teamUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_templateCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_templateDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_templateUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_timeScheduleCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_timeScheduleDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_timeScheduleRefreshIntegrationSchedule": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_timeScheduleUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_timeScheduleUpsertExternal": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_trackAnonymousEvent": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_triageResponsibilityCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_triageResponsibilityDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_triageResponsibilityUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_updateIntegrationSlackScopes": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_userChangeRole": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_userDiscordConnect": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_userExternalUserDisconnect": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_userFlagUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_userRevokeAllSessions": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_userRevokeSession": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_userSettingsFlagsReset": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_userSettingsUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_userSuspend": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_userUnlinkFromIdentityProvider": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_userUnsuspend": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_userUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_viewPreferencesCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_viewPreferencesDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_viewPreferencesUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_webhookCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_webhookDelete": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_webhookRotateSecret": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_webhookUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_workflowStateArchive": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_workflowStateCreate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "mutation_workflowStateUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_administrableTeams": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_agentActivities": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_agentActivity": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_agentSession": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_agentSessionSandbox": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_agentSessions": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_agentSkill": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_agentSkills": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_applicationInfo": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_archivedIntegrations": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_archivedTeams": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_attachment": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_attachmentSources": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_attachments": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_attachmentsForURL": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_auditEntries": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_auditEntryTypes": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_authenticationSessions": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_availableUsers": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_comment": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_comments": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_customView": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_customViewDetailsSuggestion": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_customViewHasSubscribers": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_customViews": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_customer": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_customerNeed": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_customerNeeds": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_customerStatus": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_customerStatuses": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_customerTier": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_customerTiers": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_customers": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_cycle": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_cycles": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_diff": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_document": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_documentContentHistory": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_documentContentHistoryEntries": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_documentContentHistoryTimeline": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_documents": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_emailIntakeAddress": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_emoji": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_emojis": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_entityExternalLink": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_externalUser": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_externalUsers": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_failuresForOauthWebhooks": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_favorite": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_favorites": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_fetchData": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_initiative": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_initiativeFilterSuggestion": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_initiativeLabel": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_initiativeLabels": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_initiativeLeadTeamChangeImpact": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_initiativeRelation": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_initiativeRelations": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_initiativeToProject": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_initiativeToProjects": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_initiativeUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_initiativeUpdates": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_initiatives": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_integration": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_integrationHasScopes": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_integrationTemplate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_integrationTemplates": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_integrations": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_integrationsSettings": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_issue": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_issueFigmaFileKeySearch": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_issueFilterSuggestion": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_issueImportCheckCSV": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_issueImportCheckSync": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_issueImportJqlCheck": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_issueLabel": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_issueLabels": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_issuePriorityValues": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_issueRelation": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_issueRelations": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_issueRepositorySuggestions": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_issueSearch": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_issueTitleSuggestionFromCustomerRequest": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_issueToRelease": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_issueToReleases": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_issueVcsBranchSearch": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_issues": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_latestReleaseByAccessKey": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_microsoftTeamsChannels": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_notification": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_notificationSubscription": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_notificationSubscriptions": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_notifications": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_notificationsUnreadCount": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_oauthApplication": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_oauthApplications": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_organization": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_organizationDomainClaimRequest": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_organizationExists": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_organizationInvite": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_organizationInviteDetails": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_organizationInvites": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_organizationMeta": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_project": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_projectFilterSuggestion": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_projectLabel": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_projectLabels": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_projectMilestone": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_projectMilestones": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_projectRelation": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_projectRelations": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_projectStatus": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_projectStatusProjectCount": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_projectStatuses": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_projectUpdate": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_projectUpdates": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_projects": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_pushSubscriptionTest": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_rateLimitStatus": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_recentReleasesByAccessKey": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_release": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_releaseNote": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_releaseNotes": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_releasePipeline": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_releasePipelineByAccessKey": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_releasePipelines": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_releaseSearch": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_releaseStage": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_releaseStages": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_releases": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_searchDocuments": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_searchIssues": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_searchProjects": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_semanticSearch": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_slaConfigurations": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_ssoUrlFromEmail": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_team": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_teamMembership": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_teamMemberships": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_teams": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_template": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_templates": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_templatesForIntegration": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_timeSchedule": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_timeSchedules": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_triageResponsibilities": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_triageResponsibility": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_user": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_userSessions": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_userSettings": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_users": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_verifyGitHubEnterpriseServerInstallation": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_viewer": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_webhook": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_webhooks": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_workflowState": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+      "query_workflowStates": {
+        "concurrency": 2,
+        "rpm": 40,
+      },
+    },
+  },
+  "peopledatalabs": {
+    "connector": {
+      "concurrency": 3,
+      "rpm": 100,
+    },
+    "methods": {
+      "autocomplete": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "autocompleteGet": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "bulkCompanyEnrichment": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "bulkPersonEnrichment": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "cleanCompany": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "cleanCompanyGet": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "cleanLocation": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "cleanLocationGet": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "cleanSchool": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "cleanSchoolGet": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "enrichCompany": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "enrichIp": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "enrichJobTitle": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "enrichJobTitleGet": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "enrichSkill": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getPersonChangelog": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getPersonEnrichment": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "getSubjectRequests": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "identifyPerson": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "postPersonEnrichment": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "retrievePeopleBulk": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "retrievePerson": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "searchCompanies": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "searchCompaniesGet": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "searchJobPostings": {
+        "concurrency": 1,
+        "rpm": 20,
+      },
+      "searchPeople": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+      "searchPeopleGet": {
+        "concurrency": 3,
+        "rpm": 100,
+      },
+    },
+  },
   "plusvibe": {
     "connector": {
       "concurrency": 3,
@@ -1696,6 +4456,62 @@ exports[`bundled extension rate-limit config > pins the rate-limit shape of ever
       },
     },
   },
+  "surfe": {
+    "connector": {
+      "concurrency": 3,
+      "rps": 10,
+    },
+    "methods": {
+      "fetchRecommendations": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "findPeopleByEmail": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getCompaniesEnrichment": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getCredits": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getFilters": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getPeopleEnrichment": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "getRecommendationIcps": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "searchCompanies": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "searchPeople": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "startCompaniesEnrichment": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "startPeopleEnrichment": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+      "upsertRecommendationIcp": {
+        "concurrency": 3,
+        "rps": 10,
+      },
+    },
+  },
   "thecompaniesapi": {
     "connector": {
       "concurrency": 5,
@@ -1777,6 +4593,218 @@ exports[`bundled extension rate-limit config > pins the rate-limit shape of ever
       "similarCompanies": {
         "concurrency": 5,
         "rps": 50,
+      },
+    },
+  },
+  "theirstack": {
+    "connector": {
+      "concurrency": 2,
+      "rps": 4,
+    },
+    "methods": {
+      "buying_intents_v1": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "delete_company_lists_by_id_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "generate_app_url_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_billing_credit_balance_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_catalog_companies_per_company_country_code_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_catalog_industries_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_catalog_jobs_companies_per_job_country_code_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_catalog_keywords_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_catalog_locations_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_company_lists_by_id_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_company_lists_companies_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_company_lists_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_datasets_v1": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_email_preferences_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_requests_count_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_requests_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_saved_searches_by_id_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_saved_searches_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_teams_credits_consumption_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_webhooks_by_id_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_webhooks_event_types_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_webhooks_events_count_aggregated_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_webhooks_events_count_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_webhooks_events_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "get_webhooks_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "list_keyword_categories_v1": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "list_keyword_subcategories_v1": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "patch_company_lists_by_id_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "patch_saved_searches_archive_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "patch_saved_searches_by_id_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "patch_webhooks_archive_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "patch_webhooks_by_id_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "patch_webhooks_status_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "post_company_lists_add_companies_multiple_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "post_company_lists_add_companies_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "post_company_lists_duplicate_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "post_company_lists_remove_companies_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "post_company_lists_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "post_datasets_credentials_v1": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "post_saved_searches_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "post_webhooks_events_retry_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "post_webhooks_test_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "post_webhooks_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "put_email_preferences_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "search_companies_v1": {
+        "concurrency": 1,
+        "rpm": 10,
+      },
+      "search_jobs_v1": {
+        "concurrency": 1,
+        "rpm": 10,
+      },
+      "technographics_v1": {
+        "concurrency": 1,
+        "rpm": 10,
+      },
+      "unsubscribe_email_one_click_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "unsubscribe_email_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "unsubscribe_saved_search_alert_one_click_v0": {
+        "concurrency": 2,
+        "rps": 4,
+      },
+      "unsubscribe_saved_search_alert_v0": {
+        "concurrency": 2,
+        "rps": 4,
       },
     },
   },
@@ -2245,6 +5273,350 @@ exports[`bundled extension rate-limit config > pins the rate-limit shape of ever
       },
     },
   },
+  "zoominfo": {
+    "connector": {
+      "concurrency": 3,
+      "rps": 5,
+    },
+    "methods": {
+      "addColumns": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "archiveCustomerBuyerPersona": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "archiveCustomerCompetitor": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "archiveIdealCompanySegment": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "archiveOrganizationOffering": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "askAccountSummaryQuestion": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "companyLookalikes": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "createFolder": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "deleteColumn": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "deleteContentInteractionEngagement": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "deleteCustomerBuyerPersona": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "deleteCustomerCompetitor": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "deleteCustomerSettings": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "deleteFolder": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "deleteIdealCompanySegment": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "deleteOrganizationOffering": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "deleteRows": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "enrichAudience": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "enrichCompany": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "enrichContact": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "enrichCorporateHierarchy": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "enrichHashtag": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "enrichIntent": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "enrichNews": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "enrichOrgChart": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "enrichScoop": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "enrichTechnology": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "getAccountSummary": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "getAudienceFilterMetadata": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "getAudienceUpload": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "getAudiences": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "getCompanyInsightsByType": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "getContactLookalikes": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "getContactRecommendations": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "getContentInteractionEngagement": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "getCustomerBuyerPersona": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "getCustomerCompetitor": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "getCustomerSettings": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "getFolderById": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "getIdealCompanySegment": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "getJobStatus": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "getOrganizationOffering": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "getRowById": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "getSupportedDataDependencies": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "listAudiences": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "listCustomerBuyerPersonas": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "listCustomerCompetitors": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "listFolders": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "listIdealCompanySegments": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "listOrganizationOfferings": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "listPulses": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "listRows": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "lookup": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "lookupEnrich": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "lookupSearch": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "marketingCreateAudience": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "marketingDeleteAudience": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "marketingGetAudience": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "patchAudience": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "patchColumn": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "searchCompany": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "searchContact": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "searchIntent": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "searchNews": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "searchScoop": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "studioCreateAudience": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "studioDeleteAudience": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "studioGetAudience": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "unarchiveCustomerBuyerPersona": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "unarchiveCustomerCompetitor": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "unarchiveIdealCompanySegment": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "unarchiveOrganizationOffering": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "updateAudience": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "updateFolder": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "uploadAudience": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "upsertContentInteractions": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "upsertCustomerBuyerPersona": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "upsertCustomerCompetitor": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "upsertCustomerSettings": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "upsertIdealCompanySegment": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "upsertMatchCriteria": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "upsertOrganizationOffering": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "upsertRows": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+      "userUsage": {
+        "concurrency": 3,
+        "rps": 5,
+      },
+    },
+  },
 }
 `;
 
@@ -2265,13 +5637,19 @@ exports[`bundled extension rate-limit config > ships the expected set of extensi
   "hubspot",
   "instantly",
   "leadmagic",
+  "lemlist",
+  "linear",
+  "peopledatalabs",
   "plusvibe",
   "prospeo",
   "reoon",
   "smartlead",
   "smuggler",
   "supabase",
+  "surfe",
   "thecompaniesapi",
+  "theirstack",
   "trigify",
+  "zoominfo",
 ]
 `;

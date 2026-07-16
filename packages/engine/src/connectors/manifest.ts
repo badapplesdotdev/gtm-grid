@@ -52,10 +52,30 @@ const methodSchema = z.object({
   options: z.record(z.string(), fieldOptionSourceSchema).optional(),
   /** Per-method outbound throttle override (stricter than the connector default). */
   rateLimit: rateLimitSchema.optional(),
-  /** For GET/DELETE: which input fields become querystring (default: all non-path fields). */
+  /** Input fields sent in the query string (bodyless methods default to all non-path fields). */
   query: z.array(z.string()).optional(),
+  /** Send a JSON request body even for verbs that are normally bodyless (notably DELETE). */
+  body: z.boolean().optional(),
+  /** Content type for a JSON request body (default: application/json). */
+  contentType: z.string().optional(),
+  /** Override connector-level authentication for a public method. */
+  auth: z.boolean().optional(),
+  /** Build a GraphQL operation from this method's inputs. Generated operations
+   * declare a root field + variable types + selection set; `custom` passes a
+   * caller-provided query/variables pair through the same error-aware runtime. */
+  graphql: z
+    .object({
+      custom: z.boolean().optional(),
+      operation: z.enum(["query", "mutation"]).optional(),
+      field: z.string().optional(),
+      variables: z.record(z.string(), z.string()).optional(),
+      selection: z.string().optional(),
+    })
+    .optional(),
   /** For body verbs: input fields to omit from the JSON body. */
   bodyOmit: z.array(z.string()).optional(),
+  /** Send one input field as the entire request body (for top-level arrays/scalars). */
+  bodyFrom: z.string().optional(),
   credits: z.number().optional(),
   batchSize: z.number().optional(),
   /**
@@ -106,8 +126,12 @@ export const manifestSchema = z.object({
       query: z.string().optional(),
       /** Which decrypted secret holds the token (default "apiKey"). */
       secretKey: z.string().optional(),
+      /** User-facing name for the credential (default "API key"). */
+      credentialLabel: z.string().optional(),
       /** When header is Authorization, set the scheme prefix (e.g. "Bearer "). Default "Bearer ". */
       scheme: z.string().optional(),
+      /** For HTTP Basic APIs that use the API key as the password, encode `username:key`. */
+      basicUsername: z.string().optional(),
     })
     .nullable()
     .optional(),
@@ -176,28 +200,96 @@ async function httpCall(
   // and surfacing the upstream's cryptic 401 body. Applies to every apiKey
   // connector, not just one.
   const token = ctx.secrets[secretKey];
-  if (man.auth?.type === "apiKey") {
+  if (man.auth?.type === "apiKey" && m.auth !== false) {
     if (!token) throw new Error(missingKeyMessage(man));
     if (man.auth.header) {
       const isAuthz = man.auth.header.toLowerCase() === "authorization";
-      headers[man.auth.header] = isAuthz ? `${man.auth.scheme ?? "Bearer "}${token}` : token;
+      const credential = isAuthz && man.auth.basicUsername !== undefined
+        ? `${man.auth.scheme ?? "Basic "}${btoa(`${man.auth.basicUsername}:${token}`)}`
+        : isAuthz ? `${man.auth.scheme ?? "Bearer "}${token}` : token;
+      headers[man.auth.header] = credential;
     } else if (man.auth.query) {
       url.searchParams.set(man.auth.query, token);
     }
   }
 
-  const init: RequestInit = { method: m.verb, headers, redirect: "manual" };
-  if (m.verb === "GET" || m.verb === "DELETE") {
-    const fields = m.query ?? Object.keys(input).filter((k) => !pathParams.has(k));
-    for (const k of fields) {
-      const v = input[k];
-      if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+  const hasBody = m.body ?? (m.verb !== "GET" && m.verb !== "DELETE");
+  const queryFields = m.query ?? (hasBody ? [] : Object.keys(input).filter((k) => !pathParams.has(k)));
+  for (const k of queryFields) {
+    const v = input[k];
+    if (v === undefined || v === null) continue;
+    if (Array.isArray(v)) {
+      url.searchParams.delete(k);
+      for (const item of v) url.searchParams.append(k, String(item));
+    } else if (typeof v === "object") {
+      url.searchParams.set(k, JSON.stringify(v));
+    } else {
+      url.searchParams.set(k, String(v));
     }
-  } else {
+  }
+
+  const init: RequestInit = { method: m.verb, headers, redirect: "manual" };
+  if (m.graphql) {
     headers["content-type"] = "application/json";
-    const omit = new Set([...(m.bodyOmit ?? []), ...pathParams]);
+    if (m.graphql.custom) {
+      init.body = JSON.stringify({
+        query: input.query,
+        variables: input.variables ?? {},
+        ...(input.operationName ? { operationName: input.operationName } : {}),
+      });
+    } else {
+      const operation = m.graphql.operation ?? "query";
+      const field = m.graphql.field;
+      if (!field) throw new Error(`${man.name} ${m.id} is missing its GraphQL root field`);
+      const variableTypes = m.graphql.variables ?? {};
+      const declarations = Object.entries(variableTypes).map(([name, type]) => `$${name}: ${type}`).join(", ");
+      const argumentsList = Object.keys(variableTypes).map((name) => `${name}: $${name}`).join(", ");
+      const operationName = m.id.replace(/[^A-Za-z0-9_]/g, "_");
+      const query = `${operation} ${operationName}${declarations ? `(${declarations})` : ""} { ${field}${argumentsList ? `(${argumentsList})` : ""}${m.graphql.selection ? ` ${m.graphql.selection}` : ""} }`;
+      const variables = Object.fromEntries(
+        Object.keys(variableTypes)
+          .filter((name) => input[name] !== undefined)
+          .map((name) => [name, input[name]]),
+      );
+      init.body = JSON.stringify({ query, variables, operationName });
+    }
+  } else if (hasBody) {
+    const omit = new Set([...(m.bodyOmit ?? []), ...queryFields, ...pathParams]);
     const body = Object.fromEntries(Object.entries(input).filter(([k]) => !omit.has(k)));
-    init.body = JSON.stringify(body);
+    const payload = m.bodyFrom ? input[m.bodyFrom] : body;
+    if (m.contentType === "multipart/form-data") {
+      const form = new FormData();
+      for (const [key, value] of Object.entries(body)) {
+        if (value === undefined || value === null) continue;
+        const fieldSchema = (m.input?.properties as Record<string, { format?: string }> | undefined)?.[key];
+        if (fieldSchema?.format === "binary" && typeof value === "string") {
+          const match = value.match(/^data:([^;,]+)?;base64,(.+)$/s);
+          if (match) {
+            const bytes = Uint8Array.from(atob(match[2]!), (char) => char.charCodeAt(0));
+            form.append(key, new Blob([bytes], { type: match[1] ?? "application/octet-stream" }), "upload");
+          } else {
+            form.append(key, new Blob([value], { type: "application/octet-stream" }), "upload");
+          }
+        } else if (Array.isArray(value)) {
+          for (const item of value) form.append(key, typeof item === "object" ? JSON.stringify(item) : String(item));
+        } else {
+          form.append(key, typeof value === "object" ? JSON.stringify(value) : String(value));
+        }
+      }
+      init.body = form;
+    } else if (m.contentType === "application/x-www-form-urlencoded") {
+      headers["content-type"] = m.contentType;
+      const encoded = new URLSearchParams();
+      for (const [key, value] of Object.entries(body)) {
+        if (value === undefined || value === null) continue;
+        if (Array.isArray(value)) for (const item of value) encoded.append(key, String(item));
+        else encoded.set(key, typeof value === "object" ? JSON.stringify(value) : String(value));
+      }
+      init.body = encoded.toString();
+    } else {
+      headers["content-type"] = m.contentType ?? "application/json";
+      init.body = JSON.stringify(payload);
+    }
   }
 
   // Retry transient upstream failures (429/503/5xx and network blips) with capped
@@ -224,6 +316,17 @@ async function httpCall(
   } catch {
     data = text;
   }
+  if (m.graphql && data && typeof data === "object") {
+    const errors = (data as { errors?: Array<{ message?: string; extensions?: { code?: string } }> }).errors;
+    if (Array.isArray(errors) && errors.length > 0) {
+      const code = errors[0]?.extensions?.code ?? "";
+      const message = errors.map((error) => error.message ?? "Unknown GraphQL error").join("; ").slice(0, 500);
+      if (/AUTH|UNAUTH/i.test(code) || /authenticat|unauthori[sz]ed|api key/i.test(message)) {
+        throw new Error(invalidKeyMessage(man));
+      }
+      throw new Error(`${man.name} ${m.id} GraphQL${code ? ` ${code}` : ""}: ${message}`);
+    }
+  }
   if (!resp.ok) {
     // A 401 on an apiKey connector almost always means the configured key is
     // invalid/expired (a missing key is already caught pre-flight) — turn the raw
@@ -234,17 +337,23 @@ async function httpCall(
     const detail = typeof data === "string" ? data.slice(0, 300) : JSON.stringify(data).slice(0, 300);
     throw new Error(`${man.name} ${m.id} HTTP ${resp.status}: ${detail}`);
   }
+  if (m.graphql && data && typeof data === "object") {
+    const payload = (data as { data?: Record<string, unknown> }).data;
+    return m.graphql.custom ? payload : payload?.[m.graphql.field ?? ""];
+  }
   return data;
 }
 
 /** Actionable message for an apiKey connector invoked with no resolved secret. */
 function missingKeyMessage(man: ExtensionManifest): string {
-  return `${man.name} API key not configured — connect a ${man.name} credential to run this function.`;
+  const label = man.auth?.credentialLabel ?? "API key";
+  return `${man.name} ${label} not configured — connect a ${man.name} credential to run this function.`;
 }
 
 /** Actionable message for an apiKey connector rejected with a 401. */
 function invalidKeyMessage(man: ExtensionManifest): string {
-  return `${man.name} API key invalid or expired (HTTP 401) — check the ${man.name} credential and update the key.`;
+  const label = man.auth?.credentialLabel ?? "API key";
+  return `${man.name} ${label} invalid or expired (HTTP 401) — check the ${man.name} credential and update it.`;
 }
 
 /** One resolved choice for a pick-field dropdown. */

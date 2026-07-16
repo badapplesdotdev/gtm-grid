@@ -281,12 +281,12 @@ function ScopeTabs({
 function Collapsible({ title, defaultOpen = false, children }: { title: string; defaultOpen?: boolean; children: ReactNode }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="collapse">
-      <button className="collapse-head" onClick={() => setOpen((o) => !o)}>
+    <div className="detail-collapse">
+      <button className="detail-collapse-head" onClick={() => setOpen((o) => !o)}>
         <span>{title}</span>
-        <span className={`collapse-caret${open ? " open" : ""}`}><I.Caret /></span>
+        <span className={`detail-collapse-caret${open ? " open" : ""}`}><I.Caret /></span>
       </button>
-      {open && <div className="collapse-body">{children}</div>}
+      {open && <div className="detail-collapse-body">{children}</div>}
     </div>
   );
 }
@@ -297,11 +297,13 @@ function Collapsible({ title, defaultOpen = false, children }: { title: string; 
  */
 function ConnectionsSection({
   name,
+  credentialLabel = "API key",
   connectedScopes,
   onSave,
   workspace,
 }: {
   name: string;
+  credentialLabel?: string;
   connectedScopes: CredentialScope[];
   onSave: (apiKey: string, scope: CredentialScope) => Promise<void>;
   /**
@@ -334,7 +336,7 @@ function ConnectionsSection({
   const reset = () => { setAdding(false); setKeyDraft(""); setErr(""); };
 
   const save = async () => {
-    if (!keyDraft.trim()) { setErr("Enter an API key"); return; }
+    if (!keyDraft.trim()) { setErr(`Enter ${credentialLabel}`); return; }
     setSaving(true);
     setErr("");
     try {
@@ -376,11 +378,11 @@ function ConnectionsSection({
       <div className={`conn-card${adding ? " editing" : ""}`}>
         {adding ? (
           <div className="conn-add-form">
-            <label className="form-label">{name} API key · {scopeLabel(scope)}</label>
+            <label className="form-label">{name} {credentialLabel} · {scopeLabel(scope)}</label>
             <input
               className="form-input"
               type="password"
-              placeholder={`${name} API key`}
+              placeholder={`${name} ${credentialLabel}`}
               value={keyDraft}
               autoFocus
               onChange={(e) => setKeyDraft(e.target.value)}
@@ -390,7 +392,7 @@ function ConnectionsSection({
             <div className="conn-add-actions">
               <button className="btn btn-outline btn-sm" onClick={reset} disabled={saving}>Cancel</button>
               <button className="btn btn-primary btn-sm" onClick={save} disabled={saving}>
-                {saving ? "Saving…" : "Save key"}
+                {saving ? "Saving…" : /key/i.test(credentialLabel) ? "Save key" : "Save token"}
               </button>
             </div>
           </div>
@@ -407,7 +409,9 @@ function ConnectionsSection({
                 )}
               </span>
             </div>
-            <button className="btn btn-outline btn-sm" onClick={() => setAdding(true)}>Replace key</button>
+            <button className="btn btn-outline btn-sm" onClick={() => setAdding(true)}>
+              {/key/i.test(credentialLabel) ? "Replace key" : "Replace token"}
+            </button>
           </div>
         ) : (
           <div className="conn-empty">
@@ -586,6 +590,7 @@ export function ExtensionPanel({ id, onConnected, onBack, workspaceCreds, worksp
   }
 
   const methodCount = detail.methods.length;
+  const connected = detail.connected || (workspaceCreds?.connectedExtensionIds.has(detail.id) ?? false);
   const description = detail.description ?? `${detail.category} tool`;
   const meta = ["Tool", `${methodCount} method${methodCount !== 1 ? "s" : ""}`, detail.version ? `v${detail.version}` : null]
     .filter(Boolean)
@@ -610,14 +615,15 @@ export function ExtensionPanel({ id, onConnected, onBack, workspaceCreds, worksp
 
       <ConnectionsSection
         name={detail.name}
+        credentialLabel={detail.auth?.credentialLabel}
         connectedScopes={detail.connectedScopes}
         onSave={onSave}
         workspace={workspaceCtxFor(workspaceCreds, detail.id, detail.name)}
       />
 
       {/* Endpoints stay hidden until a key is connected. */}
-      <Collapsible title={`Available methods · ${methodCount}`} defaultOpen={detail.connected}>
-        {detail.connected ? (
+      <Collapsible title={`Available methods · ${methodCount}`} defaultOpen={connected}>
+        {connected ? (
           <div className="method-list">
             {detail.methods.map((m) => (
               <div key={m.id} className="method-row">
@@ -633,12 +639,12 @@ export function ExtensionPanel({ id, onConnected, onBack, workspaceCreds, worksp
             ))}
           </div>
         ) : (
-          <div className="method-locked">🔒 Connect an API key to see {detail.name}'s methods.</div>
+          <div className="method-locked">🔒 Connect your {detail.auth?.credentialLabel ?? "API key"} to see {detail.name}'s methods.</div>
         )}
       </Collapsible>
 
       {detail.auth?.header && (
-        <Collapsible title="Where the key is used">
+        <Collapsible title={/key/i.test(detail.auth.credentialLabel ?? "API key") ? "Where the key is used" : "Where the credential is used"}>
           <p className="conn-hint" style={{ margin: 0 }}>
             Sent as the <code>{detail.auth.header}</code> header on requests to{" "}
             <code>{detail.baseUrl ?? "the API"}</code> when a function column calls a {detail.name} method.

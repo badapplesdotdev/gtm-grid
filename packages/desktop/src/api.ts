@@ -131,7 +131,7 @@ export interface ExtensionDetail {
   version: string | null;
   baseUrl: string | null;
   logo: string | null;
-  auth: { type: string; header: string | null; secretKey: string } | null;
+  auth: { type: string; header: string | null; secretKey: string; credentialLabel?: string } | null;
   connected: boolean;
   connectedScopes: CredentialScope[];
   methods: ExtensionMethodDetail[];

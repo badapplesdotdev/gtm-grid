@@ -28,6 +28,16 @@ export function freshState() {
     // locks the cloud UI regardless of paid/trial state. Default: hosted.
     selfHost: false,
 
+    // Shared connector credentials + calls captured by hermetic provider
+    // simulators. Tokens never leave this process and no live credits are used.
+    credentials: [],
+    zoomInfoCalls: [],
+    surfeCalls: [],
+    linearCalls: [],
+    theirStackCalls: [],
+    peopleDataLabsCalls: [],
+    lemlistCalls: [],
+
     // ── CRM sync (Attio) ────────────────────────────────────────────────────
     // Whether the workspace has an Attio OAuth connection (crm.connectionStatus).
     crmConnected: false,
