@@ -47,7 +47,7 @@ beforeAll(async () => {
       CONSTRAINT table_shares_by_token UNIQUE (token)
     );
   `);
-});
+}, 30_000);
 
 afterAll(async () => {
   await pg.close();

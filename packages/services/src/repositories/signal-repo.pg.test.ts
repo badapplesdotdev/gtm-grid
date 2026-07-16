@@ -88,7 +88,7 @@ beforeAll(async () => {
       created_at bigint NOT NULL
     );
   `);
-});
+}, 30_000);
 
 afterAll(async () => {
   await pg.close();

@@ -71,7 +71,7 @@ beforeAll(async () => {
       consumed_actions bigint NOT NULL DEFAULT 0
     );
   `);
-});
+}, 30_000);
 
 afterAll(async () => {
   await pg.close();

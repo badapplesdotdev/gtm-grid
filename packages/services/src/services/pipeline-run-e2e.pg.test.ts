@@ -119,7 +119,7 @@ beforeAll(async () => {
       CONSTRAINT pipeline_node_runs_once UNIQUE (run_id, row_id, node_id, generation)
     );
   `);
-});
+}, 30_000);
 
 afterAll(async () => {
   await pg.close();
