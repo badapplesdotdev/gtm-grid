@@ -17,6 +17,7 @@
     "@gtmgrid/cloud": "workspace:*",
     "@gtmgrid/db": "workspace:*",
     "@gtmgrid/email": "workspace:*",
+    "@gtmgrid/pipelines": "workspace:*",
     "autumn-js": "1.2.27",
     "drizzle-orm": "^0.45.2",
     "effect": "^3.21.3",

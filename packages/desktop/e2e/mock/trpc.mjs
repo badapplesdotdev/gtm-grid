@@ -5,6 +5,61 @@
 
 import { col, cell, mePayload, tablePagePayload, tableSummary } from "./state.mjs";
 
+// ── pipeline helpers (automation layer) ──────────────────────────────────────
+const clone = (x) => JSON.parse(JSON.stringify(x));
+
+/** A starter draft graph: input → formula (a complete, deployable 2-node flow,
+ *  chosen so the editor's legacy-migration effect does NOT auto-patch it). */
+function starterGraph() {
+  return {
+    schemaVersion: 1,
+    nodes: [
+      { id: "input", type: "input", name: "Record", position: { x: 80, y: 180 }, config: { key: "record", required: true } },
+      { id: "label", type: "formula", name: "Label", position: { x: 360, y: 180 }, config: { expression: "record" } },
+    ],
+    edges: [{ id: "e1", source: "input", target: "label" }],
+  };
+}
+
+/** The server-derived plan snapshot the editor reads (capabilities + estimate). */
+function compiledFor(graph) {
+  const billable = graph.nodes.filter((n) => n.type !== "input" && n.type !== "output").map((n) => n.id);
+  return {
+    graphHash: "e2e-hash",
+    topologicalNodeIds: graph.nodes.map((n) => n.id),
+    capabilities: { local: true, cloud: true, reasons: [] },
+    actionEstimate: { minimumPerRecord: billable.length, expectedPerRecord: billable.length, maximumPerRecord: billable.length, billableNodeIds: billable },
+  };
+}
+
+const pipelinePublic = (p) => ({
+  id: p.id, workspaceId: p.workspaceId, projectId: p.projectId, name: p.name,
+  description: p.description, archived: p.archived, createdBy: p.createdBy,
+  createdAt: p.createdAt, updatedAt: p.updatedAt,
+});
+
+/** Minimal graph-patch reducer mirroring `applyPipelineGraphPatches`. */
+function applyPatches(graph, patches) {
+  const next = clone(graph);
+  for (const patch of patches ?? []) {
+    if (patch.op === "add_node") next.nodes.push(clone(patch.node));
+    else if (patch.op === "update_node") next.nodes = next.nodes.map((n) => (n.id === patch.nodeId ? { ...n, ...clone(patch.patch) } : n));
+    else if (patch.op === "remove_node") { next.nodes = next.nodes.filter((n) => n.id !== patch.nodeId); next.edges = next.edges.filter((e) => e.source !== patch.nodeId && e.target !== patch.nodeId); }
+    else if (patch.op === "add_edge") next.edges.push(clone(patch.edge));
+    else if (patch.op === "remove_edge") next.edges = next.edges.filter((e) => e.id !== patch.edgeId);
+    else if (patch.op === "replace_node_edges") next.edges = clone(patch.edges);
+  }
+  return next;
+}
+
+function makeDraft(s, pipelineId, graph, version) {
+  return {
+    id: `version_${++s.seq.version}`, pipelineId, workspaceId: s.workspaceId, version,
+    status: "draft", graph, compiledPlan: compiledFor(graph), graphHash: "e2e-hash",
+    createdBy: s.user.id, createdAt: Date.now(), deployedAt: null,
+  };
+}
+
 /** Procedures the renderer calls. Unlisted procedures fall back to `null` (see
  *  server.mjs) so optional/panel-only calls degrade gracefully. */
 export const procedures = {
@@ -372,4 +427,54 @@ export const procedures = {
     s.crmBindings = s.crmBindings.filter((b) => b.id !== input?.bindingId);
     return null;
   },
+
+  // ── pipelines (automation layer) ─────────────────────────────────────────
+  "pipelines.list": (input, s) =>
+    s.pipelines
+      .filter((p) => p.projectId === input?.projectId)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .map((p) => ({ id: p.id, name: p.name, description: p.description, createdAt: p.createdAt, updatedAt: p.updatedAt })),
+  "pipelines.get": (input, s) => {
+    const p = s.pipelines.find((x) => x.id === input?.pipelineId);
+    if (!p) return null;
+    return { pipeline: pipelinePublic(p), draft: p.draft, deployed: p.deployed, bindings: p.bindings };
+  },
+  "pipelines.create": (input, s) => {
+    const now = Date.now();
+    const pid = `pipeline_${++s.seq.pipeline}`;
+    const draft = makeDraft(s, pid, starterGraph(), 1);
+    const p = {
+      id: pid, workspaceId: s.workspaceId, projectId: input?.projectId,
+      name: (input?.name ?? "Untitled pipeline").trim(), description: null, archived: false,
+      createdBy: s.user.id, createdAt: now, updatedAt: now, draft, deployed: null, bindings: [],
+    };
+    s.pipelines.push(p);
+    return { pipeline: pipelinePublic(p), version: draft };
+  },
+  "pipelines.patchDraft": (input, s) => {
+    const p = s.pipelines.find((x) => x.id === input?.pipelineId);
+    if (!p) return null;
+    // Editing a deployed-only pipeline forks a fresh draft off the deployed graph.
+    if (!p.draft) p.draft = makeDraft(s, p.id, p.deployed ? clone(p.deployed.graph) : starterGraph(), (p.deployed?.version ?? 0) + 1);
+    p.draft.graph = applyPatches(p.draft.graph, input?.patches ?? []);
+    p.draft.compiledPlan = compiledFor(p.draft.graph);
+    p.updatedAt = Date.now();
+    return { id: p.draft.id, version: p.draft.version };
+  },
+  "pipelines.deploy": (input, s) => {
+    const p = s.pipelines.find((x) => x.id === input?.pipelineId);
+    if (!p || !p.draft) return null;
+    const version = (p.deployed?.version ?? 0) + 1;
+    p.deployed = { ...p.draft, status: "deployed", version, deployedAt: Date.now() };
+    p.draft = null; // promoting the draft clears it until the next edit
+    p.updatedAt = Date.now();
+    return { version };
+  },
+  "pipelines.remove": (input, s) => {
+    s.pipelines = s.pipelines.filter((x) => x.id !== input?.pipelineId);
+    return { id: input?.pipelineId };
+  },
+  "pipelines.listRuns": () => [],
+  "pipelines.tableBindings": () => [],
+  "pipelines.estimateRun": () => ({ minimumActions: 0, expectedActions: 0, maximumActions: 0, perRecord: { minimumPerRecord: 0, expectedPerRecord: 0, maximumPerRecord: 0, billableNodeIds: [] } }),
 };

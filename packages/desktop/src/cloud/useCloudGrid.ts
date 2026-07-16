@@ -128,6 +128,8 @@ export const gridQueryKeys = {
   webhooks: (tableId: string) => ["webhooks", "list", tableId] as const,
   deliveries: (webhookId: string) =>
     ["webhooks", "deliveries", webhookId] as const,
+  /** A table's share links (the `share.listByTable` query). */
+  shares: (tableId: string) => ["shares", "list", tableId] as const,
 };
 
 /**
@@ -859,6 +861,14 @@ export function useCloudTablePaged(tableId: Id<"tables"> | null): {
         cursor: pageParam,
       }),
     getNextPageParam: (last) => last.nextCursor,
+    // Realtime is the fast path. This targeted fallback keeps local builds and
+    // temporary socket outages live without polling settled tables.
+    refetchInterval: (query) => {
+      const cached = query.state.data as { pages?: readonly GridPage[] } | undefined;
+      return cached?.pages?.some((page) => page.cells.some((cell) => cell.status === "pending" || cell.status === "running"))
+        ? 750
+        : false;
+    },
   });
 
   // Subscribe once a page is loaded; patch the PAGED cache per event.
@@ -1399,6 +1409,7 @@ export function useCloudGridMutations() {
       }),
     [qc],
   );
+  const refreshTable = useCallback((tableId: string) => refresh(tableId), [refresh]);
 
   // Optimistically apply a structural event to both caches so the change shows
   // INSTANTLY (no waiting on the refetch round-trip), then `refresh` reconciles
@@ -1764,6 +1775,7 @@ export function useCloudGridMutations() {
 
   return {
     setCell,
+    refreshTable,
     addRow,
     addRowsWithCells,
     addColumn,
@@ -1879,6 +1891,88 @@ export function useWebhooks(
     () => q.data?.map(toCloudWebhook),
     [q.data],
   );
+}
+
+// ── Table shares (share-a-table-via-URL) ─────────────────────────────────────
+
+/**
+ * One share link as returned by `share.listByTable` (the `ShareSummary` shape:
+ * id/token/name/enabled/expiresAt/createdAt/revokedAt/shareUrl). Metadata only —
+ * the heavy snapshot payload is never shipped to the list.
+ */
+export type CloudShare = Awaited<
+  ReturnType<NonNullable<typeof apiClient>["share"]["listByTable"]["query"]>
+>[number];
+
+/** The result of `share.create` (`{ id, token, shareUrl }`). */
+export type CreatedShare = Awaited<
+  ReturnType<NonNullable<typeof apiClient>["share"]["create"]["mutate"]>
+>;
+
+/**
+ * Reactive list of a table's share links (newest first). Issues zero calls when
+ * cloud is off or no table is selected. Mirrors {@link useWebhooks}.
+ */
+export function useTableShares(
+  tableId: Id<"tables"> | null,
+): CloudShare[] | undefined {
+  const q = useRqQuery({
+    queryKey: gridQueryKeys.shares(tableId ?? ""),
+    enabled: apiClient !== null && tableId !== null,
+    queryFn: () => apiClient!.share.listByTable.query({ tableId: tableId! }),
+  });
+  return q.data;
+}
+
+/**
+ * Mutation wrappers for the share panel — create a link, revoke a link, and
+ * clone a shared table into a project. Each invalidates the affected query so
+ * the UI reflects the change. Mirrors {@link useWebhookMutations}.
+ */
+export function useShareMutations() {
+  const qc = useQueryClient();
+
+  const createShare = useCallback(
+    async (
+      tableId: Id<"tables">,
+      opts?: { name?: string; expiresAt?: number | null },
+    ): Promise<CreatedShare> => {
+      const res = await apiClient!.share.create.mutate({
+        tableId,
+        ...(opts?.name ? { name: opts.name } : {}),
+        ...(opts?.expiresAt !== undefined ? { expiresAt: opts.expiresAt } : {}),
+      });
+      await qc.invalidateQueries({ queryKey: gridQueryKeys.shares(tableId) });
+      return res;
+    },
+    [qc],
+  );
+
+  const revokeShare = useCallback(
+    async (shareId: string, tableId: Id<"tables">) => {
+      await apiClient!.share.revoke.mutate({ shareId });
+      await qc.invalidateQueries({ queryKey: gridQueryKeys.shares(tableId) });
+    },
+    [qc],
+  );
+
+  const cloneShare = useCallback(
+    async (args: {
+      token: string;
+      targetProjectId: string;
+      includeData: boolean;
+    }) => {
+      const res = await apiClient!.share.clone.mutate(args);
+      // The cloned table lands in the target project — refresh its table list.
+      await qc.invalidateQueries({
+        queryKey: gridQueryKeys.tables(args.targetProjectId),
+      });
+      return res;
+    },
+    [qc],
+  );
+
+  return { createShare, revokeShare, cloneShare };
 }
 
 /** One per-event delivery as returned by `listDeliveriesPaged` (newest first). */

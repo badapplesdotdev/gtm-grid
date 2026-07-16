@@ -70,6 +70,9 @@ export const RISK_CLASS: Record<string, RiskClass> = {
   reorder_columns: "edit",
   reorder_rows: "edit",
   upload_extension: "edit",
+  import_table_from_share: "edit",
+  create_pipeline: "edit",
+  patch_pipeline: "edit",
   // destructive — irreversible data loss
   delete_rows: "destructive",
   delete_column: "destructive",
@@ -78,6 +81,7 @@ export const RISK_CLASS: Record<string, RiskClass> = {
   run_column: "spend",
   run_table: "spend",
   run_function: "spend",
+  deploy_pipeline: "destructive",
 };
 
 export function riskClass(tool: string): RiskClass {

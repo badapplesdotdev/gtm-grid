@@ -569,6 +569,8 @@ export interface AgentCloudContext {
   readonly projectId: string;
   /** The active table — OPTIONAL: the agent works with no table loaded. */
   readonly tableId?: string;
+  /** The pipeline currently open on the workflow canvas. */
+  readonly pipelineId?: string;
 }
 
 /** Agent activity forwarded to the host (drives agent presence in the grid). */
@@ -750,12 +752,14 @@ function AskCards({ request, onSubmit }: { request: AskRequest; onSubmit: (answe
 export default function AgentPanel({
   onGridChange,
   activeTable,
+  activePipeline,
   cloud,
   onAgentEvent,
   onResizeStart,
 }: {
   onGridChange: () => void;
   activeTable: { name: string; columns: string[] } | null;
+  activePipeline: { id: string; name: string } | null;
   /** Cloud context when a cloud project is active; `null` in local mode. */
   cloud?: AgentCloudContext | null;
   /** Tool-call / turn-end notifications (drives the grid's agent presence). */
@@ -926,10 +930,11 @@ export default function AgentPanel({
   // SCALAR table name (not the `activeTable` object identity, which App.tsx
   // churns every re-render) so unrelated re-renders never tear down a live turn.
   const tableKey = tableAbortKey(activeTable);
+  const contextKey = `${tableKey}:${activePipeline?.id ?? ""}`;
   useEffect(() => {
     const refs = abortRefs.current;
     return () => abortAllRuns(refs);
-  }, [tableKey]);
+  }, [contextKey]);
 
   async function send(preset?: string, modeOverride?: PermMode, approval?: { tool: string; argsHash: string }) {
     // Bind this turn to the agent it was started on. Everything below uses `a`,
@@ -995,7 +1000,10 @@ export default function AgentPanel({
           approval: approval || undefined,
           sessionId: sessionRef.current[a],
           newChat: fresh || undefined,
-          context: activeTable ? { tableName: activeTable.name, columns: activeTable.columns } : undefined,
+          context: activeTable || activePipeline ? {
+            ...(activeTable ? { tableName: activeTable.name, columns: activeTable.columns } : {}),
+            ...(activePipeline ? { pipelineId: activePipeline.id, pipelineName: activePipeline.name } : {}),
+          } : undefined,
           // CLOUD context (TRI-3296): forwarded only when a cloud project is
           // active so the agent's table tools operate on Supabase; omitted in
           // local mode so the agent keeps local-SQLite behaviour.
@@ -1329,9 +1337,9 @@ export default function AgentPanel({
             </aside>
           )}
 
-          {activeTable && (
-            <div className="agent-context-chip" title="The agent operates on this table by default">
-              <span className="agent-context-dot" /> on <strong>{activeTable.name}</strong>
+          {(activePipeline || activeTable) && (
+            <div className="agent-context-chip" title={activePipeline ? "The agent can inspect and edit this pipeline" : "The agent operates on this table by default"}>
+              <span className="agent-context-dot" /> on <strong>{activePipeline?.name ?? activeTable?.name}</strong>
             </div>
           )}
           {pendingAsk ? (
@@ -1368,8 +1376,8 @@ export default function AgentPanel({
               ref={inputRef}
               value={input}
               placeholder={
-                activeTable
-                  ? `Message ${AGENT_LABEL[agent]} about "${activeTable.name}"… (/ for commands)`
+                activePipeline || activeTable
+                  ? `Message ${AGENT_LABEL[agent]} about "${activePipeline?.name ?? activeTable?.name}"… (/ for commands)`
                   : `Message ${AGENT_LABEL[agent]}… (/ for commands)`
               }
               onChange={(e) => onComposerChange(e.target.value)}

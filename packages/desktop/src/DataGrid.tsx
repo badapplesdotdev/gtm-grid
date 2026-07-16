@@ -111,6 +111,10 @@ export interface GridController {
    *  environment's default run (local: unrun + errored rows; cloud: force). */
   readonly runColumn: (colId: string, opts?: { force?: boolean; rowIds?: string[] }) => void;
   readonly runCell: (rowId: string, colId: string) => void;
+  /** Structured pipeline output columns get the same per-cell play affordance
+   * as function columns, but enqueue their attached workflow instead. */
+  readonly pipelineOutputColumnIds?: ReadonlySet<string>;
+  readonly runPipelineCell?: (rowId: string, colId: string) => void;
   /** Run an explicit set of function cells (the range-selection "Run N cells");
    *  grouped per column into force+rowIds runs. Omit to hide the menu item. */
   readonly runCells?: (cells: Array<{ rowId: string; colId: string }>) => void;
@@ -163,6 +167,8 @@ export type CellActions = Pick<
   GridController,
   | "setCell"
   | "runCell"
+  | "pipelineOutputColumnIds"
+  | "runPipelineCell"
   | "clearCell"
   | "openCellDetails"
   | "expandCell"
@@ -750,6 +756,8 @@ export function DataGrid({
     () => ({
       setCell: c.setCell,
       runCell: c.runCell,
+      pipelineOutputColumnIds: c.pipelineOutputColumnIds,
+      runPipelineCell: c.runPipelineCell,
       clearCell: c.clearCell,
       openCellDetails: c.openCellDetails,
       expandCell: c.expandCell,
@@ -760,6 +768,8 @@ export function DataGrid({
     [
       c.setCell,
       c.runCell,
+      c.pipelineOutputColumnIds,
+      c.runPipelineCell,
       c.clearCell,
       c.openCellDetails,
       c.expandCell,

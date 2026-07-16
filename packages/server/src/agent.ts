@@ -37,6 +37,11 @@ const GTM_TOOLS = [
   "run_function",
   "upload_extension",
   "ask_user_question",
+  "list_pipelines",
+  "get_pipeline",
+  "create_pipeline",
+  "patch_pipeline",
+  "deploy_pipeline",
 ];
 const MUTATING = new Set([
   "create_table", "rename_table", "delete_table",
@@ -44,11 +49,14 @@ const MUTATING = new Set([
   "add_rows", "update_cells", "delete_rows",
   "set_dedupe", "run_column", "run_table",
   "reorder_columns", "reorder_rows", "upload_extension",
+  "create_pipeline", "patch_pipeline", "deploy_pipeline",
 ]);
 
 export interface AgentContext {
   tableName?: string;
   columns?: string[];
+  pipelineId?: string;
+  pipelineName?: string;
   /** Live snapshot of the connector registry so the skill stays in sync with installed extensions. */
   providers?: Array<{ id: string; name: string; category: string; methodCount: number }>;
   /** Per-tool operating manuals (the `<tool>.skill.md` files) for tools that are CONNECTED,
@@ -149,6 +157,22 @@ Source, enrich, and write data ONLY through the GTM Grid tools (\`list_tables\`,
 - A function column's params can reference OTHER columns via \`{{Column Name}}\` templates — that's how data flows row-by-row. Example: an Email column with \`fn: 'leadmagic.emailFinder'\` and \`params: { first_name: "{{First Name}}", last_name: "{{Last Name}}", domain: "{{Domain}}" }\`.
 - "Code" columns run a sandboxed JS body (\`function(inputs, sdk){ ... }\`) for custom transforms or to call \`sdk.<provider>.<method>(...)\` directly.
 
+## Columns vs reusable pipelines
+Do not turn every request into a pipeline. Choose the smallest durable abstraction:
+- Use an **ordinary function column** for one independent enrichment or transform whose result belongs in one column.
+- Use **dependent columns** for a linear, table-specific sequence where each stage is useful and visible as a column.
+- Use a **pipeline** only when at least one is true: the logic must be reused across tables, it branches, it has multiple outputs, it needs an independent deploy/version lifecycle, or it must run from schedules/webhooks/remote events.
+- When the request clearly fits one side, choose it without adding friction: default to columns for a simple one-table linear job, and use a pipeline when the user explicitly asks for a workflow/automation or the logic clearly needs one of the capabilities above.
+- When both designs are genuinely viable and the choice materially changes visibility, reuse, or maintenance, ask one concise question before mutating anything: explain the concrete tradeoff and offer **visible table columns** versus **one reusable pipeline-backed column**. Do not ask this for routine one-step work.
+- Before creating a pipeline, call \`list_pipelines\`; reuse or extend an existing one when its purpose matches. When an active pipeline is supplied below and the user says "this pipeline", "this workflow", or "the canvas", target it directly instead of searching by name.
+- You can build a complete graph with \`create_pipeline(graph)\`, or build/edit any portion of an existing graph with \`patch_pipeline\`. Patches support adding, updating and removing nodes; adding and removing edges; and atomically replacing a node's outgoing branches.
+- Pipeline edits are draft-only. Call \`get_pipeline\` first, then use the smallest atomic \`patch_pipeline\` set that leaves the graph connected and valid. Preserve unaffected node positions and configuration. Never deploy merely to test.
+- A table attachment has one pipeline output column. Every terminal path result is stored together as structured JSON in that cell; do not propose writing individual node outputs directly into unrelated table columns. If the user wants a field elsewhere, add a later formula/function column that reads it from the structured pipeline result.
+- For inserts, deletes, branches and re-branches, include all required node and edge changes in one patch call. Use fresh stable ids for new nodes/edges and inspect the returned graph before claiming success.
+- If an active pipeline is present, \`get_pipeline\`, \`patch_pipeline\`, and \`deploy_pipeline\` default to it, so the id may be omitted. Attempt the relevant tool before claiming pipeline tools are disconnected; if a call fails, report its exact error.
+- \`deploy_pipeline\` changes production behavior and is approval-gated. Explain what version/attachments are affected and wait for approval.
+- Cloud pipeline charging is one action when each executable node starts for a record. Input/output routing is free; skipped branches are free; pipeline output cell writes are not charged again. Mention the estimate before a large run.
+
 ## Slash commands
 The user can steer you with slash commands typed in the chat. When their message STARTS with one (e.g. \`/goal …\`), treat the leading \`/word\` as the command and the rest of the line as its argument, follow the protocol below, then resume normal operation. An unrecognized \`/word\` is just ordinary text — answer normally.
 
@@ -245,14 +269,28 @@ ${renderSkillsSection(ctx?.skills)}
 
   const cloud = isCloud ? CLOUD_NOTE : "";
   const plan = mode === "plan" ? PLAN_MODE_NOTE : "";
-  if (!ctx?.tableName) return base + cloud + plan;
-  const cols = ctx.columns?.length ? ` Its columns are: ${ctx.columns.join(", ")}.` : "";
-  return (
-    base +
-    cloud +
-    plan +
-    `\n\n## Active table\nThe user is viewing **"${ctx.tableName}"**.${cols} When they say "this table" or don't name one, operate on this one.`
-  );
+  let active = "";
+  if (ctx?.tableName) {
+    const cols = ctx.columns?.length ? ` Its columns are: ${ctx.columns.join(", ")}.` : "";
+    active += `\n\n## Active table\nThe user is viewing **"${ctx.tableName}"**.${cols} When they say "this table" or don't name one, operate on this one.`;
+  }
+  if (ctx?.pipelineId) {
+    const name = ctx.pipelineName?.trim() || "Untitled pipeline";
+    active += `\n\n## Active pipeline\nThe user has **"${name}"** open on the workflow canvas (pipeline id: \`${ctx.pipelineId}\`). When they say "this pipeline", "this workflow", "this automation", "the flow", or "the canvas", they mean this pipeline. You may build it completely or modify only the requested portion: add, configure, update, move, connect, branch, re-branch, or delete nodes and edges with the pipeline tools.\n\n**Pipeline tools are mounted through the same \`gtmgrid\` MCP server as table tools.** Claude may defer their schemas between turns; a deferred/removed schema does NOT mean the tools disconnected. For every request that inspects or changes this pipeline, use ToolSearch to load \`mcp__gtmgrid__get_pipeline\` and, when editing, \`mcp__gtmgrid__patch_pipeline\`, then call \`get_pipeline\` in the current turn before answering. Treat any earlier claim that the pipeline tools were disconnected as stale session memory. Only report a connection problem after a current-turn ToolSearch or pipeline tool call returns an actual error.`;
+  }
+  return base + cloud + plan + active;
+}
+
+/**
+ * Claude resumes a long-lived native session. Its deferred-tool index can retain
+ * an old turn where pipeline schemas were removed from immediate context and the
+ * model may incorrectly remember that as an MCP disconnect. Put the recovery
+ * directive next to the current user request as well as in the system preamble;
+ * this is deliberately Claude-only because ToolSearch is a Claude runtime tool.
+ */
+export function claudeTaskMessage(message: string, ctx?: AgentContext): string {
+  if (!ctx?.pipelineId) return message;
+  return `[GTM Grid active pipeline: ${ctx.pipelineName?.trim() || "Untitled pipeline"} (${ctx.pipelineId})]\nIf this request inspects or changes the pipeline, first use ToolSearch for mcp__gtmgrid__get_pipeline and mcp__gtmgrid__patch_pipeline, then call get_pipeline now. Deferred or previously removed tool schemas are discoverable and are not a disconnect; do not rely on an earlier turn's availability claim.\n\n${message}`;
 }
 
 /**
@@ -818,6 +856,8 @@ export interface AgentCloud {
   readonly projectId: string;
   /** The active table — OPTIONAL: the agent works with no table loaded. */
   readonly tableId?: string;
+  /** The active pipeline canvas — OPTIONAL and independent of the active table. */
+  readonly pipelineId?: string;
 }
 
 /**
@@ -844,10 +884,11 @@ export function parseAgentCloud(raw: unknown): AgentCloud | undefined {
   const workspaceId = read("workspaceId");
   const projectId = read("projectId");
   const tableId = read("tableId"); // optional — may be absent when no table is open
+  const pipelineId = read("pipelineId"); // optional — may be absent when no pipeline is open
   if (apiUrl === undefined || token === undefined || workspaceId === undefined || projectId === undefined) {
     return undefined;
   }
-  return { apiUrl, token, workspaceId, projectId, tableId };
+  return { apiUrl, token, workspaceId, projectId, tableId, pipelineId };
 }
 
 /**
@@ -932,6 +973,8 @@ export function mcpEnv(
     GTMGRID_CLOUD_PROJECT: cloud.projectId,
     // Only when a table is actually open — the MCP treats it as optional.
     ...(cloud.tableId ? { GTMGRID_CLOUD_TABLE: cloud.tableId } : {}),
+    // Lets pipeline tools target the canvas the user is currently viewing.
+    ...(cloud.pipelineId ? { GTMGRID_CLOUD_PIPELINE: cloud.pipelineId } : {}),
     ...obs,
     ...perm,
   };
@@ -1055,9 +1098,10 @@ export function streamClaude(
   opts: { message: string; project: string; repoRoot: string; sessionId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; mode?: string; cloud?: AgentCloud; providerEnv?: Record<string, string>; approval?: AgentApproval },
 ): void {
   const sse = sseClient(res, opts.origin);
+  const taskMessage = claudeTaskMessage(opts.message, opts.context);
   const args = [
     "-p",
-    opts.message,
+    taskMessage,
     "--output-format",
     "stream-json",
     "--verbose",

@@ -27,6 +27,7 @@
   "dependencies": {
     "@gtmgrid/analytics": "workspace:*",
     "@gtmgrid/cloud": "workspace:*",
+    "@gtmgrid/pipelines": "workspace:*",
     "@gtmgrid/services": "workspace:*",
     "@radix-ui/react-avatar": "^1.1.12",
     "@radix-ui/react-dialog": "^1.1.16",

@@ -110,7 +110,7 @@ export function parseWebhookRecordData(
  * URL that targets a private/reserved/metadata address. (The desktop sidecar runs
  * on the user's own machine and intentionally leaves this off.)
  */
-function engineConfig(): EngineConfig {
+export function engineConfig(): EngineConfig {
   const ai = aiConfigFromEnv();
   return ai === undefined
     ? { guardSsrf: true }
@@ -176,7 +176,7 @@ export function workspaceRegistry(workspaceId: string): Promise<Registry> {
   return reg;
 }
 
-function buildWorkerStore(
+export function buildWorkerStore(
   tableId: string,
   workspaceId: string,
 ): Promise<GridStoreShape> {

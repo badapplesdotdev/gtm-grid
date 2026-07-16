@@ -96,6 +96,12 @@ function GridCellInner({
   selectionMenuItems,
   onCellFocus,
 }: GridCellProps) {
+  const isPipelineOutput = actions.pipelineOutputColumnIds?.has(col.id) ?? false;
+  const runThisCell = isPipelineOutput && actions.runPipelineCell
+    ? () => actions.runPipelineCell!(rowId, col.id)
+    : col.kind === "function"
+      ? () => actions.runCell(rowId, col.id)
+      : undefined;
   const tdStyle: PresenceTdStyle | undefined = here || pinnedLeft !== undefined
     ? { ...(here ? { "--presence-color": here[0].color } : {}), ...(pinnedLeft !== undefined ? { left: pinnedLeft } : {}) }
     : undefined;
@@ -154,9 +160,9 @@ function GridCellInner({
         openCtx(
           e,
           rowCtxItems(rowId, [
-            ...(col.kind === "function"
+            ...(runThisCell
               ? ([
-                  { label: "Run cell", disabled: !actions.canRun, onClick: () => actions.runCell(rowId, col.id) },
+                  { label: isPipelineOutput ? "Run pipeline" : "Run cell", disabled: !actions.canRun, onClick: runThisCell },
                   ...(actions.openCellDetails
                     ? [{ label: "View cell details", onClick: () => actions.openCellDetails!(col, cell, rowId) }]
                     : []),
@@ -219,7 +225,7 @@ function GridCellInner({
                 })
             : undefined
         }
-        onRunCell={col.kind === "function" ? () => actions.runCell(rowId, col.id) : undefined}
+        onRunCell={runThisCell}
         running={running}
         waiting={waiting}
         isActive={isActiveCell}

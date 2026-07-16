@@ -147,6 +147,20 @@ export {
   projectRepoLayer,
 } from "./repositories/project-repo.js";
 export {
+  type CompiledPipelineSnapshot,
+  type PipelineBindingRecord,
+  PipelineActionsLimitError,
+  type PipelineRecord,
+  PipelineRepo,
+  PipelineRepoError,
+  type PipelineRepoFixtures,
+  PipelineRepoLive,
+  pipelineRepoLayer,
+  type PipelineRunRecord,
+  type PipelineVersionRecord,
+  type PipelineVersionStatus,
+} from "./repositories/pipeline-repo.js";
+export {
   type NewTable,
   type Table,
   TableRepo,
@@ -271,6 +285,12 @@ export {
   type WorkerTableMeta,
 } from "./services/webhook-service.js";
 export { ExtensionService } from "./services/extension-service.js";
+export {
+  PipelineBindingError,
+  PipelineInvalidGraphError,
+  PipelineNotFoundError,
+  PipelineService,
+} from "./services/pipeline-service.js";
 // --- Cloud-access gate (entitlement) -----------------------------------------
 export {
   EntitlementService,
@@ -290,6 +310,42 @@ export {
   InvalidCellError as GridInvalidCellError,
   type TablePage,
 } from "./services/grid-service.js";
+// --- Share-a-table-via-URL: snapshot format + repo + service -----------------
+export {
+  referencedProviders,
+  SHARE_SNAPSHOT_MAX_BYTES,
+  SHARE_SNAPSHOT_VERSION,
+  type SnapshotCell,
+  type SnapshotColumn,
+  type SnapshotColumnKind,
+  type SnapshotColumnType,
+  type SnapshotSourceGrid,
+  snapshotFromFullGrid,
+  type SnapshotValidation,
+  type TableShareSnapshot,
+  validateSnapshot,
+} from "./share-snapshot.js";
+export {
+  type InMemoryShareTable,
+  type InsertShareInput,
+  ShareRepo,
+  ShareRepoError,
+  type ShareRepoFixtures,
+  ShareRepoLive,
+  shareRepoLayer,
+  type TableShare,
+} from "./repositories/share-repo.js";
+export {
+  type CloneResult,
+  type CreateShareResult,
+  InvalidShareSnapshotError,
+  ShareNotFoundError,
+  type SharePreview,
+  ShareService,
+  type ShareSummary,
+  ShareTooLargeError,
+  shareUrlFor,
+} from "./services/share-service.js";
 export {
   type MeterQuota,
   MeterService,
