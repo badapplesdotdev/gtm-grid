@@ -24,8 +24,8 @@
  */
 
 import { schema } from "@gtmgrid/db";
-import { and, eq, isNull } from "drizzle-orm";
-import { Context, Data, Effect, Layer, Option } from "effect";
+import { and, eq, isNull, sql } from "drizzle-orm";
+import { Context, Data, Effect, Exit, Layer, Option, Runtime } from "effect";
 import { DbClient } from "../db-client.js";
 
 /** A credential scope. Mirrors the `credential_scope` pgEnum (schema.ts:74). */
@@ -133,6 +133,40 @@ export class CredentialRepo extends Context.Tag("CredentialRepo")<
      * removing a CRM OAuth connection); no-op when nothing matches.
      */
     readonly remove: (key: OwnerKey) => Effect.Effect<boolean, CredentialRepoError>;
+    /**
+     * Run `onAcquired` holding an exclusive cross-instance lock on `lockKey`, or
+     * `onBusy` if another instance already holds it. NEVER blocks.
+     *
+     * This exists for OAuth providers whose refresh tokens are SINGLE-USE
+     * (`RefreshPolicy.Rotating`, i.e. Slack): two concurrent column runs that
+     * both refresh will revoke each other's live token mid-run, so the refresh
+     * CALL itself — not just the write — must be mutually exclusive. A
+     * compare-and-swap after the fact cannot help; the damage is the HTTP call.
+     *
+     * `pg_try_advisory_xact_lock`, deliberately, on two counts:
+     *
+     * 1. TRY, not blocking. An xact lock is only released at COMMIT, so a
+     *    blocking `pg_advisory_xact_lock` would pin a pooled connection for the
+     *    holder AND one per waiter across a network call. The pool is `max: 2`
+     *    per instance (Supavisor transaction mode — see `@gtmgrid/db/client`),
+     *    so two waiters would stall the entire instance until `connect_timeout`.
+     *    Non-blocking means the loser proceeds immediately on its stored token,
+     *    which is still valid for the whole skew window — the skew IS the grace
+     *    period.
+     * 2. XACT, not session. In transaction-mode pooling a session-level lock is
+     *    unsound: `pg_advisory_lock` and `pg_advisory_unlock` can land on
+     *    different backends, leaking the lock forever. Transaction scope ties
+     *    the lock's lifetime to a single backend and releases it on commit
+     *    OR crash.
+     *
+     * Callers MUST re-read state inside `onAcquired`: winning the lock says
+     * nothing about whether the work still needs doing.
+     */
+    readonly withTryRefreshLock: <A, E, R>(args: {
+      readonly lockKey: string;
+      readonly onAcquired: Effect.Effect<A, E, R>;
+      readonly onBusy: Effect.Effect<A, E, R>;
+    }) => Effect.Effect<A, E | CredentialRepoError, R>;
   }
 >() {}
 
@@ -294,7 +328,42 @@ export const CredentialRepoLive: Layer.Layer<
               },
               catch: fail("credential delete failed"),
             })
-          : Effect.succeed(false)
+          : Effect.succeed(false),
+      withTryRefreshLock: <A, E, R>(args: {
+        readonly lockKey: string;
+        readonly onAcquired: Effect.Effect<A, E, R>;
+        readonly onBusy: Effect.Effect<A, E, R>;
+      }): Effect.Effect<A, E | CredentialRepoError, R> =>
+        Effect.gen(function* () {
+          // Capture the caller's runtime so the inner Effect keeps its context
+          // (CryptoService et al.) across the Drizzle transaction boundary.
+          const runtime = yield* Effect.runtime<R>();
+          // Captured out of the transaction rather than returned through it, so
+          // the typing never depends on the driver's `transaction` return type.
+          // Seeded with a defect: if the body somehow never runs, that is a bug
+          // and must surface as one, not as a silent success.
+          let captured: Exit.Exit<A, E> = Exit.die(
+            new Error("withTryRefreshLock: transaction body did not run"),
+          );
+          yield* Effect.tryPromise({
+            try: () =>
+              db.transaction(async (tx) => {
+                const rows = await tx.execute(LOCK_SQL(args.lockKey));
+                const acquired = readAcquired(rows);
+                // runPromiseEXIT, not runPromise: a rejected promise would be
+                // caught below and flattened into CredentialRepoError, erasing
+                // the inner effect's typed failures. The Exit is re-raised
+                // as-is, so E survives the round trip.
+                captured = await Runtime.runPromiseExit(runtime)(
+                  acquired ? args.onAcquired : args.onBusy,
+                );
+              }),
+            catch: fail("Could not acquire the credential refresh lock"),
+          });
+          // `Exit` IS an `Effect`, so this re-raises the inner typed failure.
+          return yield* captured;
+        }),
+
     };
   }),
 );
@@ -317,6 +386,46 @@ const rowToOption = (
       });
 
 /**
+ * Hash `lockKey` to the bigint `pg_try_advisory_xact_lock` wants.
+ * `hashtextextended` is a stable Postgres builtin, so every instance maps a key
+ * to the same lock id. Collisions across DIFFERENT keys are possible but benign:
+ * the worst case is two unrelated connections briefly serialising.
+ */
+const LOCK_SQL = (lockKey: string) =>
+  sql`select pg_try_advisory_xact_lock(hashtextextended(${lockKey}, 0)) as acquired`;
+
+/**
+ * Read the boolean out of the lock query's result, totally.
+ *
+ * TWO SHAPES, deliberately. Drizzle's `execute()` return differs by driver:
+ *   - `drizzle-orm/postgres-js` (production) yields an ARRAY-like result:
+ *     `[{ acquired: true }]`
+ *   - `drizzle-orm/pglite` (the .pg.test suites) yields
+ *     `{ rows: [{ acquired: true }], fields, affectedRows }`
+ * Handling only the first is what production happens to need — but it fails
+ * CLOSED and SILENTLY against anything else: an unrecognised shape reads as
+ * "someone else holds the lock", so the refresh never runs, forever, with no
+ * error anywhere. A driver swap would surface months later as "Slack keeps
+ * disconnecting". Accepting both shapes costs three lines and removes that trap.
+ *
+ * Failing closed on a genuinely unknown shape is still the right default: a
+ * false negative skips one refresh of a token that is still inside its skew
+ * window, whereas a false positive lets two instances refresh at once — exactly
+ * the single-use-token trampling this lock exists to prevent.
+ */
+const readAcquired = (raw: unknown): boolean => {
+  const rows = Array.isArray(raw)
+    ? raw
+    : typeof raw === "object" && raw !== null && Array.isArray(Reflect.get(raw, "rows"))
+      ? Reflect.get(raw, "rows")
+      : null;
+  if (!Array.isArray(rows) || rows.length === 0) return false;
+  const first: unknown = rows[0];
+  if (typeof first !== "object" || first === null) return false;
+  return Reflect.get(first, "acquired") === true;
+};
+
+/**
  * An in-memory `CredentialRepo` Layer backed by a mutable copy of the given
  * rows. `upsert` mutates the copy so a save-then-read in one test sees the write,
  * exactly like the Drizzle path — exercised with NO live database.
@@ -326,6 +435,8 @@ export const credentialRepoLayer = (
 ): Layer.Layer<CredentialRepo> =>
   Layer.sync(CredentialRepo, () => {
     const rows: CredentialRow[] = seed.map((r) => ({ ...r }));
+    /** Held lock keys, so the in-memory layer can exercise the busy branch. */
+    const heldLocks = new Set<string>();
 
     const matchesKey = (r: CredentialRow, key: OwnerKey): boolean =>
       r.workspaceId === key.workspaceId &&
@@ -398,6 +509,28 @@ export const credentialRepoLayer = (
           if (index === -1) return false;
           rows.splice(index, 1);
           return true;
-        })
+        }),
+      /**
+       * In-process mutex. Enough to exercise BOTH branches in a unit test, but
+       * it proves nothing about `pg_try_advisory_xact_lock` — a fake cannot,
+       * because the lock exists to coordinate across instances/processes. The
+       * real proof is the integration test against live Postgres.
+       */
+      withTryRefreshLock: <A, E, R>(args: {
+        readonly lockKey: string;
+        readonly onAcquired: Effect.Effect<A, E, R>;
+        readonly onBusy: Effect.Effect<A, E, R>;
+      }): Effect.Effect<A, E | CredentialRepoError, R> =>
+        Effect.suspend(() => {
+          if (heldLocks.has(args.lockKey)) return args.onBusy;
+          heldLocks.add(args.lockKey);
+          return Effect.ensuring(
+            args.onAcquired,
+            Effect.sync(() => {
+              heldLocks.delete(args.lockKey);
+            }),
+          );
+        }),
+
     };
   });
