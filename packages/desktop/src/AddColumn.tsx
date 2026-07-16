@@ -346,6 +346,7 @@ const NAV_CLUSTERS: string[][] = [
   ["AI", "Formula"],
   ["Enrich people", "Enrich company", "Find email", "Verify email", "Find phone", "Search"],
   ["Formatting", "Scoring", "Verification", "Scraping", "Extraction"],
+  ["Tables"],
   ["Ads", "Jobs", "Signals"],
 ];
 
@@ -377,7 +378,8 @@ export function FunctionsModal({
     setAddErr("");
     try {
       const name = f.label;
-      const type = f.provider === "http" ? "json" : "text";
+      // JSON-output providers default the column type to json (drill-in works).
+      const type = f.provider === "http" || f.provider === "table" ? "json" : "text";
       const res = await gridApi.addColumn(tableId, { name, type, fn: f.fnKey, params: {} });
       onAdded({
         id: res.id,

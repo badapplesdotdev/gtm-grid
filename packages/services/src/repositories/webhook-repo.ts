@@ -37,6 +37,10 @@ export interface WebhookMappingEntry {
 /** The webhook's receive behaviour. */
 export type WebhookMode = "create" | "upsert";
 
+/** What feeds an inbound connection: a third-party HTTP POST (classic webhook,
+ *  null/"http") or a sibling table's push column ("push"). */
+export type WebhookSource = "http" | "push";
+
 /** A webhook row projection the domain uses. Mirrors `webhooks`. */
 export interface Webhook {
   readonly id: string;
@@ -53,6 +57,10 @@ export interface Webhook {
   readonly createdAt: number;
   readonly lastReceivedAt: number | null;
   readonly receivedCount: number | null;
+  /** Null/"http" = classic webhook; "push" = fed by a table.push column. */
+  readonly source?: WebhookSource | null;
+  /** The sibling table whose push column feeds this connection ("push" only). */
+  readonly sourceTableId?: string | null;
 }
 
 /** Fields a `createWebhook` insert supplies. */
@@ -68,6 +76,8 @@ export interface WebhookInsert {
   readonly mode: WebhookMode | null;
   readonly upsertKey: string | null;
   readonly createdAt: number;
+  readonly source?: WebhookSource | null;
+  readonly sourceTableId?: string | null;
 }
 
 /** A patch over a webhook row; only present fields are written. */
@@ -217,6 +227,15 @@ export class WebhookRepo extends Context.Tag("WebhookRepo")<
     readonly findByToken: (
       token: string,
     ) => Effect.Effect<Option.Option<Webhook>, WebhookRepoError>;
+    /**
+     * The PUSH CONNECTION feeding `tableId` from `sourceTableId` (a webhooks
+     * row with source="push"), or `None`. One connection per (source, target)
+     * pair — table.push finds-or-creates it on first delivery.
+     */
+    readonly findPushConnection: (
+      sourceTableId: string,
+      tableId: string,
+    ) => Effect.Effect<Option.Option<Webhook>, WebhookRepoError>;
     /** Insert a webhook, returning its id. */
     readonly insert: (
       values: WebhookInsert,
@@ -234,6 +253,14 @@ export class WebhookRepo extends Context.Tag("WebhookRepo")<
     readonly findTable: (
       tableId: string,
     ) => Effect.Effect<Option.Option<GridTable>, WebhookRepoError>;
+    /**
+     * All tables of a project (position order) — the cross-table actions'
+     * sibling list (table.push / table.lookup resolve their target within the
+     * SOURCE table's project; this is that candidate set).
+     */
+    readonly listTablesByProject: (
+      projectId: string,
+    ) => Effect.Effect<readonly GridTable[], WebhookRepoError>;
     /** A row by id, or `None`. */
     readonly findRow: (
       rowId: string,
@@ -482,6 +509,8 @@ function rowToWebhook(r: {
   createdAt: number;
   lastReceivedAt: number | null;
   receivedCount: number | null;
+  source?: string | null;
+  sourceTableId?: string | null;
 }): Webhook {
   return {
     id: r.id,
@@ -498,6 +527,8 @@ function rowToWebhook(r: {
     createdAt: r.createdAt,
     lastReceivedAt: r.lastReceivedAt,
     receivedCount: r.receivedCount,
+    source: r.source === "push" ? "push" : r.source === "http" ? "http" : null,
+    sourceTableId: r.sourceTableId ?? null,
   };
 }
 
@@ -565,6 +596,29 @@ export const WebhookRepoLive: Layer.Layer<WebhookRepo, never, DbClient> =
             catch: fail("token lookup failed"),
           }),
 
+        findPushConnection: (sourceTableId, tableId) =>
+          UUID_RE.test(sourceTableId) && UUID_RE.test(tableId)
+            ? Effect.tryPromise({
+                try: async () => {
+                  const rows = await db
+                    .select()
+                    .from(schema.webhooks)
+                    .where(
+                      and(
+                        eq(schema.webhooks.sourceTableId, sourceTableId),
+                        eq(schema.webhooks.tableId, tableId),
+                        eq(schema.webhooks.source, "push"),
+                      ),
+                    )
+                    .limit(1);
+                  return Option.fromNullable(
+                    rows[0] === undefined ? null : rowToWebhook(rows[0]),
+                  );
+                },
+                catch: fail("push connection lookup failed"),
+              })
+            : Effect.succeed(Option.none<Webhook>()),
+
         insert: (values) =>
           Effect.tryPromise({
             try: async () => {
@@ -584,6 +638,8 @@ export const WebhookRepoLive: Layer.Layer<WebhookRepo, never, DbClient> =
                   createdAt: values.createdAt,
                   lastReceivedAt: null,
                   receivedCount: 0,
+                  source: values.source ?? null,
+                  sourceTableId: values.sourceTableId ?? null,
                 })
                 .returning({ id: schema.webhooks.id });
               const id = rows[0]?.id;
@@ -628,6 +684,19 @@ export const WebhookRepoLive: Layer.Layer<WebhookRepo, never, DbClient> =
                 catch: fail("table lookup failed"),
               })
             : Effect.succeed(Option.none<GridTable>()),
+
+        listTablesByProject: (projectId) =>
+          UUID_RE.test(projectId)
+            ? Effect.tryPromise({
+                try: async () =>
+                  db
+                    .select()
+                    .from(schema.tables)
+                    .where(eq(schema.tables.projectId, projectId))
+                    .orderBy(asc(schema.tables.position)),
+                catch: fail("project tables lookup failed"),
+              })
+            : Effect.succeed([] as readonly GridTable[]),
 
         findRow: (rowId) =>
           UUID_RE.test(rowId)
@@ -1272,6 +1341,17 @@ export const webhookRepoLayer = (fixtures: {
       Effect.succeed(
         Option.fromNullable(webhooks.find((w) => w.token === token)),
       ),
+    findPushConnection: (sourceTableId, tableId) =>
+      Effect.succeed(
+        Option.fromNullable(
+          webhooks.find(
+            (w) =>
+              w.source === "push" &&
+              w.sourceTableId === sourceTableId &&
+              w.tableId === tableId,
+          ),
+        ),
+      ),
     insert: (values) =>
       Effect.sync(() => {
         const id = nextId("webhook");
@@ -1295,6 +1375,12 @@ export const webhookRepoLayer = (fixtures: {
       }),
     findTable: (tableId) =>
       Effect.succeed(Option.fromNullable(tables.find((t) => t.id === tableId))),
+    listTablesByProject: (projectId) =>
+      Effect.succeed(
+        [...tables]
+          .filter((t) => t.projectId === projectId)
+          .sort((a, b) => a.position - b.position),
+      ),
     findRow: (rowId) =>
       Effect.succeed(Option.fromNullable(rows.find((r) => r.id === rowId))),
     findColumn: (columnId) =>

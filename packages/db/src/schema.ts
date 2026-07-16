@@ -609,11 +609,23 @@ export const webhooks = pgTable(
     lastReceivedAt: bigint("last_received_at", { mode: "number" }),
     /** Total payloads received. */
     receivedCount: integer("received_count"),
+    /**
+     * What feeds this inbound connection. Null/"http" = a classic webhook (a
+     * third party POSTs to the token URL). "push" = a table.push column in a
+     * SIBLING table delivers rows through the engine — same mapping/upsert/
+     * autoRun machinery, no public HTTP ingress (the token is never served).
+     */
+    source: text("source"),
+    /** The sibling table whose push column feeds this connection ("push" only). */
+    sourceTableId: uuid("source_table_id").references(() => tables.id, {
+      onDelete: "cascade",
+    }),
   },
   (t) => [
     index("webhooks_by_workspace").on(t.workspaceId),
     index("webhooks_by_table").on(t.tableId),
     index("webhooks_by_token").on(t.token),
+    index("webhooks_by_source_table").on(t.sourceTableId),
   ],
 );
 

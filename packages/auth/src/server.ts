@@ -75,11 +75,17 @@ function requireEmailVerification(): boolean {
   return process.env.AUTH_REQUIRE_EMAIL_VERIFICATION === "true";
 }
 
-/** Build the `trustedOrigins` allow-list: SITE_URL (if set) + desktop origins. */
+/** Build the `trustedOrigins` allow-list: SITE_URL (if set) + desktop origins
+ *  + any GTMGRID_DEV_ORIGINS (comma-separated extra DEV origins for
+ *  parallel-worktree development — paired with the same env in the CORS
+ *  middleware; unset in production). */
 function trustedOrigins(): string[] {
   const origins = [DESKTOP_DEEP_LINK_PREFIX, ...DESKTOP_WEB_ORIGINS];
   const siteUrl = process.env.SITE_URL;
   if (siteUrl !== undefined && siteUrl !== "") origins.push(siteUrl);
+  for (const o of process.env.GTMGRID_DEV_ORIGINS?.split(",") ?? []) {
+    if (o.trim() !== "") origins.push(o.trim());
+  }
   return origins;
 }
 

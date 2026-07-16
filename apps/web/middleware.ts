@@ -20,6 +20,10 @@ const ALLOWED_ORIGINS = new Set([
   "http://tauri.localhost", // Windows / Linux / Android Tauri webview
   "https://tauri.localhost",
   "http://localhost:5173", // desktop dev (vite)
+  // Extra DEV origins for parallel-worktree development (a second checkout's
+  // vite on an alternate port, e.g. http://localhost:5183). Comma-separated;
+  // unset in production, so the packaged allow-list above is unchanged there.
+  ...(process.env.GTMGRID_DEV_ORIGINS?.split(",").map((o) => o.trim()).filter(Boolean) ?? []),
 ]);
 
 function corsHeaders(origin: string): Record<string, string> {
@@ -27,7 +31,10 @@ function corsHeaders(origin: string): Record<string, string> {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Credentials": "true",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "content-type, authorization",
+    // `x-gtmgrid-member` carries the member session token on the renderer's
+    // direct worker-route calls (e.g. the table-actions editors' sibling-table
+    // reads) — without it here the browser fails those requests at preflight.
+    "Access-Control-Allow-Headers": "content-type, authorization, x-gtmgrid-member",
     "Access-Control-Expose-Headers": "set-auth-token, set-auth-jwt",
     "Access-Control-Max-Age": "86400",
     Vary: "Origin",

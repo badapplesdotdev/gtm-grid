@@ -31,6 +31,7 @@ import {
   CloudSchemaMapping,
   Engine,
   cloudGridStoreShape,
+  cloudTableGateway,
   connectorFromManifest,
   defaultRegistry,
   fetchWithRetry,
@@ -40,6 +41,7 @@ import {
   type EngineConfig,
   type GridStoreShape,
   type Registry,
+  type TableGatewayRefs,
 } from "@gtmgrid/engine";
 import { Effect } from "effect";
 import { capCellValue } from "./cell.js";
@@ -198,6 +200,20 @@ export async function buildCloudStore(
     }).pipe(Effect.provide(CloudSchemaMapping.Default)),
   );
 }
+
+/**
+ * The cross-table worker routes the table.push / table.lookup gateway drives.
+ * Mirrors `packages/server/src/cloud-run.ts` TABLE_GATEWAY_REFS; every route
+ * revalidates same-project scoping server-side against `sourceTableId`.
+ */
+export const TABLE_GATEWAY_REFS: TableGatewayRefs = {
+  listProjectTables: "/api/worker/listProjectTables",
+  getTableSchema: "/api/worker/getTableSchema",
+  getTableRows: "/api/worker/getTableRows",
+  upsertRowInTable: "/api/worker/upsertRowInTable",
+  createColumnInTable: "/api/worker/createColumnInTable",
+  pushRowIntoTable: "/api/worker/pushRowIntoTable",
+};
 
 /**
  * The subset of grid operations the MCP table tools call, so the tool handlers
@@ -924,7 +940,10 @@ export function makeCloudSource(
           : candidates;
       const workspaceId = await deps.resolveWorkspaceId(client, tableId);
       const store = await buildCloudStore(client, tableId, workspaceId);
-      const engine = new Engine(deps.config, deps.registry, {
+      // Cross-table access for table.push / table.lookup columns, scoped to
+      // this run's source table.
+      const tableGateway = cloudTableGateway({ client, refs: TABLE_GATEWAY_REFS, sourceTableId: tableId });
+      const engine = new Engine({ ...deps.config, grid: tableGateway }, deps.registry, {
         store,
         creds: store,
       });
@@ -948,7 +967,13 @@ export function makeCloudSource(
       // context workspace directly — no active table required for a function run.
       const workspaceId = context.workspaceId;
       const store = await buildCloudStore(client, context.tableId ?? "", workspaceId);
-      const engine = new Engine(deps.config, deps.registry, {
+      // Cross-table access only when a source table anchors the project scope
+      // (the worker routes key same-project checks off sourceTableId). Without
+      // one, table.* fails with its clear "not available here" message.
+      const grid = context.tableId
+        ? cloudTableGateway({ client, refs: TABLE_GATEWAY_REFS, sourceTableId: context.tableId })
+        : undefined;
+      const engine = new Engine({ ...deps.config, ...(grid ? { grid } : {}) }, deps.registry, {
         store,
         creds: store,
       });

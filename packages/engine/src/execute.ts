@@ -19,6 +19,7 @@ import {
 } from "./store.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import type { TableGateway } from "./table-gateway.js";
 import type { AiConfig, AiFallbackRequest, AiGenerationEvent, Column, ConnectorMethod, RateLimit } from "./types.js";
 
 // One LLM-observability trace id per column run, propagated across the run's
@@ -27,6 +28,13 @@ import type { AiConfig, AiFallbackRequest, AiGenerationEvent, Column, ConnectorM
 // dispatch (preview / option resolution) outside a run has no store → the host
 // mints a per-generation id.
 const aiRunTrace = new AsyncLocalStorage<string>();
+
+// The ROW a dispatch is currently executing for, propagated through the per-row
+// run path so a connector method can know its row (table.push v2 sends the
+// whole source row server-side by rowId instead of a client-built mapping).
+// Undefined outside a row run (previews resolve rows separately; standalone
+// dispatches have no row).
+const rowRunContext = new AsyncLocalStorage<{ rowId: string; tableId: string; columnId: string }>();
 
 /** Stored on a cell's `error` (with status "empty") when a run condition gates the
  *  row off, so the grid can show a muted "Run condition not met" note instead of a dash. */
@@ -62,6 +70,13 @@ export interface EngineConfig {
    * (pure in-process transforms) are always exempt regardless of this value.
    */
   defaultRateLimit?: RateLimit;
+  /**
+   * Cross-table access for the `table` connector (table.push / table.lookup),
+   * passed through to every dispatch as `ctx.grid`. The run lane builds it with
+   * the run's source table id baked in (same-project scoping is enforced by the
+   * backing worker routes). Absent ⇒ table.* methods fail with a clear error.
+   */
+  grid?: TableGateway;
   /**
    * Optional exception sink for run failures. The engine runs in several hosts
    * (sidecar, cloud worker, MCP, CLI), so it never imports a telemetry client —
@@ -226,6 +241,8 @@ export class Engine {
               aiFallback: this.config.aiFallback,
               onAiGeneration: this.config.onAiGeneration,
               aiTraceId: aiRunTrace.getStore(),
+              grid: this.config.grid,
+              row: rowRunContext.getStore(),
             }),
           ),
         );
@@ -500,7 +517,11 @@ export class Engine {
         }
       });
     } else {
-      await mapConcurrent(rowIds, concurrency, async (rowId) => {
+      await mapConcurrent(rowIds, concurrency, (rowId) =>
+        // Scope the row-run context to THIS row's whole execution (condition,
+        // param resolution, sandbox, dispatches) so ctx.row is correct even
+        // under concurrent row fan-out.
+        rowRunContext.run({ rowId, tableId: col.table_id, columnId }, async () => {
         const existing = await Effect.runPromise(reads.getCell(rowId, columnId));
         if (!opts.force && existing?.status === "done") return;
 
@@ -552,7 +573,8 @@ export class Engine {
         } catch (e) {
           await markError(rowId, e);
         }
-      });
+        }),
+      );
     }
     };
 
@@ -610,6 +632,7 @@ export class Engine {
         aiProviders,
         guardSsrf: this.config.guardSsrf,
         aiFallback: this.config.aiFallback,
+        grid: this.config.grid,
       }),
     );
   }

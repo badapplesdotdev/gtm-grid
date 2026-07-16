@@ -4,6 +4,7 @@ import {
   aiConfigFromEnv,
   bundledConnectors,
   cloudGridStoreShape,
+  cloudTableGateway,
   connectorFromManifest,
   defaultRegistry,
   parseManifest,
@@ -12,6 +13,7 @@ import {
   type GridStoreShape,
   type Registry,
   type RunErrorContext,
+  type TableGatewayRefs,
 } from "@gtmgrid/engine";
 import { buildColumnDeps, topoSortColumnIds } from "@gtmgrid/services/columns";
 import { Effect } from "effect";
@@ -190,6 +192,21 @@ function buildWorkerStore(
   );
 }
 
+/**
+ * The cross-table worker routes the table.push / table.lookup gateway drives
+ * (same paths as the sidecar's TABLE_GATEWAY_REFS in cloud-run.ts). The
+ * headless enricher authenticates with the worker secret; the routes still
+ * enforce same-project scoping against the run's source table.
+ */
+const TABLE_GATEWAY_REFS: TableGatewayRefs = {
+  listProjectTables: "/api/worker/listProjectTables",
+  getTableSchema: "/api/worker/getTableSchema",
+  getTableRows: "/api/worker/getTableRows",
+  upsertRowInTable: "/api/worker/upsertRowInTable",
+  createColumnInTable: "/api/worker/createColumnInTable",
+  pushRowIntoTable: "/api/worker/pushRowIntoTable",
+};
+
 /** The grid shape `/webhook/getTable` returns (table + columns/rows/cells). */
 interface WorkerGrid {
   readonly columns: ReadonlyArray<{
@@ -200,6 +217,9 @@ interface WorkerGrid {
     // Carried so enrichment can order columns by their {{ref}} dependency graph
     // (the worker `getTable` projection already returns these — grid-service).
     readonly provider: string | null;
+    // Carried for the pushed-row auto-run's loop guard (skip table.push
+    // columns); the worker getTable projection already returns it.
+    readonly method: string | null;
     readonly params: Record<string, unknown>;
     readonly condition: string | null;
     readonly position: number;
@@ -315,8 +335,17 @@ export async function runEnrichColumn(
       distinctId: ctx.workspaceId,
       properties: { source: "engine-run", surface: "cloud", table_id: ctx.tableId, ...c },
     });
+  // Cross-table access for table.push / table.lookup columns on this table.
+  // NOTE the loop bound: an auto-run enrich SKIPS the target's own table.push
+  // columns (see runAutoTargetColumns in process-pushed-row.ts), so a push
+  // chain can never cascade A→B→A.
+  const grid = cloudTableGateway({
+    client: workerClient,
+    refs: TABLE_GATEWAY_REFS,
+    sourceTableId: ctx.tableId,
+  });
   const engine = new Engine(
-    { ...engineConfig(), reportError },
+    { ...engineConfig(), reportError, grid },
     registry,
     { store, creds: store },
   );

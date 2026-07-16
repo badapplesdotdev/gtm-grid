@@ -35,6 +35,11 @@ import { EntitlementService } from "./entitlement-service.js";
 import { isSelfHost } from "../self-host.js";
 import { mintSigningSecret, mintToken } from "../webhook-mint.js";
 import {
+  applyMapping,
+  asWebhookCellValue,
+  PAYLOAD_PATH,
+} from "../webhook-mapping.js";
+import {
   type DeliveryCursor,
   type DeliveryPage,
   WebhookDeliveryRepo,
@@ -566,6 +571,9 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         Effect.gen(function* () {
           const found = yield* repo.findByToken(token);
           if (found._tag === "None" || !found.value.enabled) return null;
+          // A PUSH CONNECTION is fed by a sibling table's push column, never by
+          // HTTP — its token must not resolve as a public webhook endpoint.
+          if (found.value.source === "push") return null;
           const w = found.value;
           // Cloud-access gate at the inbound door: a lapsed/Free workspace stops
           // accepting webhook data. Treated as not-found (the caller 404s) so no
@@ -646,9 +654,11 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           yield* deliveries.pruneOldest(webhook.id, DELIVERY_RETENTION);
         });
 
-      /** Write a set of mapped cells onto a row (patch-or-insert per column). */
+      /** Write a set of mapped cells onto a row (patch-or-insert per column).
+       *  Takes any `{ workspaceId, tableId }` carrier — a webhook config, or a
+       *  cross-table push target — since those are the only fields it reads. */
       const writeCells = (
-        webhook: Webhook,
+        webhook: { readonly workspaceId: string; readonly tableId: string },
         rowId: string,
         cells: CellMap,
         validColumnIds: ReadonlySet<string>,
@@ -844,7 +854,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
               });
             }
           }
-          return { rowId };
+          return { rowId, created: matchedRowId === null };
         });
 
       /**
@@ -1257,6 +1267,624 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           return { secrets };
         });
 
+      // ── CROSS-TABLE ACTIONS (the table.push / table.lookup gateway paths) ──
+      // Same trust model as the other worker grid paths: secret-gated headless
+      // callers pass, member-path callers are asserted against the SOURCE
+      // table's workspace. Same-project scoping is enforced HERE (server-side):
+      // a target outside the source table's project resolves as not-found, so
+      // nothing about other projects/workspaces leaks and the gateway cannot be
+      // steered across the project boundary regardless of client behaviour.
+
+      /** One pushed record = one cloud action (mirrors the webhook meter). */
+      const PUSH_QUOTA_MESSAGE =
+        "This push would exceed your plan's remaining cloud actions.";
+
+      /** Load a table or fail typed (cross-table paths). */
+      const requireTable = (tableId: string) =>
+        Effect.gen(function* () {
+          const t = yield* repo.findTable(tableId);
+          if (t._tag === "None") {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({ message: `Table ${tableId} not found.` }),
+            );
+          }
+          return t.value;
+        });
+
+      /**
+       * Resolve a cross-table TARGET within the source table's project — by id,
+       * or by exact name among the project's tables. A target that exists but
+       * lives outside the source's project resolves to `null` (indistinguishable
+       * from non-existence — no cross-project leak). Asserts workspace
+       * membership on the member path before touching anything else.
+       */
+      const resolveSiblingTable = (sourceTableId: string, targetRef: string) =>
+        Effect.gen(function* () {
+          const source = yield* requireTable(sourceTableId);
+          yield* assertMemberIfIdentified(source.workspaceId);
+          const byId = yield* repo.findTable(targetRef);
+          if (byId._tag === "Some" && byId.value.projectId === source.projectId) {
+            return { source, target: byId.value };
+          }
+          const siblings = yield* repo.listTablesByProject(source.projectId);
+          return { source, target: siblings.find((t) => t.name === targetRef) ?? null };
+        });
+
+      /** Sibling tables of the source's project (id + name, position order). */
+      const listProjectTables = (sourceTableId: string) =>
+        Effect.gen(function* () {
+          const source = yield* requireTable(sourceTableId);
+          yield* assertMemberIfIdentified(source.workspaceId);
+          const siblings = yield* repo.listTablesByProject(source.projectId);
+          return { tables: siblings.map((t) => ({ id: t.id, name: t.name })) };
+        });
+
+      /** A sibling table's schema (id/name + full column projection), or null. */
+      const getTableSchemaForActions = (args: {
+        readonly sourceTableId: string;
+        readonly targetRef: string;
+      }) =>
+        Effect.gen(function* () {
+          const { target } = yield* resolveSiblingTable(
+            args.sourceTableId,
+            args.targetRef,
+          );
+          if (target === null) return null;
+          const cols = yield* columnRepo.listByTable(target.id);
+          return {
+            table: { id: target.id, name: target.name },
+            columns: cols.map((c) => ({
+              id: c.id,
+              name: c.name,
+              type: c.type,
+              kind: c.kind,
+            })),
+          };
+        });
+
+      /** A sibling table's rows + cells (the lookup read), gateway grid shape. */
+      const getTableRowsForActions = (args: {
+        readonly sourceTableId: string;
+        readonly targetTableId: string;
+      }) =>
+        Effect.gen(function* () {
+          const { target } = yield* resolveSiblingTable(
+            args.sourceTableId,
+            args.targetTableId,
+          );
+          if (target === null) {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({
+                message: `Table ${args.targetTableId} not found in this project.`,
+              }),
+            );
+          }
+          const cols = yield* columnRepo.listByTable(target.id);
+          const rows = yield* repo.listRows(target.id);
+          const cells = yield* repo.listCellsByTable(target.id);
+          return {
+            columns: cols.map((c) => ({
+              _id: c.id,
+              name: c.name,
+              type: c.type,
+              kind: c.kind,
+            })),
+            rows: rows.map((r) => ({ _id: r.id })),
+            cells: cells.map((c) => ({
+              rowId: c.rowId,
+              columnId: c.columnId,
+              value: c.value,
+            })),
+          };
+        });
+
+      /**
+       * UPSERT ONE pushed row into a sibling table (the table.push write).
+       * Mirrors the webhook {@link upsertRow} — indexed key match, patch-or-
+       * insert, metered ONCE per record, realtime publish — minus the webhook
+       * config/delivery bookkeeping, plus the same-project target resolution.
+       * `keyColumnId: null` appends unconditionally (push's append mode).
+       */
+      const upsertRowInTable = (args: {
+        readonly sourceTableId: string;
+        readonly targetTableId: string;
+        readonly keyColumnId: string | null;
+        readonly keyValue: unknown;
+        readonly cells: CellMap;
+      }) =>
+        Effect.gen(function* () {
+          const { target } = yield* resolveSiblingTable(
+            args.sourceTableId,
+            args.targetTableId,
+          );
+          if (target === null) {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({
+                message: `Table ${args.targetTableId} not found in this project.`,
+              }),
+            );
+          }
+          // Cloud-access gate (plan/trial) BEFORE the quota gate, exactly as the
+          // webhook ingest paths.
+          yield* entitlement.requireCloudAccess(target.workspaceId);
+          yield* assertQuota(target.workspaceId, 1, PUSH_QUOTA_MESSAGE);
+
+          const validColumnIds = yield* tableColumnIds(target.id);
+          if (args.keyColumnId !== null && !validColumnIds.has(args.keyColumnId)) {
+            return yield* Effect.fail(
+              new InvalidMappingError({
+                message: `Upsert key column ${args.keyColumnId} does not belong to table ${target.id}.`,
+              }),
+            );
+          }
+
+          const now = Date.now();
+          // Indexed point match on (table, keyColumn, keyValue); a null key
+          // (append mode) or a non-scalar key value inserts fresh.
+          const matchedRowId =
+            args.keyColumnId !== null && isValidUpsertKeyValue(args.keyValue)
+              ? yield* repo
+                  .findRowByCellValue(target.id, args.keyColumnId, args.keyValue)
+                  .pipe(Effect.map((o) => (o._tag === "Some" ? o.value : null)))
+              : null;
+
+          let rowId: string;
+          let existingByColumn: ReadonlyMap<string, string>;
+          if (matchedRowId !== null) {
+            rowId = matchedRowId;
+            const map = new Map<string, string>();
+            for (const c of yield* repo.listCellsByRow(rowId)) {
+              map.set(c.columnId, c.id);
+            }
+            existingByColumn = map;
+          } else {
+            const position = yield* nextPosition(target.id);
+            rowId = yield* repo.insertRow({
+              workspaceId: target.workspaceId,
+              tableId: target.id,
+              position,
+              createdAt: now,
+            });
+            existingByColumn = new Map();
+          }
+          yield* writeCells(
+            { workspaceId: target.workspaceId, tableId: target.id },
+            rowId,
+            args.cells,
+            validColumnIds,
+            existingByColumn,
+            now,
+          );
+
+          // Exactly ONE billable cloud action per pushed record.
+          yield* repo.meterActions(target.workspaceId, 1);
+          // Open grids on the TARGET table see the push land live.
+          const written = eventCells(rowId, args.cells, validColumnIds);
+          if (matchedRowId === null) {
+            yield* publish(target.workspaceId, target.id, {
+              type: "row.insert",
+              row: { _id: rowId },
+              cells: written,
+            });
+          } else {
+            for (const cell of written) {
+              yield* publish(target.workspaceId, target.id, {
+                type: "cell.upsert",
+                cell,
+              });
+            }
+          }
+          return {
+            rowId,
+            created: matchedRowId === null,
+            workspaceId: target.workspaceId,
+            tableId: target.id,
+          };
+        });
+
+      /**
+       * Create a MANUAL column on a sibling table (push's createMissingColumns).
+       * Metered one cloud action, mirroring the member `addColumn` mutation.
+       */
+      const createColumnInTable = (args: {
+        readonly sourceTableId: string;
+        readonly targetTableId: string;
+        readonly name: string;
+        readonly type?: string;
+      }) =>
+        Effect.gen(function* () {
+          const { target } = yield* resolveSiblingTable(
+            args.sourceTableId,
+            args.targetTableId,
+          );
+          if (target === null) {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({
+                message: `Table ${args.targetTableId} not found in this project.`,
+              }),
+            );
+          }
+          yield* entitlement.requireCloudAccess(target.workspaceId);
+          yield* assertQuota(
+            target.workspaceId,
+            1,
+            "Creating this column would exceed your plan's remaining cloud actions.",
+          );
+          const type = args.type ?? "text";
+          const position = yield* columnRepo.nextPosition(target.id);
+          const id = yield* columnRepo.insert({
+            workspaceId: target.workspaceId,
+            tableId: target.id,
+            name: args.name,
+            type,
+            kind: "manual",
+            provider: null,
+            method: null,
+            code: null,
+            params: {},
+            condition: null,
+            position,
+            createdAt: Date.now(),
+          });
+          yield* repo.meterActions(target.workspaceId, 1);
+          yield* publish(target.workspaceId, target.id, {
+            type: "column.insert",
+            column: {
+              _id: id,
+              name: args.name,
+              type,
+              kind: "manual",
+              provider: null,
+              method: null,
+              code: null,
+              params: {},
+              condition: null,
+            },
+          });
+          return { id };
+        });
+
+      // ── PUSH CONNECTIONS (webhook-style table.push, v2) ────────────────────
+      // A table.push column delivers each source row THROUGH the webhook
+      // ingestion machinery: the whole row lands as a payload on a per
+      // (source → target) PUSH CONNECTION (a webhooks row with source="push"),
+      // whose mapping — edited from the TARGET table, like any webhook — decides
+      // which fields land in which columns. The `$` entry keeps the raw payload
+      // in a "Pushed data" json column, so re-mapping later can BACKFILL rows
+      // already pushed.
+
+      /** Name of the raw-payload column pushes land records in on the target. */
+      const PUSHED_DATA_COLUMN = "Pushed data";
+
+      /** Find-or-create the target's "Pushed data" raw json column. Created at
+       *  the FRONT of the table (like a webhook table's raw source column) —
+       *  incoming data reads left-to-right: source record first, mapped/derived
+       *  columns after it. */
+      const ensurePushedDataColumn = (tableId: string, workspaceId: string) =>
+        Effect.gen(function* () {
+          const cols = yield* columnRepo.listByTable(tableId);
+          const existing = cols.find(
+            (c) => c.name === PUSHED_DATA_COLUMN && c.type === "json",
+          );
+          if (existing !== undefined) return existing.id;
+          const position =
+            cols.length === 0
+              ? 0
+              : Math.min(...cols.map((c) => c.position)) - 1;
+          const id = yield* columnRepo.insert({
+            workspaceId,
+            tableId,
+            name: PUSHED_DATA_COLUMN,
+            type: "json",
+            kind: "manual",
+            provider: null,
+            method: null,
+            code: null,
+            params: {},
+            condition: null,
+            position,
+            createdAt: Date.now(),
+          });
+          yield* publish(workspaceId, tableId, {
+            type: "column.insert",
+            column: {
+              _id: id,
+              name: PUSHED_DATA_COLUMN,
+              type: "json",
+              kind: "manual",
+              provider: null,
+              method: null,
+              code: null,
+              params: {},
+              condition: null,
+            },
+          });
+          return id;
+        });
+
+      /**
+       * Deliver ONE source row into a sibling table through its push
+       * connection — the table.push v2 write. Finds-or-creates the connection
+       * (default mapping: `$` → "Pushed data"), applies ITS stored mapping to
+       * the full source-row payload, injects the dedupe key cell, and lands the
+       * record via the SAME metered upsert/insert paths a webhook record uses
+       * (one cloud action per record, delivery recorded, realtime published).
+       */
+      const pushRecord = (args: {
+        readonly sourceTableId: string;
+        readonly sourceRowId: string;
+        /** The push COLUMN itself — its result cell is provenance, not data,
+         *  so it is excluded from the delivered payload. */
+        readonly sourceColumnId?: string | null;
+        /** Target table id or exact name (resolved within the project). */
+        readonly targetTableId: string;
+        readonly mode: "upsert" | "append";
+        /** Target column NAME to dedupe on (upsert mode). */
+        readonly keyColumnName?: string | null;
+        readonly keyValue?: unknown;
+      }) =>
+        Effect.gen(function* () {
+          const { source, target } = yield* resolveSiblingTable(
+            args.sourceTableId,
+            args.targetTableId,
+          );
+          if (target === null) {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({
+                message: `Table ${args.targetTableId} not found in this project.`,
+              }),
+            );
+          }
+          if (target.id === source.id) {
+            return yield* Effect.fail(
+              new InvalidConfigError({
+                message: "A push cannot target its own table.",
+              }),
+            );
+          }
+
+          // Read the SOURCE row as a { [columnName]: value } payload.
+          const row = yield* repo.findRow(args.sourceRowId);
+          if (row._tag === "None" || row.value.tableId !== source.id) {
+            return yield* Effect.fail(
+              new WebhookNotFoundError({
+                message: `Row ${args.sourceRowId} not found in the source table.`,
+              }),
+            );
+          }
+          const sourceCols = yield* columnRepo.listByTable(source.id);
+          const nameById = new Map(sourceCols.map((c) => [c.id, c.name]));
+          const payload: Record<string, unknown> = {};
+          for (const cell of yield* repo.listCellsByRow(args.sourceRowId)) {
+            // The push column's own result cell is provenance, not data.
+            if (args.sourceColumnId != null && cell.columnId === args.sourceColumnId) continue;
+            const name = nameById.get(cell.columnId);
+            if (name === undefined || cell.value === null || cell.value === undefined) continue;
+            payload[name] = cell.value;
+          }
+
+          // Resolve the dedupe key (a MANUAL target column, by name).
+          let keyColumnId: string | null = null;
+          if (args.mode === "upsert") {
+            const keyName =
+              typeof args.keyColumnName === "string" ? args.keyColumnName.trim() : "";
+            if (keyName === "") {
+              return yield* Effect.fail(
+                new InvalidConfigError({
+                  message: "Upsert mode requires a key column name.",
+                }),
+              );
+            }
+            const targetCols = yield* columnRepo.listByTable(target.id);
+            const keyCol = targetCols.find((c) => c.name === keyName);
+            if (keyCol === undefined) {
+              return yield* Effect.fail(
+                new InvalidMappingError({
+                  message: `Key column "${keyName}" does not exist in "${target.name}".`,
+                }),
+              );
+            }
+            if (keyCol.kind !== "manual") {
+              return yield* Effect.fail(
+                new InvalidMappingError({
+                  message: `Key column "${keyName}" is a function column — dedupe on a manual column.`,
+                }),
+              );
+            }
+            keyColumnId = keyCol.id;
+          }
+
+          // Find-or-create the push connection for this (source → target) pair.
+          const existing = yield* repo.findPushConnection(source.id, target.id);
+          let connection: Webhook;
+          if (existing._tag === "Some") {
+            connection = existing.value;
+            // The SENDER owns mode/key — sync the connection when they changed.
+            if (
+              connection.mode !== args.mode ||
+              (connection.upsertKey ?? null) !== keyColumnId
+            ) {
+              yield* repo.patch(connection.id, {
+                mode: args.mode === "upsert" ? "upsert" : "create",
+                upsertKey: keyColumnId,
+              });
+            }
+            // SELF-HEAL: the raw-payload column may have been DELETED since the
+            // connection was created — its `$` entry then points at a dead
+            // column id and every payload write is silently skipped (rows land
+            // empty). Recreate the "Pushed data" column and repoint the entry
+            // so pushes never degrade like that.
+            const liveCols = yield* columnRepo.listByTable(target.id);
+            const liveIds = new Set(liveCols.map((c) => c.id));
+            const payloadEntry = connection.mapping.find(
+              (m) => m.path === PAYLOAD_PATH,
+            );
+            if (payloadEntry === undefined || !liveIds.has(payloadEntry.columnId)) {
+              const payloadCol = yield* ensurePushedDataColumn(
+                target.id,
+                target.workspaceId,
+              );
+              const nextMapping = [
+                { path: PAYLOAD_PATH, columnId: payloadCol },
+                ...connection.mapping.filter((m) => m.path !== PAYLOAD_PATH),
+              ];
+              yield* repo.patch(connection.id, { mapping: nextMapping });
+              connection = { ...connection, mapping: nextMapping };
+            }
+          } else {
+            const payloadCol = yield* ensurePushedDataColumn(
+              target.id,
+              target.workspaceId,
+            );
+            const id = yield* repo.insert({
+              workspaceId: target.workspaceId,
+              tableId: target.id,
+              name: `Push from ${source.name}`,
+              // Minted for schema parity only — resolveToken refuses source="push",
+              // so this connection is NEVER reachable as a public HTTP endpoint.
+              token: mintToken(),
+              signingSecret: null,
+              mapping: [{ path: PAYLOAD_PATH, columnId: payloadCol }],
+              enabled: true,
+              autoRun: null,
+              mode: args.mode === "upsert" ? "upsert" : "create",
+              upsertKey: keyColumnId,
+              createdAt: Date.now(),
+              source: "push",
+              sourceTableId: source.id,
+            });
+            const created = yield* requireWebhook(id);
+            connection = created;
+          }
+
+          // Project the payload through the connection's mapping; the dedupe key
+          // cell is always written so an inserted row is findable on re-runs.
+          const cells: Record<string, unknown> = applyMapping(
+            payload,
+            connection.mapping,
+            Date.now(),
+          );
+          if (keyColumnId !== null && args.keyValue !== undefined && args.keyValue !== null) {
+            cells[keyColumnId] = args.keyValue;
+          }
+
+          // AUTO-MAP BY NAME: a payload field whose name matches a MANUAL target
+          // column fills that column automatically (exact match first, then
+          // case-insensitive) unless the mapping or key already routes it. This
+          // is what makes "same column names just work" without configuring a
+          // mapping — function/code columns are never written (their cells are
+          // computed by their own runs; enable autoRunTarget for those).
+          const targetCols = yield* columnRepo.listByTable(target.id);
+          const manualByExact = new Map<string, string>();
+          const manualByFold = new Map<string, string>();
+          for (const c of targetCols) {
+            if (c.kind !== "manual" || c.name === PUSHED_DATA_COLUMN) continue;
+            if (!manualByExact.has(c.name)) manualByExact.set(c.name, c.id);
+            const fold = c.name.trim().toLowerCase();
+            if (!manualByFold.has(fold)) manualByFold.set(fold, c.id);
+          }
+          for (const [field, value] of Object.entries(payload)) {
+            const colId =
+              manualByExact.get(field) ??
+              manualByFold.get(field.trim().toLowerCase());
+            if (colId === undefined || cells[colId] !== undefined) continue;
+            cells[colId] = value;
+          }
+
+          // Land the record via the SAME metered webhook paths (quota, meter
+          // once, delivery log, realtime publish).
+          if (args.mode === "upsert" && keyColumnId !== null) {
+            const result = yield* upsertRow({
+              webhookId: connection.id,
+              upsertKey: keyColumnId,
+              cells,
+            });
+            return {
+              rowId: result.rowId,
+              created: result.created,
+              tableId: target.id,
+              workspaceId: target.workspaceId,
+              connectionId: connection.id,
+            };
+          }
+          const inserted = yield* insertRow({
+            webhookId: connection.id,
+            cells,
+          });
+          return {
+            rowId: inserted.rowId,
+            created: true,
+            tableId: target.id,
+            workspaceId: target.workspaceId,
+            connectionId: connection.id,
+          };
+        });
+
+      /**
+       * Re-apply a connection's CURRENT mapping to every row that carries a
+       * stored raw payload — so a mapping added AFTER rows were pushed fills
+       * those rows' columns too (the user's "map later, backfill" flow). Writes
+       * through {@link writeCells} (no per-record meter — this is a
+       * re-projection of already-ingested, already-billed data). Member-gated.
+       */
+      const backfillPushMapping = (webhookId: string) =>
+        Effect.gen(function* () {
+          const webhook = yield* requireWebhook(webhookId);
+          yield* assertMemberIfIdentified(webhook.workspaceId);
+
+          const payloadEntry = webhook.mapping.find((m) => m.path === PAYLOAD_PATH);
+          if (payloadEntry === undefined) {
+            return yield* Effect.fail(
+              new InvalidConfigError({
+                message:
+                  "This connection keeps no raw payload column, so there is nothing to backfill from.",
+              }),
+            );
+          }
+          const fieldEntries = webhook.mapping.filter((m) => m.path !== PAYLOAD_PATH);
+          if (fieldEntries.length === 0) return { rows: 0, updated: 0 };
+
+          const validColumnIds = yield* tableColumnIds(webhook.tableId);
+          const allCells = yield* repo.listCellsByTable(webhook.tableId);
+          const byRow = new Map<string, Map<string, GridCell>>();
+          for (const cell of allCells) {
+            let m = byRow.get(cell.rowId);
+            if (m === undefined) byRow.set(cell.rowId, (m = new Map()));
+            m.set(cell.columnId, cell);
+          }
+
+          let scanned = 0;
+          let updated = 0;
+          const now = Date.now();
+          for (const [rowId, cellsByCol] of byRow) {
+            const stored = asWebhookCellValue(
+              cellsByCol.get(payloadEntry.columnId)?.value,
+            );
+            if (stored === null) continue;
+            scanned++;
+            const mapped = applyMapping(stored.payload, fieldEntries, stored.receivedAt);
+            if (Object.keys(mapped).length === 0) continue;
+            const existingByColumn = new Map<string, string>();
+            for (const c of cellsByCol.values()) existingByColumn.set(c.columnId, c.id);
+            yield* writeCells(
+              { workspaceId: webhook.workspaceId, tableId: webhook.tableId },
+              rowId,
+              mapped,
+              validColumnIds,
+              existingByColumn,
+              now,
+            );
+            updated++;
+            for (const cell of eventCells(rowId, mapped, validColumnIds)) {
+              yield* publish(webhook.workspaceId, webhook.tableId, {
+                type: "cell.upsert",
+                cell,
+              });
+            }
+          }
+          return { rows: scanned, updated };
+        });
+
       return {
         listWebhooks,
         createWebhook,
@@ -1279,6 +1907,13 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         setCells,
         setCellStatus,
         getCredential,
+        listProjectTables,
+        getTableSchemaForActions,
+        getTableRowsForActions,
+        upsertRowInTable,
+        createColumnInTable,
+        pushRecord,
+        backfillPushMapping,
       } as const;
     }),
     dependencies: [],

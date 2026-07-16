@@ -26,6 +26,7 @@ import {
   CloudSchemaMapping,
   Engine,
   cloudGridStoreShape,
+  cloudTableGateway,
   defaultRegistry,
   fetchWithRetry,
   Registry,
@@ -33,6 +34,8 @@ import {
   type CloudFunctionRefs,
   type EngineConfig,
   type GridStoreShape,
+  type TableGateway,
+  type TableGatewayRefs,
 } from "@gtmgrid/engine";
 
 /**
@@ -55,6 +58,57 @@ const CLOUD_REFS: CloudFunctionRefs = {
   setCells: "/api/worker/setCells",
   getCredential: "/api/worker/getCredential",
 };
+
+/**
+ * The cross-table worker routes the {@link cloudTableGateway} drives — the
+ * table.push / table.lookup surface (sibling list, schema, rows, atomic upsert,
+ * column create). Every route revalidates same-project scoping server-side
+ * against the `sourceTableId` the gateway bakes into each request.
+ */
+const TABLE_GATEWAY_REFS: TableGatewayRefs = {
+  listProjectTables: "/api/worker/listProjectTables",
+  getTableSchema: "/api/worker/getTableSchema",
+  getTableRows: "/api/worker/getTableRows",
+  upsertRowInTable: "/api/worker/upsertRowInTable",
+  createColumnInTable: "/api/worker/createColumnInTable",
+  pushRowIntoTable: "/api/worker/pushRowIntoTable",
+};
+
+/**
+ * Build the {@link TableGateway} for one run — the cross-table surface the
+ * `table` connector reaches through `ctx.grid`. Scoped to the run's SOURCE
+ * table (self-push guard + server-side same-project checks key off it).
+ */
+export function buildTableGateway(
+  client: CloudClientLike,
+  sourceTableId: string,
+): TableGateway {
+  return cloudTableGateway({ client, refs: TABLE_GATEWAY_REFS, sourceTableId });
+}
+
+/**
+ * Wrap a {@link TableGateway} so its WRITE operations refuse — the preview
+ * lane's gateway. A previewed table.lookup reads normally; a previewed
+ * table.push fails with an actionable message instead of silently writing rows
+ * into (and metering against) the target table.
+ */
+export function readOnlyGateway(gateway: TableGateway): TableGateway {
+  const refuse = (op: string): never => {
+    throw new Error(
+      `table.${op} is not available in a preview — save the column and run it to push rows.`,
+    );
+  };
+  return {
+    ...gateway,
+    sourceTableId: gateway.sourceTableId,
+    listTables: () => gateway.listTables(),
+    getSchema: (ref) => gateway.getSchema(ref),
+    readRows: (tableId) => gateway.readRows(tableId),
+    upsertRow: async () => refuse("push"),
+    pushRow: async () => refuse("push"),
+    createColumn: async () => refuse("push"),
+  };
+}
 
 /**
  * The metadata-only worker ref `resolveWorkspaceId` reads the table's workspace
@@ -364,7 +418,10 @@ export async function runCloudColumn(
   await assertColumnRunQuota(client, req);
   const workspaceId = await resolveWorkspaceId(client, req.tableId);
   const store = await buildCloudStore(client, req.tableId, workspaceId);
-  const engine = new Engine(deps.config, deps.registry, {
+  // Cross-table access for table.push / table.lookup, scoped to this run's
+  // source table (the worker routes enforce same-project server-side).
+  const grid = buildTableGateway(client, req.tableId);
+  const engine = new Engine({ ...deps.config, grid }, deps.registry, {
     store,
     creds: store,
   });
@@ -409,7 +466,11 @@ export async function previewCloudColumn(
   const client = deps.makeClient(req.apiUrl, req.token);
   const workspaceId = await resolveWorkspaceId(client, req.tableId);
   const store = await buildCloudStore(client, req.tableId, workspaceId);
-  const engine = new Engine(deps.config, deps.registry, { store, creds: store });
+  // Previews get a READ-ONLY cross-table surface: a table.lookup previews
+  // faithfully, while a table.push preview is refused with a clear message —
+  // "Try on N rows" must never write rows into (or meter against) the target.
+  const grid = readOnlyGateway(buildTableGateway(client, req.tableId));
+  const engine = new Engine({ ...deps.config, grid }, deps.registry, { store, creds: store });
   return engine.previewColumn(
     { provider: req.provider, method: req.method, params: req.params, table_id: req.tableId },
     req.limit ?? 5,
