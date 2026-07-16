@@ -85,6 +85,48 @@ export const UpsertRowSchema = z.object({
   recordId: z.string().optional(),
 });
 
+// ── Cross-table actions (the table.push / table.lookup gateway routes). All
+// carry the run's sourceTableId so the service can enforce same-project
+// scoping server-side; targetRef may be a table NAME (not only a uuid).
+export const ListProjectTablesSchema = z.object({ sourceTableId: id });
+export const GetTableSchemaSchema = z.object({
+  sourceTableId: id,
+  targetRef: z.string().min(1),
+});
+export const GetTableRowsSchema = z.object({
+  sourceTableId: id,
+  targetTableId: id,
+});
+export const UpsertRowInTableSchema = z.object({
+  sourceTableId: id,
+  targetTableId: id,
+  keyColumnId: id.nullable(),
+  keyValue: z.unknown(),
+  cells: cellMap,
+  autoRunTarget: z.boolean().optional(),
+  recordId: z.string().optional(),
+});
+export const CreateColumnInTableSchema = z.object({
+  sourceTableId: id,
+  targetTableId: id,
+  name: z.string().min(1),
+  type: z.enum(["text", "number", "boolean", "date", "json"]).optional(),
+});
+// Webhook-style push (v2): deliver ONE source row into a sibling table through
+// its push connection. targetTableId may be a table NAME (resolved in-project).
+export const PushRowIntoTableSchema = z.object({
+  sourceTableId: id,
+  sourceRowId: id,
+  /** The push column itself — excluded from the delivered payload. */
+  sourceColumnId: id.nullable().optional(),
+  targetTableId: z.string().min(1),
+  mode: z.enum(["upsert", "append"]),
+  keyColumnName: z.string().nullable().optional(),
+  keyValue: z.unknown().optional(),
+  autoRunTarget: z.boolean().optional(),
+});
+export const BackfillPushMappingSchema = z.object({ webhookId: id });
+
 export const SaveCredentialSchema = z.object({
   workspaceId: id,
   extensionId: id,

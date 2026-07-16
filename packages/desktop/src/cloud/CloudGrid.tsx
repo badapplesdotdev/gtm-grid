@@ -43,7 +43,7 @@ import { buildColumnMetaMap } from "../FnIcon";
 import { DedupePopover } from "../DedupePopover";
 import { resolveRowHeight } from "../gridVirtual";
 import { buildPresenceView } from "../gridPresence";
-import { runCloudColumn, runCloudPreview } from "./cloud-run";
+import { runCloudColumn, runCloudPreview, type CloudSession } from "./cloud-run";
 import { cascadeDependents, runColumnsInDepOrder } from "../gridRun";
 import { WebhookModal } from "./WebhookModal";
 import { ShareModal } from "./ShareModal";
@@ -77,6 +77,34 @@ interface SignalBindingStatus {
   readonly lastSyncedAt: number | null;
   readonly lastError: string | null;
   readonly enabled: boolean;
+}
+
+/**
+ * POST a member-authenticated worker route (apps/web `/api/worker/*`). The
+ * table-actions editor reads its cross-table data (sibling tables, a target's
+ * schema) through the SAME routes the engine's TableGateway runs against, so
+ * the picker offers exactly the set a run can resolve. Auth: the signed-in
+ * member's Better Auth bearer via the `X-Gtmgrid-Member` header (resolved and
+ * membership-asserted server-side, like every other worker member call).
+ */
+async function workerMemberFetch<T>(
+  session: CloudSession,
+  route: "listProjectTables" | "getTableSchema",
+  body: Record<string, unknown>,
+): Promise<T> {
+  const res = await fetch(`${session.apiUrl}/api/worker/${route}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "X-Gtmgrid-Member": session.token,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Request failed (${res.status})`);
+  }
+  return (await res.json()) as T;
 }
 
 /** Compact relative timestamp for the signal strip. */
@@ -616,6 +644,43 @@ export function CloudGrid({
     [],
   );
 
+  // ── Cross-table authoring data (table.push / table.lookup) ──────────────
+  // Fetched lazily — only while the edit rail is open on a `table` column — so
+  // ordinary tables never pay the extra worker round-trip. `sourceTableId` is
+  // the open table: the route lists its project SIBLINGS server-side (no
+  // projectId needed client-side).
+  const projectTablesQ = useReactQuery({
+    queryKey: ["tableActions", "projectTables", String(tableId)],
+    enabled: editCol?.provider === "table" && session !== null && tableId !== null,
+    staleTime: 30_000,
+    queryFn: async () => {
+      const r = await workerMemberFetch<{ tables: Array<{ id: string; name: string }> }>(
+        session!,
+        "listProjectTables",
+        { sourceTableId: String(tableId) },
+      );
+      return r.tables;
+    },
+  });
+  // A target table's columns for the editor's pickers. Resolves by id or exact
+  // name inside the project; a missing/foreign target returns null → reject so
+  // the editor shows its inline "pick a table again" warning.
+  const fetchTableColumns = useCallback(
+    async (targetRef: string) => {
+      if (session === null || tableId === null) throw new Error("Sign in to load tables");
+      const r = await workerMemberFetch<{
+        table: { id: string; name: string };
+        columns: Array<{ id: string; name: string; type: string; kind: string }>;
+      } | null>(session, "getTableSchema", {
+        sourceTableId: String(tableId),
+        targetRef,
+      });
+      if (!r || !Array.isArray(r.columns)) throw new Error("Target table not found");
+      return r.columns;
+    },
+    [session, tableId],
+  );
+
   // The cloud column-authoring backend. addColumn / updateColumn target the
   // cloud tRPC API; generateFormula / aiProviders reuse the LOCAL sidecar (which
   // is what runs cloud columns), so AI + formula authoring works identically.
@@ -820,7 +885,7 @@ export function CloudGrid({
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17a4 4 0 0 1 3.6-3.98" /><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06" /><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8" /></svg>
         ),
         onClick: () => setShowWebhook(true),
-        title: "Configure this table's inbound webhook",
+        title: "Configure incoming data — the inbound webhook and pushes from other tables",
       },
       {
         id: "share",
@@ -968,6 +1033,11 @@ export function CloudGrid({
           // No tableId: the preview dry-run resolves rows via the LOCAL sidecar,
           // which can't see cloud tables — the panel hides Try-on-rows without it.
           rows={table.rows}
+          // Cross-table (table.push / table.lookup) target data: sibling tables
+          // + a target's schema via the member-authenticated worker routes.
+          projectTables={projectTablesQ.data}
+          fetchTableColumns={session !== null ? fetchTableColumns : undefined}
+          currentTableId={String(table.id)}
           onClose={() => setEditCol(null)}
           onSaved={(run) => {
             const colId = editCol.id;

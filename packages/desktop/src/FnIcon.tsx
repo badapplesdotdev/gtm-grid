@@ -38,6 +38,7 @@ export const CATEGORY_ICON: Record<string, ReactNode> = {
   Ads: I("M3 11v2a1 1 0 0 0 1 1h3l5 4V6L7 10H4a1 1 0 0 0-1 1z|M16 9a3 3 0 0 1 0 6"),
   Jobs: I("M3 7h18v13H3z|M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"),
   Signals: I("M4 11a9 9 0 0 1 9 9|M4 4a16 16 0 0 1 16 16|M5 19a1 1 0 1 0 0 .01z"),
+  Tables: I("M3 5h18v14H3z|M3 10h18|M9 10v9|M15 10v9"),
   Code: <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 12, lineHeight: 1 }}>{"{ }"}</span>,
   Other: I("M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z|M3.27 6.96 12 12.01l8.73-5.05|M12 22.08V12"),
 };
@@ -57,6 +58,7 @@ export const CATEGORY_ORDER: string[] = [
   "Verification",
   "Scraping",
   "Extraction",
+  "Tables",
   "Ads",
   "Jobs",
   "Signals",
@@ -76,6 +78,7 @@ export function categorize(provider: string, methodCategory?: string | null): st
   if (provider === "ai") return "AI";
   if (provider === "formula") return "Formula";
   if (provider === "formatting") return "Formatting";
+  if (provider === "table") return "Tables";
   return OTHER_CATEGORY;
 }
 

@@ -28,9 +28,12 @@ import type { Id } from "./ids";
 import type { Column } from "../api";
 import { Shell } from "../ImportCsvModal";
 import { INNGEST_URL } from "./client";
+import type { CloudSession } from "./cloud-run";
 import {
   type CloudWebhook,
   type WebhookMappingEntry,
+  useCloudGridMutations,
+  useCloudSession,
   useWebhookDeliveries,
   useWebhookMutations,
   useWebhooks,
@@ -113,6 +116,33 @@ function CopyBtn({ text, label }: { text: string; label?: string }) {
   );
 }
 
+/**
+ * POST a member-authenticated worker route (apps/web `/api/worker/*`) — the
+ * same helper pattern as CloudGrid's `workerMemberFetch`, replicated here for
+ * the push-connection extras (the pushing table's schema for path suggestions,
+ * and the mapping backfill). Auth: the signed-in member's Better Auth bearer
+ * via the `X-Gtmgrid-Member` header (membership-asserted server-side).
+ */
+async function workerMemberPost<T>(
+  session: CloudSession,
+  route: "getTableSchema" | "backfillPushMapping",
+  body: Record<string, unknown>,
+): Promise<T> {
+  const res = await fetch(`${session.apiUrl}/api/worker/${route}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "X-Gtmgrid-Member": session.token,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Request failed (${res.status})`);
+  }
+  return (await res.json()) as T;
+}
+
 /** The desktop Switch — same markup/CSS as the CSV import header toggle. */
 function Switch({
   checked,
@@ -171,9 +201,22 @@ export function WebhookModal({
     setAuth,
   } = useWebhookMutations();
 
-  // The single webhook for this table (the panel manages exactly one). When the
-  // table has none yet, lazily create one the first time the panel needs it.
-  const webhook: CloudWebhook | undefined = webhooks?.[0];
+  // The single HTTP webhook for this table (the panel manages exactly one).
+  // `listWebhooks` ALSO returns push connections (`source: "push"` rows fed by
+  // sibling tables' "Push to table" columns) — those must NEVER be mistaken for
+  // the table's webhook (their token is never served), so filter them out
+  // before picking the first row. When the table has no HTTP webhook yet,
+  // lazily create one the first time the panel needs it.
+  const webhook: CloudWebhook | undefined = useMemo(
+    () => webhooks?.filter((w) => w.source !== "push")[0],
+    [webhooks],
+  );
+  // Push connections feeding THIS table, each with its own field mapping.
+  const pushConnections = useMemo(
+    () => (webhooks ?? []).filter((w) => w.source === "push"),
+    [webhooks],
+  );
+  const session = useCloudSession();
 
   // Real, member-gated per-event delivery log for this webhook (newest first),
   // cursor-paginated: 20 to start, "Load more" pages 20 at a time.
@@ -623,7 +666,322 @@ ${authOn ? '  -H "X-GTMGrid-Signature: $SIG" \\\n' : ""}  -d '${sampleBody.repla
             </div>
           </div>
         )}
+
+        {/* Push connections: sibling tables' "Push to table" columns feeding
+            THIS table. Same mapping machinery as the webhook, edited here on
+            the receiving side. */}
+        {pushConnections.length > 0 && (
+          <div className="wh-body">
+            <div className="form-section-label" style={{ marginTop: 20 }}>
+              Incoming pushes
+            </div>
+            <div className="field-hint" style={{ marginTop: 0, marginBottom: 10 }}>
+              Other tables push rows here through "Push to table" columns. The
+              whole pushed row lands in the "Pushed data" column; each
+              connection's mapping routes its fields into this table's columns.
+            </div>
+            {pushConnections.map((c) => (
+              <PushConnectionCard
+                key={c._id}
+                connection={c}
+                columns={columns}
+                tableId={tableId}
+                session={session}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </Shell>
+  );
+}
+
+/** Sentinel option value for "create a new column" in the mapping selects —
+ *  can't collide with real column ids (uuids). */
+const CREATE_COLUMN = "__create_column__";
+
+/**
+ * One "Incoming pushes" card: a push connection (a `webhooks` row with
+ * `source: "push"`) whose mapping decides which fields of the pushed row fill
+ * which of THIS table's columns. Reuses the webhook mapping-row editor and the
+ * same `updateWebhookMapping` persistence, plus two push-only extras:
+ *
+ *  - "＋ Create new column…" in the column select — creates a manual text
+ *    column on this table (the same cloud addColumn mutation the grid uses;
+ *    its optimistic insert refreshes the `columns` prop) and points the
+ *    mapping row at it.
+ *  - "Backfill rows" — POST /api/worker/backfillPushMapping re-applies the
+ *    current mapping to rows already pushed (from their stored raw payloads).
+ *
+ * Mapping paths are the PUSHING table's column names, so when the source
+ * table's schema is reachable its column names are offered as a datalist on
+ * the path input (best-effort — a fetch failure degrades to plain text).
+ */
+function PushConnectionCard({
+  connection,
+  columns,
+  tableId,
+  session,
+}: {
+  connection: CloudWebhook;
+  columns: Column[];
+  tableId: Id<"tables">;
+  session: CloudSession | null;
+}) {
+  const { updateMapping } = useWebhookMutations();
+  const { addColumn } = useCloudGridMutations();
+  const [error, setError] = useState<string | null>(null);
+
+  // Editable mapping rows, seeded from the persisted mapping (same idiom as
+  // the webhook editor above).
+  const [mapRows, setMapRows] = useState<WebhookMappingEntry[]>(
+    connection.mapping,
+  );
+  useEffect(() => {
+    setMapRows(connection.mapping);
+  }, [connection._id, connection.mapping]);
+
+  const persist = useCallback(
+    (rows: WebhookMappingEntry[]) => {
+      const valid = rows.filter((r) => r.path.trim() !== "");
+      void updateMapping(connection._id, valid).catch((e: unknown) =>
+        setError(e instanceof Error ? e.message : "Could not save the mapping."),
+      );
+    },
+    [connection._id, updateMapping],
+  );
+
+  const setPath = (i: number, path: string) => {
+    setMapRows((rows) => {
+      const next = rows.map((r, idx) => (idx === i ? { ...r, path } : r));
+      persist(next);
+      return next;
+    });
+  };
+  const setCol = (i: number, columnId: Id<"columns">) => {
+    setMapRows((rows) => {
+      const next = rows.map((r, idx) => (idx === i ? { ...r, columnId } : r));
+      persist(next);
+      return next;
+    });
+  };
+  const addRow = () => {
+    const firstCol = columns[0];
+    if (!firstCol) return;
+    setMapRows((rows) => [
+      ...rows,
+      { path: "", columnId: firstCol.id as Id<"columns"> },
+    ]);
+  };
+  const removeRow = (i: number) => {
+    setMapRows((rows) => {
+      const next = rows.filter((_, idx) => idx !== i);
+      persist(next);
+      return next;
+    });
+  };
+
+  // "＋ Create new column…": which row's inline name input is open.
+  const [createFor, setCreateFor] = useState<number | null>(null);
+  const [newColName, setNewColName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const confirmCreate = async (i: number) => {
+    const name = newColName.trim();
+    if (!name || creating) return;
+    setCreating(true);
+    setError(null);
+    try {
+      // A manual text column on THIS table — the same cloud column-authoring
+      // mutation the grid's Add-column flow uses (no fn/code → kind "manual").
+      const id = String(await addColumn(tableId, { name, type: "text" }));
+      setMapRows((rows) => {
+        const next = rows.map((r, idx) =>
+          idx === i ? { ...r, columnId: id as Id<"columns"> } : r,
+        );
+        persist(next);
+        return next;
+      });
+      setCreateFor(null);
+      setNewColName("");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Could not create the column.");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  // Backfill: re-apply the mapping to rows already pushed.
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillMsg, setBackfillMsg] = useState<string | null>(null);
+  const backfill = async () => {
+    if (session === null || backfilling) return;
+    setBackfilling(true);
+    setBackfillMsg(null);
+    setError(null);
+    try {
+      const r = await workerMemberPost<{ rows: number; updated: number }>(
+        session,
+        "backfillPushMapping",
+        { webhookId: connection._id },
+      );
+      setBackfillMsg(`Backfilled ${r.updated} of ${r.rows} rows`);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Backfill failed.");
+    } finally {
+      setBackfilling(false);
+    }
+  };
+
+  // The pushing table's column names (the push payload's keys) for the path
+  // datalist. Fetched through the same worker schema route the push editor
+  // uses; `getTableSchema` resolves any project sibling by ref.
+  const [sourceCols, setSourceCols] = useState<string[]>([]);
+  const sourceTableId = connection.sourceTableId ?? null;
+  useEffect(() => {
+    if (session === null || sourceTableId === null) return;
+    let on = true;
+    void workerMemberPost<{ columns?: Array<{ name: string }> } | null>(
+      session,
+      "getTableSchema",
+      { sourceTableId: tableId, targetRef: sourceTableId },
+    )
+      .then((r) => {
+        if (on && r && Array.isArray(r.columns)) {
+          setSourceCols(r.columns.map((c) => c.name));
+        }
+      })
+      .catch(() => {
+        /* best-effort — the path input stays a plain text input */
+      });
+    return () => {
+      on = false;
+    };
+  }, [session, sourceTableId, tableId]);
+  const datalistId = `wh-push-src-${connection._id}`;
+
+  return (
+    <div className="wh-field">
+      <label
+        className="field-label"
+        style={{ display: "flex", alignItems: "center", gap: 8 }}
+      >
+        <WI.Table s={12} /> {connection.name ?? "Push connection"}
+        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          {backfillMsg && <span className="opt">{backfillMsg}</span>}
+          <button
+            type="button"
+            className="btn btn-outline btn-sm"
+            onClick={() => void backfill()}
+            disabled={backfilling || session === null}
+            title="Re-apply this mapping to rows already pushed"
+          >
+            {backfilling ? "Backfilling…" : "Backfill rows"}
+          </button>
+        </span>
+      </label>
+      {error && <div className="import-error">{error}</div>}
+      {sourceCols.length > 0 && (
+        <datalist id={datalistId}>
+          {sourceCols.map((n) => (
+            <option key={n} value={n} />
+          ))}
+        </datalist>
+      )}
+      <div className="wh-map">
+        {mapRows.length === 0 && (
+          <div className="wh-map-empty">
+            No mappings yet. Add one to route pushed fields to columns.
+          </div>
+        )}
+        {mapRows.map((row, i) => {
+          const col = columns.find((c) => c.id === row.columnId);
+          const g = typeGlyph(col?.type ?? "text");
+          return (
+            <div className="wh-map-row" key={i}>
+              <input
+                className="map-key-input"
+                value={row.path}
+                placeholder="Email — a column name from the pushing table"
+                list={sourceCols.length > 0 ? datalistId : undefined}
+                onChange={(e) => setPath(i, e.target.value)}
+              />
+              <span className="map-arrow">
+                <WI.ArrowRight s={12} />
+              </span>
+              {createFor === i ? (
+                <>
+                  <input
+                    className="map-key-input"
+                    autoFocus
+                    value={newColName}
+                    placeholder="New column name"
+                    onChange={(e) => setNewColName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void confirmCreate(i);
+                      if (e.key === "Escape") setCreateFor(null);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    disabled={creating || newColName.trim() === ""}
+                    onClick={() => void confirmCreate(i)}
+                  >
+                    {creating ? "Creating…" : "Create"}
+                  </button>
+                  <button
+                    className="map-remove"
+                    title="Cancel"
+                    onClick={() => setCreateFor(null)}
+                  >
+                    <WI.X s={12} />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div className="map-col-select">
+                    <span className="mc-type" style={{ color: g.color }}>
+                      {g.glyph}
+                    </span>
+                    <select
+                      value={row.columnId}
+                      onChange={(e) => {
+                        if (e.target.value === CREATE_COLUMN) {
+                          setCreateFor(i);
+                          setNewColName("");
+                        } else {
+                          setCol(i, e.target.value as Id<"columns">);
+                        }
+                      }}
+                    >
+                      {columns.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                      <option value={CREATE_COLUMN}>＋ Create new column…</option>
+                    </select>
+                  </div>
+                  <button
+                    className="map-remove"
+                    title="Remove mapping"
+                    onClick={() => removeRow(i)}
+                  >
+                    <WI.X s={12} />
+                  </button>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <button
+        className="wh-map-add"
+        onClick={addRow}
+        disabled={columns.length === 0}
+      >
+        <WI.Plus s={12} /> Add mapping
+      </button>
+    </div>
   );
 }

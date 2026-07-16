@@ -60,6 +60,21 @@ export {
   type CloudCredentialResolution,
   type CloudCredentialForRunResult,
 } from "./store-cloud.js";
+// TableGateway — the cross-table surface table.push / table.lookup run against
+// (injected per-engine as `EngineConfig.grid`, surfaced to methods as `ctx.grid`).
+// Same injected-client decoupling as the cloud GridStore.
+export {
+  cloudTableGateway,
+  type TableGateway,
+  type TableGatewayRefs,
+  type CloudTableGatewayConfig,
+  type GatewayTableInfo,
+  type GatewayTableSchema,
+  type GatewayRow,
+  type GatewayUpsertInput,
+  type GatewayUpsertResult,
+  type GatewayPushInput,
+} from "./table-gateway.js";
 
 /**
  * Root directory for all project + global .db files. Defaults to `~/gtmgrid`;

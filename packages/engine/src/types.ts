@@ -1,5 +1,7 @@
 // Shared domain types for the gtmgrid engine.
 
+import type { TableGateway } from "./table-gateway.js";
+
 export type ColumnType = "text" | "number" | "boolean" | "date" | "json";
 export type ColumnKind = "manual" | "function";
 export type CellStatus = "empty" | "pending" | "running" | "done" | "error";
@@ -198,6 +200,21 @@ export interface MethodContext {
    * dispatch (preview / option resolution).
    */
   aiTraceId?: string;
+  /**
+   * Cross-table access for the `table` connector (table.push / table.lookup) —
+   * the ONLY door a method has to sibling tables in the same project. Injected
+   * per-engine by the run lane (which bakes in the source table id for scoping);
+   * absent on hosts that don't wire it, where table.* methods fail with a clear
+   * "not available here" error. Same injection pattern as {@link aiFallback}.
+   */
+  grid?: TableGateway;
+  /**
+   * The row this dispatch is executing for, when the call happens inside a
+   * per-row column run (set by the engine via AsyncLocalStorage). `table.push`
+   * uses it to deliver the WHOLE source row server-side by rowId. Undefined on
+   * standalone dispatches (previews / option resolution / MCP run_function).
+   */
+  row?: { readonly rowId: string; readonly tableId: string; readonly columnId: string };
 }
 
 /** Raw data for one LLM generation, handed to {@link MethodContext.onAiGeneration}. */

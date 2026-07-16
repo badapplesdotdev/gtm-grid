@@ -2921,6 +2921,12 @@ body.resizing-agent .agent-panel { transition: none; }
   font: 500 11.5px var(--font-sans); color: var(--accent);
 }
 .cep-cvar-add:hover { text-decoration: underline; }
+/* Table actions (table.push / table.lookup editors): the returned-columns
+   checklist and the stacked advanced checkboxes. */
+.cep-ret-list { display: flex; flex-direction: column; gap: 5px; max-height: 190px; overflow-y: auto; }
+.cep-ret-item { display: flex; align-items: center; gap: 7px; font: 400 12.5px var(--font-sans); color: var(--text-2); cursor: pointer; }
+.cep-ret-item input[type="checkbox"] { width: 13px; height: 13px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+.cep-tbl-checks { display: flex; flex-direction: column; gap: 9px; margin-top: 6px; }
 /* Live-options pick dropdown: a search box pinned at the top of the menu, and a
    muted secondary line on each option (e.g. a campaign's status/count). */
 .cep-pick-search {

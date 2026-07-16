@@ -1,6 +1,7 @@
 import { serve } from "inngest/next";
 import { inngest } from "../../../lib/inngest/client";
 import { processWebhookRecord } from "../../../lib/inngest/functions/process-webhook-record";
+import { processPushedRow } from "../../../lib/inngest/functions/process-pushed-row";
 import {
   enrichSignalRow,
   pollTrigifySignals,
@@ -43,6 +44,8 @@ export const { GET, POST, PUT } = serve({
   client: inngest,
   functions: [
     processWebhookRecord,
+    // table.push autoRunTarget — the target's columns run over the pushed row.
+    processPushedRow,
     sendTrialReminders,
     sendWorkspaceWelcome,
     pollTrigifySignals,

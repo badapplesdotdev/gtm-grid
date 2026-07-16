@@ -17,6 +17,14 @@ export { DbClient, DbClientLive, dbClientLayer } from "./db-client.js";
 
 // --- Self-host detection (GTMGRID_SELF_HOST) ---------------------------------
 export { isSelfHost } from "./self-host.js";
+export {
+  applyMapping,
+  asWebhookCellValue,
+  valueAtPath,
+  PAYLOAD_PATH,
+  type MappingEntry,
+  type WebhookCellValue,
+} from "./webhook-mapping.js";
 
 // --- Repositories (Effect <-> Drizzle adapters) ------------------------------
 export {

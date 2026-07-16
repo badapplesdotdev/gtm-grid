@@ -147,6 +147,32 @@ describe("toCloudWebhook — tRPC row → desktop shape", () => {
     expect(w.upsertKey).toBe("c9");
     expect(w.receivedCount).toBe(3);
   });
+
+  it("carries push-connection source fields (and drops them when null)", () => {
+    const base = {
+      id: "h3",
+      workspaceId: "w1",
+      tableId: "t1",
+      name: "Push from Leads",
+      token: "whk_z",
+      signingSecret: null,
+      mapping: [],
+      enabled: true,
+      autoRun: null,
+      mode: null,
+      upsertKey: null,
+      createdAt: 1,
+      lastReceivedAt: null,
+      receivedCount: null,
+    };
+    const push = toCloudWebhook({ ...base, source: "push", sourceTableId: "t9" });
+    expect(push.source).toBe("push");
+    expect(push.sourceTableId).toBe("t9");
+
+    const http = toCloudWebhook({ ...base, source: null, sourceTableId: null });
+    expect("source" in http).toBe(false);
+    expect("sourceTableId" in http).toBe(false);
+  });
 });
 
 describe("toCloudDelivery — tRPC item → desktop shape", () => {

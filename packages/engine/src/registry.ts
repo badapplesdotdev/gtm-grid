@@ -7,6 +7,7 @@ import { githubConnector } from "./connectors/github.js";
 import { formattingConnector } from "./connectors/formatting.js";
 import { formulaConnector } from "./connectors/formula.js";
 import { httpRequestConnector } from "./connectors/http-request.js";
+import { tableConnector } from "./connectors/table.js";
 import { connectorFromManifest, parseManifest } from "./connectors/manifest.js";
 import { BUNDLED_MANIFESTS } from "./bundled-manifests.generated.js";
 
@@ -48,6 +49,7 @@ export function defaultRegistry(): Registry {
     formulaConnector,
     githubConnector,
     httpRequestConnector,
+    tableConnector,
   ]);
 }
 

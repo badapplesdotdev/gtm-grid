@@ -1831,6 +1831,12 @@ export interface CloudWebhook {
   readonly createdAt: number;
   readonly lastReceivedAt?: number | null;
   readonly receivedCount?: number;
+  /** What feeds this connection: undefined/"http" = a classic webhook (third
+   *  party POSTs to the token URL); "push" = a sibling table's `table.push`
+   *  column delivers rows through the engine (no public HTTP ingress). */
+  readonly source?: string;
+  /** The sibling table whose push column feeds this connection ("push" only). */
+  readonly sourceTableId?: Id<"tables"> | null;
 }
 
 /**
@@ -1852,6 +1858,8 @@ export function toCloudWebhook(w: {
   createdAt: number;
   lastReceivedAt: number | null;
   receivedCount: number | null;
+  source?: string | null;
+  sourceTableId?: string | null;
 }): CloudWebhook {
   return {
     _id: w.id as Id<"webhooks">,
@@ -1871,6 +1879,10 @@ export function toCloudWebhook(w: {
     createdAt: w.createdAt,
     lastReceivedAt: w.lastReceivedAt,
     ...(w.receivedCount !== null ? { receivedCount: w.receivedCount } : {}),
+    ...(w.source != null ? { source: w.source } : {}),
+    ...(w.sourceTableId != null
+      ? { sourceTableId: w.sourceTableId as Id<"tables"> }
+      : {}),
   };
 }
 

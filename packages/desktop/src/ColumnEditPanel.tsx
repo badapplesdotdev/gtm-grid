@@ -27,6 +27,7 @@ import {
   FX_TYPES,
 } from "./AddColumn";
 import { FnIcon, CATEGORY_ICON, categorize, buildColumnMetaMap } from "./FnIcon";
+import { buildTablePushParams, buildTableLookupParams } from "./tableActionParams";
 import { Sheet, SheetContent } from "./components/ui/sheet";
 
 const X = (
@@ -632,6 +633,474 @@ function ModelPicker({
 }
 
 
+// ─── Table actions (table.push / table.lookup) ───────────────────────────────
+// Dedicated editors for the cross-table connector: a target-table picker fed by
+// the host (projectTables / fetchTableColumns props), then method-specific
+// fields bound to the pure param builders in ./tableActionParams. The generic
+// enrichment mapping can't render these — the interesting inputs (dedupe key,
+// per-target-column mapping, returned columns) depend on ANOTHER table's schema.
+
+/** One column of the push/lookup TARGET table (from fetchTableColumns). */
+interface TargetColumn {
+  id: string;
+  name: string;
+  type: string;
+  kind: string;
+}
+
+/** A project sibling table the target picker offers. */
+interface ProjectTableRef {
+  id: string;
+  name: string;
+}
+
+/** Load the target table's columns whenever the target ref changes (also on
+ *  mount for a saved column). `missing` = the ref didn't resolve (renamed or
+ *  deleted target) → the editors show the re-pick warning. */
+function useTargetSchema(
+  targetRef: string,
+  fetchTableColumns?: (tableId: string) => Promise<TargetColumn[]>,
+): { schema: TargetColumn[] | null; missing: boolean; loading: boolean } {
+  const [schema, setSchema] = useState<TargetColumn[] | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const ref = targetRef.trim();
+  useEffect(() => {
+    if (!ref || !fetchTableColumns) {
+      setSchema(null);
+      setMissing(false);
+      return;
+    }
+    let on = true;
+    setLoading(true);
+    setMissing(false);
+    fetchTableColumns(ref)
+      .then((cols) => {
+        if (on) setSchema(cols);
+      })
+      .catch(() => {
+        if (on) {
+          setSchema(null);
+          setMissing(true);
+        }
+      })
+      .finally(() => {
+        if (on) setLoading(false);
+      });
+    return () => {
+      on = false;
+    };
+  }, [ref, fetchTableColumns]);
+  return { schema, missing, loading };
+}
+
+/** The target-table dropdown (same open/close idiom as the other ai-selects).
+ *  Stores the table ID, displays the name. */
+function TargetTableSelect({
+  tables,
+  value,
+  onPick,
+  excludeId,
+}: {
+  tables: ProjectTableRef[];
+  value: string;
+  onPick: (id: string) => void;
+  /** The edited column's own table — excluded for push (self-push is rejected). */
+  excludeId?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  const list = excludeId ? tables.filter((t) => t.id !== excludeId) : tables;
+  // The engine accepts an id or an exact name — resolve either for display.
+  const selected = tables.find((t) => t.id === value) ?? tables.find((t) => t.name === value);
+
+  return (
+    <div className="ai-select" ref={wrapRef}>
+      <button type="button" className="form-input ai-select-btn" onClick={() => setOpen((o) => !o)}>
+        {selected ? (
+          <span className="cep-map-sel">{selected.name}</span>
+        ) : (
+          <span className="ai-select-placeholder">{value.trim() ? `${value} — table not found` : "Select a table…"}</span>
+        )}
+        <span className={`ai-select-caret${open ? " open" : ""}`}>{Chevron}</span>
+      </button>
+      {open && (
+        <div className="ai-select-menu">
+          {list.length === 0 && <div className="ai-select-item cep-map-none">No other tables in this project</div>}
+          {list.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              className={`ai-select-item${selected?.id === t.id ? " active" : ""}`}
+              onClick={() => { onPick(t.id); setOpen(false); }}
+            >
+              <span className="ai-select-check">{selected?.id === t.id ? Check : null}</span>
+              <span className="ai-select-item-label">{t.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A dropdown over the TARGET table's columns (by NAME — the engine resolves
+ *  names, so a rename in the target is a visible break, not a silent miswrite). */
+function TargetColumnSelect({
+  value,
+  onChange,
+  options,
+  placeholder,
+}: {
+  value: string;
+  onChange: (name: string) => void;
+  options: TargetColumn[];
+  placeholder: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  const matched = options.find((c) => c.name === value);
+  return (
+    <div className="ai-select" ref={wrapRef}>
+      <button type="button" className="form-input ai-select-btn" onClick={() => setOpen((o) => !o)}>
+        {matched ? (
+          <span className="cep-map-sel">
+            <span className="cep-type-icon">{TYPE_ICONS[matched.type] ?? TYPE_ICONS.text}</span>
+            {matched.name}
+          </span>
+        ) : (
+          <span className="ai-select-placeholder">{value.trim() ? `${value} — column not found` : placeholder}</span>
+        )}
+        <span className={`ai-select-caret${open ? " open" : ""}`}>{Chevron}</span>
+      </button>
+      {open && (
+        <div className="ai-select-menu">
+          {options.length === 0 && <div className="ai-select-item cep-map-none">No columns available</div>}
+          {options.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              className={`ai-select-item${matched?.id === c.id ? " active" : ""}`}
+              onClick={() => { onChange(c.name); setOpen(false); }}
+            >
+              <span className="ai-select-check">{matched?.id === c.id ? Check : null}</span>
+              <span className="cep-type-icon">{TYPE_ICONS[c.type] ?? TYPE_ICONS.text}</span>
+              <span className="ai-select-item-label">{c.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The `table.push` editor: target picker → upsert/append → dedupe key →
+ *  auto-run toggle. Push is webhook-style — the WHOLE row is delivered and the
+ *  TARGET table's push-connection mapping routes fields into columns — so there
+ *  is no sender-side column mapping here. Reports the assembled params up on
+ *  every edit (same contract as HttpRequestForm). */
+function TablePushForm({
+  initial,
+  columns,
+  projectTables,
+  fetchTableColumns,
+  currentTableId,
+  onChange,
+}: {
+  initial: Record<string, unknown>;
+  /** The CURRENT table's columns (the value/template side of the mapping). */
+  columns: PanelColumnRef[];
+  projectTables?: ProjectTableRef[];
+  fetchTableColumns?: (tableId: string) => Promise<TargetColumn[]>;
+  currentTableId?: string;
+  onChange: (params: Record<string, unknown>) => void;
+}) {
+  const [target, setTarget] = useState(typeof initial.targetTable === "string" ? initial.targetTable : "");
+  const [mode, setMode] = useState<"upsert" | "append">(initial.mode === "append" ? "append" : "upsert");
+  const [keyColumn, setKeyColumn] = useState(typeof initial.keyColumn === "string" ? initial.keyColumn : "");
+  const [keyValue, setKeyValue] = useState(typeof initial.keyValue === "string" ? initial.keyValue : "");
+  const [autoRun, setAutoRun] = useState(initial.autoRunTarget === true);
+
+  const { schema, missing } = useTargetSchema(target, fetchTableColumns);
+  // Only MANUAL target columns can be dedupe keys (function cells are owned by
+  // their own runs).
+  const manualCols = useMemo(() => (schema ?? []).filter((c) => c.kind === "manual"), [schema]);
+
+  // Report the assembled params on every edit (the panel's buildPatch reads them).
+  useEffect(() => {
+    onChange(
+      buildTablePushParams(initial, {
+        targetTable: target,
+        mode,
+        keyColumn,
+        keyValue,
+        autoRunTarget: autoRun,
+      }),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, mode, keyColumn, keyValue, autoRun]);
+
+  return (
+    <>
+      <div className="fnx-cfg-section">Target table</div>
+      {projectTables ? (
+        <TargetTableSelect
+          tables={projectTables}
+          value={target}
+          excludeId={currentTableId}
+          onPick={(id) => {
+            setTarget(id);
+            setKeyColumn(""); // the dedupe key is target-specific
+          }}
+        />
+      ) : (
+        <input
+          className="form-input"
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          placeholder="Target table id or exact name"
+        />
+      )}
+      {missing && <div className="conn-err">Target table not found — pick a table.</div>}
+
+      <label className="form-label">Mode</label>
+      <div className="fx-types">
+        <button type="button" className={`fx-type${mode === "upsert" ? " active" : ""}`} onClick={() => setMode("upsert")}>
+          Upsert
+        </button>
+        <button type="button" className={`fx-type${mode === "append" ? " active" : ""}`} onClick={() => setMode("append")}>
+          Append
+        </button>
+      </div>
+      <p className="params-hint">
+        {mode === "upsert"
+          ? "Update matching rows — no duplicates on re-runs."
+          : "Always add a new row — re-runs will duplicate."}
+      </p>
+
+      {mode === "upsert" && (
+        <>
+          <div className="fnx-cfg-section">Dedupe key</div>
+          {schema ? (
+            <TargetColumnSelect
+              value={keyColumn}
+              onChange={setKeyColumn}
+              options={manualCols}
+              placeholder="Select a target column…"
+            />
+          ) : (
+            <input
+              className="form-input"
+              value={keyColumn}
+              onChange={(e) => setKeyColumn(e.target.value)}
+              placeholder="Target column name (e.g. Email)"
+            />
+          )}
+          <MappingField
+            paramKey="Key value"
+            required
+            description="The value to match rows on — usually the column that fills the dedupe key."
+            value={keyValue}
+            onChange={setKeyValue}
+            columns={columns}
+          />
+        </>
+      )}
+
+      <div className="fnx-cfg-section">Field mapping</div>
+      <p className="params-hint">
+        The whole row is pushed. The raw data lands in the target's "Pushed data"
+        column — open the target table's Incoming data panel to map fields into
+        columns (and backfill rows already pushed).
+      </p>
+
+      <div className="fnx-cfg-section">Advanced</div>
+      <div className="cep-tbl-checks">
+        <label className="run-cond-check">
+          <input type="checkbox" checked={autoRun} onChange={(e) => setAutoRun(e.target.checked)} />
+          <span className="run-cond-check-text">
+            <span className="run-cond-check-name">Run the target table's enrichments on pushed rows</span>
+            <span className="run-cond-check-sub">The target's own push columns are skipped to prevent loops.</span>
+          </span>
+        </label>
+      </div>
+    </>
+  );
+}
+
+/** The `table.lookup` editor: target picker (self-lookup allowed) → match
+ *  column/value → returned columns checklist → multiplicity / case / not-found. */
+function TableLookupForm({
+  initial,
+  columns,
+  projectTables,
+  fetchTableColumns,
+  onChange,
+}: {
+  initial: Record<string, unknown>;
+  columns: PanelColumnRef[];
+  projectTables?: ProjectTableRef[];
+  fetchTableColumns?: (tableId: string) => Promise<TargetColumn[]>;
+  onChange: (params: Record<string, unknown>) => void;
+}) {
+  const [target, setTarget] = useState(typeof initial.targetTable === "string" ? initial.targetTable : "");
+  const [matchColumn, setMatchColumn] = useState(typeof initial.matchColumn === "string" ? initial.matchColumn : "");
+  const [matchValue, setMatchValue] = useState(typeof initial.matchValue === "string" ? initial.matchValue : "");
+  const [returnSel, setReturnSel] = useState<string[]>(() =>
+    Array.isArray(initial.return) ? (initial.return as unknown[]).filter((n): n is string => typeof n === "string") : [],
+  );
+  const [multiple, setMultiple] = useState<"first" | "all" | "count">(
+    initial.multiple === "all" || initial.multiple === "count" ? initial.multiple : "first",
+  );
+  const [caseInsensitive, setCaseInsensitive] = useState(initial.caseInsensitive === true);
+  const [notFound, setNotFound] = useState<"null" | "error">(initial.notFound === "error" ? "error" : "null");
+
+  const { schema, missing } = useTargetSchema(target, fetchTableColumns);
+  const allNames = useMemo(() => (schema ?? []).map((c) => c.name), [schema]);
+
+  useEffect(() => {
+    onChange(
+      buildTableLookupParams(initial, {
+        targetTable: target,
+        matchColumn,
+        matchValue,
+        returnColumns: returnSel,
+        allColumnNames: allNames,
+        multiple,
+        caseInsensitive,
+        notFound,
+      }),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, matchColumn, matchValue, returnSel, allNames, multiple, caseInsensitive, notFound]);
+
+  // Empty selection = ALL columns. Toggling off from "all" materialises the
+  // explicit rest; re-checking the last one collapses back to "all" (omitted).
+  const selected = returnSel.length === 0 ? allNames : returnSel;
+  const toggleReturn = (name: string) =>
+    setReturnSel((prev) => {
+      const cur = prev.length === 0 ? allNames : prev;
+      const next = cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name];
+      if (next.length === 0) return prev; // returning nothing is meaningless
+      if (allNames.length > 0 && allNames.every((n) => next.includes(n))) return [];
+      return next;
+    });
+
+  return (
+    <>
+      <div className="fnx-cfg-section">Look up in</div>
+      {projectTables ? (
+        <TargetTableSelect
+          tables={projectTables}
+          value={target}
+          onPick={(id) => {
+            setTarget(id);
+            setMatchColumn(""); // the match column is target-specific
+            setReturnSel([]);
+          }}
+        />
+      ) : (
+        <input
+          className="form-input"
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          placeholder="Table id or exact name (this table works too)"
+        />
+      )}
+      {missing && <div className="conn-err">Target table not found — pick a table.</div>}
+
+      <label className="form-label">Match column</label>
+      {schema ? (
+        <TargetColumnSelect
+          value={matchColumn}
+          onChange={setMatchColumn}
+          options={schema}
+          placeholder="Select the column to match against…"
+        />
+      ) : (
+        <input
+          className="form-input"
+          value={matchColumn}
+          onChange={(e) => setMatchColumn(e.target.value)}
+          placeholder="Target column name (e.g. Email)"
+        />
+      )}
+      <MappingField
+        paramKey="Match value"
+        required
+        description="The value to find — usually a column of this table, e.g. {{Email}}."
+        value={matchValue}
+        onChange={setMatchValue}
+        columns={columns}
+      />
+
+      {schema && schema.length > 0 && (
+        <>
+          <div className="fnx-cfg-section">Columns to return</div>
+          <div className="fnx-io-box cep-ret-list">
+            {schema.map((c) => (
+              <label key={c.id} className="cep-ret-item">
+                <input type="checkbox" checked={selected.includes(c.name)} onChange={() => toggleReturn(c.name)} />
+                <span className="cep-type-icon">{TYPE_ICONS[c.type] ?? TYPE_ICONS.text}</span>
+                <span>{c.name}</span>
+              </label>
+            ))}
+          </div>
+          <p className="params-hint">Everything checked returns the whole row.</p>
+        </>
+      )}
+
+      <label className="form-label">If multiple rows match</label>
+      <select
+        className="form-input form-select"
+        value={multiple}
+        onChange={(e) => setMultiple(e.target.value as "first" | "all" | "count")}
+      >
+        <option value="first">Return the first match</option>
+        <option value="all">Return all matches</option>
+        <option value="count">Return the match count</option>
+      </select>
+
+      <label className="form-label">If nothing matches</label>
+      <select
+        className="form-input form-select"
+        value={notFound}
+        onChange={(e) => setNotFound(e.target.value as "null" | "error")}
+      >
+        <option value="null">Leave empty (null)</option>
+        <option value="error">Mark as error</option>
+      </select>
+
+      <div className="cep-tbl-checks">
+        <label className="run-cond-check">
+          <input type="checkbox" checked={caseInsensitive} onChange={(e) => setCaseInsensitive(e.target.checked)} />
+          <span className="run-cond-check-text">
+            <span className="run-cond-check-name">Ignore case when matching</span>
+          </span>
+        </label>
+      </div>
+    </>
+  );
+}
+
 export function ColumnEditPanel({
   column,
   columns,
@@ -642,6 +1111,9 @@ export function ColumnEditPanel({
   onSaved,
   onError,
   onOpenExtension,
+  projectTables,
+  fetchTableColumns,
+  currentTableId,
 }: {
   column: Column;
   /** All of the table's columns (the panel filters out the edited one). */
@@ -657,14 +1129,24 @@ export function ColumnEditPanel({
   onError?: (message: string) => void;
   /** Open the provider's extension panel (local only — manage the API key). */
   onOpenExtension?: (providerId: string) => void;
+  /** The project's tables for the table.push/lookup target picker. Absent →
+   *  the editor degrades to a plain text input for the target ref. */
+  projectTables?: Array<{ id: string; name: string }>;
+  /** Resolve a target table's columns (by id or exact name); rejects when the
+   *  table is gone so the editor can show its inline re-pick warning. */
+  fetchTableColumns?: (tableId: string) => Promise<Array<{ id: string; name: string; type: string; kind: string }>>;
+  /** The edited column's own table id — excluded from push targets (the engine
+   *  rejects self-push; self-lookup stays allowed). */
+  currentTableId?: string;
 }) {
   const gridApi = useColumnApi();
   const isFormula = column.provider === "formula" || column.fn === "formula.eval";
   const isAi = column.provider === "ai";
   const isHttp = column.provider === "http";
   const isCode = !column.provider && column.fn === "code";
+  const isTable = column.provider === "table";
   const isFunction = !!column.provider || !!column.fn;
-  const isEnrichment = isFunction && !isFormula && !isAi && !isHttp && !isCode;
+  const isEnrichment = isFunction && !isFormula && !isAi && !isHttp && !isCode && !isTable;
   const p: Record<string, unknown> = column.params ?? {};
 
   // ── Identity: resolve the connector + method this column executes ──
@@ -716,6 +1198,9 @@ export function ColumnEditPanel({
   const [maxTokens, setMaxTokens] = useState(isAi && p.maxTokens != null ? String(p.maxTokens) : "");
   // http: the full request builder reports serialized params on every edit
   const [httpParams, setHttpParams] = useState<Record<string, unknown>>(p);
+  // table.push / table.lookup: the dedicated editors report assembled params
+  // on every edit (same contract as the HTTP request builder)
+  const [tableParams, setTableParams] = useState<Record<string, unknown>>(p);
   // enrichment: every schema key (even unset ones — so missing required inputs
   // are visible and mappable) + any extra agent-set params
   const [params, setParams] = useState<Record<string, string>>(() => {
@@ -839,6 +1324,8 @@ export function ColumnEditPanel({
       patch.params = np;
     } else if (isHttp) {
       patch.params = httpParams;
+    } else if (isTable) {
+      patch.params = tableParams;
     } else if (isEnrichment) {
       patch.params = buildEnrichmentParams();
     } else if (!isFunction) {
@@ -1010,6 +1497,26 @@ export function ColumnEditPanel({
 
         {isHttp && <HttpRequestForm columns={otherColumnNames} initial={p} onChange={setHttpParams} />}
 
+        {isTable && column.method === "push" && (
+          <TablePushForm
+            initial={p}
+            columns={otherColumns}
+            projectTables={projectTables}
+            fetchTableColumns={fetchTableColumns}
+            currentTableId={currentTableId}
+            onChange={setTableParams}
+          />
+        )}
+        {isTable && column.method === "lookup" && (
+          <TableLookupForm
+            initial={p}
+            columns={otherColumns}
+            projectTables={projectTables}
+            fetchTableColumns={fetchTableColumns}
+            onChange={setTableParams}
+          />
+        )}
+
         {isCode && (
           <>
             <div className="fnx-cfg-section">Code</div>
@@ -1034,7 +1541,7 @@ export function ColumnEditPanel({
             tableId={tableId}
             provider={column.provider}
             method={previewMethod}
-            params={isHttp ? httpParams : isEnrichment ? buildEnrichmentParams() : p}
+            params={isHttp ? httpParams : isTable ? tableParams : isEnrichment ? buildEnrichmentParams() : p}
             limit={5}
           />
         )}
