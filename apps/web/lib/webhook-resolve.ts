@@ -21,6 +21,13 @@ export interface ResolvedWebhook {
   readonly workspaceId: string;
   readonly tableId: string;
   readonly mapping: readonly MappingEntry[];
+  /**
+   * The PER-WEBHOOK `X-GTMGrid-Signature` secret. Opt-in, and consulted ONLY by
+   * the generic receiver — the Slack ingress cannot honour it (Slack signs with
+   * its own scheme and has never seen this secret) and does not need to (it
+   * authenticates via Slack's v0 HMAC + the tenant gate). See the Slack route's
+   * header for why that is deliberate rather than an oversight.
+   */
   readonly signingSecret: string | null;
   readonly autoRun: boolean;
   readonly mode: "create" | "upsert";

@@ -126,6 +126,33 @@ describe("tenant gate", () => {
   });
 });
 
+describe("per-webhook signingSecret", () => {
+  it("a webhook WITH a per-webhook signing secret STILL accepts Slack events", async () => {
+    // Deliberate, and pinned because it reads as an oversight. `signingSecret`
+    // gates hex(HMAC-SHA256(secret, body)) on X-GTMGrid-Signature — a header
+    // Slack has never heard of and cannot produce. Enforcing it here would not
+    // harden the route; it would turn "Require signed requests" into "silently
+    // disable Slack". The gate that matters for THIS ingress is the tenant gate.
+    resolveToken.mockResolvedValue({ ...WEBHOOK, signingSecret: "whsec_owner_opted_in" });
+
+    const res = await post(messageBody(OWN_TEAM));
+
+    expect(res.status).toBe(200);
+    expect(sent).toHaveBeenCalledOnce();
+  });
+
+  it("...but the tenant gate still applies to it — the secret is not a second way in", async () => {
+    // The paired half: "we don't check signingSecret" must not read as "this
+    // route is lax". A foreign team is dropped whether or not a secret is set.
+    resolveToken.mockResolvedValue({ ...WEBHOOK, signingSecret: "whsec_owner_opted_in" });
+
+    const res = await post(messageBody(FOREIGN_TEAM));
+
+    expect(await res.json()).toMatchObject({ ignored: "team-mismatch" });
+    expect(sent).not.toHaveBeenCalled();
+  });
+});
+
 describe("signature gate (unchanged by the tenant gate)", () => {
   it("rejects a bad signature with 401 and never resolves the token", async () => {
     const raw = messageBody(OWN_TEAM);

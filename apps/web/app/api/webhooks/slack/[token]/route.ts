@@ -33,6 +33,31 @@ import { resolveToken, slackTeamForWorkspace } from "../../../../../lib/webhook-
  * events. Everything downstream is shared via `lib/webhook-resolve` +
  * `applyMapping`.
  *
+ * `webhook.signingSecret` IS DELIBERATELY NOT CONSULTED HERE — the one thing
+ * about this route most likely to read as an oversight, so, explicitly:
+ *
+ *   - It is UNSATISFIABLE, not merely unchecked. That secret gates
+ *     `hex(HMAC-SHA256(<per-webhook secret>, body))` on `X-GTMGrid-Signature`.
+ *     Slack has never heard of that secret and signs with its own scheme, so no
+ *     genuine Slack event can ever carry it. Enforcing it here would not harden
+ *     the route; it would make "Require signed requests" mean "silently disable
+ *     Slack" — a footgun in a toggle whose copy says nothing about Slack.
+ *   - It gates the ANONYMOUS ingress, and this ingress is not anonymous. On
+ *     `[token]/route.ts` with no secret set, the token IS the whole credential:
+ *     anyone who learns the URL can post. The secret is what upgrades that to
+ *     "prove you hold the secret too". Requests HERE have already proven they
+ *     came from Slack (v0 HMAC, replay-windowed) on behalf of a team the
+ *     workspace is connected to (the tenant gate below). Different authority,
+ *     not weaker — there is no unsigned path to close.
+ *   - No privilege boundary is crossed. Slack takes ONE Request URL per app,
+ *     set by the app's owner, so the only party who can aim Slack at a token is
+ *     the party that owns the app and the webhook.
+ *
+ * Cross-cutting policy that SHOULD bind both ingresses belongs upstream in
+ * `WebhookService.resolveToken`, where `source === "push"` and the cloud-access
+ * gate already live — not re-derived per route. Pinned by
+ * "a webhook WITH a per-webhook signing secret still accepts Slack events".
+ *
  * ACK FAST: Slack retries any non-2xx (up to 3 times) and disables endpoints
  * that keep failing, so the durable work happens in Inngest and this returns
  * immediately.

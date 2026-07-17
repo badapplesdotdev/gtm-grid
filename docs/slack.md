@@ -87,6 +87,21 @@ would now (correctly) be dropped by the tenant gate. Cloud-wide inbound events
 would need a **token-less** URL that routes by `team_id` → connection →
 workspace. Not built; the gate makes the gap safe rather than silent.
 
+### "Require signed requests" does not apply to Slack
+
+A webhook's opt-in `signingSecret` gates `X-GTMGrid-Signature` on the GENERIC
+receiver only. Slack signs with its own scheme and has never seen that secret, so
+no real Slack event can carry it — enforcing it on the Slack ingress would mean
+the toggle silently disables the integration rather than hardening it.
+
+That is not a hole. The secret exists to upgrade the generic ingress from "the
+token is the whole credential" to "prove you hold the secret too"; the Slack
+ingress is never anonymous (Slack's v0 HMAC + the tenant gate), and Slack's
+single owner-configured Request URL means only the webhook's own owner can aim
+Slack at a token. If a policy must bind BOTH ingresses, put it in
+`WebhookService.resolveToken` alongside the `source === "push"` and cloud-access
+gates — not in one route.
+
 ## The manual verify gate
 
 Everything below the consent screen is covered automatically (`pnpm test`,
