@@ -1,5 +1,18 @@
 # @gtmgrid/desktop
 
+## 1.10.0
+
+### Minor Changes
+
+- 5e47d7c: Let connected agents show, hide, and pin columns and apply or clear grid filters. Large column runs now continue in persistent background jobs with status polling, and interrupted agent streams are surfaced clearly instead of appearing successful.
+
+### Patch Changes
+
+- @gtmgrid/analytics@1.10.0
+- @gtmgrid/cloud@1.10.0
+- @gtmgrid/pipelines@1.10.0
+- @gtmgrid/services@1.10.0
+
 ## 1.9.0
 
 ### Minor Changes
