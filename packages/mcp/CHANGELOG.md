@@ -1,5 +1,14 @@
 # @gtmgrid/mcp
 
+## 1.9.0
+
+### Patch Changes
+
+- Updated dependencies [31dfbed]
+  - @gtmgrid/engine@1.9.0
+  - @gtmgrid/observability@1.9.0
+  - @gtmgrid/pipelines@1.9.0
+
 ## 1.8.0
 
 ### Patch Changes
