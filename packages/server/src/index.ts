@@ -47,6 +47,7 @@ import { requiredInputKeys, resolveOptionArgs } from "./option-args.js";
 import { corsHeadersFor, isLoopbackHost, isOriginAllowed } from "./cors.js";
 import { Semaphore } from "./semaphore.js";
 import { captureException, captureServerEvent, flushObservability, installProcessHandlers, log } from "./observability.js";
+import { BackgroundRunRegistry } from "./background-runs.js";
 
 // Install last-gasp crash handlers ASAP so an error during boot/init is reported.
 installProcessHandlers();
@@ -80,6 +81,7 @@ const MAX_CONCURRENT_RUNS = Number(
   process.env.GTMGRID_MAX_CONCURRENT_RUNS ?? 4,
 );
 const runLimiter = new Semaphore(MAX_CONCURRENT_RUNS);
+const backgroundColumnRuns = new BackgroundRunRegistry<unknown>();
 
 // ── Shared global db: credentials, extensions, AI config (across all projects).
 const globalDb = new Db(globalDbPath());
@@ -847,6 +849,70 @@ route("POST", "/api/cloud/columns/run", async (_p, body) => {
       deps,
     ),
   );
+});
+
+// Long agent-initiated runs must outlive the disposable Claude/Codex MCP child.
+// The persistent sidecar owns the promise and exposes a bounded long-poll status
+// route; this keeps the agent producing output without tying the work to its
+// five-minute idle watchdog.
+route("POST", "/api/cloud/columns/run-background", (_p, body) => {
+  const apiUrl = String(body?.apiUrl ?? "").trim();
+  const token = String(body?.token ?? "").trim();
+  const tableId = String(body?.tableId ?? "").trim();
+  const columnId = String(body?.columnId ?? "").trim();
+  if (!apiUrl || !token || !tableId || !columnId)
+    return { error: "apiUrl, token, tableId and columnId are required" };
+  const rowIds = Array.isArray(body?.rowIds) && body.rowIds.length ? (body.rowIds as string[]) : undefined;
+  const deps = defaultCloudRunDeps(registry, aiConfig());
+  const run = backgroundColumnRuns.start(() =>
+    runLimiter.run(() =>
+      runCloudColumn(
+        { apiUrl, token, tableId, columnId, force: !!body?.force, concurrency: body?.concurrency ?? 5, rowIds },
+        deps,
+      ),
+    ),
+  );
+  return { started: true, ...run };
+});
+
+route("POST", "/api/cloud/columns/run-table-background", (_p, body) => {
+  const apiUrl = String(body?.apiUrl ?? "").trim();
+  const token = String(body?.token ?? "").trim();
+  const tableId = String(body?.tableId ?? "").trim();
+  const columns = Array.isArray(body?.columns)
+    ? body.columns.flatMap((value: unknown) => {
+        if (!value || typeof value !== "object") return [];
+        const item = value as { columnId?: unknown; column?: unknown };
+        const columnId = String(item.columnId ?? "").trim();
+        if (!columnId) return [];
+        return [{ columnId, column: String(item.column ?? columnId) }];
+      })
+    : [];
+  if (!apiUrl || !token || !tableId || columns.length === 0)
+    return { error: "apiUrl, token, tableId and at least one column are required" };
+  const deps = defaultCloudRunDeps(registry, aiConfig());
+  const run = backgroundColumnRuns.start(() => runLimiter.run(async () => {
+    const results: Array<{ column: string; ran: number; errors: number }> = [];
+    for (const column of columns) {
+      const result = await runCloudColumn(
+        { apiUrl, token, tableId, columnId: column.columnId, force: !!body?.force, concurrency: body?.concurrency ?? 5 },
+        deps,
+      );
+      results.push({ column: column.column, ...result });
+    }
+    return {
+      columns: results,
+      ran: results.reduce((sum, result) => sum + result.ran, 0),
+      errors: results.reduce((sum, result) => sum + result.errors, 0),
+    };
+  }));
+  return { started: true, ...run };
+});
+
+route("POST", "/api/cloud/columns/runs/:id/status", async (p, body) => {
+  const waitMs = Math.min(Math.max(Number(body?.waitMs ?? 0), 0), 120_000);
+  const run = await backgroundColumnRuns.wait(p.id, Number.isFinite(waitMs) ? waitMs : 0);
+  return run ?? { error: "background run not found (the desktop engine may have restarted)" };
 });
 
 // "Try on N rows" preview for a CLOUD table: dry-run a not-yet-saved function

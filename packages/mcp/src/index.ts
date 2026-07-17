@@ -102,6 +102,20 @@ const mcpAiFallback = async (req: { prompt: string; system?: string; model?: str
   return data.text;
 };
 
+const sidecarJson = async <T>(path: string, body: Record<string, unknown>): Promise<T> => {
+  const port = process.env.GTMGRID_PORT ?? "8787";
+  const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({})) as T & { error?: string };
+  if (!res.ok || (data.error && !("status" in data))) {
+    throw new Error(data.error ?? `desktop engine returned HTTP ${res.status}`);
+  }
+  return data;
+};
+
 // The engine is Db-free, backed by the cloud store; it still needs a registry for
 // connector discovery + cloud runs, built with the user's uploaded extensions
 // loaded from the secrets vault. AI columns fall back to the user's coding-agent
@@ -504,7 +518,7 @@ server.tool(
 
 server.tool(
   "run_column",
-  "Run a function column over its rows (enriching cells), in grid order (top-down — the same order the user sees). Pass `limit` to enrich only the next N rows that still need filling — use this for requests like 'run this for 10 rows' or 'do the next 20': it fills the first N unfilled cells in display order, NEVER a random subset. Add `offset` to skip the first matches (e.g. limit:10, offset:10 = rows 11–20). Omit `limit` to run every pending row. A large run (more than ~50 pending rows) asks first: it returns the pending-row count + estimated credits — surface that and only re-call with confirm:true once the user approves. A confirmed large run is then started in the BACKGROUND on the sidecar (it outlasts this turn — a synchronous run of hundreds of rows would hit the 5-min turn limit and be killed), and returns immediately with {started:true}; poll get_column/get_table to watch the done count rise and tell the user when it's complete. A small run (≤50 rows) runs synchronously and returns {ran, errors}.",
+  "Run a function column over its rows (enriching cells), in grid order (top-down — the same order the user sees). Pass `limit` to enrich only the next N rows that still need filling; add `offset` to skip earlier matches. A large run asks for approval first. Once approved, runs over 50 pending rows are owned by the persistent desktop engine and return {started:true,runId}; they survive this MCP/agent process. IMPORTANT: after a background start, repeatedly call get_run_status(runId, wait_seconds:90) until it succeeds or fails, then continue the user's remaining steps in this SAME turn. Do not stop merely because the run started. Small runs return {ran,errors} synchronously.",
   { table: z.string(), column: z.string(), force: z.boolean().optional(), concurrency: z.number().optional(), limit: z.number().optional(), offset: z.number().optional(), confirm: z.boolean().optional() },
   async ({ table, column, force, concurrency, limit, offset, confirm }) => {
     const args = { table, column, force, concurrency, limit, offset, confirm };
@@ -518,8 +532,45 @@ server.tool(
       target: `${table} › ${column}`,
     });
     if (!g.ok) return g.result;
+    const prepared = await cloudSource.prepareColumnRun(table, column, { force, limit, offset });
+    if (prepared.pending === 0) return ok({ column: prepared.column, ran: 0, errors: 0 });
+    if (prepared.pending > CONFIRM_THRESHOLD) {
+      const background = await sidecarJson<{
+        started: true;
+        runId: string;
+        status: string;
+      }>("/api/cloud/columns/run-background", {
+        apiUrl: gridEnv.context.apiUrl,
+        token: gridEnv.context.token,
+        tableId: prepared.tableId,
+        columnId: prepared.columnId,
+        ...(prepared.rowIds !== undefined ? { rowIds: prepared.rowIds } : {}),
+        force: !!force,
+        concurrency: concurrency ?? 5,
+      });
+      return ok({
+        column: prepared.column,
+        pending: prepared.pending,
+        ...background,
+        next: `Call get_run_status with run_id '${background.runId}' and wait_seconds 90 until status is succeeded or failed, then continue the plan.`,
+      });
+    }
     return ok(withRunHint(await cloudSource.runColumn(table, column, { force, concurrency, limit, offset })));
   },
+);
+
+server.tool(
+  "get_run_status",
+  "Wait for a background column run and return its status. After run_column returns started:true, keep calling this with wait_seconds:90 while status is 'running'. When it is 'succeeded', continue the user's next planned step; when 'failed', explain the error and stop retrying blindly.",
+  {
+    run_id: z.string(),
+    wait_seconds: z.number().min(0).max(120).optional().describe("Long-poll duration; default 90 seconds, maximum 120."),
+  },
+  async ({ run_id, wait_seconds }) =>
+    ok(await sidecarJson<Record<string, unknown>>(
+      `/api/cloud/columns/runs/${encodeURIComponent(run_id)}/status`,
+      { waitMs: Math.round((wait_seconds ?? 90) * 1000) },
+    )),
 );
 
 server.tool(
@@ -529,6 +580,63 @@ server.tool(
   async ({ table, limit, offset }) => {
     return ok(await cloudSource.getTable(table, { limit, offset }));
   },
+);
+
+const gridFilterOperator = z.enum([
+  "equals", "not_equals", "contains", "not_contains", "contains_any",
+  "greater_than", "greater_than_or_equal", "less_than", "less_than_or_equal",
+  "before", "after", "is_empty", "is_not_empty", "has_error", "has_no_error",
+  "has_results", "has_no_results", "has_not_run", "is_queued", "is_running",
+  "is_not_running",
+]);
+
+server.tool(
+  "set_column_visibility",
+  "Change which columns are visible in the desktop grid for the table the user is viewing. Use action:'hide' or 'show' with one or more exact column names; use action:'show_all' to reveal every column. This changes only the user's saved view, never table data.",
+  {
+    table: z.string(),
+    action: z.enum(["hide", "show", "show_all"]),
+    columns: z.array(z.string()).optional().describe("Exact column names. Required for hide/show; omit for show_all."),
+  },
+  async ({ table, action, columns }) => {
+    if (action !== "show_all" && (!columns || columns.length === 0)) {
+      throw new Error(`columns is required when action is '${action}'`);
+    }
+    return ok({ viewChanged: true, table, action, columns: columns ?? [] });
+  },
+);
+
+server.tool(
+  "set_column_pinning",
+  "Pin or unpin columns in the desktop grid for the table the user is viewing. Pinned columns stay on the left. Use action:'pin' or 'unpin' with exact column names; use action:'unpin_all' to clear all pins. This changes only the user's saved view.",
+  {
+    table: z.string(),
+    action: z.enum(["pin", "unpin", "unpin_all"]),
+    columns: z.array(z.string()).optional().describe("Exact column names. Required for pin/unpin; omit for unpin_all."),
+  },
+  async ({ table, action, columns }) => {
+    if (action !== "unpin_all" && (!columns || columns.length === 0)) {
+      throw new Error(`columns is required when action is '${action}'`);
+    }
+    return ok({ viewChanged: true, table, action, columns: columns ?? [] });
+  },
+);
+
+server.tool(
+  "set_grid_filters",
+  "Replace the visible row filters in the desktop grid for the table the user is viewing. Groups are combined with AND; rules inside a group use mode:'all' (AND) or mode:'any' (OR). Pass groups:[] to clear every filter. Column names must match the table. This changes only the user's saved view and never deletes rows.",
+  {
+    table: z.string(),
+    groups: z.array(z.object({
+      mode: z.enum(["all", "any"]).default("all"),
+      rules: z.array(z.object({
+        column: z.string(),
+        operator: gridFilterOperator,
+        value: z.union([z.string(), z.number(), z.boolean()]).optional().describe("Omit for operators such as is_empty, has_error, or is_running."),
+      })).min(1),
+    })),
+  },
+  async ({ table, groups }) => ok({ viewChanged: true, table, groups }),
 );
 
 server.tool(
@@ -686,7 +794,7 @@ server.tool(
 
 server.tool(
   "run_table",
-  "Run EVERY function column over all its pending rows, LEFT-TO-RIGHT (grid order — the natural dependency order, since a later column can reference an earlier column's output). Without `force` each column only fills cells that aren't already `done`; with `force` it recomputes every cell. A large run (more than ~50 pending cells in total) asks first: it returns the pending count + the function-column count — surface that and only re-call with confirm:true once the user approves. Returns a per-column ran/errors breakdown plus the totals.",
+  "Run EVERY function column over all its pending rows, LEFT-TO-RIGHT. A large run asks for approval, then runs in the persistent desktop engine and returns {started:true,runId}. Keep calling get_run_status(runId, wait_seconds:90) until terminal, then continue the user's remaining plan in the same turn. Small runs return a per-column breakdown synchronously.",
   { table: z.string(), force: z.boolean().optional(), concurrency: z.number().optional(), confirm: z.boolean().optional() },
   async ({ table, force, concurrency, confirm }) => {
     const gargs = { table, force, concurrency, confirm };
@@ -702,6 +810,29 @@ server.tool(
     const g = gate("run_table", gargs, { affected: pending, perRowCredits: 1, action: "Run table", target: table, extra: { functionColumns: fns.length } });
     if (!g.ok) return g.result;
     const targets = force ? fns : fns.filter((c) => c.pending > 0);
+    if (targets.length === 0) return ok({ columns: [], ran: 0, errors: 0 });
+    if (pending > CONFIRM_THRESHOLD) {
+      const prepared = await Promise.all(targets.map((column) =>
+        cloudSource.prepareColumnRun(table, column.name, { force }),
+      ));
+      const background = await sidecarJson<{ started: true; runId: string; status: string }>(
+        "/api/cloud/columns/run-table-background",
+        {
+          apiUrl: gridEnv.context.apiUrl,
+          token: gridEnv.context.token,
+          tableId: prepared[0].tableId,
+          columns: prepared.map((column) => ({ columnId: column.columnId, column: column.column })),
+          force: !!force,
+          concurrency: concurrency ?? 5,
+        },
+      );
+      return ok({
+        pending,
+        functionColumns: targets.length,
+        ...background,
+        next: `Call get_run_status with run_id '${background.runId}' and wait_seconds 90 until terminal, then continue the plan.`,
+      });
+    }
     const results: { column: string; ran: number; errors: number; firstError?: string }[] = [];
     for (const c of targets) results.push(await cloudSource.runColumn(table, c.name, { force, concurrency }));
     return ok(withRunHint({ columns: results, ...totals(results), firstError: results.find((r) => r.firstError)?.firstError }));
