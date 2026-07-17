@@ -18,10 +18,10 @@
  * (`extensions/slack.json` → `"slack"`) or `sdk.slack.*` finds nothing.
  */
 
-import type { SecretMap } from "@gtmgrid/cloud";
+import type { EncryptError, SecretMap } from "@gtmgrid/cloud";
 import { Effect, Option } from "effect";
-import { CredentialRepo } from "../repositories/credential-repo.js";
-import { CredentialService, type GetForRunError, type SaveCredentialError } from "./credential-service.js";
+import { type CredentialRepoError, CredentialRepo } from "../repositories/credential-repo.js";
+import { CredentialService, type GetForRunError } from "./credential-service.js";
 import { CryptoService } from "./crypto-service.js";
 import type { OAuthTokens } from "../oauth/types.js";
 
@@ -105,25 +105,54 @@ export class SlackConnectionService extends Effect.Service<SlackConnectionServic
         /**
          * Store a connection from the OAuth callback.
          *
-         * No membership check here, mirroring the CRM write path: the callback's
-         * VERIFIED SIGNED STATE is the trust boundary, and the browser
-         * completing the handshake carries no session cookie (the desktop opens
-         * it externally), so there is no member to check against.
+         * NO MEMBERSHIP CHECK — encrypt + `repo.upsert` directly, exactly as
+         * `CrmConnectionService.writeSecrets` does, and for the same reason: the
+         * callback's VERIFIED SIGNED STATE is the trust boundary, and there is no
+         * member to check against because THE BROWSER HAS NO SESSION. The desktop
+         * opens the consent URL with `openExternal`, so the system browser carries
+         * no gtmgrid.dev cookie; the callback lands with `sessionUser === null`.
+         *
+         * That is sound, not a shortcut: `slack.authorizeUrl` mints a state only
+         * after `requireMember`, and `crm-callback` verifies the state BEFORE
+         * calling here. So reaching this line already proves the workspace claim
+         * came from a member.
+         *
+         * This used to call `CredentialService.saveCredential`, whose first line
+         * is `requireMember` — which made the PRIMARY flow impossible. With no
+         * session, identity resolved to None, requireMember failed
+         * UnauthenticatedError, and the user got the 502 "couldn't finish
+         * connecting" page AFTER a successful consent — having burned the
+         * single-use code and, under rotation, minted tokens that were then
+         * dropped. The doc comment here claimed "no membership check, mirroring
+         * the CRM write path" the entire time; only the comment was mirroring it.
+         *
+         * Every test supplied a session user who was a member, so the one flow the
+         * route header calls the trust model ("NO BROWSER SESSION IS REQUIRED")
+         * was the only one never exercised. See the `sessionUser: null` case in
+         * `app/api/oauth/slack/callback/route.test.ts`.
          */
         saveConnection: (args: {
           readonly workspaceId: string;
           readonly tokens: OAuthTokens;
           readonly meta: SlackConnectionMeta;
-        }): Effect.Effect<void, SaveCredentialError> =>
-          credentials
-            .saveCredential({
+        }): Effect.Effect<void, EncryptError | CredentialRepoError> =>
+          Effect.gen(function* () {
+            const secretsEnc = yield* crypto.encrypt(
+              args.workspaceId,
+              toSecrets(args.tokens, args.meta),
+            );
+            yield* repo.upsert({
               workspaceId: args.workspaceId,
               extensionId: SLACK_CONNECTION_SLOT,
               scope: "workspace",
+              // A SHARED workspace row, so it has no owning member — the same
+              // shape the CRM connection writes, and what `findSharedForWorker`
+              // reads back on the worker path.
+              ownerUserId: null,
               name: "Slack",
-              secrets: toSecrets(args.tokens, args.meta),
-            })
-            .pipe(Effect.asVoid),
+              secretsEnc,
+            });
+          }),
 
         /**
          * The Slack TEAM this workspace is connected to, for the secret-gated

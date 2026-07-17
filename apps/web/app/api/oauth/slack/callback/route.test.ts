@@ -179,6 +179,60 @@ describe("callbackResponse — Slack", () => {
     }
   });
 
+  it("THE DESKTOP FLOW: persists with NO browser session at all", async () => {
+    // The primary flow, and the one that was never tested. The desktop opens the
+    // consent URL with `openExternal`, so the system browser carries no
+    // gtmgrid.dev cookie and the callback lands with sessionUser === null and no
+    // resolvable identity.
+    //
+    // Every other test in this file supplies a session user who is a member, so
+    // they all exercised a path the real desktop never takes. Meanwhile
+    // saveConnection called saveCredential -> requireMember, which cannot pass
+    // without an identity: consent succeeded, the code was exchanged and burned,
+    // tokens were minted under rotation — and then the write failed and the user
+    // got a 502. The route header calls this exact flow the trust model ("NO
+    // BROWSER SESSION IS REQUIRED"); it was the only one broken.
+    //
+    // The signed state is what authorises the write: slack.authorizeUrl mints one
+    // only after requireMember, and callbackResponse verifies it before
+    // persisting.
+    stubSlackFetch(OK_EXCHANGE);
+    const runtime = ManagedRuntime.make(
+      TestLayer({
+        workspaces,
+        memberships: [ownerMembership],
+        users,
+        // No session. Not "a stranger" — NOBODY.
+        currentUserId: null,
+      }),
+    );
+    try {
+      const state = await mintState();
+      const res = await callbackResponse({
+        oauth: SLACK_OAUTH,
+        runtime,
+        code: "code_live",
+        state,
+        error: null,
+        sessionUser: null,
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.text()).toContain("Acme Slack");
+
+      // The connection really landed, written from a session-less browser and
+      // decryptable afterwards. Read back through the WORKER path: the read is
+      // member-gated too, and there is still no member here — which is precisely
+      // the situation the write had to survive.
+      const team = await runtime.runPromise(
+        Effect.flatMap(SlackConnectionService, (s) => s.connectedTeamIdForWorker(WS)),
+      );
+      expect(team).toBe("T_ACME");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("fires slack_connected, NOT crm_connected — the CRM funnel stays CRM-only", async () => {
     // `crm_connected` means "a workspace connected a CRM (the wizard's step-2
     // completion)" and every dashboard keyed on it tracks CRM adoption. Slack is
