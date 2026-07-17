@@ -2,8 +2,7 @@ import { createHash } from "node:crypto";
 import { inngest } from "../../../../lib/inngest/client";
 import { captureServer } from "../../../../lib/posthog-server";
 import { clientIp, rateLimit } from "../../../../lib/rate-limit";
-import { resolveSiteUrl } from "../../../../lib/site-url";
-import { applyMapping, type MappingEntry } from "../../../../lib/webhook-mapping";
+import { applyMapping } from "../../../../lib/webhook-mapping";
 import { resolveToken } from "../../../../lib/webhook-resolve";
 import { signatureCheckPasses } from "../../../../lib/webhook-signature";
 

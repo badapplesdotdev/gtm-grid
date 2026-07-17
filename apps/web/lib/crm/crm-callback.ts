@@ -109,7 +109,7 @@ export async function callbackResponse(params: {
   readonly error: string | null;
   readonly sessionUser: CallbackSessionUser | null;
 }): Promise<Response> {
-  const { provider, displayName: name, authorizePath } = params.oauth;
+  const { displayName: name, authorizePath } = params.oauth;
   const verify = (token: string) => params.runtime.runPromise(params.oauth.verifyState(token));
 
   // 1. The user declined on the provider's consent screen.

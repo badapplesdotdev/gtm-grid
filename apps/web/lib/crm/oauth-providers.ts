@@ -53,9 +53,16 @@ export interface PersistConnectionArgs {
 }
 
 export interface OAuthRouteAdapter {
-  /** Stable provider id, used in copy and analytics. */
-  readonly provider: string;
-  /** User-facing product name for page copy ("Attio", "HubSpot", "Slack"). */
+  /**
+   * User-facing product name for page copy ("Attio", "HubSpot", "Slack").
+   *
+   * There is deliberately NO `provider: string` id field. It existed, documented
+   * as "used in copy and analytics", and was read exactly once — in a destructure
+   * that never used the value. Copy comes from `displayName`, analytics from
+   * `captureConnected`, the authorize URL from `authorizePath`, and the id is
+   * already the `OAUTH_ADAPTERS` key. A dead field on an interface built for
+   * extension is worse than a dead import: the next provider fills it in.
+   */
   readonly displayName: string;
   /** The auth service's not-configured error tag (drives the setup page). */
   readonly notConfiguredTag: string;
@@ -102,7 +109,7 @@ export type CrmOAuthAdapter = OAuthRouteAdapter;
 /** Lift a protocol adapter into the route-layer shape. */
 const routeAdapter = <E extends OAuthNotConfiguredError>(
   adapter: OAuthAdapter<E>,
-  rest: Pick<OAuthRouteAdapter, "provider" | "authorizePath" | "connectedDeepLink" | "connectedFallbackHref" | "persistConnection" | "captureConnected">,
+  rest: Pick<OAuthRouteAdapter, "authorizePath" | "connectedDeepLink" | "connectedFallbackHref" | "persistConnection" | "captureConnected">,
 ): OAuthRouteAdapter => ({
   displayName: adapter.displayName,
   notConfiguredTag: adapter.notConfiguredTag,
@@ -151,7 +158,6 @@ const crmPersist =
     });
 
 export const ATTIO_OAUTH: OAuthRouteAdapter = routeAdapter(ATTIO_ADAPTER, {
-  provider: "attio",
   authorizePath: "/api/crm/attio/authorize",
   connectedDeepLink: "gtmgrid://open/crm-connected",
   connectedFallbackHref: "/open?to=crm-connected",
@@ -167,7 +173,6 @@ export const ATTIO_OAUTH: OAuthRouteAdapter = routeAdapter(ATTIO_ADAPTER, {
 });
 
 export const HUBSPOT_OAUTH: OAuthRouteAdapter = routeAdapter(HUBSPOT_ADAPTER, {
-  provider: "hubspot",
   authorizePath: "/api/crm/hubspot/authorize",
   connectedDeepLink: "gtmgrid://open/crm-connected",
   connectedFallbackHref: "/open?to=crm-connected",
@@ -189,7 +194,6 @@ export const HUBSPOT_OAUTH: OAuthRouteAdapter = routeAdapter(HUBSPOT_ADAPTER, {
  * second identify round trip either.
  */
 export const SLACK_OAUTH: OAuthRouteAdapter = routeAdapter(SLACK_ADAPTER, {
-  provider: "slack",
   authorizePath: "/api/oauth/slack/authorize",
   /**
    * Focus the app, don't navigate. `crm-connected` exists so an OPEN CRM wizard

@@ -11,7 +11,7 @@
  * signing, `ok:false` detection, credential encrypt + persist.
  */
 
-import type { AppServices, InMemoryUser, Membership, TestLayerFixtures } from "@gtmgrid/services";
+import type { InMemoryUser, Membership, TestLayerFixtures } from "@gtmgrid/services";
 import { SLACK_ADAPTER, SlackConnectionService, TestLayer } from "@gtmgrid/services";
 import { Effect, ManagedRuntime, Option } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,8 +20,6 @@ import { SLACK_OAUTH } from "../../../../../lib/crm/oauth-providers";
 
 const captured = vi.hoisted(() => vi.fn());
 vi.mock("../../../../../lib/posthog-server", () => ({ captureServer: captured }));
-
-type ServicesRuntime = ManagedRuntime.ManagedRuntime<AppServices, never>;
 
 const WS = "11111111-1111-1111-1111-111111111111";
 const OWNER = "user_owner";
@@ -85,7 +83,7 @@ afterEach(() => {
  * through `AttioAuth` only because those services predate the adapter and are
  * still in `AppServices`.)
  */
-async function mintState(_runtime: ServicesRuntime) {
+async function mintState() {
   const state = await Effect.runPromise(SLACK_ADAPTER.mintState({ workspaceId: WS, userId: OWNER }));
   if (state === null) throw new Error("expected a signed state");
   return state;
@@ -117,7 +115,7 @@ describe("callbackResponse — Slack", () => {
   it("user canceled on Slack → friendly page linking back to the SLACK authorize path", async () => {
     const runtime = runtimeFor();
     try {
-      const state = await mintState(runtime);
+      const state = await mintState();
       const res = await callbackResponse({
         oauth: SLACK_OAUTH,
         runtime,
@@ -140,7 +138,7 @@ describe("callbackResponse — Slack", () => {
     stubSlackFetch(OK_EXCHANGE);
     const runtime = runtimeFor();
     try {
-      const state = await mintState(runtime);
+      const state = await mintState();
       const res = await callbackResponse({
         oauth: SLACK_OAUTH,
         runtime,
@@ -191,7 +189,7 @@ describe("callbackResponse — Slack", () => {
     stubSlackFetch(OK_EXCHANGE);
     const runtime = runtimeFor();
     try {
-      const state = await mintState(runtime);
+      const state = await mintState();
       await callbackResponse({
         oauth: SLACK_OAUTH,
         runtime,
@@ -217,7 +215,7 @@ describe("callbackResponse — Slack", () => {
     stubSlackFetch({ ok: false, error: "invalid_code" });
     const runtime = runtimeFor();
     try {
-      const state = await mintState(runtime);
+      const state = await mintState();
       await callbackResponse({
         oauth: SLACK_OAUTH,
         runtime,
@@ -239,7 +237,7 @@ describe("callbackResponse — Slack", () => {
     stubSlackFetch({ ok: false, error: "invalid_code" });
     const runtime = runtimeFor();
     try {
-      const state = await mintState(runtime);
+      const state = await mintState();
       const res = await callbackResponse({
         oauth: SLACK_OAUTH,
         runtime,

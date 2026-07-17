@@ -17,14 +17,11 @@
 import { MembershipService } from "@gtmgrid/cloud";
 import {
   type AppServices,
-  AttioAuth,
   CrmConnectionService,
   CrmSyncService,
-  CrmSyncError,
   crmErrorCopy,
   type CrmError,
   FILTER_OPS,
-  HubspotAuth,
   SUPPORTED_ATTR_TYPES,
 } from "@gtmgrid/services";
 import { TRPCError } from "@trpc/server";
@@ -87,9 +84,6 @@ async function runCrm<A, E>(
     cause: Cause.squash(exit.cause),
   });
 }
-
-/** The web authorize route falls back to the marketing origin off Vercel. */
-const siteOrigin = (): string => process.env.SITE_URL ?? "https://www.gtmgrid.dev";
 
 const sourceKind = z.enum(["object", "list"]);
 
