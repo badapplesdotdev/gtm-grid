@@ -18,6 +18,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { callbackResponse, type CallbackSessionUser } from "../../../../../lib/crm/crm-callback";
 import { SLACK_OAUTH } from "../../../../../lib/crm/oauth-providers";
 
+const captured = vi.hoisted(() => vi.fn());
+vi.mock("../../../../../lib/posthog-server", () => ({ captureServer: captured }));
+
 type ServicesRuntime = ManagedRuntime.ManagedRuntime<AppServices, never>;
 
 const WS = "11111111-1111-1111-1111-111111111111";
@@ -69,6 +72,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  captured.mockClear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -172,6 +176,57 @@ describe("callbackResponse — Slack", () => {
         expect(stored.value.meta.botUserId).toBe("U_BOT");
         expect(stored.value.meta.connectedByName).toBe("Olive Owner");
       }
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("fires slack_connected, NOT crm_connected — the CRM funnel stays CRM-only", async () => {
+    // `crm_connected` means "a workspace connected a CRM (the wizard's step-2
+    // completion)" and every dashboard keyed on it tracks CRM adoption. Slack is
+    // a connector, not a CRM, so folding it in would silently change what those
+    // dashboards measure — a metrics bug nothing would ever throw on. The event
+    // name lives on the ADAPTER (like connectedDeepLink) precisely so it can't
+    // default to the CRM one.
+    stubSlackFetch(OK_EXCHANGE);
+    const runtime = runtimeFor();
+    try {
+      const state = await mintState(runtime);
+      await callbackResponse({
+        oauth: SLACK_OAUTH,
+        runtime,
+        code: "code_live",
+        state,
+        error: null,
+        sessionUser,
+      });
+
+      expect(captured).toHaveBeenCalledOnce();
+      const [name, args] = captured.mock.calls[0] ?? [];
+      expect(name).toBe("slack_connected");
+      expect(name).not.toBe("crm_connected");
+      expect(args).toMatchObject({ properties: { workspace_id: WS } });
+      // No `provider` property: slack_connected isn't parameterised by one.
+      expect(Object.keys(args?.properties ?? {})).not.toContain("provider");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("emits NOTHING when the exchange fails — no phantom connect in the funnel", async () => {
+    stubSlackFetch({ ok: false, error: "invalid_code" });
+    const runtime = runtimeFor();
+    try {
+      const state = await mintState(runtime);
+      await callbackResponse({
+        oauth: SLACK_OAUTH,
+        runtime,
+        code: "bad_code",
+        state,
+        error: null,
+        sessionUser,
+      });
+      expect(captured).not.toHaveBeenCalled();
     } finally {
       await runtime.dispose();
     }

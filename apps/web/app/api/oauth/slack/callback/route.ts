@@ -5,8 +5,16 @@
  * Flow: `?error=access_denied` → friendly cancel page; invalid/expired state →
  * 400 plain-English page (the CSRF gate, checked BEFORE any code exchange);
  * otherwise exchange the code, persist the encrypted connection at the `slack`
- * credential slot, capture `crm_connected`, and bounce into the app via
- * `gtmgrid://open/slack-connected`.
+ * credential slot, capture `slack_connected`, and bounce into the app via
+ * `gtmgrid://open`.
+ *
+ * NOT `crm_connected`, and NOT `gtmgrid://open/slack-connected` — both of which
+ * this comment claimed for a while, having been copied from the CRM callback.
+ * Slack is a connector, not a CRM (`slack_connected` is its own event so the CRM
+ * adoption funnel stays CRM-only), and `slack-connected` is not a real deep-link
+ * target: it would need adding to three separate allowlists to do nothing the
+ * connect card's poll doesn't already do. Both live on `SLACK_OAUTH` in
+ * `lib/crm/oauth-providers.ts`, which is the file to trust over this sentence.
  *
  * NO BROWSER SESSION IS REQUIRED. The desktop opens the authorize URL with
  * `openExternal`, so the system browser carries no gtmgrid.dev cookie — the
