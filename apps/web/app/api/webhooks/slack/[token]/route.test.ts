@@ -118,11 +118,78 @@ describe("tenant gate", () => {
   });
 
   it("does not consult the team for the url_verification handshake", async () => {
-    // The handshake arrives before any connection exists, and carries no team.
+    // The handshake is answered before any Slack connection exists (you save the
+    // Request URL, THEN install the app), and carries no team to check.
     const res = await post(JSON.stringify({ type: "url_verification", challenge: "c123" }));
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ challenge: "c123" });
     expect(slackTeamForWorkspace).not.toHaveBeenCalled();
+  });
+});
+
+describe("url_verification handshake", () => {
+  const handshake = () => post(JSON.stringify({ type: "url_verification", challenge: "c123" }));
+
+  it("echoes the challenge for a token that resolves", async () => {
+    const res = await handshake();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ challenge: "c123" });
+  });
+
+  it("REFUSES the challenge for an unknown token, so Slack won't save the URL", async () => {
+    // The whole point. Slack refuses to save a Request URL whose challenge isn't
+    // echoed and shows the error in the app config — the ONE moment the operator
+    // gets synchronous feedback. Echoing regardless meant a typo'd token saved
+    // cleanly, then 404'd every real event days later.
+    resolveToken.mockResolvedValue(null);
+
+    const res = await handshake();
+
+    expect(res.status).toBe(404);
+    // Must not echo: Slack treats a 200-with-challenge as proof of ownership.
+    expect(await res.text()).not.toContain("c123");
+  });
+
+  it("REFUSES the challenge for a disabled / push-source / lapsed webhook alike", async () => {
+    // resolveToken collapses all of these to null, and each should fail at
+    // configure time rather than deliver into a table that won't accept it.
+    resolveToken.mockResolvedValue(null);
+    expect((await handshake()).status).toBe(404);
+  });
+
+  it("still verifies the signature BEFORE resolving the token", async () => {
+    // Order matters: an unsigned prober must not be able to probe token
+    // existence through the handshake's 200-vs-404.
+    const req = new Request(`https://www.gtmgrid.dev/api/webhooks/slack/${TOKEN}`, {
+      method: "POST",
+      body: JSON.stringify({ type: "url_verification", challenge: "c123" }),
+      headers: {
+        "X-Slack-Request-Timestamp": String(Math.floor(Date.now() / 1000)),
+        "X-Slack-Signature": "v0=deadbeef",
+      },
+    });
+    const res = await POST(req, { params: Promise.resolve({ token: TOKEN }) });
+    expect(res.status).toBe(401);
+    expect(resolveToken).not.toHaveBeenCalled();
+  });
+});
+
+describe("ignored events stay cheap", () => {
+  it("ACKs a bot echo WITHOUT a worker round trip", async () => {
+    // These are the high-volume traffic on a busy workspace and need no webhook.
+    // If the token resolve ever moves above this check, every reaction and join
+    // starts costing a fetch to the worker endpoint.
+    const res = await post(
+      JSON.stringify({
+        type: "event_callback",
+        team_id: OWN_TEAM,
+        event_id: "Ev999",
+        event: { type: "reaction_added", user: "U1" },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(resolveToken).not.toHaveBeenCalled();
+    expect(sent).not.toHaveBeenCalled();
   });
 });
 

@@ -136,3 +136,8 @@ workspace can settle** — do them before shipping, and after any change to
    `url_verification` handshake. Post a message and confirm exactly one row lands
    — Slack retries reuse `event_id`, which is what our idempotency key is built
    from.
+7. **A bad token is refused at configure time.** Save a Request URL with one
+   character of the token changed: Slack must REFUSE it ("didn't respond with the
+   value of the challenge parameter"). If it saves, the handshake is echoing
+   before resolving the token again, and every real event will 404 silently until
+   Slack disables the endpoint — the failure lands days later, far from its cause.

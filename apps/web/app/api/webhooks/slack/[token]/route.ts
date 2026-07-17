@@ -116,14 +116,11 @@ export async function POST(
 
   const request = parsed.value;
 
-  // Answer the handshake before resolving the token: it proves URL ownership at
-  // configure time and carries no event to route.
-  if (request.kind === "url_verification") {
-    return json({ challenge: request.challenge }, 200);
-  }
-
   // Anything we don't map (reactions, bot echoes, joins) is ACKed, not errored —
-  // Slack would retry a non-2xx and eventually disable the endpoint.
+  // Slack would retry a non-2xx and eventually disable the endpoint. Checked
+  // BEFORE the token resolve: these are the high-volume traffic on a busy
+  // workspace and none of them need a webhook, so they must not each cost a
+  // round trip to the worker endpoint.
   if (request.kind === "ignored") {
     return json({ ok: true, ignored: request.reason }, 200);
   }
@@ -131,6 +128,27 @@ export async function POST(
   const webhook = await resolveToken(token);
   if (webhook === null) {
     return json({ error: "Not found" }, 404);
+  }
+
+  // Answer the handshake only for a token that actually resolves.
+  //
+  // This is the ONE moment the operator gets synchronous feedback: Slack refuses
+  // to save a Request URL whose challenge is not echoed, and shows the error
+  // right there in the app config. Echoing for ANY token meant a typo'd, revoked,
+  // disabled or push-source token saved cleanly and then 404'd every real event —
+  // a silent failure surfacing days later as "Slack just doesn't work", with
+  // Slack eventually disabling the endpoint on its own.
+  //
+  // The signature checked above proves the request came from Slack for this APP.
+  // It says NOTHING about whether this token names a real webhook — those are
+  // different claims, and answering the challenge on the strength of the first
+  // one asserts the second. `resolveToken` collapses unknown / disabled / push /
+  // lapsed-workspace to one `null`, so this 404 leaks no more than the generic
+  // receiver's does. Rejecting here is also correct for the last three: a Slack
+  // URL pointed at a disabled or push-fed connection should fail at configure
+  // time, not deliver into a table that will never accept it.
+  if (request.kind === "url_verification") {
+    return json({ challenge: request.challenge }, 200);
   }
 
   // ── TENANT GATE ───────────────────────────────────────────────────────────
