@@ -602,17 +602,43 @@ export function ExtensionPanel({ id, onConnected, onBack, workspaceCreds, worksp
         <CrmOAuthSection workspaceId={workspaceId} provider={detail.id} />
       ) : null}
 
-      {/* Slack has NO api-key section below it — the OAuth grant is the whole
-          credential, which is why there is no "the key below is separate" note. */}
       {detail.id === "slack" && workspaceId ? <SlackOAuthSection workspaceId={workspaceId} /> : null}
 
-      <ConnectionsSection
-        name={detail.name}
-        credentialLabel={detail.auth?.credentialLabel}
-        connectedScopes={detail.connectedScopes}
-        onSave={onSave}
-        workspace={workspaceCtxFor(workspaceCreds, detail.id, detail.name)}
-      />
+      {/*
+        An OAUTH tool gets NO api-key section — and this is a data-loss guard, not
+        cosmetics.
+
+        `ConnectionsSection`'s workspace save writes `{ apiKey: <pasted text> }` at
+        `extensionId` / scope `workspace`, and `CredentialService.saveCredential`
+        REPLACES the whole encrypted secret map (it encrypts exactly the map it is
+        given). For Slack that row IS the OAuth grant — `SLACK_CONNECTION_SLOT` is
+        the bare "slack", because the engine resolves a connector's credential by
+        its manifest id, so `sdk.slack.*` finds nothing under any other name. One
+        paste therefore destroys accessToken, the SINGLE-USE refreshToken and the
+        team meta. With rotation on, that grant is gone for good — reconnect is the
+        only recovery.
+
+        It was worse than dead UI: an OAuth-connected workspace has a row at slot
+        "slack", so `connectedExtensionIds` contained it and the section rendered
+        "Slack connected · Replace key" — an invitation to destroy the token.
+
+        `crm-connection-service.ts` names this exact hazard as the reason CRM slots
+        are suffixed ("attio-crm"), which is why Attio/HubSpot keep their key form:
+        their auth.type is apiKey and their OAuth lives in a DIFFERENT row. Slack
+        shares its row by design, so the UI must not offer to overwrite it.
+
+        Gated on the MANIFEST rather than `id !== "slack"`, so the next OAuth
+        connector inherits this instead of re-learning it.
+      */}
+      {detail.auth?.type !== "oauth" ? (
+        <ConnectionsSection
+          name={detail.name}
+          credentialLabel={detail.auth?.credentialLabel}
+          connectedScopes={detail.connectedScopes}
+          onSave={onSave}
+          workspace={workspaceCtxFor(workspaceCreds, detail.id, detail.name)}
+        />
+      ) : null}
 
       {/* Endpoints stay hidden until a key is connected. */}
       <Collapsible title={`Available methods · ${methodCount}`} defaultOpen={connected}>

@@ -56,6 +56,35 @@ test.describe("Slack — OAuth connection (Tools → Slack)", () => {
     await expect(card).not.toContainText("API key below is separate");
   });
 
+  test("CONNECTED: offers NO api-key form — pasting one would destroy the grant", async ({ launchApp }) => {
+    // The assertion above (no footer note) was too weak: it checked the CAPTION
+    // and not the FORM, so it passed while the whole api-key section rendered
+    // below the card — reading "Slack connected · Replace key", because the OAuth
+    // row lives at slot "slack" and so counts as connected.
+    //
+    // Saving there writes `{ apiKey }` to that row, and saveCredential replaces
+    // the entire secret map: accessToken, the single-use refreshToken and the team
+    // meta are gone, unrecoverable under rotation. This asserts the FORM is absent
+    // in the state that invited it most.
+    const { window } = await launchApp(CONNECTED);
+    await openSlackPanel(window);
+
+    await expect(window.locator(".crm-oauth-card")).toBeVisible();
+    await expect(window.getByRole("button", { name: /Replace key|Replace token/i })).toHaveCount(0);
+    await expect(window.getByRole("button", { name: /Add connection/i })).toHaveCount(0);
+    await expect(window.getByPlaceholder(/^Slack /)).toHaveCount(0);
+  });
+
+  test("NOT CONNECTED: still offers no api-key form", async ({ launchApp }) => {
+    // The other state the section rendered in — an empty "Add connection" form
+    // pointed at the same slot, ready to pre-empt a grant that hasn't landed yet.
+    const { window } = await launchApp();
+    await openSlackPanel(window);
+
+    await expect(window.getByRole("button", { name: /Add connection/i })).toHaveCount(0);
+    await expect(window.getByPlaceholder(/^Slack /)).toHaveCount(0);
+  });
+
   test("NOT CONFIGURED: Connect is disabled and says why, rather than dead-ending", async ({ launchApp }) => {
     // A self-hosted deployment with no SLACK_CLIENT_ID can never complete the
     // handshake. A live button here would open a broken consent screen.
