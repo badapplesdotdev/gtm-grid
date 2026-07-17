@@ -33,7 +33,19 @@ const POLL_EVERY_MS = 2_000;
 export type OAuthCardStatus =
   | { readonly kind: "loading" }
   | { readonly kind: "disconnected"; readonly configured: boolean }
-  | { readonly kind: "connected"; readonly byName: string; readonly accountLabel: string };
+  | { readonly kind: "connected"; readonly byName: string; readonly accountLabel: string }
+  /**
+   * The status read FAILED — we do not know whether this deployment is
+   * configured or this workspace connected.
+   *
+   * This variant exists because without it the caller's `catch` had no way to say
+   * "unknown" and had to pick a lie: it picked `{ disconnected, configured:
+   * false }`, which renders "isn't set up on this deployment yet" and DISABLES
+   * Connect. A transient fault therefore accused the operator of never having
+   * installed the app, and removed the only control that could recover. Not
+   * knowing is a real state, so it gets a real case.
+   */
+  | { readonly kind: "error" };
 
 export interface OAuthConnectCardProps {
   /** Heading, e.g. "CRM sync · OAuth connection" or "Slack · OAuth connection". */
@@ -113,6 +125,22 @@ export function OAuthConnectCard(props: OAuthConnectCardProps) {
       <div className="crm-oauth-body">
         {status.kind === "loading" ? (
           <span className="cell-spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
+        ) : status.kind === "error" ? (
+          <>
+            <span className="crm-oauth-dot off" />
+            <span className="crm-oauth-text">
+              Couldn&rsquo;t check {providerName}
+              <span className="crm-oauth-sub">
+                Something went wrong reading the connection status. This says nothing about
+                whether {providerName} is connected.
+              </span>
+            </span>
+            {/* Retry, not a disabled Connect: the user has to be able to get out
+                of this state, and the previous rendering took that away. */}
+            <button className="skill-btn" disabled={busy} onClick={() => void refresh()}>
+              Retry
+            </button>
+          </>
         ) : status.kind === "connected" ? (
           <>
             <span className="crm-oauth-dot" />

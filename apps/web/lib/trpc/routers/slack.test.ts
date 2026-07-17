@@ -68,13 +68,57 @@ describe("slack.connectionStatus", () => {
     });
   });
 
-  it("does NOT leak a workspace's Slack team to a non-member", async () => {
+  it("REJECTS a non-member with FORBIDDEN — it does not answer them at all", async () => {
+    // This test used to assert the opposite ("degrades to not-connected rather
+    // than throwing: the panel must render"), which is how a swallowed authz
+    // error survived review: the suite had blessed it as intent. A non-member is
+    // not entitled to a cheerful 200 describing someone else's workspace, and
+    // `crm.connectionStatus` has always answered them with a 403.
     const caller = callerFor({ memberships, currentUserId: "stranger" });
-    // Degrades to "not connected" rather than throwing: the panel must render.
-    // What matters is that no team name or connector identity escapes.
-    const status = await caller.slack.connectionStatus({ workspaceId: WS });
-    expect(status.connected).toBe(false);
-    expect(JSON.stringify(status)).not.toContain("Acme");
+    await expect(caller.slack.connectionStatus({ workspaceId: WS })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
+
+  it("still leaks nothing about the workspace when it rejects", async () => {
+    // The original test's INSTINCT was right even though its assertion wasn't.
+    const caller = callerFor({ memberships, currentUserId: "stranger" });
+    const err = await caller.slack.connectionStatus({ workspaceId: WS }).catch((e: unknown) => e);
+    expect(JSON.stringify(err)).not.toContain("Acme");
+  });
+
+  it("an UNDECRYPTABLE credential degrades to not-connected but KEEPS configured: true", async () => {
+    // The one failure worth degrading, and the exact thing the old blanket
+    // catchAll got wrong. The stored secret is unusable, so "Not connected" is
+    // honest and the user can fix it by reconnecting — but the deployment IS
+    // configured, and saying otherwise renders "Slack isn't set up on this
+    // deployment yet" AND disables the Connect button, removing the only control
+    // that could recover. `configured` is read before the credential and must
+    // survive its failure.
+    vi.stubEnv("SLACK_CLIENT_ID", "cid");
+    vi.stubEnv("SLACK_CLIENT_SECRET", "secret");
+    const caller = callerFor({
+      memberships,
+      currentUserId: "member",
+      credentials: [
+        {
+          id: "cred_slack_1",
+          workspaceId: WS,
+          extensionId: "slack",
+          scope: "workspace" as const,
+          name: "Slack",
+          ownerUserId: null,
+          createdAt: 0,
+          // Real ciphertext would decrypt; this cannot, which is the point.
+          secretsEnc: "not-a-valid-envelope",
+        },
+      ],
+    });
+
+    expect(await caller.slack.connectionStatus({ workspaceId: WS })).toEqual({
+      configured: true,
+      connected: false,
+    });
   });
 });
 

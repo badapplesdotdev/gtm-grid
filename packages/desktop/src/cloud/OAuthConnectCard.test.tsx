@@ -51,6 +51,24 @@ describe("not connected", () => {
     expect(screen.getByText(/isn't set up on this deployment yet/i)).toBeTruthy();
   });
 
+  it("an ERRORED status does NOT accuse the deployment of being unconfigured", async () => {
+    // The distinction this whole variant exists for. A failed status read tells
+    // us NOTHING about whether the operator installed the OAuth app, and the
+    // previous rendering (`{ disconnected, configured: false }`) asserted exactly
+    // that — on any transient blip — while disabling the only button that could
+    // recover.
+    render(<OAuthConnectCard {...base} status={{ kind: "error" }} />);
+    expect(screen.queryByText(/isn't set up on this deployment yet/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Connect Slack/i })).toBeNull();
+  });
+
+  it("an ERRORED status offers a working Retry", async () => {
+    const refresh = vi.fn(async () => {});
+    render(<OAuthConnectCard {...base} refresh={refresh} status={{ kind: "error" }} />);
+    await userEvent.click(screen.getByRole("button", { name: /Retry/i }));
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+  });
+
   it("surfaces an authorize failure instead of hanging on 'Waiting…'", async () => {
     const authorizeUrl = vi.fn(async () => {
       throw new Error("Slack OAuth env missing: SLACK_CLIENT_ID");

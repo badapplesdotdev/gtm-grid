@@ -12,7 +12,7 @@
  * the duplication is data, not logic.
  */
 
-import { MembershipService, SlackConnectionService } from "@gtmgrid/services";
+import { MembershipService, type SlackConnection, SlackConnectionService } from "@gtmgrid/services";
 import { Effect, Option } from "effect";
 import { z } from "zod";
 import { authorizeUrlWithState, SLACK_OAUTH } from "../../crm/oauth-providers";
@@ -34,9 +34,24 @@ export const slackRouter = router({
         Effect.gen(function* () {
           const membership = yield* MembershipService;
           yield* membership.requireMember(input.workspaceId);
+          // `isConfigured` reads env only — its error channel is `never`, so it
+          // needs no handling and cannot be the thing a catch here is for.
           const configured = yield* SLACK_OAUTH.isConfigured();
           const connection = yield* SlackConnectionService;
-          const conn = yield* connection.memberConnection(input.workspaceId);
+          const conn = yield* connection.memberConnection(input.workspaceId).pipe(
+            // Degrade EXACTLY ONE failure, and only this far.
+            //
+            // A stored credential that won't decrypt is genuinely unusable, and
+            // "Not connected" (with a working Connect button) is the honest, and
+            // fixable, rendering of that. Everything else in `GetForRunError`
+            // propagates: `CredentialAuthzError` is authz and belongs as a 403,
+            // and `CredentialRepoError` is a transient DB fault the operator
+            // needs to SEE.
+            //
+            // Note `configured` is already resolved above and survives untouched,
+            // which is the whole point — see below.
+            Effect.catchTag("DecryptError", () => Effect.succeed(Option.none<SlackConnection>())),
+          );
           return Option.match(conn, {
             onNone: () => ({ configured, connected: false as const }),
             onSome: (c) => ({
@@ -47,11 +62,17 @@ export const slackRouter = router({
               teamId: c.meta.teamId,
             }),
           });
-        }).pipe(
-          // The desktop only needs "can I offer Connect?"; a read failure must
-          // not blow up the whole panel.
-          Effect.catchAll(() => Effect.succeed({ configured: false as const, connected: false as const })),
-        ),
+        }),
+        // NO blanket `Effect.catchAll(() => ({ configured: false, ... }))` here.
+        // It swallowed requireMember's NotAMemberError (a 403 became a cheerful
+        // 200) and every transient DB fault, and then asserted `configured:
+        // false` — which the desktop renders as "Slack isn't set up on this
+        // deployment yet" AND uses to DISABLE the Connect button. So a five-second
+        // DB blip on a fully configured deployment told the user their operator
+        // never set Slack up, and left them no control to retry with. It also
+        // defeated this router's own `runEffect`, whose entire job is mapping
+        // typed failures to tRPC codes. `crm.connectionStatus` has no such catch;
+        // this one was the anomaly.
       ),
     ),
 

@@ -518,7 +518,11 @@ export function SlackOAuthSection({ workspaceId }: { workspaceId: string }) {
         setStatus({ kind: "connected", byName: s.connectedByName, accountLabel: s.teamName || "Slack" });
       } else setStatus({ kind: "disconnected", configured: s.configured });
     } catch {
-      setStatus({ kind: "disconnected", configured: false });
+      // NOT `{ disconnected, configured: false }`. A failed read tells us nothing
+      // about whether this deployment is configured, and claiming it does renders
+      // "Slack isn't set up on this deployment yet" with Connect DISABLED — an
+      // accusation against the operator, and a dead end, on any transient blip.
+      setStatus({ kind: "error" });
     }
   }, [workspaceId]);
 
