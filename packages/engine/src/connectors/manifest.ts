@@ -180,6 +180,17 @@ async function httpCall(
   ctx: MethodContext,
 ): Promise<unknown> {
   const input = coerceInputTypes(rawInput, m.input);
+
+  // Required-field pre-flight. The manifest's input JSON-Schema declares which
+  // fields are mandatory; enforce them locally BEFORE firing the request. A row
+  // whose `{{Email}}` resolves to empty would otherwise send `{ email: "" }` and
+  // bounce off the upstream with a cryptic 400 ("the email field is required") —
+  // while still consuming the user's API credits on a call that never could
+  // succeed. Throw an actionable local error naming the missing field instead.
+  // Applies to every manifest connector, not just one.
+  const missing = missingRequiredFields(input, m.input);
+  if (missing.length > 0) throw new Error(missingFieldsMessage(man, m, missing));
+
   const secretKey = man.auth?.secretKey ?? "apiKey";
   const pathParams = new Set<string>();
   const path = m.path.replace(/\{(\w+)\}/g, (_, k: string) => {
@@ -342,6 +353,35 @@ async function httpCall(
     return m.graphql.custom ? payload : payload?.[m.graphql.field ?? ""];
   }
   return data;
+}
+
+/**
+ * Return the manifest-declared `required` input fields that are absent or empty.
+ * A field counts as missing when it is undefined/null, an empty/whitespace-only
+ * string, or an empty array — the shapes that reliably trigger an upstream "field
+ * is required" 400. Values are read post-coercion, so a numeric `0` or boolean
+ * `false` is treated as present.
+ */
+function missingRequiredFields(input: Record<string, unknown>, schema: unknown): string[] {
+  const required = (schema as { required?: unknown } | undefined)?.required;
+  if (!Array.isArray(required)) return [];
+  const missing: string[] = [];
+  for (const field of required) {
+    if (typeof field !== "string") continue;
+    const v = input[field];
+    if (v === undefined || v === null) missing.push(field);
+    else if (typeof v === "string" && v.trim() === "") missing.push(field);
+    else if (Array.isArray(v) && v.length === 0) missing.push(field);
+  }
+  return missing;
+}
+
+/** Actionable message for a method invoked with required inputs missing/empty. */
+function missingFieldsMessage(man: ExtensionManifest, m: ManifestMethod, fields: string[]): string {
+  const label = m.label ?? m.id;
+  const list = fields.join(", ");
+  const plural = fields.length > 1 ? "fields are" : "field is";
+  return `${man.name} ${label}: required ${plural} missing or empty: ${list} — map a non-empty input for ${fields.length > 1 ? "these fields" : "this field"}.`;
 }
 
 /** Actionable message for an apiKey connector invoked with no resolved secret. */
