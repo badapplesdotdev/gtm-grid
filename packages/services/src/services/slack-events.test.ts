@@ -145,6 +145,50 @@ describe("body classification", () => {
     expect(failureTag(await Effect.runPromiseExit(classifySlackBody({ challenge: "x" })))).toBe("SlackBodyMalformed");
   });
 
+  it("REJECTS an otherwise-valid message with no event_id, rather than pass it through unkeyed", async () => {
+    // event_id is the ONLY idempotency key: Slack's retries reuse it but carry a
+    // fresh timestamp + signature, so a body hash would mint a new id per retry
+    // and double-insert. An envelope without one cannot be de-duped, so it is
+    // rejected here — which is what makes SlackMessageRecord.eventId a
+    // non-optional string, and any `eventId ?? <fallback>` downstream dead code.
+    const body = {
+      type: "event_callback",
+      team_id: "T1",
+      event: { type: "message", text: "hi", user: "U1", channel: "C1", ts: "1.2" },
+    };
+    const exit = await Effect.runPromiseExit(classifySlackBody(body));
+    expect(failureTag(exit)).toBe("SlackBodyMalformed");
+  });
+
+  it("reports no-event-id, NOT no-type, when only event_id is missing", async () => {
+    // The type discriminator was present and valid — reporting "no-type" sends
+    // whoever reads the failure looking at the wrong field.
+    const exit = await Effect.runPromiseExit(
+      classifySlackBody({
+        type: "event_callback",
+        team_id: "T1",
+        event: { type: "message", text: "hi", user: "U1", channel: "C1", ts: "1.2" },
+      }),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const failure = Cause.failureOption(exit.cause);
+      expect(Option.isSome(failure) ? Reflect.get(failure.value, "reason") : null).toBe("no-event-id");
+    }
+  });
+
+  it("a message WITH an event_id carries it through as a plain string", async () => {
+    const parsed = await Effect.runPromise(
+      classifySlackBody({
+        type: "event_callback",
+        team_id: "T1",
+        event_id: "Ev123",
+        event: { type: "message", text: "hi", user: "U1", channel: "C1", ts: "1.2" },
+      }),
+    );
+    expect(parsed).toMatchObject({ kind: "message", record: { eventId: "Ev123" } });
+  });
+
   it("parseSlackBody rejects unparseable JSON", async () => {
     expect(failureTag(await Effect.runPromiseExit(parseSlackBody("{not json")))).toBe("SlackBodyMalformed");
   });

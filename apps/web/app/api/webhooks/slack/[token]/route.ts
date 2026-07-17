@@ -157,8 +157,10 @@ export async function POST(
 
   // Keyed on Slack's event_id, NOT a body hash: Slack's retries reuse the
   // event_id but carry a fresh timestamp and signature, so hashing the body
-  // would mint a new id per retry and double-insert the row.
-  const recordId = slackRecordId(token, request.record.eventId ?? rawBody);
+  // would mint a new id per retry and double-insert the row. `eventId` is
+  // non-optional precisely because an envelope without one cannot be de-duped —
+  // `classifySlackBody` rejects those rather than let them through unkeyed.
+  const recordId = slackRecordId(token, request.record.eventId);
 
   await inngest.send({
     id: recordId,

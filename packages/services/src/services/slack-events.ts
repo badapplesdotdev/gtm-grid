@@ -74,9 +74,12 @@ export class SlackTimestampInvalid extends Data.TaggedError("SlackTimestampInval
   readonly skewMs?: number;
 }> {}
 
-/** The body is not a JSON object, or carries no usable `type` discriminator. */
+/**
+ * The body is not a JSON object, carries no usable `type` discriminator, or —
+ * for a message we would otherwise accept — no `event_id` to de-dupe on.
+ */
 export class SlackBodyMalformed extends Data.TaggedError("SlackBodyMalformed")<{
-  readonly reason: "unparseable" | "not-an-object" | "no-type";
+  readonly reason: "unparseable" | "not-an-object" | "no-type" | "no-event-id";
 }> {}
 
 /**
@@ -342,7 +345,7 @@ export const classifySlackBody = (body: unknown): Effect.Effect<SlackRequest, Sl
     // silently double-inserted.
     const eventId = readString(body, "event_id");
     if (eventId === null) {
-      return Effect.fail(new SlackBodyMalformed({ reason: "no-type" }));
+      return Effect.fail(new SlackBodyMalformed({ reason: "no-event-id" }));
     }
 
     const eventTimeSeconds = readNumber(body, "event_time");
