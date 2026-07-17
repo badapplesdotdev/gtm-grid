@@ -75,11 +75,36 @@ export class SlackTimestampInvalid extends Data.TaggedError("SlackTimestampInval
 }> {}
 
 /**
- * The body is not a JSON object, carries no usable `type` discriminator, or —
- * for a message we would otherwise accept — no `event_id` to de-dupe on.
+ * The body could not be classified. `reason` names WHICH check failed.
+ *
+ * One reason per distinct failure, deliberately — the route collapses every one
+ * of these to the same opaque 401 (a prober must not learn which check it
+ * tripped), so logs and tests are the field's ONLY consumers. A reason shared by
+ * two failures is therefore not a small inaccuracy; it is the entire value of the
+ * field, gone. Three of these used to read "no-type" or "not-an-object" for
+ * failures where the type was present and valid.
+ *
+ * The `event`-prefixed reasons are about the NESTED envelope, not the body:
+ * "no-type" is a body with no discriminator, "no-event-type" is an
+ * `event_callback` whose inner event has none. Same for
+ * "not-an-object"/"no-event".
  */
 export class SlackBodyMalformed extends Data.TaggedError("SlackBodyMalformed")<{
-  readonly reason: "unparseable" | "not-an-object" | "no-type" | "no-event-id";
+  readonly reason:
+    /** Not JSON at all. */
+    | "unparseable"
+    /** JSON, but not an object (an array, a bare string, null). */
+    | "not-an-object"
+    /** An object with no `type` discriminator. */
+    | "no-type"
+    /** A `url_verification` handshake carrying no `challenge` to echo. */
+    | "no-challenge"
+    /** An `event_callback` whose `event` is missing or not an object. */
+    | "no-event"
+    /** An `event_callback` whose inner `event` carries no `type`. */
+    | "no-event-type"
+    /** A message we would otherwise accept, with no `event_id` to de-dupe on. */
+    | "no-event-id";
 }> {}
 
 /**
@@ -311,9 +336,10 @@ export const classifySlackBody = (body: unknown): Effect.Effect<SlackRequest, Sl
 
     if (type === "url_verification") {
       const challenge = readString(body, "challenge");
-      // A handshake with no (or a non-string) challenge is unanswerable.
+      // A handshake with no (or a non-string) challenge is unanswerable. NOT
+      // "no-type": `type` was present and read exactly "url_verification".
       return challenge === null
-        ? Effect.fail(new SlackBodyMalformed({ reason: "no-type" }))
+        ? Effect.fail(new SlackBodyMalformed({ reason: "no-challenge" }))
         : Effect.succeed<SlackRequest>({ kind: "url_verification", challenge });
     }
 
@@ -323,12 +349,15 @@ export const classifySlackBody = (body: unknown): Effect.Effect<SlackRequest, Sl
 
     const event = readObject(body, "event");
     if (event === null) {
-      return Effect.fail(new SlackBodyMalformed({ reason: "not-an-object" }));
+      // The BODY is a fine object; its nested `event` is the problem. Sharing
+      // "not-an-object" with the body check sent readers to the wrong field.
+      return Effect.fail(new SlackBodyMalformed({ reason: "no-event" }));
     }
 
     const eventType = readString(event, "type");
     if (eventType === null) {
-      return Effect.fail(new SlackBodyMalformed({ reason: "no-type" }));
+      // The body's `type` said "event_callback"; the INNER event has none.
+      return Effect.fail(new SlackBodyMalformed({ reason: "no-event-type" }));
     }
     if (eventType !== "message" && eventType !== "app_mention") {
       return Effect.succeed<SlackRequest>({ kind: "ignored", reason: `event:${eventType}` });
