@@ -106,7 +106,6 @@ describe("requiresSerializedRefresh", () => {
     expect(requiresSerializedRefresh(RefreshPolicy.Rotating(1))).toBe(true);
     expect(requiresSerializedRefresh(RefreshPolicy.Proactive(1))).toBe(false);
     expect(requiresSerializedRefresh(RefreshPolicy.None)).toBe(false);
-    expect(requiresSerializedRefresh(RefreshPolicy.None)).toBe(false);
   });
 });
 
