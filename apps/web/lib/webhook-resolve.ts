@@ -1,10 +1,19 @@
 /**
- * Token → webhook config, via the secret-gated worker endpoint.
+ * Token → webhook config, and the Slack tenant lookup, over the secret-gated
+ * worker endpoints.
  *
- * Extracted verbatim from `app/api/webhooks/[token]/route.ts` so the Slack
- * Events receiver (`app/api/webhooks/slack/[token]/route.ts`) resolves tokens
- * through exactly the same path. Two receivers hand-rolling the same
- * worker-secret fetch is how they drift — one gets a fix and the other doesn't.
+ * Extracted from `app/api/webhooks/[token]/route.ts` so the Slack Events
+ * receiver (`app/api/webhooks/slack/[token]/route.ts`) resolves tokens through
+ * exactly the same path. Two receivers hand-rolling the same worker-secret fetch
+ * is how they drift — one gets a fix and the other doesn't.
+ *
+ * That argument did not go far enough on the first pass. This module was
+ * extracted VERBATIM, which duplicated `workerBaseUrl`/`workerSecret`/the
+ * bearer-POST that `lib/inngest/worker-client.ts` already had — so it fixed the
+ * drift between the two RECEIVERS while creating the same drift, of the same
+ * auth contract, between the receivers and the engine's store client. The HTTP
+ * half now lives once in `lib/worker-call.ts`; what remains here is the part
+ * that is genuinely webhook-specific: the response SHAPE.
  *
  * Slack differs from the generic receiver ONLY in how a request authenticates
  * (its own `X-Slack-Signature` v0 HMAC, over a global signing secret, rather
@@ -12,7 +21,7 @@
  * token, the mapping, the Inngest event — is shared.
  */
 
-import { resolveSiteUrl } from "./site-url";
+import { callWorker } from "./worker-call";
 import type { MappingEntry } from "./webhook-mapping";
 
 /** The resolved webhook config the worker route returns (or `null`). */
@@ -35,42 +44,12 @@ export interface ResolvedWebhook {
 }
 
 /**
- * Resolve the base URL of the apps/web deployment serving the worker endpoints
- * — `SITE_URL` when configured, else the Vercel-injected deployment URL.
- */
-export function workerBaseUrl(): string {
-  return resolveSiteUrl();
-}
-
-/** Resolve the shared worker bearer secret, failing closed when unset. */
-export function workerSecret(): string {
-  const secret = process.env.WEBHOOK_WORKER_SECRET;
-  if (secret === undefined || secret === "") {
-    throw new Error("WEBHOOK_WORKER_SECRET is not configured");
-  }
-  return secret;
-}
-
-/**
  * Resolve a token to its webhook config (or `null`) via the secret-gated
  * endpoint. Unknown AND disabled tokens both resolve to `null`, so callers
  * cannot leak which by returning different errors.
  */
 export async function resolveToken(token: string): Promise<ResolvedWebhook | null> {
-  const res = await fetch(`${workerBaseUrl()}/api/worker/resolveToken`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${workerSecret()}`,
-    },
-    body: JSON.stringify({ token }),
-  });
-  if (!res.ok) {
-    throw new Error(`resolveToken failed: ${res.status} ${res.statusText}`);
-  }
-  const text = await res.text();
-  if (text === "") return null;
-  const parsed: unknown = JSON.parse(text);
+  const parsed = await callWorker("/api/worker/resolveToken", { token });
   return parsed === null ? null : (parsed as ResolvedWebhook);
 }
 
@@ -88,20 +67,7 @@ export async function resolveToken(token: string): Promise<ResolvedWebhook | nul
  * input).
  */
 export async function slackTeamForWorkspace(workspaceId: string): Promise<string | null> {
-  const res = await fetch(`${workerBaseUrl()}/api/worker/slackTeam`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${workerSecret()}`,
-    },
-    body: JSON.stringify({ workspaceId }),
-  });
-  if (!res.ok) {
-    throw new Error(`slackTeam failed: ${res.status} ${res.statusText}`);
-  }
-  const text = await res.text();
-  if (text === "") return null;
-  const parsed: unknown = JSON.parse(text);
+  const parsed = await callWorker("/api/worker/slackTeam", { workspaceId });
   if (typeof parsed !== "object" || parsed === null) return null;
   const teamId = Reflect.get(parsed, "teamId");
   return typeof teamId === "string" && teamId !== "" ? teamId : null;
