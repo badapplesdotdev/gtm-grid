@@ -1,9 +1,59 @@
 import { describe, expect, it } from "vitest";
 import type { Column, FullTable, Row } from "./api";
-import { applyGridView, matchesFilterGroups, type GridFilterGroup } from "./gridView";
+import { applyAgentGridViewCommand, applyGridView, matchesFilterGroups, type AgentGridViewCommand, type GridFilterGroup, type GridViewState } from "./gridView";
 
 const column = (id: string, type = "text", kind: Column["kind"] = "manual"): Column => ({
   id, name: id, type, kind, provider: null, method: null, fn: null, params: {},
+});
+
+describe("agent grid view commands", () => {
+  const table: FullTable = {
+    id: "t", name: "Leads",
+    columns: [
+      { ...column("email"), name: "Email" },
+      { ...column("score", "number"), name: "Score" },
+      { ...column("status"), name: "Status" },
+    ],
+    rows: [],
+  };
+  const empty: GridViewState = { hiddenColumnIds: [], pinnedColumnIds: [], filterGroups: [] };
+  const command = (sequence: number, name: AgentGridViewCommand["name"], input: Record<string, unknown>): AgentGridViewCommand => ({ sequence, name, input });
+
+  it("hides, shows, and reveals all columns by display name", () => {
+    const hidden = applyAgentGridViewCommand(empty, table, command(1, "set_column_visibility", { table: "Leads", action: "hide", columns: ["Email", "Score"] }));
+    expect(hidden.hiddenColumnIds).toEqual(["email", "score"]);
+    const shown = applyAgentGridViewCommand(hidden, table, command(2, "set_column_visibility", { table: "Leads", action: "show", columns: ["Email"] }));
+    expect(shown.hiddenColumnIds).toEqual(["score"]);
+    expect(applyAgentGridViewCommand(shown, table, command(3, "set_column_visibility", { table: "Leads", action: "show_all" })).hiddenColumnIds).toEqual([]);
+  });
+
+  it("pinning reveals a hidden column and hiding removes its pin", () => {
+    const hidden: GridViewState = { ...empty, hiddenColumnIds: ["email"] };
+    const pinned = applyAgentGridViewCommand(hidden, table, command(1, "set_column_pinning", { table: "t", action: "pin", columns: ["Email"] }));
+    expect(pinned).toMatchObject({ hiddenColumnIds: [], pinnedColumnIds: ["email"] });
+    const hiddenAgain = applyAgentGridViewCommand(pinned, table, command(2, "set_column_visibility", { table: "Leads", action: "hide", columns: ["Email"] }));
+    expect(hiddenAgain).toMatchObject({ hiddenColumnIds: ["email"], pinnedColumnIds: [] });
+  });
+
+  it("replaces filters, resolves names, preserves groups, and clears with an empty list", () => {
+    const filtered = applyAgentGridViewCommand(empty, table, command(7, "set_grid_filters", {
+      table: "leads",
+      groups: [
+        { mode: "any", rules: [{ column: "Status", operator: "equals", value: "Qualified" }, { column: "Score", operator: "greater_than", value: 80 }] },
+        { mode: "all", rules: [{ column: "Email", operator: "is_not_empty" }] },
+      ],
+    }));
+    expect(filtered.filterGroups.map((group) => group.mode)).toEqual(["any", "all"]);
+    expect(filtered.filterGroups[0]?.rules.map((rule) => [rule.columnId, rule.operator, rule.value])).toEqual([
+      ["status", "equals", "Qualified"], ["score", "greater_than", "80"],
+    ]);
+    expect(applyAgentGridViewCommand(filtered, table, command(8, "set_grid_filters", { table: "Leads", groups: [] })).filterGroups).toEqual([]);
+  });
+
+  it("ignores commands for another table or unknown columns", () => {
+    expect(applyAgentGridViewCommand(empty, table, command(1, "set_column_visibility", { table: "Accounts", action: "hide", columns: ["Email"] }))).toBe(empty);
+    expect(applyAgentGridViewCommand(empty, table, command(2, "set_column_visibility", { table: "Leads", action: "hide", columns: ["Missing"] }))).toBe(empty);
+  });
 });
 const row = (id: string, cells: Row["cells"]): Row => ({ id, cells });
 const done = (value: unknown) => ({ value, status: "done" as const, error: null });
