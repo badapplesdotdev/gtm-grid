@@ -60,6 +60,15 @@ const methodSchema = z.object({
   contentType: z.string().optional(),
   /** Override connector-level authentication for a public method. */
   auth: z.boolean().optional(),
+  /**
+   * Treat an HTTP 404 as an expected "no data" result: resolve the call to
+   * `null` (an empty cell) instead of throwing. For enrich-by-identifier
+   * methods where the upstream returns 404 when the record simply doesn't
+   * exist — e.g. Trigify's `{"code":"NOT_FOUND"}` for an unresolvable LinkedIn
+   * URL — a legitimately-missing profile shouldn't look like a failed run or
+   * generate error-tracking noise. Other non-2xx responses still throw.
+   */
+  emptyWhenNotFound: z.boolean().optional(),
   /** Build a GraphQL operation from this method's inputs. Generated operations
    * declare a root field + variable types + selection set; `custom` passes a
    * caller-provided query/variables pair through the same error-aware runtime. */
@@ -334,6 +343,11 @@ async function httpCall(
     if (resp.status === 401 && man.auth?.type === "apiKey") {
       throw new Error(invalidKeyMessage(man));
     }
+    // An expected "record not found" on an enrich-by-identifier method (opted in
+    // via `emptyWhenNotFound`): resolve to no-data rather than throwing, so a
+    // legitimately-missing record leaves an empty cell instead of a failed run
+    // that also gets reported to Error Tracking.
+    if (resp.status === 404 && m.emptyWhenNotFound) return null;
     const detail = typeof data === "string" ? data.slice(0, 300) : JSON.stringify(data).slice(0, 300);
     throw new Error(`${man.name} ${m.id} HTTP ${resp.status}: ${detail}`);
   }

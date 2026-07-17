@@ -8426,6 +8426,7 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
     "category": "enrichment",
     "description": "B2B data enrichment — email finder, mobile finder, and profile & company search.",
     "baseUrl": "https://api.leadmagic.io",
+    "logo": "https://www.google.com/s2/favicons?domain=leadmagic.io&sz=128",
     "auth": {
       "type": "apiKey",
       "header": "X-API-Key",
@@ -95377,6 +95378,7 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
         "verb": "POST",
         "path": "/v1/profile/enrich",
         "credits": 1,
+        "emptyWhenNotFound": true,
         "input": {
           "type": "object",
           "required": [
@@ -95541,6 +95543,7 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
         "verb": "POST",
         "path": "/v1/company/enrich",
         "credits": 1,
+        "emptyWhenNotFound": true,
         "input": {
           "type": "object",
           "required": [
