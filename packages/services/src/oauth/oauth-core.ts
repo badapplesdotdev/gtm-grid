@@ -12,10 +12,22 @@
  * `CrmConnectionService`; HTTP calls carrying a token belong to the per-provider
  * clients; token LIFECYCLE (when to refresh) is `RefreshPolicy` in `adapter.ts`.
  *
- * The state token format is load-bearing and must not drift: a state minted by
- * the pre-refactor code has a 15-minute TTL, so any format change would break
- * every in-flight OAuth handshake at deploy. `oauth-core.test.ts` pins it
- * against a fixture computed independently of this implementation.
+ * The state token format is load-bearing: a minted state has a 15-minute TTL, so
+ * any format change breaks every IN-FLIGHT handshake at deploy — the user sees
+ * the "link expired, try again" page and clicks Connect once more. That is the
+ * known, bounded, self-healing cost of changing it, and it must be a deliberate
+ * decision. `oauth-core.test.ts` pins the format against a fixture computed
+ * independently of this implementation, so drift cannot happen by accident.
+ *
+ * It has been changed ONCE, deliberately:
+ *   v1  `workspaceId\nuserId\nts`
+ *   v2  `provider\nworkspaceId\nuserId\nts`  — see {@link mintState}
+ * v2 exists because v1 was not bound to a provider, and every provider's state
+ * secret falls back to the same `BETTER_AUTH_SECRET`, so ANY provider's state
+ * verified on EVERY provider's callback. v1 states are rejected outright rather
+ * than accepted for compatibility: a transition window would have kept the hole
+ * open for exactly as long as it was worth exploiting, to spare a 15-minute
+ * retry-once blip.
  */
 
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -63,22 +75,37 @@ export const isConfigured = <E extends OAuthNotConfiguredError>(spec: OAuthCoreS
   Effect.sync(() => Boolean(process.env[spec.clientIdEnv] && process.env[spec.clientSecretEnv]));
 
 /**
- * Mint the signed OAuth state for `(workspaceId, userId)`; null when no signing
- * secret exists — callers render "not configured" rather than ever emitting an
- * UNSIGNED state, which would defeat the CSRF gate entirely.
+ * Mint the signed OAuth state for `(provider, workspaceId, userId)`; null when no
+ * signing secret exists — callers render "not configured" rather than ever
+ * emitting an UNSIGNED state, which would defeat the CSRF gate entirely.
+ *
+ * The PROVIDER ID IS IN THE PAYLOAD, and that is the point. Without it the
+ * payload was `workspaceId\nuserId\nts`, and since every provider's
+ * `stateSecretEnv` falls back to the same `BETTER_AUTH_SECRET`, a state minted
+ * for an Attio handshake verified on the Slack and HubSpot callbacks — and vice
+ * versa — for the full 15-minute TTL. These callbacks deliberately require NO
+ * browser session (the desktop opens them with `openExternal`, which carries no
+ * cookie), so the state is the entire trust boundary; it should not also be a
+ * skeleton key across every other handshake.
  */
 export const mintState = <E extends OAuthNotConfiguredError>(spec: OAuthCoreSpec<E>, claims: OAuthStateClaims) =>
   Effect.sync((): string | null => {
     const key = stateSecret(spec);
     if (!key) return null;
-    const payload = `${claims.workspaceId}\n${claims.userId}\n${Date.now()}`;
+    const payload = `${spec.id}\n${claims.workspaceId}\n${claims.userId}\n${Date.now()}`;
     return `${Buffer.from(payload, "utf8").toString("base64url")}.${sign(payload, key)}`;
   });
 
 /**
- * Verify a state token (signature + TTL); null on ANY mismatch — a single
- * null-vs-throw surface keeps callers from distinguishing "forged" from
- * "expired", which is not information an attacker should get.
+ * Verify a state token (provider + signature + TTL); null on ANY mismatch — a
+ * single null-vs-throw surface keeps callers from distinguishing "forged" from
+ * "expired" from "wrong provider", which is not information an attacker should
+ * get.
+ *
+ * The provider check is belt AND braces: a cross-provider state already fails
+ * here on the field compare, and would ALSO fail the MAC if the two providers
+ * had distinct `stateSecretEnv` values set. The field compare is what holds when
+ * they both fall back to `BETTER_AUTH_SECRET`, which is the default deployment.
  */
 export const verifyState = <E extends OAuthNotConfiguredError>(spec: OAuthCoreSpec<E>, token: string) =>
   Effect.sync((): OAuthStateClaims | null => {
@@ -92,8 +119,11 @@ export const verifyState = <E extends OAuthNotConfiguredError>(spec: OAuthCoreSp
     const expBuf = Buffer.from(expected);
     // Length-check FIRST: timingSafeEqual throws on a length mismatch.
     if (macBuf.length !== expBuf.length || !timingSafeEqual(macBuf, expBuf)) return null;
-    const [workspaceId, userId, issuedAt] = payload.split("\n");
-    if (!workspaceId || !userId || !issuedAt) return null;
+    const [provider, workspaceId, userId, issuedAt] = payload.split("\n");
+    if (!provider || !workspaceId || !userId || !issuedAt) return null;
+    // A state minted for another provider's handshake is not valid here, even
+    // though it is genuinely signed by us.
+    if (provider !== spec.id) return null;
     const ts = Number(issuedAt);
     if (!Number.isFinite(ts) || Date.now() - ts > STATE_TTL_MS) return null;
     return { workspaceId, userId };

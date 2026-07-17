@@ -136,6 +136,16 @@ export const needsRefresh = (tokens: OAuthTokens, policy: RefreshPolicy, now: nu
  * routes match on its exact tag to decide whether to render the setup page.
  */
 export interface OAuthCoreSpec<E extends OAuthNotConfiguredError> {
+  /**
+   * Stable provider id. Doubles as the credential slot, so it MUST match the
+   * connector id — and it is part of the SIGNED state payload.
+   *
+   * Lives on the CORE spec, not just {@link OAuthProviderSpec}, because state
+   * binding is a PROTOCOL concern: without it `mintState`/`verifyState` cannot
+   * tell which handshake a state belongs to, so every provider's state verified
+   * on every other provider's callback for the full 15-minute TTL.
+   */
+  readonly id: string;
   /** DISPLAY name, used verbatim in error copy ("Attio", "HubSpot", "Slack"). */
   readonly displayName: string;
   readonly authorizeUrl: string;
@@ -166,8 +176,6 @@ export type TokenRequestKind = "exchange" | "refresh";
 
 /** A full provider definition: protocol mechanics + lifecycle + identity. */
 export interface OAuthProviderSpec<E extends OAuthNotConfiguredError> extends OAuthCoreSpec<E> {
-  /** Stable id. Doubles as the credential slot, so it MUST match the connector id. */
-  readonly id: string;
   /** The `_tag` of the error `notConfigured` builds; web routes match on it. */
   readonly notConfiguredTag: string;
   /** When and how this provider's tokens must be renewed. */

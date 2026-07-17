@@ -102,6 +102,28 @@ Slack at a token. If a policy must bind BOTH ingresses, put it in
 `WebhookService.resolveToken` alongside the `source === "push"` and cloud-access
 gates — not in one route.
 
+### OAuth state is provider-bound (v2), and NOT single-use
+
+The signed state payload is `provider\nworkspaceId\nuserId\nts`. The leading
+provider id was added because every provider's `stateSecretEnv` falls back to the
+same `BETTER_AUTH_SECRET`, so a state minted for an Attio handshake verified on
+the Slack and HubSpot callbacks, and vice versa, for its full 15-minute TTL.
+These callbacks deliberately carry no browser session, so the state IS the trust
+boundary.
+
+**Deploy note:** changing the format invalidates in-flight states. At deploy,
+anyone mid-handshake sees "link expired, try again" and reconnects. Bounded to
+the 15-minute TTL and self-healing.
+
+**Still open, deliberately:** a state remains MULTI-USE within its TTL. Closing
+that needs a single-use nonce, which needs storage (a used-nonce table with TTL
+eviction) — real infrastructure. It is worth less than it looks: each use still
+requires a fresh provider `code`, which providers issue single-use, so a replay
+re-connects the same account rather than escalating. The root risk is a stolen
+state being spent AT ALL, and a nonce only narrows that to once. Binding the
+state to the initiating browser would close it properly, and is exactly what the
+session-less callback gives up.
+
 ## The manual verify gate
 
 Everything below the consent screen is covered automatically (`pnpm test`,
