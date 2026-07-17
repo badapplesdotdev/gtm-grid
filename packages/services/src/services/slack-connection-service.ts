@@ -22,6 +22,7 @@ import type { SecretMap } from "@gtmgrid/cloud";
 import { Effect, Option } from "effect";
 import { CredentialRepo } from "../repositories/credential-repo.js";
 import { CredentialService, type GetForRunError, type SaveCredentialError } from "./credential-service.js";
+import { CryptoService } from "./crypto-service.js";
 import type { OAuthTokens } from "../oauth/types.js";
 
 /**
@@ -98,6 +99,7 @@ export class SlackConnectionService extends Effect.Service<SlackConnectionServic
     effect: Effect.gen(function* () {
       const credentials = yield* CredentialService;
       const repo = yield* CredentialRepo;
+      const crypto = yield* CryptoService;
 
       return {
         /**
@@ -122,6 +124,39 @@ export class SlackConnectionService extends Effect.Service<SlackConnectionServic
               secrets: toSecrets(args.tokens, args.meta),
             })
             .pipe(Effect.asVoid),
+
+        /**
+         * The Slack TEAM this workspace is connected to, for the secret-gated
+         * worker path (no membership — the worker secret is the trust boundary).
+         * `null` when there is no connection or it carries no team.
+         *
+         * Returns ONLY the team id, never the secret map: the sole caller is the
+         * Events receiver, which needs to answer "is this event from the team
+         * this workspace connected?" and has no business holding an access token.
+         *
+         * This exists because Slack's Events API delivers EVERY installation of
+         * an app to ONE app-global Request URL, signed with ONE app-global
+         * signing secret. A valid v0 signature therefore proves only "Slack sent
+         * this on behalf of this APP" — NOT "this came from the workspace that
+         * owns this webhook". Without comparing the team, anyone who installs the
+         * app into their own Slack workspace has their messages inserted as rows
+         * into whichever tenant's webhook the configured URL names.
+         */
+        connectedTeamIdForWorker: (workspaceId: string) =>
+          Effect.gen(function* () {
+            const row = yield* repo.findSharedForWorker({
+              workspaceId,
+              extensionId: SLACK_CONNECTION_SLOT,
+            });
+            if (Option.isNone(row)) return null;
+            const secrets = yield* crypto.decrypt(workspaceId, row.value.secretsEnc);
+            const teamId = secrets.teamId ?? "";
+            return teamId === "" ? null : teamId;
+          }).pipe(
+            // A read failure must FAIL CLOSED at the caller: it returns null, and
+            // the receiver drops the event rather than accepting an unverified one.
+            Effect.catchAll(() => Effect.succeed(null)),
+          ),
 
         /** The connection for a MEMBER (membership is the trust boundary), or None. */
         memberConnection: (

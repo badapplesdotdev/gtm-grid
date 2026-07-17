@@ -66,3 +66,36 @@ export async function resolveToken(token: string): Promise<ResolvedWebhook | nul
   const parsed: unknown = JSON.parse(text);
   return parsed === null ? null : (parsed as ResolvedWebhook);
 }
+
+
+/**
+ * The Slack team a workspace is connected to, or `null`.
+ *
+ * The Events receiver's TENANT GATE. Slack delivers every installation of an app
+ * to ONE app-global Request URL, signed with ONE app-global signing secret, so a
+ * valid v0 signature proves only that Slack sent the request on behalf of this
+ * APP — never that it came from the workspace whose webhook the URL names.
+ * Anyone who installs the app into their own Slack workspace would otherwise
+ * have their messages inserted as rows into that tenant's table (and, with
+ * auto-run, spend that tenant's cloud actions enriching attacker-controlled
+ * input).
+ */
+export async function slackTeamForWorkspace(workspaceId: string): Promise<string | null> {
+  const res = await fetch(`${workerBaseUrl()}/api/worker/slackTeam`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${workerSecret()}`,
+    },
+    body: JSON.stringify({ workspaceId }),
+  });
+  if (!res.ok) {
+    throw new Error(`slackTeam failed: ${res.status} ${res.statusText}`);
+  }
+  const text = await res.text();
+  if (text === "") return null;
+  const parsed: unknown = JSON.parse(text);
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const teamId = Reflect.get(parsed, "teamId");
+  return typeof teamId === "string" && teamId !== "" ? teamId : null;
+}

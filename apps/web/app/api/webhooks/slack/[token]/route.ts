@@ -9,7 +9,7 @@ import { inngest } from "../../../../../lib/inngest/client";
 import { captureServer } from "../../../../../lib/posthog-server";
 import { clientIp, rateLimit } from "../../../../../lib/rate-limit";
 import { applyMapping } from "../../../../../lib/webhook-mapping";
-import { resolveToken } from "../../../../../lib/webhook-resolve";
+import { resolveToken, slackTeamForWorkspace } from "../../../../../lib/webhook-resolve";
 
 /**
  * The Slack Events API receiver. Slack POSTs an event envelope to
@@ -106,6 +106,25 @@ export async function POST(
   const webhook = await resolveToken(token);
   if (webhook === null) {
     return json({ error: "Not found" }, 404);
+  }
+
+  // ── TENANT GATE ───────────────────────────────────────────────────────────
+  // The v0 signature above proves the request came from Slack on behalf of this
+  // APP — it does NOT prove which Slack workspace it came from. The signing
+  // secret and the Events Request URL are app-global, not per-installation, so
+  // events from EVERY workspace that installed the app arrive here, all validly
+  // signed. Without this check, anyone who installs the app into their own Slack
+  // workspace gets their messages inserted as rows into whichever tenant's
+  // webhook the URL names — and with auto-run, enriched at that tenant's expense
+  // on attacker-controlled input.
+  //
+  // Fails CLOSED: no connection, no stored team, or an unreadable one all drop.
+  const expectedTeam = await slackTeamForWorkspace(webhook.workspaceId);
+  if (expectedTeam === null || request.record.team !== expectedTeam) {
+    // ACK 200, not 4xx: Slack retries a non-2xx and eventually disables the
+    // endpoint, and a foreign team's events are not this endpoint's business to
+    // complain about. The response says nothing about which case it was.
+    return json({ ok: true, ignored: "team-mismatch" }, 200);
   }
 
   const payload = slackRecordPayload(request.record);

@@ -378,6 +378,7 @@ export const appLayer = (params: {
   const slackConnectionService = SlackConnectionService.Default.pipe(
     Layer.provide(credentialService),
     Layer.provide(credentialRepo),
+    Layer.provide(CryptoServiceLive),
   );
   const crmSyncService = CrmSyncService.Default.pipe(
     Layer.provide(crmBindingRepo),
@@ -774,6 +775,7 @@ export const TestLayer = (
   const slackConnectionService = SlackConnectionService.Default.pipe(
     Layer.provide(credentialService),
     Layer.provide(credentialRepo),
+    Layer.provide(cryptoService),
   );
   const entitlementService = EntitlementService.Default.pipe(
     Layer.provide(workspaceRepo),

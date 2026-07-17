@@ -65,6 +65,28 @@ skew *is* the grace period.
 Rotation is **irreversible** once enabled on a Slack app. Do not enable it on an
 app whose tokens something else depends on.
 
+## Inbound events: the tenant gate, and a hard limit
+
+A valid Slack signature is **not an authorisation decision.** The signing secret
+and the Events Request URL are **app-global, not per-installation** — every
+workspace that installs the app posts to the same URL, all validly signed. A v0
+signature proves "Slack sent this on behalf of this app"; it says nothing about
+*which* workspace.
+
+The receiver therefore compares the event's `team` against the team the
+webhook's workspace is connected to (`/api/worker/slackTeam`) and drops
+mismatches with an ACK. Without it, anyone who installs the app into their own
+Slack workspace has their messages inserted as rows into whichever tenant's
+webhook the URL names — and with auto-run, enriched at that tenant's expense.
+
+**The limit this exposes:** Slack allows **one Request URL per app**, set by the
+app's owner. So `/api/webhooks/slack/<token>` only works where the customer owns
+the app — i.e. **self-host / BYO**. On the shared cloud app the owner is us, so a
+single tenant's token would be baked into the URL and every other tenant's events
+would now (correctly) be dropped by the tenant gate. Cloud-wide inbound events
+would need a **token-less** URL that routes by `team_id` → connection →
+workspace. Not built; the gate makes the gap safe rather than silent.
+
 ## The manual verify gate
 
 Everything below the consent screen is covered automatically (`pnpm test`,
