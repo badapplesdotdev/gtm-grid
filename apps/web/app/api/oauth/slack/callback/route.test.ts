@@ -149,7 +149,15 @@ describe("callbackResponse — Slack", () => {
       expect(res.status).toBe(200);
       const html = await res.text();
       expect(html).toContain("Acme Slack");
-      expect(html).toContain("gtmgrid://open/slack-connected");
+
+      // The success page must NOT send a Slack user to the CRM route. The
+      // "Open GTM Grid" button is the fallback when the browser doesn't hand off
+      // the gtmgrid:// protocol — the only path where it matters — and it was
+      // hardcoded to /open?to=crm-connected for every provider.
+      expect(html).not.toContain("crm-connected");
+      // Focus the app; the card's poll converges on its own. A slack-connected
+      // destination would be dead until added to three separate allowlists.
+      expect(html).toContain("gtmgrid://open");
 
       // The connection really landed, decryptable, with the team + bot ids.
       const stored = await runtime.runPromise(

@@ -8,7 +8,6 @@
 
 import { type AppServices, WorkspaceRepo } from "@gtmgrid/services";
 import { Effect, Exit, type ManagedRuntime, Option } from "effect";
-import { captureServer } from "../posthog-server";
 import { type CrmPageLink, crmOAuthPage, htmlResponse } from "./oauth-html";
 import type { OAuthRouteAdapter } from "./oauth-providers";
 
@@ -80,7 +79,7 @@ function failurePage(name: string, retry: CrmPageLink): Response {
   );
 }
 
-function successPage(name: string, crmWorkspaceName: string, deepLink: string): Response {
+function successPage(name: string, crmWorkspaceName: string, deepLink: string, fallbackHref: string): Response {
   const named = crmWorkspaceName.trim() !== "";
   return htmlResponse(
     crmOAuthPage({
@@ -90,7 +89,7 @@ function successPage(name: string, crmWorkspaceName: string, deepLink: string): 
       // Fires the deep link instantly (same mechanism as /open); the CTA is the
       // fallback when the browser doesn't hand off to the app.
       redirectTo: deepLink,
-      primary: { href: "/open?to=crm-connected", label: "Open GTM Grid" },
+      primary: { href: fallbackHref, label: "Open GTM Grid" },
     }),
     200,
   );
@@ -166,10 +165,8 @@ export async function callbackResponse(params: {
   if (Exit.isFailure(exit)) return failurePage(name, retryLink(authorizePath, claims.workspaceId));
 
   // 4. Success → analytics + the bounce-into-app page.
-  captureServer("crm_connected", {
-    distinctId: claims.userId,
-    properties: { provider, workspace_id: claims.workspaceId },
-    groups: { workspace: claims.workspaceId },
-  });
-  return successPage(name, exit.value, params.oauth.connectedDeepLink);
+  // The provider emits its OWN typed event: Slack is not a CRM, and every
+  // dashboard keyed on `crm_connected` tracks CRM adoption.
+  params.oauth.captureConnected({ userId: claims.userId, workspaceId: claims.workspaceId });
+  return successPage(name, exit.value, params.oauth.connectedDeepLink, params.oauth.connectedFallbackHref);
 }

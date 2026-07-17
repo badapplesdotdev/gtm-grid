@@ -36,6 +36,7 @@ import {
 } from "@gtmgrid/services";
 import { CrmSyncError } from "@gtmgrid/services";
 import { Effect } from "effect";
+import { captureServer } from "../posthog-server";
 
 export interface CrmOAuthClaims {
   readonly workspaceId: string;
@@ -62,6 +63,16 @@ export interface OAuthRouteAdapter {
   readonly authorizePath: string;
   /** Deep link fired by the success page to hand back to the desktop app. */
   readonly connectedDeepLink: string;
+  /**
+   * Where the success page's "Open GTM Grid" button points when the browser
+   * does NOT hand off the `gtmgrid://` protocol — the only path where that
+   * button matters.
+   *
+   * REQUIRED, deliberately not defaulted to the CRM route: a default is how the
+   * Slack success page ended up sending users to `/open?to=crm-connected`. A new
+   * provider must state where it goes.
+   */
+  readonly connectedFallbackHref: string;
   /** Whether this provider's OAuth app env is configured (drives UI affordances). */
   readonly isConfigured: () => Effect.Effect<boolean, never, AppServices>;
   readonly mintState: (claims: CrmOAuthClaims) => Effect.Effect<string | null, never, AppServices>;
@@ -74,6 +85,15 @@ export interface OAuthRouteAdapter {
    * when the provider doesn't name one.
    */
   readonly persistConnection: (args: PersistConnectionArgs) => Effect.Effect<string, unknown, AppServices>;
+  /**
+   * Emit this provider's "connected" analytics event.
+   *
+   * On the ADAPTER rather than in the callback core because the event map is
+   * typed per-event: a single parameterised `captureServer(name, …)` would lose
+   * that. It also keeps the core free of a `provider === "slack" ? … : …`
+   * branch — the shape this whole refactor removed.
+   */
+  readonly captureConnected: (args: { readonly userId: string; readonly workspaceId: string }) => void;
 }
 
 /** @deprecated Use {@link OAuthRouteAdapter}; kept so existing imports keep compiling. */
@@ -82,7 +102,7 @@ export type CrmOAuthAdapter = OAuthRouteAdapter;
 /** Lift a protocol adapter into the route-layer shape. */
 const routeAdapter = <E extends OAuthNotConfiguredError>(
   adapter: OAuthAdapter<E>,
-  rest: Pick<OAuthRouteAdapter, "provider" | "authorizePath" | "connectedDeepLink" | "persistConnection">,
+  rest: Pick<OAuthRouteAdapter, "provider" | "authorizePath" | "connectedDeepLink" | "connectedFallbackHref" | "persistConnection" | "captureConnected">,
 ): OAuthRouteAdapter => ({
   displayName: adapter.displayName,
   notConfiguredTag: adapter.notConfiguredTag,
@@ -134,18 +154,32 @@ export const ATTIO_OAUTH: OAuthRouteAdapter = routeAdapter(ATTIO_ADAPTER, {
   provider: "attio",
   authorizePath: "/api/crm/attio/authorize",
   connectedDeepLink: "gtmgrid://open/crm-connected",
+  connectedFallbackHref: "/open?to=crm-connected",
   persistConnection: crmPersist("attio", (session) =>
     Effect.flatMap(AttioClient, (c) => c.identifySelf(session)),
   ),
+  captureConnected: ({ userId, workspaceId }) =>
+    captureServer("crm_connected", {
+      distinctId: userId,
+      properties: { provider: "attio", workspace_id: workspaceId },
+      groups: { workspace: workspaceId },
+    }),
 });
 
 export const HUBSPOT_OAUTH: OAuthRouteAdapter = routeAdapter(HUBSPOT_ADAPTER, {
   provider: "hubspot",
   authorizePath: "/api/crm/hubspot/authorize",
   connectedDeepLink: "gtmgrid://open/crm-connected",
+  connectedFallbackHref: "/open?to=crm-connected",
   persistConnection: crmPersist("hubspot", (session) =>
     Effect.flatMap(HubspotClient, (c) => c.identifySelf(session)),
   ),
+  captureConnected: ({ userId, workspaceId }) =>
+    captureServer("crm_connected", {
+      distinctId: userId,
+      properties: { provider: "hubspot", workspace_id: workspaceId },
+      groups: { workspace: workspaceId },
+    }),
 });
 
 /**
@@ -157,7 +191,16 @@ export const HUBSPOT_OAUTH: OAuthRouteAdapter = routeAdapter(HUBSPOT_ADAPTER, {
 export const SLACK_OAUTH: OAuthRouteAdapter = routeAdapter(SLACK_ADAPTER, {
   provider: "slack",
   authorizePath: "/api/oauth/slack/authorize",
-  connectedDeepLink: "gtmgrid://open/slack-connected",
+  /**
+   * Focus the app, don't navigate. `crm-connected` exists so an OPEN CRM wizard
+   * can skip its 2s poll and advance immediately; Slack has no wizard — its
+   * OAuthConnectCard polls and converges on its own. A `slack-connected`
+   * destination would have to be added to THREE allowlists (app/open's DEST_RE,
+   * deepLinkNav's DeepLinkTarget, App.tsx's switch) to do nothing extra, and
+   * until it was in all three the link was simply dead.
+   */
+  connectedDeepLink: "gtmgrid://open",
+  connectedFallbackHref: "/open",
   persistConnection: (args) =>
     Effect.gen(function* () {
       const connection = yield* SlackConnectionService;
@@ -175,6 +218,12 @@ export const SLACK_OAUTH: OAuthRouteAdapter = routeAdapter(SLACK_ADAPTER, {
         },
       });
       return teamName;
+    }),
+  captureConnected: ({ userId, workspaceId }) =>
+    captureServer("slack_connected", {
+      distinctId: userId,
+      properties: { workspace_id: workspaceId },
+      groups: { workspace: workspaceId },
     }),
 });
 
