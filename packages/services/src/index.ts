@@ -489,6 +489,48 @@ export { CRM_DISPLAY_NAMES, type CrmProvider, type CrmClientApi, type CrmSession
 export { CrmClientRegistry } from "./services/crm-client-registry.js";
 export { CrmAuthRegistry } from "./services/crm-auth-registry.js";
 export {
+  OAuthCredentialService,
+  OAUTH_SLOTS,
+  type OAuthSlotSpec,
+} from "./services/oauth-credential-service.js";
+export {
+  SlackConnectionService,
+  SLACK_CONNECTION_SLOT,
+  parseConnection as parseSlackConnection,
+  toSecrets as slackConnectionSecrets,
+  type SlackConnection,
+  type SlackConnectionMeta,
+} from "./services/slack-connection-service.js";
+export {
+  SlackAuth,
+  SLACK_ADAPTER,
+  SLACK_SPEC,
+  SLACK_SCOPES,
+  SlackOAuthNotConfigured,
+} from "./services/slack-auth.js";
+export {
+  verifySlackRequest,
+  readSlackRequest,
+  parseSlackBody,
+  classifySlackBody,
+  checkSlackTimestamp,
+  resolveSlackSigningSecret,
+  slackBasestring,
+  slackSignature,
+  slackRecordPayload,
+  slackRecordId,
+  SLACK_TIMESTAMP_WINDOW_MS,
+  SLACK_SIGNING_SECRET_ENV,
+  SlackSigningSecretNotConfigured,
+  SlackSignatureInvalid,
+  SlackTimestampInvalid,
+  SlackBodyMalformed,
+  type SlackRequest,
+  type SlackRequestError,
+  type SlackRequestHeaders,
+  type SlackMessageRecord,
+} from "./services/slack-events.js";
+export {
   HubspotAuth,
   HUBSPOT_ADAPTER,
   HUBSPOT_SPEC,

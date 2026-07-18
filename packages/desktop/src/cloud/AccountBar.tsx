@@ -19,29 +19,13 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { openExternalUrl } from "./open-external";
 import { type BillingCycle, resolvePlanId } from "@gtmgrid/cloud";
 import { Dialog, DialogContent } from "../components/ui/dialog";
 import type { Id } from "./ids";
 import { cloudEnabled, syncWorkspacePlan } from "./client";
-import { electron } from "../electron";
 
 /** Open a URL in the system browser (Electron when packaged, else a new tab). */
-async function openExternalUrl(url: string): Promise<void> {
-  try {
-    const api = electron();
-    if (api) {
-      await api.openExternal(url);
-      return;
-    }
-  } catch {
-    /* fall through to a browser tab */
-  }
-  const w = (globalThis as { window?: Window }).window;
-  if (!w) return;
-  const tab = w.open(url, "_blank", "noopener");
-  if (!tab) w.location.assign(url);
-}
-
 /** Discord brand mark. */
 const DiscordIcon = (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">

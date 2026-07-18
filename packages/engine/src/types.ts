@@ -248,12 +248,49 @@ export interface AiConfig {
   baseURL?: string;
 }
 
+/**
+ * How a connector authenticates its outbound calls. Both arms ultimately resolve
+ * ONE token out of the flat `MethodContext.secrets` map under `secretKey`, so the
+ * injection path is shared — the arms differ in where that token CAME FROM, and
+ * therefore in what a user must do when it is missing or rejected:
+ *
+ * - `apiKey` — the user pasted a key. Missing/401 ⇒ "check the credential and
+ *   update the key".
+ * - `oauth`  — the token was minted by an OAuth grant against `provider` and is
+ *   refreshed outside the engine. Missing/401 ⇒ "(re)connect the account"; there
+ *   is no key for the user to paste, so key-flavoured copy would be a dead end.
+ *
+ * The engine deliberately knows nothing about the OAuth dance itself (authorize/
+ * refresh live in the cloud service layer) — by the time a method runs, an oauth
+ * connector is just an access token sitting in `secrets`.
+ */
+export type ConnectorAuth =
+  | {
+      type: "apiKey";
+      header?: string;
+      query?: string;
+      /** Which decrypted secret holds the token (default "apiKey"). */
+      secretKey?: string;
+      /** When header is Authorization, the scheme prefix (default "Bearer "). */
+      scheme?: string;
+    }
+  | {
+      type: "oauth";
+      /** OAuth provider id the access token was minted for (e.g. "slack"). */
+      provider: string;
+      header?: string;
+      /** Which decrypted secret holds the access token (default "accessToken"). */
+      secretKey?: string;
+      /** When header is Authorization, the scheme prefix (default "Bearer "). */
+      scheme?: string;
+    };
+
 export interface Connector {
   id: string; // e.g. "ai", "apollo"
   name: string;
   category: string;
   /** Auth requirement; null for built-ins like AI that read from AI provider config. */
-  auth: { type: "apiKey"; header?: string; query?: string } | null;
+  auth: ConnectorAuth | null;
   /** Default outbound throttle for every method (a method may override it stricter). */
   rateLimit?: RateLimit;
   /**

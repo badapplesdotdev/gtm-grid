@@ -204,6 +204,8 @@ interface CloudGridProps {
   onUpgrade?: () => void;
   /** The connector/function catalog for the Functions browser (shared with local). */
   connectors: ConnectorInfo[];
+  /** Connector ids with a shared WORKSPACE credential (cloud). */
+  cloudConnectedExtensionIds?: ReadonlySet<string>;
   /** Open the AI-provider settings (the Functions browser's "configure AI" link). */
   onOpenAiSettings?: () => void;
   /** Open the pipeline picker in the context of this table. */
@@ -227,6 +229,7 @@ export function CloudGrid({
   tableId,
   workspaceId,
   connectors,
+  cloudConnectedExtensionIds,
   onOpenAiSettings,
   onAutomate,
   openWebhookToken,
@@ -1042,6 +1045,7 @@ export function CloudGrid({
           projectTables={projectTablesQ.data}
           fetchTableColumns={session !== null ? fetchTableColumns : undefined}
           currentTableId={String(table.id)}
+          cloudConnectedExtensionIds={cloudConnectedExtensionIds}
           onClose={() => setEditCol(null)}
           onSaved={(run) => {
             const colId = editCol.id;

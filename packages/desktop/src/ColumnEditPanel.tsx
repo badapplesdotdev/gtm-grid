@@ -68,6 +68,7 @@ function MappingField({
   method,
   optionSource,
   allValues,
+  cloudTableId,
 }: {
   paramKey: string;
   required: boolean;
@@ -82,6 +83,21 @@ function MappingField({
   /** Current values of the sibling fields, so a dependent dropdown (e.g.
    *  campaign_id) can pass a required parent value (e.g. workspace_id). */
   allValues?: Record<string, string>;
+  /**
+   * The CLOUD table this picker belongs to, when the project is cloud-backed.
+   *
+   * Sourced from `currentTableId`, NOT `tableId`: CloudGrid deliberately omits
+   * `tableId` (it gates the Try-on-rows preview, which the local sidecar cannot
+   * run against a cloud table), so keying off it would have made this a silent
+   * no-op on exactly the projects it exists to fix.
+   *
+   * Forwarded to `/api/options` so the sidecar resolves the option source with
+   * the WORKSPACE's credential rather than the local SQLite one. Without it a
+   * cloud project's picker reported the connector "not connected" while the
+   * Tools panel — reading cloud state — said Connected. Undefined on a local
+   * project, where the local credential is the right one.
+   */
+  cloudTableId?: string;
 }) {
   const ref = pureColumnRef(value);
   const matched = ref ? columns.find((c) => c.name === ref) : undefined;
@@ -119,7 +135,7 @@ function MappingField({
     setOptLoading(true);
     setOptErr("");
     try {
-      const r = await api.fieldOptions({ provider: provider!, method: method!, field: paramKey, search: q, values: allValues });
+      const r = await api.fieldOptions({ provider: provider!, method: method!, field: paramKey, search: q, values: allValues, tableId: cloudTableId });
       if (r.error) throw new Error(r.error);
       setOptions(r.options ?? []);
     } catch (e) {
@@ -1114,6 +1130,7 @@ export function ColumnEditPanel({
   projectTables,
   fetchTableColumns,
   currentTableId,
+  cloudConnectedExtensionIds,
 }: {
   column: Column;
   /** All of the table's columns (the panel filters out the edited one). */
@@ -1138,6 +1155,15 @@ export function ColumnEditPanel({
   /** The edited column's own table id — excluded from push targets (the engine
    *  rejects self-push; self-lookup stays allowed). */
   currentTableId?: string;
+  /**
+   * Connector ids with a SHARED workspace (cloud) credential.
+   *
+   * `api.extensions()` reports `connected` from the LOCAL SQLite store only, so
+   * on a cloud project every connector read as disconnected — the panel said
+   * "No Slack API key" while the Tools panel, which already merges this set
+   * (Panels.tsx), said Connected. Same merge, same source of truth.
+   */
+  cloudConnectedExtensionIds?: ReadonlySet<string>;
 }) {
   const gridApi = useColumnApi();
   const isFormula = column.provider === "formula" || column.fn === "formula.eval";
@@ -1240,6 +1266,11 @@ export function ColumnEditPanel({
       .catch(() => { if (on) setExt(null); });
     return () => { on = false; };
   }, [isEnrichment, column.provider, connector?.requiresCredential]);
+  // LOCAL credential (from the sidecar) OR a shared WORKSPACE one (cloud). Either
+  // makes a run work, so either must clear the warning.
+  const credentialConnected =
+    (ext?.connected ?? false) ||
+    (column.provider ? cloudConnectedExtensionIds?.has(column.provider) ?? false : false);
 
   useEffect(() => {
     if (!isAi) return;
@@ -1299,6 +1330,7 @@ export function ColumnEditPanel({
         value={params[k] ?? ""}
         onChange={(v) => setParams((prev) => ({ ...prev, [k]: v }))}
         columns={otherColumns}
+        cloudTableId={currentTableId}
         provider={column.provider}
         method={column.method}
         optionSource={methodInfo?.options?.[k] ?? null}
@@ -1418,9 +1450,16 @@ export function ColumnEditPanel({
         {/* ── Account / credential status ── */}
         {isEnrichment && connector?.requiresCredential && ext !== undefined && (
           <div className="cep-account">
-            <span className={`cep-account-dot${ext?.connected ? " on" : ""}`} />
+            <span className={`cep-account-dot${credentialConnected ? " on" : ""}`} />
             <span className="cep-account-text">
-              {ext?.connected ? `${identity.providerName} account connected` : `No ${identity.providerName} API key — runs will fail`}
+              {credentialConnected
+                ? `${identity.providerName} account connected`
+                : /* NOT "No API key": an OAuth connector like Slack has no key to
+                     paste, so that copy sent people hunting for a field that does
+                     not exist. `missingCredentialMessage` in the engine's
+                     manifest.ts already makes this distinction; this is the same
+                     rule, worded for a status line. */
+                  `${identity.providerName} not connected — runs will fail`}
             </span>
             {onOpenExtension && column.provider && (
               <button className="ai-link" onClick={() => { onClose(); onOpenExtension(column.provider!); }}>

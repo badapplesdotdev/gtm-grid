@@ -8,6 +8,8 @@
 export const API_BASE = (import.meta as any).env?.VITE_API ?? "http://127.0.0.1:8787";
 const BASE = API_BASE;
 
+import { getStoredAuthToken } from "./cloud/client";
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, {
     ...init,
@@ -217,11 +219,28 @@ export const api = {
   // (e.g. listCampaigns) using the connector's stored key and returns the
   // name→id choices for the column-editor dropdown. `search` filters server-side
   // when the source endpoint supports it.
-  fieldOptions: (body: { provider: string; method: string; field: string; search?: string; values?: Record<string, string> }) =>
-    http<{ options?: FieldOption[]; error?: string }>("/api/options", {
+  // CLOUD-AWARE. When `tableId` names a cloud table AND a signed-in session
+  // exists, the apps/web url + bearer token ride along so the sidecar resolves
+  // the option source with the WORKSPACE credential (Postgres) instead of the
+  // local SQLite one. Both are read here rather than threaded through React:
+  // `getStoredAuthToken` is a module accessor and VITE_API_URL is build-time, so
+  // the picker needs no new props beyond the table it belongs to.
+  //
+  // Omitting them (local project, or signed out) leaves the server on its
+  // existing local-credential path — this widens behaviour, it does not change
+  // the local one.
+  fieldOptions: (body: { provider: string; method: string; field: string; search?: string; values?: Record<string, string>; tableId?: string }) => {
+    const apiUrl = ((import.meta as any).env?.VITE_API_URL as string | undefined) ?? "";
+    const token = getStoredAuthToken();
+    const cloud =
+      body.tableId && apiUrl !== "" && token
+        ? { apiUrl, token, tableId: body.tableId }
+        : {};
+    return http<{ options?: FieldOption[]; error?: string }>("/api/options", {
       method: "POST",
-      body: JSON.stringify(body),
-    }),
+      body: JSON.stringify({ ...body, ...cloud }),
+    });
+  },
   generateFormula: (description: string, columns: string[], mode: "formula" | "condition" = "formula") =>
     http<{ formula?: string; error?: string }>("/api/ai/generate-formula", {
       method: "POST",

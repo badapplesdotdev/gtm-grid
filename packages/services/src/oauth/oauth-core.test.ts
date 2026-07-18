@@ -30,6 +30,7 @@ class TestOAuthNotConfigured extends Data.TaggedError("TestOAuthNotConfigured")<
 
 /** Mirrors the Attio shape: no scopes, provider-specific state secret override. */
 const SPEC: OAuthCoreSpec<TestOAuthNotConfigured> = {
+  id: "test-provider",
   displayName: "TestProvider",
   authorizeUrl: "https://app.example.com/authorize",
   tokenUrl: "https://app.example.com/oauth/token",
@@ -75,7 +76,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("state format (byte-identical to the pre-refactor implementation)", () => {
+describe("state format (v2 — provider-bound)", () => {
   it("mints exactly base64url(payload).base64url(hmac-sha256) with a \\n-joined payload", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-04T10:00:00Z"));
@@ -84,8 +85,10 @@ describe("state format (byte-identical to the pre-refactor implementation)", () 
 
     const state = await run(mintState(SPEC, claims));
 
-    // Computed independently of the implementation under test.
-    const payload = `ws_a\nuser_1\n${now}`;
+    // Computed independently of the implementation under test. The leading
+    // `test-provider` is v2: v1 was `ws_a\nuser_1\n${now}`, unbound to any
+    // provider, so it verified on every provider's callback.
+    const payload = `test-provider\nws_a\nuser_1\n${now}`;
     const expected = `${Buffer.from(payload, "utf8").toString("base64url")}.${createHmac(
       "sha256",
       "test-hmac-secret",
@@ -96,8 +99,55 @@ describe("state format (byte-identical to the pre-refactor implementation)", () 
     expect(state).toBe(expected);
   });
 
+  it("REJECTS a v1 (provider-less) state, even though we genuinely signed it", async () => {
+    // The deploy cost, made explicit: in-flight v1 states die rather than being
+    // accepted for compatibility. A transition window would have kept the
+    // cross-provider hole open for exactly as long as it was worth exploiting.
+    const now = Date.now();
+    const v1Payload = `ws_a\nuser_1\n${now}`;
+    const v1 = `${Buffer.from(v1Payload, "utf8").toString("base64url")}.${createHmac(
+      "sha256",
+      "test-hmac-secret",
+    )
+      .update(v1Payload)
+      .digest("base64url")}`;
+
+    expect(await run(verifyState(SPEC, v1))).toBeNull();
+  });
+
   it("keeps the TTL at 15 minutes", () => {
     expect(STATE_TTL_MS).toBe(15 * 60 * 1000);
+  });
+});
+
+describe("provider binding", () => {
+  /** Same shape, same signing key, different id — the real-world default. */
+  const OTHER_SPEC: OAuthCoreSpec<TestOAuthNotConfigured> = { ...SPEC, id: "other-provider" };
+
+  it("REJECTS a state minted for ANOTHER provider sharing the same signing key", async () => {
+    // The whole finding. Every provider's stateSecretEnv falls back to
+    // BETTER_AUTH_SECRET, so the MAC alone cannot tell these apart — an Attio
+    // state verified on the Slack callback for its full TTL. The callbacks
+    // require no session, so the state is the entire trust boundary.
+    const state = await run(mintState(OTHER_SPEC, { workspaceId: "ws_a", userId: "user_1" }));
+    if (state === null) throw new Error("expected state");
+
+    // Genuinely signed by us, and valid on ITS own callback...
+    expect(await run(verifyState(OTHER_SPEC, state))).toEqual({ workspaceId: "ws_a", userId: "user_1" });
+    // ...but not on this one.
+    expect(await run(verifyState(SPEC, state))).toBeNull();
+  });
+
+  it("does not let a forged provider field pass — the id is INSIDE the signature", async () => {
+    // Swapping the id in the payload invalidates the MAC, so binding cannot be
+    // stripped by editing the state.
+    const forged = `${SPEC.id}\nws_a\nuser_1\n${Date.now()}`;
+    const wrongMac = createHmac("sha256", "test-hmac-secret")
+      .update(`other-provider\nws_a\nuser_1\n${Date.now()}`)
+      .digest("base64url");
+    const token = `${Buffer.from(forged, "utf8").toString("base64url")}.${wrongMac}`;
+
+    expect(await run(verifyState(SPEC, token))).toBeNull();
   });
 });
 
@@ -152,7 +202,7 @@ describe("state round-trip", () => {
     vi.stubEnv("TEST_OAUTH_SECRET", "provider-specific-key");
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-04T10:00:00Z"));
-    const payload = `ws_a\nuser_1\n${Date.now()}`;
+    const payload = `${SPEC.id}\nws_a\nuser_1\n${Date.now()}`;
     const state = await run(mintState(SPEC, { workspaceId: "ws_a", userId: "user_1" }));
     const withProviderKey = createHmac("sha256", "provider-specific-key").update(payload).digest("base64url");
     expect(state?.split(".")[1]).toBe(withProviderKey);

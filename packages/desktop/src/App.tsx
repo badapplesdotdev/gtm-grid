@@ -3017,6 +3017,7 @@ export default function App() {
               tableId={cloudTableId}
               workspaceId={activeWorkspace?._id ?? null}
               connectors={connectors}
+              cloudConnectedExtensionIds={workspaceCreds?.connectedExtensionIds}
               onOpenAiSettings={() => setView({ kind: "ai", id: aiProviders[0]?.id ?? "anthropic" })}
               onAutomate={(tableId, outputColumnId) => setView({ kind: "pipelines", attachTableId: String(tableId), attachOutputColumnId: outputColumnId })}
               openWebhookToken={openWebhookToken}

@@ -8426,6 +8426,7 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
     "category": "enrichment",
     "description": "B2B data enrichment — email finder, mobile finder, and profile & company search.",
     "baseUrl": "https://api.leadmagic.io",
+    "logo": "https://www.google.com/s2/favicons?domain=leadmagic.io&sz=128",
     "auth": {
       "type": "apiKey",
       "header": "X-API-Key",
@@ -84463,6 +84464,175 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
         "input": {
           "type": "object",
           "properties": {}
+        }
+      }
+    ]
+  },
+  {
+    "id": "slack",
+    "name": "Slack",
+    "version": "1.0.0",
+    "category": "messaging",
+    "description": "Post messages to Slack channels and look up workspace users and channels.",
+    "baseUrl": "https://slack.com/api",
+    "logo": "https://www.google.com/s2/favicons?domain=slack.com&sz=128",
+    "auth": {
+      "type": "oauth",
+      "provider": "slack"
+    },
+    "rateLimit": {
+      "rpm": 20,
+      "concurrency": 2
+    },
+    "methods": [
+      {
+        "id": "postMessage",
+        "label": "Post Message",
+        "description": "Post a message to a channel. `channel` is a channel id (C…) — pick it by name from the live channel list. Set `thread_ts` to reply in a thread. Requires the chat:write scope, and the app must be a member of the channel.",
+        "result": "ts",
+        "category": "Notify",
+        "verb": "POST",
+        "path": "/chat.postMessage",
+        "credits": 0,
+        "rateLimit": {
+          "rps": 1,
+          "concurrency": 1
+        },
+        "input": {
+          "type": "object",
+          "required": [
+            "channel",
+            "text"
+          ],
+          "properties": {
+            "channel": {
+              "type": "string",
+              "description": "Channel id (C…) to post to"
+            },
+            "text": {
+              "type": "string",
+              "description": "Message text (mrkdwn)"
+            },
+            "thread_ts": {
+              "type": "string",
+              "description": "Parent message ts to reply in a thread"
+            },
+            "reply_broadcast": {
+              "type": "boolean",
+              "description": "With thread_ts, also send the reply to the channel"
+            },
+            "unfurl_links": {
+              "type": "boolean",
+              "description": "Enable link previews (default true for text-only messages)"
+            },
+            "mrkdwn": {
+              "type": "boolean",
+              "description": "Parse *bold*/_italic_ markup (default true)"
+            }
+          }
+        },
+        "options": {
+          "channel": {
+            "method": "listChannels",
+            "itemsPath": "channels",
+            "labelKey": "name",
+            "valueKey": "id",
+            "args": {
+              "limit": 200,
+              "exclude_archived": true,
+              "types": "public_channel,private_channel"
+            }
+          }
+        }
+      },
+      {
+        "id": "listChannels",
+        "label": "List Channels",
+        "description": "List channels in the workspace (cursor-paginated). Also backs the channel picker on postMessage. Requires channels:read (and groups:read for private channels).",
+        "category": "Notify",
+        "verb": "GET",
+        "path": "/conversations.list",
+        "credits": 0,
+        "rateLimit": {
+          "rpm": 20,
+          "concurrency": 2
+        },
+        "input": {
+          "type": "object",
+          "properties": {
+            "types": {
+              "type": "string",
+              "description": "Comma-separated: public_channel,private_channel,mpim,im (default public_channel)"
+            },
+            "exclude_archived": {
+              "type": "boolean",
+              "description": "Omit archived channels"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "1-1000, but keep under 200 (Slack recommends ≤200)"
+            },
+            "cursor": {
+              "type": "string",
+              "description": "Pagination cursor from response_metadata.next_cursor"
+            }
+          }
+        }
+      },
+      {
+        "id": "lookupUserByEmail",
+        "label": "Find User by Email",
+        "description": "Find a workspace user by their email address — returns the full user object including the U… id. Requires users:read.email. Returns ok:false with error 'users_not_found' when nobody matches.",
+        "result": "user.id",
+        "category": "Enrich people",
+        "verb": "GET",
+        "path": "/users.lookupByEmail",
+        "credits": 0,
+        "rateLimit": {
+          "rpm": 50,
+          "concurrency": 3
+        },
+        "input": {
+          "type": "object",
+          "required": [
+            "email"
+          ],
+          "properties": {
+            "email": {
+              "type": "string",
+              "description": "Email address to look up"
+            }
+          }
+        }
+      },
+      {
+        "id": "getUserInfo",
+        "label": "Get User Info",
+        "description": "Get a workspace user's profile by their Slack user id (U…). Requires users:read.",
+        "result": "user.name",
+        "category": "Enrich people",
+        "verb": "GET",
+        "path": "/users.info",
+        "credits": 0,
+        "rateLimit": {
+          "rpm": 100,
+          "concurrency": 5
+        },
+        "input": {
+          "type": "object",
+          "required": [
+            "user"
+          ],
+          "properties": {
+            "user": {
+              "type": "string",
+              "description": "Slack user id (U…)"
+            },
+            "include_locale": {
+              "type": "boolean",
+              "description": "Include the user's locale"
+            }
+          }
         }
       }
     ]

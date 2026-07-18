@@ -19,6 +19,7 @@ import { authRouter } from "./routers/auth";
 import { billingRouter } from "./routers/billing";
 import { credentialsRouter } from "./routers/credentials";
 import { crmRouter } from "./routers/crm";
+import { slackRouter } from "./routers/slack";
 import { extensionsRouter } from "./routers/extensions";
 import { gridRouter } from "./routers/grid";
 import { invitationsRouter } from "./routers/invitations";
@@ -87,6 +88,7 @@ export const appRouter = router({
   signals: signalsRouter,
   /** Member-gated Attio CRM-sync bindings; sync execution runs in Inngest. */
   crm: crmRouter,
+  slack: slackRouter,
   /** Member-gated connector extensions (TRI-3250). */
   extensions: extensionsRouter,
   /**

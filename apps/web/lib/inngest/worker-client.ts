@@ -2,7 +2,7 @@ import type {
   CloudClientLike,
   CloudFunctionRefs,
 } from "@gtmgrid/engine";
-import { resolveSiteUrl } from "../site-url";
+import { callWorker } from "../worker-call";
 
 /**
  * A {@link CloudClientLike} (the structural cloud-store client the engine's
@@ -25,49 +25,6 @@ import { resolveSiteUrl } from "../site-url";
  * header.
  */
 
-/**
- * Resolve the base URL of the apps/web deployment that serves the worker
- * endpoints. The Inngest worker and the `/api/worker/*` routes run in the SAME
- * Next.js deployment — `SITE_URL` when configured, else the Vercel-injected
- * deployment URL (see {@link resolveSiteUrl}).
- */
-function workerBaseUrl(): string {
-  return resolveSiteUrl();
-}
-
-/** Resolve the shared worker bearer secret, failing closed when unset. */
-function workerSecret(): string {
-  const secret = process.env.WEBHOOK_WORKER_SECRET;
-  if (secret === undefined || secret === "") {
-    throw new Error("WEBHOOK_WORKER_SECRET is not configured");
-  }
-  return secret;
-}
-
-/**
- * POST `args` to an `/api/worker/*` route and return the parsed JSON body. A
- * non-2xx response throws (the engine maps it to a typed `GridStoreError`).
- */
-async function call(route: string, args: Record<string, unknown>): Promise<unknown> {
-  const res = await fetch(`${workerBaseUrl()}${route}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${workerSecret()}`,
-    },
-    body: JSON.stringify(args),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(
-      `Worker route ${route} failed: ${res.status} ${res.statusText} ${text}`.trim(),
-    );
-  }
-  // Routes return JSON; tolerate an empty body (returns null).
-  const text = await res.text();
-  return text === "" ? null : JSON.parse(text);
-}
-
 /** The route path a ref resolves to — refs ARE the route strings here. */
 function routeOf(ref: unknown): string {
   if (typeof ref !== "string") {
@@ -82,9 +39,9 @@ function routeOf(ref: unknown): string {
  * authenticated client, which the worker does not use.
  */
 export const workerClient: CloudClientLike = {
-  query: (ref, args) => call(routeOf(ref), args),
-  mutation: (ref, args) => call(routeOf(ref), args),
-  action: (ref, args) => call(routeOf(ref), args),
+  query: (ref, args) => callWorker(routeOf(ref), args),
+  mutation: (ref, args) => callWorker(routeOf(ref), args),
+  action: (ref, args) => callWorker(routeOf(ref), args),
 };
 
 /**

@@ -452,6 +452,49 @@ export interface CloudPreviewRequest {
   readonly limit?: number;
 }
 
+/** Inputs for resolving a live option list (a picker) on a CLOUD table. */
+export interface CloudOptionsRequest {
+  /** The apps/web API base URL (the desktop's `VITE_API_URL`). */
+  readonly apiUrl: string;
+  /** The signed-in member's Better Auth bearer token (localhost trust boundary). */
+  readonly token: string;
+  /** The `tables.id` the column editor is open on — resolves the workspace. */
+  readonly tableId: string;
+  /** The connector the option SOURCE method belongs to. */
+  readonly provider: string;
+  /** The source method that lists the options (e.g. `listChannels`). */
+  readonly method: string;
+  readonly args: Record<string, unknown>;
+}
+
+/**
+ * Dispatch an option-source method against a CLOUD project's credentials.
+ *
+ * WHY THIS EXISTS: `/api/options` used to dispatch through the sidecar's LOCAL
+ * engine, whose creds port reads the local SQLite store. A cloud workspace's
+ * connector credential lives in Postgres, so every picker on a cloud project
+ * resolved no credential and reported the connector "not connected" — while the
+ * Tools panel, reading the cloud state, said Connected. Slack made it obvious
+ * because it is OAuth-only: there is no local key to paste as a workaround, so
+ * the channel picker was permanently empty on a connection that worked fine.
+ *
+ * Mirrors {@link previewCloudColumn}: a worker-backed client, the cloud store as
+ * the creds port, and NOTHING persisted or metered — an option list is a read.
+ * No grid gateway is wired in: an option source lists remote records (channels,
+ * campaigns), never the user's own tables, so handing it a cross-table surface
+ * would widen what a picker can reach for no gain.
+ */
+export async function dispatchCloudOptions(
+  req: CloudOptionsRequest,
+  deps: CloudRunDeps,
+): Promise<unknown> {
+  const client = deps.makeClient(req.apiUrl, req.token);
+  const workspaceId = await resolveWorkspaceId(client, req.tableId);
+  const store = await buildCloudStore(client, req.tableId, workspaceId);
+  const engine = new Engine(deps.config, deps.registry, { store, creds: store });
+  return engine.dispatch(req.provider, req.method, req.args);
+}
+
 /**
  * Dry-run a not-yet-saved function column on a CLOUD table (the "Try on N rows"
  * preview). Mirrors {@link runCloudColumn} — a worker-backed client, the

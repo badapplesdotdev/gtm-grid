@@ -27,7 +27,11 @@ const extensionManifests = readdirSync(extensionDir)
   .map((file) => JSON.parse(readFileSync(join(extensionDir, file), "utf8")))
   .sort((a, b) => a.name.localeCompare(b.name));
 const extensionManifestById = new Map(extensionManifests.map((manifest) => [manifest.id, manifest]));
-const detailedMockExtensionIds = new Set(["attio", "hubspot", "zoominfo", "surfe", "linear", "theirstack", "peopledatalabs", "lemlist"]);
+// Ids the base list already emits, so the GTMGRID_REVIEW_ALL_TOOLS manifest scan
+// must NOT re-add them. "slack" is here despite being DERIVED from its manifest
+// rather than hand-detailed: what this set means is "already in the list", and
+// omitting it emitted Slack twice (the specs only survived on .first()).
+const detailedMockExtensionIds = new Set(["attio", "hubspot", "zoominfo", "surfe", "linear", "theirstack", "peopledatalabs", "lemlist", "slack"]);
 // Keep review mode aligned with the production source of truth in
 // packages/server/src/index.ts. Manifests deliberately do not control this.
 const reviewFeaturedToolIds = new Set(["trigify", "smuggler", "leadmagic", "avtrz"]);
@@ -39,6 +43,9 @@ const peopleDataLabsManifest = JSON.parse(readFileSync(join(extensionDir, "peopl
 const peopleDataLabsLogo = peopleDataLabsManifest.logo;
 const lemlistManifest = JSON.parse(readFileSync(join(extensionDir, "lemlist.json"), "utf8"));
 const lemlistLogo = lemlistManifest.logo;
+// Slack is served from its manifest wholesale (summary AND detail), so there is
+// exactly one source of truth for it: extensions/slack.json.
+const slackManifest = extensionManifestById.get("slack");
 const attioLogo = extensionManifestById.get("attio")?.logo ?? null;
 const hubspotLogo = extensionManifestById.get("hubspot")?.logo ?? null;
 
@@ -52,6 +59,35 @@ function extensionScopes(extensionId) {
   return state.credentials
     .filter((credential) => credential.extensionId === extensionId && credential.scope !== "workspace")
     .map((credential) => credential.scope);
+}
+
+/**
+ * Fail LOUDLY if the tools list would serve the same id twice.
+ *
+ * A duplicate is what happens whenever a tool is added to the base list but not
+ * to `detailedMockExtensionIds`, so the GTMGRID_REVIEW_ALL_TOOLS manifest scan
+ * re-emits it. That happened to Slack and NOTHING caught it: the specs locate
+ * tools with `.first()`, which quietly takes row one and moves on. A mock that
+ * serves a shape the real API never would, without complaint, is worse than no
+ * mock — the suite goes green on a fiction.
+ *
+ * Throwing here surfaces as a 500 and fails every tools spec at once, which is
+ * the correct volume for "the fixture is lying".
+ */
+function assertUniqueExtensionIds(rows) {
+  const seen = new Set();
+  const dupes = new Set();
+  for (const row of rows) {
+    if (seen.has(row.id)) dupes.add(row.id);
+    seen.add(row.id);
+  }
+  if (dupes.size > 0) {
+    throw new Error(
+      `[e2e-mock] /api/extensions would serve duplicate ids: ${[...dupes].join(", ")}. ` +
+        `Add them to detailedMockExtensionIds so the review-mode manifest scan skips them.`,
+    );
+  }
+  return rows;
 }
 
 function manifestSummary(manifest) {
@@ -458,6 +494,97 @@ async function serveStatic(pathname, res) {
   }
 }
 
+/** The tools list the mock serves. Ids are static; only `connected` reads state. */
+function extensionRows() {
+  return [
+      // Minimal Attio tool so the Tools sidebar + panel (incl. the CRM OAuth
+      // management card) are exercisable end-to-end.
+      { id: "attio", name: "Attio", category: "crm", description: "Attio CRM — records, lists and webhooks via the v2 REST API.", featured: !reviewAllTools, methods: 1, connected: false, logo: attioLogo },
+      { id: "hubspot", name: "HubSpot", category: "crm", description: "HubSpot CRM — contacts, companies and lists via the v3 API.", featured: !reviewAllTools, methods: 1, connected: false, logo: hubspotLogo },
+      {
+        id: "zoominfo",
+        name: "ZoomInfo",
+        category: "enrichment",
+        description: "ZoomInfo GTM intelligence, enrichment, Copilot, Studio, Marketing, Platform, and Agent APIs (84 endpoints).",
+        featured: false,
+        methods: 84,
+        connected: state.credentials.some((credential) => credential.extensionId === "zoominfo"),
+        logo: zoomInfoLogo,
+      },
+      {
+        id: "surfe",
+        name: "Surfe",
+        category: "enrichment",
+        description: "Surfe people and company search, enrichment, recommendations, credits, and filters (12 endpoints).",
+        featured: false,
+        methods: 12,
+        connected: state.credentials.some((credential) => credential.extensionId === "surfe"),
+        logo: surfeLogo,
+      },
+      {
+        id: "linear",
+        name: "Linear",
+        category: "project-management",
+        description: "Linear issues, projects, teams, cycles, customers, documents, integrations, and administration (516 active GraphQL operations).",
+        featured: false,
+        methods: 517,
+        connected: state.credentials.some((credential) => credential.extensionId === "linear"),
+        logo: linearLogo,
+      },
+      {
+        id: "theirstack",
+        name: "TheirStack",
+        category: "enrichment",
+        description: "TheirStack jobs, companies, technographics, buying intent, lists, datasets, catalogs, saved searches, and webhooks (51 active endpoints).",
+        featured: false,
+        methods: 51,
+        connected: state.credentials.some((credential) => credential.extensionId === "theirstack"),
+        logo: theirStackLogo,
+      },
+      {
+        id: "peopledatalabs",
+        name: "People Data Labs",
+        category: "enrichment",
+        description: "People Data Labs person, company, search, cleaning, job, changelog, and privacy APIs (27 production operations).",
+        featured: false,
+        methods: 27,
+        connected: state.credentials.some((credential) => credential.extensionId === "peopledatalabs"),
+        logo: peopleDataLabsLogo,
+      },
+      {
+        id: "lemlist",
+        name: "Lemlist",
+        category: "sales-engagement",
+        description: "Lemlist campaigns, leads, CRM, inbox, enrichment, deliverability, sequences, tasks, signals, and webhooks (140 operations).",
+        featured: false,
+        methods: 140,
+        connected: state.credentials.some((credential) => credential.extensionId === "lemlist"),
+        logo: lemlistLogo,
+      },
+      ...(reviewAllTools
+        ? extensionManifests
+            .filter((manifest) => !detailedMockExtensionIds.has(manifest.id))
+            .map(manifestSummary)
+        : []),
+      // Slack: an OAUTH connector rather than an apiKey one — the panel must
+      // render the OAuth card and NO api-key section.
+      //
+      // DERIVED from extensions/slack.json, not hand-written. The hand-written
+      // copy had drifted from the manifest on description, featured AND logo
+      // (and its detail on credits) within one PR of being added — a mock that
+      // contradicts the manifest it stands in for tests nothing.
+      { ...manifestSummary(slackManifest), connected: state.slackConnected },
+  ];
+}
+
+// Validate the FIXTURE at startup, not per request: a duplicate id is a static
+// mistake (a tool in the base list but missing from detailedMockExtensionIds),
+// so it should stop the mock BEFORE any spec runs, with a message naming the
+// fix. Throwing from the async request handler instead just killed the process
+// mid-suite and surfaced as "connection refused" — loud, but about the wrong
+// thing.
+assertUniqueExtensionIds(extensionRows());
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const { pathname, search } = url;
@@ -564,78 +691,7 @@ const server = createServer(async (req, res) => {
   // ── engine sidecar API ────────────────────────────────────────────────
   if (pathname === "/api/health") return sendJson(res, { ok: true, project: "e2e" });
   if (pathname === "/api/functions") return sendJson(res, [zoomInfoFunction, surfeFunction, linearFunction, theirStackFunction, peopleDataLabsFunction, lemlistFunction]);
-  if (pathname === "/api/extensions")
-    return sendJson(res, [
-      // Minimal Attio tool so the Tools sidebar + panel (incl. the CRM OAuth
-      // management card) are exercisable end-to-end.
-      { id: "attio", name: "Attio", category: "crm", description: "Attio CRM — records, lists and webhooks via the v2 REST API.", featured: !reviewAllTools, methods: 1, connected: false, logo: attioLogo },
-      { id: "hubspot", name: "HubSpot", category: "crm", description: "HubSpot CRM — contacts, companies and lists via the v3 API.", featured: !reviewAllTools, methods: 1, connected: false, logo: hubspotLogo },
-      {
-        id: "zoominfo",
-        name: "ZoomInfo",
-        category: "enrichment",
-        description: "ZoomInfo GTM intelligence, enrichment, Copilot, Studio, Marketing, Platform, and Agent APIs (84 endpoints).",
-        featured: false,
-        methods: 84,
-        connected: state.credentials.some((credential) => credential.extensionId === "zoominfo"),
-        logo: zoomInfoLogo,
-      },
-      {
-        id: "surfe",
-        name: "Surfe",
-        category: "enrichment",
-        description: "Surfe people and company search, enrichment, recommendations, credits, and filters (12 endpoints).",
-        featured: false,
-        methods: 12,
-        connected: state.credentials.some((credential) => credential.extensionId === "surfe"),
-        logo: surfeLogo,
-      },
-      {
-        id: "linear",
-        name: "Linear",
-        category: "project-management",
-        description: "Linear issues, projects, teams, cycles, customers, documents, integrations, and administration (516 active GraphQL operations).",
-        featured: false,
-        methods: 517,
-        connected: state.credentials.some((credential) => credential.extensionId === "linear"),
-        logo: linearLogo,
-      },
-      {
-        id: "theirstack",
-        name: "TheirStack",
-        category: "enrichment",
-        description: "TheirStack jobs, companies, technographics, buying intent, lists, datasets, catalogs, saved searches, and webhooks (51 active endpoints).",
-        featured: false,
-        methods: 51,
-        connected: state.credentials.some((credential) => credential.extensionId === "theirstack"),
-        logo: theirStackLogo,
-      },
-      {
-        id: "peopledatalabs",
-        name: "People Data Labs",
-        category: "enrichment",
-        description: "People Data Labs person, company, search, cleaning, job, changelog, and privacy APIs (27 production operations).",
-        featured: false,
-        methods: 27,
-        connected: state.credentials.some((credential) => credential.extensionId === "peopledatalabs"),
-        logo: peopleDataLabsLogo,
-      },
-      {
-        id: "lemlist",
-        name: "Lemlist",
-        category: "sales-engagement",
-        description: "Lemlist campaigns, leads, CRM, inbox, enrichment, deliverability, sequences, tasks, signals, and webhooks (140 operations).",
-        featured: false,
-        methods: 140,
-        connected: state.credentials.some((credential) => credential.extensionId === "lemlist"),
-        logo: lemlistLogo,
-      },
-      ...(reviewAllTools
-        ? extensionManifests
-            .filter((manifest) => !detailedMockExtensionIds.has(manifest.id))
-            .map(manifestSummary)
-        : []),
-    ]);
+  if (pathname === "/api/extensions") return sendJson(res, extensionRows());
   if (pathname === "/api/extensions/zoominfo")
     return sendJson(res, {
       id: "zoominfo",
@@ -757,6 +813,12 @@ const server = createServer(async (req, res) => {
         .map((credential) => credential.scope),
       methods: lemlistMethods,
     });
+  if (pathname === "/api/extensions/slack")
+    // Derived, so `auth: { type: "oauth" }` and every method's credits come from
+    // extensions/slack.json rather than a copy that can disagree with it. The
+    // copy DID disagree: it billed 1 credit per method where the manifest
+    // declares 0.
+    return sendJson(res, { ...manifestDetail(slackManifest), connected: state.slackConnected });
   if (pathname === "/api/extensions/attio")
     return sendJson(res, {
       id: "attio",
