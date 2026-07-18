@@ -2,7 +2,7 @@
 // is selected. Layout mirrors the connections design: a header, Personal/Team/
 // Local scope tabs, a "CONNECTIONS" add-card, and collapsible info sections.
 
-import { useState, useEffect, useCallback, ReactNode, type MouseEvent } from "react";
+import { useState, useEffect, useCallback, useRef, ReactNode, type MouseEvent } from "react";
 import { api, ExtensionDetail, ExtensionInfo, AiProviderInfo, CredentialScope, SkillInfo, SkillDetail } from "./api";
 import { onActivateKey } from "./lib/utils";
 import { Dialog, DialogContent } from "./components/ui/dialog";
@@ -10,6 +10,7 @@ import { aiProviderCredId } from "./cloud/credentials";
 import { Markdown } from "./AgentPanel";
 import { BrandIcon } from "./BrandIcon";
 import { apiClient } from "./cloud/client";
+import { useQueryClient } from "@tanstack/react-query";
 import { OAuthConnectCard, type OAuthCardStatus } from "./cloud/OAuthConnectCard";
 
 /**
@@ -455,11 +456,21 @@ function ConnectionsSection({
 function CrmOAuthSection({ workspaceId, provider }: { workspaceId: string; provider: "attio" | "hubspot" }) {
   const crmName = provider === "hubspot" ? "HubSpot" : "Attio";
   const [status, setStatus] = useState<OAuthCardStatus>({ kind: "loading" });
+  const queryClient = useQueryClient();
+  // Same reason as SlackOAuthSection: an OAuth connect lands server-side, so the
+  // cached credential list never learns about it. The CRM slots are suffixed
+  // ("attio-crm"), so this does not flip the CRM's own apiKey entry — it
+  // refreshes the list the panels read, which is what went stale.
+  const wasConnected = useRef<boolean | null>(null);
 
   const refresh = useCallback(async () => {
     if (!apiClient) return;
     try {
       const s = await apiClient.crm.connectionStatus.query({ workspaceId, provider });
+      if (wasConnected.current !== null && wasConnected.current !== (s?.connected ?? false)) {
+        void queryClient.invalidateQueries({ queryKey: ["credentials", "list", workspaceId] });
+      }
+      wasConnected.current = s?.connected ?? false;
       if (s == null) setStatus({ kind: "disconnected", configured: false });
       else if (s.connected) {
         setStatus({
@@ -509,11 +520,27 @@ function CrmOAuthSection({ workspaceId, provider }: { workspaceId: string; provi
  */
 export function SlackOAuthSection({ workspaceId }: { workspaceId: string }) {
   const [status, setStatus] = useState<OAuthCardStatus>({ kind: "loading" });
+  const queryClient = useQueryClient();
+  // Whether the LAST poll saw a connection, so we only invalidate on a CHANGE
+  // rather than on every 2s tick.
+  const wasConnected = useRef<boolean | null>(null);
 
   const refresh = useCallback(async () => {
     if (!apiClient) return;
     try {
       const s = await apiClient.slack.connectionStatus.query({ workspaceId });
+      // An OAuth connect is written SERVER-side by the callback, so nothing in
+      // the renderer knows the credential list just changed. `useWorkspaceCredentials`
+      // caches that list and is invalidated only by the LOCAL save / copy-key
+      // paths — so after connecting, the card flipped to "Connected" (it polls
+      // this query) while everything driven by `connectedExtensionIds` still read
+      // disconnected: the Tools panel hid the method list behind "Connect your
+      // API key", and the column editor warned "runs will fail". Both were wrong,
+      // and both cleared only on restart.
+      if (wasConnected.current !== null && wasConnected.current !== s.connected) {
+        void queryClient.invalidateQueries({ queryKey: ["credentials", "list", workspaceId] });
+      }
+      wasConnected.current = s.connected;
       if (s.connected) {
         setStatus({ kind: "connected", byName: s.connectedByName, accountLabel: s.teamName || "Slack" });
       } else setStatus({ kind: "disconnected", configured: s.configured });
@@ -658,7 +685,15 @@ export function ExtensionPanel({ id, onConnected, onBack, workspaceCreds, worksp
             ))}
           </div>
         ) : (
-          <div className="method-locked">🔒 Connect your {detail.auth?.credentialLabel ?? "API key"} to see {detail.name}'s methods.</div>
+          <div className="method-locked">
+            {/* An OAUTH connector has no key to paste — "connect your API key"
+                sends the user hunting for a field that does not exist. The engine's
+                `missingCredentialMessage` already draws this distinction; this is
+                the same rule for the locked-methods notice. */}
+            🔒 {detail.auth?.type === "oauth"
+              ? `Connect ${detail.name} to see its methods.`
+              : `Connect your ${detail.auth?.credentialLabel ?? "API key"} to see ${detail.name}'s methods.`}
+          </div>
         )}
       </Collapsible>
 
