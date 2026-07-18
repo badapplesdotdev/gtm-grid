@@ -45,6 +45,9 @@ const usedActions = async (workspaceId = WS): Promise<number> => {
   return Number(rows.rows[0]?.used ?? 0);
 };
 
+// PGlite boots a whole Postgres in WASM (~1.5s idle, far longer under a
+// parallel full-suite run). vitest's DEFAULT 10s hook timeout makes this flaky
+// by construction, and 'Hook timed out' looks nothing like its cause.
 beforeAll(async () => {
   await pg.exec(`
     CREATE TABLE workspaces (
@@ -75,7 +78,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await pg.close();
-});
+}, 60_000);
 
 beforeEach(async () => {
   await pg.exec(

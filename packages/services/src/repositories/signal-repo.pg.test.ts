@@ -65,6 +65,9 @@ const seed = (bindings: readonly SeedBinding[]) =>
     })),
   );
 
+// PGlite boots a whole Postgres in WASM (~1.5s idle, far longer under a
+// parallel full-suite run). vitest's DEFAULT 10s hook timeout makes this flaky
+// by construction, and 'Hook timed out' looks nothing like its cause.
 beforeAll(async () => {
   // Mirror the `signal_bindings` columns the due query reads. No FK references —
   // this table stands alone, which is all listDuePage needs.
@@ -92,7 +95,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await pg.close();
-});
+}, 60_000);
 
 describe("SignalRepo.listDuePage (real Postgres — untyped-CASE regression)", () => {
   it("resolves the parameterised due CASE on Postgres for mixed schedules", async () => {

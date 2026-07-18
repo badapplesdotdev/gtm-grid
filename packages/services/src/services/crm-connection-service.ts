@@ -19,10 +19,17 @@
  * attioWorkspaceId/Name and are read via fallback) so "connected by Morgan ·
  * Trigify GTM" renders without a second store.
  *
- * PROACTIVE REFRESH: sessions minted here refresh the access token up front
- * when it expires within {@link REFRESH_SKEW_MS} (HubSpot tokens live ~30
- * minutes; Attio's rarely carry an expiry). A refresh REFUSAL fails the mint
- * with {@link CrmAuthRevoked} (the connection is dead); transient refresh
+ * REFRESH: sessions minted here renew the access token according to the
+ * PROVIDER'S OWN policy (`RefreshPolicy`, carried by its OAuth adapter and
+ * interpreted by `oauth/token-service.ts`) rather than one hard-coded rule:
+ * Attio and HubSpot are Proactive (refresh ahead of expiry; their refresh
+ * tokens are reusable, so a redundant refresh is harmless), while Slack is
+ * Rotating (single-use refresh tokens, so the refresh must be serialized per
+ * connection). Attio tokens that carry no expiry simply never look stale, which
+ * is how its documented ambiguity is honoured without a policy of its own.
+ *
+ * Unchanged in every case: a refresh REFUSAL fails the mint with
+ * {@link CrmAuthRevoked} (the connection is dead), while transient refresh
  * failures fall back to the stored token — the client's 401 backstop covers it.
  */
 
@@ -31,6 +38,7 @@ import type { SecretMap } from "@gtmgrid/cloud";
 import { CrmAuthRevoked, CrmConnectionMissing, CrmSyncError, type CrmError } from "../crm/errors.js";
 import { CRM_DISPLAY_NAMES, type CrmProvider, type CrmSession, type CrmTokens } from "./crm-client.js";
 import { CrmAuthRegistry } from "./crm-auth-registry.js";
+import { freshTokens as interpretRefreshPolicy } from "../oauth/token-service.js";
 import { CredentialRepo } from "../repositories/credential-repo.js";
 import { CredentialService } from "./credential-service.js";
 import { CryptoService } from "./crypto-service.js";
@@ -45,9 +53,6 @@ export const crmConnectionSlot = (provider: CrmProvider): string => `${provider}
 
 /** @deprecated The Attio slot ("attio-crm") — use {@link crmConnectionSlot}. */
 export const ATTIO_EXTENSION_ID = crmConnectionSlot("attio");
-
-/** Refresh ahead of expiry by this margin (a sync run must outlive its token). */
-const REFRESH_SKEW_MS = 5 * 60 * 1000;
 
 /** Display metadata alongside the tokens. */
 export interface CrmConnectionMeta {
@@ -164,33 +169,43 @@ export class CrmConnectionService extends Effect.Service<CrmConnectionService>()
         );
 
       /**
-       * Proactively refresh tokens that expire within the skew window. A
-       * refusal (CrmAuthRevoked) propagates — the connection is dead and the
-       * binding should pause; anything transient falls back to the stored
-       * token (the client's refresh-on-401 is the backstop).
+       * Refresh tokens the provider's {@link RefreshPolicy} says are stale.
+       *
+       * The decision itself lives in `oauth/token-service.ts` so that all three
+       * providers share one interpretation; this only supplies the I/O. What
+       * used to be an inline `expiringSoon` check hard-coded HubSpot's
+       * proactive-refresh strategy for EVERY provider — fine while the roster
+       * was Attio + HubSpot, but wrong for Slack, whose refresh tokens are
+       * single-use and must be serialized.
        */
       const freshTokens = (
         provider: CrmProvider,
         workspaceId: string,
         tokens: CrmTokens,
-      ): Effect.Effect<CrmTokens, CrmError> => {
-        const expiringSoon =
-          tokens.expiresAtMs !== undefined && tokens.expiresAtMs < Date.now() + REFRESH_SKEW_MS;
-        if (!expiringSoon || tokens.refreshToken === undefined) return Effect.succeed(tokens);
-        const refreshToken = tokens.refreshToken;
-        return auth.refresh(provider, refreshToken).pipe(
-          Effect.map((refreshed): CrmTokens => ({ refreshToken, ...refreshed })),
-          Effect.tap((merged) => persistTokens(provider, workspaceId, merged)),
-          Effect.catchAll((e) =>
-            e._tag === "CrmAuthRevoked"
-              ? Effect.fail(e)
-              : Effect.logWarning("crm proactive refresh failed; using stored token").pipe(
+      ): Effect.Effect<CrmTokens, CrmError> =>
+        interpretRefreshPolicy(tokens, {
+          policy: auth.policyFor(provider),
+          provider: CRM_DISPLAY_NAMES[provider],
+          // Namespaced per (workspace, slot) so two providers in one workspace —
+          // and two workspaces on one provider — never contend with each other.
+          lockKey: `oauth-refresh:${workspaceId}:${crmConnectionSlot(provider)}`,
+          reread: readSecretsForWorker(provider, workspaceId).pipe(Effect.map(parseTokens)),
+          refresh: (refreshToken) => auth.refresh(provider, refreshToken),
+          persist: (t) => persistTokens(provider, workspaceId, t),
+          withTryLock: (args) =>
+            repo.withTryRefreshLock(args).pipe(
+              Effect.catchTag("CredentialRepoError", (e) =>
+                // The lock is an OPTIMISATION, not a correctness gate for the
+                // caller: if we cannot even reach Postgres to take it, failing
+                // the sync outright is worse than serving the stored token,
+                // which is still inside its skew window.
+                Effect.logWarning("could not take the oauth refresh lock; using stored token").pipe(
                   Effect.annotateLogs({ provider, workspaceId, error: e._tag }),
                   Effect.as(tokens),
                 ),
-          ),
-        );
-      };
+              ),
+            ),
+        });
 
       const sessionFrom = (provider: CrmProvider, workspaceId: string, secrets: SecretMap) =>
         Effect.gen(function* () {
