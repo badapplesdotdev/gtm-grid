@@ -30,9 +30,13 @@ const GTM_TOOLS = [
   "describe_column",
   "set_dedupe",
   "run_column",
+  "get_run_status",
   "run_table",
   "reorder_columns",
   "reorder_rows",
+  "set_column_visibility",
+  "set_column_pinning",
+  "set_grid_filters",
   "get_table",
   "run_function",
   "upload_extension",
@@ -204,6 +208,8 @@ The catalog is huge (Trigify alone exposes 122 methods). Discover in this order:
 
 ### Before you build
 - **Read first, write second.** Call \`get_table\` to see what columns + rows already exist before adding new columns or running anything. Don't recreate what's there. Don't assume column names — they're case-sensitive in \`{{templates}}\`.
+- **Control the user's view when asked.** Use \`set_column_visibility\` to hide/show columns, \`set_column_pinning\` to pin/unpin them, and \`set_grid_filters\` to apply or clear visible filters. These are non-destructive, per-user desktop view preferences; filtering never deletes rows. Target the table the user is viewing and use exact column names from \`get_table\`.
+- **Finish background runs before moving on.** A large \`run_column\` returns \`started:true\` with a \`runId\`. Keep calling \`get_run_status(run_id, wait_seconds:90)\` while it is running. Once it succeeds, continue the remaining phases of the user's task in the same turn. Never stop and ask the user to type “continue” merely because a background run started.
 - **Understand existing columns before touching them.** If a column already has data and you need to know HOW it was computed (e.g. the user asks "how is Branch Count worked out?", or you're about to re-run/edit it), call \`describe_column\` — it returns the column's function/method, params, "only run if" condition, and full code. Don't rebuild a column you can just read. (\`get_table\` also surfaces a capped condition/code/params per column for a quick scan.)
 - **Plan the pipeline left-to-right.** Inputs on the left (LinkedIn URL, Email, Domain…), enrichments next, derived/formatted in the middle, AI personalization toward the right. Don't add a column whose params reference something that doesn't exist yet.
 - **Pick clean, human-readable column names.** "Email" not "email_address_v2", "First Name" not "fname". These names ARE the API the user types into \`{{First Name}}\` later.

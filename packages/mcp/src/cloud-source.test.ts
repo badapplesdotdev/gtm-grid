@@ -596,6 +596,19 @@ describe("makeCloudSource.runColumn — runs through the reused cloud GridStore 
     expect([...rowsWritten(client.mutations, "c2")].sort()).toEqual(["r1", "r2"]);
   });
 
+  it("prepares stable ids and an exact row scope for sidecar-owned background runs", async () => {
+    const grid = fourUnfilledRows();
+    const { deps } = depsFor(grid);
+    const prepared = await makeCloudSource(CTX, deps).prepareColumnRun("t1", "Upper", { limit: 2, offset: 1 });
+    expect(prepared).toEqual({
+      tableId: "t1",
+      columnId: "c2",
+      column: "Upper",
+      pending: 2,
+      rowIds: ["r2", "r3"],
+    });
+  });
+
   it("offset + limit runs the NEXT slice (rows 3–4), so 'do the next N' is sequential", async () => {
     const grid = fourUnfilledRows();
     const { deps, client } = depsFor(grid);

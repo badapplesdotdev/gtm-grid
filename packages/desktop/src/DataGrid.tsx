@@ -36,7 +36,7 @@ import { PresenceAvatars } from "./PresenceAvatars";
 import { type GridPresenceView, presenceCellKey } from "./gridPresence";
 import { useGridKeyboardNav } from "./useGridKeyboardNav";
 import { GridViewControls } from "./GridViewControls";
-import { applyGridView, defaultOperatorForColumn, EMPTY_GRID_VIEW, sanitizeGridView, type GridViewState } from "./gridView";
+import { applyAgentGridViewCommand, applyGridView, defaultOperatorForColumn, EMPTY_GRID_VIEW, sanitizeGridView, type AgentGridViewCommand, type GridViewState } from "./gridView";
 
 /** A `<td>` style that also carries the per-cell presence-ring color variable. */
 type PresenceTdStyle = CSSProperties & { "--presence-color"?: string };
@@ -227,9 +227,11 @@ export interface SelRect {
 export function DataGrid({
   controller: c,
   bodyOverride,
+  agentViewCommand,
 }: {
   controller: GridController;
   bodyOverride?: ReactNode;
+  agentViewCommand?: AgentGridViewCommand | null;
 }) {
   const sourceTable = c.table;
   const storageKey = `gtmgrid:grid-view:${sourceTable.id}`;
@@ -251,6 +253,12 @@ export function DataGrid({
       return { tableId: sourceTable.id, view: typeof update === "function" ? update(base) : update };
     });
   }, [sourceTable.id]);
+  const lastAgentViewCommand = useRef(0);
+  useEffect(() => {
+    if (!agentViewCommand || agentViewCommand.sequence <= lastAgentViewCommand.current) return;
+    lastAgentViewCommand.current = agentViewCommand.sequence;
+    setView((current) => applyAgentGridViewCommand(current, sourceTable, agentViewCommand));
+  }, [agentViewCommand, setView, sourceTable]);
   useEffect(() => {
     if (storedView.tableId !== sourceTable.id) return;
     try { localStorage.setItem(storageKey, JSON.stringify(storedView.view)); } catch { /* best-effort view preference */ }

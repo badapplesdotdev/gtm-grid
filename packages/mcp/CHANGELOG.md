@@ -1,5 +1,26 @@
 # @gtmgrid/mcp
 
+## 1.10.0
+
+### Minor Changes
+
+- 5e47d7c: Let connected agents show, hide, and pin columns and apply or clear grid filters. Large column runs now continue in persistent background jobs with status polling, and interrupted agent streams are surfaced clearly instead of appearing successful.
+
+### Patch Changes
+
+- @gtmgrid/engine@1.10.0
+- @gtmgrid/observability@1.10.0
+- @gtmgrid/pipelines@1.10.0
+
+## 1.9.0
+
+### Patch Changes
+
+- Updated dependencies [31dfbed]
+  - @gtmgrid/engine@1.9.0
+  - @gtmgrid/observability@1.9.0
+  - @gtmgrid/pipelines@1.9.0
+
 ## 1.8.0
 
 ### Patch Changes
