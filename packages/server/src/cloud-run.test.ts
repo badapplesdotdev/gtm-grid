@@ -31,6 +31,7 @@ import {
   makeWorkerClient,
   resolveWorkspaceId,
   runCloudColumn,
+  dispatchCloudOptions,
   type CloudRunDeps,
 } from "./cloud-run.js";
 
@@ -668,5 +669,67 @@ describe("clampConcurrency — safe per-run fan-out ceiling (M6 / TRI-3282)", ()
     // Despite the absurd requested concurrency, every row still ran exactly once.
     expect(res).toEqual({ ran: 2, errors: 0 });
     expect(grid.cells.filter((c) => c.columnId === "c_x")).toHaveLength(2);
+  });
+});
+
+describe("dispatchCloudOptions", () => {
+  /**
+   * The picker's credential source. `/api/options` used to dispatch through the
+   * sidecar's LOCAL engine, whose creds port reads local SQLite — so on a cloud
+   * project every option list resolved NO credential and the connector reported
+   * itself "not connected", while the Tools panel (reading cloud state) said
+   * Connected. Invisible for connectors that also take a local key; total for an
+   * OAuth-only one like Slack, where the channel picker was permanently empty on
+   * a connection that worked.
+   */
+  it("resolves the option source with the WORKSPACE credential, via the worker route", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    let sawSecrets: Record<string, string> | undefined;
+    const connector: Connector = {
+      id: "slack",
+      name: "Slack",
+      category: "messaging",
+      requiresCredential: true,
+      methods: [
+        {
+          id: "listChannels",
+          label: "List channels",
+          description: "Lists channels.",
+          inputSchema: {},
+          batchSize: 1,
+          credits: 0,
+          run: async (_input, ctx) => {
+            sawSecrets = ctx.secrets as Record<string, string>;
+            return { channels: [{ id: "C1", name: "general" }] };
+          },
+        } as ConnectorMethod,
+      ],
+    };
+    const registry = new Registry([connector]);
+
+    const { client } = fakeConvex(
+      { columns: [], rows: [], cells: [] },
+      { slack: { accessToken: "xoxe.xoxb-from-postgres" } },
+    );
+    const spyClient: CloudClientLike = {
+      ...client,
+      action: async (ref, args) => {
+        if (String(ref) === "/api/worker/getCredential") seen.push(args);
+        return client.action(ref, args);
+      },
+    };
+
+    const raw = await dispatchCloudOptions(
+      { apiUrl: "https://x", token: "t", tableId: "t1", provider: "slack", method: "listChannels", args: {} },
+      { makeClient: () => spyClient, registry, config: {} } as CloudRunDeps,
+    );
+
+    // It went to the CLOUD credential route, for the workspace the table resolves to.
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[0]).toMatchObject({ extensionId: "slack", scope: "workspace" });
+    // ...and the connector actually received that secret, not an empty map — the
+    // empty map is exactly what produced "Slack is not connected".
+    expect(sawSecrets?.accessToken).toBe("xoxe.xoxb-from-postgres");
+    expect(raw).toMatchObject({ channels: [{ id: "C1" }] });
   });
 });
