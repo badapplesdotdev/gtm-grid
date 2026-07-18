@@ -1,5 +1,15 @@
 # @gtmgrid/mcp
 
+## 1.11.0
+
+### Patch Changes
+
+- Updated dependencies [06473ac]
+- Updated dependencies [46f06fc]
+  - @gtmgrid/engine@1.11.0
+  - @gtmgrid/observability@1.11.0
+  - @gtmgrid/pipelines@1.11.0
+
 ## 1.10.0
 
 ### Minor Changes

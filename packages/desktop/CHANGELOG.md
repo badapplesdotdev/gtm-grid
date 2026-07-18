@@ -1,5 +1,66 @@
 # @gtmgrid/desktop
 
+## 1.11.0
+
+### Minor Changes
+
+- 46f06fc: Slack integration via a provider-agnostic OAuth adapter.
+
+  Extracts the OAuth protocol mechanics out of the ~95% byte-identical
+  `attio-auth.ts`/`hubspot-auth.ts` pair into a shared core, and models each
+  provider's token lifecycle as DATA (`RefreshPolicy`) rather than as doc comments
+  every consumer had to read and hand-honour. Attio and HubSpot are now specs over
+  that core with their behaviour unchanged (their tests pass untouched).
+
+  Adds Slack as the first OAuth-authed grid connector: `extensions/slack.json`
+  (postMessage, listChannels, lookupUserByEmail, getUserInfo) reaching the engine
+  through a new `oauth` arm on the connector manifest's auth schema. Token rotation
+  is enabled and refreshed server-side under a non-blocking advisory lock — Slack's
+  refresh tokens are single-use, so concurrent column runs would otherwise revoke
+  each other's live token mid-run.
+
+  Also adds a Slack Events receiver that converges on the existing inbound-webhook
+  Inngest event.
+
+### Patch Changes
+
+- 06473ac: Cloud connector credentials now resolve everywhere the UI claims they do, and a
+  connector method can name the single value its cell should display.
+
+  **Option pickers on a cloud project resolved no credential.** `/api/options`
+  dispatched through the sidecar's own engine, whose credentials port reads local
+  SQLite — but a cloud workspace's connector credential lives in Postgres. Every
+  live dropdown therefore reported the connector "not connected" while the Tools
+  panel, reading cloud state, said Connected. Invisible for connectors that also
+  accept a pasted key; total for an OAuth-only one like Slack, where the channel
+  picker stayed permanently empty on a connection that worked. The route is now
+  cloud-aware, mirroring the existing cloud preview path.
+
+  **A connector method can declare `result`**, a dot-path naming the one value to
+  store (`"ts"`, `"user.id"`). A cell renders a scalar, so a method returning a
+  whole response object — `chat.postMessage` returns `{ok, channel, ts, message}` —
+  wrote a `done` cell that displayed as EMPTY: the message really was posted and
+  the user saw nothing, indistinguishable from "it never ran". Optional and
+  fail-soft: an unresolvable path returns the raw response, so the 854 existing
+  REST methods are unchanged.
+
+  **Connecting an OAuth account refreshes the credential list.** An OAuth connect
+  is written server-side by the callback, so nothing in the renderer knew the list
+  had changed; the connect card flipped to Connected (it polls a different query)
+  while the Tools panel kept the method list locked behind "Connect your API key"
+  and the column editor warned "runs will fail" — until an app restart.
+
+  Also: the Tools panel no longer offers an api-key form for an OAuth connector.
+  Saving one wrote `{apiKey}` over the same credential row the OAuth grant lives
+  in, destroying the access token, the single-use refresh token and the team
+  metadata — unrecoverable under rotation except by reconnecting.
+
+- Updated dependencies [46f06fc]
+  - @gtmgrid/services@1.11.0
+  - @gtmgrid/analytics@1.11.0
+  - @gtmgrid/cloud@1.11.0
+  - @gtmgrid/pipelines@1.11.0
+
 ## 1.10.0
 
 ### Minor Changes
