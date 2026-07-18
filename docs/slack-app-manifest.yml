@@ -1,0 +1,24 @@
+display_information:
+  name: GTM Grid (dev)
+  description: Programmable GTM spreadsheet - post messages and look up users from a column.
+features:
+  bot_user:
+    display_name: GTM Grid
+    always_online: false
+oauth_config:
+  redirect_urls:
+    - https://REPLACE-WITH-YOUR-TUNNEL/api/oauth/slack/callback
+  scopes:
+    bot:
+      - chat:write
+      - chat:write.public
+      - channels:read
+      - groups:read
+      - im:read
+      - mpim:read
+      - users:read
+      - users:read.email
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
