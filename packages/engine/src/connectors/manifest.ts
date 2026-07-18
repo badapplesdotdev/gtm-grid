@@ -80,6 +80,22 @@ const methodSchema = z.object({
    *  the category is per-method, not per-connector. Omitted/unknown → the
    *  method is listed under "All" only. */
   category: z.string().optional(),
+  /**
+   * Dot-path to the ONE value this method should yield, e.g. `"ts"` or
+   * `"data.id"`. Optional: without it the whole parsed response is returned,
+   * which is what every REST method did before this existed.
+   *
+   * It matters because a cell renders a SCALAR — `csvExport.ts` states the
+   * convention outright ("Objects/arrays … export blank"). So a method that
+   * returns `{ok, ts, channel, message: {...}}` writes a `done` cell that
+   * displays as EMPTY: the run succeeded, the side effect happened, and the user
+   * sees nothing. Naming the receipt turns that into a visible acknowledgement.
+   *
+   * A path that does not resolve falls back to the raw response — i.e. exactly
+   * today's behaviour — so a typo degrades to the status quo rather than
+   * silently blanking a cell that previously held data.
+   */
+  result: z.string().optional(),
   verb: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
   path: z.string(),
   /** JSON Schema for inputs (object). Surfaced to agents + UI as-is. */
@@ -376,7 +392,20 @@ async function httpCall(
     const payload = (data as { data?: Record<string, unknown> }).data;
     return m.graphql.custom ? payload : payload?.[m.graphql.field ?? ""];
   }
-  return data;
+  return m.result === undefined ? data : pickResult(data, m.result);
+}
+
+/**
+ * Follow a dot-path into a parsed response, returning the raw response when the
+ * path does not resolve (see {@link methodSchema.result} for why it fails soft).
+ */
+function pickResult(data: unknown, path: string): unknown {
+  let cur: unknown = data;
+  for (const key of path.split(".")) {
+    if (cur === null || typeof cur !== "object") return data;
+    cur = (cur as Record<string, unknown>)[key];
+  }
+  return cur === undefined ? data : cur;
 }
 
 /**
