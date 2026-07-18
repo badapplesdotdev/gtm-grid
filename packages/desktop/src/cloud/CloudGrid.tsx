@@ -58,6 +58,7 @@ import {
 } from "./useCloudGrid";
 import { isCloudTableMissing } from "../tableTree";
 import { useTablePipelineBindings } from "./usePipelines";
+import type { AgentGridViewCommand } from "../gridView";
 
 /** Fixed cloud column width (px) — cloud columns are not resizable. */
 const CLOUD_COL_W = 180;
@@ -219,6 +220,8 @@ interface CloudGridProps {
    * can self-heal to the table's current linked cloud id (TRI-3312).
    */
   onMissing?: () => void;
+  /** View-only command emitted by Claude/Codex/Cursor through the side panel. */
+  agentViewCommand?: AgentGridViewCommand | null;
 }
 
 export function CloudGrid({
@@ -231,6 +234,7 @@ export function CloudGrid({
   onAutomate,
   openWebhookToken,
   onMissing,
+  agentViewCommand,
 }: CloudGridProps) {
   const { data, loadMore, hasMore, isLoadingMore } = useCloudTablePaged(tableId);
   const session = useCloudSession();
@@ -945,7 +949,7 @@ export function CloudGrid({
       )}
       <SignalStatusStrip tableId={String(table.id)} />
       {workspaceId && <CrmStatusStrip tableId={String(table.id)} workspaceId={workspaceId} onUpgrade={onUpgrade} />}
-      <DataGrid controller={controller} />
+      <DataGrid controller={controller} agentViewCommand={agentViewCommand} />
 
       {detail && (
         <CellDetails

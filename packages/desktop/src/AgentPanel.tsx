@@ -23,6 +23,7 @@ interface ToolCallT {
   name: string;
   input: Record<string, unknown>;
   result?: string;
+  error?: string;
 }
 /** An ordered segment of an assistant turn. The agent streams text and tool
  *  calls interleaved; recording them as a sequence (rather than one text blob +
@@ -92,10 +93,23 @@ function appendText(m: Message, chunk: string): Message {
   return { ...m, parts, text: m.text + chunk };
 }
 
-/** Record a fallback notice (stop/error) only when the turn produced no text. */
-function ensureText(m: Message, chunk: string): Message {
-  if (m.text) return m;
-  return { ...m, parts: [...m.parts, { kind: "text", text: chunk }], text: chunk };
+/** Surface a turn failure even when the agent already streamed earlier text. */
+export function appendErrorNotice(m: Message, message: string): Message {
+  const notice = `\n\n⚠️ ${message}`;
+  const tools = m.tools.map((tool) =>
+    tool.result === undefined && tool.error === undefined ? { ...tool, error: message } : tool,
+  );
+  return { ...appendText(m, notice), tools, error: true };
+}
+
+export function incompleteStreamMessage(
+  agent: AgentKind,
+  state: { sawDone: boolean; sawEnd: boolean; sawError: boolean },
+): string | null {
+  if (state.sawDone || state.sawError) return null;
+  return state.sawEnd
+    ? `${AGENT_LABEL[agent]} stopped before returning a final result. You can safely retry or continue the same task.`
+    : `Connection to ${AGENT_LABEL[agent]} ended unexpectedly. The last tool may still be incomplete.`;
 }
 
 /** Back-fill `parts` for messages loaded from a native transcript, which only
@@ -460,11 +474,12 @@ function ToolCall({ tool, running }: { tool: ToolCallT; running: boolean }) {
   const expandable = tool.result !== undefined && tool.result.length > 0;
   const args = argsLabel(tool.input);
   return (
-    <div className={`tc${running ? " running" : ""}`}>
+    <div className={`tc${running ? " running" : ""}${tool.error ? " failed" : ""}`}>
       <button className="tc-row" onClick={() => expandable && setOpen((o) => !o)} disabled={!expandable}>
-        <span className="tc-status">{running ? <span className="tc-spin" /> : <IconCheck s={10} />}</span>
+        <span className="tc-status">{running ? <span className="tc-spin" /> : tool.error ? <span aria-label="Failed">×</span> : <IconCheck s={10} />}</span>
         <span className="tc-name">{tool.name}</span>
         {args && <span className="tc-args">{args}</span>}
+        {tool.error && <span className="tc-error">Interrupted</span>}
         {tool.result !== undefined && !running && <span className="tc-summary">{summarize(tool.result)}</span>}
         {expandable && <span className={`tc-caret${open ? " open" : ""}`}><IconChevronRight s={11} /></span>}
       </button>
@@ -1015,6 +1030,9 @@ export default function AgentPanel({
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = "";
+      let sawDone = false;
+      let sawEnd = false;
+      let sawError = false;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -1067,15 +1085,24 @@ export default function AgentPanel({
           else if (e.type === "grid") onGridChange();
           else if (e.type === "session") sessionRef.current[a] = e.sessionId;
           else if (e.type === "done") {
+            sawDone = true;
             if (e.sessionId) sessionRef.current[a] = e.sessionId;
             if (e.isError) updateLast((m) => ({ ...m, error: true }));
             capture("agent_turn_completed", { agent: a, mode: effMode, outcome: e.isError ? "error" : "completed" });
-          } else if (e.type === "error") updateLast((m) => ({ ...ensureText(m, e.message), error: true }));
+          } else if (e.type === "end") {
+            sawEnd = true;
+            if (e.sessionId) sessionRef.current[a] = e.sessionId;
+          } else if (e.type === "error") {
+            sawError = true;
+            updateLast((m) => appendErrorNotice(m, e.message));
+          }
         }
       }
+      const incomplete = incompleteStreamMessage(a, { sawDone, sawEnd, sawError });
+      if (incomplete) throw new Error(incomplete);
     } catch (err) {
-      if ((err as any)?.name === "AbortError") updateLast((m) => ensureText(m, "⏹ stopped"));
-      else updateLast((m) => ({ ...ensureText(m, err instanceof Error ? err.message : "stream failed"), error: true }));
+      if ((err as any)?.name === "AbortError") updateLast((m) => appendErrorNotice(m, "Stopped"));
+      else updateLast((m) => appendErrorNotice(m, err instanceof Error ? err.message : "Stream failed"));
     } finally {
       setBusyByAgent((b) => ({ ...b, [a]: false }));
       // Only clear our own slot — a fresh turn for this agent may have already
@@ -1109,7 +1136,7 @@ export default function AgentPanel({
 
   // Derive the thinking-indicator label from the live stream state.
   const lastMsg = messages[messages.length - 1];
-  const runningTool = lastMsg?.tools.find((t) => t.result === undefined);
+  const runningTool = lastMsg?.tools.find((t) => t.result === undefined && t.error === undefined);
   const thinkLabel = runningTool
     ? `Running ${runningTool.name}`
     : lastMsg && lastMsg.role === "assistant" && lastMsg.text
@@ -1246,7 +1273,7 @@ export default function AgentPanel({
                   {m.parts.map((part, pi) => {
                     if (part.kind === "tool") {
                       const t = m.tools[part.ref];
-                      return t ? <ToolCall key={`t${pi}`} tool={t} running={t.result === undefined && busy && isLast} /> : null;
+                      return t ? <ToolCall key={`t${pi}`} tool={t} running={t.result === undefined && t.error === undefined && busy && isLast} /> : null;
                     }
                     if (!part.text) return null;
                     return m.role === "assistant"

@@ -297,6 +297,22 @@ export interface CloudGridSource {
     opts: { force?: boolean; concurrency?: number; limit?: number; offset?: number },
   ) => Promise<{ column: string; ran: number; errors: number }>;
   /**
+   * Resolve a requested run to stable cloud ids and the exact pending row scope.
+   * Large MCP runs hand this payload to the persistent sidecar so the work
+   * outlives the short-lived agent/MCP process.
+   */
+  readonly prepareColumnRun: (
+    tableRef: string,
+    columnRef: string,
+    opts: { force?: boolean; limit?: number; offset?: number },
+  ) => Promise<{
+    tableId: string;
+    columnId: string;
+    column: string;
+    pending: number;
+    rowIds?: string[];
+  }>;
+  /**
    * Call a connector function DIRECTLY (no table) on the cloud project — the
    * cloud twin of the local `engine.dispatch`. Resolves the workspace's shared
    * connector credentials through the worker `getCredential` route (the same
@@ -769,6 +785,27 @@ export function makeCloudSource(
       `No column "${name}" in this table. Valid columns: ${grid.columns.map((c) => c.name).join(", ")}.`,
     );
 
+  const prepareRun = async (
+    tableRef: string,
+    columnRef: string,
+    opts: { force?: boolean; limit?: number; offset?: number },
+  ) => {
+    const { tableId, grid } = await resolveGrid(tableRef);
+    const col = resolveColumn(grid, columnRef);
+    if (!col) throw unknownColumn(columnRef, grid);
+    const cellStatus = new Map<string, string>();
+    for (const cell of grid.cells) {
+      if (cell.columnId === col._id) cellStatus.set(cell.rowId, cell.status);
+    }
+    const candidates = opts.force
+      ? grid.rows
+      : grid.rows.filter((row) => (cellStatus.get(row._id) ?? "empty") !== "done");
+    const scoped = opts.limit != null
+      ? candidates.slice(opts.offset ?? 0, (opts.offset ?? 0) + opts.limit)
+      : candidates;
+    return { tableId, col, scoped };
+  };
+
   return {
     getTable: async (tableRef, opts) => {
       const tableId = await resolveTableId(tableRef);
@@ -918,26 +955,19 @@ export function makeCloudSource(
       return { added: rowIds.length };
     },
 
+    prepareColumnRun: async (tableRef, columnRef, opts) => {
+      const { tableId, col, scoped } = await prepareRun(tableRef, columnRef, opts);
+      return {
+        tableId,
+        columnId: col._id,
+        column: col.name,
+        pending: scoped.length,
+        ...(opts.limit != null ? { rowIds: scoped.map((r) => r._id) } : {}),
+      };
+    },
+
     runColumn: async (tableRef, columnRef, opts) => {
-      const { tableId, grid } = await resolveGrid(tableRef);
-      const col = resolveColumn(grid, columnRef);
-      if (!col) throw unknownColumn(columnRef, grid);
-      // Scope to the next N rows in grid order when `limit` is set, mirroring the
-      // local source: candidates are rows whose cell for this column isn't `done`
-      // (or every row under `force`), in `grid.rows` order, then sliced by
-      // offset/limit. So "run 10 rows" fills the first 10 unfilled cells in the
-      // order the grid displays — not a random subset.
-      const cellStatus = new Map<string, string>();
-      for (const cell of grid.cells) {
-        if (cell.columnId === col._id) cellStatus.set(cell.rowId, cell.status);
-      }
-      const candidates = opts.force
-        ? grid.rows
-        : grid.rows.filter((r) => (cellStatus.get(r._id) ?? "empty") !== "done");
-      const scoped =
-        opts.limit != null
-          ? candidates.slice(opts.offset ?? 0, (opts.offset ?? 0) + opts.limit)
-          : candidates;
+      const { tableId, col, scoped } = await prepareRun(tableRef, columnRef, opts);
       const workspaceId = await deps.resolveWorkspaceId(client, tableId);
       const store = await buildCloudStore(client, tableId, workspaceId);
       // Cross-table access for table.push / table.lookup columns, scoped to

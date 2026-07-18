@@ -42,11 +42,128 @@ export interface GridViewState {
   readonly filterGroups: readonly GridFilterGroup[];
 }
 
+export type AgentGridViewTool =
+  | "set_column_visibility"
+  | "set_column_pinning"
+  | "set_grid_filters";
+
+/** One view-only command forwarded from the active agent turn into DataGrid. */
+export interface AgentGridViewCommand {
+  readonly sequence: number;
+  readonly name: AgentGridViewTool;
+  readonly input: Record<string, unknown>;
+}
+
 export const EMPTY_GRID_VIEW: GridViewState = {
   hiddenColumnIds: [],
   pinnedColumnIds: [],
   filterGroups: [],
 };
+
+const FILTER_OPERATORS = new Set<FilterOperator>([
+  "equals", "not_equals", "contains", "not_contains", "contains_any",
+  "greater_than", "greater_than_or_equal", "less_than", "less_than_or_equal",
+  "before", "after", "is_empty", "is_not_empty", "has_error", "has_no_error",
+  "has_results", "has_no_results", "has_not_run", "is_queued", "is_running",
+  "is_not_running",
+]);
+
+const viewString = (value: unknown): string | null =>
+  typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+
+const viewValue = (value: unknown): string => {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") {
+    try { return JSON.stringify(value); } catch { return String(value); }
+  }
+  return String(value);
+};
+
+/** Apply a side-panel agent's view command without touching the source table. */
+export function applyAgentGridViewCommand(
+  current: GridViewState,
+  table: FullTable,
+  command: AgentGridViewCommand,
+): GridViewState {
+  const tableRef = viewString(command.input.table);
+  if (tableRef === null || ![table.id, table.name].some((value) => value.toLocaleLowerCase() === tableRef.toLocaleLowerCase())) {
+    return current;
+  }
+  const byRef = new Map<string, string>();
+  for (const column of table.columns) {
+    byRef.set(column.id.toLocaleLowerCase(), column.id);
+    byRef.set(column.name.toLocaleLowerCase(), column.id);
+  }
+  const columns = Array.isArray(command.input.columns)
+    ? command.input.columns.flatMap((value) => {
+        const ref = viewString(value);
+        const id = ref === null ? undefined : byRef.get(ref.toLocaleLowerCase());
+        return id === undefined ? [] : [id];
+      })
+    : [];
+
+  if (command.name === "set_column_visibility") {
+    const action = command.input.action;
+    if (action === "show_all") return { ...current, hiddenColumnIds: [] };
+    if (columns.length === 0) return current;
+    const selected = new Set(columns);
+    if (action === "show") {
+      return { ...current, hiddenColumnIds: current.hiddenColumnIds.filter((id) => !selected.has(id)) };
+    }
+    if (action === "hide") {
+      return {
+        ...current,
+        hiddenColumnIds: [...new Set([...current.hiddenColumnIds, ...columns])],
+        pinnedColumnIds: current.pinnedColumnIds.filter((id) => !selected.has(id)),
+      };
+    }
+    return current;
+  }
+
+  if (command.name === "set_column_pinning") {
+    const action = command.input.action;
+    if (action === "unpin_all") return { ...current, pinnedColumnIds: [] };
+    if (columns.length === 0) return current;
+    const selected = new Set(columns);
+    if (action === "unpin") {
+      return { ...current, pinnedColumnIds: current.pinnedColumnIds.filter((id) => !selected.has(id)) };
+    }
+    if (action === "pin") {
+      return {
+        ...current,
+        hiddenColumnIds: current.hiddenColumnIds.filter((id) => !selected.has(id)),
+        pinnedColumnIds: [...new Set([...current.pinnedColumnIds, ...columns])],
+      };
+    }
+    return current;
+  }
+
+  if (!Array.isArray(command.input.groups)) return current;
+  const filterGroups = command.input.groups.flatMap((rawGroup, groupIndex): GridFilterGroup[] => {
+    if (!rawGroup || typeof rawGroup !== "object") return [];
+    const group = rawGroup as { mode?: unknown; rules?: unknown };
+    if (!Array.isArray(group.rules)) return [];
+    const rules = group.rules.flatMap((rawRule, ruleIndex): GridFilterRule[] => {
+      if (!rawRule || typeof rawRule !== "object") return [];
+      const rule = rawRule as { column?: unknown; operator?: unknown; value?: unknown };
+      const columnRef = viewString(rule.column);
+      const columnId = columnRef === null ? undefined : byRef.get(columnRef.toLocaleLowerCase());
+      if (columnId === undefined || typeof rule.operator !== "string" || !FILTER_OPERATORS.has(rule.operator as FilterOperator)) return [];
+      return [{
+        id: `agent-${command.sequence}-rule-${groupIndex}-${ruleIndex}`,
+        columnId,
+        operator: rule.operator as FilterOperator,
+        value: viewValue(rule.value),
+      }];
+    });
+    return rules.length === 0 ? [] : [{
+      id: `agent-${command.sequence}-group-${groupIndex}`,
+      mode: group.mode === "any" ? "any" : "all",
+      rules,
+    }];
+  });
+  return { ...current, filterGroups };
+}
 
 export const VALUELESS_OPERATORS = new Set<FilterOperator>([
   "is_empty",

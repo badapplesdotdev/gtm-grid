@@ -2458,6 +2458,9 @@ body.resizing-agent .agent-panel { transition: none; }
 .tc.running .tc-row { border-color: color-mix(in srgb, var(--accent) 28%, transparent); background: var(--accent-soft); }
 .tc-status { width: 15px; height: 15px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--success); color: #fff; }
 .tc.running .tc-status { background: transparent; color: var(--accent); }
+.tc.failed .tc-row { border-color: color-mix(in srgb, var(--danger) 35%, transparent); background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.tc.failed .tc-status { background: var(--danger); color: #fff; font: 700 13px/1 var(--font-sans); }
+.tc-error { font: 600 11px var(--font-sans); color: var(--danger); white-space: nowrap; }
 .tc-spin { width: 12px; height: 12px; border: 1.5px solid color-mix(in srgb, var(--accent) 30%, transparent); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
 .tc-name { font: 600 12px var(--font-mono); color: var(--text); flex-shrink: 0; }
 .tc-args { font: 11.5px var(--font-mono); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }

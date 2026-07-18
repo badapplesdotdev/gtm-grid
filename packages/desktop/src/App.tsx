@@ -77,6 +77,7 @@ import { resolveActiveTable } from "./cloud/active-table";
 import { type SignalsCloud } from "./SignalsModal";
 // Type-only import (erased at build) so the AgentPanel lazy chunk stays split.
 import type { AgentCloudContext } from "./AgentPanel";
+import type { AgentGridViewCommand, AgentGridViewTool } from "./gridView";
 import type { TableCard } from "./Panels";
 import type { ImportWriter } from "./csvImport";
 import { PipelineEditor, PipelineSidebar, PipelinesHub } from "./Pipelines";
@@ -1371,6 +1372,21 @@ export default function App() {
       ? { workspaceId: agentCloud.workspaceId, tableId: agentCloud.tableId }
       : null,
   );
+  const [agentViewCommand, setAgentViewCommand] = useState<AgentGridViewCommand | null>(null);
+  const agentViewSequence = useRef(0);
+  const handleAgentEvent = useCallback((event: Parameters<typeof onAgentEvent>[0]) => {
+    onAgentEvent(event);
+    if (event.type !== "tool") return;
+    const viewTools = new Set<AgentGridViewTool>([
+      "set_column_visibility", "set_column_pinning", "set_grid_filters",
+    ]);
+    if (!viewTools.has(event.name as AgentGridViewTool)) return;
+    setAgentViewCommand({
+      sequence: ++agentViewSequence.current,
+      name: event.name as AgentGridViewTool,
+      input: event.input,
+    });
+  }, [onAgentEvent]);
   // Trial countdown: whole days left until the active workspace's trial ends
   // (null when not trialing). Drives the in-app "trial ends in N days" banner so
   // users add a card BEFORE the hard lock.
@@ -3007,6 +3023,7 @@ export default function App() {
               openWebhookToken={openWebhookToken}
               onMissing={onCloudTableMissing}
               onUpgrade={() => setShowUpgrade(true)}
+              agentViewCommand={agentViewCommand}
             />
           </Suspense>
         )}
@@ -3132,7 +3149,7 @@ export default function App() {
           activeTable={activeTable}
           activePipeline={activePipeline}
           cloud={agentCloud}
-          onAgentEvent={onAgentEvent}
+          onAgentEvent={handleAgentEvent}
           onResizeStart={startAgentResize}
         />
       </Suspense>
