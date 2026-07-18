@@ -45,7 +45,10 @@ Unset `SLACK_CLIENT_ID` is a supported state: the Tools panel shows a disabled
 Connect button and says Slack isn't set up, rather than opening a broken consent
 screen.
 
-Redirect URL to register: `https://<your-host>/api/oauth/slack/callback`. It is
+Redirect URL to register: `https://<your-host>/api/oauth/slack/callback` —
+**staging is `https://staging.gtmgrid.dev/api/oauth/slack/callback`**. Slack
+requires HTTPS and rejects `http://localhost`, so there is no local-only path;
+use staging (or a tunnel). It is
 sent explicitly on both the authorize and token calls, because Slack silently
 routes to the *first* configured redirect URL when the param is absent and several
 are registered.
