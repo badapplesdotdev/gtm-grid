@@ -41,7 +41,7 @@ import { randomUUID } from "node:crypto";
 import { codexModelOptions, detectAgents, streamClaude, streamCodex, streamCursor, setAgentPath, rescanAgents, generateWithAgent, parseAgentCloud, type AgentKind } from "./agent.js";
 import { localProviderEnv, resolveCloudProviderEnv } from "./provider-env.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
-import { runCloudColumn, previewCloudColumn, defaultCloudRunDeps } from "./cloud-run.js";
+import { runCloudColumn, previewCloudColumn, dispatchCloudOptions, defaultCloudRunDeps } from "./cloud-run.js";
 import { compilePipeline, makePipelineNodeExecutor, pipelineGraphSchema, runPipelineRecord, type PipelineNodeExecutor } from "@gtmgrid/pipelines";
 import { requiredInputKeys, resolveOptionArgs } from "./option-args.js";
 import { corsHeadersFor, isLoopbackHost, isOriginAllowed } from "./cors.js";
@@ -804,7 +804,26 @@ route("POST", "/api/options", async (_p, body) => {
       }
     }
   }
-  const raw = await runLimiter.run(() => engine.dispatch(provider, source.method, args));
+  // CLOUD vs LOCAL credentials. The sidecar's own `engine` resolves credentials
+  // from local SQLite; a cloud workspace's connector credential lives in
+  // Postgres. When the column editor sends cloud context, dispatch through a
+  // cloud-backed engine so the picker sees the SAME credential the run will use.
+  //
+  // Without this every picker on a cloud project reported the connector "not
+  // connected" while the Tools panel said Connected — invisible for connectors
+  // that also accept a local key, total for an OAuth-only one like Slack.
+  const apiUrl = String(body?.apiUrl ?? "").trim();
+  const token = String(body?.token ?? "").trim();
+  const tableId = String(body?.tableId ?? "").trim();
+  const isCloud = apiUrl !== "" && token !== "" && tableId !== "";
+  const raw = await runLimiter.run(() =>
+    isCloud
+      ? dispatchCloudOptions(
+          { apiUrl, token, tableId, provider, method: source.method, args },
+          defaultCloudRunDeps(registry, aiConfig()),
+        )
+      : engine.dispatch(provider, source.method, args),
+  );
   return { options: extractOptions(raw, source) };
 });
 
