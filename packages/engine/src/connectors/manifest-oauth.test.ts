@@ -160,3 +160,47 @@ describe("apiKey manifests are unaffected by the union widening", () => {
     await expect(m.run({}, { secrets: {} })).rejects.toThrow(/FindyMail API key not configured/i);
   });
 });
+
+describe("result: extracting the ONE value a cell can display", () => {
+  /**
+   * A cell renders a SCALAR — csvExport.ts states the convention outright
+   * ("Objects/arrays … export blank"). chat.postMessage returns
+   * `{ok, channel, ts, message:{…}}`, so before `result` the column wrote a
+   * `done` cell that displayed as EMPTY: the message really was posted, the run
+   * really succeeded, and the user saw nothing. That is the worst kind of
+   * failure — indistinguishable from "it never ran".
+   */
+  const runWith = async (methodDef: Record<string, unknown>, body: unknown) => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } })));
+    const man = parseManifest({
+      id: "slack", name: "Slack", baseUrl: "https://slack.com/api",
+      auth: { type: "oauth", provider: "slack" },
+      methods: [{ verb: "POST", path: "/x", description: "d", ...methodDef }],
+    });
+    const m = connectorFromManifest(man).methods[0];
+    return m.run({}, { secrets: { accessToken: "xoxb-x" } } as unknown as MethodContext);
+  };
+
+  it("returns the named field instead of the whole response", async () => {
+    const out = await runWith({ id: "postMessage", result: "ts" },
+      { ok: true, channel: "C1", ts: "1784374172.726039", message: { text: "hi" } });
+    expect(out).toBe("1784374172.726039");
+  });
+
+  it("follows a DOTTED path", async () => {
+    expect(await runWith({ id: "lookupUserByEmail", result: "user.id" },
+      { ok: true, user: { id: "U123", name: "morgan" } })).toBe("U123");
+  });
+
+  it("FAILS SOFT to the raw response when the path does not resolve", async () => {
+    // A typo must degrade to the pre-existing behaviour, never blank a cell that
+    // used to hold data — 854 REST methods rely on that raw return today.
+    expect(await runWith({ id: "m", result: "nope.missing" }, { ok: true, ts: "1.2" }))
+      .toMatchObject({ ok: true, ts: "1.2" });
+  });
+
+  it("without `result`, returns the whole response — unchanged for every existing method", async () => {
+    expect(await runWith({ id: "m" }, { ok: true, ts: "1.2" })).toMatchObject({ ok: true, ts: "1.2" });
+  });
+});
