@@ -133,3 +133,25 @@ describe("parseReleaseNotes — the incoming update's GitHub release body", () =
     expect(parseReleaseNotes(null)).toEqual({ added: [], fixed: [] });
   });
 });
+
+describe("build-channel suffix", () => {
+  const RAW = ["## 1.10.0", "", "- Fixed: a thing", ""].join("\n");
+
+  it("matches a -staging build against its base version", () => {
+    // vite.config.ts appends the channel so an installed app says which backend
+    // it talks to. Without this the changelog silently never appears on staging
+    // — a null return, no error, nothing to notice.
+    expect(changelogSection("1.10.0-staging", RAW)).toContain("a thing");
+    expect(changelogSection("1.10.0-dev", RAW)).toContain("a thing");
+  });
+
+  it("does NOT strip a real prerelease suffix", () => {
+    // 1.10.0-rc.1 may have its own heading; collapsing it into 1.10.0 would show
+    // the wrong release notes.
+    expect(changelogSection("1.10.0-rc.1", RAW)).toBeNull();
+  });
+
+  it("leaves a plain version untouched", () => {
+    expect(changelogSection("1.10.0", RAW)).toContain("a thing");
+  });
+});

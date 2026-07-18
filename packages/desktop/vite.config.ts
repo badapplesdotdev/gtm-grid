@@ -24,10 +24,32 @@ export default defineConfig(({ command, mode }) => {
         "Set it to your apps/web base URL (e.g. https://app.gtmgrid.dev or http://localhost:3000).",
     );
   }
+  // BUILD CHANNEL, derived from the backend the bundle is being pointed at — NOT
+  // a separate flag. The endpoints are baked in at build time, so a staging app
+  // and a production app are different binaries that look identical once
+  // installed; the whole point of the suffix is telling them apart. Deriving it
+  // from VITE_API_URL means the label CANNOT disagree with reality, whereas a
+  // hand-set flag can be forgotten or left stale from the previous build — which
+  // is precisely the failure it exists to prevent.
+  const host = (() => {
+    try {
+      return new URL(apiUrl ?? "").host;
+    } catch {
+      return "";
+    }
+  })();
+  const channel =
+    host === "www.gtmgrid.dev" || host === "gtmgrid.dev"
+      ? null // production: the bare version, as released
+      : host === "staging.gtmgrid.dev"
+        ? "staging"
+        : "dev"; // localhost, tunnels, preview URLs
+  const displayVersion = channel === null ? appVersion : `${appVersion}-${channel}`;
+
   return {
     plugins: [react(), tailwindcss()],
     clearScreen: false,
-    define: { __APP_VERSION__: JSON.stringify(appVersion) },
+    define: { __APP_VERSION__: JSON.stringify(displayVersion) },
     server: { port: 5173, strictPort: true },
     build: {
       outDir: "dist",

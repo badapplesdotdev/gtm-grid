@@ -11,9 +11,21 @@ import rawChangelog from "../CHANGELOG.md?raw";
  * Return the raw markdown body of the `## <version>` section (without the heading),
  * or null if that version has no entry. `raw` is injectable for tests.
  */
+/**
+ * Strip a BUILD-CHANNEL suffix (`-staging`, `-dev`) that `vite.config.ts` appends
+ * to `__APP_VERSION__` so an installed app announces which backend it talks to.
+ *
+ * Only those two exact channels are stripped — NOT any `-…` suffix. A real
+ * prerelease (`1.10.0-rc.1`) can have its own changelog heading and must keep
+ * matching itself.
+ */
+const stripBuildChannel = (version: string): string =>
+  version.replace(/-(staging|dev)$/, "");
+
 export function changelogSection(version: string, raw: string = rawChangelog): string | null {
   const lines = raw.split("\n");
-  const start = lines.findIndex((l) => l.trim() === `## ${version}`);
+  const wanted = stripBuildChannel(version);
+  const start = lines.findIndex((l) => l.trim() === `## ${wanted}`);
   if (start === -1) return null;
   const rest = lines.slice(start + 1);
   const endRel = rest.findIndex((l) => /^##\s/.test(l));
