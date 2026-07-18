@@ -89,6 +89,28 @@ function trustedOrigins(): string[] {
   return origins;
 }
 
+/**
+ * Read the Better Auth signing secret, failing fast with a clear error when it
+ * is unset. Passing no `secret` lets Better Auth silently fall back to its
+ * hardcoded DEFAULT secret and then throw a generic `BetterAuthError` in
+ * production — breaking sign-in/sign-up entirely — so we surface the real cause
+ * here at construction time instead. The same secret also signs CRM OAuth state
+ * (apps/web/lib/trpc/routers/crm.ts) and email-unsubscribe tokens
+ * (apps/web/lib/lifecycle-email/unsubscribe-token.ts), so running on the default
+ * would be a signing-security weakness too, not just an outage.
+ */
+function authSecret(): string {
+  const secret = process.env.BETTER_AUTH_SECRET;
+  if (secret === undefined || secret === "") {
+    throw new Error(
+      "BETTER_AUTH_SECRET is not set. It is required to sign Better Auth " +
+        "sessions/tokens (and CRM OAuth state + email-unsubscribe tokens). " +
+        "Generate one with `openssl rand -hex 32` and set it. See .env.example.",
+    );
+  }
+  return secret;
+}
+
 /** Better Auth social-provider config, populated only for env-enabled providers. */
 function socialProviders(): Record<string, { clientId: string; clientSecret: string }> {
   const providers: Record<string, { clientId: string; clientSecret: string }> =
@@ -140,6 +162,10 @@ export function createAuth(db: Db): ReturnType<typeof betterAuth> {
   // portable `Auth<BetterAuthOptions>` (avoids a non-nameable type in the
   // emitted .d.ts that would otherwise reference Better Auth's bundled zod).
   const options: BetterAuthOptions = {
+    // Explicit signing secret — never let Better Auth fall back to its hardcoded
+    // default (which throws a `BetterAuthError` in production). Fails fast with a
+    // clear message when unset (see {@link authSecret}).
+    secret: authSecret(),
     database: drizzleAdapter(db, {
       provider: "pg",
       usePlural: true,
