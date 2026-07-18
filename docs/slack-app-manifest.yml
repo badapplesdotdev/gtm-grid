@@ -7,7 +7,7 @@ features:
     always_online: false
 oauth_config:
   redirect_urls:
-    - https://REPLACE-WITH-YOUR-TUNNEL/api/oauth/slack/callback
+    - https://gtm-grid-web-git-starbase-slack-integration-bad-apples.vercel.app/api/oauth/slack/callback
   scopes:
     bot:
       - chat:write
@@ -21,4 +21,6 @@ oauth_config:
 settings:
   org_deploy_enabled: false
   socket_mode_enabled: false
-  token_rotation_enabled: false
+  # ROTATION ON: irreversible for this app. This is the config the
+  # advisory-lock refresh design exists for.
+  token_rotation_enabled: true
