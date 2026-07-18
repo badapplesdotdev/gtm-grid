@@ -12,10 +12,10 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { openExternalUrl } from "./open-external";
 import { useQuery as useReactQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "./client";
 import { BrandIcon } from "../BrandIcon";
-import { electron } from "../electron";
 import { gridQueryKeys } from "./useCloudGrid";
 
 /** Provider display bits, keyed by the binding's stored provider string. */
@@ -84,19 +84,6 @@ function agoLabel(ts: number): string {
 }
 
 /** Open a URL in the system browser (Electron when packaged, else a new tab). */
-async function openExternalUrl(url: string): Promise<void> {
-  try {
-    const api = electron();
-    if (api) { await api.openExternal(url); return; }
-  } catch {
-    /* fall through to a browser tab */
-  }
-  const w = (globalThis as { window?: Window }).window;
-  if (!w) return;
-  const tab = w.open(url, "_blank", "noopener");
-  if (!tab) w.location.assign(url);
-}
-
 export function CrmStatusStrip({ tableId, workspaceId, onUpgrade }: { tableId: string; workspaceId: string; onUpgrade?: () => void }) {
   const q = useReactQuery({
     queryKey: ["crm", "bindings", tableId],

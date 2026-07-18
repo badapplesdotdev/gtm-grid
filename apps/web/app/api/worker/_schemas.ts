@@ -49,6 +49,8 @@ export const DeleteRowSchema = z.object({ rowId: id });
 export const DeleteTableSchema = z.object({ tableId: id });
 export const GetCredentialSchema = z.object({ workspaceId: id, extensionId: id });
 export const GetExtensionsSchema = z.object({ workspaceId: id });
+/** The Slack team a workspace is connected to — the Events receiver's tenant gate. */
+export const SlackTeamSchema = z.object({ workspaceId: id });
 export const GetTableSchema = z.object({ tableId: id });
 // Scoped grid read: all columns + only these rows' cells (bounded by rowIds).
 export const GetTableForRowsSchema = z.object({

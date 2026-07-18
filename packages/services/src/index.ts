@@ -459,12 +459,85 @@ export { SignalRepo, SignalRepoLive, signalRepoLayer, SignalRepoError, type Sign
 export { CrmBindingRepo, CrmBindingRepoLive, crmBindingRepoLayer, CrmSyncedRowRepo, CrmSyncedRowRepoLive, crmSyncedRowRepoLayer, CrmSyncRunRepo, CrmSyncRunRepoLive, crmSyncRunRepoLayer, CrmRepoError, CRM_DAILY_DUE_MS, type CrmBinding, type CrmBindingColumn, type CrmBindingInsert, type CrmBindingPatch, type CrmDueCursor, type CrmDueBinding, type CrmDueBindingPage, type CrmSyncedRow, type CrmSyncedRowUpsert, type CrmSyncRun, type CrmSyncRunFinish } from "./repositories/crm-repo.js";
 export { CrmRateLimitError, CrmServerError, CrmNetworkError, CrmAuthRevoked, CrmConnectionMissing, CrmSchemaDriftError, CrmSourceGoneError, RowCapReached, CrmRequestError, CrmSyncError, isTransientCrmError, type CrmError } from "./crm/errors.js";
 export { crmErrorCopy, type CrmErrorPresentation, type CrmRunStatus } from "./crm/error-copy.js";
-export { AttioAuth, AttioOAuthNotConfigured, type AttioTokens, type AttioOAuthState } from "./services/attio-auth.js";
+// The provider-agnostic OAuth adapter (TRI: oauth-adapter). `OAuthAdapter` is
+// R = never, so consumers can use it directly without resolving a service.
+export { makeAdapter, adapterFor, type OAuthAdapter } from "./oauth/adapter.js";
+export {
+  needsRefresh,
+  requiresSerializedRefresh,
+  REFRESH_SKEW_MS,
+  RefreshPolicy,
+  type OAuthCoreSpec,
+  type OAuthNotConfiguredError,
+  type OAuthProviderSpec,
+  type OAuthStateClaims,
+  type OAuthTokens,
+  type TokenRequestKind,
+} from "./oauth/types.js";
+export { STATE_TTL_MS } from "./oauth/oauth-core.js";
+export { type OAuthProtocolError } from "./oauth/errors.js";
+export {
+  AttioAuth,
+  ATTIO_ADAPTER,
+  ATTIO_SPEC,
+  AttioOAuthNotConfigured,
+  type AttioTokens,
+  type AttioOAuthState,
+} from "./services/attio-auth.js";
 export { AttioClient, ATTIO_PAGE_LIMIT, type AttioSession } from "./services/attio-client.js";
 export { CRM_DISPLAY_NAMES, type CrmProvider, type CrmClientApi, type CrmSession, type CrmTokens, type CrmObjectSummary, type CrmListSummary, type CrmAttribute, type CrmAttrRef, type CrmRecord, type CrmListEntry, type CrmPage } from "./services/crm-client.js";
 export { CrmClientRegistry } from "./services/crm-client-registry.js";
 export { CrmAuthRegistry } from "./services/crm-auth-registry.js";
-export { HubspotAuth, HubspotOAuthNotConfigured, HUBSPOT_SCOPES, type HubspotOAuthState } from "./services/hubspot-auth.js";
+export {
+  OAuthCredentialService,
+  OAUTH_SLOTS,
+  type OAuthSlotSpec,
+} from "./services/oauth-credential-service.js";
+export {
+  SlackConnectionService,
+  SLACK_CONNECTION_SLOT,
+  parseConnection as parseSlackConnection,
+  toSecrets as slackConnectionSecrets,
+  type SlackConnection,
+  type SlackConnectionMeta,
+} from "./services/slack-connection-service.js";
+export {
+  SlackAuth,
+  SLACK_ADAPTER,
+  SLACK_SPEC,
+  SLACK_SCOPES,
+  SlackOAuthNotConfigured,
+} from "./services/slack-auth.js";
+export {
+  verifySlackRequest,
+  readSlackRequest,
+  parseSlackBody,
+  classifySlackBody,
+  checkSlackTimestamp,
+  resolveSlackSigningSecret,
+  slackBasestring,
+  slackSignature,
+  slackRecordPayload,
+  slackRecordId,
+  SLACK_TIMESTAMP_WINDOW_MS,
+  SLACK_SIGNING_SECRET_ENV,
+  SlackSigningSecretNotConfigured,
+  SlackSignatureInvalid,
+  SlackTimestampInvalid,
+  SlackBodyMalformed,
+  type SlackRequest,
+  type SlackRequestError,
+  type SlackRequestHeaders,
+  type SlackMessageRecord,
+} from "./services/slack-events.js";
+export {
+  HubspotAuth,
+  HUBSPOT_ADAPTER,
+  HUBSPOT_SPEC,
+  HubspotOAuthNotConfigured,
+  HUBSPOT_SCOPES,
+  type HubspotOAuthState,
+} from "./services/hubspot-auth.js";
 export { HubspotClient, HUBSPOT_PAGE_LIMIT } from "./services/hubspot-client.js";
 export { mapHubspotPropertyType, flattenHubspotValue, toHubspotSearchBody, type HubspotPropertyMeta } from "./crm/hubspot-attributes.js";
 export { CrmConnectionService, ATTIO_EXTENSION_ID, crmConnectionSlot, type CrmConnectionMeta } from "./services/crm-connection-service.js";

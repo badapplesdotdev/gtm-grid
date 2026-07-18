@@ -1,40 +1,35 @@
 /**
- * `HubspotAuth` — the OAuth 2.0 handshake with HubSpot (TRI: crm-sync). Pure
- * protocol, mirroring {@link AttioAuth}: build the authorize URL, mint/verify
- * the signed `state` parameter, exchange an authorization code, refresh an
- * access token. Token STORAGE belongs to {@link CrmConnectionService}; HTTP
- * calls with a token belong to {@link HubspotClient}.
+ * `HubspotAuth` — the OAuth 2.0 handshake with HubSpot (TRI: crm-sync).
  *
- * State tokens are HMAC-signed (BETTER_AUTH_SECRET, `HUBSPOT_OAUTH_SECRET`
- * override) binding `(workspaceId, userId, issuedAt)` with a 15-minute TTL —
- * the CSRF defense for the callback.
+ * The protocol mechanics now live in `oauth/oauth-core.ts`; this file is the
+ * HubSpot-specific DATA plus the service wrapper that keeps `HubspotAuth` in the
+ * `AppServices` union. Token STORAGE belongs to {@link CrmConnectionService};
+ * HTTP calls with a token belong to {@link HubspotClient}.
  *
  * Unlike Attio, HubSpot's token lifecycle is DOCUMENTED: access tokens expire
  * (~30 minutes, `expires_in` always returned) and the refresh token is
- * long-lived — so `expiresAtMs` is always set and proactive refresh
- * (CrmConnectionService.sessionFrom) is the primary path, with refresh-on-401
- * as the backstop.
+ * long-lived. That used to be a doc comment; it is now
+ * {@link RefreshPolicy.Proactive} — refresh ahead of expiry, with the 401 as the
+ * backstop. Proactive rather than Rotating because HubSpot's refresh tokens are
+ * REUSABLE: a redundant refresh is harmless, so no locking is required.
  */
 
-import { createHmac, timingSafeEqual } from "node:crypto";
 import { Data, Effect } from "effect";
-import { CrmAuthRevoked, CrmNetworkError, CrmServerError, CrmSyncError } from "../crm/errors.js";
-import type { CrmTokens } from "./crm-client.js";
+import { makeAdapter } from "../oauth/adapter.js";
+import {
+  REFRESH_SKEW_MS,
+  RefreshPolicy,
+  type OAuthProviderSpec,
+  type OAuthStateClaims,
+} from "../oauth/types.js";
 
-/** Claims bound into an OAuth `state` token. */
-export interface HubspotOAuthState {
-  readonly workspaceId: string;
-  readonly userId: string;
-}
+/** Claims bound into an OAuth `state` token. Alias of the shared shape. */
+export type HubspotOAuthState = OAuthStateClaims;
 
 /** Raised when the OAuth env (client id/secret) is not configured. */
 export class HubspotOAuthNotConfigured extends Data.TaggedError("HubspotOAuthNotConfigured")<{
   readonly missing: string;
 }> {}
-
-const AUTHORIZE_URL = "https://app.hubspot.com/oauth/authorize";
-const TOKEN_URL = "https://api.hubapi.com/oauth/v1/token";
-const STATE_TTL_MS = 15 * 60 * 1000;
 
 /**
  * Scopes for v1: OAuth identity + read-only contacts, companies, lists, and
@@ -50,130 +45,32 @@ export const HUBSPOT_SCOPES = [
   "crm.objects.owners.read",
 ] as const;
 
-const stateSecret = (): string | null =>
-  process.env.HUBSPOT_OAUTH_SECRET ?? process.env.BETTER_AUTH_SECRET ?? null;
+/** Everything provider-specific about HubSpot, as data. */
+export const HUBSPOT_SPEC: OAuthProviderSpec<HubspotOAuthNotConfigured> = {
+  id: "hubspot",
+  displayName: "HubSpot",
+  notConfiguredTag: "HubspotOAuthNotConfigured",
+  refreshPolicy: RefreshPolicy.Proactive(REFRESH_SKEW_MS),
+  authorizeUrl: "https://app.hubspot.com/oauth/authorize",
+  tokenUrl: "https://api.hubapi.com/oauth/v1/token",
+  scopes: HUBSPOT_SCOPES,
+  scopeSeparator: " ",
+  clientIdEnv: "HUBSPOT_CLIENT_ID",
+  clientSecretEnv: "HUBSPOT_CLIENT_SECRET",
+  stateSecretEnv: "HUBSPOT_OAUTH_SECRET",
+  redirectPath: "/api/crm/hubspot/callback",
+  notConfigured: (missing) => new HubspotOAuthNotConfigured({ missing }),
+};
 
-const sign = (payload: string, key: string): string =>
-  createHmac("sha256", key).update(payload).digest("base64url");
+/** The HubSpot adapter. Usable without the Effect service (no requirements). */
+export const HUBSPOT_ADAPTER = makeAdapter(HUBSPOT_SPEC);
 
-interface TokenResponse {
-  readonly access_token?: string;
-  readonly refresh_token?: string;
-  readonly expires_in?: number;
-}
-
+/**
+ * Service wrapper. `HubspotAuth` stays a `Effect.Service` because it is part of
+ * the `AppServices` union and every existing call site resolves it from the
+ * runtime; the adapter underneath is what actually does the work.
+ */
 export class HubspotAuth extends Effect.Service<HubspotAuth>()("HubspotAuth", {
-  effect: Effect.gen(function* () {
-    const env = () =>
-      Effect.gen(function* () {
-        const clientId = process.env.HUBSPOT_CLIENT_ID ?? "";
-        const clientSecret = process.env.HUBSPOT_CLIENT_SECRET ?? "";
-        if (!clientId) return yield* Effect.fail(new HubspotOAuthNotConfigured({ missing: "HUBSPOT_CLIENT_ID" }));
-        if (!clientSecret)
-          return yield* Effect.fail(new HubspotOAuthNotConfigured({ missing: "HUBSPOT_CLIENT_SECRET" }));
-        const site = process.env.SITE_URL ?? "https://www.gtmgrid.dev";
-        return { clientId, clientSecret, redirectUri: `${site}/api/crm/hubspot/callback` };
-      });
-
-    /**
-     * POST the token endpoint with form-encoded `params`. Grant refusals
-     * (4xx) are {@link CrmAuthRevoked} — for a code exchange that means the
-     * code was bad/expired; for a refresh it means the connection is dead.
-     */
-    const tokenRequest = (params: Record<string, string>) =>
-      Effect.gen(function* () {
-        const { clientId, clientSecret, redirectUri } = yield* env();
-        const res = yield* Effect.tryPromise({
-          try: () =>
-            fetch(TOKEN_URL, {
-              method: "POST",
-              headers: { "content-type": "application/x-www-form-urlencoded" },
-              body: new URLSearchParams({
-                client_id: clientId,
-                client_secret: clientSecret,
-                redirect_uri: redirectUri,
-                ...params,
-              }).toString(),
-            }),
-          catch: (cause) => new CrmNetworkError({ provider: "HubSpot", cause }),
-        });
-        if (res.status >= 500) return yield* Effect.fail(new CrmServerError({ provider: "HubSpot", status: res.status }));
-        if (!res.ok) {
-          const detail = yield* Effect.tryPromise({ try: () => res.text(), catch: () => new CrmNetworkError({ provider: "HubSpot", cause: "unreadable token error body" }) }).pipe(
-            Effect.orElseSucceed(() => ""),
-          );
-          return yield* Effect.fail(new CrmAuthRevoked({ provider: "HubSpot", detail: detail.slice(0, 500) }));
-        }
-        const body = yield* Effect.tryPromise({
-          try: () => res.json() as Promise<TokenResponse>,
-          catch: (cause) => new CrmNetworkError({ provider: "HubSpot", cause }),
-        });
-        const accessToken = body.access_token ?? "";
-        if (!accessToken) {
-          return yield* Effect.fail(new CrmSyncError({ message: "HubSpot token response had no access_token" }));
-        }
-        const tokens: CrmTokens = {
-          accessToken,
-          ...(body.refresh_token ? { refreshToken: body.refresh_token } : {}),
-          ...(typeof body.expires_in === "number"
-            ? { expiresAtMs: Date.now() + body.expires_in * 1000 }
-            : {}),
-        };
-        return tokens;
-      });
-
-    return {
-      /** Whether the HubSpot OAuth app env is configured (drives UI affordances). */
-      isConfigured: () => Effect.sync(() => Boolean(process.env.HUBSPOT_CLIENT_ID && process.env.HUBSPOT_CLIENT_SECRET)),
-
-      /** The HubSpot authorize URL for a signed state (space-separated scopes). */
-      authorizeUrl: (state: string) =>
-        Effect.gen(function* () {
-          const { clientId, redirectUri } = yield* env();
-          const url = new URL(AUTHORIZE_URL);
-          url.searchParams.set("client_id", clientId);
-          url.searchParams.set("redirect_uri", redirectUri);
-          url.searchParams.set("scope", HUBSPOT_SCOPES.join(" "));
-          url.searchParams.set("response_type", "code");
-          url.searchParams.set("state", state);
-          return url.toString();
-        }),
-
-      /** Mint the signed OAuth state for `(workspaceId, userId)`; null when unsigned. */
-      mintState: (claims: HubspotOAuthState) =>
-        Effect.sync(() => {
-          const key = stateSecret();
-          if (!key) return null;
-          const payload = `${claims.workspaceId}\n${claims.userId}\n${Date.now()}`;
-          return `${Buffer.from(payload, "utf8").toString("base64url")}.${sign(payload, key)}`;
-        }),
-
-      /** Verify a state token (signature + TTL); null on any mismatch. */
-      verifyState: (token: string) =>
-        Effect.sync((): HubspotOAuthState | null => {
-          const key = stateSecret();
-          if (!key) return null;
-          const [body, mac] = token.split(".");
-          if (!body || !mac) return null;
-          const payload = Buffer.from(body, "base64url").toString("utf8");
-          const expected = sign(payload, key);
-          const macBuf = Buffer.from(mac);
-          const expBuf = Buffer.from(expected);
-          if (macBuf.length !== expBuf.length || !timingSafeEqual(macBuf, expBuf)) return null;
-          const [workspaceId, userId, issuedAt] = payload.split("\n");
-          if (!workspaceId || !userId || !issuedAt) return null;
-          const ts = Number(issuedAt);
-          if (!Number.isFinite(ts) || Date.now() - ts > STATE_TTL_MS) return null;
-          return { workspaceId, userId };
-        }),
-
-      /** Exchange an authorization code for tokens. */
-      exchangeCode: (code: string) => tokenRequest({ grant_type: "authorization_code", code }),
-
-      /** Refresh an access token. Refusal = the connection is dead (CrmAuthRevoked). */
-      refresh: (refreshToken: string) =>
-        tokenRequest({ grant_type: "refresh_token", refresh_token: refreshToken }),
-    } as const;
-  }),
+  effect: Effect.succeed(HUBSPOT_ADAPTER),
   dependencies: [],
 }) {}

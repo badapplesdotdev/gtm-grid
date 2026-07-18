@@ -104,6 +104,41 @@ describe("callbackResponse", () => {
     }
   });
 
+  it("THE DESKTOP FLOW: persists with NO browser session at all", async () => {
+    // A REGRESSION GUARD, not a bug fix — this path already works, because
+    // CrmConnectionService.saveConnection encrypts and upserts directly rather
+    // than going through CredentialService.saveCredential (whose first line is
+    // requireMember). Nothing pinned that, though, and its Slack sibling was
+    // written the other way and was broken from the start: the desktop opens
+    // consent with `openExternal`, the system browser carries no gtmgrid.dev
+    // cookie, and every callback test supplied a session user — so the flow the
+    // route header calls the trust model was the only one untested.
+    //
+    // The verified signed state is the authorisation here; mintState itself is
+    // reached only through a member-gated authorize procedure.
+    stubAttioFetch({ workspace_id: "attio_ws_1", workspace_name: "Acme CRM" });
+    const runtime = runtimeFor({ currentUserId: null });
+    try {
+      const state = await mintState(runtime);
+      const res = await callbackResponse({
+        oauth: ATTIO_OAUTH,
+        runtime,
+        code: "auth_code",
+        state,
+        error: null,
+        // No session. Not a stranger — nobody.
+        sessionUser: null,
+      });
+
+      // A 502 "couldn't finish connecting" here would mean the write had grown a
+      // member gate, burning the single-use code after a successful consent.
+      expect(res.status).toBe(200);
+      expect(await res.text()).toContain("Acme CRM");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("valid state → persists the connection and bounces into the app", async () => {
     stubAttioFetch({ workspace_id: "attio_ws_1", workspace_name: "Acme CRM" });
     const runtime = runtimeFor();

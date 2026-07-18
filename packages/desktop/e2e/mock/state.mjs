@@ -41,6 +41,13 @@ export function freshState() {
     // ── CRM sync (Attio) ────────────────────────────────────────────────────
     // Whether the workspace has an Attio OAuth connection (crm.connectionStatus).
     crmConnected: false,
+    // Whether the workspace has a Slack OAuth connection (slack.connectionStatus).
+    slackConnected: false,
+    // Whether the deployment has a Slack app at all. "Configured" and
+    // "connected" are different things: a self-hosted instance with no
+    // SLACK_CLIENT_ID can never connect, and the UI must say so rather than
+    // offering a button into a broken handshake.
+    slackConfigured: true,
     // Same for HubSpot — the two providers connect independently.
     hubspotConnected: false,
     // Bindings + sync-run history, seedable per scenario (shallow overrides).

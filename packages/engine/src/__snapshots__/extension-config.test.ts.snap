@@ -4175,6 +4175,30 @@ exports[`bundled extension rate-limit config > pins the rate-limit shape of ever
       },
     },
   },
+  "slack": {
+    "connector": {
+      "concurrency": 2,
+      "rpm": 20,
+    },
+    "methods": {
+      "getUserInfo": {
+        "concurrency": 5,
+        "rpm": 100,
+      },
+      "listChannels": {
+        "concurrency": 2,
+        "rpm": 20,
+      },
+      "lookupUserByEmail": {
+        "concurrency": 3,
+        "rpm": 50,
+      },
+      "postMessage": {
+        "concurrency": 1,
+        "rps": 1,
+      },
+    },
+  },
   "smartlead": {
     "connector": {
       "concurrency": 3,
@@ -5643,6 +5667,7 @@ exports[`bundled extension rate-limit config > ships the expected set of extensi
   "plusvibe",
   "prospeo",
   "reoon",
+  "slack",
   "smartlead",
   "smuggler",
   "supabase",

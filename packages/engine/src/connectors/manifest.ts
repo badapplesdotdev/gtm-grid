@@ -29,6 +29,48 @@ const rateLimitSchema = z.object({
   concurrency: z.number().int().positive().optional(),
 });
 
+/**
+ * How the connector authenticates. A discriminated union on `type` so a manifest
+ * can declare EITHER a pasted key or an OAuth-minted token; both resolve a single
+ * token from the flat `ctx.secrets` map, so injection is shared and only the
+ * remediation copy differs (see {@link missingCredentialMessage}).
+ *
+ * The `apiKey` arm is unchanged and stays byte-compatible with every bundled
+ * manifest — `type` was already a literal, so widening to a union adds an arm
+ * without touching how the existing ones parse.
+ */
+const authSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("apiKey"),
+    header: z.string().optional(),
+    query: z.string().optional(),
+    /** Which decrypted secret holds the token (default "apiKey"). */
+    secretKey: z.string().optional(),
+    /** User-facing name for the credential (default "API key"). */
+    credentialLabel: z.string().optional(),
+    /** When header is Authorization, set the scheme prefix (e.g. "Bearer "). Default "Bearer ". */
+    scheme: z.string().optional(),
+    /** For HTTP Basic APIs that use the API key as the password, encode `username:key`. */
+    basicUsername: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("oauth"),
+    /**
+     * The OAuth provider id this connector's access token is minted for. The engine
+     * never runs the grant itself — authorize/refresh live in the cloud service
+     * layer, which drops the resulting access token into the credential's secrets.
+     * This field is what ties the manifest to that provider's connection.
+     */
+    provider: z.string().min(1),
+    /** Header the access token rides in. Defaults to the OAuth 2.0 bearer norm. */
+    header: z.string().default("Authorization"),
+    /** Scheme prefix used when the header is Authorization. */
+    scheme: z.string().default("Bearer "),
+    /** Which decrypted secret holds the access token. */
+    secretKey: z.string().default("accessToken"),
+  }),
+]);
+
 const methodSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9_]+$/, "method id must be alphanumeric/underscore"),
   label: z.string().optional(),
@@ -119,22 +161,7 @@ export const manifestSchema = z.object({
   /** Optional brand logo URL; falls back to a derived favicon when absent. */
   logo: z.string().url().optional(),
   baseUrl: z.string().url(),
-  auth: z
-    .object({
-      type: z.literal("apiKey"),
-      header: z.string().optional(),
-      query: z.string().optional(),
-      /** Which decrypted secret holds the token (default "apiKey"). */
-      secretKey: z.string().optional(),
-      /** User-facing name for the credential (default "API key"). */
-      credentialLabel: z.string().optional(),
-      /** When header is Authorization, set the scheme prefix (e.g. "Bearer "). Default "Bearer ". */
-      scheme: z.string().optional(),
-      /** For HTTP Basic APIs that use the API key as the password, encode `username:key`. */
-      basicUsername: z.string().optional(),
-    })
-    .nullable()
-    .optional(),
+  auth: authSchema.nullable().optional(),
   /** Static headers sent on every request. */
   headers: z.record(z.string(), z.string()).optional(),
   /** Default outbound throttle for every method (a method may override it stricter). */
@@ -144,6 +171,8 @@ export const manifestSchema = z.object({
 
 export type ExtensionManifest = z.infer<typeof manifestSchema>;
 type ManifestMethod = z.infer<typeof methodSchema>;
+/** The resolved auth block (defaults applied) — narrowed on `type` at use sites. */
+type ManifestAuth = z.infer<typeof authSchema>;
 
 /** Validate raw JSON (string or object) into a typed manifest. Throws on invalid. */
 export function parseManifest(raw: unknown): ExtensionManifest {
@@ -200,9 +229,15 @@ async function httpCall(
   // and surfacing the upstream's cryptic 401 body. Applies to every apiKey
   // connector, not just one.
   const token = ctx.secrets[secretKey];
-  if (man.auth?.type === "apiKey" && m.auth !== false) {
-    if (!token) throw new Error(missingKeyMessage(man));
-    if (man.auth.header) {
+  if (man.auth && m.auth !== false) {
+    if (!token) throw new Error(missingCredentialMessage(man, man.auth));
+    if (man.auth.type === "oauth") {
+      // An oauth access token is just another entry in the flat `secrets` map by
+      // the time it reaches here, so it shares this one read. `header`/`scheme`
+      // carry schema defaults, hence no ?? fallbacks.
+      const isAuthz = man.auth.header.toLowerCase() === "authorization";
+      headers[man.auth.header] = isAuthz ? `${man.auth.scheme}${token}` : token;
+    } else if (man.auth.header) {
       const isAuthz = man.auth.header.toLowerCase() === "authorization";
       const credential = isAuthz && man.auth.basicUsername !== undefined
         ? `${man.auth.scheme ?? "Basic "}${btoa(`${man.auth.basicUsername}:${token}`)}`
@@ -322,7 +357,7 @@ async function httpCall(
       const code = errors[0]?.extensions?.code ?? "";
       const message = errors.map((error) => error.message ?? "Unknown GraphQL error").join("; ").slice(0, 500);
       if (/AUTH|UNAUTH/i.test(code) || /authenticat|unauthori[sz]ed|api key/i.test(message)) {
-        throw new Error(invalidKeyMessage(man));
+        throw new Error(invalidCredentialMessage(man, man.auth));
       }
       throw new Error(`${man.name} ${m.id} GraphQL${code ? ` ${code}` : ""}: ${message}`);
     }
@@ -331,8 +366,8 @@ async function httpCall(
     // A 401 on an apiKey connector almost always means the configured key is
     // invalid/expired (a missing key is already caught pre-flight) — turn the raw
     // upstream "Unauthenticated" body into the same actionable guidance.
-    if (resp.status === 401 && man.auth?.type === "apiKey") {
-      throw new Error(invalidKeyMessage(man));
+    if (resp.status === 401 && man.auth) {
+      throw new Error(invalidCredentialMessage(man, man.auth));
     }
     const detail = typeof data === "string" ? data.slice(0, 300) : JSON.stringify(data).slice(0, 300);
     throw new Error(`${man.name} ${m.id} HTTP ${resp.status}: ${detail}`);
@@ -344,15 +379,30 @@ async function httpCall(
   return data;
 }
 
-/** Actionable message for an apiKey connector invoked with no resolved secret. */
-function missingKeyMessage(man: ExtensionManifest): string {
-  const label = man.auth?.credentialLabel ?? "API key";
+/**
+ * Actionable message for an authenticated connector invoked with no resolved
+ * secret. The remedy is auth-type specific: an apiKey user pastes a key, whereas
+ * an oauth user has no key to paste — telling them to "update the key" would send
+ * them hunting for a field that does not exist.
+ */
+function missingCredentialMessage(man: ExtensionManifest, auth: ManifestAuth | null | undefined): string {
+  if (auth?.type === "oauth") {
+    return `${man.name} is not connected — connect your ${man.name} account to run this function.`;
+  }
+  const label = auth?.credentialLabel ?? "API key";
   return `${man.name} ${label} not configured — connect a ${man.name} credential to run this function.`;
 }
 
-/** Actionable message for an apiKey connector rejected with a 401. */
-function invalidKeyMessage(man: ExtensionManifest): string {
-  const label = man.auth?.credentialLabel ?? "API key";
+/**
+ * Actionable message for an authenticated connector rejected with a 401. For
+ * oauth this normally means the grant was revoked or the refresh token died, so
+ * the only fix is reconnecting — never "check the key".
+ */
+function invalidCredentialMessage(man: ExtensionManifest, auth: ManifestAuth | null | undefined): string {
+  if (auth?.type === "oauth") {
+    return `${man.name} authorization expired or was revoked (HTTP 401) — reconnect your ${man.name} account to run this function.`;
+  }
+  const label = auth?.credentialLabel ?? "API key";
   return `${man.name} ${label} invalid or expired (HTTP 401) — check the ${man.name} credential and update it.`;
 }
 

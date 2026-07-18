@@ -191,6 +191,8 @@ import { CrmAuthRegistry } from "./services/crm-auth-registry.js";
 import { HubspotAuth } from "./services/hubspot-auth.js";
 import { HubspotClient } from "./services/hubspot-client.js";
 import { CrmConnectionService } from "./services/crm-connection-service.js";
+import { SlackConnectionService } from "./services/slack-connection-service.js";
+import { OAuthCredentialService } from "./services/oauth-credential-service.js";
 import { CrmSyncService } from "./services/crm-sync-service.js";
 import {
   type CrmBinding,
@@ -336,6 +338,12 @@ export const appLayer = (params: {
   const entitlementService = EntitlementService.Default.pipe(
     Layer.provide(workspaceRepo),
   );
+  // Refreshes OAuth slots for a run credential. Resolved by the worker
+  // getCredential ROUTE, not depended on by WebhookService — see its header.
+  const oauthCredentialService = OAuthCredentialService.Default.pipe(
+    Layer.provide(credentialRepo),
+    Layer.provide(CryptoServiceLive),
+  );
   const webhookService = WebhookService.Default.pipe(
     Layer.provide(webhookRepo),
     Layer.provide(webhookDeliveryRepo),
@@ -365,6 +373,12 @@ export const appLayer = (params: {
     Layer.provide(credentialRepo),
     Layer.provide(CryptoServiceLive),
     Layer.provide(crmAuthRegistry),
+  );
+  // Slack rides the GENERIC credential machinery — no CRM sync deps.
+  const slackConnectionService = SlackConnectionService.Default.pipe(
+    Layer.provide(credentialService),
+    Layer.provide(credentialRepo),
+    Layer.provide(CryptoServiceLive),
   );
   const crmSyncService = CrmSyncService.Default.pipe(
     Layer.provide(crmBindingRepo),
@@ -435,6 +449,8 @@ export const appLayer = (params: {
     crmClientRegistry,
     crmAuthRegistry,
     crmConnectionService,
+    slackConnectionService,
+    oauthCredentialService,
     crmSyncService,
     gridService,
     shareService,
@@ -756,8 +772,17 @@ export const TestLayer = (
     Layer.provide(cryptoService),
     Layer.provide(crmAuthRegistry),
   );
+  const slackConnectionService = SlackConnectionService.Default.pipe(
+    Layer.provide(credentialService),
+    Layer.provide(credentialRepo),
+    Layer.provide(cryptoService),
+  );
   const entitlementService = EntitlementService.Default.pipe(
     Layer.provide(workspaceRepo),
+  );
+  const oauthCredentialService = OAuthCredentialService.Default.pipe(
+    Layer.provide(credentialRepo),
+    Layer.provide(cryptoService),
   );
   const webhookService = WebhookService.Default.pipe(
     Layer.provide(webhookRepo),
@@ -856,6 +881,8 @@ export const TestLayer = (
     crmClientRegistry,
     crmAuthRegistry,
     crmConnectionService,
+    slackConnectionService,
+    oauthCredentialService,
     crmSyncService,
     gridService,
     shareService,
@@ -916,6 +943,8 @@ export type AppServices =
   | CrmClientRegistry
   | CrmAuthRegistry
   | CrmConnectionService
+  | SlackConnectionService
+  | OAuthCredentialService
   | CrmSyncService
   | ExtensionService
   | ExtensionRepo

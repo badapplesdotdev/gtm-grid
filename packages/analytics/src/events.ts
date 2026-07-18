@@ -36,6 +36,8 @@ export interface AnalyticsEventMap {
     table_id: string;
     auto_run: boolean;
     mode: string;
+    /** Which ingress accepted it — "slack" for the Events API receiver, absent for the generic token webhook. */
+    source?: string;
   };
 
   // ── Desktop product surface (new) ────────────────────────────────────────────
@@ -177,6 +179,13 @@ export interface AnalyticsEventMap {
   };
   /** A workspace connected a CRM via OAuth (the wizard's step-2 completion). */
   crm_connected: { provider: string; workspace_id: string };
+  /**
+   * A Slack workspace was connected. Deliberately NOT folded into
+   * `crm_connected`: Slack is a connector, not a CRM, and every dashboard or
+   * alert keyed on `crm_connected` tracks CRM adoption — Slack rows would be
+   * noise in all of them.
+   */
+  slack_connected: { workspace_id: string };
   /** A synced table binding was created (wizard completed end to end). */
   crm_binding_created: {
     provider: string;

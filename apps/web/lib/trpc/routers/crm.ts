@@ -17,19 +17,17 @@
 import { MembershipService } from "@gtmgrid/cloud";
 import {
   type AppServices,
-  AttioAuth,
   CrmConnectionService,
   CrmSyncService,
-  CrmSyncError,
   crmErrorCopy,
   type CrmError,
   FILTER_OPS,
-  HubspotAuth,
   SUPPORTED_ATTR_TYPES,
 } from "@gtmgrid/services";
 import { TRPCError } from "@trpc/server";
 import { Cause, Effect, Exit, Option } from "effect";
 import { z } from "zod";
+import { authorizeUrlWithState, oauthAdapterFor } from "../../crm/oauth-providers";
 import type { ServicesRuntime } from "../context";
 import { inngest } from "../../inngest/client";
 import { captureServer } from "../../posthog-server";
@@ -87,9 +85,6 @@ async function runCrm<A, E>(
   });
 }
 
-/** The web authorize route falls back to the marketing origin off Vercel. */
-const siteOrigin = (): string => process.env.SITE_URL ?? "https://www.gtmgrid.dev";
-
 const sourceKind = z.enum(["object", "list"]);
 
 /** Optional on every procedure: desktop builds that predate HubSpot send none. */
@@ -123,10 +118,9 @@ export const crmRouter = router({
       runCrm(
         ctx.runtime,
         Effect.gen(function* () {
-          const configured =
-            input.provider === "hubspot"
-              ? yield* Effect.flatMap(HubspotAuth, (a) => a.isConfigured())
-              : yield* Effect.flatMap(AttioAuth, (a) => a.isConfigured());
+          // From the adapter map, not a ternary: the old form sent every
+          // non-"hubspot" provider down the Attio branch.
+          const configured = yield* oauthAdapterFor(input.provider).isConfigured();
           const conn = yield* CrmConnectionService;
           const meta = yield* conn.connectionMeta(input.workspaceId, input.provider);
           return Option.match(meta, {
@@ -166,36 +160,7 @@ export const crmRouter = router({
           const membership = yield* MembershipService;
           const member = yield* membership.requireMember(input.workspaceId);
           const claims = { workspaceId: input.workspaceId, userId: member.userId };
-          const url =
-            input.provider === "hubspot"
-              ? yield* Effect.gen(function* () {
-                  const auth = yield* HubspotAuth;
-                  const state = yield* auth.mintState(claims);
-                  if (state === null) {
-                    return yield* Effect.fail(
-                      new CrmSyncError({ message: "OAuth state signing unavailable (no BETTER_AUTH_SECRET)" }),
-                    );
-                  }
-                  return yield* auth.authorizeUrl(state).pipe(
-                    Effect.catchTag("HubspotOAuthNotConfigured", (e) =>
-                      Effect.fail(new CrmSyncError({ message: `HubSpot OAuth env missing: ${e.missing}` })),
-                    ),
-                  );
-                })
-              : yield* Effect.gen(function* () {
-                  const auth = yield* AttioAuth;
-                  const state = yield* auth.mintState(claims);
-                  if (state === null) {
-                    return yield* Effect.fail(
-                      new CrmSyncError({ message: "OAuth state signing unavailable (no BETTER_AUTH_SECRET)" }),
-                    );
-                  }
-                  return yield* auth.authorizeUrl(state).pipe(
-                    Effect.catchTag("AttioOAuthNotConfigured", (e) =>
-                      Effect.fail(new CrmSyncError({ message: `Attio OAuth env missing: ${e.missing}` })),
-                    ),
-                  );
-                });
+          const url = yield* authorizeUrlWithState(oauthAdapterFor(input.provider), claims);
           return { url };
         }),
       ),

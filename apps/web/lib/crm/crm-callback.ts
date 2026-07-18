@@ -6,17 +6,10 @@
  * `GET` wraps.
  */
 
-import {
-  type AppServices,
-  type CrmSession,
-  CrmBindingRepo,
-  CrmConnectionService,
-  WorkspaceRepo,
-} from "@gtmgrid/services";
+import { type AppServices, WorkspaceRepo } from "@gtmgrid/services";
 import { Effect, Exit, type ManagedRuntime, Option } from "effect";
-import { captureServer } from "../posthog-server";
 import { type CrmPageLink, crmOAuthPage, htmlResponse } from "./oauth-html";
-import type { CrmOAuthAdapter } from "./oauth-providers";
+import type { OAuthRouteAdapter } from "./oauth-providers";
 
 type ServicesRuntime = ManagedRuntime.ManagedRuntime<AppServices, never>;
 
@@ -35,10 +28,18 @@ function displayName(sessionUser: CallbackSessionUser | null, stateUserId: strin
   return sessionUser.name && sessionUser.name.trim() !== "" ? sessionUser.name : sessionUser.email;
 }
 
-/** Retry link back into the provider's authorize route for a known workspace. */
-function retryLink(provider: string, workspaceId: string): CrmPageLink {
+/**
+ * Retry link back into the provider's authorize route for a known workspace.
+ *
+ * The path comes from the ADAPTER rather than being interpolated as
+ * `/api/crm/${provider}/authorize`: that template silently assumed every
+ * provider is a CRM, and would have produced a 404 for Slack (which lives at
+ * `/api/oauth/slack/authorize`) — on the error page, where a broken link is
+ * least likely to be noticed.
+ */
+function retryLink(authorizePath: string, workspaceId: string): CrmPageLink {
   return {
-    href: `/api/crm/${provider}/authorize?workspace=${encodeURIComponent(workspaceId)}`,
+    href: `${authorizePath}?workspace=${encodeURIComponent(workspaceId)}`,
     label: "Try connecting again",
   };
 }
@@ -78,7 +79,7 @@ function failurePage(name: string, retry: CrmPageLink): Response {
   );
 }
 
-function successPage(name: string, crmWorkspaceName: string): Response {
+function successPage(name: string, crmWorkspaceName: string, deepLink: string, fallbackHref: string): Response {
   const named = crmWorkspaceName.trim() !== "";
   return htmlResponse(
     crmOAuthPage({
@@ -87,8 +88,8 @@ function successPage(name: string, crmWorkspaceName: string): Response {
       message: `${name} connected — returning to GTM Grid…`,
       // Fires the deep link instantly (same mechanism as /open); the CTA is the
       // fallback when the browser doesn't hand off to the app.
-      redirectTo: "gtmgrid://open/crm-connected",
-      primary: { href: "/open?to=crm-connected", label: "Open GTM Grid" },
+      redirectTo: deepLink,
+      primary: { href: fallbackHref, label: "Open GTM Grid" },
     }),
     200,
   );
@@ -102,34 +103,32 @@ function successPage(name: string, crmWorkspaceName: string): Response {
  */
 export async function callbackResponse(params: {
   readonly runtime: ServicesRuntime;
-  readonly oauth: CrmOAuthAdapter;
+  readonly oauth: OAuthRouteAdapter;
   readonly code: string;
   readonly state: string;
   readonly error: string | null;
   readonly sessionUser: CallbackSessionUser | null;
 }): Promise<Response> {
-  const { provider, displayName: name } = params.oauth;
+  const { displayName: name, authorizePath } = params.oauth;
   const verify = (token: string) => params.runtime.runPromise(params.oauth.verifyState(token));
 
   // 1. The user declined on the provider's consent screen.
   if (params.error !== null && params.error !== "") {
     const claims = params.state !== "" ? await verify(params.state) : null;
-    return canceledPage(name, claims ? retryLink(provider, claims.workspaceId) : undefined);
+    return canceledPage(name, claims ? retryLink(authorizePath, claims.workspaceId) : undefined);
   }
 
   // 2. CSRF/expiry gate — an invalid or aged state never exchanges a code.
   const claims = params.state !== "" ? await verify(params.state) : null;
   if (claims === null) return expiredPage();
 
-  if (params.code === "") return failurePage(name, retryLink(provider, claims.workspaceId));
+  if (params.code === "") return failurePage(name, retryLink(authorizePath, claims.workspaceId));
 
   const connectedByName = displayName(params.sessionUser, claims.userId);
 
   // 3. Exchange → identify → persist → un-pause, all against the same runtime.
   const exit = await params.runtime.runPromiseExit(
     Effect.gen(function* () {
-      const connection = yield* CrmConnectionService;
-      const bindings = yield* CrmBindingRepo;
       const workspaces = yield* WorkspaceRepo;
 
       // Desktop-initiated flows land here WITHOUT a browser session (the state
@@ -149,40 +148,25 @@ export async function callbackResponse(params: {
           : connectedByName;
 
       const tokens = yield* params.oauth.exchangeCode(params.code);
-      const session: CrmSession = {
+      // Identify + store + un-pause is the PROVIDER's business: a CRM has
+      // bindings to clear and a client to identify with, Slack has neither.
+      return yield* params.oauth.persistConnection({
         workspaceId: claims.workspaceId,
+        userId: claims.userId,
+        connectedByName: nameFromDb,
         tokens,
-        persist: () => Effect.void,
-      };
-      const self = yield* params.oauth.identifySelf(session);
-      yield* connection.saveConnection({
-        workspaceId: claims.workspaceId,
-        provider,
-        tokens,
-        meta: {
-          connectedByUserId: claims.userId,
-          connectedByName: nameFromDb,
-          crmWorkspaceId: self.workspaceId,
-          crmWorkspaceName: self.workspaceName,
-        },
       });
-      // Reconnecting resolves a revoked-auth pause (NOT source_gone — a deleted
-      // source isn't fixed by re-authing).
-      yield* bindings.clearPause({ workspaceId: claims.workspaceId, provider, reason: "auth_revoked" });
-      return self.workspaceName;
     }),
   );
 
   // Any failure (a bad/expired code, a provider outage, a persist defect)
   // becomes a retry page — defects are already routed to Error Tracking by the
   // host `reportError` sink wired into `appLayer`.
-  if (Exit.isFailure(exit)) return failurePage(name, retryLink(provider, claims.workspaceId));
+  if (Exit.isFailure(exit)) return failurePage(name, retryLink(authorizePath, claims.workspaceId));
 
   // 4. Success → analytics + the bounce-into-app page.
-  captureServer("crm_connected", {
-    distinctId: claims.userId,
-    properties: { provider, workspace_id: claims.workspaceId },
-    groups: { workspace: claims.workspaceId },
-  });
-  return successPage(name, exit.value);
+  // The provider emits its OWN typed event: Slack is not a CRM, and every
+  // dashboard keyed on `crm_connected` tracks CRM adoption.
+  params.oauth.captureConnected({ userId: claims.userId, workspaceId: claims.workspaceId });
+  return successPage(name, exit.value, params.oauth.connectedDeepLink, params.oauth.connectedFallbackHref);
 }
