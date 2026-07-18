@@ -27,6 +27,15 @@ export interface CrmPageLink {
 
 /**
  * Render one CRM OAuth page. `primary` is the green CTA, `secondary` a quieter
+ * The brand mark is `/brand/logo.svg`, deliberately a RELATIVE path: these pages
+ * are served BY apps/web, so the logo always resolves against whichever host
+ * rendered them. An absolute production URL would have shown the production logo
+ * on staging — harmless-looking, but exactly the kind of cross-environment
+ * reference that makes "which environment am I on?" ambiguous.
+ *
+ * `width`/`height` are set as ATTRIBUTES as well as CSS so the card does not
+ * reflow while the SVG loads.
+ *
  * text link beneath it, and `redirectTo` (when set) is fired immediately by a
  * script tag — the success page uses it to bounce into the desktop app the same
  * way `/open` does. All link hrefs are escaped; callers pass already-validated
@@ -52,7 +61,7 @@ export function crmOAuthPage(opts: {
 <meta name="robots" content="noindex"><title>${escapeHtml(opts.title)}</title></head>
 <body style="margin:0;background:#f8f8fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
 <div style="max-width:440px;margin:96px auto;background:#fff;border:1px solid #e4e4ea;border-radius:12px;padding:36px 40px;text-align:center;">
-<div style="font-weight:700;font-size:18px;letter-spacing:-0.03em;color:#1f2937;">gtm grid</div>
+<img src="/brand/logo.svg" alt="GTM Grid" width="138" height="26" style="display:block;margin:0 auto;height:26px;width:auto;">
 <h1 style="margin:18px 0 0;font-size:20px;font-weight:600;letter-spacing:-0.02em;color:#111118;">${escapeHtml(opts.heading)}</h1>
 <p style="margin:10px 0 0;font-size:14px;line-height:1.6;color:#5a5a6e;">${escapeHtml(opts.message)}</p>
 ${primary}
