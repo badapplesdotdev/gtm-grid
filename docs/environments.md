@@ -18,6 +18,21 @@ production desktop release**. Keeping `main` as production leaves `release.yml`
 and `migrate-prod.yml` untouched, which are the two files where a mistake is
 least recoverable.
 
+## Telling the two databases apart
+
+Both live on the same pooler host (`aws-1-us-east-2.pooler.supabase.com:6543`), so
+the ONLY thing distinguishing a production connection string from a staging one is
+the project ref in the username (`postgres.<ref>`):
+
+| Environment | Supabase project ref |
+|---|---|
+| production | `fmzqedfoqhdzpdsguvci` |
+| staging | `pkbxzbnkpwjawifnlrct` |
+
+Refs are identifiers, not secrets — they appear in dashboard URLs. Check the ref
+before pasting any connection string into an env var; host and port alone tell you
+nothing.
+
 ## The couplings that will bite
 
 **The `staging` branch name is load-bearing.** The Supabase persistent branch is
