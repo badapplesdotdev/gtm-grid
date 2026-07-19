@@ -39,13 +39,17 @@ export function readConsent(): ConsentChoice | null {
  * Granting switches persistence to cookies+localStorage and opts in. Denying
  * opts out and drops any identifying state PostHog is holding in memory.
  */
-export function applyConsent(choice: ConsentChoice, options?: { silent?: boolean }): void {
+export function applyConsent(choice: ConsentChoice): void {
   if (choice === "granted") {
+    // Only ever called for a LIVE choice made in the banner, never to replay a
+    // stored one on page load — instrumentation-client.ts picks persistence at
+    // init for that case, because a post-init swap copies the in-memory props
+    // over the persisted ones and mints a new anonymous person each load.
+    // Here the swap is what we want: the visitor just accepted, so the id they
+    // browsed this session with should carry forward into persistent storage.
     posthog.set_config({ persistence: "localStorage+cookie" });
-    // `opt_in_capturing` emits an `$opt_in` event by default. That is right when
-    // the visitor actively accepts, but re-applying a stored choice on every page
-    // load would emit one per navigation, inflating the event stream.
-    posthog.opt_in_capturing(options?.silent ? { captureEventName: false } : undefined);
+    // Emits `$opt_in`, which is correct — this IS a fresh act of consent.
+    posthog.opt_in_capturing();
     return;
   }
   // Order matters: opt out first so nothing is captured mid-teardown, then
