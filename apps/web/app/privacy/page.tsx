@@ -122,7 +122,9 @@ export default function PrivacyPage() {
         Where you bring your
         own AI provider key, prompts and row content are sent from your machine directly to that
         provider; we do not receive or retain that traffic. Local-only projects are stored on your
-        device and are not uploaded to us at all.
+        device and their contents are not uploaded to us. The one exception is error reporting:
+        if a run fails, the desktop app and its local engine send us an error report as
+        described above, which can contain fragments of the data being processed.
       </p>
       <p>
         The exceptions are server-side runs you explicitly choose — pipelines you set to run on
@@ -163,11 +165,16 @@ export default function PrivacyPage() {
         <li><strong>Vercel</strong> — hosting for the website and API.</li>
         <li><strong>Stripe</strong> (via Autumn) — payment processing and subscription billing.</li>
         <li><strong>Resend</strong> — transactional and lifecycle email delivery.</li>
-        <li><strong>PostHog</strong> — product analytics.</li>
+        <li><strong>PostHog</strong> — product analytics and error reporting.</li>
+        <li>
+          <strong>Inngest</strong> — durable background job processing. Inbound webhook
+          records and cloud pipeline runs pass through Inngest as event payloads, so it
+          receives Customer Data, not only job metadata.
+        </li>
+        <li><strong>PartyKit</strong> — realtime presence.</li>
       </ul>
       <p>
-        We also use Inngest for background job processing and PartyKit for realtime presence.
-        Separately, connectors you choose to enable (your CRM, data providers, AI model providers)
+        Connectors you choose to enable (your CRM, data providers, AI model providers)
         receive the data needed to fulfil the request you made — their own privacy policies govern
         that processing. We may disclose data where the law requires it — and we will notify
         you when we are legally permitted to do so, which court orders and similar requests
@@ -191,8 +198,12 @@ export default function PrivacyPage() {
           below, and we will action it unless we are legally required to keep a record.
         </li>
         <li>
-          <strong>Operational logs:</strong> held by our hosting provider, Vercel, and
-          retained for 30 days.
+          <strong>Operational logs:</strong> held by our hosting provider, Vercel, and kept
+          only for the short period their platform retains them, for fault diagnosis.
+        </li>
+        <li>
+          <strong>Analytics and error reports:</strong> held by PostHog under their retention
+          schedule for our plan.
         </li>
         <li>
           <strong>Pipeline run data:</strong> execution history for pipeline runs is retained
