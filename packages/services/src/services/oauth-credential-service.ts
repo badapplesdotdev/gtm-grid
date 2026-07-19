@@ -30,6 +30,12 @@ import { freshTokens } from "../oauth/token-service.js";
 import type { OAuthNotConfiguredError, OAuthTokens, RefreshPolicy } from "../oauth/types.js";
 import { CredentialRepo } from "../repositories/credential-repo.js";
 import { CryptoService } from "./crypto-service.js";
+import { GOOGLE_ADAPTER } from "./google-auth.js";
+import {
+  GOOGLE_CONNECTION_SLOT,
+  parseConnection as parseGoogleConnection,
+  toSecrets as googleToSecrets,
+} from "./google-connection-service.js";
 import { SLACK_ADAPTER } from "./slack-auth.js";
 import {
   parseConnection as parseSlackConnection,
@@ -68,6 +74,35 @@ export const OAUTH_SLOTS: Readonly<Record<string, OAuthSlotSpec>> = {
           teamId: secrets.teamId ?? "",
           teamName: secrets.teamName ?? "",
           botUserId: secrets.botUserId ?? "",
+        },
+      );
+    },
+  },
+  [GOOGLE_CONNECTION_SLOT]: {
+    adapter: GOOGLE_ADAPTER,
+    policy: GOOGLE_ADAPTER.refreshPolicy,
+    parse: (secrets) => parseGoogleConnection(secrets)?.tokens ?? null,
+    /**
+     * The merge must carry the PICKED FILES across a refresh, not just the
+     * display meta. Under `drive.file` that list is the only record of which
+     * spreadsheets the grant can actually open — dropping it on the hour, every
+     * hour, when the access token rolls over would leave a perfectly valid token
+     * attached to a connection the UI believes can reach nothing.
+     *
+     * `parseGoogleConnection` returning null means the stored blob has no usable
+     * token, which `freshSecrets` already screened for before calling here; the
+     * fallback reconstructs the meta field-by-field anyway so a partial row still
+     * round-trips rather than silently blanking.
+     */
+    merge: (secrets, tokens) => {
+      const existing = parseGoogleConnection(secrets);
+      return googleToSecrets(
+        tokens,
+        existing?.meta ?? {
+          connectedByUserId: secrets.connectedByUserId ?? "",
+          connectedByName: secrets.connectedByName ?? "",
+          googleEmail: secrets.googleEmail ?? "",
+          pickedFiles: [],
         },
       );
     },

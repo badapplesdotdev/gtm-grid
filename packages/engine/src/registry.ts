@@ -42,6 +42,29 @@ export class Registry {
   }
 }
 
+/**
+ * Which credential row a connector's calls authenticate with.
+ *
+ * Defaults to the connector's own id, which is what every connector predating
+ * this helper relied on — so an absent `credentialSlot` is exactly the old
+ * behaviour, and no existing manifest changes meaning.
+ *
+ * The override exists for provider FAMILIES. Google mints ONE grant covering
+ * Sheets, Docs and Gmail; without a shared slot each of those connectors would
+ * demand its own connection and the user would authorise Google once per
+ * connector. Only the `oauth` arm may share a slot: two `apiKey` connectors
+ * pointing at one row would let the Tools panel's "Replace key" on either of
+ * them silently overwrite the other's secret.
+ *
+ * `undefined` connector (an id with no registered connector) falls back to the
+ * id too, so a lookup miss degrades to the old behaviour rather than throwing.
+ */
+export function credentialSlotFor(connector: Connector | undefined, connectorId: string): string {
+  const auth = connector?.auth;
+  if (auth?.type === "oauth" && auth.credentialSlot) return auth.credentialSlot;
+  return connectorId;
+}
+
 export function defaultRegistry(): Registry {
   return new Registry([
     aiConnector,

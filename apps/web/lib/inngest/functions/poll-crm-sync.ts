@@ -26,6 +26,7 @@ import {
   CrmSyncService,
   DUE_PAGE_SIZE,
   FANOUT_CHUNK,
+  MAX_DUE_PAGES,
 } from "@gtmgrid/services";
 import { Effect, ManagedRuntime } from "effect";
 import { inngest } from "../client";
@@ -179,7 +180,7 @@ export const pollCrmSync = inngest.createFunction(
         // Bound the work per cron tick: at most a fixed number of pages, so a
         // pathological backlog can't make one tick run unbounded (the next daily
         // tick resumes — bindings stay marked due until synced).
-        for (let page = 0; page < 200; page += 1) {
+        for (let page = 0; page < MAX_DUE_PAGES; page += 1) {
           const result: {
             items: ReadonlyArray<{ id: string; workspaceId: string; createdAt: number }>;
             nextCursor: { readonly createdAt: number; readonly id: string } | null;

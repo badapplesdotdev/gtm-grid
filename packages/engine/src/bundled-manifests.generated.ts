@@ -3695,6 +3695,189 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
     ]
   },
   {
+    "id": "googlesheets",
+    "name": "Google Sheets",
+    "version": "1.0.0",
+    "category": "productivity",
+    "description": "Read and write Google Sheets from a column. Connect your Google account once, then select which spreadsheets GTM Grid may open — it can only ever touch the files you pick.",
+    "logo": "https://www.google.com/s2/favicons?domain=sheets.google.com&sz=128",
+    "baseUrl": "https://sheets.googleapis.com/v4",
+    "auth": {
+      "type": "oauth",
+      "provider": "google",
+      "credentialSlot": "google"
+    },
+    "rateLimit": {
+      "rpm": 60,
+      "concurrency": 2
+    },
+    "methods": [
+      {
+        "id": "appendRow",
+        "label": "Append Row",
+        "description": "Append a row to the end of a sheet. `values` is a LIST OF ROWS, so a single row is `[[\"Acme\", \"acme.com\"]]` — the extra nesting is Google's shape, not a typo. `range` only needs to name the sheet tab (e.g. `Sheet1`); Google finds the first empty row itself. The spreadsheet must be one you selected when connecting.",
+        "category": "Send data",
+        "verb": "POST",
+        "path": "/spreadsheets/{spreadsheetId}/values/{range}:append",
+        "result": "updates.updatedRange",
+        "credits": 0,
+        "query": [
+          "valueInputOption",
+          "insertDataOption"
+        ],
+        "input": {
+          "type": "object",
+          "required": [
+            "spreadsheetId",
+            "range",
+            "values"
+          ],
+          "properties": {
+            "spreadsheetId": {
+              "type": "string",
+              "description": "Spreadsheet id (the long id in its URL). Must be a sheet you selected when connecting Google."
+            },
+            "range": {
+              "type": "string",
+              "description": "Sheet tab to append to, e.g. `Sheet1` or `Sheet1!A:D`"
+            },
+            "values": {
+              "type": "array",
+              "description": "Rows to append. One row = [[\"cell one\", \"cell two\"]]",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "valueInputOption": {
+              "type": "string",
+              "description": "USER_ENTERED (default — Google parses numbers/dates/formulas) or RAW (store verbatim)"
+            },
+            "insertDataOption": {
+              "type": "string",
+              "description": "INSERT_ROWS (default) or OVERWRITE"
+            }
+          }
+        },
+        "options": {
+          "range": {
+            "method": "listSheets",
+            "itemsPath": "sheets",
+            "labelKey": "properties.title",
+            "valueKey": "properties.title"
+          }
+        }
+      },
+      {
+        "id": "getValues",
+        "label": "Read Range",
+        "description": "Read a cell range and return its values as a list of rows. Use A1 notation, e.g. `Sheet1!A1:D50` for a block or `Sheet1!A2:A` for a whole column from row 2 down. Empty trailing cells are omitted by Google, so rows can be shorter than you expect.",
+        "category": "Read data",
+        "verb": "GET",
+        "path": "/spreadsheets/{spreadsheetId}/values/{range}",
+        "result": "values",
+        "credits": 0,
+        "input": {
+          "type": "object",
+          "required": [
+            "spreadsheetId",
+            "range"
+          ],
+          "properties": {
+            "spreadsheetId": {
+              "type": "string",
+              "description": "Spreadsheet id (the long id in its URL). Must be a sheet you selected when connecting Google."
+            },
+            "range": {
+              "type": "string",
+              "description": "A1 range, e.g. `Sheet1!A1:D50`"
+            },
+            "majorDimension": {
+              "type": "string",
+              "description": "ROWS (default) or COLUMNS"
+            },
+            "valueRenderOption": {
+              "type": "string",
+              "description": "FORMATTED_VALUE (default), UNFORMATTED_VALUE, or FORMULA"
+            }
+          }
+        }
+      },
+      {
+        "id": "updateValues",
+        "label": "Write Range",
+        "description": "Overwrite a specific cell range. `values` is a LIST OF ROWS, so writing one cell is `[[\"done\"]]`. The range must match the shape of the data you send — writing a 2-cell row into `A1:A1` fails. To add data without overwriting anything, use Append Row instead.",
+        "category": "Send data",
+        "verb": "PUT",
+        "path": "/spreadsheets/{spreadsheetId}/values/{range}",
+        "result": "updatedRange",
+        "credits": 0,
+        "query": [
+          "valueInputOption"
+        ],
+        "input": {
+          "type": "object",
+          "required": [
+            "spreadsheetId",
+            "range",
+            "values"
+          ],
+          "properties": {
+            "spreadsheetId": {
+              "type": "string",
+              "description": "Spreadsheet id (the long id in its URL). Must be a sheet you selected when connecting Google."
+            },
+            "range": {
+              "type": "string",
+              "description": "A1 range to overwrite, e.g. `Sheet1!B2:C2`"
+            },
+            "values": {
+              "type": "array",
+              "description": "Rows to write. One cell = [[\"done\"]]",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "valueInputOption": {
+              "type": "string",
+              "description": "USER_ENTERED (default) or RAW"
+            }
+          }
+        }
+      },
+      {
+        "id": "listSheets",
+        "label": "List Sheet Tabs",
+        "description": "List the tabs in a spreadsheet. Mostly used to populate the sheet picker on the other methods, but callable directly to discover tab names.",
+        "category": "Read data",
+        "verb": "GET",
+        "path": "/spreadsheets/{spreadsheetId}",
+        "credits": 0,
+        "input": {
+          "type": "object",
+          "required": [
+            "spreadsheetId"
+          ],
+          "properties": {
+            "spreadsheetId": {
+              "type": "string",
+              "description": "Spreadsheet id (the long id in its URL)"
+            },
+            "fields": {
+              "type": "string",
+              "description": "Partial-response mask. Defaults to sheets.properties so the reply stays small."
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
     "id": "granola",
     "name": "Granola",
     "version": "1.0.0",

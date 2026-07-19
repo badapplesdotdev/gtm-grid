@@ -1292,6 +1292,110 @@ export const lifecycleEmailSends = pgTable(
   ],
 );
 
+/**
+ * A cloud table fed by a Google Sheet. The Inngest cron pages values out of the
+ * Sheets API, maps them through `columns`, and inserts/updates rows — the Sheets
+ * analogue of {@link crmBindings}. Pull-only: GTM Grid never writes back to the
+ * spreadsheet from here (the `googlesheets` connector is how a column does that,
+ * deliberately, so an import can never mangle someone's source of truth).
+ *
+ * There is no `provider` column, unlike `crmBindings`: the credential slot is
+ * always `google`, and a second spreadsheet provider is not a thing.
+ */
+export const sheetBindings = pgTable(
+  "sheet_bindings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    tableId: uuid("table_id")
+      .notNull()
+      .references(() => tables.id, { onDelete: "cascade" }),
+    /** Google spreadsheet id (the long id in its URL). */
+    spreadsheetId: text("spreadsheet_id").notNull(),
+    /** Spreadsheet name at bind time, for display when the API is unreachable. */
+    spreadsheetName: text("spreadsheet_name").notNull(),
+    /** The tab within the spreadsheet, e.g. "Leads". */
+    sheetTitle: text("sheet_title").notNull(),
+    /**
+     * 1-based row holding the column headers. Almost always 1, but real sheets
+     * carry title banners and merged cells above the real header.
+     */
+    headerRow: integer("header_row").notNull(),
+    /** Header label → column mapping: [{ header, columnId }] (jsonb). */
+    columns: jsonb("columns").notNull(),
+    /**
+     * Header whose value identifies a row across syncs. Null means "no key" —
+     * rows are then identified by their SHEET ROW NUMBER, which is correct for
+     * append-only sheets and wrong the moment someone sorts or deletes a row.
+     * The UI pushes hard toward choosing a key for exactly that reason.
+     */
+    keyHeader: text("key_header"),
+    /** "manual" | "hourly" | "daily" | "weekly". */
+    schedule: text("schedule").notNull(),
+    enabled: boolean("enabled").notNull(),
+    /**
+     * Set when syncing is halted for a reason the USER must resolve
+     * ("auth_revoked" | "file_gone" | "sheet_gone"); null while healthy. A paused
+     * binding is skipped by the cron and surfaces a repair banner in the app.
+     */
+    pausedReason: text("paused_reason"),
+    lastSyncedAt: bigint("last_synced_at", { mode: "number" }),
+    /** Human-readable copy of the last failure (already user-safe), or null. */
+    lastError: text("last_error"),
+    rowsSynced: integer("rows_synced"),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  },
+  (t) => [
+    index("sheet_bindings_by_workspace").on(t.workspaceId),
+    index("sheet_bindings_by_table").on(t.tableId),
+    // One binding per (table, spreadsheet, tab). Re-importing the same tab into
+    // the same table is always a mistake — it would double every row on the next
+    // sync, with the two bindings fighting over the same cells.
+    uniqueIndex("sheet_bindings_by_table_source").on(t.tableId, t.spreadsheetId, t.sheetTitle),
+  ],
+);
+
+/**
+ * Sheet row → grid row identity map, one entry per source row a binding has
+ * ingested.
+ *
+ * This is what makes re-sync an UPDATE rather than a duplicate-insert, and it is
+ * the whole reason importing is more than "read values, insert rows". Entries
+ * are never deleted by sync: a row removed from the spreadsheet keeps its grid
+ * row, and with it any enrichment the user paid for downstream.
+ */
+export const sheetSyncedRows = pgTable(
+  "sheet_synced_rows",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    bindingId: uuid("binding_id")
+      .notNull()
+      .references(() => sheetBindings.id, { onDelete: "cascade" }),
+    rowId: uuid("row_id")
+      .notNull()
+      .references(() => rows.id, { onDelete: "cascade" }),
+    /**
+     * Identity of the source row: the key column's value when `keyHeader` is
+     * set, otherwise the literal sheet row number as text. Text either way so
+     * one unique index serves both modes.
+     */
+    externalKey: text("external_key").notNull(),
+    /**
+     * Hash of the mapped values at last write. An unchanged hash skips the cell
+     * writes, so re-syncing a mostly-static sheet costs one read rather than
+     * thousands of cell upserts.
+     */
+    valuesHash: text("values_hash"),
+    createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("sheet_synced_rows_by_binding_key").on(t.bindingId, t.externalKey),
+    index("sheet_synced_rows_by_row").on(t.rowId),
+  ],
+);
+
 // Re-export `sql` so consumers can build raw fragments without a second
 // drizzle-orm import path; keeps the package the single DB surface.
 export { sql };

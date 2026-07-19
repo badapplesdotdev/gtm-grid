@@ -186,6 +186,20 @@ export interface AnalyticsEventMap {
    * noise in all of them.
    */
   slack_connected: { workspace_id: string };
+  /**
+   * A Google account was connected. Separate from `crm_connected` for the same
+   * reason as Slack, and separate from any future `gsuite_*` event because ONE
+   * grant serves every Google connector — connecting is a single act regardless
+   * of whether the workspace goes on to use Sheets, Docs or Gmail.
+   */
+  google_connected: { workspace_id: string };
+  /**
+   * Spreadsheets were authorised through the Google Picker. Distinct from
+   * `google_connected` because under the `drive.file` scope these are genuinely
+   * two steps: a workspace can be connected but able to reach nothing, and the
+   * gap between the two is a real funnel drop worth seeing.
+   */
+  google_sheets_picked: { workspace_id: string; file_count: number };
   /** A synced table binding was created (wizard completed end to end). */
   crm_binding_created: {
     provider: string;

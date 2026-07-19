@@ -10,7 +10,7 @@ import {
   isFormulaColumn,
   type CompiledFormula,
 } from "./formula.js";
-import { Registry, defaultRegistry } from "./registry.js";
+import { Registry, credentialSlotFor, defaultRegistry } from "./registry.js";
 import { runFunction, type SandboxDispatch } from "./sandbox.js";
 import {
   type GridStoreError,
@@ -225,7 +225,11 @@ export class Engine {
       Effect.gen(this, function* () {
         const m = this.registry.method(provider, method);
         if (!m) throw new Error(`Unknown function ${provider}.${method}`);
-        const cred = yield* this.creds.getCredential(provider);
+        // The credential slot is the connector id UNLESS the connector declares
+        // a shared one, which is how a provider family (Google: sheets, docs,
+        // gmail) reads a single OAuth grant instead of demanding one connection
+        // per connector. Absent slot ⇒ unchanged behaviour for every connector.
+        const cred = yield* this.creds.getCredential(credentialSlotFor(this.registry.get(provider), provider));
         const aiProviders = this.config.aiProviders?.length
           ? this.config.aiProviders
           : this.config.ai

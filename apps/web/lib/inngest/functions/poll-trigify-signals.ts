@@ -13,7 +13,7 @@
  * `runtime = "nodejs"` for the Effect runtime + credential decrypt (node:crypto).
  */
 
-import { type AppServices, appLayer, DUE_PAGE_SIZE, FANOUT_CHUNK, type SignalDueCursor, SignalService } from "@gtmgrid/services";
+import { type AppServices, appLayer, DUE_PAGE_SIZE, FANOUT_CHUNK, MAX_DUE_PAGES, type SignalDueCursor, SignalService } from "@gtmgrid/services";
 import { Effect, ManagedRuntime } from "effect";
 import { inngest } from "../client";
 import { onFailure } from "../on-failure";
@@ -48,7 +48,7 @@ export const pollTrigifySignals = inngest.createFunction(
         // Bound the work per cron tick: at most a fixed number of pages, so a
         // pathological backlog can't make one tick run unbounded (the next tick
         // resumes — bindings stay marked due until synced).
-        for (let page = 0; page < 200; page += 1) {
+        for (let page = 0; page < MAX_DUE_PAGES; page += 1) {
           const result: { items: ReadonlyArray<{ id: string; workspaceId: string; createdAt: number }>; nextCursor: SignalDueCursor | null } =
             await exec(
               Effect.gen(function* () {

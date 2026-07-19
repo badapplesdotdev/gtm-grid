@@ -478,6 +478,30 @@ exports[`bundled extension rate-limit config > pins the rate-limit shape of ever
       },
     },
   },
+  "googlesheets": {
+    "connector": {
+      "concurrency": 2,
+      "rpm": 60,
+    },
+    "methods": {
+      "appendRow": {
+        "concurrency": 2,
+        "rpm": 60,
+      },
+      "getValues": {
+        "concurrency": 2,
+        "rpm": 60,
+      },
+      "listSheets": {
+        "concurrency": 2,
+        "rpm": 60,
+      },
+      "updateValues": {
+        "concurrency": 2,
+        "rpm": 60,
+      },
+    },
+  },
   "granola": {
     "connector": {
       "concurrency": 3,
@@ -5656,6 +5680,7 @@ exports[`bundled extension rate-limit config > ships the expected set of extensi
   "firecrawl",
   "fireflies",
   "fullenrich",
+  "googlesheets",
   "granola",
   "heyreach",
   "hubspot",

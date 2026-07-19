@@ -65,11 +65,35 @@ export interface OAuthConnectCardProps {
   readonly disconnectedSub: string;
   /** Optional trailing note (e.g. "the API key below is separate"). */
   readonly footerNote?: string;
+  /**
+   * An extra action shown only while CONNECTED.
+   *
+   * Exists for Google: under the `drive.file` scope a valid grant can still reach
+   * no files, so "connected" is not the end of setup — the user must also pick
+   * spreadsheets, and can come back to pick more later. Every other provider so
+   * far finishes at consent, which is why this is optional rather than a required
+   * slot every caller has to pass null into.
+   */
+  readonly connectedAction?: {
+    readonly label: string;
+    readonly run: () => Promise<void>;
+  };
 }
 
 export function OAuthConnectCard(props: OAuthConnectCardProps) {
   const { headText, providerName, status, refresh, authorizeUrl, disconnect } = props;
-  const [busy, setBusy] = useState(false);
+  /**
+   * WHY we are polling, not merely THAT we are.
+   *
+   * A bare boolean breaks the moment a second browser round-trip exists. The
+   * "we're connected now" effect below fires on `busy && connected` — and for
+   * `connectedAction` the card is ALREADY connected when the trip starts, so a
+   * boolean would resolve it on the very next render: the poll would stop
+   * instantly and the card would announce "Google connected." in response to the
+   * user asking to pick files.
+   */
+  const [busyReason, setBusyReason] = useState<null | "authorize" | "action">(null);
+  const busy = busyReason !== null;
   const [confirming, setConfirming] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
@@ -80,7 +104,7 @@ export function OAuthConnectCard(props: OAuthConnectCardProps) {
     const tick = setInterval(() => {
       void refresh();
     }, POLL_EVERY_MS);
-    const stop = setTimeout(() => setBusy(false), POLL_WINDOW_MS);
+    const stop = setTimeout(() => setBusyReason(null), POLL_WINDOW_MS);
     return () => {
       clearInterval(tick);
       clearTimeout(stop);
@@ -88,11 +112,14 @@ export function OAuthConnectCard(props: OAuthConnectCardProps) {
   }, [busy, refresh]);
 
   useEffect(() => {
-    if (busy && status.kind === "connected") {
-      setBusy(false);
+    // Only an AUTHORIZE trip resolves on "connected" — that is its success
+    // condition. An action trip is already connected and ends on its own timeout
+    // or when the caller's own state changes.
+    if (busyReason === "authorize" && status.kind === "connected") {
+      setBusyReason(null);
       setNote(`${providerName} connected.`);
     }
-  }, [busy, status, providerName]);
+  }, [busyReason, status, providerName]);
 
   const authorize = useCallback(async () => {
     setNote(null);
@@ -100,10 +127,10 @@ export function OAuthConnectCard(props: OAuthConnectCardProps) {
       const url = await authorizeUrl();
       // Set busy BEFORE handing off: on a fast local round-trip the connection
       // can land before the browser even returns focus.
-      setBusy(true);
+      setBusyReason("authorize");
       await openExternalUrl(url);
     } catch (e) {
-      setBusy(false);
+      setBusyReason(null);
       setNote(e instanceof Error ? e.message : `Could not start the ${providerName} connection.`);
     }
   }, [authorizeUrl, providerName]);
@@ -151,6 +178,25 @@ export function OAuthConnectCard(props: OAuthConnectCardProps) {
                 {status.byName ? ` · connected by ${status.byName}` : ""}
               </span>
             </span>
+            {props.connectedAction ? (
+              <button
+                className="skill-btn primary"
+                disabled={busy}
+                onClick={() => {
+                  // Same busy/poll cycle as authorize: the action hands off to the
+                  // system browser too, so the result arrives out-of-process and
+                  // the poll is what notices it.
+                  setNote(null);
+                  setBusyReason("action");
+                  void props.connectedAction?.run().catch((e: unknown) => {
+                    setBusyReason(null);
+                    setNote(e instanceof Error ? e.message : "Could not open the picker.");
+                  });
+                }}
+              >
+                {props.connectedAction.label}
+              </button>
+            ) : null}
             <button className="skill-btn" disabled={busy} onClick={() => void authorize()}>
               {busy ? `Waiting for ${providerName}…` : "Reconnect"}
             </button>

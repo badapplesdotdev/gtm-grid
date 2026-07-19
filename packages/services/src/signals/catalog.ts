@@ -227,3 +227,23 @@ export const FANOUT_CHUNK = 200;
 
 /** How many due bindings the cron pulls per keyset page. */
 export const DUE_PAGE_SIZE = 500;
+
+/**
+ * How many keyset pages one cron tick will walk before stopping.
+ *
+ * A backstop, not a budget. Paging ends naturally when `nextCursor` is null, so
+ * this only bites on a pathological backlog — where it stops ONE tick from
+ * running unbounded and starving the function's step budget. Nothing is lost:
+ * bindings stay marked due, so the next tick resumes where this one left off.
+ *
+ * At `DUE_PAGE_SIZE` per page that is 100k bindings per tick, which is far past
+ * any real workload — so raising it is not the fix if a backlog persists. That
+ * would mean syncs are failing or the cron cadence is too slow, and the cap is
+ * the symptom rather than the cause.
+ *
+ * Deliberately NOT reused as {@link FANOUT_CHUNK}, which happens to share the
+ * value 200: one bounds PAGES READ, the other bounds EVENTS SENT PER STEP. They
+ * are independent knobs and folding them together would couple two unrelated
+ * limits at whichever value someone tuned first.
+ */
+export const MAX_DUE_PAGES = 200;
