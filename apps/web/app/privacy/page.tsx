@@ -14,10 +14,10 @@ const LAST_UPDATED = "19 July 2026";
 // and the processors we actually depend on (Supabase/Postgres, Vercel,
 // Better Auth, Autumn+Stripe, Resend, PostHog, Inngest, PartyKit).
 //
-// NOT bespoke legal advice. Four items marked [[ ]] below are facts about the
-// business that cannot be read out of the codebase — legal entity, address,
-// retention windows, and supervisory authority. Fill those in and have counsel
-// review before this is relied on.
+// Business facts (entity, address, retention, supervisory authority) supplied by
+// the business owner, not derived from code — re-check them if the company
+// details change. NOT bespoke legal advice; have counsel review before relying
+// on it in a dispute.
 export default function PrivacyPage() {
   return (
     <main className="container prose">
@@ -42,10 +42,10 @@ export default function PrivacyPage() {
 
       <h2>1. Who we are</h2>
       <p>
-        The Service is operated by [[LEGAL ENTITY NAME]], [[REGISTERED ADDRESS]]. For data
-        you put into a workspace about your own prospects and customers, you are the data
-        controller and we act as your processor. For your account and billing data, we are
-        the controller. Privacy questions:{" "}
+        The Service is operated by Aphex Automate LTD, 86 Broadway, Cowbridge, CF6 41TR,
+        United Kingdom. For data you put into a workspace about your own prospects and
+        customers, you are the data controller and we act as your processor. For your
+        account and billing data, we are the controller. Privacy questions:{" "}
         <a href="mailto:morgan@trigify.io">morgan@trigify.io</a>.
       </p>
 
@@ -163,13 +163,23 @@ export default function PrivacyPage() {
 
       <h2>7. How long we keep it</h2>
       <ul>
-        <li>Account and workspace data: for as long as your account is open.</li>
         <li>
-          After you delete a workspace or close your account: deleted within
-          [[RETENTION WINDOW — e.g. 30 days]], except where we must keep records longer.
+          <strong>Account, workspace, and grid data:</strong> we do not apply an automatic
+          expiry — this data is kept for as long as you want it, and is deleted when you ask
+          us to delete it. You can request deletion at any time using the contact address
+          below, and we will action it unless we are legally required to keep a record.
         </li>
-        <li>Billing records: retained as long as tax and accounting law requires.</li>
-        <li>Analytics and logs: [[LOG RETENTION WINDOW]].</li>
+        <li>
+          <strong>Operational logs:</strong> held by our hosting provider, Vercel, and
+          retained for 30 days.
+        </li>
+        <li>
+          <strong>Playbook run data:</strong> retained for 30 days.
+        </li>
+        <li>
+          <strong>Billing records:</strong> retained as long as tax and accounting law
+          requires.
+        </li>
       </ul>
 
       <h2>8. Security</h2>
@@ -191,8 +201,8 @@ export default function PrivacyPage() {
       </p>
       <p>
         If you are unhappy with how we have handled your data you can complain to your local data
-        protection authority — in the UK, [[SUPERVISORY AUTHORITY — e.g. the Information
-        Commissioner&rsquo;s Office]].
+        protection authority. In the UK that is the Information Commissioner&rsquo;s Office
+        (<a href="https://ico.org.uk">ico.org.uk</a>).
       </p>
       <p>
         If your data is in a customer&rsquo;s workspace and you are not a GTM Grid user, that
