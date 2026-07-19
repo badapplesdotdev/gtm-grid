@@ -484,7 +484,7 @@ export function Footer({ version }: { version: string }) {
       </div>
       <div className="footer-bottom">
         <div className="wrap">
-          <span>© 2026 Grid</span>
+          <span>© 2026 Aphex Automate LTD</span>
           <span className="mono">v{version} · FSL-1.1-MIT</span>
         </div>
       </div>
