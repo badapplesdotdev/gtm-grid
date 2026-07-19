@@ -1,4 +1,5 @@
 import posthog from "posthog-js";
+import { applyConsent, readConsent } from "./lib/consent";
 import { clientEnv, posthogEnabled } from "./lib/env";
 
 // Initialize PostHog only when a project token is configured — a missing token
@@ -22,6 +23,18 @@ if (posthogEnabled) {
     // Re-enabling needs the privacy review in docs/observability.md plus a
     // matching disclosure in §2 of apps/web/app/privacy/page.tsx.
     disable_session_recording: true,
+    // PECR requires PRIOR consent for non-essential storage, so PostHog must not
+    // write a cookie or localStorage entry on page load. Booting opted-out with
+    // in-memory persistence means nothing is stored and nothing is sent until
+    // the visitor accepts in the banner (app/CookieConsent.tsx), at which point
+    // `applyConsent` switches persistence on. Do NOT remove these two lines
+    // without also removing the analytics-cookie disclosure in §10 of /privacy.
+    opt_out_capturing_by_default: true,
+    persistence: "memory",
     debug: process.env.NODE_ENV === "development",
   });
+
+  // Re-apply a previously stored choice. Absent or unreadable = stay opted out.
+  const stored = readConsent();
+  if (stored) applyConsent(stored);
 }

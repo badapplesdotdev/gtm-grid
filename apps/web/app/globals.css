@@ -942,3 +942,77 @@ code, .mono {
 /* Out-specify `.prose a` (0,1,1) so the button keeps its own colour and has no underline. */
 .prose a.prose__cta { margin-top: var(--space-5); color: var(--text-on-accent); text-decoration: none; }
 .prose__foot { margin-top: var(--space-8); padding-top: var(--space-5); border-top: 1px solid var(--line); }
+
+/* ─────────────────────── Cookie consent banner ─────────────────────── */
+/* Fixed to the viewport bottom so it is visible without obscuring page
+   content on mobile. Both actions share the same .btn sizing — under ICO
+   guidance a reject control that is less prominent than accept is not a free
+   choice, so only the fill differs. */
+.cookie-banner {
+  position: fixed;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 60;
+  padding: 0.875rem 1rem calc(0.875rem + env(safe-area-inset-bottom));
+  background: var(--surface-page);
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -8px 24px rgb(17 17 24 / 6%);
+}
+
+.cookie-banner__inner {
+  display: flex;
+  gap: 1.25rem;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 68rem;
+  margin: 0 auto;
+  flex-wrap: wrap;
+}
+
+.cookie-banner__copy {
+  flex: 1 1 22rem;
+  min-width: 0;
+}
+
+.cookie-banner__title {
+  margin: 0 0 0.15rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-body);
+}
+
+.cookie-banner__body {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.cookie-banner__actions {
+  display: flex;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+}
+
+/* A button that reads as a link — used for the consent-withdrawal control so it
+   sits naturally in the footer list and in prose. */
+.linklike {
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+
+@media (max-width: 34rem) {
+  .cookie-banner__actions {
+    width: 100%;
+  }
+
+  .cookie-banner__actions .btn {
+    flex: 1 1 0;
+    justify-content: center;
+  }
+}

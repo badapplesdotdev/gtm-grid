@@ -1106,3 +1106,7 @@ html { scroll-behavior: smooth; }
 .gtm-home .conn-card.custom .conn-ico svg { width: 20px; height: 20px; }
 .gtm-home .conn-card.custom .conn-name { color: var(--text); }
 
+/* Consent-withdrawal control sits in the Company column and must read as one of
+   the links beside it, not as a form button. */
+.gtm-home .foot-col .linklike { display: block; font-size: 14px; color: var(--text-2); padding: 5px 0; text-align: left; text-decoration: none; transition: color .12s ease; }
+.gtm-home .foot-col .linklike:hover { color: var(--text); }

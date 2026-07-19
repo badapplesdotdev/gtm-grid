@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { CookieSettingsButton } from "../CookieConsent";
 
 export const metadata: Metadata = {
   title: "Privacy Policy — GTM Grid",
@@ -150,7 +151,8 @@ export default function PrivacyPage() {
         </li>
         <li>
           <strong>To improve the product and send lifecycle email</strong> — analytics and
-          onboarding or digest mail. Basis: legitimate interests, and consent where required. You
+          onboarding or digest mail. Basis: your consent for analytics cookies, collected via the
+          banner before anything is stored on your device; legitimate interests for the rest. You
           can opt out of non-transactional email at any time.
         </li>
       </ul>
@@ -247,8 +249,18 @@ export default function PrivacyPage() {
 
       <h2>10. Cookies</h2>
       <p>
-        We use cookies that are strictly necessary to keep you signed in, and analytics cookies to
-        understand product usage. We do not use advertising cookies.
+        We use cookies that are strictly necessary to keep you signed in and to remember your
+        cookie choice. These do not need your consent because the site cannot work without them.
+      </p>
+      <p>
+        We would also like to use analytics cookies to understand how the product is used. We
+        ask first: until you accept, our analytics tool runs with in-memory storage only and
+        writes nothing to your device. If you decline, it stays that way. We do not use
+        advertising cookies, and we do not record your screen.
+      </p>
+      <p>
+        You can change your mind at any time — <CookieSettingsButton /> re-opens the banner, and
+        declining clears any analytics cookies we previously set.
       </p>
 
       <h2>11. Children</h2>

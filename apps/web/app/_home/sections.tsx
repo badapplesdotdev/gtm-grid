@@ -4,6 +4,7 @@
 // client components (HeroApp, Nav, QuickStart, Pricing, Faq, DownloadCTA,
 // CopyButton); connector data comes from the real catalog in connectors.ts.
 
+import { CookieSettingsButton } from "../CookieConsent";
 import { CONNECTORS, CONNECTOR_COUNT } from "./connectors";
 import { DownloadCTA } from "./DownloadCTA";
 import { CopyButton } from "./CopyButton";
@@ -477,6 +478,7 @@ export function Footer({ version }: { version: string }) {
           <a href="/docs/attio">Attio integration</a>
           <a href="/terms">Terms</a>
           <a href="/privacy">Privacy</a>
+          <CookieSettingsButton className="linklike" />
           <a href={`${REPO}/blob/main/LICENSE`}>License</a>
         </div>
       </div>
