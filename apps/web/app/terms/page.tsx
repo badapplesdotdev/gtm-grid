@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { LegalPage } from "../_legal/LegalPage";
 
 export const metadata: Metadata = {
   title: "Terms of Service — GTM Grid",
   description: "The terms that govern your use of the GTM Grid desktop app and cloud services.",
 };
 
-const LAST_UPDATED = "5 July 2026";
+const LAST_UPDATED = "19 July 2026";
 
 // Plain-language boilerplate ToS covering the product as it actually works:
 // desktop app + cloud workspaces, BYO AI keys, read-only CRM connections,
@@ -14,23 +15,13 @@ const LAST_UPDATED = "5 July 2026";
 // review with counsel before relying on it in a dispute.
 export default function TermsPage() {
   return (
-    <main className="container prose">
-      <Link className="wordmark prose__home" href="/">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="wordmark__mark" src="/brand/icon.png" alt="" width={16} height={16} aria-hidden="true" />
-        GTM Grid
-      </Link>
-
-      <header className="prose__head">
-        <span className="eyebrow">legal</span>
-        <h1>Terms of Service</h1>
-        <p className="prose__lede">Last updated: {LAST_UPDATED}</p>
-      </header>
-
+    <LegalPage title="Terms of Service" lastUpdated={LAST_UPDATED}>
       <p>
         These Terms of Service (&ldquo;Terms&rdquo;) govern your use of the GTM Grid desktop
         application, website, and cloud services (together, the &ldquo;Service&rdquo;), operated
-        by GTM Grid (&ldquo;we&rdquo;, &ldquo;us&rdquo;). By creating an account or using the
+        by Aphex Automate LTD, 86 Broadway, Cowbridge, CF64 1TR, United Kingdom
+        (&ldquo;we&rdquo;, &ldquo;us&rdquo;) — the same entity identified as data controller in
+        our <Link href="/privacy">Privacy Policy</Link>. By creating an account or using the
         Service you agree to these Terms. If you are using the Service on behalf of a company,
         you represent that you have authority to bind that company, and &ldquo;you&rdquo; means
         that company.
@@ -159,8 +150,8 @@ export default function TermsPage() {
 
       <h2>14. Contact</h2>
       <p>
-        Questions about these Terms: <a href="mailto:morgan@trigify.io">morgan@trigify.io</a>.
+        Questions about these Terms: <a href="mailto:legal@gtmgrid.dev">legal@gtmgrid.dev</a>.
       </p>
-    </main>
+    </LegalPage>
   );
 }

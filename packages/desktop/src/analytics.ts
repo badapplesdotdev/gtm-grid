@@ -43,19 +43,25 @@ export function initAnalytics(): void {
     // React error-boundary catches are reported explicitly from ErrorBoundary.
     capture_exceptions: true,
     defaults: "2026-01-30",
-    // Session Replay. Whether recording actually runs is gated by the project's
-    // "Record user sessions" toggle (PostHog remote config), so this stays off
-    // for OSS/local builds with their own project. The Tauri webview has no CSP
-    // (tauri.conf.json `security.csp: null`) and an absolute `api_host`, so the
-    // recorder script loads and uploads without extra config.
+    // Session Replay is HARD-OFF at the client, not merely left to the PostHog
+    // project's "Record user sessions" remote-config toggle.
     //
-    // `maskAllInputs` (PostHog default, set explicitly here) masks values typed
-    // into inputs/textareas. Displayed text — including prospect data shown in
-    // the grid — IS captured, so replays stay maximally useful for debugging UX.
-    // To hide a specific element from replay, add the `ph-no-capture` class.
-    session_recording: {
-      maskAllInputs: true,
-    },
+    // Why: `maskAllInputs` masks only what the user TYPES. Displayed text —
+    // including prospect data rendered in the grid — would still be captured and
+    // uploaded. That is third-party personal data our customers are the
+    // controller for, so replay cannot be switched on by flipping a dashboard
+    // toggle: it needs the privacy review docs/observability.md defers it
+    // pending, plus a matching disclosure in /privacy.
+    //
+    // Leaving `session_recording` configured here meant that toggle alone would
+    // have started the upload, silently making the published privacy policy
+    // false. `disable_session_recording` removes that remote kill-switch risk.
+    //
+    // To re-enable: complete the privacy review, disclose replay in §2 of
+    // apps/web/app/privacy/page.tsx, then swap this for
+    // `session_recording: { maskAllInputs: true, maskTextSelector: "*" }` and
+    // mark grid cells `ph-no-capture`.
+    disable_session_recording: true,
   });
   // Super-properties attached to EVERY desktop event. There is no built-in
   // discriminator between the desktop (Tauri) and web (`apps/web`) surfaces —

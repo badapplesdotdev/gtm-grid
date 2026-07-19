@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { DM_Sans, JetBrains_Mono, Newsreader } from "next/font/google";
 import "./globals.css";
+import { CookieConsent } from "./CookieConsent";
 
 // DM Sans is the UI sans (300–700; wordmark is 700, -0.02em tracking).
 const dmSans = DM_Sans({
@@ -66,7 +67,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${dmSans.variable} ${jetbrainsMono.variable} ${newsreader.variable}`}>
-      <body>{children}</body>
+      <body>
+        {children}
+        <CookieConsent />
+      </body>
     </html>
   );
 }

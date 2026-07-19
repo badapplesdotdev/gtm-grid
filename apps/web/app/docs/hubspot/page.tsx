@@ -143,7 +143,7 @@ export default function HubspotDocsPage() {
       </ul>
 
       <p className="prose__foot">
-        Questions? Email <a href="mailto:morgan@trigify.io">morgan@trigify.io</a> — we read
+        Questions? Email <a href="mailto:support@gtmgrid.dev">support@gtmgrid.dev</a> — we read
         everything.
       </p>
     </main>

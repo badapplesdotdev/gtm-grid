@@ -972,8 +972,8 @@ html { scroll-behavior: smooth; }
 .gtm-home .footer-brand .brand { margin-bottom: 14px; }
 .gtm-home .footer-tag { font-family: var(--font-mono); font-size: 12.5px; color: var(--text-3); line-height: 1.6; max-width: 30ch; }
 .gtm-home .foot-col h5 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-3); margin-bottom: 14px; }
-.gtm-home .foot-col a { display: block; font-size: 14px; color: var(--text-2); padding: 5px 0; transition: color .12s ease; }
-.gtm-home .foot-col a:hover { color: var(--text); }
+.gtm-home .foot-col a, .gtm-home .foot-col .linklike { display: block; font-size: 14px; color: var(--text-2); padding: 5px 0; transition: color .12s ease; }
+.gtm-home .foot-col a:hover, .gtm-home .foot-col .linklike:hover { color: var(--text); }
 .gtm-home .footer-bottom { border-top: 1px solid var(--border); margin-top: 44px; padding-top: 22px; }
 .gtm-home .footer-bottom .wrap { display: flex; align-items: center; justify-content: space-between; }
 .gtm-home .footer-bottom span { font-size: 12.5px; color: var(--text-3); }
@@ -1106,3 +1106,6 @@ html { scroll-behavior: smooth; }
 .gtm-home .conn-card.custom .conn-ico svg { width: 20px; height: 20px; }
 .gtm-home .conn-card.custom .conn-name { color: var(--text); }
 
+/* The consent-withdrawal control shares the footer-link rules above; it only
+   needs the bits that differ from an <a>. */
+.gtm-home .foot-col .linklike { text-align: left; text-decoration: none; }
