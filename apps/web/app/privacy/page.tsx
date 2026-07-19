@@ -11,8 +11,10 @@ const LAST_UPDATED = "19 July 2026";
 // Plain-language privacy policy grounded in what the code actually does:
 // account fields from packages/db/src/schema.ts (users/sessions/accounts),
 // envelope-encrypted credentials, cloud-stored grid data, local execution,
-// and the processors we actually depend on (Supabase/Postgres, Vercel,
-// Better Auth, Autumn+Stripe, Resend, PostHog, Inngest, PartyKit).
+// and the third parties that actually RECEIVE data, which is what §5 must list:
+// Supabase/Postgres, Vercel, Autumn+Stripe, Resend, PostHog, Inngest, PartyKit.
+// Better Auth is deliberately absent — it is a self-hosted library running inside
+// apps/web, not a processor, so it must not be added to §5.
 //
 // Business facts (entity, address, retention, supervisory authority) supplied by
 // the business owner, not derived from code — re-check them if the company
@@ -37,7 +39,7 @@ export default function PrivacyPage() {
         This policy explains what personal data GTM Grid (&ldquo;we&rdquo;, &ldquo;us&rdquo;)
         collects when you use the GTM Grid desktop application, website, and cloud services
         (together, the &ldquo;Service&rdquo;), why we collect it, who we share it with, and the
-        choices you have. It sits alongside our <a href="/terms">Terms of Service</a>.
+        choices you have. It sits alongside our <Link href="/terms">Terms of Service</Link>.
       </p>
 
       <h2>1. Who we are</h2>
@@ -55,8 +57,10 @@ export default function PrivacyPage() {
         <li>Your name, email address, and whether that email has been verified.</li>
         <li>An avatar image, if you set one or your identity provider supplies one.</li>
         <li>
-          Sign-in records: one session per signed-in device, and — if you sign in with a
-          third-party provider — the provider&rsquo;s account identifier and tokens.
+          Sign-in records: a record of each active sign-in session, including the IP address
+          and browser user-agent captured at sign-in, which we keep for security and audit
+          purposes. If you sign in with a third-party provider we also store that
+          provider&rsquo;s account identifier and tokens.
         </li>
         <li>
           A last-active timestamp, and your email preferences, so we can send lifecycle mail
@@ -162,8 +166,10 @@ export default function PrivacyPage() {
         We also use Inngest for background job processing and PartyKit for realtime presence.
         Separately, connectors you choose to enable (your CRM, data providers, AI model providers)
         receive the data needed to fulfil the request you made — their own privacy policies govern
-        that processing. We may disclose data if legally required, or as part of a merger or
-        acquisition, in which case we will tell you first.
+        that processing. We may disclose data where the law requires it — and we will notify
+        you when we are legally permitted to do so, which court orders and similar requests
+        sometimes forbid. If we are ever part of a merger or acquisition we will tell you
+        before your data moves.
       </p>
 
       <h2>6. International transfers</h2>
@@ -186,7 +192,10 @@ export default function PrivacyPage() {
           retained for 30 days.
         </li>
         <li>
-          <strong>Playbook run data:</strong> retained for 30 days.
+          <strong>Pipeline run data:</strong> execution history for pipeline runs is retained
+          for 30 days, after which completed runs are deleted automatically. Results a
+          pipeline writes into your grid cells are your data, not execution logs, and are
+          kept until you overwrite or delete them.
         </li>
         <li>
           <strong>Billing records:</strong> retained as long as tax and accounting law

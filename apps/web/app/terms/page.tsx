@@ -30,7 +30,8 @@ export default function TermsPage() {
       <p>
         These Terms of Service (&ldquo;Terms&rdquo;) govern your use of the GTM Grid desktop
         application, website, and cloud services (together, the &ldquo;Service&rdquo;), operated
-        by GTM Grid (&ldquo;we&rdquo;, &ldquo;us&rdquo;). By creating an account or using the
+        by Aphex Automate LTD (&ldquo;we&rdquo;, &ldquo;us&rdquo;), the entity identified in our{" "}
+        <Link href="/privacy">Privacy Policy</Link>. By creating an account or using the
         Service you agree to these Terms. If you are using the Service on behalf of a company,
         you represent that you have authority to bind that company, and &ldquo;you&rdquo; means
         that company.
