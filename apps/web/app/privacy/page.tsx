@@ -89,9 +89,21 @@ export default function PrivacyPage() {
 
       <h3>Usage and diagnostic data</h3>
       <p>
-        Product analytics events (pages and features used, coarse device and browser information,
-        approximate location derived from IP) and operational logs. We use these to understand how
-        the product is used and to keep it working.
+        Product analytics events (features used, coarse device, app version and browser
+        information, approximate location derived from IP) and operational logs. We use these
+        to understand how the product is used and to keep it working.
+      </p>
+      <p>
+        When the app hits an error we capture an automatic error report containing the error
+        message, stack trace, and the app state around the failure. Error messages can
+        incidentally include fragments of the data being processed at the time. We use these
+        reports only to diagnose and fix faults.
+      </p>
+      <p>
+        <strong>We do not record your screen.</strong> Session replay is switched off in the
+        desktop app, so the contents of your grids are never captured to video or DOM
+        recordings. If we ever turn it on we will update this policy and tell you before it
+        takes effect.
       </p>
 
       <h3>Billing data</h3>

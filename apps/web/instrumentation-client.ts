@@ -15,6 +15,13 @@ if (posthogEnabled) {
     ui_host: "https://us.posthog.com",
     defaults: "2026-01-30",
     capture_exceptions: true,
+    // Session Replay hard-off, matching packages/desktop/src/analytics.ts. Left
+    // unset, posthog-js starts recording as soon as the project's "Record user
+    // sessions" toggle is flipped — no code change, no review. /privacy states
+    // we do not record screens, so that must not be a dashboard-only decision.
+    // Re-enabling needs the privacy review in docs/observability.md plus a
+    // matching disclosure in §2 of apps/web/app/privacy/page.tsx.
+    disable_session_recording: true,
     debug: process.env.NODE_ENV === "development",
   });
 }

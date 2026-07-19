@@ -95,8 +95,14 @@ events land** (re-run via the PostHog MCP, which can build them in minutes):
 
 ## Deferred / follow-ups
 
-- **Session Replay** — off pending a privacy review (desktop/web show customer PII);
-  enable with mask-all-inputs when revisited.
+- **Session Replay** — off pending a privacy review (desktop/web show customer PII).
+  Now enforced client-side via `disable_session_recording: true` in both
+  `packages/desktop/src/analytics.ts` and `apps/web/instrumentation-client.ts`, so the
+  PostHog project toggle alone can no longer start recording. Note `maskAllInputs` is
+  NOT sufficient here — it masks typed input only, while grid cells render prospect PII
+  as displayed text. Re-enabling requires the privacy review, `maskTextSelector: "*"`
+  (or `ph-no-capture` on grid cells), and an update to §2 of
+  `apps/web/app/privacy/page.tsx`, which currently states we do not record screens.
 - **LLM Analytics** — instrument `ai.generate` + the agent panel with PostHog LLM
   observability (cost/latency/tokens).
 - **Feature Flags** — wire the flag SDK for gated rollouts / kill-switches.
