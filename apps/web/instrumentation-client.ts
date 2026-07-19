@@ -35,6 +35,8 @@ if (posthogEnabled) {
   });
 
   // Re-apply a previously stored choice. Absent or unreadable = stay opted out.
+  // `silent` suppresses the `$opt_in` event: this is replaying an existing
+  // choice on page load, not a fresh act of consent.
   const stored = readConsent();
-  if (stored) applyConsent(stored);
+  if (stored) applyConsent(stored, { silent: true });
 }

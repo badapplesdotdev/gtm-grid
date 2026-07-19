@@ -4,10 +4,11 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
   CONSENT_REOPEN_EVENT,
+  openConsentSettings,
   readConsent,
-  resetConsent,
   writeConsent,
 } from "../lib/consent";
+import { posthogEnabled } from "../lib/env";
 
 /**
  * Cookie-consent banner for the marketing site.
@@ -24,6 +25,9 @@ export function CookieConsent() {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
+    // With no PostHog token there are no analytics cookies to consent to, so
+    // asking would be theatre — and would imply tracking that is not happening.
+    if (!posthogEnabled) return;
     setVisible(readConsent() === null);
     const reopen = () => setVisible(true);
     window.addEventListener(CONSENT_REOPEN_EVENT, reopen);
@@ -75,8 +79,13 @@ export function CookieConsent() {
  * so the right to withdraw consent is actually exercisable.
  */
 export function CookieSettingsButton({ className }: { className?: string }) {
+  if (!posthogEnabled) return null;
   return (
-    <button type="button" className={className ?? "linklike"} onClick={() => resetConsent()}>
+    <button
+      type="button"
+      className={className ?? "linklike"}
+      onClick={() => openConsentSettings()}
+    >
       Cookie settings
     </button>
   );

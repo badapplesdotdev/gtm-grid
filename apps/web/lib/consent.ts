@@ -15,9 +15,6 @@ import posthog from "posthog-js";
 
 export const CONSENT_STORAGE_KEY = "gtmgrid_cookie_consent";
 
-/** Fired when consent changes so mounted components can re-read it. */
-export const CONSENT_CHANGED_EVENT = "gtmgrid:consent-changed";
-
 /** Fired to re-open the banner so a visitor can change their mind. */
 export const CONSENT_REOPEN_EVENT = "gtmgrid:consent-reopen";
 
@@ -42,18 +39,24 @@ export function readConsent(): ConsentChoice | null {
  * Granting switches persistence to cookies+localStorage and opts in. Denying
  * opts out and drops any identifying state PostHog is holding in memory.
  */
-export function applyConsent(choice: ConsentChoice): void {
+export function applyConsent(choice: ConsentChoice, options?: { silent?: boolean }): void {
   if (choice === "granted") {
     posthog.set_config({ persistence: "localStorage+cookie" });
-    posthog.opt_in_capturing();
+    // `opt_in_capturing` emits an `$opt_in` event by default. That is right when
+    // the visitor actively accepts, but re-applying a stored choice on every page
+    // load would emit one per navigation, inflating the event stream.
+    posthog.opt_in_capturing(options?.silent ? { captureEventName: false } : undefined);
     return;
   }
+  // Order matters: opt out first so nothing is captured mid-teardown, then
+  // `reset()` to drop the stored distinct id and any identifying state, and only
+  // then switch to memory persistence so future state is never written to disk.
   posthog.opt_out_capturing();
-  posthog.set_config({ persistence: "memory" });
   posthog.reset();
+  posthog.set_config({ persistence: "memory" });
 }
 
-/** Persist a choice, apply it, and notify listeners. */
+/** Persist an actively-made choice and apply it. */
 export function writeConsent(choice: ConsentChoice): void {
   try {
     window.localStorage.setItem(CONSENT_STORAGE_KEY, choice);
@@ -61,16 +64,17 @@ export function writeConsent(choice: ConsentChoice): void {
     // If we cannot persist the choice we still honour it for this page view.
   }
   applyConsent(choice);
-  window.dispatchEvent(new CustomEvent(CONSENT_CHANGED_EVENT));
 }
 
-/** Clear the stored choice and re-open the banner (withdrawal of consent). */
-export function resetConsent(): void {
-  try {
-    window.localStorage.removeItem(CONSENT_STORAGE_KEY);
-  } catch {
-    // Ignore — the reopen event below still surfaces the banner.
-  }
-  applyConsent("denied");
+/**
+ * Re-open the banner so the visitor can change their mind.
+ *
+ * This deliberately does NOT revoke consent. Opening a settings control is not
+ * the same as withdrawing — silently opting someone out (and resetting their
+ * identity) merely for looking would be wrong, and would also mean an accidental
+ * click quietly changed their preference. The existing choice stands until they
+ * pick a different one in the banner.
+ */
+export function openConsentSettings(): void {
   window.dispatchEvent(new CustomEvent(CONSENT_REOPEN_EVENT));
 }

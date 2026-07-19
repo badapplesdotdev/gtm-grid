@@ -151,9 +151,12 @@ export default function PrivacyPage() {
         </li>
         <li>
           <strong>To improve the product and send lifecycle email</strong> — analytics and
-          onboarding or digest mail. Basis: your consent for analytics cookies, collected via the
-          banner before anything is stored on your device; legitimate interests for the rest. You
-          can opt out of non-transactional email at any time.
+          onboarding or digest mail. Basis: on this website, your consent, collected via the
+          cookie banner before anything is stored on your device. In the desktop app we currently
+          rely on legitimate interests: it records product analytics to local storage on launch
+          and does not yet offer an in-app opt-out. We are adding one; until then, email us and
+          we will exclude you. Lifecycle email relies on legitimate interests, and you can opt out
+          of non-transactional email at any time.
         </li>
       </ul>
 
@@ -259,8 +262,14 @@ export default function PrivacyPage() {
         advertising cookies, and we do not record your screen.
       </p>
       <p>
-        You can change your mind at any time — <CookieSettingsButton /> re-opens the banner, and
-        declining clears any analytics cookies we previously set.
+        You can change your mind at any time — <CookieSettingsButton /> re-opens the banner.
+        Declining opts you out, clears the identifiers our analytics tool was holding, and stops
+        anything further being written to your device.
+      </p>
+      <p>
+        This section describes this website. The desktop application is not a browser and does
+        not use cookies, but it does write analytics identifiers to local storage on your machine
+        when it launches — see section 4 for the basis we rely on there and how to opt out.
       </p>
 
       <h2>11. Children</h2>
