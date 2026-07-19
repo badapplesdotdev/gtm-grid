@@ -118,15 +118,18 @@ export default function PrivacyPage() {
 
       <h2>3. What stays on your machine</h2>
       <p>
-        Column execution runs locally in the desktop app, not on our servers. Where you bring your
+        By default, column execution runs locally in the desktop app rather than on our servers.
+        Where you bring your
         own AI provider key, prompts and row content are sent from your machine directly to that
         provider; we do not receive or retain that traffic. Local-only projects are stored on your
         device and are not uploaded to us at all.
       </p>
       <p>
-        The exceptions are server-side runs you explicitly enable — scheduled syncs and inbound
-        webhook auto-enrichment — which execute in our cloud worker and therefore do pass through
-        our infrastructure.
+        The exceptions are server-side runs you explicitly choose — pipelines you set to run on
+        the cloud target, scheduled syncs, and inbound webhook auto-enrichment. These execute in
+        our cloud worker and therefore do pass through our infrastructure, including the row
+        content they process. Cloud runs use workspace-shared credentials only; they never use a
+        member&rsquo;s personal keys or the local coding-agent fallback.
       </p>
 
       <h2>4. Why we process it, and on what basis</h2>
