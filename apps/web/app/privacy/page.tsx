@@ -44,7 +44,7 @@ export default function PrivacyPage() {
 
       <h2>1. Who we are</h2>
       <p>
-        The Service is operated by Aphex Automate LTD, 86 Broadway, Cowbridge, CF6 41TR,
+        The Service is operated by Aphex Automate LTD, 86 Broadway, Cowbridge, CF64 1TR,
         United Kingdom. For data you put into a workspace about your own prospects and
         customers, you are the data controller and we act as your processor. For your
         account and billing data, we are the controller. Privacy questions:{" "}
