@@ -38,7 +38,7 @@ export default function PrivacyPage() {
         United Kingdom. For data you put into a workspace about your own prospects and
         customers, you are the data controller and we act as your processor. For your
         account and billing data, we are the controller. Privacy questions:{" "}
-        <a href="mailto:morgan@trigify.io">morgan@trigify.io</a>.
+        <a href="mailto:legal@gtmgrid.dev">legal@gtmgrid.dev</a>.
       </p>
 
       <h2>2. Data we collect</h2>
@@ -153,7 +153,8 @@ export default function PrivacyPage() {
           onboarding or digest mail. Basis: on this website, your consent, collected via the
           cookie banner before anything is stored on your device. In the desktop app we currently
           rely on legitimate interests: it records product analytics to local storage on launch
-          and does not yet offer an in-app opt-out. We are adding one; until then, email us and
+          and does not yet offer an in-app opt-out. We are adding one; until then, email{" "}
+          <a href="mailto:legal@gtmgrid.dev">legal@gtmgrid.dev</a> and
           we will exclude you. Lifecycle email relies on legitimate interests, and you can opt out
           of non-transactional email at any time.
         </li>
@@ -249,7 +250,7 @@ export default function PrivacyPage() {
         Depending on where you live, you may have the right to access, correct, delete, export, or
         restrict processing of your personal data, to object to processing based on legitimate
         interests, and to withdraw consent. Much of this you can do yourself in the app; for
-        anything else, email <a href="mailto:morgan@trigify.io">morgan@trigify.io</a> and we will
+        anything else, email <a href="mailto:legal@gtmgrid.dev">legal@gtmgrid.dev</a> and we will
         respond within one month.
       </p>
       <p>
@@ -308,7 +309,7 @@ export default function PrivacyPage() {
       <h2>14. Contact</h2>
       <p>
         Questions about this policy or your data:{" "}
-        <a href="mailto:morgan@trigify.io">morgan@trigify.io</a>.
+        <a href="mailto:legal@gtmgrid.dev">legal@gtmgrid.dev</a>.
       </p>
     </LegalPage>
   );

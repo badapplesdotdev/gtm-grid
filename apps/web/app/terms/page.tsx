@@ -150,7 +150,7 @@ export default function TermsPage() {
 
       <h2>14. Contact</h2>
       <p>
-        Questions about these Terms: <a href="mailto:morgan@trigify.io">morgan@trigify.io</a>.
+        Questions about these Terms: <a href="mailto:legal@gtmgrid.dev">legal@gtmgrid.dev</a>.
       </p>
     </LegalPage>
   );
