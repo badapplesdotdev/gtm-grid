@@ -26,6 +26,12 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import { errorCode, errorCopy, isRetryable, PickerError } from "./picker-errors";
+import {
+  GSI_SRC,
+  loadPickerScript,
+  openGooglePicker,
+  type PickedFile,
+} from "./google-picker";
 
 interface PickerConfig {
   readonly accessToken: string;
@@ -33,28 +39,6 @@ interface PickerConfig {
   readonly appId: string;
   readonly clientId: string;
 }
-
-interface PickedFile {
-  readonly id: string;
-  readonly name: string;
-}
-
-/** Google's loader is injected rather than bundled — it must come from their origin. */
-const GSI_SRC = "https://apis.google.com/js/api.js";
-
-const loadScript = (src: string): Promise<void> =>
-  new Promise((resolve, reject) => {
-    if (document.querySelector(`script[src="${src}"]`)) {
-      resolve();
-      return;
-    }
-    const el = document.createElement("script");
-    el.src = src;
-    el.async = true;
-    el.onload = () => resolve();
-    el.onerror = () => reject(new PickerError(null));
-    document.head.append(el);
-  });
 
 /** Narrow the config off an untrusted body without a cast (CLAUDE.md). */
 const readConfig = (raw: unknown): PickerConfig => {
@@ -96,6 +80,7 @@ export default function GooglePickerPage() {
   }, []);
 
   const [savedCount, setSavedCount] = useState<number | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
 
   const config = useQuery({
     queryKey: ["google-picker-config", state],
@@ -118,7 +103,7 @@ export default function GooglePickerPage() {
       // The script is part of "ready to open the picker": the config alone is
       // useless without it, and folding it in means one loading state rather
       // than two that can disagree.
-      await loadScript(GSI_SRC);
+      await loadPickerScript(GSI_SRC);
       return parsed;
     },
   });
@@ -146,48 +131,14 @@ export default function GooglePickerPage() {
   const openPicker = useCallback(() => {
     if (config.data === undefined) return;
     const { accessToken, developerKey, appId } = config.data;
-    // `gapi` and `google.picker` are injected by Google's loader at runtime.
-    const gapi = Reflect.get(window, "gapi");
-    if (typeof gapi !== "object" || gapi === null) return;
-    const load = Reflect.get(gapi, "load");
-    if (typeof load !== "function") return;
-
-    load("picker", () => {
-      const picker = Reflect.get(Reflect.get(window, "google") ?? {}, "picker");
-      if (typeof picker !== "object" || picker === null) return;
-
-      // Google's Picker builder is an untyped runtime global; there is no
-      // published type package, so this is dynamic by necessity rather than by
-      // choice. Everything crossing back OUT of it is narrowed below.
-      const p: Record<string, any> = picker;
-      const view = new p.DocsView(p.ViewId.SPREADSHEETS)
-        // Shared drives matter for real teams; without this a user simply cannot
-        // see the sheet they were told to connect.
-        .setIncludeFolders(true)
-        .setSelectFolderEnabled(false);
-
-      new p.PickerBuilder()
-        .enableFeature(p.Feature.MULTISELECT_ENABLED)
-        .setAppId(appId)
-        .setOAuthToken(accessToken)
-        .setDeveloperKey(developerKey)
-        .addView(view)
-        .setCallback((data: Record<string, unknown>) => {
-          if (data[p.Response.ACTION] !== p.Action.PICKED) return;
-          const docs: unknown = data[p.Response.DOCUMENTS];
-          const files: PickedFile[] = Array.isArray(docs)
-            ? docs.flatMap((d: unknown) => {
-                if (d === null || typeof d !== "object") return [];
-                const id = Reflect.get(d, "id");
-                const name = Reflect.get(d, "name");
-                if (typeof id !== "string") return [];
-                return [{ id, name: typeof name === "string" ? name : id }];
-              })
-            : [];
-          if (files.length > 0) save.mutate(files);
-        })
-        .build()
-        .setVisible(true);
+    openGooglePicker({
+      accessToken,
+      developerKey,
+      appId,
+      onPicked: (files) => save.mutate(files),
+      // The global went missing or changed shape. Nothing the user can fix, but
+      // silence would leave them staring at a page that claimed to be ready.
+      onUnavailable: () => setUnavailable(true),
     });
   }, [config.data, save]);
 
@@ -205,7 +156,10 @@ export default function GooglePickerPage() {
   // A URL with no `state` at all is a dead link — the same class of failure as
   // an expired one, and reported the same way rather than left spinning.
   const failure =
-    config.error ?? save.error ?? (state === "" ? new PickerError("invalid_or_expired_state") : null);
+    config.error ??
+    save.error ??
+    (unavailable ? new PickerError(null) : null) ??
+    (state === "" ? new PickerError("invalid_or_expired_state") : null);
 
   return (
     <Shell>
