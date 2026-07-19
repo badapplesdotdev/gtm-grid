@@ -100,10 +100,10 @@ export default function PrivacyPage() {
         reports only to diagnose and fix faults.
       </p>
       <p>
-        <strong>We do not record your screen.</strong> Session replay is switched off in the
-        desktop app, so the contents of your grids are never captured to video or DOM
-        recordings. If we ever turn it on we will update this policy and tell you before it
-        takes effect.
+        <strong>We do not record your screen or your sessions.</strong> Session replay is
+        disabled in our analytics across both the desktop app and this website, so the
+        contents of your grids are never captured to video or DOM recordings. If we ever
+        turn it on we will update this policy and tell you before it takes effect.
       </p>
 
       <h3>Billing data</h3>
