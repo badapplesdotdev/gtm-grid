@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { LegalPage } from "../_legal/LegalPage";
-import { CookieSettingsButton } from "../CookieConsent";
+import { ConsentSettingsParagraph } from "../CookieConsent";
 
 export const metadata: Metadata = {
   title: "Privacy Policy — GTM Grid",
@@ -271,15 +271,17 @@ export default function PrivacyPage() {
       </p>
       <p>
         We would also like to use analytics cookies to understand how the product is used. We
-        ask first: until you accept, our analytics tool runs with in-memory storage only and
-        writes nothing to your device. If you decline, it stays that way. We do not use
-        advertising cookies, and we do not record your screen.
+        ask first: until you accept, our analytics tool keeps its state in memory only and sets
+        no analytics cookies or identifiers on your device. We do not use advertising cookies,
+        and we do not record your screen.
       </p>
       <p>
-        You can change your mind at any time — <CookieSettingsButton /> re-opens the banner.
-        Declining opts you out, clears the identifiers our analytics tool was holding, and stops
-        anything further being written to your device.
+        If you decline, our analytics tool records that refusal in a single local flag
+        (<code>__ph_opt_in_out_…</code>) so we can honour it on your next visit. That flag is
+        strictly necessary — it exists only to keep you opted out — but we mention it because it
+        is the one thing declining does write.
       </p>
+      <ConsentSettingsParagraph />
       <p>
         This section describes this website. The desktop application is not a browser and does
         not use cookies, but it does write analytics identifiers to local storage on your machine

@@ -9,7 +9,14 @@
  *
  * The consent choice itself is stored in localStorage rather than a cookie. It is
  * strictly necessary (it exists only to honour the visitor's own preference), so
- * it does not itself require consent.
+ * it does not itself require consent. Note that declining ALSO causes posthog-js
+ * to write its own `__ph_opt_in_out_<token>` flag to localStorage — see §10 of
+ * /privacy, which discloses both.
+ *
+ * Why this store exists alongside posthog-js's own consent state: persistence
+ * must be chosen at `posthog.init` time (see instrumentation-client.ts), which
+ * means the choice has to be readable BEFORE PostHog exists. `has_opted_in_capturing`
+ * cannot serve that, so a small store we own is the only option.
  */
 import posthog from "posthog-js";
 
@@ -50,6 +57,10 @@ export function applyConsent(choice: ConsentChoice): void {
     posthog.set_config({ persistence: "localStorage+cookie" });
     // Emits `$opt_in`, which is correct — this IS a fresh act of consent.
     posthog.opt_in_capturing();
+    // posthog-js defers the initial `$pageview` and skips it while opted out, so
+    // the page the visitor was on when they accepted would otherwise never be
+    // recorded and attribution for the visit would start a navigation late.
+    posthog.capture("$pageview");
     return;
   }
   // Order matters: opt out first so nothing is captured mid-teardown, then

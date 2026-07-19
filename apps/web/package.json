@@ -3,7 +3,7 @@
   "version": "1.11.0",
   "private": true,
   "type": "module",
-  "description": "GTM Grid — marketing site + Inngest webhook worker (unified Next.js app).",
+  "description": "GTM Grid \u2014 marketing site + Inngest webhook worker (unified Next.js app).",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -43,6 +43,7 @@
     "@types/react-dom": "^19.1.0",
     "eslint": "^9.18.0",
     "eslint-config-next": "^15.5.4",
+    "jsdom": "^29.1.1",
     "typescript": "npm:@typescript/typescript6@^6.0.2"
   }
 }
