@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { LegalPage } from "../_legal/LegalPage";
 import { CookieSettingsButton } from "../CookieConsent";
 
 export const metadata: Metadata = {
@@ -23,19 +24,7 @@ const LAST_UPDATED = "19 July 2026";
 // on it in a dispute.
 export default function PrivacyPage() {
   return (
-    <main className="container prose">
-      <Link className="wordmark prose__home" href="/">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="wordmark__mark" src="/brand/icon.png" alt="" width={16} height={16} aria-hidden="true" />
-        GTM Grid
-      </Link>
-
-      <header className="prose__head">
-        <span className="eyebrow">legal</span>
-        <h1>Privacy Policy</h1>
-        <p className="prose__lede">Last updated: {LAST_UPDATED}</p>
-      </header>
-
+    <LegalPage title="Privacy Policy" lastUpdated={LAST_UPDATED}>
       <p>
         This policy explains what personal data GTM Grid (&ldquo;we&rdquo;, &ldquo;us&rdquo;)
         collects when you use the GTM Grid desktop application, website, and cloud services
@@ -59,9 +48,14 @@ export default function PrivacyPage() {
         <li>An avatar image, if you set one or your identity provider supplies one.</li>
         <li>
           Sign-in records: a record of each active sign-in session, including the IP address
-          and browser user-agent captured at sign-in, which we keep for security and audit
-          purposes. If you sign in with a third-party provider we also store that
-          provider&rsquo;s account identifier and tokens.
+          and browser user-agent captured at sign-in, which we hold for the life of that
+          session so we can show you where your account is signed in and investigate
+          suspicious access.
+        </li>
+        <li>
+          If you sign in with an email and password, a cryptographic hash of that password —
+          never the password itself. If you sign in with a third-party provider instead, that
+          provider&rsquo;s account identifier and access tokens.
         </li>
         <li>
           A last-active timestamp, and your email preferences, so we can send lifecycle mail
@@ -103,6 +97,11 @@ export default function PrivacyPage() {
         message, stack trace, and the app state around the failure. Error messages can
         incidentally include fragments of the data being processed at the time. We use these
         reports only to diagnose and fix faults.
+      </p>
+      <p>
+        We may occasionally run an in-product survey or show a feedback widget. Anything you
+        write into one of those is sent to our analytics provider along with the identifiers
+        already attached to your session. Answering is always optional.
       </p>
       <p>
         <strong>We do not record your screen or your sessions.</strong> Session replay is
@@ -166,9 +165,18 @@ export default function PrivacyPage() {
         behalf under contract:
       </p>
       <ul>
-        <li><strong>Supabase</strong> — the Postgres database that stores workspace and grid data.</li>
-        <li><strong>Vercel</strong> — hosting for the website and API.</li>
-        <li><strong>Stripe</strong> (via Autumn) — payment processing and subscription billing.</li>
+        <li>
+          <strong>Supabase</strong> — the managed Postgres database holding everything in
+          section 2 that lives in our cloud: your account, your workspaces, your encrypted
+          connector credentials, and all grid content, including personal data about the
+          prospects and customers in it.
+        </li>
+        <li><strong>Vercel</strong> — hosting for the website and API, and our operational logs.</li>
+        <li>
+          <strong>Autumn</strong> — subscription and seat management, which receives your
+          account and workspace identifiers. <strong>Stripe</strong> sits underneath it and
+          handles payment processing and card details.
+        </li>
         <li><strong>Resend</strong> — transactional and lifecycle email delivery.</li>
         <li><strong>PostHog</strong> — product analytics and error reporting.</li>
         <li>
@@ -215,6 +223,11 @@ export default function PrivacyPage() {
           for 30 days, after which completed runs are deleted automatically. Results a
           pipeline writes into your grid cells are your data, not execution logs, and are
           kept until you overwrite or delete them.
+        </li>
+        <li>
+          <strong>Inbound webhook deliveries:</strong> we keep the most recent 50 payloads per
+          webhook so you can debug a failing integration. Older ones are discarded as new
+          deliveries arrive, rather than on a fixed schedule.
         </li>
         <li>
           <strong>Billing records:</strong> retained as long as tax and accounting law
@@ -297,6 +310,6 @@ export default function PrivacyPage() {
         Questions about this policy or your data:{" "}
         <a href="mailto:morgan@trigify.io">morgan@trigify.io</a>.
       </p>
-    </main>
+    </LegalPage>
   );
 }

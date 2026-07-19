@@ -103,6 +103,15 @@ events land** (re-run via the PostHog MCP, which can build them in minutes):
   as displayed text. Re-enabling requires the privacy review, `maskTextSelector: "*"`
   (or `ph-no-capture` on grid cells), and an update to §2 of
   `apps/web/app/privacy/page.tsx`, which currently states we do not record screens.
+
+  > **The client-side flag only protects builds from v1.11.1 onward.** Desktop
+  > `0.22.2` shipped with `session_recording` configured (see its CHANGELOG entry),
+  > so **any already-installed build that has not auto-updated will start recording
+  > and uploading grid PII the moment the PostHog project's "Record user sessions"
+  > toggle is switched on** — while `/privacy` promises we do not record screens.
+  > Until old builds have aged out, the *effective* control is the org-level
+  > PostHog toggle, which must stay OFF. Treat it as a production setting with a
+  > published legal promise behind it, not a dashboard convenience.
 - **LLM Analytics** — instrument `ai.generate` + the agent panel with PostHog LLM
   observability (cost/latency/tokens).
 - **Feature Flags** — wire the flag SDK for gated rollouts / kill-switches.

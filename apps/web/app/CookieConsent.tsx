@@ -20,8 +20,9 @@ import { posthogEnabled } from "../lib/env";
  * under the ICO's guidance.
  */
 export function CookieConsent() {
-  // `null` until the effect runs: the server cannot know the stored choice, so
-  // rendering nothing initially keeps markup identical across hydration.
+  // Starts false so the server-rendered markup and the first client render
+  // match: the server cannot know the stored choice, and rendering the banner
+  // before the effect reads localStorage would be a hydration mismatch.
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
@@ -42,9 +43,14 @@ export function CookieConsent() {
   };
 
   return (
+    // Deliberately `role="region"`, not `role="dialog"`. A dialog implies a
+    // modal contract — focus trapping, Escape to dismiss, inert background —
+    // that this banner does not implement, and announcing one without it is
+    // worse for screen-reader users than not claiming it. The banner is a
+    // non-blocking landmark the user can reach in normal tab order.
     <div
       className="cookie-banner"
-      role="dialog"
+      role="region"
       aria-labelledby="cookie-banner-title"
       aria-describedby="cookie-banner-body"
     >
