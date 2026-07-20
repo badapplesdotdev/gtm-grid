@@ -1615,6 +1615,10 @@ export function useCloudGridMutations() {
             kind,
             provider,
             method,
+            // A newly inserted column names no account: it resolves the
+            // workspace's sole one, which is right for every connector but a
+            // multi-team Slack, where the editor's picker sets it afterwards.
+            accountId: null,
             code: body.code ?? null,
             params: body.params ?? {},
             condition: null,
@@ -1720,6 +1724,8 @@ export function useCloudGridMutations() {
                 provider:
                   patch.provider !== undefined ? patch.provider : current.provider,
                 method: patch.method !== undefined ? patch.method : current.method,
+                accountId:
+                  patch.accountId !== undefined ? patch.accountId : (current.accountId ?? null),
                 code: patch.code !== undefined ? patch.code : current.code,
                 params: patch.params !== undefined ? patch.params : current.params,
                 condition:

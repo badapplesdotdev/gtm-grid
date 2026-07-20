@@ -41,8 +41,15 @@ export interface GridEventColumn {
   readonly kind: string;
   readonly provider: string | null;
   readonly method: string | null;
-  /** Which account on the provider (Slack team id); null = the sole account. */
-  readonly accountId: string | null;
+  /**
+   * Which account on the provider (Slack team id); null/absent = the sole
+   * account.
+   *
+   * Optional so a producer that predates the field still type-checks, and
+   * because absent and null mean the same thing to the reducer — there is no
+   * third state to distinguish.
+   */
+  readonly accountId?: string | null;
   readonly code: string | null;
   readonly params: unknown;
   readonly condition: string | null;

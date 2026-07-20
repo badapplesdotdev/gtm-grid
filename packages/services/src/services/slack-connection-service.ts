@@ -342,22 +342,30 @@ export class SlackConnectionService extends Effect.Service<SlackConnectionServic
         > =>
           Effect.gen(function* () {
             if (teamId === undefined || teamId === "") {
-              const accounts = yield* repo.findSharedAccounts({
-                workspaceId,
-                extensionId: SLACK_CONNECTION_SLOT,
-              });
+              // `loadAccounts`, NOT `repo.findSharedAccounts`: counting RAW rows
+              // counts rows that are not connections.
+              //
+              // The Tools panel's apiKey form writes `{ apiKey: … }` to this
+              // same extension id at the sole-account key. Before `account_id`
+              // that overwrote the OAuth row and destroyed the grant; now it
+              // lands in a SEPARATE row, which is a real improvement — but a
+              // raw count then saw two "accounts" and made every unpinned Slack
+              // column ambiguous, breaking a working single-team workspace on a
+              // stray paste. `loadAccounts` drops anything `parseConnection`
+              // cannot read, so a row with no access token is not an account.
+              const accounts = yield* loadAccounts(workspaceId);
               if (accounts.length === 0) return Option.none<SlackConnection>();
               if (accounts.length > 1) {
                 return yield* Effect.fail(
                   new SlackAccountAmbiguous({
                     workspaceId,
-                    teamIds: accounts.map((a) => a.accountId),
+                    teamIds: accounts.map(({ row }) => row.accountId),
                   }),
                 );
               }
               // Exactly one — use its key, whatever it is. A not-yet-healed
               // legacy row sits at `""` and resolves here just as it always did.
-              return yield* readAccount(workspaceId, accounts[0].accountId);
+              return yield* readAccount(workspaceId, accounts[0].row.accountId);
             }
             return yield* readAccount(workspaceId, teamId);
           }),

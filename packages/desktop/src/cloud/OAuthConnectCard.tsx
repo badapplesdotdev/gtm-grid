@@ -75,6 +75,15 @@ export interface OAuthConnectCardProps {
    * guessing wrong destroys a live grant.
    */
   readonly accounts?: readonly { readonly id: string; readonly label: string; readonly byName: string }[];
+  /**
+   * Whether this caller may disconnect. `false` hides every Disconnect control.
+   *
+   * Defaults to `true` so providers that have no role rule (the CRM ones) keep
+   * their existing behaviour without opting in. Presentation only — the server
+   * gates the mutation regardless; this just stops offering an action that
+   * would come back 403.
+   */
+  readonly canDisconnect?: boolean;
   /** Sub-copy under "Connected · <account>". */
   readonly connectedSub: string;
   /** Sub-copy under "Not connected". */
@@ -92,6 +101,7 @@ export function OAuthConnectCard(props: OAuthConnectCardProps) {
   const [note, setNote] = useState<string | null>(null);
   const accounts = props.accounts ?? [];
   const multi = accounts.length > 0;
+  const canDisconnect = props.canDisconnect ?? true;
 
   // Poll only WHILE a round-trip is in flight, and give up after a bounded
   // window — the user may simply have closed the consent tab.
@@ -189,7 +199,7 @@ export function OAuthConnectCard(props: OAuthConnectCardProps) {
             <button className="skill-btn" disabled={busy} onClick={() => void authorize()}>
               {busy ? `Waiting for ${providerName}…` : "Reconnect"}
             </button>
-            {confirming ? (
+            {!canDisconnect ? null : confirming ? (
               <>
                 <button className="skill-btn danger" onClick={() => void onDisconnect()}>
                   Confirm disconnect
@@ -242,7 +252,7 @@ export function OAuthConnectCard(props: OAuthConnectCardProps) {
                   with one flag, arming the confirm on any row armed it on every
                   row, and the danger button next to the wrong team is exactly
                   the misclick that costs an irrecoverable rotating grant. */}
-              {confirmingAccount === account.id ? (
+              {!canDisconnect ? null : confirmingAccount === account.id ? (
                 <>
                   <button
                     className="skill-btn danger"

@@ -65,6 +65,11 @@ describe("slack.connectionStatus", () => {
     expect(await caller.slack.connectionStatus({ workspaceId: WS })).toEqual({
       configured: false,
       connected: false,
+      connections: [],
+      canDisconnect: false,
+      connectedByName: "",
+      teamName: "",
+      teamId: "",
     });
   });
 
@@ -75,6 +80,11 @@ describe("slack.connectionStatus", () => {
     expect(await caller.slack.connectionStatus({ workspaceId: WS })).toEqual({
       configured: true,
       connected: false,
+      connections: [],
+      canDisconnect: false,
+      connectedByName: "",
+      teamName: "",
+      teamId: "",
     });
   });
 
@@ -115,6 +125,7 @@ describe("slack.connectionStatus", () => {
           id: "cred_slack_1",
           workspaceId: WS,
           extensionId: "slack",
+          accountId: "",
           scope: "workspace" as const,
           name: "Slack",
           ownerUserId: null,
@@ -128,6 +139,11 @@ describe("slack.connectionStatus", () => {
     expect(await caller.slack.connectionStatus({ workspaceId: WS })).toEqual({
       configured: true,
       connected: false,
+      connections: [],
+      canDisconnect: false,
+      connectedByName: "",
+      teamName: "",
+      teamId: "",
     });
   });
 });
@@ -181,6 +197,25 @@ describe("slack.authorizeUrl (member-gated)", () => {
   });
 });
 
+describe("slack.connectionStatus — canDisconnect", () => {
+  it("is FALSE for a plain member, so the UI never offers the control", async () => {
+    // The flag is derived from the SAME role the mutation enforces and returned
+    // rather than recomputed client-side, so the button cannot drift out of
+    // agreement with the server. A UI that hides it for the wrong people is
+    // confusing; one that shows it for the wrong people is a 403 dressed up as
+    // a feature.
+    const caller = callerFor({ memberships: adminMemberships, currentUserId: "member" });
+    const status = await caller.slack.connectionStatus({ workspaceId: WS });
+    expect(status.canDisconnect).toBe(false);
+  });
+
+  it("is TRUE for an admin", async () => {
+    const caller = callerFor({ memberships: adminMemberships, currentUserId: "boss" });
+    const status = await caller.slack.connectionStatus({ workspaceId: WS });
+    expect(status.canDisconnect).toBe(true);
+  });
+});
+
 describe("slack.connectionStatus — multiple connected teams", () => {
   it("lists EVERY connected team, and disconnecting one leaves the other", async () => {
     // The headline bug this replaced: a second connect overwrote the first row,
@@ -231,6 +266,30 @@ describe("slack.connectionStatus — multiple connected teams", () => {
     });
     const after = await caller.slack.connectionStatus({ workspaceId: WS });
     expect(after.connections.map((c) => c.teamId)).toEqual(["T_EU"]);
+  });
+});
+
+describe("slack.connectionStatus — canDisconnect", () => {
+  it("is FALSE for a plain member, so the UI never offers the button", async () => {
+    // The mutation refuses a member anyway; this is what stops the desktop
+    // rendering a Disconnect that can only ever come back 403. Derived from the
+    // same role check, server-side, so the two cannot drift apart.
+    const caller = callerFor({ memberships: adminMemberships, currentUserId: "member" });
+    const status = await caller.slack.connectionStatus({ workspaceId: WS });
+    expect(status.canDisconnect).toBe(false);
+  });
+
+  it("is TRUE for an admin", async () => {
+    const caller = callerFor({ memberships: adminMemberships, currentUserId: "boss" });
+    const status = await caller.slack.connectionStatus({ workspaceId: WS });
+    expect(status.canDisconnect).toBe(true);
+  });
+
+  it("is TRUE for the workspace owner", async () => {
+    const owners: readonly Membership[] = [{ workspaceId: WS, userId: "member", role: "owner" }];
+    const caller = callerFor({ memberships: owners, currentUserId: "member" });
+    const status = await caller.slack.connectionStatus({ workspaceId: WS });
+    expect(status.canDisconnect).toBe(true);
   });
 });
 

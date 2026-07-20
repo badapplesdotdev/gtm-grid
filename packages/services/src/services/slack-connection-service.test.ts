@@ -59,7 +59,7 @@ describe("the credential slot", () => {
     // both tests must be read together.
   });
 
-  it("an apiKey save at this slot ANNIHILATES a live OAuth grant (why the UI must not offer one)", async () => {
+  it("an apiKey save at this slot NO LONGER annihilates a live OAuth grant — account_id separates them", async () => {
     const WS = "11111111-1111-1111-1111-111111111111";
     const layer = TestLayer({
       workspaces: [{ id: WS, name: "WS", ownerId: "u1", currentPlanId: "team" }],
@@ -68,7 +68,7 @@ describe("the credential slot", () => {
       currentUserId: "u1",
     });
 
-    const { before, after } = await Effect.runPromise(
+    const { before, after, token } = await Effect.runPromise(
       Effect.gen(function* () {
         const slack = yield* SlackConnectionService;
         const credentials = yield* CredentialService;
@@ -96,15 +96,24 @@ describe("the credential slot", () => {
         });
         const after = yield* slack.memberConnection(WS);
 
-        return { before: Option.isSome(before), after: Option.isSome(after) };
+        return {
+          before: Option.isSome(before),
+          after: Option.isSome(after),
+          token: Option.isSome(after) ? after.value.tokens.accessToken : null,
+        };
       }).pipe(Effect.provide(layer)),
     );
 
     expect(before).toBe(true);
-    // Not "degraded" — GONE. The single-use refreshToken cannot be re-derived, so
-    // under Rotating(30min) the workspace's grant is unrecoverable by any means
-    // except a full reconnect through Slack's consent screen.
-    expect(after).toBe(false);
+    // THIS ASSERTION IS INVERTED FROM WHAT IT USED TO BE, and the inversion is
+    // the point of `account_id`.
+    //
+    // The OAuth grant lives at the TEAM key (`T_ACME`); the apiKey save lands at
+    // the sole-account key (`""`). They are different rows, so the paste no
+    // longer overwrites a single-use `xoxe-1-` refresh token that cannot be
+    // re-derived. The grant survives, and the stray row is deletable.
+    expect(after).toBe(true);
+    expect(token).toBe("xoxe.xoxb-live");
   });
 });
 

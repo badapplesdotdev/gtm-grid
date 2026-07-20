@@ -165,7 +165,12 @@ export async function POST(
   // yield an EMPTY list, and `[].includes(...)` is false — so the drop is the
   // default, not a case someone has to remember to write.
   const connectedTeams = await slackTeamsForWorkspace(webhook.workspaceId);
-  if (!connectedTeams.includes(request.record.team)) {
+  // The record's team is NULLABLE, and null is checked explicitly rather than
+  // left to `includes(null)`. It would be false today only because
+  // `slackTeamsForWorkspace` filters empty entries out; relying on that makes
+  // the tenant gate depend on a detail of a function in another file.
+  const eventTeam = request.record.team;
+  if (eventTeam === null || !connectedTeams.includes(eventTeam)) {
     // ACK 200, not 4xx: Slack retries a non-2xx and eventually disables the
     // endpoint, and a foreign team's events are not this endpoint's business to
     // complain about. The response says nothing about which case it was.

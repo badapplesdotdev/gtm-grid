@@ -37,7 +37,7 @@ export const slackRouter = router({
         
         Effect.gen(function* () {
           const membership = yield* MembershipService;
-          yield* membership.requireMember(input.workspaceId);
+          const member = yield* membership.requireMember(input.workspaceId);
           // `isConfigured` reads env only — its error channel is `never`, so it
           // needs no handling and cannot be the thing a catch here is for.
           const configured = yield* SLACK_OAUTH.isConfigured();
@@ -65,6 +65,17 @@ export const slackRouter = router({
           return {
             configured,
             connected: connections.length > 0,
+            /**
+             * Whether THIS caller may disconnect. Derived from the same role the
+             * mutation enforces, and returned rather than recomputed in the
+             * client, so the button cannot drift out of agreement with the
+             * server: a UI that hides it for the wrong people is confusing, one
+             * that SHOWS it for the wrong people is a 403 dressed as a feature.
+             *
+             * Not a security control — `disconnect` gates itself. This only
+             * stops us offering an action the caller cannot take.
+             */
+            canDisconnect: member.role === "owner" || member.role === "admin",
             connections: connections.map((m: SlackConnectionMeta) => ({
               teamId: m.teamId,
               teamName: m.teamName,

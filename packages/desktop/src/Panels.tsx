@@ -524,6 +524,15 @@ export function SlackOAuthSection({ workspaceId }: { workspaceId: string }) {
   const [accounts, setAccounts] = useState<
     readonly { id: string; label: string; byName: string }[]
   >([]);
+  /**
+   * Whether the signed-in member may disconnect (owner/admin). Read from the
+   * SERVER's answer rather than a locally-held role, so the button and the
+   * mutation's own gate can never disagree.
+   *
+   * Defaults false: until the status read lands we do not know, and briefly
+   * hiding a control the user does have beats briefly offering one they don't.
+   */
+  const [canDisconnect, setCanDisconnect] = useState(false);
   const queryClient = useQueryClient();
   // Whether the LAST poll saw a connection, so we only invalidate on a CHANGE
   // rather than on every 2s tick.
@@ -545,6 +554,7 @@ export function SlackOAuthSection({ workspaceId }: { workspaceId: string }) {
         void queryClient.invalidateQueries({ queryKey: ["credentials", "list", workspaceId] });
       }
       wasConnected.current = s.connected;
+      setCanDisconnect(s.canDisconnect);
       setAccounts(
         s.connections.map((c: { teamId: string; teamName: string; connectedByName: string }) => ({
           id: c.teamId,
@@ -585,6 +595,7 @@ export function SlackOAuthSection({ workspaceId }: { workspaceId: string }) {
         return url;
       }}
       accounts={accounts}
+      canDisconnect={canDisconnect}
       disconnect={async (teamId) => {
         if (!apiClient) throw new Error("Not signed in");
         // `teamId` undefined only from the single-connection card, where
