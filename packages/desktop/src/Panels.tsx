@@ -554,9 +554,15 @@ export function SlackOAuthSection({ workspaceId }: { workspaceId: string }) {
         void queryClient.invalidateQueries({ queryKey: ["credentials", "list", workspaceId] });
       }
       wasConnected.current = s.connected;
-      setCanDisconnect(s.canDisconnect);
+      // `?? false` / `?? []`, not a bare read. The desktop ships independently
+      // of the server, so a client on this build can talk to a deployment whose
+      // `connectionStatus` predates these fields. A bare `s.connections.map`
+      // throws on undefined, and the throw lands in the catch below — turning a
+      // perfectly healthy connection into "Couldn't check Slack" with no way
+      // back. Absent means "no extra accounts, and assume no rights".
+      setCanDisconnect(s.canDisconnect ?? false);
       setAccounts(
-        s.connections.map((c: { teamId: string; teamName: string; connectedByName: string }) => ({
+        (s.connections ?? []).map((c: { teamId: string; teamName: string; connectedByName: string }) => ({
           id: c.teamId,
           // A team with no stored name still needs an identity in the list, or
           // two unnamed connections render as an indistinguishable pair with

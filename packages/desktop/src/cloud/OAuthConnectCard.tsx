@@ -100,7 +100,21 @@ export function OAuthConnectCard(props: OAuthConnectCardProps) {
   const [confirmingAccount, setConfirmingAccount] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const accounts = props.accounts ?? [];
-  const multi = accounts.length > 0;
+  /**
+   * Whether this PROVIDER can hold several accounts at all (Slack passes the
+   * array; the CRM providers don't). Distinct from {@link multi} on purpose.
+   */
+  const supportsMultiple = props.accounts !== undefined;
+  /**
+   * Whether to switch to the LIST rendering — only at two or more.
+   *
+   * `> 1`, not `> 0`. Keying this off "the provider supports multiple" replaced
+   * the familiar "Connected · Acme Slack / Reconnect / Disconnect" card with a
+   * roster reading "Connected · 1 workspace" the moment Slack had a single
+   * connection — both worse, and a pointless change for the overwhelmingly
+   * common case. `e2e/slack.spec.ts` caught it.
+   */
+  const multi = accounts.length > 1;
   const canDisconnect = props.canDisconnect ?? true;
 
   // Poll only WHILE a round-trip is in flight, and give up after a bounded
@@ -199,6 +213,15 @@ export function OAuthConnectCard(props: OAuthConnectCardProps) {
             <button className="skill-btn" disabled={busy} onClick={() => void authorize()}>
               {busy ? `Waiting for ${providerName}…` : "Reconnect"}
             </button>
+            {/* The only route to a SECOND account while the first is connected —
+                without it a multi-account provider is stuck at one, since the
+                list rendering that carries this button needs two to appear.
+                Absent entirely for single-account providers. */}
+            {supportsMultiple && (
+              <button className="skill-btn" disabled={busy} onClick={() => void authorize()}>
+                Connect another
+              </button>
+            )}
             {!canDisconnect ? null : confirming ? (
               <>
                 <button className="skill-btn danger" onClick={() => void onDisconnect()}>
