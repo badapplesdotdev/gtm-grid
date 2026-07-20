@@ -111,6 +111,19 @@ describe("round trip", () => {
     expect(parsed?.meta).toEqual(META);
   });
 
+  it("preserves connectedAt across the string round trip as a NUMBER", () => {
+    // The desktop card's reconnect signal: a reconnect to the same team moves
+    // nothing else, so this timestamp is how it confirms a fresh grant landed.
+    const secrets = toSecrets({ accessToken: "at" }, { ...META, connectedAt: 1_700_000_000_000 });
+    expect(secrets.connectedAt).toBe("1700000000000");
+    expect(parseConnection(secrets)?.meta.connectedAt).toBe(1_700_000_000_000);
+  });
+
+  it("drops a missing or corrupt connectedAt rather than yielding NaN", () => {
+    expect(parseConnection(toSecrets({ accessToken: "at" }, META))?.meta.connectedAt).toBeUndefined();
+    expect(parseConnection({ accessToken: "at", connectedAt: "nope" })?.meta.connectedAt).toBeUndefined();
+  });
+
   it("carries team/bot ids into tokens.extra, where the refresh merge preserves them", () => {
     const parsed = parseConnection(toSecrets({ accessToken: "at" }, META));
     expect(parsed?.tokens.extra).toEqual({ teamId: "T123", teamName: "Trigify GTM", botUserId: "U456" });

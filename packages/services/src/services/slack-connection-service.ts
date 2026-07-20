@@ -40,6 +40,15 @@ export interface SlackConnectionMeta {
   readonly teamName: string;
   /** The bot user the app posts as. */
   readonly botUserId: string;
+  /**
+   * When this connection was last established (epoch ms). The desktop card
+   * needs it to confirm a RECONNECT: reconnecting to the same team leaves
+   * everything else here unchanged, so this timestamp is the only signal that a
+   * fresh grant landed. Optional so connections written before this field
+   * existed still parse — they just carry no reconnect timestamp until the next
+   * (re)connect writes one.
+   */
+  readonly connectedAt?: number;
 }
 
 /** The whole connection: what to call Slack with, plus what to show the user. */
@@ -66,6 +75,7 @@ export const toSecrets = (tokens: OAuthTokens, meta: SlackConnectionMeta): Secre
   teamId: meta.teamId,
   teamName: meta.teamName,
   botUserId: meta.botUserId,
+  ...(meta.connectedAt !== undefined ? { connectedAt: String(meta.connectedAt) } : {}),
 });
 
 /** Read a stored secret map back into tokens + meta; null when there is no usable token. */
@@ -73,6 +83,7 @@ export const parseConnection = (secrets: SecretMap): SlackConnection | null => {
   const accessToken = secrets.accessToken ?? "";
   if (accessToken === "") return null;
   const expires = Number(secrets.expiresAtMs);
+  const connectedAt = Number(secrets.connectedAt);
   const extra = {
     teamId: secrets.teamId ?? "",
     teamName: secrets.teamName ?? "",
@@ -88,6 +99,7 @@ export const parseConnection = (secrets: SecretMap): SlackConnection | null => {
     meta: {
       connectedByUserId: secrets.connectedByUserId ?? "",
       connectedByName: secrets.connectedByName ?? "",
+      ...(Number.isFinite(connectedAt) && connectedAt > 0 ? { connectedAt } : {}),
       ...extra,
     },
   };

@@ -60,6 +60,9 @@ export const slackRouter = router({
               connectedByName: c.meta.connectedByName,
               teamName: c.meta.teamName,
               teamId: c.meta.teamId,
+              // Lets the desktop card confirm a reconnect (same team = nothing
+              // else changes). Omitted for connections stored before this field.
+              connectedAt: c.meta.connectedAt,
             }),
           });
         }),

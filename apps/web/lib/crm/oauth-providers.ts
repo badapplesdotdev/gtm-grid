@@ -219,6 +219,10 @@ export const SLACK_OAUTH: OAuthRouteAdapter = routeAdapter(SLACK_ADAPTER, {
           teamId: extra.teamId ?? "",
           teamName,
           botUserId: extra.botUserId ?? "",
+          // Stamped on every (re)connect so the desktop card can confirm a
+          // reconnect landed — reconnecting to the same team changes nothing
+          // else the status exposes.
+          connectedAt: Date.now(),
         },
       });
       return teamName;
