@@ -68,6 +68,25 @@ describe("sendNewUserWebhook", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("refuses non-https URLs (PII + token must not go plaintext)", async () => {
+    process.env[URL_KEY] = "http://example.test/api/webhooks/new-user";
+    await sendNewUserWebhook(user);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("normalizes string timestamps and nulls unparseable ones", async () => {
+    await sendNewUserWebhook({
+      ...user,
+      createdAt: "2026-07-02",
+      updatedAt: "not-a-date",
+    });
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string,
+    );
+    expect(body.user.createdAt).toBe("2026-07-02T00:00:00.000Z");
+    expect(body.user.updatedAt).toBeNull();
+  });
+
   it("defaults optional fields instead of dropping them", async () => {
     await sendNewUserWebhook({ id: "user_456", email: "bare@example.com" });
     const body = JSON.parse(

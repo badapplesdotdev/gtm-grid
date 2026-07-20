@@ -30,7 +30,8 @@ export interface NewUserWebhookUser {
 /** Normalize Date fields to ISO strings so the JSON payload is stable. */
 function iso(value: Date | string | undefined): string | null {
   if (value === undefined) return null;
-  return value instanceof Date ? value.toISOString() : value;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 /**
@@ -43,6 +44,13 @@ export async function sendNewUserWebhook(
 ): Promise<void> {
   const url = process.env.NEW_USER_WEBHOOK_URL;
   if (url === undefined || url === "") return;
+  // PII + a capability token travel on this request — refuse plaintext HTTP.
+  if (!url.startsWith("https://")) {
+    console.error(
+      "[auth] NEW_USER_WEBHOOK_URL must be https:// — webhook not sent",
+    );
+    return;
+  }
   try {
     const response = await fetch(url, {
       method: "POST",
