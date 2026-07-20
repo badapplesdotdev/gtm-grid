@@ -224,10 +224,10 @@ describe("callbackResponse — Slack", () => {
       // decryptable afterwards. Read back through the WORKER path: the read is
       // member-gated too, and there is still no member here — which is precisely
       // the situation the write had to survive.
-      const team = await runtime.runPromise(
-        Effect.flatMap(SlackConnectionService, (s) => s.connectedTeamIdForWorker(WS)),
+      const teams = await runtime.runPromise(
+        Effect.flatMap(SlackConnectionService, (s) => s.connectedTeamIdsForWorker(WS)),
       );
-      expect(team).toBe("T_ACME");
+      expect(teams).toEqual(["T_ACME"]);
     } finally {
       await runtime.dispose();
     }

@@ -138,6 +138,12 @@ export interface GridColumn {
   readonly kind: ColumnKind;
   readonly provider: string | null;
   readonly method: string | null;
+  /**
+   * Which account on the provider (a Slack team id); null = the workspace's
+   * sole account on this connector. The desktop reads it to preselect the
+   * column's team in the editor.
+   */
+  readonly accountId: string | null;
   readonly code: string | null;
   readonly params: unknown;
   readonly condition: string | null;
@@ -212,6 +218,7 @@ const toGridColumn = (c: Column): GridColumn => ({
   kind: c.kind,
   provider: c.provider,
   method: c.method,
+  accountId: c.accountId ?? null,
   code: c.code,
   params: c.params,
   condition: c.condition,
@@ -600,6 +607,8 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       readonly kind: ColumnKind;
       readonly provider?: string | null;
       readonly method?: string | null;
+      /** Which account on the provider (Slack team id); null = the sole account. */
+      readonly accountId?: string | null;
       readonly code?: string | null;
       readonly params?: unknown;
       readonly condition?: string | null;
@@ -668,6 +677,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
             kind: args.kind,
             provider: args.provider ?? null,
             method: args.method ?? null,
+            accountId: args.accountId ?? null,
             code: args.code ?? null,
             params: args.params ?? {},
             condition: args.condition ?? null,
@@ -1203,6 +1213,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
             kind: col.kind,
             provider: col.provider,
             method: col.method,
+            accountId: col.accountId ?? null,
             code: col.code,
             params: col.params,
             condition: col.condition,

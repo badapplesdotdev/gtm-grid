@@ -61,6 +61,8 @@ export interface StoreColumn {
   kind: "manual" | "function";
   provider: string | null;
   method: string | null;
+  /** Which account on the provider (Slack team id); null = the sole account. */
+  accountId?: string | null;
   code: string | null;
   params: unknown;
   condition: string | null;

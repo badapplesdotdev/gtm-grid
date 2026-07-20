@@ -284,8 +284,22 @@ export const procedures = {
   // bindings, no sources, and disconnecting pauses nothing.
   "slack.connectionStatus": (_input, s) =>
     s.slackConnected
-      ? { configured: true, connected: true, connectedByName: "Morgan", teamName: "Acme Slack", teamId: "T_ACME" }
-      : { configured: s.slackConfigured, connected: false },
+      ? {
+          configured: true,
+          connected: true,
+          connectedByName: "Morgan",
+          teamName: "Acme Slack",
+          teamId: "T_ACME",
+          // ONE connected team, so the card keeps its single-connection
+          // rendering ("Connected · Acme Slack" + Reconnect/Disconnect). The
+          // multi-team list is exercised by the router unit tests; this mock
+          // pins the shape the desktop reads.
+          connections: [
+            { teamId: "T_ACME", teamName: "Acme Slack", connectedByName: "Morgan" },
+          ],
+          canDisconnect: true,
+        }
+      : { configured: s.slackConfigured, connected: false, connections: [], canDisconnect: true },
   "slack.authorizeUrl": () => ({
     url: "https://slack.com/oauth/v2/authorize?client_id=e2e&state=fake&redirect_uri=https%3A%2F%2Fwww.gtmgrid.dev%2Fapi%2Foauth%2Fslack%2Fcallback&scope=chat%3Awrite%2Cchannels%3Aread%2Cusers%3Aread",
   }),

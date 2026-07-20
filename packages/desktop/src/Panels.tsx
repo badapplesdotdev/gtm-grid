@@ -520,6 +520,19 @@ function CrmOAuthSection({ workspaceId, provider }: { workspaceId: string; provi
  */
 export function SlackOAuthSection({ workspaceId }: { workspaceId: string }) {
   const [status, setStatus] = useState<OAuthCardStatus>({ kind: "loading" });
+  /** Every connected Slack team — a workspace may install the app into several. */
+  const [accounts, setAccounts] = useState<
+    readonly { id: string; label: string; byName: string }[]
+  >([]);
+  /**
+   * Whether the signed-in member may disconnect (owner/admin). Read from the
+   * SERVER's answer rather than a locally-held role, so the button and the
+   * mutation's own gate can never disagree.
+   *
+   * Defaults false: until the status read lands we do not know, and briefly
+   * hiding a control the user does have beats briefly offering one they don't.
+   */
+  const [canDisconnect, setCanDisconnect] = useState(false);
   const queryClient = useQueryClient();
   // Whether the LAST poll saw a connection, so we only invalidate on a CHANGE
   // rather than on every 2s tick.
@@ -541,8 +554,29 @@ export function SlackOAuthSection({ workspaceId }: { workspaceId: string }) {
         void queryClient.invalidateQueries({ queryKey: ["credentials", "list", workspaceId] });
       }
       wasConnected.current = s.connected;
+      // `?? false` / `?? []`, not a bare read. The desktop ships independently
+      // of the server, so a client on this build can talk to a deployment whose
+      // `connectionStatus` predates these fields. A bare `s.connections.map`
+      // throws on undefined, and the throw lands in the catch below — turning a
+      // perfectly healthy connection into "Couldn't check Slack" with no way
+      // back. Absent means "no extra accounts, and assume no rights".
+      setCanDisconnect(s.canDisconnect ?? false);
+      setAccounts(
+        (s.connections ?? []).map((c: { teamId: string; teamName: string; connectedByName: string }) => ({
+          id: c.teamId,
+          // A team with no stored name still needs an identity in the list, or
+          // two unnamed connections render as an indistinguishable pair with
+          // two Disconnect buttons.
+          label: c.teamName || c.teamId || "Slack workspace",
+          byName: c.connectedByName,
+        })),
+      );
       if (s.connected) {
-        setStatus({ kind: "connected", byName: s.connectedByName, accountLabel: s.teamName || "Slack" });
+        setStatus({
+          kind: "connected",
+          byName: s.connectedByName ?? "",
+          accountLabel: s.teamName || "Slack",
+        });
       } else setStatus({ kind: "disconnected", configured: s.configured });
     } catch {
       // NOT `{ disconnected, configured: false }`. A failed read tells us nothing
@@ -566,9 +600,16 @@ export function SlackOAuthSection({ workspaceId }: { workspaceId: string }) {
         const { url } = await apiClient.slack.authorizeUrl.query({ workspaceId });
         return url;
       }}
-      disconnect={async () => {
+      accounts={accounts}
+      canDisconnect={canDisconnect}
+      disconnect={async (teamId) => {
         if (!apiClient) throw new Error("Not signed in");
-        const res = await apiClient.slack.disconnect.mutate({ workspaceId });
+        // `teamId` undefined only from the single-connection card, where
+        // "disconnect everything" and "disconnect the one" are the same act.
+        const res = await apiClient.slack.disconnect.mutate({
+          workspaceId,
+          ...(teamId === undefined ? {} : { teamId }),
+        });
         return res.removed ? "Disconnected." : "Nothing to disconnect.";
       }}
       connectedSub="powers Slack columns (post a message, look up a user)"

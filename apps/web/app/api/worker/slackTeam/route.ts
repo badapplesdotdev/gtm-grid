@@ -25,8 +25,8 @@ export function POST(req: Request): Promise<Response> {
   return runWorker(req, SlackTeamSchema, (body) =>
     Effect.gen(function* () {
       const svc = yield* SlackConnectionService;
-      const teamId = yield* svc.connectedTeamIdForWorker(body.workspaceId);
-      return { teamId };
+      const teamIds = yield* svc.connectedTeamIdsForWorker(body.workspaceId);
+      return { teamIds };
     }),
   );
 }

@@ -26,6 +26,12 @@ export interface Column {
   readonly kind: ColumnKind;
   readonly provider: string | null;
   readonly method: string | null;
+  /**
+   * Which account on the provider (Slack team id); null/absent = the sole
+   * account. Optional to stay assignable from {@link StoreColumn}, whose
+   * in-memory rows predate the field.
+   */
+  readonly accountId?: string | null;
   readonly code: string | null;
   readonly params: unknown;
   readonly condition: string | null;
@@ -55,6 +61,11 @@ export interface NewColumn {
   readonly kind: ColumnKind;
   readonly provider: string | null;
   readonly method: string | null;
+  /**
+   * Which account on the provider; omit for the single-account connectors,
+   * which is every caller that creates a plain manual/CRM-synced column.
+   */
+  readonly accountId?: string | null;
   readonly code: string | null;
   readonly params: unknown;
   readonly condition: string | null;
@@ -71,6 +82,7 @@ export interface ColumnPatch {
   readonly kind?: ColumnKind;
   readonly provider?: string | null;
   readonly method?: string | null;
+  readonly accountId?: string | null;
   readonly code?: string | null;
   readonly params?: unknown;
   readonly condition?: string | null;
@@ -145,6 +157,7 @@ export const ColumnRepoLive: Layer.Layer<ColumnRepo, never, DbClient> =
         kind: schema.columns.kind,
         provider: schema.columns.provider,
         method: schema.columns.method,
+        accountId: schema.columns.accountId,
         code: schema.columns.code,
         params: schema.columns.params,
         condition: schema.columns.condition,
@@ -210,6 +223,7 @@ export const ColumnRepoLive: Layer.Layer<ColumnRepo, never, DbClient> =
                   kind: values.kind,
                   provider: values.provider,
                   method: values.method,
+                  accountId: values.accountId ?? null,
                   code: values.code,
                   params: values.params,
                   condition: values.condition,
@@ -239,6 +253,7 @@ export const ColumnRepoLive: Layer.Layer<ColumnRepo, never, DbClient> =
                   if (patch.kind !== undefined) set.kind = patch.kind;
                   if (patch.provider !== undefined) set.provider = patch.provider;
                   if (patch.method !== undefined) set.method = patch.method;
+                  if (patch.accountId !== undefined) set.accountId = patch.accountId;
                   if (patch.code !== undefined) set.code = patch.code;
                   if (patch.params !== undefined) set.params = patch.params;
                   if (patch.condition !== undefined) set.condition = patch.condition;
@@ -316,6 +331,7 @@ export const columnRepoLayer = (store: GridStore): Layer.Layer<ColumnRepo> =>
         if (patch.kind !== undefined) col.kind = patch.kind;
         if (patch.provider !== undefined) col.provider = patch.provider;
         if (patch.method !== undefined) col.method = patch.method;
+        if (patch.accountId !== undefined) col.accountId = patch.accountId;
         if (patch.code !== undefined) col.code = patch.code;
         if (patch.params !== undefined) col.params = patch.params;
         if (patch.condition !== undefined) col.condition = patch.condition;

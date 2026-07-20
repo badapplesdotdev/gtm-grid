@@ -178,6 +178,8 @@ interface ConvexColumnDoc {
   readonly kind: Column["kind"];
   readonly provider: string | null;
   readonly method: string | null;
+  /** Which account on the provider (Slack team id); absent for single-account connectors. */
+  readonly accountId?: string | null;
   readonly code: string | null;
   readonly params: Record<string, unknown>;
   readonly condition: string | null;
@@ -229,6 +231,7 @@ const toColumn = (c: ConvexColumnDoc): Column => ({
   kind: c.kind,
   provider: c.provider,
   method: c.method,
+  accountId: c.accountId ?? null,
   code: c.code,
   params: c.params,
   condition: c.condition,
@@ -483,6 +486,7 @@ export const cloudGridStoreShape = (
      */
     const getCredential = (
       provider: string,
+      accountId?: string,
     ): Effect.Effect<Credential | undefined, GridStoreError> => {
       const ref = refs.getCredential;
       const resolution = config.credentials;
@@ -492,6 +496,12 @@ export const cloudGridStoreShape = (
         client.action(ref, {
           workspaceId: resolution.workspaceId,
           extensionId: provider,
+          // Sent only when the column names one. Absent means "the workspace's
+          // sole account on this connector", which the route resolves — it is
+          // NOT the same as `""`, which would name the legacy single-account
+          // row explicitly and miss a workspace whose only Slack row is keyed
+          // by a real team id.
+          ...(accountId !== undefined && accountId !== "" ? { accountId } : {}),
           scope: resolution.scope,
         }),
       ).pipe(

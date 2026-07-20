@@ -27,6 +27,13 @@ export interface Column {
   kind: "manual" | "function";
   provider: string | null;
   method: string | null;
+  /**
+   * Which account on the provider this column runs against — a Slack team id
+   * when the workspace has connected several. Null/absent = the workspace's
+   * only account on this connector, which is every other connector and every
+   * column authored before multi-team Slack.
+   */
+  accountId?: string | null;
   fn: string | null;
   /** Custom QuickJS body for code columns (fn === "code"); null otherwise. */
   code?: string | null;
