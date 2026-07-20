@@ -542,7 +542,13 @@ export function SlackOAuthSection({ workspaceId }: { workspaceId: string }) {
       }
       wasConnected.current = s.connected;
       if (s.connected) {
-        setStatus({ kind: "connected", byName: s.connectedByName, accountLabel: s.teamName || "Slack" });
+        setStatus({
+          kind: "connected",
+          byName: s.connectedByName,
+          accountLabel: s.teamName || "Slack",
+          // Freshness signal the card uses to confirm a reconnect landed.
+          connectedAt: s.connectedAt,
+        });
       } else setStatus({ kind: "disconnected", configured: s.configured });
     } catch {
       // NOT `{ disconnected, configured: false }`. A failed read tells us nothing

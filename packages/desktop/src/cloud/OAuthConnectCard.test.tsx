@@ -110,6 +110,36 @@ describe("connected", () => {
   });
 });
 
+describe("reconnect", () => {
+  // The bug: a reconnect starts from the "connected" state, so the old
+  // "connected right now?" guard cleared `busy` on the very first render — the
+  // button never dwelled in "Waiting…", the user saw nothing happen, and kept
+  // clicking Reconnect. Feedback must persist until a genuinely NEW grant lands.
+  const connectedAt = (at: number): OAuthCardStatus => ({ ...connected, connectedAt: at });
+
+  it("dwells in 'Waiting…' after Reconnect and does NOT clear on the unchanged status", async () => {
+    const { rerender } = render(<OAuthConnectCard {...base} status={connectedAt(1000)} />);
+    await userEvent.click(screen.getByRole("button", { name: /Reconnect/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Waiting for Slack…/i })).toBeTruthy());
+
+    // A poll returning the SAME connection (reconnect not finished) must not end
+    // the wait — this is exactly the render that used to clear it.
+    rerender(<OAuthConnectCard {...base} status={connectedAt(1000)} />);
+    expect(screen.getByRole("button", { name: /Waiting for Slack…/i })).toBeTruthy();
+    expect(screen.queryByText("Slack connected.")).toBeNull();
+  });
+
+  it("confirms once the poll observes a FRESH connection (newer connectedAt)", async () => {
+    const { rerender } = render(<OAuthConnectCard {...base} status={connectedAt(1000)} />);
+    await userEvent.click(screen.getByRole("button", { name: /Reconnect/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Waiting for Slack…/i })).toBeTruthy());
+
+    rerender(<OAuthConnectCard {...base} status={connectedAt(2000)} />);
+    await waitFor(() => expect(screen.getByText("Slack connected.")).toBeTruthy());
+    expect(screen.getByRole("button", { name: /Reconnect/i })).toBeTruthy();
+  });
+});
+
 describe("polling", () => {
   it("does NOT poll until a round-trip is in flight", async () => {
     const refresh = vi.fn(async () => {});

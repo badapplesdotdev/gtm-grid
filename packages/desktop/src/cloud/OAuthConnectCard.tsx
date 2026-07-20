@@ -23,7 +23,7 @@
  * Plain React: no Effect in the view layer (CLAUDE.md).
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { openExternalUrl } from "./open-external";
 
 /** How long to keep polling after opening the consent screen. */
@@ -33,7 +33,21 @@ const POLL_EVERY_MS = 2_000;
 export type OAuthCardStatus =
   | { readonly kind: "loading" }
   | { readonly kind: "disconnected"; readonly configured: boolean }
-  | { readonly kind: "connected"; readonly byName: string; readonly accountLabel: string }
+  | {
+      readonly kind: "connected";
+      readonly byName: string;
+      readonly accountLabel: string;
+      /**
+       * When this connection was last established (epoch ms). This is the
+       * FRESHNESS signal a reconnect needs: a reconnect starts from the
+       * "connected" state and — when it lands on the same account — changes
+       * nothing else observable, so `connectedAt` is the only thing that moves
+       * to prove a new grant landed. Optional because a provider may not supply
+       * it yet (the card then falls back to account/who, and to the poll
+       * timeout); see {@link connectionFingerprint}.
+       */
+      readonly connectedAt?: number;
+    }
   /**
    * The status read FAILED — we do not know whether this deployment is
    * configured or this workspace connected.
@@ -67,11 +81,38 @@ export interface OAuthConnectCardProps {
   readonly footerNote?: string;
 }
 
+/**
+ * A value that changes ONLY when the connection itself changes. We snapshot it
+ * at the moment (re)connect is clicked and compare on every poll, so a
+ * completed round-trip can be told apart from the state the click started in.
+ * `connectedAt` is the authoritative signal (a reconnect to the same account
+ * moves nothing else); account label + who fall back for providers that don't
+ * supply it. A non-connected status fingerprints to its bare kind, so the
+ * common `disconnected → connected` transition is always seen as fresh.
+ */
+function connectionFingerprint(status: OAuthCardStatus): string {
+  if (status.kind !== "connected") return status.kind;
+  return `connected|${status.connectedAt ?? ""}|${status.accountLabel}|${status.byName}`;
+}
+
 export function OAuthConnectCard(props: OAuthConnectCardProps) {
   const { headText, providerName, status, refresh, authorizeUrl, disconnect } = props;
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+
+  // The connection as it looked the instant (re)connect was clicked. `null`
+  // when no round-trip is in flight. A reconnect begins already "connected", so
+  // "connected right now?" cannot distinguish a finished handshake from the
+  // click that opened it — we compare against this instead.
+  const preConnectFingerprint = useRef<string | null>(null);
+  // Latest status, so `authorize` can snapshot it on click WITHOUT depending on
+  // `status` (which would re-create the callback — and tear down the poll — on
+  // every tick).
+  const statusRef = useRef(status);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   // Poll only WHILE a round-trip is in flight, and give up after a bounded
   // window — the user may simply have closed the consent tab.
@@ -87,19 +128,29 @@ export function OAuthConnectCard(props: OAuthConnectCardProps) {
     };
   }, [busy, refresh]);
 
+  // Finish ONLY when the poll observes a connection that DIFFERS from the
+  // pre-click snapshot — i.e. a genuinely new grant landed. The old guard
+  // ("connected right now?") fired the instant a reconnect began, because the
+  // card was already connected: `busy` cleared on the first render, the button
+  // never dwelled in "Waiting…", and the user — given no signal anything was in
+  // flight — kept clicking Reconnect. A stalled or same-account round-trip that
+  // never moves the fingerprint is caught by the poll-window timeout above.
   useEffect(() => {
-    if (busy && status.kind === "connected") {
-      setBusy(false);
-      setNote(`${providerName} connected.`);
-    }
+    if (!busy || status.kind !== "connected") return;
+    if (connectionFingerprint(status) === preConnectFingerprint.current) return;
+    setBusy(false);
+    setNote(`${providerName} connected.`);
   }, [busy, status, providerName]);
 
   const authorize = useCallback(async () => {
     setNote(null);
     try {
       const url = await authorizeUrl();
-      // Set busy BEFORE handing off: on a fast local round-trip the connection
-      // can land before the browser even returns focus.
+      // Snapshot the connection BEFORE handing off, so the poll recognises the
+      // fresh grant even on a reconnect (which starts already connected). Set
+      // busy BEFORE the browser opens: on a fast local round-trip the
+      // connection can land before the browser even returns focus.
+      preConnectFingerprint.current = connectionFingerprint(statusRef.current);
       setBusy(true);
       await openExternalUrl(url);
     } catch (e) {
