@@ -9,7 +9,7 @@ import { inngest } from "../../../../../lib/inngest/client";
 import { captureServer } from "../../../../../lib/posthog-server";
 import { clientIp, rateLimit } from "../../../../../lib/rate-limit";
 import { applyMapping } from "../../../../../lib/webhook-mapping";
-import { resolveToken, slackTeamForWorkspace } from "../../../../../lib/webhook-resolve";
+import { resolveToken, slackTeamsForWorkspace } from "../../../../../lib/webhook-resolve";
 
 /**
  * The Slack Events API receiver. Slack POSTs an event envelope to
@@ -161,9 +161,11 @@ export async function POST(
   // webhook the URL names — and with auto-run, enriched at that tenant's expense
   // on attacker-controlled input.
   //
-  // Fails CLOSED: no connection, no stored team, or an unreadable one all drop.
-  const expectedTeam = await slackTeamForWorkspace(webhook.workspaceId);
-  if (expectedTeam === null || request.record.team !== expectedTeam) {
+  // Fails CLOSED: no connection, no stored team, or an unreadable one all
+  // yield an EMPTY list, and `[].includes(...)` is false — so the drop is the
+  // default, not a case someone has to remember to write.
+  const connectedTeams = await slackTeamsForWorkspace(webhook.workspaceId);
+  if (!connectedTeams.includes(request.record.team)) {
     // ACK 200, not 4xx: Slack retries a non-2xx and eventually disables the
     // endpoint, and a foreign team's events are not this endpoint's business to
     // complain about. The response says nothing about which case it was.

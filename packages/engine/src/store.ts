@@ -86,9 +86,17 @@ export interface GridStoreShape {
     columnId: string,
     patch: CellPatch,
   ) => Effect.Effect<void, GridStoreError>;
-  /** Resolve the (decrypted) credential for a connector provider, if any. */
+  /**
+   * Resolve the (decrypted) credential for a connector provider, if any.
+   *
+   * `accountId` names WHICH account when a workspace can hold more than one on
+   * the same connector — Slack's team id. Omitted (the case for every other
+   * connector, and for every column authored before multi-team Slack) the store
+   * resolves the workspace's sole account.
+   */
   readonly getCredential: (
     provider: string,
+    accountId?: string,
   ) => Effect.Effect<Credential | undefined, GridStoreError>;
   /**
    * Optional: return a read-only snapshot of the store for the duration of one

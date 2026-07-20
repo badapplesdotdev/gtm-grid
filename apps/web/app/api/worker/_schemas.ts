@@ -38,6 +38,7 @@ export const CreateColumnSchema = z.object({
   kind: columnKind,
   provider: nullableStr,
   method: nullableStr,
+  accountId: nullableStr,
   code: nullableStr,
   params: z.unknown().optional(),
   condition: nullableStr,
@@ -47,7 +48,17 @@ export const CreateTableSchema = z.object({ projectId: id, name: z.string() });
 export const DeleteColumnSchema = z.object({ columnId: id });
 export const DeleteRowSchema = z.object({ rowId: id });
 export const DeleteTableSchema = z.object({ tableId: id });
-export const GetCredentialSchema = z.object({ workspaceId: id, extensionId: id });
+export const GetCredentialSchema = z.object({
+  workspaceId: id,
+  extensionId: id,
+  /**
+   * WHICH account on the connector (a Slack team id). Absent means "the
+   * workspace's only account", which the service resolves — and rejects as
+   * ambiguous when there is more than one. NOT `id`: this is a provider's
+   * identifier, not one of ours.
+   */
+  accountId: z.string().min(1).max(128).optional(),
+});
 export const GetExtensionsSchema = z.object({ workspaceId: id });
 /** The Slack team a workspace is connected to — the Events receiver's tenant gate. */
 export const SlackTeamSchema = z.object({ workspaceId: id });
@@ -180,6 +191,7 @@ export const UpdateColumnSchema = z.object({
     kind: columnKind.optional(),
     provider: nullableStr,
     method: nullableStr,
+    accountId: nullableStr,
     code: nullableStr,
     params: z.unknown().optional(),
     condition: nullableStr,

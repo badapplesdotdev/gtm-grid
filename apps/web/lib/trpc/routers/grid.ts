@@ -463,6 +463,11 @@ export const gridRouter = router({
         kind: columnKind.optional(),
         provider: z.string().nullish(),
         method: z.string().nullish(),
+        /**
+         * Which account on the provider (a Slack team id). `null` clears the
+         * pin back to "the workspace's only account"; omitted leaves it alone.
+         */
+        accountId: z.string().nullish(),
         code: z.string().nullish(),
         params: z.unknown().optional(),
         condition: z.string().nullish(),

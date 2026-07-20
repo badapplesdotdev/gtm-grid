@@ -29,6 +29,7 @@ export function POST(req: Request): Promise<Response> {
       const stored = yield* svc.getCredential({
         workspaceId: body.workspaceId,
         extensionId: body.extensionId,
+        accountId: body.accountId,
       });
       if (stored === null) return null;
 
@@ -37,8 +38,19 @@ export function POST(req: Request): Promise<Response> {
       // fail the read: the caller's own 401 handling is the backstop, whereas
       // returning null here would read as "not connected" and surface as a
       // baffling "connect Slack" error on a connection that is fine.
+      // `stored.accountId` (the RESOLVED account), not `body.accountId`: when
+      // the caller named none and the workspace has exactly one, the refresh
+      // must still write back to THAT row. Passing the request's undefined
+      // through would re-read and persist the `""` row instead — burning a
+      // single-use Slack refresh token and storing the result where nothing
+      // reads it.
       const secrets = yield* oauth
-        .freshSecrets(body.workspaceId, body.extensionId, stored.secrets)
+        .freshSecrets(
+          body.workspaceId,
+          body.extensionId,
+          stored.secrets,
+          stored.accountId,
+        )
         .pipe(
           Effect.catchAll((e) =>
             Effect.logWarning("oauth refresh failed for a run credential; using the stored token").pipe(

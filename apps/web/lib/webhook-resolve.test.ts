@@ -16,7 +16,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveToken, slackTeamForWorkspace } from "./webhook-resolve";
+import { resolveToken, slackTeamsForWorkspace } from "./webhook-resolve";
 
 const SITE_URL = "https://app.gtmgrid.test";
 const SECRET = "whk_secret_value";
@@ -90,12 +90,12 @@ describe("resolveToken", () => {
   });
 });
 
-describe("slackTeamForWorkspace", () => {
-  it("POSTs the workspaceId to /api/worker/slackTeam and returns the team", async () => {
-    const f = fetchReturning(200, JSON.stringify({ teamId: "T_ACME" }));
+describe("slackTeamsForWorkspace", () => {
+  it("POSTs the workspaceId to /api/worker/slackTeam and returns every team", async () => {
+    const f = fetchReturning(200, JSON.stringify({ teamIds: ["T_ACME", "T_ACME_EU"] }));
     vi.stubGlobal("fetch", f);
 
-    expect(await slackTeamForWorkspace(WS)).toBe("T_ACME");
+    expect(await slackTeamsForWorkspace(WS)).toEqual(["T_ACME", "T_ACME_EU"]);
 
     const [url, init] = f.mock.calls[0] ?? [];
     expect(url).toBe(`${SITE_URL}/api/worker/slackTeam`);
@@ -103,22 +103,41 @@ describe("slackTeamForWorkspace", () => {
     expect(JSON.parse(String(init?.body))).toEqual({ workspaceId: WS });
   });
 
-  it("returns null for no connection, an empty team, or a non-object body", async () => {
-    // Each becomes null so the tenant gate FAILS CLOSED and drops the event —
-    // null must never be confusable with a real team id.
-    for (const body of ["", "null", JSON.stringify({}), JSON.stringify({ teamId: "" }), '"nope"']) {
+  it("returns an EMPTY list for no connection or a malformed body", async () => {
+    // Empty is the fail-closed value: the caller tests membership, and
+    // `[].includes(team)` is false, so an unreadable answer drops the event
+    // rather than admitting it. A non-array `teamIds` must not slip through as
+    // a truthy value either.
+    for (const body of [
+      "",
+      "null",
+      JSON.stringify({}),
+      JSON.stringify({ teamIds: [] }),
+      JSON.stringify({ teamIds: "T_ACME" }),
+      '"nope"',
+    ]) {
       vi.stubGlobal("fetch", fetchReturning(200, body));
-      expect(await slackTeamForWorkspace(WS)).toBeNull();
+      expect(await slackTeamsForWorkspace(WS)).toEqual([]);
     }
   });
 
-  it("never returns anything but the team id, even if the route leaked more", async () => {
+  it("drops non-string and empty entries rather than passing them through", async () => {
+    // An empty string would match a record whose `team` the receiver failed to
+    // read, turning a malformed event into an accepted one.
+    vi.stubGlobal(
+      "fetch",
+      fetchReturning(200, JSON.stringify({ teamIds: ["T_ACME", "", null, 7, "T_EU"] })),
+    );
+    expect(await slackTeamsForWorkspace(WS)).toEqual(["T_ACME", "T_EU"]);
+  });
+
+  it("never returns anything but team ids, even if the route leaked more", async () => {
     // Defence in depth: the receiver has no business holding a token, so even a
     // route regression that returned secrets must not hand them back.
     vi.stubGlobal(
       "fetch",
-      fetchReturning(200, JSON.stringify({ teamId: "T_ACME", accessToken: "xoxb-leaked" })),
+      fetchReturning(200, JSON.stringify({ teamIds: ["T_ACME"], accessToken: "xoxb-leaked" })),
     );
-    expect(await slackTeamForWorkspace(WS)).toBe("T_ACME");
+    expect(await slackTeamsForWorkspace(WS)).toEqual(["T_ACME"]);
   });
 });

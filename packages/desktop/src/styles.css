@@ -2878,6 +2878,10 @@ body.resizing-agent .agent-panel { transition: none; }
 }
 
 /* Account / credential status strip */
+/* Inline warning under the provider-account picker when a multi-account
+   connector is left unpinned — runs will fail, so it reads as a warning rather
+   than a hint. */
+.cep-account-warn { margin: 6px 0 2px; font: 400 11.5px var(--font-sans); color: var(--warning, var(--text-2)); line-height: 1.45; }
 .cep-account {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 10px; margin-bottom: 12px;
@@ -5338,6 +5342,10 @@ button.crmw-crm-card:hover { border-color: var(--accent); box-shadow: var(--shad
 .crm-oauth-dot.off { background: var(--border-2); }
 .crm-oauth-text { flex: 1; min-width: 0; display: flex; flex-direction: column; font: 500 13px var(--font-sans); color: var(--text); }
 .crm-oauth-sub { font: 400 11.5px var(--font-sans); color: var(--text-3); }
+/* One connected account row (multi-account providers, e.g. several Slack teams).
+   Indented and hairline-separated so the list reads as belonging to the card
+   above it rather than as a stack of sibling cards. */
+.crm-oauth-account { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
 .crm-oauth-note { margin-top: 10px; font: 400 12px var(--font-sans); color: var(--text-2); }
 .crm-oauth-note.subtle { color: var(--text-3); font-size: 11.5px; }
 .skill-btn.danger { border-color: var(--danger); color: var(--danger); }

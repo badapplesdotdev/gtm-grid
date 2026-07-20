@@ -167,9 +167,14 @@ export class SignalService extends Effect.Service<SignalService>()("SignalServic
      */
     const workerTrigifyKey = (workspaceId: string) =>
       Effect.gen(function* () {
+        // `trigify` is a single-account connector, so the list is empty or has
+        // exactly one entry; taking the first is not the arbitrary pick it
+        // would be for Slack. Passing no `accountId` matches the `""` row every
+        // apiKey connector writes.
         const enc = yield* grid.findSharedCredentialEnc(workspaceId, "trigify");
-        if (Option.isNone(enc)) return yield* Effect.fail(new SignalError({ message: NO_KEY }));
-        const secrets = yield* crypto.decrypt(workspaceId, enc.value);
+        const first = enc[0];
+        if (first === undefined) return yield* Effect.fail(new SignalError({ message: NO_KEY }));
+        const secrets = yield* crypto.decrypt(workspaceId, first.secretsEnc);
         const apiKey = (secrets.apiKey as string | undefined) ?? (secrets.key as string | undefined) ?? "";
         if (!apiKey) return yield* Effect.fail(new SignalError({ message: NO_KEY }));
         return apiKey;

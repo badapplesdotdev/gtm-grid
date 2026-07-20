@@ -41,6 +41,8 @@ export interface GridEventColumn {
   readonly kind: string;
   readonly provider: string | null;
   readonly method: string | null;
+  /** Which account on the provider (Slack team id); null = the sole account. */
+  readonly accountId: string | null;
   readonly code: string | null;
   readonly params: unknown;
   readonly condition: string | null;

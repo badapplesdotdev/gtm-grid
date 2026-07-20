@@ -39,6 +39,8 @@ export interface ColumnAuthoringApi {
       kind?: string;
       provider?: string | null;
       method?: string | null;
+      /** Which account on the provider (Slack team id); null clears the pin. */
+      accountId?: string | null;
       code?: string | null;
       params?: Record<string, unknown>;
       condition?: string | null;

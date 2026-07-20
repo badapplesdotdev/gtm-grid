@@ -57,8 +57,24 @@ export interface OAuthConnectCardProps {
   readonly refresh: () => Promise<void>;
   /** Resolve the authorize URL (server-minted state). */
   readonly authorizeUrl: () => Promise<string>;
-  /** Disconnect; returns the note to show. */
-  readonly disconnect: () => Promise<string>;
+  /**
+   * Disconnect; returns the note to show. `accountId` names WHICH connected
+   * account to forget — passed only from the per-account rows below, so a
+   * provider that can hold one connection can ignore it entirely.
+   */
+  readonly disconnect: (accountId?: string) => Promise<string>;
+  /**
+   * The connected accounts, when the provider allows MORE THAN ONE (Slack: a
+   * workspace may install the app into several teams).
+   *
+   * Omitted or empty ⇒ the single-connection rendering above, unchanged, which
+   * is what every CRM provider still gets. Supplied ⇒ each account is listed
+   * with its own Disconnect and the primary button becomes "Connect another",
+   * because for a multi-account provider "Reconnect" is ambiguous about which
+   * one it would replace — and with Slack's rotating single-use tokens,
+   * guessing wrong destroys a live grant.
+   */
+  readonly accounts?: readonly { readonly id: string; readonly label: string; readonly byName: string }[];
   /** Sub-copy under "Connected · <account>". */
   readonly connectedSub: string;
   /** Sub-copy under "Not connected". */
@@ -71,7 +87,11 @@ export function OAuthConnectCard(props: OAuthConnectCardProps) {
   const { headText, providerName, status, refresh, authorizeUrl, disconnect } = props;
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  /** Which account row is mid-confirm, so one Disconnect never arms the others. */
+  const [confirmingAccount, setConfirmingAccount] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const accounts = props.accounts ?? [];
+  const multi = accounts.length > 0;
 
   // Poll only WHILE a round-trip is in flight, and give up after a bounded
   // window — the user may simply have closed the consent tab.
@@ -108,16 +128,20 @@ export function OAuthConnectCard(props: OAuthConnectCardProps) {
     }
   }, [authorizeUrl, providerName]);
 
-  const onDisconnect = useCallback(async () => {
-    setConfirming(false);
-    setNote(null);
-    try {
-      setNote(await disconnect());
-      await refresh();
-    } catch (e) {
-      setNote(e instanceof Error ? e.message : `Could not disconnect ${providerName}.`);
-    }
-  }, [disconnect, refresh, providerName]);
+  const onDisconnect = useCallback(
+    async (accountId?: string) => {
+      setConfirming(false);
+      setConfirmingAccount(null);
+      setNote(null);
+      try {
+        setNote(await disconnect(accountId));
+        await refresh();
+      } catch (e) {
+        setNote(e instanceof Error ? e.message : `Could not disconnect ${providerName}.`);
+      }
+    },
+    [disconnect, refresh, providerName],
+  );
 
   return (
     <div className="crm-oauth-card">
@@ -139,6 +163,17 @@ export function OAuthConnectCard(props: OAuthConnectCardProps) {
                 of this state, and the previous rendering took that away. */}
             <button className="skill-btn" disabled={busy} onClick={() => void refresh()}>
               Retry
+            </button>
+          </>
+        ) : status.kind === "connected" && multi ? (
+          <>
+            <span className="crm-oauth-dot" />
+            <span className="crm-oauth-text">
+              Connected · {accounts.length} {accounts.length === 1 ? "workspace" : "workspaces"}
+              <span className="crm-oauth-sub">{props.connectedSub}</span>
+            </span>
+            <button className="skill-btn" disabled={busy} onClick={() => void authorize()}>
+              {busy ? `Waiting for ${providerName}…` : `Connect another ${providerName} workspace`}
             </button>
           </>
         ) : status.kind === "connected" ? (
@@ -193,6 +228,43 @@ export function OAuthConnectCard(props: OAuthConnectCardProps) {
           </>
         )}
       </div>
+      {multi && status.kind === "connected"
+        ? accounts.map((account) => (
+            <div className="crm-oauth-account" key={account.id}>
+              <span className="crm-oauth-dot" />
+              <span className="crm-oauth-text">
+                {account.label}
+                <span className="crm-oauth-sub">
+                  {account.byName ? `connected by ${account.byName}` : "connected"}
+                </span>
+              </span>
+              {/* Confirm state is keyed BY ACCOUNT id, not a shared boolean:
+                  with one flag, arming the confirm on any row armed it on every
+                  row, and the danger button next to the wrong team is exactly
+                  the misclick that costs an irrecoverable rotating grant. */}
+              {confirmingAccount === account.id ? (
+                <>
+                  <button
+                    className="skill-btn danger"
+                    onClick={() => void onDisconnect(account.id)}
+                  >
+                    Confirm disconnect
+                  </button>
+                  <button className="skill-btn" onClick={() => setConfirmingAccount(null)}>
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="skill-btn"
+                  onClick={() => setConfirmingAccount(account.id)}
+                >
+                  Disconnect
+                </button>
+              )}
+            </div>
+          ))
+        : null}
       {note ? <div className="crm-oauth-note">{note}</div> : null}
       {props.footerNote ? <div className="crm-oauth-note subtle">{props.footerNote}</div> : null}
     </div>

@@ -244,6 +244,34 @@ export function CloudGrid({
     (pipelineBindings.data ?? []).flatMap((binding) => Object.values(binding.outputMapping)),
   ), [pipelineBindings.data]);
 
+  // The workspace's connected SLACK TEAMS, for the column editor's account
+  // picker. A workspace may install the app into several, and a column that
+  // does not name one fails at run time once there is more than one — so the
+  // editor needs the list to make that choice available at authoring time.
+  //
+  // Keyed by connector id so the shape generalises: the day a second connector
+  // supports multiple accounts, it joins this map rather than growing a
+  // parallel prop.
+  const slackAccountsQ = useReactQuery({
+    queryKey: ["slack", "accounts", workspaceId],
+    enabled: apiClient !== null && Boolean(workspaceId),
+    queryFn: async () => {
+      const res = await apiClient.slack.connectionStatus.query({
+        workspaceId: String(workspaceId),
+      });
+      return res.connections.map(
+        (c: { teamId: string; teamName: string }) => ({
+          id: c.teamId,
+          label: c.teamName || c.teamId,
+        }),
+      );
+    },
+  });
+  const providerAccounts = useMemo(
+    () => ({ slack: slackAccountsQ.data ?? [] }),
+    [slackAccountsQ.data],
+  );
+
   // The table's CRM binding (if any) powers the add-column popover's
   // "From {CRM}" section — one more source field, server-backfilled by the
   // sync the mutation enqueues.
@@ -712,6 +740,7 @@ export function CloudGrid({
           kind: patch.kind as "manual" | "function" | undefined,
           provider: patch.provider,
           method: patch.method,
+          accountId: patch.accountId,
           code: patch.code,
           params: patch.params as Record<string, unknown> | undefined,
           condition: patch.condition,
@@ -1046,6 +1075,7 @@ export function CloudGrid({
           fetchTableColumns={session !== null ? fetchTableColumns : undefined}
           currentTableId={String(table.id)}
           cloudConnectedExtensionIds={cloudConnectedExtensionIds}
+          providerAccounts={providerAccounts}
           onClose={() => setEditCol(null)}
           onSaved={(run) => {
             const colId = editCol.id;

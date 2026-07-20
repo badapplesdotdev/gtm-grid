@@ -31,8 +31,8 @@ vi.mock("../../../../../lib/rate-limit", () => ({
 }));
 
 const resolveToken = vi.hoisted(() => vi.fn());
-const slackTeamForWorkspace = vi.hoisted(() => vi.fn());
-vi.mock("../../../../../lib/webhook-resolve", () => ({ resolveToken, slackTeamForWorkspace }));
+const slackTeamsForWorkspace = vi.hoisted(() => vi.fn());
+vi.mock("../../../../../lib/webhook-resolve", () => ({ resolveToken, slackTeamsForWorkspace }));
 
 const WEBHOOK = {
   webhookId: "wh_1",
@@ -70,7 +70,7 @@ const post = async (raw: string) => {
 beforeEach(() => {
   vi.stubEnv("SLACK_SIGNING_SECRET", SECRET);
   resolveToken.mockResolvedValue(WEBHOOK);
-  slackTeamForWorkspace.mockResolvedValue(OWN_TEAM);
+  slackTeamsForWorkspace.mockResolvedValue([OWN_TEAM]);
 });
 
 afterEach(() => {
@@ -100,7 +100,26 @@ describe("tenant gate", () => {
   });
 
   it("FAILS CLOSED when the workspace has no Slack connection", async () => {
-    slackTeamForWorkspace.mockResolvedValue(null);
+    // An EMPTY list is the fail-closed value now the gate tests membership:
+    // `[].includes(team)` is false, so the drop needs no special case.
+    slackTeamsForWorkspace.mockResolvedValue([]);
+    const res = await post(messageBody(OWN_TEAM));
+    expect(await res.json()).toMatchObject({ ignored: "team-mismatch" });
+    expect(sent).not.toHaveBeenCalled();
+  });
+
+  it("accepts an event from ANY connected team, not just the first", async () => {
+    // The whole point of multi-team support: a workspace with two Slack
+    // installs must ingest events from both. Under the old equality gate the
+    // second team's events were silently dropped as a mismatch.
+    slackTeamsForWorkspace.mockResolvedValue(["T_OTHER", OWN_TEAM]);
+    const res = await post(messageBody(OWN_TEAM));
+    expect(await res.json()).toMatchObject({ ok: true });
+    expect(sent).toHaveBeenCalled();
+  });
+
+  it("still rejects a team the workspace has NOT connected", async () => {
+    slackTeamsForWorkspace.mockResolvedValue(["T_OTHER", "T_THIRD"]);
     const res = await post(messageBody(OWN_TEAM));
     expect(await res.json()).toMatchObject({ ignored: "team-mismatch" });
     expect(sent).not.toHaveBeenCalled();
@@ -123,7 +142,7 @@ describe("tenant gate", () => {
     const res = await post(JSON.stringify({ type: "url_verification", challenge: "c123" }));
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ challenge: "c123" });
-    expect(slackTeamForWorkspace).not.toHaveBeenCalled();
+    expect(slackTeamsForWorkspace).not.toHaveBeenCalled();
   });
 });
 

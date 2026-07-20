@@ -50,6 +50,8 @@ import { CryptoService } from "./crypto-service.js";
 export interface SaveCredentialInput {
   readonly workspaceId: string;
   readonly extensionId: string;
+  /** Which account on the connector; omit for single-account connectors. */
+  readonly accountId?: string;
   readonly scope: CredentialScope;
   readonly name: string;
   /** PLAINTEXT secret map (e.g. `{ apiKey: "..." }`). Encrypted before storage. */
@@ -60,6 +62,12 @@ export interface SaveCredentialInput {
 export interface GetForRunInput {
   readonly workspaceId: string;
   readonly extensionId: string;
+  /**
+   * Which account on the connector. Omit for the single-account connectors,
+   * which is every one except Slack — a workspace may install the Slack app
+   * into several teams and each install has its own token pair.
+   */
+  readonly accountId?: string;
   readonly scope: CredentialScope;
 }
 
@@ -126,6 +134,7 @@ export class CredentialService extends Effect.Service<CredentialService>()(
           const existing = yield* repo.findForAccess({
             workspaceId: input.workspaceId,
             extensionId: input.extensionId,
+            accountId: input.accountId,
             scope: input.scope,
             ownerUserId,
           });
@@ -145,6 +154,7 @@ export class CredentialService extends Effect.Service<CredentialService>()(
           return yield* repo.upsert({
             workspaceId: input.workspaceId,
             extensionId: input.extensionId,
+            accountId: input.accountId,
             scope: input.scope,
             ownerUserId,
             name: input.name,
@@ -168,6 +178,7 @@ export class CredentialService extends Effect.Service<CredentialService>()(
           const row = yield* repo.findForAccess({
             workspaceId: input.workspaceId,
             extensionId: input.extensionId,
+            accountId: input.accountId,
             scope: input.scope,
             ownerUserId,
           });

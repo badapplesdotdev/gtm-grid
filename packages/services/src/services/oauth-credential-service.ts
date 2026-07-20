@@ -82,12 +82,34 @@ export class OAuthCredentialService extends Effect.Service<OAuthCredentialServic
       const crypto = yield* CryptoService;
 
       /** Read + decrypt the shared row for a slot. Used for the in-lock re-read. */
-      const readSecrets = (workspaceId: string, extensionId: string) =>
+      const readSecrets = (
+        workspaceId: string,
+        extensionId: string,
+        accountId: string | undefined,
+      ) =>
         Effect.gen(function* () {
-          const row = yield* repo.findSharedForWorker({ workspaceId, extensionId });
+          const row = yield* repo.findSharedForWorker({
+            workspaceId,
+            extensionId,
+            accountId,
+          });
           if (Option.isNone(row)) return null;
           return yield* crypto.decrypt(workspaceId, row.value.secretsEnc);
         });
+
+      /** The row's display name, so a refresh does not rename it. */
+      const readName = (
+        workspaceId: string,
+        extensionId: string,
+        accountId: string | undefined,
+        fallback: string,
+      ) =>
+        repo
+          .findSharedForWorker({ workspaceId, extensionId, accountId })
+          .pipe(
+            Effect.map((row) => (Option.isNone(row) ? fallback : row.value.name)),
+            Effect.catchAll(() => Effect.succeed(fallback)),
+          );
 
       return {
         /**
@@ -99,6 +121,18 @@ export class OAuthCredentialService extends Effect.Service<OAuthCredentialServic
           workspaceId: string,
           extensionId: string,
           secrets: SecretMap,
+          /**
+           * Which account's row to re-read and write back to. Omitting it means
+           * the single-account row (`""`), which is correct for every connector
+           * but Slack.
+           *
+           * THIS IS NOT COSMETIC. Without it a Slack refresh re-read and
+           * persisted the `""` row while the caller was running team `T_B`: the
+           * fresh token would be merged over the wrong secrets and written to
+           * the wrong row, so team B would burn its single-use rotating refresh
+           * token and then store the result somewhere nothing reads.
+           */
+          accountId?: string,
         ): Effect.Effect<SecretMap, CrmError> => {
           const slot = OAUTH_SLOTS[extensionId];
           if (slot === undefined) return Effect.succeed(secrets);
@@ -110,8 +144,13 @@ export class OAuthCredentialService extends Effect.Service<OAuthCredentialServic
             provider: slot.adapter.displayName,
             // Namespaced per (workspace, slot) so two workspaces on one provider
             // — and two providers in one workspace — never contend.
-            lockKey: `oauth-refresh:${workspaceId}:${extensionId}`,
-            reread: readSecrets(workspaceId, extensionId).pipe(
+            // Namespaced per ACCOUNT as well as per (workspace, slot): Slack's
+            // refresh tokens are single-use per install, so team A refreshing
+            // must not block — nor be serialized against — team B. Sharing one
+            // key across a workspace's teams would be safe but needlessly
+            // convoy them behind a network round-trip each.
+            lockKey: `oauth-refresh:${workspaceId}:${extensionId}:${accountId ?? ""}`,
+            reread: readSecrets(workspaceId, extensionId, accountId).pipe(
               Effect.map((s) => (s === null ? null : slot.parse(s))),
               Effect.catchAll(() => Effect.succeed(null)),
             ),
@@ -131,15 +170,29 @@ export class OAuthCredentialService extends Effect.Service<OAuthCredentialServic
                 // Merge over the CURRENT stored map, not the one we were handed:
                 // display meta may have changed since, and a refresh must never
                 // clobber it.
-                const current = yield* readSecrets(workspaceId, extensionId);
+                const current = yield* readSecrets(
+                  workspaceId,
+                  extensionId,
+                  accountId,
+                );
                 const next = slot.merge(current ?? secrets, tokens);
                 const secretsEnc = yield* crypto.encrypt(workspaceId, next);
+                // Preserve the stored display name. A rotation is not a
+                // reconnect, and writing `displayName` unconditionally would
+                // rename "Slack — Acme EU" back to "Slack" every 12 hours.
+                const name = yield* readName(
+                  workspaceId,
+                  extensionId,
+                  accountId,
+                  slot.adapter.displayName,
+                );
                 yield* repo.upsert({
                   workspaceId,
                   extensionId,
+                  accountId,
                   scope: "workspace",
                   ownerUserId: null,
-                  name: slot.adapter.displayName,
+                  name,
                   secretsEnc,
                 });
               }).pipe(

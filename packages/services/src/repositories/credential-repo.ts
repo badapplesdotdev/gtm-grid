@@ -24,7 +24,7 @@
  */
 
 import { schema } from "@gtmgrid/db";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { Context, Data, Effect, Exit, Layer, Option, Runtime } from "effect";
 import { DbClient } from "../db-client.js";
 
@@ -39,6 +39,8 @@ export type CredentialScope = "workspace" | "personal";
 export interface CredentialMetadata {
   readonly id: string;
   readonly extensionId: string;
+  /** Which account on the connector; `""` for single-account connectors. */
+  readonly accountId: string;
   readonly scope: CredentialScope;
   readonly name: string;
   /** Owning member for a `personal` row; `null` for a shared `workspace` row. */
@@ -71,10 +73,27 @@ export class CredentialRepoError extends Data.TaggedError(
 export interface OwnerKey {
   readonly workspaceId: string;
   readonly extensionId: string;
+  /**
+   * WHICH account on the connector (Slack's team id). Omit — or pass `""` — for
+   * a connector a workspace can only hold one of, which is every connector
+   * except Slack and every row written before `account_id` existed.
+   *
+   * Optional rather than required so the ~20 single-account call sites stay
+   * honest at `""` without threading a value they have no concept of;
+   * {@link ACCOUNT_DEFAULT} is applied at the boundary, never left implicit in
+   * the SQL.
+   */
+  readonly accountId?: string;
   readonly scope: CredentialScope;
   /** `personal` rows bind to a user id; `workspace` rows key on `null`. */
   readonly ownerUserId: string | null;
 }
+
+/**
+ * The `accountId` of a connector's sole account. Matches the column default, so
+ * a row written without one and a row written with `""` are the same row.
+ */
+export const ACCOUNT_DEFAULT = "";
 
 /** The fields an upsert writes (the ciphertext is produced by CryptoService). */
 export interface CredentialUpsert extends OwnerKey {
@@ -119,7 +138,26 @@ export class CredentialRepo extends Context.Tag("CredentialRepo")<
     readonly findSharedForWorker: (args: {
       readonly workspaceId: string;
       readonly extensionId: string;
+      /** Which account; omit for the sole-account connectors. */
+      readonly accountId?: string;
     }) => Effect.Effect<Option.Option<CredentialRow>, CredentialRepoError>;
+    /**
+     * EVERY shared workspace-scope row for one connector — one per connected
+     * account — INCLUDING ciphertext, oldest first.
+     *
+     * Exists because a connector can now hold more than one account: Slack
+     * writes a row per connected team, discriminated by `accountId`. Keeping
+     * the discriminator in a COLUMN rather than inside `secretsEnc` is what
+     * lets this be an index scan instead of a decrypt-and-filter of every row.
+     *
+     * Ordered by `createdAt` so both the UI ordering and the
+     * "exactly one connection → use it" fallback in `SlackConnectionService`
+     * are deterministic rather than at the planner's mercy.
+     */
+    readonly findSharedAccounts: (args: {
+      readonly workspaceId: string;
+      readonly extensionId: string;
+    }) => Effect.Effect<readonly CredentialRow[], CredentialRepoError>;
     /**
      * Insert or rotate a credential in place on (workspace, extension, scope,
      * owner). Returns the row id. Ports the upsert in `storeCredential` (:146).
@@ -175,6 +213,7 @@ interface DbCredentialRow {
   readonly id: string;
   readonly workspaceId: string;
   readonly extensionId: string;
+  readonly accountId: string;
   readonly scope: CredentialScope;
   readonly name: string;
   readonly ownerUserId: string | null;
@@ -203,6 +242,7 @@ export const CredentialRepoLive: Layer.Layer<
       and(
         eq(schema.credentials.workspaceId, key.workspaceId),
         eq(schema.credentials.extensionId, key.extensionId),
+        eq(schema.credentials.accountId, key.accountId ?? ACCOUNT_DEFAULT),
         eq(schema.credentials.scope, key.scope),
         key.ownerUserId === null
           ? isNull(schema.credentials.ownerUserId)
@@ -218,6 +258,7 @@ export const CredentialRepoLive: Layer.Layer<
                   .select({
                     id: schema.credentials.id,
                     extensionId: schema.credentials.extensionId,
+                    accountId: schema.credentials.accountId,
                     scope: schema.credentials.scope,
                     name: schema.credentials.name,
                     ownerUserId: schema.credentials.ownerUserId,
@@ -246,7 +287,33 @@ export const CredentialRepoLive: Layer.Layer<
             })
           : Effect.succeed(Option.none<CredentialRow>()),
 
-      findSharedForWorker: ({ workspaceId, extensionId }) =>
+      findSharedForWorker: ({ workspaceId, extensionId, accountId }) =>
+        UUID_RE.test(workspaceId)
+          ? Effect.tryPromise({
+              try: async () => {
+                const rows = await db
+                  .select()
+                  .from(schema.credentials)
+                  .where(
+                    and(
+                      eq(schema.credentials.workspaceId, workspaceId),
+                      eq(schema.credentials.extensionId, extensionId),
+                      eq(
+                        schema.credentials.accountId,
+                        accountId ?? ACCOUNT_DEFAULT,
+                      ),
+                      eq(schema.credentials.scope, "workspace"),
+                      isNull(schema.credentials.ownerUserId),
+                    ),
+                  )
+                  .limit(1);
+                return rowToOption(rows[0]);
+              },
+              catch: fail("worker credential lookup failed"),
+            })
+          : Effect.succeed(Option.none<CredentialRow>()),
+
+      findSharedAccounts: ({ workspaceId, extensionId }) =>
         UUID_RE.test(workspaceId)
           ? Effect.tryPromise({
               try: async () => {
@@ -261,43 +328,77 @@ export const CredentialRepoLive: Layer.Layer<
                       isNull(schema.credentials.ownerUserId),
                     ),
                   )
-                  .limit(1);
-                return rowToOption(rows[0]);
+                  .orderBy(asc(schema.credentials.createdAt));
+                return rows satisfies readonly CredentialRow[];
               },
-              catch: fail("worker credential lookup failed"),
+              catch: fail("credential account list failed"),
             })
-          : Effect.succeed(Option.none<CredentialRow>()),
+          : Effect.succeed([] as readonly CredentialRow[]),
 
+      /**
+       * ONE STATEMENT, never select-then-write.
+       *
+       * This was a read-modify-write: `SELECT ... LIMIT 1`, then `UPDATE` or
+       * `INSERT`. With no unique index behind it, two concurrent writers on the
+       * same owner key both read "absent" and both INSERTed. Every read is
+       * `LIMIT 1` (:264, webhook-repo.ts:1265), so the second row was invisible
+       * — for Slack that meant a connect racing a token refresh could leave a
+       * live rotating refresh chain stranded in an unreachable row.
+       *
+       * The conflict target must name the PARTIAL index that applies, because
+       * `credentials` has two (see schema.ts): shared rows key on three columns
+       * `WHERE owner_user_id IS NULL`, owned rows on four `WHERE ... IS NOT
+       * NULL`. Postgres cannot infer which from the values alone, so the branch
+       * is on the same predicate that selects the index.
+       *
+       * `createdAt` is deliberately absent from the `set`: a rotation updates a
+       * credential, it does not create one, and the original connect time is
+       * what the UI shows.
+       */
       upsert: (input) =>
         UUID_RE.test(input.workspaceId)
           ? Effect.tryPromise({
               try: async () => {
-                const existing = await db
-                  .select({ id: schema.credentials.id })
-                  .from(schema.credentials)
-                  .where(ownerKeyWhere(input))
-                  .limit(1);
-                const found = existing[0];
-                if (found !== undefined) {
-                  await db
-                    .update(schema.credentials)
-                    .set({ name: input.name, secretsEnc: input.secretsEnc })
-                    .where(eq(schema.credentials.id, found.id));
-                  return found.id;
-                }
-                const inserted = await db
+                const values = {
+                  workspaceId: input.workspaceId,
+                  extensionId: input.extensionId,
+                  accountId: input.accountId ?? ACCOUNT_DEFAULT,
+                  scope: input.scope,
+                  ownerUserId: input.ownerUserId,
+                  name: input.name,
+                  secretsEnc: input.secretsEnc,
+                  createdAt: Date.now(),
+                };
+                const set = { name: input.name, secretsEnc: input.secretsEnc };
+                const conflict =
+                  input.ownerUserId === null
+                    ? {
+                        target: [
+                          schema.credentials.workspaceId,
+                          schema.credentials.extensionId,
+                          schema.credentials.accountId,
+                          schema.credentials.scope,
+                        ],
+                        targetWhere: isNull(schema.credentials.ownerUserId),
+                        set,
+                      }
+                    : {
+                        target: [
+                          schema.credentials.workspaceId,
+                          schema.credentials.extensionId,
+                          schema.credentials.accountId,
+                          schema.credentials.scope,
+                          schema.credentials.ownerUserId,
+                        ],
+                        targetWhere: isNotNull(schema.credentials.ownerUserId),
+                        set,
+                      };
+                const rows = await db
                   .insert(schema.credentials)
-                  .values({
-                    workspaceId: input.workspaceId,
-                    extensionId: input.extensionId,
-                    scope: input.scope,
-                    ownerUserId: input.ownerUserId,
-                    name: input.name,
-                    secretsEnc: input.secretsEnc,
-                    createdAt: Date.now(),
-                  })
+                  .values(values)
+                  .onConflictDoUpdate(conflict)
                   .returning({ id: schema.credentials.id });
-                return inserted[0].id;
+                return rows[0].id;
               },
               catch: fail("credential upsert failed"),
             })
@@ -317,6 +418,17 @@ export const CredentialRepoLive: Layer.Layer<
                     and(
                       eq(schema.credentials.workspaceId, key.workspaceId),
                       eq(schema.credentials.extensionId, key.extensionId),
+                      // NARROWED BY ACCOUNT, like every other key-shaped method
+                      // here. Without this predicate a delete keyed on one
+                      // Slack team removed EVERY team the workspace had
+                      // connected — and the legacy-healing path in
+                      // `SlackConnectionService.loadAccounts`, which re-writes a
+                      // `""` row under its real team id and then deletes the
+                      // `""` row, deleted the row it had just written.
+                      eq(
+                        schema.credentials.accountId,
+                        key.accountId ?? ACCOUNT_DEFAULT,
+                      ),
                       eq(schema.credentials.scope, key.scope),
                       key.ownerUserId === null
                         ? isNull(schema.credentials.ownerUserId)
@@ -378,6 +490,7 @@ const rowToOption = (
         id: row.id,
         workspaceId: row.workspaceId,
         extensionId: row.extensionId,
+        accountId: row.accountId,
         scope: row.scope,
         name: row.name,
         ownerUserId: row.ownerUserId,
@@ -441,6 +554,7 @@ export const credentialRepoLayer = (
     const matchesKey = (r: CredentialRow, key: OwnerKey): boolean =>
       r.workspaceId === key.workspaceId &&
       r.extensionId === key.extensionId &&
+      r.accountId === (key.accountId ?? ACCOUNT_DEFAULT) &&
       r.scope === key.scope &&
       r.ownerUserId === key.ownerUserId;
 
@@ -450,9 +564,18 @@ export const credentialRepoLayer = (
           rows
             .filter((r) => r.workspaceId === workspaceId)
             .map(
-              ({ id, extensionId, scope, name, ownerUserId, createdAt }) => ({
+              ({
                 id,
                 extensionId,
+                accountId,
+                scope,
+                name,
+                ownerUserId,
+                createdAt,
+              }) => ({
+                id,
+                extensionId,
+                accountId,
                 scope,
                 name,
                 ownerUserId,
@@ -464,17 +587,32 @@ export const credentialRepoLayer = (
         Effect.succeed(
           Option.fromNullable(rows.find((r) => matchesKey(r, key)) ?? null),
         ),
-      findSharedForWorker: ({ workspaceId, extensionId }) =>
+      findSharedForWorker: ({ workspaceId, extensionId, accountId }) =>
         Effect.succeed(
           Option.fromNullable(
             rows.find(
               (r) =>
                 r.workspaceId === workspaceId &&
                 r.extensionId === extensionId &&
+                r.accountId === (accountId ?? ACCOUNT_DEFAULT) &&
                 r.scope === "workspace" &&
                 r.ownerUserId === null,
             ) ?? null,
           ),
+        ),
+      findSharedAccounts: ({ workspaceId, extensionId }) =>
+        Effect.succeed(
+          rows
+            .filter(
+              (r) =>
+                r.workspaceId === workspaceId &&
+                r.extensionId === extensionId &&
+                r.scope === "workspace" &&
+                r.ownerUserId === null,
+            )
+            // Mirror the Drizzle `orderBy(asc(createdAt))`, so a test that
+            // asserts "the oldest connection is the fallback" holds on both.
+            .sort((a, b) => a.createdAt - b.createdAt),
         ),
       upsert: (input) =>
         Effect.sync(() => {
@@ -494,6 +632,7 @@ export const credentialRepoLayer = (
             id,
             workspaceId: input.workspaceId,
             extensionId: input.extensionId,
+            accountId: input.accountId ?? ACCOUNT_DEFAULT,
             scope: input.scope,
             ownerUserId: input.ownerUserId,
             name: input.name,

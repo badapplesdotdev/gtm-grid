@@ -520,6 +520,10 @@ function CrmOAuthSection({ workspaceId, provider }: { workspaceId: string; provi
  */
 export function SlackOAuthSection({ workspaceId }: { workspaceId: string }) {
   const [status, setStatus] = useState<OAuthCardStatus>({ kind: "loading" });
+  /** Every connected Slack team — a workspace may install the app into several. */
+  const [accounts, setAccounts] = useState<
+    readonly { id: string; label: string; byName: string }[]
+  >([]);
   const queryClient = useQueryClient();
   // Whether the LAST poll saw a connection, so we only invalidate on a CHANGE
   // rather than on every 2s tick.
@@ -541,8 +545,22 @@ export function SlackOAuthSection({ workspaceId }: { workspaceId: string }) {
         void queryClient.invalidateQueries({ queryKey: ["credentials", "list", workspaceId] });
       }
       wasConnected.current = s.connected;
+      setAccounts(
+        s.connections.map((c: { teamId: string; teamName: string; connectedByName: string }) => ({
+          id: c.teamId,
+          // A team with no stored name still needs an identity in the list, or
+          // two unnamed connections render as an indistinguishable pair with
+          // two Disconnect buttons.
+          label: c.teamName || c.teamId || "Slack workspace",
+          byName: c.connectedByName,
+        })),
+      );
       if (s.connected) {
-        setStatus({ kind: "connected", byName: s.connectedByName, accountLabel: s.teamName || "Slack" });
+        setStatus({
+          kind: "connected",
+          byName: s.connectedByName ?? "",
+          accountLabel: s.teamName || "Slack",
+        });
       } else setStatus({ kind: "disconnected", configured: s.configured });
     } catch {
       // NOT `{ disconnected, configured: false }`. A failed read tells us nothing
@@ -566,9 +584,15 @@ export function SlackOAuthSection({ workspaceId }: { workspaceId: string }) {
         const { url } = await apiClient.slack.authorizeUrl.query({ workspaceId });
         return url;
       }}
-      disconnect={async () => {
+      accounts={accounts}
+      disconnect={async (teamId) => {
         if (!apiClient) throw new Error("Not signed in");
-        const res = await apiClient.slack.disconnect.mutate({ workspaceId });
+        // `teamId` undefined only from the single-connection card, where
+        // "disconnect everything" and "disconnect the one" are the same act.
+        const res = await apiClient.slack.disconnect.mutate({
+          workspaceId,
+          ...(teamId === undefined ? {} : { teamId }),
+        });
         return res.removed ? "Disconnected." : "Nothing to disconnect.";
       }}
       connectedSub="powers Slack columns (post a message, look up a user)"

@@ -24,6 +24,16 @@ const createCaller = createCallerFactory(appRouter);
 
 const WS = "11111111-1111-1111-1111-111111111111";
 const memberships: readonly Membership[] = [{ workspaceId: WS, userId: "member", role: "member" }];
+/**
+ * `disconnect` is ADMIN-gated (reading status and adding a connection are not),
+ * so the destructive tests need a caller who actually holds the role. Deleting
+ * a shared workspace credential breaks every teammate's columns and cannot be
+ * undone without a fresh consent round-trip.
+ */
+const adminMemberships: readonly Membership[] = [
+  { workspaceId: WS, userId: "member", role: "member" },
+  { workspaceId: WS, userId: "boss", role: "admin" },
+];
 
 const callerFor = (fixtures: TestLayerFixtures) =>
   createCaller(
@@ -171,14 +181,76 @@ describe("slack.authorizeUrl (member-gated)", () => {
   });
 });
 
-describe("slack.disconnect (member-gated)", () => {
+describe("slack.connectionStatus — multiple connected teams", () => {
+  it("lists EVERY connected team, and disconnecting one leaves the other", async () => {
+    // The headline bug this replaced: a second connect overwrote the first row,
+    // so a workspace could hold exactly one Slack team and connecting another
+    // silently repointed every column in the grid.
+    vi.stubEnv("SLACK_CLIENT_ID", "cid");
+    vi.stubEnv("SLACK_CLIENT_SECRET", "secret");
+    const layer = TestLayer({
+      workspaces: [{ id: WS, name: "WS", ownerId: "member", currentPlanId: "team" }],
+      users: [
+        { id: "member", name: "Morgan", email: "m@acme.com" },
+        { id: "boss", name: "Sam", email: "s@acme.com" },
+      ],
+      memberships: adminMemberships,
+      currentUserId: "boss",
+    });
+    const ctx = createTestContext({ layer, userId: "boss" });
+    const caller = createCaller(ctx);
+
+    const connect = (teamId: string, teamName: string) =>
+      ctx.runtime.runPromise(
+        Effect.flatMap(SlackConnectionService, (s) =>
+          s.saveConnection({
+            workspaceId: WS,
+            tokens: { accessToken: `xoxb-${teamId}`, refreshToken: `rt-${teamId}` },
+            meta: {
+              connectedByUserId: "boss",
+              connectedByName: "Sam",
+              teamId,
+              teamName,
+              botUserId: "U_BOT",
+            },
+          }),
+        ),
+      );
+
+    await connect("T_ACME", "Acme Slack");
+    await connect("T_EU", "Acme EU");
+
+    const status = await caller.slack.connectionStatus({ workspaceId: WS });
+    expect(status.connected).toBe(true);
+    expect(status.connections.map((c) => c.teamId).sort()).toEqual(["T_ACME", "T_EU"]);
+    // Display meta only — a token must never reach a client bundle.
+    expect(JSON.stringify(status)).not.toContain("xoxb-");
+
+    expect(await caller.slack.disconnect({ workspaceId: WS, teamId: "T_ACME" })).toEqual({
+      removed: true,
+    });
+    const after = await caller.slack.connectionStatus({ workspaceId: WS });
+    expect(after.connections.map((c) => c.teamId)).toEqual(["T_EU"]);
+  });
+});
+
+describe("slack.disconnect (admin-gated)", () => {
   it("rejects a non-member with FORBIDDEN", async () => {
     const caller = callerFor({ memberships, currentUserId: "stranger" });
     await expect(caller.slack.disconnect({ workspaceId: WS })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
-  it("is a no-op for a member with nothing connected", async () => {
-    const caller = callerFor({ memberships, currentUserId: "member" });
+  it("rejects a plain MEMBER with FORBIDDEN", async () => {
+    // The connection is workspace-shared: every teammate's Slack columns run
+    // against it, and the tokens cannot be recovered locally once deleted. That
+    // is not a decision any member should be able to make alone — status reads
+    // and new connections stay member-level because both are additive.
+    const caller = callerFor({ memberships: adminMemberships, currentUserId: "member" });
+    await expect(caller.slack.disconnect({ workspaceId: WS })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("is a no-op for an admin with nothing connected", async () => {
+    const caller = callerFor({ memberships: adminMemberships, currentUserId: "boss" });
     expect(await caller.slack.disconnect({ workspaceId: WS })).toEqual({ removed: false });
   });
 
@@ -187,11 +259,14 @@ describe("slack.disconnect (member-gated)", () => {
     vi.stubEnv("SLACK_CLIENT_SECRET", "secret");
     const layer = TestLayer({
       workspaces: [{ id: WS, name: "WS", ownerId: "member", currentPlanId: "team" }],
-      users: [{ id: "member", name: "Morgan", email: "m@acme.com" }],
-      memberships,
-      currentUserId: "member",
+      users: [
+        { id: "member", name: "Morgan", email: "m@acme.com" },
+        { id: "boss", name: "Sam", email: "s@acme.com" },
+      ],
+      memberships: adminMemberships,
+      currentUserId: "boss",
     });
-    const ctx = createTestContext({ layer, userId: "member" });
+    const ctx = createTestContext({ layer, userId: "boss" });
     const caller = createCaller(ctx);
 
     await ctx.runtime.runPromise(

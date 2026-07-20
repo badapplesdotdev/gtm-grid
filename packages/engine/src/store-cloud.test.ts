@@ -122,6 +122,10 @@ describe("ConvexGridStore — reads", () => {
       kind: "function",
       provider: "ai",
       method: "generate",
+      // A doc with no `accountId` maps to null, not undefined — "the
+      // workspace's only account on this connector", which is what every
+      // pre-multi-team column is.
+      accountId: null,
       code: null,
       params: { prompt: "hi {{Name}}" },
       position: 0,

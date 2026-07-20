@@ -374,6 +374,25 @@ export const credentials = pgTable(
       .references(() => workspaces.id, { onDelete: "cascade" }),
     /** The connector/extension these secrets authenticate, e.g. "ai:openai". */
     extensionId: text("extension_id").notNull(),
+    /**
+     * WHICH ACCOUNT on that connector, when a workspace can connect more than
+     * one — Slack's team id (`T0123ABC`), since a workspace may install the app
+     * into several Slack workspaces and each install has its own token pair.
+     *
+     * NOT NULL DEFAULT '' rather than nullable, deliberately. `owner_user_id`
+     * is already nullable, and a second nullable column in the uniqueness key
+     * turns two partial indexes into four. The empty string is a real value
+     * meaning "the connector's only account", which is what every pre-existing
+     * row is and what every single-account connector stays.
+     *
+     * The discriminator lives HERE and not inside `secrets_enc` so that listing
+     * a workspace's connections is an index scan rather than a decrypt of every
+     * row, and so the per-row OAuth refresh + `pg_try_advisory_xact_lock` stay
+     * per-ACCOUNT. Slack's refresh tokens are single-use (`RefreshPolicy.Rotating`);
+     * folding several teams into one row would make one lock serialize unrelated
+     * teams and give `freshSecrets` several token pairs it cannot represent.
+     */
+    accountId: text("account_id").notNull().default(""),
     scope: credentialScope("scope").notNull(),
     /** Owning member for a `personal`-scope row; null for `workspace` rows. */
     ownerUserId: text("owner_user_id").references(() => users.id, {
@@ -386,13 +405,28 @@ export const credentials = pgTable(
   },
   (t) => [
     index("credentials_by_workspace").on(t.workspaceId),
+    // Serves both the prefix lookup and "every account this workspace has
+    // connected on this connector" (`findSharedAccounts`).
     index("credentials_by_workspace_extension").on(t.workspaceId, t.extensionId),
-    index("credentials_by_workspace_extension_owner").on(
-      t.workspaceId,
-      t.extensionId,
-      t.scope,
-      t.ownerUserId,
-    ),
+    // TWO PARTIAL UNIQUE INDEXES, not one unique over every key column, because
+    // `owner_user_id` is NULL for every `workspace`-scope row and Postgres
+    // treats NULLs as DISTINCT in a unique index — so a plain unique would
+    // permit unlimited duplicate SHARED rows, which is exactly the case that
+    // needs constraining. `NULLS NOT DISTINCT` (PG15+) would also work, but
+    // drizzle-orm 0.45 cannot express it on an index and hand-patching the
+    // generated SQL would drift from the meta snapshot.
+    //
+    // These replace the old non-unique `credentials_by_workspace_extension_owner`,
+    // whose column list they cover between them. Without a unique index,
+    // `CredentialRepo.upsert` was a read-modify-write: two concurrent connects
+    // both saw no row and both INSERTed, and every read is `LIMIT 1`, so the
+    // loser's tokens became invisible-but-live.
+    uniqueIndex("credentials_shared_unique")
+      .on(t.workspaceId, t.extensionId, t.accountId, t.scope)
+      .where(sql`${t.ownerUserId} is null`),
+    uniqueIndex("credentials_owned_unique")
+      .on(t.workspaceId, t.extensionId, t.accountId, t.scope, t.ownerUserId)
+      .where(sql`${t.ownerUserId} is not null`),
   ],
 );
 
@@ -506,6 +540,23 @@ export const columns = pgTable(
     provider: text("provider"),
     /** Connector method, e.g. "generate". Nullable. */
     method: text("method"),
+    /**
+     * WHICH ACCOUNT on the provider this column runs against — a Slack team id,
+     * matching `credentials.account_id`.
+     *
+     * Null means "the workspace's only account on this connector", which is
+     * every column authored before a workspace could connect more than one
+     * Slack team, and every column on every single-account connector. The
+     * engine resolves null to the sole stored credential and FAILS the cell
+     * (`CredentialAccountAmbiguous`) rather than guessing when there are
+     * several — so an existing column keeps working right up until the moment
+     * its answer would become arbitrary, and then says so.
+     *
+     * NOT a foreign key to `credentials`: disconnecting a team must not cascade
+     * a column's config away. A column pointing at a disconnected team should
+     * fail loudly and be repointable, not silently become unbound.
+     */
+    accountId: text("account_id"),
     /** JS body executed in the QuickJS sandbox for function columns. Nullable. */
     code: text("code"),
     /** Input mapping; templated with {{Column Name}}. v.any() -> jsonb. */
