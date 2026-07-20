@@ -247,5 +247,11 @@ export const applyGridEvent = (
       // A favourite/pin toggled — sidebar-only state, no `getTable` data, so
       // the grid is unaffected (the list view refetches + reorders).
       return snapshot;
+
+    case "project.delete":
+      // A whole project vanished — no `getTable` snapshot mutation applies
+      // (the project/sidebar lists refetch; an open table inside it 404s on
+      // refetch and the client switches away).
+      return snapshot;
   }
 };

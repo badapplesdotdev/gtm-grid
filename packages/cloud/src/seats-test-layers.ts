@@ -70,6 +70,8 @@ export interface FakeAutumnConfig {
   readonly activePlanIds?: readonly string[];
   /** The `trialEndsAt` (epoch ms) `getActiveSubscriptions` reports; default null. */
   readonly trialEndsAt?: number | null;
+  /** Records each `deleteCustomer` call (workspace-delete billing teardown) for assertions. */
+  readonly deleteCalls?: Array<{ customerId: string }>;
   /** Per-seat price `previewSeatChange` multiplies by the seat count; default 20. */
   readonly perSeatPrice?: number;
 }
@@ -152,6 +154,10 @@ export const fakeAutumnLayer = (
           customerData,
         });
       }),
+    deleteCustomer: ({ customerId }) =>
+      Effect.sync(() => {
+        config.deleteCalls?.push({ customerId });
+      }),
     checkUsage: () => Effect.succeed(usage),
   });
 };
@@ -169,6 +175,7 @@ export const failingAutumnLayer = (
     | "track"
     | "trackUsage"
     | "checkUsage"
+    | "deleteCustomer"
     | "getActivePlanIds",
   message = "autumn unavailable",
 ): Layer.Layer<AutumnClient> => {
@@ -198,6 +205,7 @@ export const failingAutumnLayer = (
         ? fail
         : Effect.succeed([{ planId: "free", trialEndsAt: null }]),
     trackUsage: () => (failOn === "trackUsage" ? fail : Effect.void),
+    deleteCustomer: () => (failOn === "deleteCustomer" ? fail : Effect.void),
     // Default to a benign snapshot so a `trackUsage` failure can be exercised
     // without the (sequenced) `checkUsage` also being the thing that fails.
     checkUsage: () =>

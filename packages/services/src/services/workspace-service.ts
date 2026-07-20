@@ -22,6 +22,7 @@
  */
 
 import {
+  AutumnClient,
   type AutumnError,
   type InsufficientRoleError,
   type Membership,
@@ -47,6 +48,10 @@ import {
   WorkspaceRepo,
   type WorkspaceRepoError,
 } from "../repositories/workspace-repo.js";
+import {
+  PipelineRepo,
+  type PipelineRepoError,
+} from "../repositories/pipeline-repo.js";
 import { isSelfHost } from "../self-host.js";
 
 /** Seat usage for a workspace: members used vs. the plan limit (null = free). */
@@ -155,6 +160,15 @@ export type CreateWorkspaceError =
   | WorkspaceRepoError
   | WorkspaceMemberRepoError;
 
+/** Error channel of {@link WorkspaceService.deleteWorkspace}. */
+export type DeleteWorkspaceError =
+  | UnauthenticatedError
+  | NotAMemberError
+  | InsufficientRoleError
+  | MemberRepoError
+  | AutumnError
+  | PipelineRepoError
+  | WorkspaceRepoError;
 /** Error channel of {@link WorkspaceService.insertMember}. */
 export type InsertMemberError =
   | UnauthenticatedError
@@ -194,6 +208,8 @@ export class WorkspaceService extends Effect.Service<WorkspaceService>()(
       const memberRepo = yield* WorkspaceMemberRepo;
       const membership = yield* MembershipService;
       const seats = yield* SeatsService;
+      const autumn = yield* AutumnClient;
+      const pipelineRepo = yield* PipelineRepo;
 
       /**
        * Return the workspace for a caller who is a MEMBER of it. Fails with the
@@ -370,6 +386,36 @@ export class WorkspaceService extends Effect.Service<WorkspaceService>()(
         });
 
       /**
+       * Permanently delete a workspace and EVERYTHING in it — members,
+       * projects, tables, credentials, shares — via the `workspace_id` FK
+       * cascades. Owner-only. Deliberately NOT cloud-access gated: deleting
+       * your own data must always be possible, even on a lapsed trial.
+       *
+       * Order matters:
+       *  1. Billing teardown FIRST, fail-closed: the workspace id IS the
+       *     Autumn customer id, so `deleteCustomer` cancels the subscription
+       *     and stops metering. If that call fails the workspace is NOT
+       *     deleted (retry is safe — nothing is gone yet). Skipped entirely
+       *     on self-host, which has no billing.
+       *  2. Purge the RESTRICTed pipeline-version dependants (runs, triggers,
+       *     bindings, versions) — the FK cascade would otherwise violate the
+       *     `pipeline_versions` RESTRICT constraints.
+       *  3. Delete the workspace row; Postgres cascades do the rest.
+       */
+      const deleteWorkspace = (
+        workspaceId: string,
+      ): Effect.Effect<void, DeleteWorkspaceError> =>
+        Effect.gen(function* () {
+          yield* membership.requireRole(workspaceId, ["owner"]);
+          if (!isSelfHost()) {
+            yield* autumn.deleteCustomer({ customerId: workspaceId });
+          }
+          yield* pipelineRepo.purgeByWorkspace(workspaceId);
+          yield* repo.remove(workspaceId);
+        });
+
+
+      /**
        * Add a member to a workspace with the TRANSACTIONAL seat ceiling — ports
        * `insertMember` (convex/workspaces.ts:212). Authz: owner/admin only. Re-
        * reads the LIVE member count and runs the pure
@@ -415,6 +461,7 @@ export class WorkspaceService extends Effect.Service<WorkspaceService>()(
         me,
         listMembers,
         createWorkspace,
+        deleteWorkspace,
         insertMember,
       } as const;
     }),

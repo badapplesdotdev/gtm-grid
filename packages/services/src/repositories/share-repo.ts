@@ -16,7 +16,7 @@
  */
 
 import { schema } from "@gtmgrid/db";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
 
@@ -98,6 +98,14 @@ export class ShareRepo extends Context.Tag("ShareRepo")<
     readonly tableWorkspace: (
       tableId: string,
     ) => Effect.Effect<Option.Option<string>, ShareRepoError>;
+    /**
+     * Hard-delete every share whose table is in `tableIds`. Project-delete
+     * teardown: the public snapshot links die with the project (unlike a
+     * single-table delete, where a share survives with `tableId` set null).
+     */
+    readonly deleteByTableIds: (
+      tableIds: readonly string[],
+    ) => Effect.Effect<void, ShareRepoError>;
   }
 >() {}
 
@@ -260,6 +268,17 @@ export const ShareRepoLive: Layer.Layer<ShareRepo, never, DbClient> =
               catch: fail("table workspace lookup failed"),
             });
 
+      const deleteByTableIds: ShareRepo["Type"]["deleteByTableIds"] = (tableIds) =>
+        tableIds.length === 0
+          ? Effect.void
+          : Effect.tryPromise({
+              try: () =>
+                db
+                  .delete(schema.tableShares)
+                  .where(inArray(schema.tableShares.tableId, [...tableIds])),
+              catch: fail("share delete failed"),
+            });
+
       return {
         findByToken,
         findById,
@@ -267,6 +286,7 @@ export const ShareRepoLive: Layer.Layer<ShareRepo, never, DbClient> =
         insert,
         revoke,
         tableWorkspace,
+        deleteByTableIds,
       };
     }),
   );
@@ -340,5 +360,13 @@ export const shareRepoLayer = (
           tables.find((t) => t.id === tableId)?.workspaceId ?? null,
         ),
       ),
+    deleteByTableIds: (tableIds) =>
+      Effect.sync(() => {
+        const drop = new Set(tableIds);
+        for (let i = shares.length - 1; i >= 0; i -= 1) {
+          const t = shares[i]?.tableId;
+          if (t !== null && t !== undefined && drop.has(t)) shares.splice(i, 1);
+        }
+      }),
   });
 };

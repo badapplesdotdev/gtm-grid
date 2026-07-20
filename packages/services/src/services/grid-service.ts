@@ -76,6 +76,8 @@ import {
   TableRepo,
   type TableRepoError,
 } from "../repositories/table-repo.js";
+import { PipelineRepo } from "../repositories/pipeline-repo.js";
+import { ShareRepo } from "../repositories/share-repo.js";
 import type { WorkspaceRepoError } from "../repositories/workspace-repo.js";
 import { isSelfHost } from "../self-host.js";
 import type { GridChangeEvent, GridDedupe } from "../realtime/events.js";
@@ -269,6 +271,8 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
     const meter = yield* MeterService;
     const realtime = yield* RealtimePublisher;
     const entitlement = yield* EntitlementService;
+    const pipelineRepo = yield* PipelineRepo;
+    const shareRepo = yield* ShareRepo;
 
     /**
      * Members-only AND the workspace has cloud access (paid plan / active trial).
@@ -835,6 +839,38 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         const deleteEvent = { type: "table.delete" as const, tableId };
         yield* publish(table.workspaceId, tableId, deleteEvent);
         yield* publishWorkspaceTablesChanged(table.workspaceId, deleteEvent);
+      });
+    /**
+     * Delete a project and EVERYTHING in it — folders, tables (columns/rows/
+     * cells/webhooks/...), pipelines — via the `project_id` FK cascades.
+     * Owner/admin only. Deliberately NOT cloud-access gated (unlike other
+     * cloud writes): deleting your own data must always be possible, even on
+     * a lapsed trial. Metered ONE action (a structural delete, like
+     * `deleteTable`).
+     *
+     * Two cascades need app-level help before the project row can go:
+     *  - each pipeline's RESTRICTed version dependants are purged per
+     *    pipeline (`PipelineRepo.deletePipeline`), and
+     *  - the tables' public share links are hard-deleted — a share survives a
+     *    single-table delete (`tableId` set null) by design, but deleting the
+     *    whole project must kill its public snapshot URLs too.
+     * A `project.delete` event goes out on the workspace room so every
+     * member's project list refetches live.
+     */
+    const deleteProject = (projectId: string) =>
+      Effect.gen(function* () {
+        const project = yield* requireProject(projectId);
+        yield* membership.requireRole(project.workspaceId, ["owner", "admin"]);
+        const projectPipelines = yield* pipelineRepo.listByProject(projectId);
+        for (const pipeline of projectPipelines) {
+          yield* pipelineRepo.deletePipeline(pipeline.id);
+        }
+        const projectTables = yield* tables.listByProject(projectId);
+        yield* shareRepo.deleteByTableIds(projectTables.map((t) => t.id));
+        yield* projects.remove(projectId);
+        yield* meter.meterActions(project.workspaceId, 1);
+        const deleteEvent = { type: "project.delete" as const, projectId };
+        yield* publishWorkspaceTablesChanged(project.workspaceId, deleteEvent);
       });
 
     // ── folders (sidebar table groups) ──────────────────────────────────────
@@ -1504,6 +1540,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       addRow,
       addRowsWithCells,
       deleteTable,
+      deleteProject,
       renameTable,
       setTableFavorite,
       reorderColumn,

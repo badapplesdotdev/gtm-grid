@@ -277,6 +277,19 @@ export class AutumnClient extends Context.Tag("CloudAutumnClient")<
     }) => Effect.Effect<void, AutumnError>;
 
     /**
+     * Permanently delete `customerId` from Autumn AND Stripe, cancelling any
+     * active subscriptions and stopping all metering. Maps to Autumn
+     * `customers.delete({ customerId, deleteInStripe: true })`. Used by
+     * workspace deletion so a deleted workspace stops being billed — without
+     * this the Autumn/Stripe customer would keep accruing seat + usage charges
+     * against a workspace that no longer exists.
+     */
+    readonly deleteCustomer: (args: {
+      readonly customerId: string;
+    }) => Effect.Effect<void, AutumnError>;
+
+    /**
+     * Read the current usage/limit of a metered feature for `customerId` without
      * Read the current usage/limit of a metered feature for `customerId` without
      * consuming any. Lets the cloud-actions flush ACTION snapshot the live
      * `cloud_actions` balance so the `me` query can surface `{ used, limit }`

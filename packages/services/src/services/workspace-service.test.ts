@@ -10,6 +10,18 @@
  */
 
 import type { Membership } from "@gtmgrid/cloud";
+import { PIPELINE_SCHEMA_VERSION, compilePipeline, type PipelineGraph } from "@gtmgrid/pipelines";
+import { Cause, Effect, Exit, Option } from "effect";
+import { describe, expect, it } from "vitest";
+import { TestLayer, type TestLayerFixtures } from "../layers.js";
+import type {
+  PipelineBindingRecord,
+  PipelineRecord,
+  PipelineRunRecord,
+  PipelineVersionRecord,
+} from "../repositories/pipeline-repo.js";
+import type { Workspace } from "../repositories/workspace-repo.js";
+import { WorkspaceService } from "./workspace-service.js";
 import { Cause, Effect, Exit, Option } from "effect";
 import { describe, expect, it } from "vitest";
 import { TestLayer, type TestLayerFixtures } from "../layers.js";
@@ -123,5 +135,121 @@ describe("WorkspaceService.requireWorkspaceRole", () => {
       ["owner", "admin"],
     );
     expect(failureTag(exit)).toBe("InsufficientRoleError");
+  });
+});
+
+describe("WorkspaceService.deleteWorkspace", () => {
+  // Minimal valid graph (input -> output) for the compiled version fixture.
+  const pipeGraph: PipelineGraph = {
+    schemaVersion: PIPELINE_SCHEMA_VERSION,
+    nodes: [
+      { id: "input", type: "input", name: "Company", position: { x: 0, y: 0 }, config: { key: "company", required: true } },
+      { id: "output", type: "output", name: "Result", position: { x: 200, y: 0 }, config: { key: "result" } },
+    ],
+    edges: [{ id: "e", source: "input", target: "output" }],
+  };
+
+  /** Run deleteWorkspace then probe `me()` for the caller's remaining workspaces. */
+  const runDelete = (fixtures: TestLayerFixtures, workspaceId = WS_ID) =>
+    Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const svc = yield* WorkspaceService;
+        yield* svc.deleteWorkspace(workspaceId);
+        return yield* svc.me();
+      }).pipe(Effect.provide(TestLayer(fixtures))),
+    );
+
+  it("owner deletes the workspace — it vanishes from me() and the Autumn customer is deleted first", async () => {
+    const deleteCalls: { customerId: string }[] = [];
+    const exit = await runDelete({
+      workspaces,
+      memberships,
+      currentUserId: "user_owner",
+      autumn: { deleteCalls },
+    });
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.workspaces).toEqual([]);
+    }
+    expect(deleteCalls).toEqual([{ customerId: WS_ID }]);
+  });
+
+  it("rejects a plain member with InsufficientRoleError and deletes nothing", async () => {
+    const deleteCalls: { customerId: string }[] = [];
+    const exit = await runDelete({
+      workspaces,
+      memberships,
+      currentUserId: "user_member",
+      autumn: { deleteCalls },
+    });
+    expect(failureTag(exit)).toBe("InsufficientRoleError");
+    expect(deleteCalls).toEqual([]);
+  });
+
+  it("rejects a non-member with NotAMemberError", async () => {
+    const exit = await runDelete({
+      workspaces,
+      memberships,
+      currentUserId: "user_stranger",
+    });
+    expect(failureTag(exit)).toBe("NotAMemberError");
+  });
+
+  it("skips the Autumn delete on self-host but still deletes the workspace", async () => {
+    const deleteCalls: { customerId: string }[] = [];
+    process.env.GTMGRID_SELF_HOST = "1";
+    try {
+      const exit = await runDelete({
+        workspaces,
+        memberships,
+        currentUserId: "user_owner",
+        autumn: { deleteCalls },
+      });
+      expect(Exit.isSuccess(exit)).toBe(true);
+      if (Exit.isSuccess(exit)) {
+        expect(exit.value.workspaces).toEqual([]);
+      }
+      expect(deleteCalls).toEqual([]);
+    } finally {
+      delete process.env.GTMGRID_SELF_HOST;
+    }
+  });
+
+  it("purges the RESTRICTed pipeline dependants before the workspace cascade", async () => {
+    const compiled = compilePipeline(pipeGraph);
+    const snapshot = {
+      graphHash: compiled.graphHash,
+      topologicalNodeIds: compiled.topologicalNodeIds,
+      capabilities: compiled.capabilities,
+      actionEstimate: compiled.actionEstimate,
+    };
+    const pipelines: PipelineRecord[] = [
+      { id: "pipe1", workspaceId: WS_ID, projectId: "p1", name: "Pipe", description: null, archived: false, createdBy: "user_owner", createdAt: 1, updatedAt: 1 },
+    ];
+    const pipelineVersions: PipelineVersionRecord[] = [
+      { id: "v1", workspaceId: WS_ID, pipelineId: "pipe1", version: 1, status: "deployed", graph: pipeGraph, compiledPlan: snapshot, graphHash: compiled.graphHash, createdBy: "user_owner", createdAt: 1, deployedAt: 2 },
+    ];
+    const pipelineBindings: PipelineBindingRecord[] = [
+      { id: "b1", workspaceId: WS_ID, pipelineId: "pipe1", versionId: "v1", tableId: "t1", inputMapping: {}, outputMapping: {}, executionTarget: "cloud", autoRun: false, enabled: true, createdAt: 1, updatedAt: 1 },
+    ];
+    const pipelineRuns: PipelineRunRecord[] = [
+      { id: "run1", workspaceId: WS_ID, pipelineId: "pipe1", versionId: "v1", bindingId: "b1", tableId: "t1", executionTarget: "cloud", status: "succeeded", trigger: "manual", selection: null, requestedBy: null, totalRecords: 0, estimatedActions: 0, consumedActions: 0, processedRecords: 0, succeededRecords: 0, failedRecords: 0, skippedRecords: 0, firstError: null, startedAt: null, finishedAt: null, createdAt: 1 },
+    ];
+    const exit = await runDelete({
+      workspaces,
+      memberships,
+      currentUserId: "user_owner",
+      pipelines,
+      pipelineVersions,
+      pipelineBindings,
+      pipelineRuns,
+    });
+    expect(Exit.isSuccess(exit)).toBe(true);
+    // The RESTRICT offenders (versions/bindings/runs) are purged by the
+    // service; the `pipelines` row itself is dropped by the real Postgres
+    // workspace cascade, which the in-memory TestLayer does not model.
+    expect(pipelineVersions).toHaveLength(0);
+    expect(pipelineBindings).toHaveLength(0);
+    expect(pipelineRuns).toHaveLength(0);
   });
 });

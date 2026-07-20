@@ -82,3 +82,90 @@ describe("appRouter.workspace.get", () => {
     ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
   });
 });
+
+describe("appRouter.workspaces.deleteWorkspace", () => {
+  const ownerMembership: readonly Membership[] = [
+    { workspaceId: WS_ID, userId: "user_owner", role: "owner" },
+  ];
+
+  it("owner deletes the workspace (billing teardown ran first)", async () => {
+    const deleteCalls: { customerId: string }[] = [];
+    const caller = callerFor({
+      workspaces,
+      memberships: ownerMembership,
+      currentUserId: "user_owner",
+      autumn: { deleteCalls },
+    });
+    const result = await caller.workspaces.deleteWorkspace({ workspaceId: WS_ID });
+    expect(result).toEqual({ ok: true });
+    expect(deleteCalls).toEqual([{ customerId: WS_ID }]);
+  });
+
+  it("rejects a plain member with FORBIDDEN", async () => {
+    const caller = callerFor({
+      workspaces,
+      memberships,
+      currentUserId: "user_member",
+    });
+    await expect(
+      caller.workspaces.deleteWorkspace({ workspaceId: WS_ID }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("rejects an unauthenticated caller with UNAUTHORIZED", async () => {
+    const caller = callerFor({
+      workspaces,
+      memberships: ownerMembership,
+      currentUserId: null,
+    });
+    await expect(
+      caller.workspaces.deleteWorkspace({ workspaceId: WS_ID }),
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+});
+
+describe("appRouter.grid.deleteProject", () => {
+  const PROJECT_ID = "33333333-3333-3333-3333-333333333333";
+  // Fresh array per test — the TestLayer store mutates it on delete.
+  const gridProjects = () => [
+    { id: PROJECT_ID, workspaceId: WS_ID, name: "P1", createdAt: 1 },
+  ];
+  const adminMembership: readonly Membership[] = [
+    { workspaceId: WS_ID, userId: "user_admin", role: "admin" },
+  ];
+
+  it("admin deletes the project", async () => {
+    const caller = callerFor({
+      workspaces,
+      memberships: adminMembership,
+      gridProjects: gridProjects(),
+      currentUserId: "user_admin",
+    });
+    const result = await caller.grid.deleteProject({ projectId: PROJECT_ID });
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("rejects a plain member with FORBIDDEN", async () => {
+    const caller = callerFor({
+      workspaces,
+      memberships,
+      gridProjects: gridProjects(),
+      currentUserId: "user_member",
+    });
+    await expect(
+      caller.grid.deleteProject({ projectId: PROJECT_ID }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("rejects an unauthenticated caller with UNAUTHORIZED", async () => {
+    const caller = callerFor({
+      workspaces,
+      memberships: adminMembership,
+      gridProjects: gridProjects(),
+      currentUserId: null,
+    });
+    await expect(
+      caller.grid.deleteProject({ projectId: PROJECT_ID }),
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+});

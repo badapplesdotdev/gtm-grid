@@ -129,6 +129,13 @@ export class PipelineRepo extends Context.Tag("PipelineRepo")<
     readonly findPipeline: (id: string) => Effect.Effect<Option.Option<PipelineRecord>, PipelineRepoError>;
     readonly listByProject: (projectId: string) => Effect.Effect<readonly PipelineRecord[], PipelineRepoError>;
     readonly deletePipeline: (id: string) => Effect.Effect<void, PipelineRepoError>;
+    /**
+     * Delete every pipeline-owned row in the workspace whose FK RESTRICTs a
+     * `pipeline_versions` delete (runs, triggers, bindings, versions) — the
+     * pre-flight a WORKSPACE cascade delete needs so the FK cascade can drop
+     * the pipelines themselves. Scoped by `workspace_id` on each table.
+     */
+    readonly purgeByWorkspace: (workspaceId: string) => Effect.Effect<void, PipelineRepoError>;
     readonly findVersion: (id: string) => Effect.Effect<Option.Option<PipelineVersionRecord>, PipelineRepoError>;
     readonly latestVersion: (pipelineId: string, status?: PipelineVersionStatus) => Effect.Effect<Option.Option<PipelineVersionRecord>, PipelineRepoError>;
     readonly createWithDraft: (input: {
@@ -443,6 +450,18 @@ export const PipelineRepoLive: Layer.Layer<PipelineRepo, never, DbClient> =
               await tx.delete(schema.pipelines).where(eq(schema.pipelines.id, pipelineId));
             }),
             catch: fail("pipeline delete"),
+          }),
+        purgeByWorkspace: (workspaceId) =>
+          Effect.tryPromise({
+            try: async () => db.transaction(async (tx) => {
+              // Same RESTRICT-safe order as deletePipeline, scoped to the
+              // workspace so the workspace row's own FK cascade can proceed.
+              await tx.delete(schema.pipelineRuns).where(eq(schema.pipelineRuns.workspaceId, workspaceId));
+              await tx.delete(schema.pipelineTriggers).where(eq(schema.pipelineTriggers.workspaceId, workspaceId));
+              await tx.delete(schema.pipelineBindings).where(eq(schema.pipelineBindings.workspaceId, workspaceId));
+              await tx.delete(schema.pipelineVersions).where(eq(schema.pipelineVersions.workspaceId, workspaceId));
+            }),
+            catch: fail("workspace pipeline purge"),
           }),
         tableWorkspace: (tableId) =>
           Effect.tryPromise({
@@ -807,6 +826,13 @@ export const pipelineRepoLayer = (
       for (let index = bindings.length - 1; index >= 0; index -= 1) if (bindings[index]?.pipelineId === pipelineId) bindings.splice(index, 1);
       for (let index = versions.length - 1; index >= 0; index -= 1) if (versions[index]?.pipelineId === pipelineId) versions.splice(index, 1);
       for (let index = pipelines.length - 1; index >= 0; index -= 1) if (pipelines[index]?.id === pipelineId) pipelines.splice(index, 1);
+    }),
+    purgeByWorkspace: (workspaceId) => Effect.sync(() => {
+      const runIds = new Set(runs.filter((run) => run.workspaceId === workspaceId).map((run) => run.id));
+      for (let index = batches.length - 1; index >= 0; index -= 1) if (runIds.has((batches[index] as PipelineBatchRecord).runId)) batches.splice(index, 1);
+      for (let index = runs.length - 1; index >= 0; index -= 1) if (runs[index]?.workspaceId === workspaceId) runs.splice(index, 1);
+      for (let index = bindings.length - 1; index >= 0; index -= 1) if (bindings[index]?.workspaceId === workspaceId) bindings.splice(index, 1);
+      for (let index = versions.length - 1; index >= 0; index -= 1) if (versions[index]?.workspaceId === workspaceId) versions.splice(index, 1);
     }),
     tableWorkspace: (tableId) => Effect.succeed(Option.fromNullable(fixtures.tableWorkspaces?.get(tableId))),
     upsertBinding: (input) => Effect.sync(() => {

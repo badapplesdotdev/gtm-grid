@@ -90,4 +90,23 @@ export const workspacesRouter = router({
         }),
       ),
     ),
+
+  /**
+   * Permanently delete a workspace and ALL its data (members, projects,
+   * tables, credentials, shares), cancelling its Autumn/Stripe subscription
+   * first. Owner-only (enforced in the service); always allowed even on a
+   * lapsed trial.
+   */
+  deleteWorkspace: protectedProcedure
+    .input(z.object({ workspaceId: z.string().min(1) }))
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* WorkspaceService;
+          yield* svc.deleteWorkspace(input.workspaceId);
+          return { ok: true as const };
+        }),
+      ),
+    ),
 });

@@ -364,6 +364,29 @@ export function useCloudProjectMutations() {
     },
     [qc, patchTablesLists],
   );
+  const deleteProject = useCallback(
+    async (projectId: Id<"projects">) => {
+      // No optimistic patch here: the server broadcasts `project.delete` on the
+      // workspace room, so every member's project list refetches live. We just
+      // invalidate the projects + tables/folders lists to reconcile with truth.
+      try {
+        await apiClient!.grid.deleteProject.mutate({ projectId });
+      } finally {
+        await qc.invalidateQueries({
+          predicate: (query) =>
+            query.queryKey[0] === "grid" && query.queryKey[1] === "projects",
+        });
+        // The project's tables + folders are gone too; drop any loaded lists
+        // so the sidebar doesn't keep stale entries for a deleted project.
+        await qc.invalidateQueries({
+          predicate: (query) =>
+            query.queryKey[0] === "grid" &&
+            (query.queryKey[1] === "tables" || query.queryKey[1] === "folders"),
+        });
+      }
+    },
+    [qc],
+  );
   const renameTable = useCallback(
     async (tableId: Id<"tables">, name: string) => {
       // Optimistic: relabel the sidebar list(s) and the open grid header instantly.
@@ -538,6 +561,7 @@ export function useCloudProjectMutations() {
   );
   return {
     createProject,
+    deleteProject,
     createTable,
     deleteTable,
     renameTable,
