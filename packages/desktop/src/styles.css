@@ -3242,12 +3242,29 @@ body.resizing-agent .agent-panel { transition: none; }
 }
 .folder-head.drop-into .folder-ic { color: var(--accent); }
 .sidebar-item.in-folder { padding-left: 34px; }
+/* When a folder opens, slide+fade its contents in so a click reads as
+   "something happened" — otherwise the body pops in instantly and an
+   empty/archive folder gives almost no feedback (TRI: folder rageclick). */
+.folder-body { animation: folder-expand 0.16s ease-out; }
+@keyframes folder-expand {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 .folder-empty {
-  margin: 1px 12px 3px 34px; padding: 7px 10px; border: 1px dashed var(--border-2);
-  border-radius: var(--r-xs); color: var(--text-3); font-size: 11px; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  margin: 1px 12px 3px 34px; padding: 10px; border: 1px dashed var(--border-2);
+  border-radius: var(--r-xs); color: var(--text-3); text-align: center;
   transition: border-color 0.1s, color 0.1s, background 0.1s;
 }
+.folder-empty-ic { display: flex; color: var(--text-3); opacity: 0.7; }
+.folder-empty-label { font-size: 12px; font-weight: 500; color: var(--text-2); }
+.folder-empty-hint { font-size: 11px; }
 .folder-empty.drop-into { border-color: var(--accent); border-style: solid; color: var(--accent); background: var(--accent-soft); }
+.folder-empty.drop-into .folder-empty-ic,
+.folder-empty.drop-into .folder-empty-label { color: var(--accent); opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .folder-body { animation: none; }
+}
 
 /* table drag-and-drop states */
 .sidebar-item[draggable="true"] { cursor: grab; }

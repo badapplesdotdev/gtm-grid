@@ -2179,7 +2179,9 @@ export default function App() {
                 onDragOver={e => onFolderDragOver(e, folder)}
                 onDrop={e => onFolderDrop(e, folder)}
               >
-                Drop tables or folders here
+                <span className="folder-empty-ic"><Icon.FolderOpen size={18} /></span>
+                <span className="folder-empty-label">Empty folder</span>
+                <span className="folder-empty-hint">Drop tables or folders here</span>
               </div>
             ) : (
               folderRows.map((row) => renderTableRow(row, true))
