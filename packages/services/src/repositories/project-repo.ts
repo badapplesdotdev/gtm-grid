@@ -13,7 +13,7 @@ import { schema } from "@gtmgrid/db";
 import { asc, eq } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
-import type { GridStore } from "./grid-store.js";
+import { cascadeDeleteProject, type GridStore } from "./grid-store.js";
 
 /** A project row projection the grid domain uses. */
 export interface Project {
@@ -67,6 +67,13 @@ export class ProjectRepo extends Context.Tag("ProjectRepo")<
     readonly insert: (
       values: NewProject,
     ) => Effect.Effect<string, ProjectRepoError>;
+    /**
+     * Delete a project; the Postgres `project_id` FK cascades drop its
+     * folders, tables (and their columns/rows/cells/webhooks/...), and
+     * pipelines. RESTRICTed pipeline-version dependants must be purged by
+     * the caller first (PipelineRepo.deletePipeline per project pipeline).
+     */
+    readonly remove: (id: string) => Effect.Effect<void, ProjectRepoError>;
   }
 >() {}
 
@@ -124,6 +131,11 @@ export const ProjectRepoLive: Layer.Layer<ProjectRepo, never, DbClient> =
             },
             catch: fail("project insert"),
           }),
+        remove: (id) =>
+          Effect.tryPromise({
+            try: () => db.delete(schema.projects).where(eq(schema.projects.id, id)),
+            catch: fail("project delete"),
+          }),
       };
     }),
   );
@@ -147,4 +159,5 @@ export const projectRepoLayer = (store: GridStore): Layer.Layer<ProjectRepo> =>
         store.projects.push({ ...values, id });
         return id;
       }),
+    remove: (id) => Effect.sync(() => cascadeDeleteProject(store, id)),
   });

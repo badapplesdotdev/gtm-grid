@@ -314,6 +314,8 @@ export const appLayer = (params: {
     Layer.provide(workspaceMemberRepo),
     Layer.provide(membershipService),
     Layer.provide(seatsService),
+    Layer.provide(autumnLayer),
+    Layer.provide(pipelineRepo),
   );
   const billingService = BillingService.Default.pipe(
     Layer.provide(membershipService),
@@ -401,6 +403,7 @@ export const appLayer = (params: {
     Layer.provide(membershipService),
     Layer.provide(entitlementService),
   );
+  const shareRepo = ShareRepoLive.pipe(Layer.provide(dbLayer));
   const gridService = GridService.Default.pipe(
     Layer.provide(projectRepo),
     Layer.provide(tableRepo),
@@ -413,8 +416,9 @@ export const appLayer = (params: {
     Layer.provide(meterService),
     Layer.provide(realtimePublisher),
     Layer.provide(entitlementService),
+    Layer.provide(pipelineRepo),
+    Layer.provide(shareRepo),
   );
-  const shareRepo = ShareRepoLive.pipe(Layer.provide(dbLayer));
   const shareService = ShareService.Default.pipe(
     Layer.provide(shareRepo),
     Layer.provide(gridService),
@@ -736,6 +740,8 @@ export const TestLayer = (
     Layer.provide(workspaceMemberRepo),
     Layer.provide(membershipService),
     Layer.provide(seatsService),
+    Layer.provide(autumn),
+    Layer.provide(pipelineRepo),
   );
   const billingService = BillingService.Default.pipe(
     Layer.provide(membershipService),
@@ -829,6 +835,13 @@ export const TestLayer = (
     Layer.provide(membershipService),
     Layer.provide(entitlementService),
   );
+  const shareRepo = shareRepoLayer({
+    shares: fixtures.shares,
+    tables: (fixtures.gridTables ?? []).map((t) => ({
+      id: t.id,
+      workspaceId: t.workspaceId,
+    })),
+  });
   const gridService = GridService.Default.pipe(
     Layer.provide(projectRepo),
     Layer.provide(tableRepo),
@@ -841,14 +854,9 @@ export const TestLayer = (
     Layer.provide(meterService),
     Layer.provide(realtimePublisher),
     Layer.provide(entitlementService),
+    Layer.provide(pipelineRepo),
+    Layer.provide(shareRepo),
   );
-  const shareRepo = shareRepoLayer({
-    shares: fixtures.shares,
-    tables: (fixtures.gridTables ?? []).map((t) => ({
-      id: t.id,
-      workspaceId: t.workspaceId,
-    })),
-  });
   const shareService = ShareService.Default.pipe(
     Layer.provide(shareRepo),
     Layer.provide(gridService),

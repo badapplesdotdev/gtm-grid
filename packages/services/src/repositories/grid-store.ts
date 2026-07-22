@@ -136,6 +136,24 @@ export const cascadeDeleteTable = (store: GridStore, tableId: string): void => {
   removeWhere(store.tables, (t) => t.id === tableId);
 };
 
+/**
+ * Cascade-delete a project from the store: the cells/rows/columns of every
+ * table in the project, then the tables, folders, and the project itself —
+ * the in-memory mirror of the Postgres `project_id` FK cascades. Pipelines
+ * are NOT here (they live in the pipeline repo's own fixtures).
+ */
+export const cascadeDeleteProject = (store: GridStore, projectId: string): void => {
+  const tableIds = new Set(
+    store.tables.filter((t) => t.projectId === projectId).map((t) => t.id),
+  );
+  removeWhere(store.cells, (c) => tableIds.has(c.tableId));
+  removeWhere(store.rows, (r) => tableIds.has(r.tableId));
+  removeWhere(store.columns, (c) => tableIds.has(c.tableId));
+  removeWhere(store.tables, (t) => t.projectId === projectId);
+  removeWhere(store.folders, (f) => f.projectId === projectId);
+  removeWhere(store.projects, (p) => p.id === projectId);
+};
+
 /** Cascade-delete a column: every cell in that column, then the column. */
 export const cascadeDeleteColumn = (
   store: GridStore,

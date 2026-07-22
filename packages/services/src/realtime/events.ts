@@ -189,6 +189,18 @@ export interface TableFavoriteEvent {
 }
 
 /**
+ * A whole project was deleted (with everything in it). Broadcast on the
+ * WORKSPACE room only — it does not mutate any `getTable` snapshot (the
+ * project/sidebar lists refetch instead; an open table inside the project
+ * 404s on refetch and the client switches away), so the reducer passes it
+ * through.
+ */
+export interface ProjectDeleteEvent {
+  readonly type: "project.delete";
+  readonly projectId: string;
+}
+
+/**
  * The discriminated union of every grid change the publisher emits and the
  * reducer applies. Discriminated on `type` so a `switch` is exhaustive.
  */
@@ -205,7 +217,8 @@ export type GridChangeEvent =
   | TableDeleteEvent
   | TableRenameEvent
   | FoldersChangedEvent
-  | TableFavoriteEvent;
+  | TableFavoriteEvent
+  | ProjectDeleteEvent;
 
 /**
  * The `getTable`-shaped client cache the reducer patches. Identical in shape to

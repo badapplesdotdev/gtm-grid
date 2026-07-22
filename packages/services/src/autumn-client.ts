@@ -264,6 +264,18 @@ function boundMethods(client: Autumn): AutumnClientImpl {
         catch: (cause) =>
           new AutumnError({ message: autumnMessage(cause, "check"), cause }),
       }),
+    deleteCustomer: ({ customerId }) =>
+      Effect.tryPromise({
+        // deleteInStripe tears down the Stripe customer too, cancelling any
+        // active subscription — without it billing would continue for a
+        // workspace that no longer exists.
+        try: () => client.customers.delete({ customerId, deleteInStripe: true }),
+        catch: (cause) =>
+          new AutumnError({
+            message: autumnMessage(cause, "customers.delete"),
+            cause,
+          }),
+      }),
   };
 }
 
@@ -330,6 +342,7 @@ export const AutumnClientLive: Layer.Layer<AutumnClient> = Layer.effect(
         withClient((m) => m.getActiveSubscriptions(args)),
       trackUsage: (args) => withClient((m) => m.trackUsage(args)),
       checkUsage: (args) => withClient((m) => m.checkUsage(args)),
+      deleteCustomer: (args) => withClient((m) => m.deleteCustomer(args)),
     };
   }),
 );

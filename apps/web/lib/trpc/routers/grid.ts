@@ -413,6 +413,24 @@ export const gridRouter = router({
         }),
       ),
     ),
+  /**
+   * Delete a project and everything in it (folders, tables, pipelines); the
+   * tables' public share links die with it. Owner/admin-only (enforced in
+   * the service). Broadcasts `project.delete` on the workspace room so every
+   * member's project list refetches live. Metered.
+   */
+  deleteProject: protectedProcedure
+    .input(z.object({ projectId: z.string().min(1) }))
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* GridService;
+          yield* svc.deleteProject(input.projectId);
+          return { ok: true as const };
+        }),
+      ),
+    ),
 
   /**
    * Rename a table. Members-only. Metered ONE. Broadcasts `table.rename` so open

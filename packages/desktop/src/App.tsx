@@ -1199,6 +1199,7 @@ export default function App() {
   const cloudFolders = useCloudFolders(cloudProject?._id ?? null);
   const {
     createProject: createCloudProject,
+    deleteProject: deleteCloudProject,
     createTable: createCloudTable,
     deleteTable: deleteCloudTable,
     renameTable: renameCloudTable,
@@ -1736,6 +1737,23 @@ export default function App() {
     setCloudTableId(null);
     setView({ kind: "table" });
   }, []);
+
+  // Delete a cloud project (owner/admin server-side). Failure is swallowed by
+  // design: the list refetch reconciles either way, and the confirm dialog
+  // already reported any error surfaced before the mutation ran.
+  const onDeleteCloudProject = useCallback(
+    async (project: CloudProject) => {
+      await deleteCloudProject(project._id).catch(() => {});
+      // If the deleted project was the active one, clear it so the app falls
+      // back to the empty state (or auto-selects another project via the
+      // existing effect once the project list refetches).
+      if (cloudProject?._id === project._id) {
+        setCloudProject(null);
+        setCloudTableId(null);
+      }
+    },
+    [deleteCloudProject, cloudProject],
+  );
 
   // Create a cloud project in the active workspace, then open it. Surfaces any
   // failure (and always clears the busy flag) so the UI never hangs silently.
@@ -3317,6 +3335,7 @@ export default function App() {
             activeId: cloudProject?._id ?? null,
             onSelect: onCloudProjectSelected,
             onCreate: onCreateCloudProject,
+            onDelete: onDeleteCloudProject,
           }}
         />
       )}

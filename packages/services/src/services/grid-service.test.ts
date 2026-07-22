@@ -31,6 +31,21 @@ import { folderRepoLayer } from "../repositories/folder-repo.js";
 import { projectRepoLayer } from "../repositories/project-repo.js";
 import { rowRepoLayer } from "../repositories/row-repo.js";
 import { tableRepoLayer } from "../repositories/table-repo.js";
+import { PIPELINE_SCHEMA_VERSION, compilePipeline, type PipelineGraph } from "@gtmgrid/pipelines";
+import {
+  pipelineRepoLayer,
+  type PipelineBindingRecord,
+  type PipelineRecord,
+  type PipelineRepoFixtures,
+  type PipelineRunRecord,
+  type PipelineVersionRecord,
+} from "../repositories/pipeline-repo.js";
+import {
+  shareRepoLayer,
+  ShareRepo,
+  type ShareRepoFixtures,
+  type TableShare,
+} from "../repositories/share-repo.js";
 import {
   type Workspace,
   workspaceRepoLayer,
@@ -54,6 +69,9 @@ const memberships: readonly Membership[] = [
   // A second member, used to prove favourites are WORKSPACE-SHARED (one member's
   // pin is visible to the other).
   { workspaceId: WS, userId: "member2", role: "member" },
+  // Role escalation paths for deleteProject (owner/admin allowed, member not).
+  { workspaceId: WS, userId: "admin", role: "admin" },
+  { workspaceId: WS, userId: "owner", role: "owner" },
 ];
 
 function harness(opts: {
@@ -67,6 +85,10 @@ function harness(opts: {
    * captures events; pass a failing layer to prove publish is best-effort.
    */
   realtime?: Layer.Layer<RealtimePublisher>;
+  /** Pipeline fixtures (pipelines/versions/bindings/runs) — mutated in place by the test layer, so a delete is observable on the arrays handed in. */
+  pipelines?: PipelineRepoFixtures;
+  /** Share fixtures (public table-share links) for the deleteProject share-kill assertions. */
+  shares?: ShareRepoFixtures;
 }) {
   const store = opts.store ?? makeGridStore();
   const quotas = opts.quotas ?? new Map<string, MeterQuota>();
@@ -98,6 +120,7 @@ function harness(opts: {
       cloudActionsLimit: q?.cloudActionsLimit ?? null,
     });
   };
+  const shareLayer = shareRepoLayer(opts.shares);
   const layer = GridService.Default.pipe(
     Layer.provide(projectRepoLayer(store)),
     Layer.provide(tableRepoLayer(store)),
@@ -110,10 +133,12 @@ function harness(opts: {
     Layer.provide(meterServiceLayer(quotas)),
     Layer.provide(opts.realtime ?? recordingRealtimePublisherLayer(events)),
     Layer.provide(entitlement),
+    Layer.provide(pipelineRepoLayer(opts.pipelines)),
+    Layer.provide(shareLayer),
   );
   const run = <A, E>(program: Effect.Effect<A, E, GridService>) =>
     Effect.runPromiseExit(program.pipe(Effect.provide(layer)));
-  return { run, store, quotas, events };
+  return { run, store, quotas, events, shareLayer };
 }
 
 const failTag = (exit: Exit.Exit<unknown, unknown>): string | undefined => {
@@ -760,6 +785,119 @@ describe("GridService realtime publishing (TRI-3251)", () => {
     expect(store.rows).toHaveLength(1);
   });
 });
+
+describe("GridService.deleteProject", () => {
+  // Minimal valid graph (input -> output) for compiled version fixtures.
+  const pipeGraph: PipelineGraph = {
+    schemaVersion: PIPELINE_SCHEMA_VERSION,
+    nodes: [
+      { id: "input", type: "input", name: "Company", position: { x: 0, y: 0 }, config: { key: "company", required: true } },
+      { id: "output", type: "output", name: "Result", position: { x: 200, y: 0 }, config: { key: "result" } },
+    ],
+    edges: [{ id: "e", source: "input", target: "output" }],
+  };
+
+  /** Pipeline fixtures whose arrays are MUTATED by the repo test layer (so a purge is observable). */
+  const pipelineFixtures = () => {
+    const compiled = compilePipeline(pipeGraph);
+    const snapshot = {
+      graphHash: compiled.graphHash,
+      topologicalNodeIds: compiled.topologicalNodeIds,
+      capabilities: compiled.capabilities,
+      actionEstimate: compiled.actionEstimate,
+    };
+    const pipelines: PipelineRecord[] = [
+      { id: "pipe1", workspaceId: WS, projectId: "p1", name: "Pipe", description: null, archived: false, createdBy: "owner", createdAt: 1, updatedAt: 1 },
+    ];
+    const versions: PipelineVersionRecord[] = [
+      { id: "v1", workspaceId: WS, pipelineId: "pipe1", version: 1, status: "deployed", graph: pipeGraph, compiledPlan: snapshot, graphHash: compiled.graphHash, createdBy: "owner", createdAt: 1, deployedAt: 2 },
+    ];
+    const bindings: PipelineBindingRecord[] = [
+      { id: "b1", workspaceId: WS, pipelineId: "pipe1", versionId: "v1", tableId: "t1", inputMapping: {}, outputMapping: {}, executionTarget: "cloud", autoRun: false, enabled: true, createdAt: 1, updatedAt: 1 },
+    ];
+    const runs: PipelineRunRecord[] = [
+      { id: "run1", workspaceId: WS, pipelineId: "pipe1", versionId: "v1", bindingId: "b1", tableId: "t1", executionTarget: "cloud", status: "succeeded", trigger: "manual", selection: null, requestedBy: null, totalRecords: 0, estimatedActions: 0, consumedActions: 0, processedRecords: 0, succeededRecords: 0, failedRecords: 0, skippedRecords: 0, firstError: null, startedAt: null, finishedAt: null, createdAt: 1 },
+    ];
+    return { pipelines, versions, bindings, runs };
+  };
+
+  const projectStore = () =>
+    makeGridStore({
+      projects: [{ id: "p1", workspaceId: WS, name: "P1", createdAt: 1 }],
+      tables: [table()],
+      columns: [column()],
+      rows: [row()],
+      cells: [
+        { id: "cell1", workspaceId: WS, tableId: "t1", rowId: "r1", columnId: "c1", value: "v", status: "done", error: null, updatedAt: null },
+      ],
+      folders: [
+        { id: "f1", workspaceId: WS, projectId: "p1", name: "F", position: 0, createdAt: 1, parentId: null },
+      ],
+    });
+
+  const share: TableShare = { id: "s1", workspaceId: WS, tableId: "t1", token: "tok", name: null, snapshot: {}, snapshotVersion: 1, enabled: true, expiresAt: null, createdBy: null, createdAt: 1, revokedAt: null };
+
+  it("owner deletes the project, purges pipelines, kills share links, meters one action, broadcasts project.delete", async () => {
+    const pipes = pipelineFixtures();
+    const { run, store, quotas, events, shareLayer } = harness({
+      store: projectStore(),
+      currentUserId: "owner",
+      pipelines: pipes,
+      shares: { shares: [share] },
+    });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.deleteProject("p1")));
+    expect(Exit.isSuccess(exit)).toBe(true);
+    // The project + its grid contents cascaded away.
+    expect(store.projects).toHaveLength(0);
+    expect(store.tables).toHaveLength(0);
+    expect(store.columns).toHaveLength(0);
+    expect(store.rows).toHaveLength(0);
+    expect(store.cells).toHaveLength(0);
+    expect(store.folders).toHaveLength(0);
+    // RESTRICTed pipeline dependants purged BEFORE the cascade.
+    expect(pipes.pipelines).toHaveLength(0);
+    expect(pipes.versions).toHaveLength(0);
+    expect(pipes.bindings).toHaveLength(0);
+    expect(pipes.runs).toHaveLength(0);
+    // Public share links died with the project.
+    const sharesLeft = await Effect.runPromise(
+      Effect.flatMap(ShareRepo, (r) => r.listByTable("t1")).pipe(
+        Effect.provide(shareLayer),
+      ),
+    );
+    expect(sharesLeft).toEqual([]);
+    // One billable structural action.
+    expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
+    // The workspace room heard about it.
+    expect(
+      events.some(
+        (e) => e.tableId === WORKSPACE_ROOM_TABLE_ID && e.event.type === "project.delete",
+      ),
+    ).toBe(true);
+  });
+
+  it("allows an admin to delete a project", async () => {
+    const { run, store } = harness({ store: projectStore(), currentUserId: "admin" });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.deleteProject("p1")));
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("rejects a plain member with InsufficientRoleError", async () => {
+    const { run, store } = harness({ store: projectStore(), currentUserId: "member" });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.deleteProject("p1")));
+    expect(failTag(exit)).toBe("InsufficientRoleError");
+    expect(store.projects).toHaveLength(1);
+  });
+
+  it("rejects a non-member with NotAMemberError", async () => {
+    const { run, store } = harness({ store: projectStore(), currentUserId: "stranger" });
+    const exit = await run(Effect.flatMap(GridService, (s) => s.deleteProject("p1")));
+    expect(failTag(exit)).toBe("NotAMemberError");
+    expect(store.projects).toHaveLength(1);
+  });
+});
+
 
 describe("cloud-access gate (lapsed trial / Free workspace)", () => {
   it("blocks opening a cloud table (getTable) with PlanRequiredError", async () => {

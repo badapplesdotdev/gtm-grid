@@ -123,6 +123,17 @@ export class WorkspaceRepo extends Context.Tag("WorkspaceRepo")<
     ) => Effect.Effect<string, WorkspaceRepoError>;
 
     /**
+     * Hard-delete the workspace row; the Postgres `workspace_id` FK cascades
+     * drop every workspace-scoped child (members, projects, tables,
+     * credentials, shares, ...). The caller MUST purge the RESTRICTed
+     * pipeline-version dependants first (PipelineRepo.purgeByWorkspace) or
+     * the delete violates a FK constraint.
+     */
+    readonly remove: (
+      workspaceId: string,
+    ) => Effect.Effect<void, WorkspaceRepoError>;
+
+    /**
      * The workspace's customer profile (org name + owner email) for Autumn
      * `customers.getOrCreate`. Ports `workspaceCustomerData`
      * (convex/workspaces.ts:351): loads the workspace, then its owner's email.
@@ -343,6 +354,12 @@ export const WorkspaceRepoLive: Layer.Layer<WorkspaceRepo, never, DbClient> =
             },
             catch: fail("trial-ending scan"),
           }),
+        remove: (workspaceId) =>
+          Effect.tryPromise({
+            try: () =>
+              db.delete(schema.workspaces).where(eq(schema.workspaces.id, workspaceId)),
+            catch: fail("workspace delete"),
+          }),
       };
     }),
   );
@@ -421,5 +438,10 @@ export const workspaceRepoLayer = (
           ];
         }),
       ),
+    remove: (workspaceId) =>
+      Effect.sync(() => {
+        const i = rows.findIndex((r) => r.id === workspaceId);
+        if (i !== -1) rows.splice(i, 1);
+      }),
   });
 };

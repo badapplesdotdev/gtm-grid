@@ -27,8 +27,8 @@ import { Dialog, DialogContent } from "../components/ui/dialog";
 import { PlanGrid, BillingToggle } from "./onboarding/PlanGrid";
 import type { SelectablePlan } from "./onboarding/flow-logic";
 import type { Id } from "./ids";
-import { apiClient, cloudEnabled } from "./client";
-import { useAuthState, useMembers } from "./auth";
+import { apiClient, cloudEnabled, queryClient } from "./client";
+import { useActiveWorkspace, useAuthState, useMe, useMembers } from "./auth";
 import { runInvite, useInviteLayer } from "./invite";
 import {
   usePendingInvitations,
@@ -81,6 +81,47 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
   const [notice, setNotice] = useState<string | null>(null);
   // When true, the plan-selection upgrade modal is shown.
   const [showUpgrade, setShowUpgrade] = useState(false);
+
+  // ── Danger zone: workspace deletion ──────────────────────────────────────
+  // The active workspace + the full workspaces list (so we can switch to
+  // another one after a successful delete, reusing the same setActiveWorkspaceId
+  // the AccountBar switcher uses).
+  const me = useMe();
+  const { setActiveWorkspaceId } = useActiveWorkspace(me ?? null);
+  const [showDelete, setShowDelete] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const submitDelete = useCallback(async () => {
+    if (workspaceId === null || deleting) return;
+    // Require the workspace name typed exactly to enable the confirm button.
+    if (workspaceName !== null && deleteConfirm.trim() !== workspaceName) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await apiClient.workspaces.deleteWorkspace.mutate({ workspaceId });
+      // Invalidate `me` so the workspace list refetches (the deleted workspace
+      // disappears). Switch the active workspace to another one (or let the
+      // store fall back to null when none remain) before closing the panel.
+      const remaining = (me?.workspaces ?? []).filter((w) => w._id !== workspaceId);
+      if (remaining.length > 0) setActiveWorkspaceId(remaining[0]._id);
+      await queryClient.invalidateQueries({ queryKey: ["workspaces", "me"] });
+      // Also drop any workspace-scoped queries (members, invitations) so stale
+      // data for the deleted workspace doesn't linger.
+      await queryClient.invalidateQueries({
+        predicate: (query) =>
+          query.queryKey[0] === "workspaces" && query.queryKey[1] !== "me",
+      });
+      setDeleteConfirm("");
+      setShowDelete(false);
+      onClose();
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : "Could not delete workspace.");
+    } finally {
+      setDeleting(false);
+    }
+  }, [workspaceId, workspaceName, deleting, deleteConfirm, me, setActiveWorkspaceId, onClose]);
 
   // Seat-cost confirmation: an invite consumes a paid seat, so before sending we
   // preview the new bill (Autumn) and hold the invite until the user approves the
@@ -328,6 +369,24 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
               </ul>
             )}
           </div>
+
+          {/* Danger zone: permanent workspace deletion. Owner-only server-side;
+              requires typing the workspace name to enable the confirm button. */}
+          <div className="form-row" style={{ borderTop: "1px solid var(--border-2)", paddingTop: 16, marginTop: 8 }}>
+            <label className="form-label" style={{ color: "var(--danger)" }}>Danger zone</label>
+            <div style={{ fontSize: 12, color: "var(--text-3)", marginBottom: 8, lineHeight: 1.5 }}>
+              Permanently delete this workspace and all of its projects, tables,
+              credentials, and share links. This cancels the billing subscription
+              and cannot be undone.
+            </div>
+            <button
+              className="btn btn-danger"
+              onClick={() => { setDeleteError(null); setShowDelete(true); }}
+              disabled={deleting}
+            >
+              Delete workspace…
+            </button>
+          </div>
         </div>
 
         <div className="modal-footer">
@@ -345,10 +404,53 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
           </button>
         </div>
 
-      {/* Plan-selection upgrade modal (C27) — shown when an invite exceeds the
-          seat limit OR via the explicit "Upgrade plan" button. Presents the paid
-          plans from the shared PLAN_CATALOG; choosing one starts checkout for
-          that plan and opens the Autumn URL in the system browser. */}
+      {showDelete && (
+        <Dialog open onOpenChange={(o) => { if (!o) { setShowDelete(false); setDeleteConfirm(""); setDeleteError(null); } }}>
+          <DialogContent className="modal" srTitle="Delete workspace" style={{ width: 440 }}>
+            <div className="modal-header">
+              <span className="modal-title">Delete workspace</span>
+              <button className="modal-close" onClick={() => { setShowDelete(false); setDeleteConfirm(""); setDeleteError(null); }} aria-label="Close">×</button>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5, margin: "0 0 12px" }}>
+                This permanently deletes <strong style={{ color: "var(--text)" }}>{workspaceName ?? "this workspace"}</strong> and
+                all of its projects, tables, credentials, and share links. The billing
+                subscription is cancelled immediately. This can&apos;t be undone.
+              </p>
+              <p style={{ fontSize: 13, color: "var(--text-2)", margin: "0 0 8px" }}>
+                Type the workspace name to confirm:
+              </p>
+              <input
+                className="form-input"
+                value={deleteConfirm}
+                onChange={(e) => setDeleteConfirm(e.target.value)}
+                placeholder={workspaceName ?? "workspace name"}
+                autoFocus
+                disabled={deleting}
+                onKeyDown={(e) => { if (e.key === "Enter") void submitDelete(); }}
+              />
+              {deleteError && (
+                <div className="account-menu-error" role="alert" style={{ marginTop: 8 }}>
+                  {deleteError}
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => { setShowDelete(false); setDeleteConfirm(""); setDeleteError(null); }} disabled={deleting}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={() => void submitDelete()}
+                disabled={deleting || (workspaceName !== null && deleteConfirm.trim() !== workspaceName)}
+              >
+                {deleting ? "Deleting…" : "Delete workspace"}
+              </button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
       {showUpgrade && (
         <UpgradeModal
           selectedPlan={selectedPlan}
