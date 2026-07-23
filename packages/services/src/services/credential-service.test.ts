@@ -291,3 +291,176 @@ describe("CredentialService personal-scope ownership", () => {
     }
   });
 });
+
+describe("CredentialService.removeCredential", () => {
+  const ADMIN = "user_admin";
+  const OWNER = "user_owner";
+  const ROLES: readonly Membership[] = [
+    ...memberships,
+    { workspaceId: WS, userId: ADMIN, role: "admin" },
+    { workspaceId: WS, userId: OWNER, role: "owner" },
+  ];
+
+  /**
+   * Save a shared key as the OWNER, then attempt the removal as `actor`, and
+   * report both the removal result and whether the key is still resolvable —
+   * the outcome that matters is "can this connector still run", not which repo
+   * call happened.
+   */
+  const saveThenRemoveAs = (actor: string) =>
+    runExit(
+      { memberships: ROLES, currentUserId: actor },
+      Effect.gen(function* () {
+        const svc = yield* CredentialService;
+        const repo = yield* CredentialRepo;
+        // Seed the row directly through the repo so the save is not itself
+        // subject to the actor's role.
+        yield* repo.upsert({
+          workspaceId: WS,
+          extensionId: "ai:anthropic",
+          scope: "workspace",
+          ownerUserId: null,
+          name: "Anthropic",
+          secretsEnc: JSON.stringify({ v: 1, ct: "x" }),
+        });
+        const removed = yield* svc.removeCredential({
+          workspaceId: WS,
+          extensionId: "ai:anthropic",
+          scope: "workspace",
+        });
+        const after = yield* repo.findForAccess({
+          workspaceId: WS,
+          extensionId: "ai:anthropic",
+          scope: "workspace",
+          ownerUserId: null,
+        });
+        return { removed, stillThere: Option.isSome(after) };
+      }),
+    );
+
+  it("lets an OWNER delete a shared key outright", async () => {
+    const exit = await saveThenRemoveAs(OWNER);
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value).toEqual({ removed: true, stillThere: false });
+    }
+  });
+
+  it("lets an ADMIN delete a shared key", async () => {
+    const exit = await saveThenRemoveAs(ADMIN);
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) expect(exit.value.removed).toBe(true);
+  });
+
+  it("refuses a plain MEMBER — a shared key is not theirs to delete", async () => {
+    // Saving stays member-level (a replace leaves a working key behind);
+    // deleting breaks every other member's columns, so it takes owner/admin.
+    const exit = await saveThenRemoveAs(ALICE);
+    expect(failureTag(exit)).toBe("InsufficientRoleError");
+  });
+
+  it("rejects a non-member", async () => {
+    const exit = await saveThenRemoveAs("user_stranger");
+    expect(failureTag(exit)).toBe("NotAMemberError");
+  });
+
+  it("rejects a signed-out caller", async () => {
+    const exit = await runExit(
+      { memberships: ROLES, currentUserId: null },
+      Effect.gen(function* () {
+        const svc = yield* CredentialService;
+        return yield* svc.removeCredential({
+          workspaceId: WS,
+          extensionId: "ai:anthropic",
+          scope: "workspace",
+        });
+      }),
+    );
+    expect(failureTag(exit)).toBe("UnauthenticatedError");
+  });
+
+  it("reports false (not an error) when there is nothing to remove", async () => {
+    const exit = await runExit(
+      { memberships: ROLES, currentUserId: OWNER },
+      Effect.gen(function* () {
+        const svc = yield* CredentialService;
+        return yield* svc.removeCredential({
+          workspaceId: WS,
+          extensionId: "ai:never-connected",
+          scope: "workspace",
+        });
+      }),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) expect(exit.value).toBe(false);
+  });
+
+  it("lets a plain member delete their OWN personal key", async () => {
+    const exit = await runExit(
+      { memberships: ROLES, currentUserId: ALICE },
+      Effect.gen(function* () {
+        const svc = yield* CredentialService;
+        yield* svc.saveCredential({
+          workspaceId: WS,
+          extensionId: "ai:openai",
+          scope: "personal",
+          name: "OpenAI",
+          secrets: { apiKey: "sk-alice" },
+        });
+        const removed = yield* svc.removeCredential({
+          workspaceId: WS,
+          extensionId: "ai:openai",
+          scope: "personal",
+        });
+        const after = yield* svc.getCredentialForRun({
+          workspaceId: WS,
+          extensionId: "ai:openai",
+          scope: "personal",
+        });
+        return { removed, stillThere: Option.isSome(after) };
+      }),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value).toEqual({ removed: true, stillThere: false });
+    }
+  });
+
+  it("cannot reach ANOTHER member's personal key", async () => {
+    // `ownerFor` binds a personal removal to the CALLER, so Bob's delete can
+    // only ever name his own row. Both users share ONE store here (a single
+    // TestLayer) — otherwise Bob would trivially remove nothing because his
+    // store never held Alice's key, and the test would prove nothing.
+    const exit = await runExit(
+      { memberships: ROLES, currentUserId: BOB },
+      Effect.gen(function* () {
+        const repo = yield* CredentialRepo;
+        yield* repo.upsert({
+          workspaceId: WS,
+          extensionId: "ai:openai",
+          scope: "personal",
+          ownerUserId: ALICE,
+          name: "OpenAI",
+          secretsEnc: JSON.stringify({ v: 1, ct: "alice" }),
+        });
+        const svc = yield* CredentialService;
+        const removed = yield* svc.removeCredential({
+          workspaceId: WS,
+          extensionId: "ai:openai",
+          scope: "personal",
+        });
+        const aliceRow = yield* repo.findForAccess({
+          workspaceId: WS,
+          extensionId: "ai:openai",
+          scope: "personal",
+          ownerUserId: ALICE,
+        });
+        return { removed, aliceKeySurvives: Option.isSome(aliceRow) };
+      }),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value).toEqual({ removed: false, aliceKeySurvives: true });
+    }
+  });
+});
