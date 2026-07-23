@@ -101,7 +101,10 @@ export function useWorkspaceCredentials(
       // keeps the affordance honest.
       remove: canRemove
         ? async (extensionId) => {
-            await apiClient!.credentials.remove.mutate({
+            // No `!` here: `apiClient` is a non-nullable module singleton
+            // (client.tsx:172). The `apiClient !== null` guards elsewhere in this
+            // file are vestigial from when it could be absent.
+            await apiClient.credentials.remove.mutate({
               workspaceId,
               extensionId,
               scope: "workspace",
