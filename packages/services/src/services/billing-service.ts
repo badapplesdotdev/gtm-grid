@@ -88,7 +88,6 @@ export type PreviewSeatChangeError =
   | NotAMemberError
   | MemberRepoError
   | WorkspaceMemberRepoError
-  | WorkspaceRepoError
   | AutumnError;
 
 /** A preview of the bill after adding seats: the new seat count + monthly total. */
@@ -243,8 +242,17 @@ export class BillingService extends Effect.Service<BillingService>()(
        * Preview the recurring bill AFTER adding `addSeats` seat(s) to the
        * workspace, so the UI can confirm the new price before an invite that
        * raises the subscription. Members-only (read-only preview). Seats =
-       * current member count + `addSeats`; priced against the workspace's current
-       * plan (defaulting to Team) via Autumn `previewAttach` — no change is made.
+       * current member count + `addSeats`; no change is made.
+       *
+       * We price against the customer's REAL active Autumn subscription rather
+       * than the cached `currentPlanId`: that cache can name a plan (e.g. Team)
+       * the customer no longer has an active/trialing subscription for (expired
+       * trial, cancelled plan, or stale cache), and Autumn `previewUpdate` 404s
+       * (`cus_product_not_found`) in that case — which used to surface as an
+       * unhandled error and block the invite flow. When there IS an active paid
+       * subscription we preview the seat-quantity change on it (`previewUpdate`);
+       * when there is NOT we fall back to a fresh-attach estimate on the Team
+       * plan (`previewAttach`), which needs no existing subscription.
        */
       const previewSeatChange = (
         workspaceId: string,
@@ -253,17 +261,23 @@ export class BillingService extends Effect.Service<BillingService>()(
         Effect.gen(function* () {
           yield* membership.requireMember(workspaceId);
           const count = yield* memberRepo.countByWorkspace(workspaceId);
-          const ws = yield* repo.findById(workspaceId);
-          const planId = Option.match(ws, {
-            onNone: () => TEAM_PLAN_ID as string,
-            onSome: (w) => w.currentPlanId ?? TEAM_PLAN_ID,
-          });
           const seatTarget = count + Math.max(1, addSeats);
-          const preview = yield* autumn.previewSeatChange({
+          const subs = yield* autumn.getActiveSubscriptions({
             customerId: workspaceId,
-            planId,
-            seats: seatTarget,
           });
+          const paidPlanIds: readonly string[] = ALL_PAID_PLAN_IDS;
+          const active = subs.find((s) => paidPlanIds.includes(s.planId)) ?? null;
+          const preview = yield* (active === null
+            ? autumn.previewSeatAttach({
+                customerId: workspaceId,
+                planId: TEAM_PLAN_ID,
+                seats: seatTarget,
+              })
+            : autumn.previewSeatChange({
+                customerId: workspaceId,
+                planId: active.planId,
+                seats: seatTarget,
+              }));
           return {
             seats: preview.seats,
             total: preview.total,

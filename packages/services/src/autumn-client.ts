@@ -123,6 +123,32 @@ function boundMethods(client: Autumn): AutumnClientImpl {
             cause,
           }),
       }),
+    previewSeatAttach: ({ customerId, planId, seats }) =>
+      Effect.tryPromise({
+        try: async () => {
+          // The customer has NO active subscription for the plan (expired
+          // trial, cancelled, or stale cached plan), so previewUpdate would 404
+          // with `cus_product_not_found`. previewAttach prices a fresh attach
+          // instead. Like previewUpdate, the RECURRING price the user will pay
+          // is next cycle's total.
+          const res = await client.billing.previewAttach({
+            customerId,
+            planId,
+            featureQuantities: [{ featureId: SEATS_FEATURE_ID, quantity: seats }],
+          });
+          const recurring =
+            (typeof res.nextCycle?.total === "number"
+              ? res.nextCycle.total
+              : undefined) ??
+            (typeof res.total === "number" ? res.total : 0);
+          return { total: recurring, currency: res.currency ?? "usd", seats };
+        },
+        catch: (cause) =>
+          new AutumnError({
+            message: autumnMessage(cause, "previewAttach"),
+            cause,
+          }),
+      }),
     attach: ({ customerId, planId, customerData }) =>
       Effect.tryPromise({
         try: async () => {
@@ -321,6 +347,8 @@ export const AutumnClientLive: Layer.Layer<AutumnClient> = Layer.effect(
       checkSeats: (args) => withClient((m) => m.checkSeats(args)),
       previewSeatChange: (args) =>
         withClient((m) => m.previewSeatChange(args)),
+      previewSeatAttach: (args) =>
+        withClient((m) => m.previewSeatAttach(args)),
       attach: (args) => withClient((m) => m.attach(args)),
       setupPayment: (args) => withClient((m) => m.setupPayment(args)),
       startTrial: (args) => withClient((m) => m.startTrial(args)),

@@ -72,6 +72,15 @@ export interface FakeAutumnConfig {
   readonly trialEndsAt?: number | null;
   /** Per-seat price `previewSeatChange` multiplies by the seat count; default 20. */
   readonly perSeatPrice?: number;
+  /**
+   * When true, `previewSeatChange` (Autumn `previewUpdate`) fails with
+   * {@link AutumnError} — modelling the `cus_product_not_found` 404 Autumn
+   * returns when the customer has no active subscription for the plan. Lets a
+   * test assert the no-active-subscription path uses `previewSeatAttach`
+   * instead and never touches `previewUpdate`. `previewSeatAttach` still
+   * succeeds.
+   */
+  readonly failPreviewUpdate?: boolean;
 }
 
 /**
@@ -101,6 +110,18 @@ export const fakeAutumnLayer = (
         return { allowed, balance };
       }),
     previewSeatChange: ({ seats }) =>
+      config.failPreviewUpdate === true
+        ? Effect.fail(
+            new AutumnError({
+              message: "Autumn previewUpdate failed: cus_product_not_found",
+            }),
+          )
+        : Effect.succeed({
+            total: seats * (config.perSeatPrice ?? 20),
+            currency: "usd",
+            seats,
+          }),
+    previewSeatAttach: ({ seats }) =>
       Effect.succeed({
         total: seats * (config.perSeatPrice ?? 20),
         currency: "usd",
@@ -182,6 +203,8 @@ export const failingAutumnLayer = (
         ? fail
         : Effect.succeed({ allowed: failOn !== "attach", balance: null }),
     previewSeatChange: ({ seats }) =>
+      Effect.succeed({ total: seats * 20, currency: "usd", seats }),
+    previewSeatAttach: ({ seats }) =>
       Effect.succeed({ total: seats * 20, currency: "usd", seats }),
     attach: () =>
       failOn === "attach"

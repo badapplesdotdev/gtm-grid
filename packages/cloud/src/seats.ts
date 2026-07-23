@@ -149,10 +149,38 @@ export class AutumnClient extends Context.Tag("CloudAutumnClient")<
 
     /**
      * Preview what `customerId` would be billed for `planId` at `seats` seats,
-     * WITHOUT making any change — Autumn `billing.previewAttach`. Powers the
-     * "adding a teammate raises your bill to $X" confirmation before an invite.
+     * WITHOUT making any change — a seat-QUANTITY change on an ALREADY-ACTIVE
+     * subscription (Autumn `billing.previewUpdate`). Powers the "adding a
+     * teammate raises your bill to $X" confirmation before an invite.
+     *
+     * REQUIRES an active/trialing subscription for `planId`: `previewUpdate`
+     * 404s (`cus_product_not_found`) otherwise. When the customer has no active
+     * subscription for the plan (expired trial, cancelled, or never subscribed)
+     * use {@link previewSeatAttach} instead.
      */
     readonly previewSeatChange: (args: {
+      readonly customerId: string;
+      readonly planId: string;
+      readonly seats: number;
+    }) => Effect.Effect<
+      {
+        readonly total: number;
+        readonly currency: string;
+        readonly seats: number;
+      },
+      AutumnError
+    >;
+
+    /**
+     * Preview what `customerId` would be billed if they ATTACHED `planId` at
+     * `seats` seats — Autumn `billing.previewAttach`. The counterpart to
+     * {@link previewSeatChange} for a customer with NO active subscription for
+     * the plan (expired trial, cancelled, stale cached plan): `previewAttach`
+     * prices a fresh attach, so it does not require an existing subscription and
+     * cannot 404 with `cus_product_not_found`. Same `{ total, currency, seats }`
+     * shape so the caller treats both previews identically.
+     */
+    readonly previewSeatAttach: (args: {
       readonly customerId: string;
       readonly planId: string;
       readonly seats: number;

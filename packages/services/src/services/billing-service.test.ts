@@ -366,6 +366,73 @@ describe("BillingService.previewSeatChange", () => {
     expect(exit.value).toEqual({ seats: 2, total: 40, currency: "usd" });
   });
 
+  const singleMember = [
+    {
+      id: "m1",
+      workspaceId: WS_ID,
+      userId: "user_owner",
+      role: "owner" as const,
+      createdAt: 1,
+      name: null,
+      email: null,
+    },
+  ];
+
+  it("prices against the customer's real active paid subscription (not the cached plan)", async () => {
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const svc = yield* BillingService;
+        return yield* svc.previewSeatChange(WS_ID);
+      }).pipe(
+        Effect.provide(
+          TestLayer({
+            workspaces,
+            users,
+            memberships: ownerMembership,
+            members: singleMember,
+            currentUserId: "user_owner",
+            // Live Autumn reports an active Team subscription: preview the
+            // seat-quantity change (previewUpdate) on it.
+            autumn: { activePlanIds: ["team"], perSeatPrice: 30 },
+          }),
+        ),
+      ),
+    );
+    if (!Exit.isSuccess(exit)) throw new Error("expected success");
+    // 1 member + 1 seat = 2 seats × $30 = $60.
+    expect(exit.value).toEqual({ seats: 2, total: 60, currency: "usd" });
+  });
+
+  it("falls back to an attach estimate when there is no active subscription (expired trial / cancelled / stale cache) instead of throwing", async () => {
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const svc = yield* BillingService;
+        return yield* svc.previewSeatChange(WS_ID);
+      }).pipe(
+        Effect.provide(
+          TestLayer({
+            workspaces,
+            users,
+            memberships: ownerMembership,
+            members: singleMember,
+            currentUserId: "user_owner",
+            // No active paid subscription; previewUpdate would 404
+            // (cus_product_not_found). The preview must still succeed via the
+            // attach estimate rather than surfacing an AutumnError.
+            autumn: {
+              activePlanIds: [],
+              failPreviewUpdate: true,
+              perSeatPrice: 25,
+            },
+          }),
+        ),
+      ),
+    );
+    if (!Exit.isSuccess(exit)) throw new Error("expected success");
+    // 1 member + 1 seat = 2 seats × $25 = $50, priced via previewAttach.
+    expect(exit.value).toEqual({ seats: 2, total: 50, currency: "usd" });
+  });
+
   it("rejects a non-member with NotAMemberError", async () => {
     const exit = await Effect.runPromiseExit(
       Effect.gen(function* () {
