@@ -640,6 +640,10 @@ export const TestLayer = (
   const memberRows = fixtures.members ?? membershipsToMemberRows(memberships);
   const fixtureUsers = fixtures.users ?? [];
 
+  // The workspace rows, owned HERE rather than inside the repo Layer, so the
+  // member store can write `ownerId` on an ownership transfer — the second write
+  // the live `transferOwnership` transaction makes.
+  const workspaceRows: Workspace[] = [];
   const workspaceRepo = workspaceRepoLayer(
     fixtures.workspaces ?? [],
     fixtureUsers.map((u) => ({
@@ -648,6 +652,7 @@ export const TestLayer = (
       email: u.email ?? null,
       image: u.image ?? null,
     })),
+    workspaceRows,
   );
   const webhookRepo = webhookRepoLayer({
     webhooks: fixtures.webhooks,
@@ -701,7 +706,10 @@ export const TestLayer = (
   // ONE shared member store backs both the data repo and the authz guard, so a
   // membership inserted via WorkspaceMemberRepo (e.g. createWorkspace's owner
   // row) is immediately visible to MembershipService — as in the live table.
-  const { workspaceMemberRepo, memberRepo } = memberStoreLayers(memberRows);
+  const { workspaceMemberRepo, memberRepo } = memberStoreLayers(
+    memberRows,
+    workspaceRows,
+  );
   const identity = cloudIdentityLayer(fixtures.currentUserId ?? null);
   const autumn = fakeAutumnLayer(fixtures.autumn ?? {});
 

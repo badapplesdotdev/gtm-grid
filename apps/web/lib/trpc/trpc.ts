@@ -50,6 +50,9 @@ export function toTrpcError(tag: string | undefined, message: string): TRPCError
     case "PlanRequiredError":
       return new TRPCError({ code: "FORBIDDEN", message });
     case "WorkspaceNotFoundError":
+    // Workspace roster: the target of a role change is not a member (a stale
+    // settings panel, or a forged user id).
+    case "MemberNotFoundError":
     case "WebhookNotFoundError":
     // Grid domain (TRI-3248): a missing project/table/column/row is not found.
     case "GridNotFoundError":
@@ -63,6 +66,9 @@ export function toTrpcError(tag: string | undefined, message: string): TRPCError
     case "UnknownPlanError":
       return new TRPCError({ code: "BAD_REQUEST", message });
     case "SeatLimitExceededError":
+    // Roster: the owner cannot demote themselves — they must transfer ownership
+    // first. A precondition on the change, not a permission failure.
+    case "LastOwnerError":
       return new TRPCError({ code: "PRECONDITION_FAILED", message });
     case "NoCheckoutUrlError":
     case "AutumnError":
@@ -72,6 +78,8 @@ export function toTrpcError(tag: string | undefined, message: string): TRPCError
     case "InvalidInvitationError":
       return new TRPCError({ code: "NOT_FOUND", message });
     case "InvalidEmailError":
+    // Invitations can't grant ownership — it transfers to an existing member.
+    case "InvalidInviteRoleError":
     // Webhooks domain (W2): malformed mapping/config/cell values are bad requests.
     case "InvalidMappingError":
     case "InvalidConfigError":

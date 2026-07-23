@@ -117,6 +117,94 @@ describe("InvitationService.inviteByEmail", () => {
     expect(failureTag(exit)).toBe("InsufficientRoleError");
   });
 
+  it("lets an owner invite an admin", async () => {
+    const exit = await run(
+      {
+        workspaces,
+        memberships: [ownerMembership],
+        users,
+        currentUserId: OWNER,
+      },
+      (svc) =>
+        svc.inviteByEmail({
+          workspaceId: WS_ID,
+          email: "new@acme.com",
+          role: "admin",
+        }),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) expect(exit.value.status).toBe("invited");
+  });
+
+  it("stops an ADMIN from inviting another admin (owner-only escalation)", async () => {
+    // Otherwise the invite path is a way around the owner-only rule on
+    // WorkspaceService.updateMemberRole — admins minting fellow admins.
+    const emailsSent: InviteEmailArgs[] = [];
+    const exit = await run(
+      {
+        workspaces,
+        memberships: [
+          ownerMembership,
+          { workspaceId: WS_ID, userId: STRANGER, role: "admin" },
+        ],
+        users,
+        currentUserId: STRANGER,
+        emailsSent,
+      },
+      (svc) =>
+        svc.inviteByEmail({
+          workspaceId: WS_ID,
+          email: "new@acme.com",
+          role: "admin",
+        }),
+    );
+    expect(failureTag(exit)).toBe("InsufficientRoleError");
+    expect(emailsSent).toHaveLength(0);
+  });
+
+  it("still lets an admin invite a plain member", async () => {
+    const exit = await run(
+      {
+        workspaces,
+        memberships: [
+          ownerMembership,
+          { workspaceId: WS_ID, userId: STRANGER, role: "admin" },
+        ],
+        users,
+        currentUserId: STRANGER,
+      },
+      (svc) =>
+        svc.inviteByEmail({
+          workspaceId: WS_ID,
+          email: "new@acme.com",
+          role: "member",
+        }),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) expect(exit.value.status).toBe("invited");
+  });
+
+  it("refuses to grant OWNER by invitation — ownership transfers instead", async () => {
+    const emailsSent: InviteEmailArgs[] = [];
+    const exit = await run(
+      {
+        workspaces,
+        memberships: [ownerMembership],
+        users,
+        currentUserId: OWNER,
+        emailsSent,
+      },
+      (svc) =>
+        svc.inviteByEmail({
+          workspaceId: WS_ID,
+          email: "new@acme.com",
+          role: "owner",
+        }),
+    );
+    expect(failureTag(exit)).toBe("InvalidInviteRoleError");
+    expect(emailsSent).toHaveLength(0);
+  });
+
   it("returns checkout (creates nothing) when over the seat limit", async () => {
     const emailsSent: InviteEmailArgs[] = [];
     const exit = await run(

@@ -19,7 +19,10 @@
  * `null` `me` and an `isAuthenticated: false` auth state).
  */
 
-import { useQuery as useReactQuery } from "@tanstack/react-query";
+import {
+  useQuery as useReactQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { Id } from "./ids";
 import { apiClient, authClient, setStoredAuthToken } from "./client";
@@ -209,6 +212,37 @@ export function useMembers(
     enabled: workspaceId !== null,
   });
   return (data as unknown as WorkspaceMembers | undefined) ?? undefined;
+}
+
+/**
+ * Change a member's role (`workspaces.updateMemberRole`). OWNER-ONLY on the
+ * server; the settings UI only renders the control for an owner, so a rejection
+ * here means a stale roster rather than an ordinary path.
+ *
+ * Passing `"owner"` TRANSFERS ownership — the target becomes owner and the
+ * caller drops to admin — so both the roster and `me` are invalidated: the
+ * caller's own role in this workspace has changed, and `me.workspaces[].role`
+ * drives what the rest of the UI offers them.
+ */
+export function useUpdateMemberRole(
+  workspaceId: Id<"workspaces"> | null,
+): (userId: string, role: WorkspaceMember["role"]) => Promise<void> {
+  const qc = useQueryClient();
+  return useCallback(
+    async (userId: string, role: WorkspaceMember["role"]) => {
+      if (workspaceId === null) return;
+      await apiClient.workspaces.updateMemberRole.mutate({
+        workspaceId: workspaceId as string,
+        userId,
+        role,
+      });
+      await qc.invalidateQueries({
+        queryKey: ["workspaces", "listMembers", workspaceId],
+      });
+      await qc.invalidateQueries({ queryKey: ["workspaces", "me"] });
+    },
+    [qc, workspaceId],
+  );
 }
 
 /**

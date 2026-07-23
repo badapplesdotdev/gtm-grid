@@ -74,6 +74,18 @@ export function acceptUrlFor(token: string): string {
   return `gtmgrid://invite/${token}`;
 }
 
+/**
+ * Raised when an invite asks for a role invitations cannot grant — today that is
+ * `owner`, because ownership is single-holder and moves only by transferring it
+ * to an existing member ({@link WorkspaceService.updateMemberRole}).
+ */
+export class InvalidInviteRoleError extends Data.TaggedError(
+  "InvalidInviteRoleError",
+)<{
+  readonly message: string;
+  readonly role: MemberRole;
+}> {}
+
 /** Raised when `inviteByEmail` is given a syntactically invalid email. */
 export class InvalidEmailError extends Data.TaggedError("InvalidEmailError")<{
   readonly message: string;
@@ -166,14 +178,31 @@ export class InvitationService extends Effect.Service<InvitationService>()(
         | MemberRepoError
         | InvitationRepoError
         | InvalidEmailError
+        | InvalidInviteRoleError
         | AutumnError
         | NoCheckoutUrlError
       > =>
         Effect.gen(function* () {
-          const inviter = yield* membership.requireRole(params.workspaceId, [
-            "owner",
-            "admin",
-          ]);
+          // An invite may only grant a role the inviter is entitled to hand out,
+          // or the invite becomes a way around the owner-only rule on
+          // `WorkspaceService.updateMemberRole`: an admin would mint fellow
+          // admins by invitation, and anyone could mint a SECOND owner —
+          // ownership is single-holder and moves only by transfer, so no invite
+          // ever carries it.
+          const inviter = yield* membership.requireRole(
+            params.workspaceId,
+            params.role === "member" ? ["owner", "admin"] : ["owner"],
+          );
+          if (params.role === "owner") {
+            return yield* Effect.fail(
+              new InvalidInviteRoleError({
+                message:
+                  "Ownership can't be granted by invitation. Invite them as an " +
+                  "admin, then make them the owner once they've joined.",
+                role: params.role,
+              }),
+            );
+          }
           const normalized = normalizeEmail(params.email);
           if (!normalized.includes("@")) {
             return yield* Effect.fail(
