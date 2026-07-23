@@ -277,6 +277,8 @@ export {
   type GetForRunError,
   type GetForRunInput,
   type ListCredentialsError,
+  type RemoveCredentialError,
+  type RemoveCredentialInput,
   type SaveCredentialError,
   type SaveCredentialInput,
 } from "./services/credential-service.js";

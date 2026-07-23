@@ -82,6 +82,37 @@ export const credentialsRouter = router({
     ),
 
   /**
+   * Delete a saved credential. `save` can only ever REPLACE a key, so this is
+   * the only way to hand a workspace back without its keys — the case that
+   * matters when a workspace was seeded with someone else's keys and its members
+   * now want to supply their own.
+   *
+   * Shared (`workspace`) rows are OWNER/ADMIN only, matching the Slack/CRM
+   * disconnect: deleting one breaks every other member's columns and cannot be
+   * undone without the original secret. `personal` rows always resolve to the
+   * caller's own, so anyone can delete theirs.
+   *
+   * Returns `{ removed: false }` when nothing matched — idempotent, so a retry
+   * or a double-click is harmless.
+   */
+  remove: cloudWorkspaceProcedure
+    .input(connectorInput)
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* CredentialService;
+          const removed = yield* svc.removeCredential({
+            workspaceId: input.workspaceId,
+            extensionId: input.extensionId,
+            scope: input.scope,
+          });
+          return { removed };
+        }),
+      ),
+    ),
+
+  /**
    * Decrypt-for-run: return the PLAINTEXT secret map for a connector to an
    * authorized member. The ONLY procedure that yields plaintext. Returns `null`
    * when no matching credential exists.

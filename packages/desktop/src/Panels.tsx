@@ -45,6 +45,13 @@ export interface WorkspaceCredContext {
    * Throws on failure so the form can surface the message.
    */
   readonly copyLocalKey?: () => Promise<void>;
+  /**
+   * DELETE the shared workspace key, leaving the workspace with none — the
+   * "hand this workspace back without my keys" case that a replace-only form
+   * could not express. `undefined` when the caller is not owner/admin, which is
+   * what the server requires; the server gates it regardless.
+   */
+  readonly onRemoveWorkspace?: () => Promise<void>;
 }
 
 /**
@@ -71,6 +78,12 @@ export interface WorkspaceCredSource {
    * signed-in cloud session exists; `undefined` otherwise.
    */
   readonly copyLocalKey?: (extensionId: string, name: string) => Promise<void>;
+  /**
+   * Delete a connector's SHARED workspace key. `undefined` when the signed-in
+   * member is not owner/admin — the role the server requires — so the panel
+   * never offers a button that would 403.
+   */
+  readonly remove?: (extensionId: string) => Promise<void>;
 }
 
 /** Narrow an app-level {@link WorkspaceCredSource} to one connector's context. */
@@ -85,6 +98,9 @@ function workspaceCtxFor(
     onSaveWorkspace: (apiKey) => source.save(extensionId, name, apiKey),
     copyLocalKey: source.copyLocalKey
       ? () => source.copyLocalKey!(extensionId, name)
+      : undefined,
+    onRemoveWorkspace: source.remove
+      ? () => source.remove!(extensionId)
       : undefined,
   };
 }
@@ -323,6 +339,7 @@ function ConnectionsSection({
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
   const [copying, setCopying] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
   const isWorkspace = scope === "workspace";
   // A LOCAL key exists for this connector (any machine-local scope, incl. legacy
@@ -371,6 +388,32 @@ function ConnectionsSection({
     }
   };
 
+  // Delete the shared Cloud key outright. Confirmed first: it stops every other
+  // member's columns for this connector, and nothing here can put the secret
+  // back — only whoever holds it can.
+  const removeShared = async () => {
+    if (!workspace?.onRemoveWorkspace) return;
+    if (
+      !window.confirm(
+        `Remove the shared ${name} ${credentialLabel} from this workspace?\n\n` +
+          `Every member's ${name} columns stop working until someone adds a new one. ` +
+          `You'll need the key itself to put it back.`,
+      )
+    ) {
+      return;
+    }
+    setRemoving(true);
+    setErr("");
+    try {
+      await workspace.onRemoveWorkspace();
+      reset();
+    } catch (e: any) {
+      setErr(e?.message ?? `Failed to remove the ${name} ${credentialLabel}`);
+    } finally {
+      setRemoving(false);
+    }
+  };
+
   return (
     <div className="detail-section">
       <ScopeTabs scope={scope} showWorkspace={showWorkspace} onScope={(s) => { setScope(s); reset(); }} />
@@ -410,9 +453,25 @@ function ConnectionsSection({
                 )}
               </span>
             </div>
-            <button className="btn btn-outline btn-sm" onClick={() => setAdding(true)}>
+            <button className="btn btn-outline btn-sm" onClick={() => setAdding(true)} disabled={removing}>
               {/key/i.test(credentialLabel) ? "Replace key" : "Replace token"}
             </button>
+            {/* Removal is Cloud-tab only and owner/admin only — `onRemoveWorkspace`
+                is undefined for anyone the server would reject. */}
+            {isWorkspace && workspace?.onRemoveWorkspace && (
+              <button
+                className="btn btn-outline btn-sm"
+                onClick={removeShared}
+                disabled={removing}
+                title={`Remove the shared ${name} ${credentialLabel} from this workspace`}
+              >
+                {removing ? "Removing…" : "Remove"}
+              </button>
+            )}
+            {/* The connected row had nowhere to report a failure — the other two
+                branches own the only `err` slots — so a rejected remove would
+                have vanished silently. */}
+            {err && <div className="conn-err">{err}</div>}
           </div>
         ) : (
           <div className="conn-empty">
