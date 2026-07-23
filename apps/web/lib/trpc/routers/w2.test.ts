@@ -278,6 +278,7 @@ describe("billing.previewSeatChange", () => {
 
 describe("workspaces.updateMemberRole", () => {
   const ADMIN_ID = "user_admin";
+  const MEMBER_ID = "user_plain";
   const rosterWithAdmin: readonly MemberWithUser[] = [
     ...members,
     {
@@ -290,13 +291,24 @@ describe("workspaces.updateMemberRole", () => {
       email: "adam@example.com",
       image: null,
     },
+    {
+      id: "m3",
+      workspaceId: WS_ID,
+      userId: MEMBER_ID,
+      role: "member",
+      createdAt: 3,
+      name: "Mo",
+      email: "mo@example.com",
+      image: null,
+    },
   ];
   const membershipsWithAdmin: readonly Membership[] = [
     ...ownerMembership,
     { workspaceId: WS_ID, userId: ADMIN_ID, role: "admin" },
+    { workspaceId: WS_ID, userId: MEMBER_ID, role: "member" },
   ];
 
-  it("lets the owner promote a member to admin", async () => {
+  it("lets the owner demote an admin to member", async () => {
     const caller = callerFor({
       users,
       workspaces,
@@ -313,6 +325,25 @@ describe("workspaces.updateMemberRole", () => {
     expect(
       roster.members.find((m) => m.userId === ADMIN_ID)?.role,
     ).toBe("member");
+  });
+
+  it("lets the owner promote a member to admin", async () => {
+    const caller = callerFor({
+      users,
+      workspaces,
+      members: rosterWithAdmin,
+      memberships: membershipsWithAdmin,
+      currentUserId: "user_owner",
+    });
+    await caller.workspaces.updateMemberRole({
+      workspaceId: WS_ID,
+      userId: MEMBER_ID,
+      role: "admin",
+    });
+    const roster = await caller.workspaces.listMembers({ workspaceId: WS_ID });
+    expect(roster.members.find((m) => m.userId === MEMBER_ID)?.role).toBe(
+      "admin",
+    );
   });
 
   it("transfers ownership and demotes the outgoing owner to admin", async () => {
