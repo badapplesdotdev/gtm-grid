@@ -4262,6 +4262,14 @@ body.resizing-agent .agent-panel { transition: none; }
 .ws-member-row { gap: 8px; }
 .ws-member-row .ws-member-name { flex: 1; }
 .ws-member-row .btn { padding: 2px 8px; font-size: 11px; }
+/* The owner's role picker (roster + invite row). Sized like the .ws-member-role
+   label it replaces, and pinned to its content width so it never takes the
+   flex:1 the invite row gives .form-input. */
+.ws-member-role-select {
+  flex: 0 0 auto; width: auto; padding: 2px 6px;
+  font-size: 11px; color: var(--text-3); text-transform: capitalize;
+}
+.ws-invite-row .ws-member-role-select { flex: 0 0 auto; }
 
 /* The plan-selection upgrade cards now reuse the shared onboarding PlanGrid
    (cloud/onboarding/onboarding.css), so the old .ws-plan-* card styles were

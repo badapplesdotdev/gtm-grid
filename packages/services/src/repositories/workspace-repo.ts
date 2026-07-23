@@ -355,11 +355,19 @@ export const WorkspaceRepoLive: Layer.Layer<WorkspaceRepo, never, DbClient> =
 export const workspaceRepoLayer = (
   workspaces: readonly Workspace[],
   users: readonly WorkspaceUser[] = [],
+  sharedRows?: Workspace[],
 ): Layer.Layer<WorkspaceRepo> => {
   // A mutable copy so `insert` is observable by later reads in the SAME test
   // (createWorkspace inserts, then the membership is created against the new id),
   // exactly like the live table.
-  const rows: Workspace[] = [...workspaces];
+  //
+  // `sharedRows` lets a caller own that array instead (it is seeded here, not
+  // replaced), so a SECOND in-memory repo can write the same rows — the composed
+  // TestLayer passes the member store's array, because the live
+  // `transferOwnership` writes `members` AND `workspaces.ownerId` in one
+  // transaction and the fake must stay consistent with that.
+  const rows: Workspace[] = sharedRows ?? [];
+  rows.push(...workspaces);
   const userRows: WorkspaceUser[] = [...users];
   let seq = 0;
   return Layer.succeed(WorkspaceRepo, {

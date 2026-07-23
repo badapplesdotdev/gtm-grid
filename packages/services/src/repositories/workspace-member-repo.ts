@@ -29,7 +29,7 @@ import {
   MemberRepo,
   type MemberRole,
 } from "@gtmgrid/cloud";
-import { count, eq, inArray } from "drizzle-orm";
+import { and, count, eq, inArray } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
 
@@ -117,6 +117,35 @@ export class WorkspaceMemberRepo extends Context.Tag("WorkspaceMemberRepo")<
     readonly insert: (
       member: NewMember,
     ) => Effect.Effect<string, WorkspaceMemberRepoError>;
+
+    /**
+     * Set an EXISTING member's role. Used for the admin <-> member changes the
+     * owner makes from workspace settings; ownership moves via
+     * `transferOwnership` instead, because that also
+     * has to move `workspaces.ownerId`.
+     */
+    readonly updateRole: (
+      workspaceId: string,
+      userId: string,
+      role: MemberRole,
+    ) => Effect.Effect<void, WorkspaceMemberRepoError>;
+
+    /**
+     * Move ownership from `fromUserId` to `toUserId` ATOMICALLY: the new owner's
+     * member row becomes `owner`, the outgoing owner's becomes `admin`, and
+     * `workspaces.ownerId` follows the new owner — one transaction, so a partial
+     * failure can never leave a workspace whose `ownerId` and member roles
+     * disagree (the state that would strand billing and deletion).
+     *
+     * This is the ONE member-repo method that also writes the `workspaces` row;
+     * it lives here rather than in {@link WorkspaceRepo} because both writes must
+     * share a transaction and the roles are the primary subject.
+     */
+    readonly transferOwnership: (input: {
+      readonly workspaceId: string;
+      readonly fromUserId: string;
+      readonly toUserId: string;
+    }) => Effect.Effect<void, WorkspaceMemberRepoError>;
   }
 >() {}
 
@@ -257,6 +286,53 @@ export const WorkspaceMemberRepoLive: Layer.Layer<
           },
           catch: fail("member insert"),
         }),
+      updateRole: (workspaceId, userId, role) =>
+        Effect.tryPromise({
+          try: async () => {
+            await db
+              .update(schema.members)
+              .set({ role })
+              .where(
+                and(
+                  eq(schema.members.workspaceId, workspaceId),
+                  eq(schema.members.userId, userId),
+                ),
+              );
+          },
+          catch: fail("member updateRole"),
+        }),
+      transferOwnership: (input) =>
+        Effect.tryPromise({
+          try: () =>
+            db.transaction(async (tx) => {
+              // Promote first, then demote: both rows are updated inside the
+              // transaction, so ordering is invisible to any other reader, and
+              // the workspace is never observably owner-less.
+              await tx
+                .update(schema.members)
+                .set({ role: "owner" })
+                .where(
+                  and(
+                    eq(schema.members.workspaceId, input.workspaceId),
+                    eq(schema.members.userId, input.toUserId),
+                  ),
+                );
+              await tx
+                .update(schema.members)
+                .set({ role: "admin" })
+                .where(
+                  and(
+                    eq(schema.members.workspaceId, input.workspaceId),
+                    eq(schema.members.userId, input.fromUserId),
+                  ),
+                );
+              await tx
+                .update(schema.workspaces)
+                .set({ ownerId: input.toUserId })
+                .where(eq(schema.workspaces.id, input.workspaceId));
+            }),
+          catch: fail("member transferOwnership"),
+        }),
     };
   }),
 );
@@ -285,9 +361,15 @@ const strip = (m: MemberWithUser): MemberRow => ({
  *
  * Used by the composed `TestLayer`; tests that only need the data repo can use
  * {@link workspaceMemberRepoLayer}.
+ *
+ * `workspaceRows` is the in-memory `WorkspaceRepo`'s mutable row array, passed
+ * when the caller wants `transferOwnership` to move `workspaces.ownerId` too —
+ * the second write the live transaction performs. Omit it and only the member
+ * roles move.
  */
 export const memberStoreLayers = (
   members: readonly MemberWithUser[],
+  workspaceRows?: { readonly id: string; readonly ownerId: string }[],
 ): {
   readonly workspaceMemberRepo: Layer.Layer<WorkspaceMemberRepo>;
   readonly memberRepo: Layer.Layer<MemberRepo>;
@@ -333,6 +415,31 @@ export const memberStoreLayers = (
           image: null,
         });
         return id;
+      }),
+    updateRole: (workspaceId, userId, role) =>
+      Effect.sync(() => {
+        const i = rows.findIndex(
+          (m) => m.workspaceId === workspaceId && m.userId === userId,
+        );
+        if (i !== -1) rows[i] = { ...rows[i], role };
+      }),
+    transferOwnership: (input) =>
+      Effect.sync(() => {
+        const setRole = (userId: string, role: MemberRole) => {
+          const i = rows.findIndex(
+            (m) => m.workspaceId === input.workspaceId && m.userId === userId,
+          );
+          if (i !== -1) rows[i] = { ...rows[i], role };
+        };
+        setRole(input.toUserId, "owner");
+        setRole(input.fromUserId, "admin");
+        // Mirror the live transaction's second write: `workspaces.ownerId`
+        // follows the new owner. Only observable when the caller shared its
+        // workspace rows with this store (the composed TestLayer does).
+        const w = workspaceRows?.findIndex((r) => r.id === input.workspaceId);
+        if (workspaceRows !== undefined && w !== undefined && w !== -1) {
+          workspaceRows[w] = { ...workspaceRows[w], ownerId: input.toUserId };
+        }
       }),
   });
   const memberRepo = Layer.succeed(MemberRepo, {
