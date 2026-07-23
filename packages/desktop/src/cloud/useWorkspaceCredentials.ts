@@ -101,9 +101,6 @@ export function useWorkspaceCredentials(
       // keeps the affordance honest.
       remove: canRemove
         ? async (extensionId) => {
-            // No `!` here: `apiClient` is a non-nullable module singleton
-            // (client.tsx:172). The `apiClient !== null` guards elsewhere in this
-            // file are vestigial from when it could be absent.
             await apiClient.credentials.remove.mutate({
               workspaceId,
               extensionId,
@@ -155,9 +152,14 @@ function useCredentialMeta(
 ): readonly CredentialMeta[] | undefined {
   const q = useReactQuery({
     queryKey: ["credentials", "list", workspaceId],
-    enabled: apiClient !== null && workspaceId !== null,
+    // `apiClient` is a non-nullable module singleton (client.tsx:172) — the
+    // `apiClient !== null` this used to carry could never be false, and the `!`
+    // below asserted away a nullability that does not exist. Both are leftovers
+    // from when the client was built lazily; the workspace check is the only
+    // real gate.
+    enabled: workspaceId !== null,
     queryFn: () =>
-      apiClient!.credentials.list.query({
+      apiClient.credentials.list.query({
         workspaceId: workspaceId as string,
       }),
   });
