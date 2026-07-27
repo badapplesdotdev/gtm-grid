@@ -241,14 +241,17 @@ function loadModels(): Record<AgentKind, string> {
 
 /** Static fallbacks for agents that don't expose a local model catalog. */
 const MODEL_OPTIONS: Record<AgentKind, AgentModelOption[]> = {
+  // Claude Code has no model cache to enumerate, but its CLI resolves family
+  // ALIASES to the latest model in each family at run time — so we offer aliases
+  // (not pinned versions) and the picker never goes stale. The live catalog is
+  // fetched from the sidecar (`/api/agent/models/claude`) on open; this static
+  // list is the pre-fetch fallback and mirrors it.
   claude: [
     { value: "", label: "Default" },
-    { value: "claude-fable-5", label: "Fable 5" },
-    { value: "claude-opus-4-8", label: "Opus 4.8" },
-    { value: "claude-opus-4-7", label: "Opus 4.7" },
-    { value: "claude-opus-4-6", label: "Opus 4.6" },
-    { value: "claude-sonnet-4-6", label: "Sonnet 4.6" },
-    { value: "claude-haiku-4-5", label: "Haiku 4.5" },
+    { value: "opus", label: "Opus (latest)" },
+    { value: "sonnet", label: "Sonnet (latest)" },
+    { value: "haiku", label: "Haiku (latest)" },
+    { value: "fable", label: "Fable (latest)" },
   ],
   codex: [
     { value: "", label: "Default" },
@@ -788,6 +791,9 @@ export default function AgentPanel({
   const [codexModelOptions, setCodexModelOptions] = useState<AgentModelOption[]>(
     MODEL_OPTIONS.codex,
   );
+  const [claudeModelOptions, setClaudeModelOptions] = useState<AgentModelOption[]>(
+    MODEL_OPTIONS.claude,
+  );
   // Permission mode (global across agents), persisted. Maps to --permission-mode.
   const [mode, setMode] = useState<PermMode>(loadMode);
   const [status, setStatus] = useState<{ claude?: AgentStatus; codex?: AgentStatus; cursor?: AgentStatus }>({});
@@ -839,9 +845,24 @@ export default function AgentPanel({
     });
   }, []);
 
+  const refreshClaudeModels = useCallback(() => {
+    void api.agentModels("claude").then((result) => {
+      const defaultLabel = result.defaultModel
+        ? `Default · ${result.models.find((m) => m.value === result.defaultModel)?.label ?? result.defaultModel}`
+        : "Default";
+      setClaudeModelOptions([
+        { value: "", label: defaultLabel },
+        ...result.models,
+      ]);
+    }).catch(() => {
+      // Sidecar not reachable yet; the static alias fallback stays valid.
+    });
+  }, []);
+
   useEffect(() => {
     refreshCodexModels();
-  }, [refreshCodexModels]);
+    refreshClaudeModels();
+  }, [refreshCodexModels, refreshClaudeModels]);
 
   // The agent asked a structured question on its last turn — surface answer cards
   // in place of the composer until the user replies (which appends a new message).
@@ -1482,8 +1503,8 @@ export default function AgentPanel({
             <ModelPicker
               agent={agent}
               value={models[agent]}
-              options={agent === "codex" ? codexModelOptions : MODEL_OPTIONS[agent]}
-              onOpen={agent === "codex" ? refreshCodexModels : undefined}
+              options={agent === "codex" ? codexModelOptions : agent === "claude" ? claudeModelOptions : MODEL_OPTIONS[agent]}
+              onOpen={agent === "codex" ? refreshCodexModels : agent === "claude" ? refreshClaudeModels : undefined}
               onChange={(v) => setModels((p) => ({ ...p, [agent]: v }))}
             />
           </div>
