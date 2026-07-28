@@ -1390,6 +1390,9 @@ function isNotFoundError(e: unknown): boolean {
 
 export function useCloudGridMutations() {
   const qc = useQueryClient();
+  // Supersession guard for the auto-run toggle — see `setAutoRun`. A ref so it
+  // survives re-renders; the identity never changes, so it needs no dep entry.
+  const autoRunSeq = useRef(makeLatestWins());
   // Invalidate BOTH the unpaged (`grid.getTable`) and the paged
   // (`grid.getTablePage`) caches for a table. The live grid renders the PAGED
   // query, so invalidating only `table` (the old behavior) left structural
@@ -1757,22 +1760,35 @@ export function useCloudGridMutations() {
   /**
    * Turn the table's auto-run on/off. Optimistic through the SAME reducer the
    * realtime `table.autoRun` echo uses, so the toolbar switch flips instantly
-   * and the echo converges on it (no refetch — the patch IS the whole change).
-   * Rolls back if the mutation fails, so the switch never lies about the policy.
+   * and the echo converges on it.
+   *
+   * A failure deliberately does NOT use `beginOptimistic`'s whole-snapshot
+   * rollback. That rollback reinstates BOTH caches as they were before ITS
+   * toggle, so with two toggles in flight a late failure of the earlier one
+   * restores a snapshot predating the later one — reverting the newer policy
+   * (and any cell edits that landed in between). For a flag that gates credit
+   * spend, that is the worst failure mode available: the switch would read ON
+   * while the server has it OFF, and the cascade would bill against a policy the
+   * user cannot see.
+   *
+   * Instead the failing toggle REFETCHES, so the cache reconverges on whatever
+   * the server actually stored rather than on a guess — and only the LATEST
+   * toggle is allowed to do that, so a slow early failure cannot yank the value
+   * out from under a newer request still in flight (that one reconciles on its
+   * own completion, whichever way it goes).
    */
   const setAutoRun = useCallback(
     async (tableId: Id<"tables">, autoRun: boolean) => {
-      const rollback = beginOptimistic(tableId, [
-        { type: "table.autoRun", tableId, autoRun },
-      ]);
+      const ticket = autoRunSeq.current.claim(tableId);
+      beginOptimistic(tableId, [{ type: "table.autoRun", tableId, autoRun }]);
       try {
         return await apiClient!.grid.setAutoRun.mutate({ tableId, autoRun });
       } catch (e) {
-        rollback();
+        if (autoRunSeq.current.isLatest(tableId, ticket)) await refresh(tableId);
         throw e;
       }
     },
-    [beginOptimistic],
+    [beginOptimistic, refresh],
   );
 
   /** Set (or clear) the table's dedupe config; the server sweeps immediately. */
@@ -1817,6 +1833,33 @@ export function useCloudGridMutations() {
     setDedupe,
     dedupeTable,
     setAutoRun,
+  };
+}
+
+/**
+ * A per-key "only the newest attempt may reconcile" guard.
+ *
+ * Each `claim(key)` supersedes the previous one for that key and hands back a
+ * ticket; `isLatest(key, ticket)` answers whether that attempt is still the
+ * newest. Used so a LATE-failing request cannot undo, or refetch over, a newer
+ * one that is still in flight — the newer request owns the final state and
+ * settles it when it completes.
+ *
+ * Keyed by table id, so toggling two different tables never interferes. Pure
+ * (no React, no cache) and unit-tested directly.
+ */
+export function makeLatestWins(): {
+  claim: (key: string) => number;
+  isLatest: (key: string, ticket: number) => boolean;
+} {
+  const seq = new Map<string, number>();
+  return {
+    claim: (key) => {
+      const next = (seq.get(key) ?? 0) + 1;
+      seq.set(key, next);
+      return next;
+    },
+    isLatest: (key, ticket) => seq.get(key) === ticket,
   };
 }
 

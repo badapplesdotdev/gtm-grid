@@ -15,6 +15,7 @@ import {
   createIncrementalTableView,
   deriveColumnKind,
   gridQueryKeys,
+  makeLatestWins,
   mergePagesToSnapshot,
   patchGridCache,
   patchPagedGridCache,
@@ -592,5 +593,63 @@ describe("wasEventDropped — the realtime drop-backstop predicate", () => {
 
   it("no loaded pages → nothing to drop (seed will fetch)", () => {
     expect(wasEventDropped([], { type: "row.insert", row: { _id: "rX" }, cells: [] })).toBe(false);
+  });
+});
+
+/**
+ * The supersession guard behind the Auto-run toggle (PR #224 review, P1).
+ *
+ * The bug it prevents: `setAutoRun` used to undo a failure with
+ * `beginOptimistic`'s whole-snapshot rollback, which reinstates the cache as it
+ * was before THAT toggle. With several toggles in flight, a late failure of an
+ * early one restored a snapshot predating the later ones — so the switch could
+ * read ON while the server had it OFF, and the cascade would bill against a
+ * policy the user could not see.
+ */
+describe("makeLatestWins — only the newest attempt may reconcile", () => {
+  it("the sole in-flight attempt is the latest", () => {
+    const g = makeLatestWins();
+    expect(g.isLatest("t1", g.claim("t1"))).toBe(true);
+  });
+
+  it("a newer claim supersedes the older one", () => {
+    const g = makeLatestWins();
+    const first = g.claim("t1");
+    const second = g.claim("t1");
+    expect(g.isLatest("t1", first)).toBe(false);
+    expect(g.isLatest("t1", second)).toBe(true);
+  });
+
+  it("THE REGRESSION: a late failure of the FIRST of three toggles cannot reconcile", () => {
+    // on→off, off→on, on→off issued back to back; the third owns the outcome.
+    const g = makeLatestWins();
+    const a = g.claim("t1");
+    const b = g.claim("t1");
+    const c = g.claim("t1");
+    // …then A's request fails, long after C already settled the policy.
+    expect(g.isLatest("t1", a)).toBe(false);
+    expect(g.isLatest("t1", b)).toBe(false);
+    expect(g.isLatest("t1", c)).toBe(true);
+  });
+
+  it("tickets are per TABLE — toggling one table never supersedes another", () => {
+    const g = makeLatestWins();
+    const t1 = g.claim("t1");
+    const t2 = g.claim("t2");
+    expect(g.isLatest("t1", t1)).toBe(true);
+    expect(g.isLatest("t2", t2)).toBe(true);
+    g.claim("t2");
+    expect(g.isLatest("t1", t1)).toBe(true); // t2's churn left t1 alone
+  });
+
+  it("a ticket from one guard means nothing to another (no shared global state)", () => {
+    const a = makeLatestWins();
+    const b = makeLatestWins();
+    a.claim("t1");
+    expect(b.isLatest("t1", 1)).toBe(false); // b never saw a claim for t1
+  });
+
+  it("an unknown table has no latest attempt", () => {
+    expect(makeLatestWins().isLatest("nope", 1)).toBe(false);
   });
 });
