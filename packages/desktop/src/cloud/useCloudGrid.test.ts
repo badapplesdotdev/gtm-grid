@@ -16,6 +16,7 @@ import {
   deriveColumnKind,
   gridQueryKeys,
   makeLatestWins,
+  makeSerialQueue,
   mergePagesToSnapshot,
   patchGridCache,
   patchPagedGridCache,
@@ -651,5 +652,112 @@ describe("makeLatestWins — only the newest attempt may reconcile", () => {
 
   it("an unknown table has no latest attempt", () => {
     expect(makeLatestWins().isLatest("nope", 1)).toBe(false);
+  });
+});
+
+/**
+ * The serial queue behind the Auto-run toggle (PR #224 review, second P1).
+ *
+ * The guard above stops a stale attempt from RECONCILING, but it cannot stop a
+ * stale attempt from WRITING: with requests overlapping, the last toggle clicked
+ * is not necessarily the last one persisted, so a superseded write can land after
+ * the winner and leave the server holding a value nobody chose. Serializing per
+ * table is what makes "last click wins" true at the server, not just in the UI.
+ */
+describe("makeSerialQueue — same-key writes never overlap", () => {
+  /** A task that resolves only when told to, recording start/finish order. */
+  const deferred = <T,>() => {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  };
+
+  it("does not start the second task until the first has settled", async () => {
+    const run = makeSerialQueue();
+    const first = deferred<string>();
+    const started: string[] = [];
+
+    const a = run("t1", () => {
+      started.push("a");
+      return first.promise;
+    });
+    const b = run("t1", () => {
+      started.push("b");
+      return Promise.resolve("b");
+    });
+
+    await Promise.resolve();
+    expect(started).toEqual(["a"]); // b is queued, NOT in flight
+
+    first.resolve("a");
+    await Promise.all([a, b]);
+    expect(started).toEqual(["a", "b"]);
+  });
+
+  it("THE REGRESSION: a superseded write cannot land after the winner", async () => {
+    // enable then disable, clicked back to back. Serialized, the server ends on
+    // the disable — the last CLICK — however slow the enable was.
+    const run = makeSerialQueue();
+    const server: boolean[] = [];
+    const enable = deferred<void>();
+
+    const a = run("t1", async () => {
+      await enable.promise;
+      server.push(true);
+    });
+    const b = run("t1", async () => {
+      server.push(false);
+    });
+
+    enable.resolve();
+    await Promise.all([a, b]);
+    expect(server).toEqual([true, false]); // disable persisted LAST
+  });
+
+  it("a rejected task does not break the chain, and its error reaches only its own caller", async () => {
+    const run = makeSerialQueue();
+    const failed = run("t1", () => Promise.reject(new Error("boom")));
+    const after = run("t1", () => Promise.resolve("ran anyway"));
+
+    await expect(failed).rejects.toThrow("boom");
+    await expect(after).resolves.toBe("ran anyway");
+  });
+
+  it("different tables run concurrently — one table's queue never blocks another", async () => {
+    const run = makeSerialQueue();
+    const blocked = deferred<void>();
+    const started: string[] = [];
+
+    const a = run("t1", () => {
+      started.push("t1");
+      return blocked.promise;
+    });
+    const b = run("t2", () => {
+      started.push("t2");
+      return Promise.resolve();
+    });
+
+    await b;
+    expect(started).toEqual(["t1", "t2"]); // t2 ran while t1 was still pending
+
+    blocked.resolve();
+    await a;
+  });
+
+  it("a drained chain is dropped, so repeated toggling does not accumulate state", async () => {
+    const run = makeSerialQueue();
+    await run("t1", () => Promise.resolve(1));
+    // A fresh task after the chain drained starts immediately (nothing to await).
+    let startedSync = false;
+    const next = run("t1", () => {
+      startedSync = true;
+      return Promise.resolve(2);
+    });
+    await next;
+    expect(startedSync).toBe(true);
   });
 });
