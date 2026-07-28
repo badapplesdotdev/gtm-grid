@@ -130,8 +130,8 @@ export function crmTerminalEvent(
  * one per row, idempotent by rowId (dedupes a replayed enqueue), handled by
  * {@link enrichCrmRow}. Gives synced rows the same dependency-ordered function
  * cascade webhook rows get. Empty when nothing was inserted (caller skips the
- * sendEvent). Only new rows carry ids in the outcome, so updated rows are not
- * re-enriched here (their function columns already ran on first insert).
+ * sendEvent). Only new rows carry ids in each page result, so updated rows are
+ * not re-enriched here (their function columns already ran on first insert).
  */
 export function crmEnrichEvents(outcome: {
   readonly newRowIds: readonly string[];
