@@ -15,7 +15,13 @@ import { Effect, Exit } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TestLayer, type TestLayerFixtures } from "../layers.js";
 import type { RecordedGridEvent } from "../services/realtime-publisher.js";
-import { CrmBindingRepo, type CrmBinding, type CrmSyncedRow, type CrmSyncRun } from "../repositories/crm-repo.js";
+import {
+  CrmBindingRepo,
+  CrmSyncRunRepo,
+  type CrmBinding,
+  type CrmSyncedRow,
+  type CrmSyncRun,
+} from "../repositories/crm-repo.js";
 import type { GridCell, GridRow } from "../repositories/webhook-repo.js";
 import { CrmConnectionService } from "./crm-connection-service.js";
 import {
@@ -545,7 +551,6 @@ describe("mid-pull failures", () => {
     scriptFetch([
       () => json(ATTRS),
       () => json({ data: fullPage }),
-      () => json(ATTRS),
       () => json({ data: [rec("rec_500", "Person 500", "p500@x.com")] }),
     ]);
 
@@ -584,6 +589,55 @@ describe("mid-pull failures", () => {
     expect(w.runs[0]?.status).toBe("ok");
   });
 
+  it("reuses the run schema and actor map instead of refetching them per page", async () => {
+    const w = world();
+    const binding: CrmBinding = {
+      ...w.binding,
+      columns: [
+        ...w.binding.columns,
+        { attrSlug: "owner", attrType: "actor-reference", columnId: "col_owner", title: "Owner" },
+      ],
+    };
+    if (w.fixtures.crmBindings !== undefined) w.fixtures.crmBindings[0] = binding;
+    const actorRec = (id: string) => ({
+      ...rec(id, id, `${id}@x.com`),
+      values: {
+        ...rec(id, id, `${id}@x.com`).values,
+        owner: [{ referenced_actor_id: "member_1" }],
+      },
+    });
+    const fullPage = Array.from({ length: 500 }, (_x, i) => actorRec(`rec_${i}`));
+    const calls = scriptFetch([
+      () =>
+        json({
+          data: [
+            ...ATTRS.data,
+            { api_slug: "owner", title: "Owner", type: "actor-reference" },
+          ],
+        }),
+      () => json({ data: fullPage }),
+      () =>
+        json({
+          data: [
+            {
+              id: { workspace_member_id: "member_1" },
+              first_name: "Morgan",
+              last_name: "Parry",
+            },
+          ],
+        }),
+      () => json({ data: [actorRec("rec_500")] }),
+    ]);
+
+    const outcome = await syncOnce(w);
+
+    expect(outcome.rowsCreated).toBe(501);
+    expect(calls.filter((call) => call.url.includes("/attributes"))).toHaveLength(1);
+    expect(calls.filter((call) => call.url.includes("/workspace_members"))).toHaveLength(1);
+    const lastRow = w.syncedRows.find((entry) => entry.externalId === "rec_500");
+    expect(lastRow === undefined ? "" : cellText(w, lastRow.rowId, "col_owner")).toBe("Morgan Parry");
+  });
+
   it("a hard failure on page 2 keeps page 1's rows, fails the run, and skips stale", async () => {
     const w = world();
     scriptFetch([
@@ -619,7 +673,7 @@ describe("mid-pull failures", () => {
 
   it("overlap guard: a run already in flight makes a second sync a no-op", async () => {
     const w = world();
-    // Another worker started a run for this binding seconds ago and is mid-pull.
+    // The durable chain may be old overall; its recent heartbeat makes it live.
     w.runs.push({
       id: "run_inflight",
       workspaceId: WS,
@@ -633,7 +687,8 @@ describe("mid-pull failures", () => {
       rowsStaled: 0,
       fieldsDropped: null,
       error: null,
-      startedAt: Date.now() - 5_000,
+      startedAt: Date.now() - 2 * 60 * 60 * 1000,
+      lastProgressAt: Date.now() - 5_000,
       finishedAt: null,
     });
     scriptFetch(syncScript([rec("rec_1", "Sarah", "sarah@vercel.com")]));
@@ -644,6 +699,54 @@ describe("mid-pull failures", () => {
     expect(outcome.rowsCreated).toBe(0);
     expect(w.rows).toHaveLength(0); // nothing pulled
     expect(w.runs).toHaveLength(1); // no second run row
+  });
+
+  it("a continuation stops before pulling when its run was already finalized", async () => {
+    const w = world();
+    const fullPage = Array.from({ length: 500 }, (_x, i) => rec(`rec_${i}`, `Person ${i}`, `p${i}@x.com`));
+    scriptFetch([
+      () => json(ATTRS),
+      () => json({ data: fullPage }),
+      () => json({ data: [rec("rec_500", "Person 500", "p500@x.com")] }),
+    ]);
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const connections = yield* CrmConnectionService;
+        yield* connections.saveConnection({
+          workspaceId: WS,
+          provider: "attio",
+          tokens: { accessToken: "at_test" },
+          meta: {
+            connectedByUserId: "user_m",
+            connectedByName: "Morgan",
+            crmWorkspaceId: "attio_ws",
+            crmWorkspaceName: "Acme",
+          },
+        });
+        const sync = yield* CrmSyncService;
+        const first = yield* sync.syncPageForWorker(w.binding.id, "cron", null);
+        if (first.next === null) {
+          return yield* Effect.fail(new Error("expected a continuation checkpoint"));
+        }
+        const runs = yield* CrmSyncRunRepo;
+        yield* runs.finish(first.next.runId, {
+          status: "failed",
+          rowsCreated: first.next.rowsCreated,
+          rowsUpdated: first.next.rowsUpdated,
+          rowsSkipped: first.next.rowsSkipped,
+          rowsStaled: 0,
+          fieldsDropped: null,
+          error: "reaped",
+          finishedAt: Date.now(),
+        });
+        return yield* sync.syncPageForWorker(w.binding.id, "cron", first.next);
+      }).pipe(Effect.provide(TestLayer(w.fixtures))) as Effect.Effect<CrmSyncPageResult, never, never>,
+    );
+
+    expect(result.outcome?.errorTag).toBe("SyncRunNotRunning");
+    expect(result.outcome?.error).toBe("reaped");
+    expect(w.rows).toHaveLength(500);
   });
 
   it("overlap guard: a crashed leftover run (stale) does NOT block the next sync", async () => {
@@ -661,7 +764,8 @@ describe("mid-pull failures", () => {
       rowsStaled: 0,
       fieldsDropped: null,
       error: null,
-      startedAt: Date.now() - 11 * 60 * 1000, // older than SYNC_STALE_RUN_MS
+      startedAt: Date.now() - 31 * 60 * 1000, // older than SYNC_STALE_RUN_MS
+      lastProgressAt: Date.now() - 31 * 60 * 1000,
       finishedAt: null,
     };
     w.runs.push(crashedRun);

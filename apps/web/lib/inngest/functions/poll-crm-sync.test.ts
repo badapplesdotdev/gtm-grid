@@ -9,8 +9,10 @@
  * key) the way concurrency-caps.test.ts pins the signals functions.
  */
 
+import type { CrmSyncPageState } from "@gtmgrid/services";
 import { describe, expect, it } from "vitest";
 import {
+  crmContinuationEvent,
   crmEnrichEvents,
   crmSyncTrigger,
   crmTerminalEvent,
@@ -76,6 +78,48 @@ describe("crmEnrichEvents — one idempotent enrich event per new row", () => {
   });
 });
 
+describe("crmContinuationEvent — bounded page chaining", () => {
+  it("carries only the compact checkpoint into a fresh Inngest run", () => {
+    const checkpoint: CrmSyncPageState = {
+      runId: "run_1",
+      bindingId: "binding_1",
+      cursor: "500",
+      pages: 1,
+      rowsCreated: 500,
+      rowsUpdated: 0,
+      rowsSkipped: 0,
+      remainingRowBudget: 9_500,
+      plan: {
+        cap: 10_000,
+        activeCols: [
+          {
+            attrSlug: "name",
+            attrType: "personal-name",
+            columnId: "column_1",
+            title: "Name",
+          },
+        ],
+        activeFilters: [],
+        pullAttrs: [{ slug: "name", type: "personal-name" }],
+        fieldsDropped: [],
+      },
+      members: null,
+    };
+
+    const event = crmContinuationEvent({
+      bindingId: "binding_1",
+      workspaceId: WS,
+      checkpoint,
+      trigger: "cron",
+    });
+
+    expect(event.id).toBe("crm-page:run_1:1");
+    expect(event.name).toBe("crm/binding.page");
+    expect(event.data.checkpoint).toEqual(checkpoint);
+    expect(event.data).not.toHaveProperty("newRowIds");
+  });
+});
+
 type ConcurrencyOption = { scope?: "fn" | "env" | "account"; key?: string; limit: number };
 
 function asEntries(concurrency: unknown): ConcurrencyOption[] {
@@ -85,6 +129,10 @@ function asEntries(concurrency: unknown): ConcurrencyOption[] {
 }
 
 describe("global Inngest concurrency caps (TRI-3265)", () => {
+  it("continues large CRM pulls through a fresh event run per checkpoint", () => {
+    expect(processCrmBinding.opts.triggers).toContainEqual({ event: "crm/binding.page" });
+  });
+
   it("process-crm-binding carries a global account cap + per-workspace key", () => {
     const entries = asEntries(processCrmBinding.opts.concurrency);
     const account = entries.find((e) => e.scope === "account");

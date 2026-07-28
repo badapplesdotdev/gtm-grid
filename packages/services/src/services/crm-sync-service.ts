@@ -15,7 +15,7 @@
  *   resolve live attributes (schema drift → drop column, keep going) → page
  *   records 500 at a time (server-side prefilter where expressible, worker
  *   filters ALWAYS re-checked) → flatten typed values to cell text (references
- *   resolved to names in per-run batches) → apply the binding's dedupe mode
+ *   resolved to names in per-page batches; actor names cached per run) → apply the binding's dedupe mode
  *   (update = hash-guarded upsert on record id or match key / skip / always
  *   create) under the plan's row cap → after a FULLY complete pull, mark
  *   vanished records' rows stale (never delete; user enrichment survives) →
@@ -74,11 +74,11 @@ export const planRowCap = (planId: string | null): number =>
 const maxPagesPerRun = (pageLimit: number): number => CRM_ROW_CAP_SCALE / pageLimit + 40;
 
 /**
- * A `running` run older than this is treated as a crashed leftover, not an
- * in-flight sync — the overlap guard ignores it so retries aren't blocked
- * forever by a worker that died mid-run.
+ * A `running` run whose heartbeat is older than this is treated as a crashed
+ * leftover. Total run age is irrelevant because durable page chains may
+ * legitimately run much longer.
  */
-export const SYNC_STALE_RUN_MS = 10 * 60 * 1000;
+export const SYNC_STALE_RUN_MS = 30 * 60 * 1000;
 
 /** Sync-log copy when the page budget ran out before the source did. */
 const PAGE_BUDGET_COPY =
@@ -160,7 +160,16 @@ export interface CrmSyncPageState {
   readonly rowsCreated: number;
   readonly rowsUpdated: number;
   readonly rowsSkipped: number;
-  readonly fieldsDropped: readonly string[];
+  readonly remainingRowBudget: number;
+  readonly plan: {
+    readonly cap: number;
+    readonly activeCols: readonly CrmBindingColumn[];
+    readonly activeFilters: readonly CrmFilter[];
+    readonly pullAttrs: readonly CrmAttrRef[];
+    readonly fieldsDropped: readonly string[];
+  };
+  /** Cached actor display names; unlike reference names this set is run-bounded. */
+  readonly members: readonly (readonly [string, string])[] | null;
 }
 
 export interface CrmSyncPageResult {
@@ -292,21 +301,28 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
         ),
       );
 
-    // ── Flattening with per-run reference/actor resolution ───────────────────
+    // ── Flattening with batched reference/actor resolution ──────────────────
 
     interface ResolveCache {
       readonly refNames: Map<string, string>; // `${object} ${recordId}` → name
       members: ReadonlyMap<string, string> | null;
     }
 
-    const newCache = (): ResolveCache => ({ refNames: new Map(), members: null });
+    const newCache = (
+      members: readonly (readonly [string, string])[] | null = null,
+    ): ResolveCache => ({
+      refNames: new Map(),
+      members: members === null ? null : new Map(members),
+    });
 
     /**
      * Resolve `records`' pre-flattened values to final cell text, batch-
-     * resolving record references + actors through the per-run cache (one
-     * query per referenced object per page + one members fetch per run,
+     * resolving record references + actors through bounded caches (one query
+     * per referenced object per page + one members fetch per run,
      * instead of per-cell lookups). Flattening itself happens inside the
-     * provider client — the engine never sees raw CRM value shapes.
+     * provider client — the engine never sees raw CRM value shapes. Reference
+     * names are batched per provider page; the bounded actor/member map is
+     * carried in the durable checkpoint and fetched at most once per run.
      */
     const resolveRecords = (
       client: CrmClientApi,
@@ -442,67 +458,73 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
           staled: 0,
         };
         const newRowIds: string[] = [];
-        let fieldsDropped: readonly string[] = checkpoint?.fieldsDropped ?? [];
+        let fieldsDropped: readonly string[] = checkpoint?.plan.fieldsDropped ?? [];
         let capped = false;
         let pageBudgetExhausted = false;
         let nextCursor: string | null = checkpoint?.cursor ?? null;
         let pagesCompleted = checkpoint?.pages ?? 0;
+        let remainingRowBudget = checkpoint?.remainingRowBudget ?? 0;
+        let members = checkpoint?.members ?? null;
+        let runPlan = checkpoint?.plan ?? null;
 
         const work = Effect.gen(function* () {
-          const cap = yield* rowCapFor(binding.workspaceId);
-
-          // 1. Live attributes: drop mapped columns (and filters) that vanished.
-          const liveAttrs = yield* client.getAttributes(
-            session,
-            binding.sourceKind === "list" ? "lists" : "objects",
-            binding.sourceId,
-            binding.sourceLabel,
-          );
-          const liveSlugs = new Set(liveAttrs.map((a) => a.slug));
-          // For LIST sources the synced attributes live on the parent OBJECT,
-          // not the list — resolve the parent's attributes too when needed.
-          if (binding.sourceKind === "list") {
-            // Parent from LIST METADATA — an empty list must still resolve its
-            // schema (member-derived parents made empty lists drop every column).
-            const parent = yield* client.getListParent(session, {
-              listId: binding.sourceId,
-              sourceLabel: binding.sourceLabel,
-            });
-            if (parent !== "") {
-              const parentAttrs = yield* client.getAttributes(session, "objects", parent, binding.sourceLabel);
-              for (const a of parentAttrs) liveSlugs.add(a.slug);
+          if (runPlan === null) {
+            const cap = yield* rowCapFor(binding.workspaceId);
+            // Resolve schema once per run, then carry the immutable plan in the
+            // checkpoint instead of repeating provider metadata calls per page.
+            const liveAttrs = yield* client.getAttributes(
+              session,
+              binding.sourceKind === "list" ? "lists" : "objects",
+              binding.sourceId,
+              binding.sourceLabel,
+            );
+            const liveSlugs = new Set(liveAttrs.map((a) => a.slug));
+            if (binding.sourceKind === "list") {
+              const parent = yield* client.getListParent(session, {
+                listId: binding.sourceId,
+                sourceLabel: binding.sourceLabel,
+              });
+              if (parent !== "") {
+                const parentAttrs = yield* client.getAttributes(session, "objects", parent, binding.sourceLabel);
+                for (const a of parentAttrs) liveSlugs.add(a.slug);
+              }
             }
+            const activeCols = binding.columns.filter((c) => liveSlugs.has(c.attrSlug));
+            const activeFilters = cfg.filters.filter((f) => liveSlugs.has(f.attrSlug));
+            const flattenCols: Array<{ attrSlug: string; attrType: string }> = [...activeCols];
+            for (const f of activeFilters) {
+              if (!flattenCols.some((c) => c.attrSlug === f.attrSlug)) {
+                flattenCols.push({ attrSlug: f.attrSlug, attrType: f.attrType });
+              }
+            }
+            if (cfg.matchKeyAttr !== null && !flattenCols.some((c) => c.attrSlug === cfg.matchKeyAttr)) {
+              const live = liveAttrs.find((a) => a.slug === cfg.matchKeyAttr);
+              if (live !== undefined) flattenCols.push({ attrSlug: live.slug, attrType: live.type });
+            }
+            fieldsDropped = binding.columns.filter((c) => !liveSlugs.has(c.attrSlug)).map((c) => c.title);
+            runPlan = {
+              cap,
+              activeCols,
+              activeFilters,
+              pullAttrs: flattenCols.map((c) => ({ slug: c.attrSlug, type: c.attrType })),
+              fieldsDropped,
+            };
+            const preexisting =
+              cfg.dedupeMode === "create"
+                ? (binding.rowsSynced ?? 0)
+                : yield* mapRepoError(syncedRows.countByBinding(binding.id), "synced-row count failed");
+            remainingRowBudget = Math.max(0, cap - preexisting);
           }
-          const activeCols = binding.columns.filter((c) => liveSlugs.has(c.attrSlug));
+
+          const plan = runPlan;
+          const activeCols = plan.activeCols;
           const activeSlugs = activeCols.map((c) => c.attrSlug);
-          fieldsDropped = binding.columns.filter((c) => !liveSlugs.has(c.attrSlug)).map((c) => c.title);
-          const activeFilters = cfg.filters.filter((f) => liveSlugs.has(f.attrSlug));
-
-          // Attributes the loop must flatten: synced columns + filter + match key.
-          const flattenCols: Array<{ attrSlug: string; attrType: string }> = [...activeCols];
-          for (const f of activeFilters) {
-            if (!flattenCols.some((c) => c.attrSlug === f.attrSlug)) {
-              flattenCols.push({ attrSlug: f.attrSlug, attrType: f.attrType });
-            }
-          }
-          if (cfg.matchKeyAttr !== null && !flattenCols.some((c) => c.attrSlug === cfg.matchKeyAttr)) {
-            const live = liveAttrs.find((a) => a.slug === cfg.matchKeyAttr);
-            if (live !== undefined) flattenCols.push({ attrSlug: live.slug, attrType: live.type });
-          }
-
-          // Cap budget: rows this binding has EVER created count against it.
-          const preexisting =
-            cfg.dedupeMode === "create"
-              ? (binding.rowsSynced ?? 0) + counters.created
-              : yield* mapRepoError(syncedRows.countByBinding(binding.id), "synced-row count failed");
-          let budget = Math.max(0, cap - preexisting);
-
+          const activeFilters = plan.activeFilters;
           const serverFilter = client.compileServerFilter(
             activeFilters,
             binding.sourceKind === "list" ? "list" : "object",
           );
-          const pullAttrs: readonly CrmAttrRef[] = flattenCols.map((c) => ({ slug: c.attrSlug, type: c.attrType }));
-          const cache = newCache();
+          const cache = newCache(members);
           let cursor: string | null = checkpoint?.cursor ?? null;
           let pages = checkpoint?.pages ?? 0;
           let pullComplete = false;
@@ -517,7 +539,7 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
               session,
               binding,
               serverFilter,
-              pullAttrs,
+              plan.pullAttrs,
               cursor,
             );
             const records = page.records;
@@ -597,11 +619,11 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
 
               // Enforce the plan cap on NEW rows only (updates always allowed).
               let inserts = toInsert;
-              if (inserts.length > budget) {
-                inserts = inserts.slice(0, budget);
+              if (inserts.length > remainingRowBudget) {
+                inserts = inserts.slice(0, remainingRowBudget);
                 capped = true;
               }
-              budget -= inserts.length;
+              remainingRowBudget -= inserts.length;
 
               const now = Date.now();
               if (inserts.length > 0) {
@@ -752,6 +774,7 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
                 );
               }
             }
+            members = cache.members === null ? null : [...cache.members.entries()];
 
             // Live progress for the strip ("Pulling records… N so far").
             // Best-effort: a progress hiccup must never fail the pull.
@@ -760,6 +783,7 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
                 rowsCreated: counters.created,
                 rowsUpdated: counters.updated,
                 rowsSkipped: counters.skipped,
+                progressedAt: Date.now(),
               })
               .pipe(Effect.catchAll(() => Effect.void));
 
@@ -785,8 +809,8 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
             );
           }
 
-          if (capped) return yield* Effect.fail(new RowCapReached({ cap }));
-          return pullComplete;
+          if (capped) return yield* Effect.fail(new RowCapReached({ cap: plan.cap }));
+          return { pullComplete, plan };
         });
 
         // Outcome assembly: successes and typed failures both finalize the run
@@ -856,8 +880,8 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
         });
 
         return yield* work.pipe(
-          Effect.flatMap((pullComplete) =>
-            !pullComplete && !pageBudgetExhausted
+          Effect.flatMap((workResult) =>
+            !workResult.pullComplete && !pageBudgetExhausted
               ? Effect.succeed<CrmSyncPageResult>({
                   outcome: null,
                   next: {
@@ -868,7 +892,9 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
                     rowsCreated: counters.created,
                     rowsUpdated: counters.updated,
                     rowsSkipped: counters.skipped,
-                    fieldsDropped,
+                    remainingRowBudget,
+                    plan: workResult.plan,
+                    members,
                   },
                   newRowIds,
                   tableId: binding.tableId,
@@ -1007,11 +1033,44 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
           return yield* Effect.fail(new CrmSyncError({ message: "CRM sync checkpoint does not match binding" }));
         }
 
-        if (checkpoint === null) {
+        if (checkpoint !== null) {
+          // Atomic lease renewal: if a stale-run reaper won the race, stop this
+          // continuation before it can write another provider page.
+          const alive = yield* mapRepoError(
+            runs.progress(checkpoint.runId, {
+              rowsCreated: checkpoint.rowsCreated,
+              rowsUpdated: checkpoint.rowsUpdated,
+              rowsSkipped: checkpoint.rowsSkipped,
+              progressedAt: Date.now(),
+            }),
+            "sync run heartbeat failed",
+          );
+          if (!alive) {
+            const found = yield* mapRepoError(runs.findById(checkpoint.runId), "sync run lookup failed");
+            const stopped = Option.isSome(found) ? found.value : null;
+            return pageResultForOutcome({
+              runId: checkpoint.runId,
+              bindingId: binding.id,
+              tableId: binding.tableId,
+              workspaceId: binding.workspaceId,
+              provider: binding.provider,
+              status: "failed",
+              rowsCreated: checkpoint.rowsCreated,
+              rowsUpdated: checkpoint.rowsUpdated,
+              rowsSkipped: checkpoint.rowsSkipped,
+              rowsStaled: 0,
+              fieldsDropped: checkpoint.plan.fieldsDropped,
+              error: stopped?.error ?? "This sync is no longer active.",
+              errorTag: "SyncRunNotRunning",
+              newRowIds: [],
+            });
+          }
+        } else {
           const newest = yield* mapRepoError(runs.listByBinding(binding.id, 1), "run lookup failed");
           const inFlight = newest[0];
           if (inFlight !== undefined && inFlight.status === "running") {
-            if (Date.now() - inFlight.startedAt < SYNC_STALE_RUN_MS) {
+            const staleBefore = Date.now() - SYNC_STALE_RUN_MS;
+            if (inFlight.lastProgressAt > staleBefore) {
               return pageResultForOutcome({
                 runId: "",
                 bindingId: binding.id,
@@ -1031,8 +1090,8 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
             }
 
             const copy = "This sync stopped before it could finish. A new sync has started.";
-            yield* runs
-              .finish(inFlight.id, {
+            const reaped = yield* mapRepoError(
+              runs.reapStale(inFlight.id, staleBefore, {
                 status: "failed",
                 rowsCreated: inFlight.rowsCreated,
                 rowsUpdated: inFlight.rowsUpdated,
@@ -1041,8 +1100,27 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
                 fieldsDropped: inFlight.fieldsDropped,
                 error: copy,
                 finishedAt: Date.now(),
-              })
-              .pipe(Effect.catchAll(() => Effect.void));
+              }),
+              "stale sync run reconciliation failed",
+            );
+            if (!reaped) {
+              return pageResultForOutcome({
+                runId: "",
+                bindingId: binding.id,
+                tableId: binding.tableId,
+                workspaceId: binding.workspaceId,
+                provider: binding.provider,
+                status: "ok",
+                rowsCreated: 0,
+                rowsUpdated: 0,
+                rowsSkipped: 0,
+                rowsStaled: 0,
+                fieldsDropped: [],
+                error: null,
+                errorTag: "SyncAlreadyRunning",
+                newRowIds: [],
+              });
+            }
           }
 
           const entitled = yield* entitlement.requireCloudAccess(binding.workspaceId).pipe(
@@ -1127,7 +1205,9 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
                 rowsSkipped: checkpoint?.rowsSkipped ?? 0,
                 rowsStaled: 0,
                 fieldsDropped:
-                  checkpoint !== null && checkpoint.fieldsDropped.length > 0 ? checkpoint.fieldsDropped : null,
+                  checkpoint !== null && checkpoint.plan.fieldsDropped.length > 0
+                    ? checkpoint.plan.fieldsDropped
+                    : null,
                 error: p.copy,
                 finishedAt: Date.now(),
               })
@@ -1146,7 +1226,7 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
               rowsUpdated: checkpoint?.rowsUpdated ?? 0,
               rowsSkipped: checkpoint?.rowsSkipped ?? 0,
               rowsStaled: 0,
-              fieldsDropped: checkpoint?.fieldsDropped ?? [],
+              fieldsDropped: checkpoint?.plan.fieldsDropped ?? [],
               error: p.copy,
               errorTag: "CrmConnectionMissing",
               newRowIds: [],

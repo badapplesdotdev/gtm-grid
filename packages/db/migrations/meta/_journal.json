@@ -155,6 +155,13 @@
       "when": 1785168930476,
       "tag": "0021_keen_meteorite",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1785243143254,
+      "tag": "0022_furry_warpath",
+      "breakpoints": true
     }
   ]
 }
