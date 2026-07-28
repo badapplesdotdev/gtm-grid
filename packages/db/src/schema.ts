@@ -1245,6 +1245,8 @@ export const crmSyncRuns = pgTable(
     /** Human-readable failure copy (user-safe), or null on ok. */
     error: text("error"),
     startedAt: bigint("started_at", { mode: "number" }).notNull(),
+    /** Lease heartbeat used to distinguish a queued/active durable chain from an orphan. */
+    lastProgressAt: bigint("last_progress_at", { mode: "number" }).notNull(),
     finishedAt: bigint("finished_at", { mode: "number" }),
   },
   (t) => [
