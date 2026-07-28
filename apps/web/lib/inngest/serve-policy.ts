@@ -9,7 +9,6 @@ export function shouldServeInngest(
   vercelTargetEnv: string | undefined,
   vercelEnv?: string,
 ): boolean {
-  return vercelTargetEnv !== undefined
-    ? vercelTargetEnv !== "preview"
-    : vercelEnv !== "preview";
+  const targetEnv = vercelTargetEnv || vercelEnv;
+  return targetEnv !== "preview";
 }
