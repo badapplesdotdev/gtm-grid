@@ -7,7 +7,7 @@
  *     schedule is DUE via SQL keyset pagination (the due predicate runs in the
  *     DB), and fans them out in bounded chunks (~{@link FANOUT_CHUNK}/event).
  *   - {@link processCrmBinding} handles each `crm/binding.due` (cron) or
- *     `crm/binding.sync-now` (manual) event: it runs `CrmSyncService.syncForWorker`
+ *     `crm/binding.sync-now` (manual) event: it runs `CrmSyncService.syncPageForWorker`
  *     (membership-free — the Inngest signing key is the trust boundary), captures
  *     the per-run PostHog event, publishes a realtime row-insert so open grids
  *     refresh live, and fans out `crm/row.inserted` enrichment for new rows.
@@ -23,6 +23,8 @@ import {
   type AppServices,
   appLayer,
   type CrmSyncOutcome,
+  type CrmSyncPageResult,
+  type CrmSyncPageState,
   CrmSyncService,
   DUE_PAGE_SIZE,
   FANOUT_CHUNK,
@@ -49,7 +51,7 @@ async function withRuntime<A>(run: (exec: <X>(e: Effect.Effect<X, unknown, AppSe
 
 /**
  * Map the Inngest event that woke {@link processCrmBinding} / {@link warmUpCrmBinding}
- * to the `syncForWorker` trigger. `sync-now` is a user's manual "Sync now";
+ * to the page worker trigger. `sync-now` is a user's manual "Sync now";
  * `binding.created` is the post-create warm-up; everything else (the daily
  * `binding.due` fan-out) is the cron. Total + pure so the mapping is unit-pinned.
  */
@@ -149,13 +151,17 @@ function captureCrmSync(outcome: CrmSyncOutcome, trigger: "cron" | "manual" | "w
   }
 }
 
-/** Run one sync through the worker path; an Effect failure surfaces as a step failure (Inngest retries). */
-function runSyncStep(bindingId: string, trigger: "cron" | "manual" | "warmup"): Promise<CrmSyncOutcome> {
+/** Run one provider page; an Effect failure surfaces as a step failure (Inngest retries). */
+function runSyncPageStep(
+  bindingId: string,
+  trigger: "cron" | "manual" | "warmup",
+  checkpoint: CrmSyncPageState | null,
+): Promise<CrmSyncPageResult> {
   return withRuntime((exec) =>
     exec(
       Effect.gen(function* () {
         const svc = yield* CrmSyncService;
-        return yield* svc.syncForWorker(bindingId, trigger);
+        return yield* svc.syncPageForWorker(bindingId, trigger, checkpoint);
       }),
     ),
   );
@@ -217,10 +223,11 @@ export const pollCrmSync = inngest.createFunction(
 
 /**
  * Per-binding sync, fanned out from the cron OR triggered by a manual "Sync now"
- * (`crm/binding.sync-now`). Two-tier concurrency: a GLOBAL account-scoped cap
+ * (`crm/binding.sync-now`). Each provider page is a separate durable step.
+ * Two-tier concurrency: a GLOBAL account-scoped cap
  * bounds total in-flight syncs across ALL workspaces (per-workspace limits
  * otherwise multiply unbounded as workspaces grow), while the per-workspace key
- * keeps any single workspace from monopolising runs. `syncForWorker` never throws
+ * keeps any single workspace from monopolising runs. `syncPageForWorker` never throws
  * for sync-level errors (the outcome carries the status + user copy) — an Effect
  * failure here means a disabled/paused binding or a bookkeeping failure, which we
  * let surface as a step failure so Inngest retries.
@@ -242,7 +249,22 @@ export const processCrmBinding = inngest.createFunction(
     const bindingId = (event.data as { bindingId?: string }).bindingId ?? "";
     if (!bindingId) return { bindingId, status: null };
     const trigger = crmSyncTrigger(event.name);
-    const outcome = await step.run(`sync:${bindingId}`, () => runSyncStep(bindingId, trigger));
+    let checkpoint: CrmSyncPageState | null = null;
+    let outcome: CrmSyncOutcome | null = null;
+    for (let pageNumber = 0; outcome === null; pageNumber += 1) {
+      const page = await step.run(`sync:${bindingId}:page:${pageNumber}`, () =>
+        runSyncPageStep(bindingId, trigger, checkpoint),
+      );
+      const pageEnrichEvents = crmEnrichEvents(page);
+      if (pageEnrichEvents.length > 0) {
+        await step.sendEvent(`enqueue-crm-enrich:${pageNumber}`, pageEnrichEvents);
+      }
+      outcome = page.outcome;
+      checkpoint = page.next;
+      if (outcome === null && checkpoint === null) {
+        throw new Error("CRM sync page returned neither an outcome nor a checkpoint");
+      }
+    }
     if (outcome.runId === "") {
       // Overlap guard fired (a run for this binding is already in flight) —
       // nothing synced, so no analytics/realtime/enrichment.
@@ -255,12 +277,9 @@ export const processCrmBinding = inngest.createFunction(
       captureCrmSync(outcome, trigger);
       return null;
     });
-    // Realtime is published from INSIDE CrmSyncService.runSync (row.insert
+    // Realtime is published from INSIDE CrmSyncService's page worker (row.insert
     // WITH cell values + cell.upsert on updates) — the worker no longer
     // publishes, which would duplicate rows with empty cells.
-    const enrichEvents = crmEnrichEvents(outcome);
-    if (enrichEvents.length > 0) await step.sendEvent("enqueue-crm-enrich", enrichEvents);
-
     return { bindingId, status: outcome.status, rowsCreated: outcome.rowsCreated, rowsUpdated: outcome.rowsUpdated };
   },
 );
@@ -305,15 +324,28 @@ export const warmUpCrmBinding = inngest.createFunction(
 
     for (let attempt = 0; attempt < WARM_UP_BACKOFF_S.length; attempt += 1) {
       await step.sleep(`backoff-${attempt}`, `${WARM_UP_BACKOFF_S[attempt]}s`);
-      const outcome = await step.run(`warm-up:${bindingId}:${attempt}`, () => runSyncStep(bindingId, "warmup"));
+      let checkpoint: CrmSyncPageState | null = null;
+      let outcome: CrmSyncOutcome | null = null;
+      for (let pageNumber = 0; outcome === null; pageNumber += 1) {
+        const page = await step.run(`warm-up:${bindingId}:${attempt}:page:${pageNumber}`, () =>
+          runSyncPageStep(bindingId, "warmup", checkpoint),
+        );
+        const pageEnrichEvents = crmEnrichEvents(page);
+        if (pageEnrichEvents.length > 0) {
+          await step.sendEvent(`warm-up-enrich:${bindingId}:${attempt}:${pageNumber}`, pageEnrichEvents);
+        }
+        outcome = page.outcome;
+        checkpoint = page.next;
+        if (outcome === null && checkpoint === null) {
+          throw new Error("CRM warm-up page returned neither an outcome nor a checkpoint");
+        }
+      }
       if (outcome.runId === "") continue; // another run is already in flight
       await step.run(`warm-up-analytics:${bindingId}:${attempt}`, async () => {
         captureCrmSync(outcome, "warmup");
         return null;
       });
       if (outcome.rowsCreated > 0) {
-        const enrichEvents = crmEnrichEvents(outcome);
-        if (enrichEvents.length > 0) await step.sendEvent(`warm-up-enrich:${bindingId}:${attempt}`, enrichEvents);
         return { bindingId, rowsCreated: outcome.rowsCreated, attempts: attempt + 1 };
       }
     }

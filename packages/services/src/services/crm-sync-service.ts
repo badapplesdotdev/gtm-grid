@@ -11,7 +11,7 @@
  *   execution goes through the worker — manual "Sync now" only enqueues — so
  *   observability, retries, and concurrency limits live in exactly one place.
  *
- * The sync algorithm (`runSync`):
+ * The sync algorithm (`runSyncPage`):
  *   resolve live attributes (schema drift → drop column, keep going) → page
  *   records 500 at a time (server-side prefilter where expressible, worker
  *   filters ALWAYS re-checked) → flatten typed values to cell text (references
@@ -146,6 +146,32 @@ export interface CrmSyncOutcome {
   readonly errorTag: string | null;
   /** Rows inserted this run, for dependency-ordered enrichment. */
   readonly newRowIds: readonly string[];
+}
+
+/**
+ * Serializable checkpoint carried between Inngest steps. A checkpoint is
+ * emitted only after one provider page and its database writes have completed.
+ */
+export interface CrmSyncPageState {
+  readonly runId: string;
+  readonly bindingId: string;
+  readonly cursor: string;
+  readonly pages: number;
+  readonly rowsCreated: number;
+  readonly rowsUpdated: number;
+  readonly rowsSkipped: number;
+  readonly fieldsDropped: readonly string[];
+}
+
+export interface CrmSyncPageResult {
+  /** Non-null only when the provider pull and run finalization are complete. */
+  readonly outcome: CrmSyncOutcome | null;
+  /** Non-null when another provider page must run in a fresh durable step. */
+  readonly next: CrmSyncPageState | null;
+  /** Rows inserted by this page only, so enrichment can fan out incrementally. */
+  readonly newRowIds: readonly string[];
+  readonly tableId: string;
+  readonly workspaceId: string;
 }
 
 export interface CrmSourceSummary {
@@ -387,31 +413,40 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
 
     // ── The sync loop ─────────────────────────────────────────────────────────
 
-    const runSync = (
+    const runSyncPage = (
       binding: CrmBinding,
       session: CrmSession,
       trigger: "cron" | "manual" | "warmup",
-    ): Effect.Effect<CrmSyncOutcome, CrmSyncError> =>
+      checkpoint: CrmSyncPageState | null,
+    ): Effect.Effect<CrmSyncPageResult, CrmSyncError> =>
       Effect.gen(function* () {
         const client = registry.forProvider(binding.provider);
-        const startedAt = Date.now();
-        const runId = yield* mapRepoError(
-          runs.start({
-            workspaceId: binding.workspaceId,
-            bindingId: binding.id,
-            tableId: binding.tableId,
-            trigger,
-            startedAt,
-          }),
-          "sync run start failed",
-        ).pipe(Effect.mapError((e) => new CrmSyncError({ message: "sync run start failed", cause: e })));
+        const runId =
+          checkpoint?.runId ??
+          (yield* mapRepoError(
+            runs.start({
+              workspaceId: binding.workspaceId,
+              bindingId: binding.id,
+              tableId: binding.tableId,
+              trigger,
+              startedAt: Date.now(),
+            }),
+            "sync run start failed",
+          ).pipe(Effect.mapError((e) => new CrmSyncError({ message: "sync run start failed", cause: e }))));
 
         const cfg = parseBindingConfig(binding.config);
-        const counters = { created: 0, updated: 0, skipped: 0, staled: 0 };
+        const counters = {
+          created: checkpoint?.rowsCreated ?? 0,
+          updated: checkpoint?.rowsUpdated ?? 0,
+          skipped: checkpoint?.rowsSkipped ?? 0,
+          staled: 0,
+        };
         const newRowIds: string[] = [];
-        let fieldsDropped: readonly string[] = [];
+        let fieldsDropped: readonly string[] = checkpoint?.fieldsDropped ?? [];
         let capped = false;
         let pageBudgetExhausted = false;
+        let nextCursor: string | null = checkpoint?.cursor ?? null;
+        let pagesCompleted = checkpoint?.pages ?? 0;
 
         const work = Effect.gen(function* () {
           const cap = yield* rowCapFor(binding.workspaceId);
@@ -458,7 +493,7 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
           // Cap budget: rows this binding has EVER created count against it.
           const preexisting =
             cfg.dedupeMode === "create"
-              ? (binding.rowsSynced ?? 0)
+              ? (binding.rowsSynced ?? 0) + counters.created
               : yield* mapRepoError(syncedRows.countByBinding(binding.id), "synced-row count failed");
           let budget = Math.max(0, cap - preexisting);
 
@@ -468,8 +503,8 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
           );
           const pullAttrs: readonly CrmAttrRef[] = flattenCols.map((c) => ({ slug: c.attrSlug, type: c.attrType }));
           const cache = newCache();
-          let cursor: string | null = null;
-          let pages = 0;
+          let cursor: string | null = checkpoint?.cursor ?? null;
+          let pages = checkpoint?.pages ?? 0;
           let pullComplete = false;
 
           while (true) {
@@ -492,6 +527,8 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
               Effect.annotateLogs({ bindingId: binding.id, cursor: cursor ?? "start", records: records.length }),
             );
             cursor = page.nextCursor;
+            nextCursor = cursor;
+            pagesCompleted = pages;
             if (records.length > 0) {
               const flats = yield* resolveRecords(client, session, records, cache);
               const textOf = (fr: FlatRecord, slug: string) => fr.texts.get(slug) ?? "";
@@ -606,7 +643,7 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
                 counters.created += rowIds.length;
                 newRowIds.push(...rowIds);
                 // Open grids see the pulled records land live, WITH their cell
-                // values (the worker path can't publish these — only runSync
+                // values (the worker path can't publish these — only the page worker
                 // knows the flattened values).
                 yield* Effect.forEach(
                   rowIds,
@@ -732,6 +769,10 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
               pullComplete = true;
               break;
             }
+            // One provider page per durable Inngest step. The cursor and
+            // cumulative counters are returned only after all page writes and
+            // progress bookkeeping have completed.
+            break;
           }
 
           // 3. Stale pass — ONLY after a complete pull (a truncated pull would
@@ -806,10 +847,35 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
             return outcome;
           });
 
+        const completed = (outcome: CrmSyncOutcome): CrmSyncPageResult => ({
+          outcome,
+          next: null,
+          newRowIds,
+          tableId: binding.tableId,
+          workspaceId: binding.workspaceId,
+        });
+
         return yield* work.pipe(
-          Effect.flatMap(() =>
-            pageBudgetExhausted
-              ? finalize("partial", PAGE_BUDGET_COPY, null, null)
+          Effect.flatMap((pullComplete) =>
+            !pullComplete && !pageBudgetExhausted
+              ? Effect.succeed<CrmSyncPageResult>({
+                  outcome: null,
+                  next: {
+                    runId,
+                    bindingId: binding.id,
+                    cursor: nextCursor ?? "",
+                    pages: pagesCompleted,
+                    rowsCreated: counters.created,
+                    rowsUpdated: counters.updated,
+                    rowsSkipped: counters.skipped,
+                    fieldsDropped,
+                  },
+                  newRowIds,
+                  tableId: binding.tableId,
+                  workspaceId: binding.workspaceId,
+                })
+              : pageBudgetExhausted
+              ? finalize("partial", PAGE_BUDGET_COPY, null, null).pipe(Effect.map(completed))
               : fieldsDropped.length > 0
                 ? finalize(
                     "partial",
@@ -820,12 +886,12 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
                     } as CrmError).copy,
                     "CrmSchemaDriftError",
                     null,
-                  )
-                : finalize("ok", null, null, null),
+                  ).pipe(Effect.map(completed))
+                : finalize("ok", null, null, null).pipe(Effect.map(completed)),
           ),
           Effect.catchAll((e: CrmError) => {
             const p = crmErrorCopy(e);
-            return finalize(p.status, p.copy, e._tag, p.pause ?? null);
+            return finalize(p.status, p.copy, e._tag, p.pause ?? null).pipe(Effect.map(completed));
           }),
         );
       });
@@ -912,6 +978,182 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
 
         return { fields, suggestedMatchKey } satisfies CrmSourceDescription;
       });
+
+    const pageResultForOutcome = (outcome: CrmSyncOutcome): CrmSyncPageResult => ({
+      outcome,
+      next: null,
+      newRowIds: outcome.newRowIds,
+      tableId: outcome.tableId,
+      workspaceId: outcome.workspaceId,
+    });
+
+    /**
+     * Run at most one provider page. Inngest persists the returned checkpoint
+     * before invoking this again, keeping every serverless invocation bounded.
+     */
+    const syncPageForWorker = (
+      bindingId: string,
+      trigger: "cron" | "manual" | "warmup",
+      checkpoint: CrmSyncPageState | null,
+    ): Effect.Effect<CrmSyncPageResult, CrmError> =>
+      Effect.gen(function* () {
+        const binding = yield* requireBinding(bindingId);
+        if (!binding.enabled || binding.pausedReason !== null) {
+          return yield* Effect.fail(
+            new CrmSyncError({ message: `Binding ${bindingId} is ${binding.pausedReason ?? "disabled"}` }),
+          );
+        }
+        if (checkpoint !== null && checkpoint.bindingId !== binding.id) {
+          return yield* Effect.fail(new CrmSyncError({ message: "CRM sync checkpoint does not match binding" }));
+        }
+
+        if (checkpoint === null) {
+          const newest = yield* mapRepoError(runs.listByBinding(binding.id, 1), "run lookup failed");
+          const inFlight = newest[0];
+          if (inFlight !== undefined && inFlight.status === "running") {
+            if (Date.now() - inFlight.startedAt < SYNC_STALE_RUN_MS) {
+              return pageResultForOutcome({
+                runId: "",
+                bindingId: binding.id,
+                tableId: binding.tableId,
+                workspaceId: binding.workspaceId,
+                provider: binding.provider,
+                status: "ok",
+                rowsCreated: 0,
+                rowsUpdated: 0,
+                rowsSkipped: 0,
+                rowsStaled: 0,
+                fieldsDropped: [],
+                error: null,
+                errorTag: "SyncAlreadyRunning",
+                newRowIds: [],
+              });
+            }
+
+            const copy = "This sync stopped before it could finish. A new sync has started.";
+            yield* runs
+              .finish(inFlight.id, {
+                status: "failed",
+                rowsCreated: inFlight.rowsCreated,
+                rowsUpdated: inFlight.rowsUpdated,
+                rowsSkipped: inFlight.rowsSkipped,
+                rowsStaled: inFlight.rowsStaled,
+                fieldsDropped: inFlight.fieldsDropped,
+                error: copy,
+                finishedAt: Date.now(),
+              })
+              .pipe(Effect.catchAll(() => Effect.void));
+          }
+
+          const entitled = yield* entitlement.requireCloudAccess(binding.workspaceId).pipe(
+            Effect.as(true),
+            Effect.catchTag("PlanRequiredError", () => Effect.succeed(false)),
+            Effect.mapError((e) => new CrmSyncError({ message: "entitlement check failed", cause: e })),
+          );
+          if (!entitled) {
+            const copy = "Your plan doesn't include CRM sync right now. Upgrade to resume syncing.";
+            const runId = yield* runs
+              .start({
+                workspaceId: binding.workspaceId,
+                bindingId: binding.id,
+                tableId: binding.tableId,
+                trigger,
+                startedAt: Date.now(),
+              })
+              .pipe(Effect.mapError((e) => new CrmSyncError({ message: "sync run start failed", cause: e })));
+            yield* runs
+              .finish(runId, {
+                status: "failed",
+                rowsCreated: 0,
+                rowsUpdated: 0,
+                rowsSkipped: 0,
+                rowsStaled: 0,
+                fieldsDropped: null,
+                error: copy,
+                finishedAt: Date.now(),
+              })
+              .pipe(Effect.catchAll(() => Effect.void));
+            yield* bindings
+              .patch(binding.id, { pausedReason: "plan_lapsed", lastError: copy })
+              .pipe(Effect.catchAll(() => Effect.void));
+            return pageResultForOutcome({
+              runId,
+              bindingId: binding.id,
+              tableId: binding.tableId,
+              workspaceId: binding.workspaceId,
+              provider: binding.provider,
+              status: "failed",
+              rowsCreated: 0,
+              rowsUpdated: 0,
+              rowsSkipped: 0,
+              rowsStaled: 0,
+              fieldsDropped: [],
+              error: copy,
+              errorTag: "PlanRequired",
+              newRowIds: [],
+            });
+          }
+        }
+
+        const session = yield* connections.workerSession(
+          binding.workspaceId,
+          registry.forProvider(binding.provider).provider,
+        );
+        return yield* runSyncPage(binding, session, trigger, checkpoint);
+      }).pipe(
+        Effect.catchTag("CrmConnectionMissing", () =>
+          Effect.gen(function* () {
+            const binding = yield* requireBinding(bindingId);
+            const p = crmErrorCopy({
+              _tag: "CrmConnectionMissing",
+              provider: registry.forProvider(binding.provider).displayName,
+            } as CrmError);
+            const runId =
+              checkpoint?.runId ??
+              (yield* runs
+                .start({
+                  workspaceId: binding.workspaceId,
+                  bindingId: binding.id,
+                  tableId: binding.tableId,
+                  trigger,
+                  startedAt: Date.now(),
+                })
+                .pipe(Effect.mapError((e) => new CrmSyncError({ message: "sync run start failed", cause: e }))));
+            yield* runs
+              .finish(runId, {
+                status: p.status,
+                rowsCreated: checkpoint?.rowsCreated ?? 0,
+                rowsUpdated: checkpoint?.rowsUpdated ?? 0,
+                rowsSkipped: checkpoint?.rowsSkipped ?? 0,
+                rowsStaled: 0,
+                fieldsDropped:
+                  checkpoint !== null && checkpoint.fieldsDropped.length > 0 ? checkpoint.fieldsDropped : null,
+                error: p.copy,
+                finishedAt: Date.now(),
+              })
+              .pipe(Effect.catchAll(() => Effect.void));
+            yield* bindings
+              .patch(binding.id, { pausedReason: p.pause ?? "auth_revoked", lastError: p.copy })
+              .pipe(Effect.catchAll(() => Effect.void));
+            return pageResultForOutcome({
+              runId,
+              bindingId: binding.id,
+              tableId: binding.tableId,
+              workspaceId: binding.workspaceId,
+              provider: binding.provider,
+              status: p.status,
+              rowsCreated: checkpoint?.rowsCreated ?? 0,
+              rowsUpdated: checkpoint?.rowsUpdated ?? 0,
+              rowsSkipped: checkpoint?.rowsSkipped ?? 0,
+              rowsStaled: 0,
+              fieldsDropped: checkpoint?.fieldsDropped ?? [],
+              error: p.copy,
+              errorTag: "CrmConnectionMissing",
+              newRowIds: [],
+            });
+          }),
+        ),
+      );
 
     return {
       // ── Member: wizard metadata ────────────────────────────────────────────
@@ -1199,166 +1441,24 @@ export class CrmSyncService extends Effect.Service<CrmSyncService>()("CrmSyncSer
        * the outcome carries the status + user copy; only bookkeeping failures
        * (run row could not even start) fail the effect.
        */
+      syncPageForWorker,
+
       syncForWorker: (bindingId: string, trigger: "cron" | "manual" | "warmup") =>
         Effect.gen(function* () {
-          const binding = yield* requireBinding(bindingId);
-          if (!binding.enabled || binding.pausedReason !== null) {
-            return yield* Effect.fail(
-              new CrmSyncError({ message: `Binding ${bindingId} is ${binding.pausedReason ?? "disabled"}` }),
-            );
+          let checkpoint: CrmSyncPageState | null = null;
+          const allNewRowIds: string[] = [];
+          while (true) {
+            const page: CrmSyncPageResult = yield* syncPageForWorker(bindingId, trigger, checkpoint);
+            allNewRowIds.push(...page.newRowIds);
+            if (page.outcome !== null) {
+              return { ...page.outcome, newRowIds: allNewRowIds };
+            }
+            if (page.next === null) {
+              return yield* Effect.fail(new CrmSyncError({ message: "CRM sync page returned no checkpoint" }));
+            }
+            checkpoint = page.next;
           }
-          // Overlap guard: the daily cron and a manual "Sync now" may target the
-          // SAME binding concurrently (the per-workspace Inngest limit is 2).
-          // Two interleaved pulls would both see records as "new" and duplicate
-          // rows, so if a run is already in flight (and not a crashed leftover
-          // older than the staleness window) this attempt no-ops. The caller
-          // detects runId === "" and skips analytics/enrichment.
-          const newest = yield* mapRepoError(runs.listByBinding(binding.id, 1), "run lookup failed");
-          const inFlight = newest[0];
-          if (
-            inFlight !== undefined &&
-            inFlight.status === "running" &&
-            Date.now() - inFlight.startedAt < SYNC_STALE_RUN_MS
-          ) {
-            const outcome: CrmSyncOutcome = {
-              runId: "",
-              bindingId: binding.id,
-              tableId: binding.tableId,
-              workspaceId: binding.workspaceId,
-              provider: binding.provider,
-              status: "ok",
-              rowsCreated: 0,
-              rowsUpdated: 0,
-              rowsSkipped: 0,
-              rowsStaled: 0,
-              fieldsDropped: [],
-              error: null,
-              errorTag: "SyncAlreadyRunning",
-              newRowIds: [],
-            };
-            return outcome;
-          }
-          const entitled = yield* entitlement.requireCloudAccess(binding.workspaceId).pipe(
-            Effect.as(true),
-            Effect.catchTag("PlanRequiredError", () => Effect.succeed(false)),
-            Effect.mapError((e) => new CrmSyncError({ message: "entitlement check failed", cause: e })),
-          );
-          if (!entitled) {
-            // Trial expired / plan lapsed: pause instead of failing the step.
-            // A failed Effect meant 3 Inngest attempts + Error-Tracking noise
-            // per binding per DAY, forever, with nothing user-visible. Pausing
-            // drops the binding out of the daily due-page; the billing
-            // webhook / plan reconcile clears the pause on upgrade.
-            const copy = "Your plan doesn't include CRM sync right now. Upgrade to resume syncing.";
-            const startedAt = Date.now();
-            const runId = yield* runs
-              .start({
-                workspaceId: binding.workspaceId,
-                bindingId: binding.id,
-                tableId: binding.tableId,
-                trigger,
-                startedAt,
-              })
-              .pipe(Effect.mapError((e) => new CrmSyncError({ message: "sync run start failed", cause: e })));
-            yield* runs
-              .finish(runId, {
-                status: "failed",
-                rowsCreated: 0,
-                rowsUpdated: 0,
-                rowsSkipped: 0,
-                rowsStaled: 0,
-                fieldsDropped: null,
-                error: copy,
-                finishedAt: Date.now(),
-              })
-              .pipe(Effect.catchAll(() => Effect.void));
-            yield* bindings
-              .patch(binding.id, { pausedReason: "plan_lapsed", lastError: copy })
-              .pipe(Effect.catchAll(() => Effect.void));
-            const outcome: CrmSyncOutcome = {
-              runId,
-              bindingId: binding.id,
-              tableId: binding.tableId,
-              workspaceId: binding.workspaceId,
-              provider: binding.provider,
-              status: "failed",
-              rowsCreated: 0,
-              rowsUpdated: 0,
-              rowsSkipped: 0,
-              rowsStaled: 0,
-              fieldsDropped: [],
-              error: copy,
-              errorTag: "PlanRequired",
-              newRowIds: [],
-            };
-            return outcome;
-          }
-          const session = yield* connections
-            .workerSession(binding.workspaceId, registry.forProvider(binding.provider).provider)
-            .pipe(
-              Effect.catchTag("CrmConnectionMissing", (e) =>
-                // A missing connection is a USER-facing outcome, not a crash:
-                // run the finalize path through runSync's error handling by
-                // failing inside it — here we short-circuit with a run row.
-                Effect.fail(e),
-              ),
-            );
-          return yield* runSync(binding, session, trigger);
-        }).pipe(
-          Effect.catchTag("CrmConnectionMissing", () =>
-            Effect.gen(function* () {
-              // Record the pause + a user-visible run entry even though the
-              // sync never started.
-              const binding = yield* requireBinding(bindingId);
-              const p = crmErrorCopy({
-                _tag: "CrmConnectionMissing",
-                provider: registry.forProvider(binding.provider).displayName,
-              } as CrmError);
-              const startedAt = Date.now();
-              const runId = yield* runs
-                .start({
-                  workspaceId: binding.workspaceId,
-                  bindingId: binding.id,
-                  tableId: binding.tableId,
-                  trigger: "cron",
-                  startedAt,
-                })
-                .pipe(Effect.mapError((e) => new CrmSyncError({ message: "sync run start failed", cause: e })));
-              yield* runs
-                .finish(runId, {
-                  status: p.status,
-                  rowsCreated: 0,
-                  rowsUpdated: 0,
-                  rowsSkipped: 0,
-                  rowsStaled: 0,
-                  fieldsDropped: null,
-                  error: p.copy,
-                  finishedAt: Date.now(),
-                })
-                .pipe(Effect.catchAll(() => Effect.void));
-              yield* bindings
-                .patch(binding.id, { pausedReason: p.pause ?? "auth_revoked", lastError: p.copy })
-                .pipe(Effect.catchAll(() => Effect.void));
-              const outcome: CrmSyncOutcome = {
-                runId,
-                bindingId: binding.id,
-                tableId: binding.tableId,
-                workspaceId: binding.workspaceId,
-                provider: binding.provider,
-                status: p.status,
-                rowsCreated: 0,
-                rowsUpdated: 0,
-                rowsSkipped: 0,
-                rowsStaled: 0,
-                fieldsDropped: [],
-                error: p.copy,
-                errorTag: "CrmConnectionMissing",
-                newRowIds: [],
-              };
-              return outcome;
-            }),
-          ),
-        ),
+        }),
 
       listDuePage: (args: {
         readonly now: number;

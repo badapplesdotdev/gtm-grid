@@ -18,7 +18,12 @@ import type { RecordedGridEvent } from "../services/realtime-publisher.js";
 import { CrmBindingRepo, type CrmBinding, type CrmSyncedRow, type CrmSyncRun } from "../repositories/crm-repo.js";
 import type { GridCell, GridRow } from "../repositories/webhook-repo.js";
 import { CrmConnectionService } from "./crm-connection-service.js";
-import { CrmSyncService, planRowCap, type CrmSyncOutcome } from "./crm-sync-service.js";
+import {
+  CrmSyncService,
+  planRowCap,
+  type CrmSyncOutcome,
+  type CrmSyncPageResult,
+} from "./crm-sync-service.js";
 
 const WS = "11111111-1111-1111-1111-111111111111";
 const TABLE = "22222222-2222-2222-2222-222222222222";
@@ -534,6 +539,51 @@ describe("disconnect", () => {
 const fullPage = Array.from({ length: 500 }, (_x, i) => rec(`bulk_${i}`, `Person ${i}`, `p${i}@x.com`));
 
 describe("mid-pull failures", () => {
+  it("checkpoints after one provider page and resumes the same run", async () => {
+    const w = world();
+    const fullPage = Array.from({ length: 500 }, (_x, i) => rec(`rec_${i}`, `Person ${i}`, `p${i}@x.com`));
+    scriptFetch([
+      () => json(ATTRS),
+      () => json({ data: fullPage }),
+      () => json(ATTRS),
+      () => json({ data: [rec("rec_500", "Person 500", "p500@x.com")] }),
+    ]);
+
+    const [first, second] = await Effect.runPromise(
+      Effect.gen(function* () {
+        const connections = yield* CrmConnectionService;
+        yield* connections.saveConnection({
+          workspaceId: WS,
+          provider: "attio",
+          tokens: { accessToken: "at_test" },
+          meta: {
+            connectedByUserId: "user_m",
+            connectedByName: "Morgan",
+            crmWorkspaceId: "attio_ws",
+            crmWorkspaceName: "Acme",
+          },
+        });
+        const sync = yield* CrmSyncService;
+        const page1 = yield* sync.syncPageForWorker(w.binding.id, "cron", null);
+        const page2 = yield* sync.syncPageForWorker(w.binding.id, "cron", page1.next);
+        return [page1, page2] as const;
+      }).pipe(Effect.provide(TestLayer(w.fixtures))) as Effect.Effect<
+        readonly [CrmSyncPageResult, CrmSyncPageResult],
+        never,
+        never
+      >,
+    );
+
+    expect(first.outcome).toBeNull();
+    expect(first.next?.pages).toBe(1);
+    expect(first.next?.rowsCreated).toBe(500);
+    expect(first.newRowIds).toHaveLength(500);
+    expect(second.outcome?.runId).toBe(first.next?.runId);
+    expect(second.outcome?.rowsCreated).toBe(501);
+    expect(w.runs).toHaveLength(1);
+    expect(w.runs[0]?.status).toBe("ok");
+  });
+
   it("a hard failure on page 2 keeps page 1's rows, fails the run, and skips stale", async () => {
     const w = world();
     scriptFetch([
@@ -598,7 +648,7 @@ describe("mid-pull failures", () => {
 
   it("overlap guard: a crashed leftover run (stale) does NOT block the next sync", async () => {
     const w = world();
-    w.runs.push({
+    const crashedRun: CrmSyncRun = {
       id: "run_crashed",
       workspaceId: WS,
       bindingId: w.binding.id,
@@ -613,12 +663,17 @@ describe("mid-pull failures", () => {
       error: null,
       startedAt: Date.now() - 11 * 60 * 1000, // older than SYNC_STALE_RUN_MS
       finishedAt: null,
-    });
+    };
+    w.runs.push(crashedRun);
     scriptFetch(syncScript([rec("rec_1", "Sarah", "sarah@vercel.com")]));
     const outcome = await syncOnce(w);
 
     expect(outcome.runId).not.toBe("");
     expect(outcome.rowsCreated).toBe(1);
+    const reconciled = w.runs.find((run) => run.id === crashedRun.id);
+    expect(reconciled?.status).toBe("failed");
+    expect(reconciled?.finishedAt).not.toBeNull();
+    expect(reconciled?.error).toContain("stopped before it could finish");
   });
 
   it("a paused binding refuses to sync until reconnected", async () => {
