@@ -15,6 +15,8 @@ import {
   createIncrementalTableView,
   deriveColumnKind,
   gridQueryKeys,
+  makeLatestWins,
+  makeSerialQueue,
   mergePagesToSnapshot,
   patchGridCache,
   patchPagedGridCache,
@@ -29,7 +31,7 @@ type Snapshot = Parameters<typeof patchGridCache>[0];
 
 const baseSnapshot = (): NonNullable<Snapshot> =>
   ({
-    table: { _id: "t1", name: "Leads", dedupe: null },
+    table: { _id: "t1", name: "Leads", dedupe: null, autoRun: true },
     columns: [
       {
         _id: "c1",
@@ -338,7 +340,7 @@ describe("createIncrementalTableView — incremental derivation + row identity",
   /** A snapshot with `rows`×`cols` cells (every cell populated). */
   const grid = (rows: number, cols: number): NonNullable<Snapshot> =>
     ({
-      table: { _id: "t1", name: "Grid", dedupe: null },
+      table: { _id: "t1", name: "Grid", dedupe: null, autoRun: true },
       columns: Array.from({ length: cols }, (_, c) => ({
         _id: `c${c}`,
         name: `C${c}`,
@@ -432,7 +434,7 @@ const page = (
   nextCursor: Page["nextCursor"],
 ): Page =>
   ({
-    table: { _id: "t1", name: "Leads", dedupe: null },
+    table: { _id: "t1", name: "Leads", dedupe: null, autoRun: true },
     columns: [
       {
         _id: "c1",
@@ -474,7 +476,12 @@ describe("mergePagesToSnapshot — flatten loaded pages (TRI-3272)", () => {
     expect(snap?.rows.map((r) => r._id)).toEqual(["r1", "r2", "r3"]);
     expect(snap?.cells.map((c) => c.rowId)).toEqual(["r1", "r2", "r3"]);
     expect(snap?.columns.map((c) => c._id)).toEqual(["c1"]);
-    expect(snap?.table).toEqual({ _id: "t1", name: "Leads", dedupe: null });
+    expect(snap?.table).toEqual({
+      _id: "t1",
+      name: "Leads",
+      dedupe: null,
+      autoRun: true,
+    });
   });
 });
 
@@ -587,5 +594,170 @@ describe("wasEventDropped — the realtime drop-backstop predicate", () => {
 
   it("no loaded pages → nothing to drop (seed will fetch)", () => {
     expect(wasEventDropped([], { type: "row.insert", row: { _id: "rX" }, cells: [] })).toBe(false);
+  });
+});
+
+/**
+ * The supersession guard behind the Auto-run toggle (PR #224 review, P1).
+ *
+ * The bug it prevents: `setAutoRun` used to undo a failure with
+ * `beginOptimistic`'s whole-snapshot rollback, which reinstates the cache as it
+ * was before THAT toggle. With several toggles in flight, a late failure of an
+ * early one restored a snapshot predating the later ones — so the switch could
+ * read ON while the server had it OFF, and the cascade would bill against a
+ * policy the user could not see.
+ */
+describe("makeLatestWins — only the newest attempt may reconcile", () => {
+  it("the sole in-flight attempt is the latest", () => {
+    const g = makeLatestWins();
+    expect(g.isLatest("t1", g.claim("t1"))).toBe(true);
+  });
+
+  it("a newer claim supersedes the older one", () => {
+    const g = makeLatestWins();
+    const first = g.claim("t1");
+    const second = g.claim("t1");
+    expect(g.isLatest("t1", first)).toBe(false);
+    expect(g.isLatest("t1", second)).toBe(true);
+  });
+
+  it("THE REGRESSION: a late failure of the FIRST of three toggles cannot reconcile", () => {
+    // on→off, off→on, on→off issued back to back; the third owns the outcome.
+    const g = makeLatestWins();
+    const a = g.claim("t1");
+    const b = g.claim("t1");
+    const c = g.claim("t1");
+    // …then A's request fails, long after C already settled the policy.
+    expect(g.isLatest("t1", a)).toBe(false);
+    expect(g.isLatest("t1", b)).toBe(false);
+    expect(g.isLatest("t1", c)).toBe(true);
+  });
+
+  it("tickets are per TABLE — toggling one table never supersedes another", () => {
+    const g = makeLatestWins();
+    const t1 = g.claim("t1");
+    const t2 = g.claim("t2");
+    expect(g.isLatest("t1", t1)).toBe(true);
+    expect(g.isLatest("t2", t2)).toBe(true);
+    g.claim("t2");
+    expect(g.isLatest("t1", t1)).toBe(true); // t2's churn left t1 alone
+  });
+
+  it("a ticket from one guard means nothing to another (no shared global state)", () => {
+    const a = makeLatestWins();
+    const b = makeLatestWins();
+    a.claim("t1");
+    expect(b.isLatest("t1", 1)).toBe(false); // b never saw a claim for t1
+  });
+
+  it("an unknown table has no latest attempt", () => {
+    expect(makeLatestWins().isLatest("nope", 1)).toBe(false);
+  });
+});
+
+/**
+ * The serial queue behind the Auto-run toggle (PR #224 review, second P1).
+ *
+ * The guard above stops a stale attempt from RECONCILING, but it cannot stop a
+ * stale attempt from WRITING: with requests overlapping, the last toggle clicked
+ * is not necessarily the last one persisted, so a superseded write can land after
+ * the winner and leave the server holding a value nobody chose. Serializing per
+ * table is what makes "last click wins" true at the server, not just in the UI.
+ */
+describe("makeSerialQueue — same-key writes never overlap", () => {
+  /** A task that resolves only when told to, recording start/finish order. */
+  const deferred = <T,>() => {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  };
+
+  it("does not start the second task until the first has settled", async () => {
+    const run = makeSerialQueue();
+    const first = deferred<string>();
+    const started: string[] = [];
+
+    const a = run("t1", () => {
+      started.push("a");
+      return first.promise;
+    });
+    const b = run("t1", () => {
+      started.push("b");
+      return Promise.resolve("b");
+    });
+
+    await Promise.resolve();
+    expect(started).toEqual(["a"]); // b is queued, NOT in flight
+
+    first.resolve("a");
+    await Promise.all([a, b]);
+    expect(started).toEqual(["a", "b"]);
+  });
+
+  it("THE REGRESSION: a superseded write cannot land after the winner", async () => {
+    // enable then disable, clicked back to back. Serialized, the server ends on
+    // the disable — the last CLICK — however slow the enable was.
+    const run = makeSerialQueue();
+    const server: boolean[] = [];
+    const enable = deferred<void>();
+
+    const a = run("t1", async () => {
+      await enable.promise;
+      server.push(true);
+    });
+    const b = run("t1", async () => {
+      server.push(false);
+    });
+
+    enable.resolve();
+    await Promise.all([a, b]);
+    expect(server).toEqual([true, false]); // disable persisted LAST
+  });
+
+  it("a rejected task does not break the chain, and its error reaches only its own caller", async () => {
+    const run = makeSerialQueue();
+    const failed = run("t1", () => Promise.reject(new Error("boom")));
+    const after = run("t1", () => Promise.resolve("ran anyway"));
+
+    await expect(failed).rejects.toThrow("boom");
+    await expect(after).resolves.toBe("ran anyway");
+  });
+
+  it("different tables run concurrently — one table's queue never blocks another", async () => {
+    const run = makeSerialQueue();
+    const blocked = deferred<void>();
+    const started: string[] = [];
+
+    const a = run("t1", () => {
+      started.push("t1");
+      return blocked.promise;
+    });
+    const b = run("t2", () => {
+      started.push("t2");
+      return Promise.resolve();
+    });
+
+    await b;
+    expect(started).toEqual(["t1", "t2"]); // t2 ran while t1 was still pending
+
+    blocked.resolve();
+    await a;
+  });
+
+  it("a drained chain is dropped, so repeated toggling does not accumulate state", async () => {
+    const run = makeSerialQueue();
+    await run("t1", () => Promise.resolve(1));
+    // A fresh task after the chain drained starts immediately (nothing to await).
+    let startedSync = false;
+    const next = run("t1", () => {
+      startedSync = true;
+      return Promise.resolve(2);
+    });
+    await next;
+    expect(startedSync).toBe(true);
   });
 });

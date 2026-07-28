@@ -83,6 +83,9 @@ export function freshState() {
         folderId: null,
         favorite: false,
         dedupe: null,
+        // Auto-run defaults ON, matching the `tables.auto_run NOT NULL DEFAULT
+        // true` column the real server reads.
+        autoRun: true,
       },
     ],
     columns: [
@@ -206,7 +209,12 @@ export function tablePagePayload(s, tableId) {
     }
   }
   return {
-    table: { _id: table.id, name: table.name, dedupe: table.dedupe ?? null },
+    table: {
+      _id: table.id,
+      name: table.name,
+      dedupe: table.dedupe ?? null,
+      autoRun: table.autoRun !== false,
+    },
     columns,
     rows: rows.map((r) => ({ _id: r._id })),
     cells,

@@ -125,6 +125,7 @@ export const procedures = {
       folderId: input?.folderId ?? null,
       favorite: false,
       dedupe: null,
+      autoRun: true,
     };
     s.tables.push(t);
     return tableSummary(s, t);
@@ -270,6 +271,12 @@ export const procedures = {
     const t = s.tables.find((x) => x.id === input?.tableId);
     if (t) t.dedupe = input.dedupe ?? null;
     return { ok: true };
+  },
+
+  "grid.setAutoRun": (input, s) => {
+    const t = s.tables.find((x) => x.id === input?.tableId);
+    if (t) t.autoRun = input.autoRun === true;
+    return { autoRun: t?.autoRun ?? true };
   },
   "grid.dedupe": () => ({ removed: 0 }),
 

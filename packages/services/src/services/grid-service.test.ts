@@ -124,7 +124,7 @@ const failTag = (exit: Exit.Exit<unknown, unknown>): string | undefined => {
 
 const table = (over: Partial<StoreTable> = {}): StoreTable => ({
   id: "t1", workspaceId: WS, projectId: "p1", name: "T1", position: 0, createdAt: 1,
-  dedupeColumn: null, dedupeKeep: null, folderId: null, favorite: false, ...over,
+  dedupeColumn: null, dedupeKeep: null, folderId: null, favorite: false, autoRun: true, ...over,
 });
 const column = (over: Partial<StoreColumn> = {}): StoreColumn => ({
   id: "c1", workspaceId: WS, tableId: "t1", name: "A", type: "text",
@@ -149,7 +149,7 @@ describe("GridService.getTable", () => {
     const exit = await run(Effect.flatMap(GridService, (s) => s.getTable("t1")));
     expect(Exit.isSuccess(exit)).toBe(true);
     if (Exit.isSuccess(exit)) {
-      expect(exit.value.table).toEqual({ _id: "t1", name: "T1", dedupe: null });
+      expect(exit.value.table).toEqual({ _id: "t1", name: "T1", dedupe: null, autoRun: true });
       expect(exit.value.columns[0]).toMatchObject({ _id: "c1", name: "A", type: "text", kind: "manual" });
       expect(exit.value.rows).toEqual([{ _id: "r1" }]);
       expect(exit.value.cells[0]).toEqual({ rowId: "r1", columnId: "c1", value: "x", status: "done", error: null });
@@ -280,7 +280,7 @@ describe("GridService.getTablePage — keyset pagination (TRI-3272)", () => {
       expect(exit.value.rows).toEqual([{ _id: "r1" }, { _id: "r2" }]);
       expect(exit.value.cells.map((c) => c.value).sort()).toEqual(["a", "b"]);
       expect(exit.value.columns[0]).toMatchObject({ _id: "c1" });
-      expect(exit.value.table).toEqual({ _id: "t1", name: "T1", dedupe: null });
+      expect(exit.value.table).toEqual({ _id: "t1", name: "T1", dedupe: null, autoRun: true });
       expect(exit.value.nextCursor).not.toBeNull();
     }
   });
@@ -912,6 +912,100 @@ describe("GridService.renameTable", () => {
     const store = makeGridStore({ tables: [table()] });
     const { run } = harness({ store, currentUserId: "stranger" });
     const exit = await run(Effect.flatMap(GridService, (s) => s.renameTable("t1", "X")));
+    expect(failTag(exit)).toBe("NotAMemberError");
+  });
+});
+
+describe("GridService.setTableAutoRun (the toolbar's Auto-run switch)", () => {
+  const autoStore = () =>
+    makeGridStore({
+      projects: [{ id: "p1", workspaceId: WS, name: "P", createdAt: 1 }],
+      tables: [table({ id: "t1", name: "T1" })],
+    });
+
+  it("defaults to ON, so an untouched table behaves exactly as before", async () => {
+    const { run } = harness({ store: autoStore() });
+    const got = await run(Effect.flatMap(GridService, (s) => s.getTable("t1")));
+    if (Exit.isSuccess(got)) expect(got.value.table.autoRun).toBe(true);
+  });
+
+  it("turns auto-run off, persists it, and surfaces it on the next getTable", async () => {
+    const store = autoStore();
+    const { run } = harness({ store });
+    const set = await run(
+      Effect.flatMap(GridService, (s) => s.setTableAutoRun("t1", false)),
+    );
+    expect(Exit.isSuccess(set)).toBe(true);
+    if (Exit.isSuccess(set)) expect(set.value).toEqual({ autoRun: false });
+    expect(store.tables[0]!.autoRun).toBe(false);
+    const got = await run(Effect.flatMap(GridService, (s) => s.getTable("t1")));
+    if (Exit.isSuccess(got)) expect(got.value.table.autoRun).toBe(false);
+  });
+
+  it("a paged read reports the same policy as the full read", async () => {
+    const store = autoStore();
+    const { run } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.setTableAutoRun("t1", false)));
+    const page = await run(
+      Effect.flatMap(GridService, (s) => s.getTablePage({ tableId: "t1" })),
+    );
+    if (Exit.isSuccess(page)) expect(page.value.table.autoRun).toBe(false);
+  });
+
+  it("turning it back on restores the default", async () => {
+    const store = autoStore();
+    const { run } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.setTableAutoRun("t1", false)));
+    await run(Effect.flatMap(GridService, (s) => s.setTableAutoRun("t1", true)));
+    expect(store.tables[0]!.autoRun).toBe(true);
+  });
+
+  it("does NOT meter (setting a policy is not a billable action)", async () => {
+    const quotas = new Map<string, MeterQuota>();
+    const { run } = harness({ store: autoStore(), quotas });
+    await run(Effect.flatMap(GridService, (s) => s.setTableAutoRun("t1", false)));
+    expect(quotas.get(WS)?.cloudActionsUsed ?? 0).toBe(0);
+  });
+
+  it("is WORKSPACE-SHARED — another member reads the policy their teammate set", async () => {
+    const store = autoStore();
+    await harness({ store }).run(
+      Effect.flatMap(GridService, (s) => s.setTableAutoRun("t1", false)),
+    );
+    const got = await harness({ store, currentUserId: "member2" }).run(
+      Effect.flatMap(GridService, (s) => s.getTable("t1")),
+    );
+    if (Exit.isSuccess(got)) expect(got.value.table.autoRun).toBe(false);
+  });
+
+  it("broadcasts table.autoRun on the TABLE room and the workspace room", async () => {
+    const store = autoStore();
+    const { run, events } = harness({ store });
+    await run(Effect.flatMap(GridService, (s) => s.setTableAutoRun("t1", false)));
+    const fired = events.filter((e) => e.event.type === "table.autoRun");
+    // The table room makes an open grid flip its switch live; the workspace room
+    // is what the sidebar/list view listens on.
+    expect(fired.map((e) => e.tableId).sort()).toEqual(["_workspace", "t1"]);
+    expect(fired[0]!.event).toMatchObject({
+      type: "table.autoRun",
+      tableId: "t1",
+      autoRun: false,
+    });
+  });
+
+  it("blocks a lapsed/Free workspace with PlanRequiredError", async () => {
+    const { run } = harness({ store: autoStore(), plan: null });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.setTableAutoRun("t1", false)),
+    );
+    expect(failTag(exit)).toBe("PlanRequiredError");
+  });
+
+  it("rejects a non-member", async () => {
+    const { run } = harness({ store: autoStore(), currentUserId: "stranger" });
+    const exit = await run(
+      Effect.flatMap(GridService, (s) => s.setTableAutoRun("t1", false)),
+    );
     expect(failTag(exit)).toBe("NotAMemberError");
   });
 });

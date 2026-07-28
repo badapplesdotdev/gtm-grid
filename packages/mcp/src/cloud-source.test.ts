@@ -173,6 +173,7 @@ function fakeClient(grid: FakeGrid): {
           deleted: 0,
         };
       }
+      if (name === "/api/worker/setAutoRun") return { autoRun: args.autoRun };
       if (name === "/api/worker/reorderColumn") {
         const ids = grid.columns.map((c) => c._id as string);
         const from = ids.indexOf(args.columnId as string);
@@ -820,6 +821,23 @@ describe("makeCloudSource — write tools mirror the local SQLite mutators", () 
     const res = await makeCloudSource(CTX, deps).setDedupe("t1", null, "oldest");
     expect(client.mutations.find((m) => m.name === "/api/worker/setDedupe")?.args.column).toBeNull();
     expect(res.dedupe).toBeNull();
+  });
+
+  it("setAutoRun posts the resolved table id + the flag, and reports what the server settled on", async () => {
+    const { deps, client } = depsFor(gapGrid());
+    const res = await makeCloudSource(CTX, deps).setAutoRun("t1", false);
+    expect(client.mutations.find((m) => m.name === "/api/worker/setAutoRun")?.args).toEqual({
+      tableId: "t1",
+      autoRun: false,
+    });
+    expect(res.autoRun).toBe(false);
+  });
+
+  it("setAutoRun turns it back on", async () => {
+    const { deps, client } = depsFor(gapGrid());
+    const res = await makeCloudSource(CTX, deps).setAutoRun("t1", true);
+    expect(client.mutations.find((m) => m.name === "/api/worker/setAutoRun")?.args.autoRun).toBe(true);
+    expect(res.autoRun).toBe(true);
   });
 });
 

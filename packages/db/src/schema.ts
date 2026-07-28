@@ -515,6 +515,13 @@ export const tables = pgTable(
       onDelete: "set null",
     }),
     dedupeKeep: text("dedupe_keep"),
+    // Auto-run: when a column's inputs change, do the BILLED function columns
+    // downstream of it re-run on their own? WORKSPACE-SHARED (like `favorite`)
+    // so the toolbar toggle means the same thing for every member, and so an
+    // agent can flip it. Defaults to ON — the historical behaviour, and what
+    // every existing table has after the migration backfill. Free columns
+    // (formula/mapped) cascade regardless; see `isFreeColumn`.
+    autoRun: boolean("auto_run").notNull().default(true),
   },
   (t) => [
     index("tables_by_project").on(t.projectId),

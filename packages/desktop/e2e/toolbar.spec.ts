@@ -59,3 +59,48 @@ test.describe("Grid toolbar overflow", () => {
     await expect.poll(async () => (await mockState()).rows.length).toBe(before + 1);
   });
 });
+
+// The Auto-run switch. It vanished entirely when the local grid was deleted
+// (#126 left `DataGrid`'s `autoRun` prop with no caller), so these assert the
+// thing that actually regressed: it RENDERS, it reflects the persisted policy,
+// and clicking it writes that policy through — not just that a handler exists.
+test.describe("Auto-run toggle", () => {
+  test("renders in the toolbar, on by default", async ({ launchApp }) => {
+    const { window } = await launchApp({ signedIn: true, paid: true });
+    await expect(window.locator(".grid-table")).toBeVisible({ timeout: 20_000 });
+
+    const toggle = window.locator(".toolbar .autorun-toggle");
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await expect(toggle.locator(".autorun-switch")).toHaveClass(/\bon\b/);
+  });
+
+  test("clicking it turns auto-run off and PERSISTS the policy", async ({ launchApp }) => {
+    const { window } = await launchApp({ signedIn: true, paid: true });
+    await expect(window.locator(".grid-table")).toBeVisible({ timeout: 20_000 });
+
+    const toggle = window.locator(".toolbar .autorun-toggle");
+    await toggle.click();
+
+    // The switch flips optimistically…
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await expect(toggle.locator(".autorun-switch")).not.toHaveClass(/\bon\b/);
+    // …and the server actually stored it (this is what survives a reload).
+    await expect
+      .poll(async () => (await mockState()).tables[0].autoRun)
+      .toBe(false);
+  });
+
+  test("clicking again turns it back on", async ({ launchApp }) => {
+    const { window } = await launchApp({ signedIn: true, paid: true });
+    await expect(window.locator(".grid-table")).toBeVisible({ timeout: 20_000 });
+
+    const toggle = window.locator(".toolbar .autorun-toggle");
+    await toggle.click();
+    await expect.poll(async () => (await mockState()).tables[0].autoRun).toBe(false);
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await expect.poll(async () => (await mockState()).tables[0].autoRun).toBe(true);
+  });
+});

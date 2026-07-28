@@ -183,6 +183,11 @@ export const SetDedupeSchema = z.object({
   keep: z.enum(["oldest", "newest"]).optional(),
 });
 
+export const SetAutoRunSchema = z.object({
+  tableId: id,
+  autoRun: z.boolean(),
+});
+
 export const UpdateColumnSchema = z.object({
   columnId: id,
   patch: z.object({

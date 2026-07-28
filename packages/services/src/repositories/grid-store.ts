@@ -37,6 +37,8 @@ export interface StoreTable {
   folderId: string | null;
   /** Workspace-shared favourite/pin flag. */
   favorite: boolean;
+  /** Workspace-shared auto-run flag (billed columns re-run on input change). */
+  autoRun: boolean;
 }
 
 /** An in-memory folder row (a sidebar table group). */

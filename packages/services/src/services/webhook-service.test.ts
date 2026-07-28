@@ -103,10 +103,12 @@ function harness(opts: {
    * pass a failing layer to prove the worker's publish is best-effort.
    */
   realtime?: Layer.Layer<RealtimePublisher>;
+  /** The target table(s); defaults to `baseTable` (auto-run left at its default). */
+  tables?: GridTable[];
 }) {
   const webhookRepo = webhookRepoLayer({
     webhooks: opts.webhooks ?? [{ ...webhook }],
-    tables: [baseTable],
+    tables: opts.tables ?? [baseTable],
     columns,
     rows: opts.rows ?? [],
     cells: opts.cells ?? [],
@@ -199,6 +201,48 @@ describe("WebhookService.resolveToken", () => {
       svc.pipe(Effect.flatMap((s) => s.resolveToken("tok-123"))),
     );
     expect(Exit.isSuccess(exit) && exit.value).toBe(null);
+  });
+
+  // The table's Auto-run switch is the OUTER gate on the webhook's own auto-run:
+  // an inbound row is the one path that spends credits with nobody watching, so
+  // "nothing in this table enriches itself" has to hold there too.
+  describe("auto-run is the AND of the webhook's flag and the table's", () => {
+    const withAutoRun = (autoRun: boolean): GridTable[] => [{ ...baseTable, autoRun }];
+    const resolve = (opts: Parameters<typeof harness>[0]) =>
+      harness(opts).run(svc.pipe(Effect.flatMap((s) => s.resolveToken("tok-123"))));
+
+    it("webhook on + table on → auto-run", async () => {
+      const exit = await resolve({
+        webhooks: [{ ...webhook, autoRun: true }],
+        tables: withAutoRun(true),
+      });
+      expect(Exit.isSuccess(exit) && exit.value?.autoRun).toBe(true);
+    });
+
+    it("webhook on + table OFF → no auto-run (the switch wins)", async () => {
+      const exit = await resolve({
+        webhooks: [{ ...webhook, autoRun: true }],
+        tables: withAutoRun(false),
+      });
+      expect(Exit.isSuccess(exit) && exit.value?.autoRun).toBe(false);
+      // The row still LANDS — only the enrichment is withheld.
+      expect(Exit.isSuccess(exit) && exit.value?.tableId).toBe(TABLE);
+    });
+
+    it("webhook OFF + table on → no auto-run (the connection's own opt-out holds)", async () => {
+      const exit = await resolve({
+        webhooks: [{ ...webhook, autoRun: false }],
+        tables: withAutoRun(true),
+      });
+      expect(Exit.isSuccess(exit) && exit.value?.autoRun).toBe(false);
+    });
+
+    it("a table left at the default auto-runs exactly as it did before", async () => {
+      // `baseTable` carries no `autoRun` — the pre-migration payload shape. It
+      // must read as ON, or every existing webhook would silently stop enriching.
+      const exit = await resolve({ webhooks: [{ ...webhook, autoRun: true }] });
+      expect(Exit.isSuccess(exit) && exit.value?.autoRun).toBe(true);
+    });
   });
 });
 
