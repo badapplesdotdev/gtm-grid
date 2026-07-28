@@ -604,13 +604,22 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             Effect.catchTag("PlanRequiredError", () => Effect.succeed(false)),
           );
           if (!hasAccess) return null;
+          // The TABLE's auto-run is the outer gate on this webhook's own. The
+          // toolbar switch means "nothing in this table enriches itself", and a
+          // row arriving over HTTP is the case where that matters most — it is
+          // the one path that spends credits with nobody watching. So the two
+          // AND: the connection opts in, the table permits it. A table left at
+          // the default (on) changes nothing.
+          const target = yield* repo.findTable(w.tableId);
+          const tableAutoRun =
+            target._tag === "Some" ? target.value.autoRun !== false : true;
           return {
             webhookId: w.id,
             workspaceId: w.workspaceId,
             tableId: w.tableId,
             mapping: w.mapping,
             signingSecret: w.signingSecret ?? null,
-            autoRun: w.autoRun ?? true,
+            autoRun: (w.autoRun ?? true) && tableAutoRun,
             mode: w.mode ?? "create",
             upsertKey: w.upsertKey ?? null,
           } satisfies ResolvedWebhook;

@@ -7,7 +7,13 @@
 
 import { describe, expect, it } from "vitest";
 import type { MinimalColumn } from "@gtmgrid/services/columns";
-import { cascadeDependents, cellIsRunning, runColumnsInDepOrder, type RunOne } from "./gridRun";
+import {
+  cascadeCandidates,
+  cascadeDependents,
+  cellIsRunning,
+  runColumnsInDepOrder,
+  type RunOne,
+} from "./gridRun";
 
 function col(id: string, name: string, params: Record<string, unknown> = {}): MinimalColumn {
   return { id, name, kind: "function", provider: null, params };
@@ -147,5 +153,89 @@ describe("cellIsRunning (column-run loading state)", () => {
 
   it("is false when nothing is running", () => {
     expect(cellIsRunning(NONE, null, "r1", "c1", undefined)).toBe(false);
+  });
+});
+
+/**
+ * The Auto-run toggle's teeth. The toolbar switch is only as good as what the
+ * cascade does with it, so these assert the POLICY (which columns are eligible)
+ * and then run a real cascade through it to prove the eligibility actually
+ * changes which columns get billed.
+ */
+describe("cascadeCandidates — the Auto-run gate", () => {
+  const billed = (id: string, name: string, params: Record<string, unknown> = {}): MinimalColumn =>
+    ({ id, name, kind: "function", provider: "leadmagic", params });
+  const formula = (id: string, name: string, params: Record<string, unknown> = {}): MinimalColumn =>
+    ({ id, name, kind: "function", provider: "formula", params });
+  const mapped = (id: string, name: string, params: Record<string, unknown> = {}): MinimalColumn =>
+    ({ id, name, kind: "function", provider: null, params });
+  const manual = (id: string, name: string): MinimalColumn =>
+    ({ id, name, kind: "manual", provider: null, params: {} });
+
+  const MIXED: MinimalColumn[] = [
+    manual("m", "Domain"),
+    billed("e", "Enrich", { src: "{{Domain}}" }),
+    mapped("p", "Pick", { src: "{{Enrich}}" }),
+    formula("f", "Score", { expression: "{{Pick}}" }),
+  ];
+
+  it("with auto-run ON, every FUNCTION column is eligible (manual ones never are)", () => {
+    expect(cascadeCandidates(MIXED, true).map((c) => c.id)).toEqual(["e", "p", "f"]);
+  });
+
+  it("with auto-run OFF, billed columns drop out and free ones stay", () => {
+    expect(cascadeCandidates(MIXED, false).map((c) => c.id)).toEqual(["p", "f"]);
+  });
+
+  it("treats a code/mapped column (no provider) and a formula column as free", () => {
+    expect(cascadeCandidates([mapped("p", "P"), formula("f", "F")], false)).toHaveLength(2);
+  });
+
+  it("keeps a SEED in the set even when auto-run would exclude it", () => {
+    // Dropping the seed would leave it with no outgoing edges, so the cascade
+    // would find nothing at all — see the run assertions below.
+    expect(cascadeCandidates(MIXED, false, ["e"]).map((c) => c.id)).toEqual(["e", "p", "f"]);
+  });
+
+  it("keeps a MANUAL seed too — a seed is there for its edges, never to re-run", () => {
+    expect(cascadeCandidates(MIXED, true, ["m"]).map((c) => c.id)).toEqual(["m", "e", "p", "f"]);
+  });
+
+  it("auto-run OFF: running the billed column by hand STILL fills its free dependents", async () => {
+    // The user asked for Enrich, so Pick + Score (free) must follow it — that is
+    // the whole point of "free columns cascade regardless".
+    const { calls, runOne } = recorder();
+    await cascadeDependents(["e"], cascadeCandidates(MIXED, false, ["e"]), ["r1"], 4, runOne);
+    expect(calls.map((c) => c.id)).toEqual(["p", "f"]);
+    // The seed itself is never re-run by its own cascade.
+    expect(calls.some((c) => c.id === "e")).toBe(false);
+    // The cascade still forces + keeps the triggering row scope.
+    expect(calls.every((c) => c.force && c.rowIds?.[0] === "r1")).toBe(true);
+  });
+
+  it("auto-run ON: running the manual column's chain runs the billed column too", async () => {
+    const { calls, runOne } = recorder();
+    await cascadeDependents(["m"], cascadeCandidates(MIXED, true, ["m"]), ["r1"], 4, runOne);
+    expect(calls.map((c) => c.id)).toEqual(["e", "p", "f"]);
+  });
+
+  it("auto-run OFF: that same chain never reaches the billed column (no credits spent)", async () => {
+    const { calls, runOne } = recorder();
+    await cascadeDependents(["m"], cascadeCandidates(MIXED, false, ["m"]), ["r1"], 4, runOne);
+    // Enrich is excluded by policy, and Pick/Score read Enrich — so with its
+    // input unchanged the walk correctly stops dead rather than recomputing
+    // stale values over a result that never moved.
+    expect(calls).toEqual([]);
+  });
+
+  it("auto-run OFF: free columns fed DIRECTLY by the seed still cascade", async () => {
+    const direct: MinimalColumn[] = [
+      mapped("src", "Src"),
+      formula("f", "Upper", { expression: "{{Src}}" }),
+      billed("e", "Enrich", { src: "{{Src}}" }),
+    ];
+    const { calls, runOne } = recorder();
+    await cascadeDependents(["src"], cascadeCandidates(direct, false, ["src"]), undefined, 4, runOne);
+    expect(calls.map((c) => c.id)).toEqual(["f"]);
   });
 });

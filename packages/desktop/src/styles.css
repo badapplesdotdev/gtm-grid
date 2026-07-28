@@ -4026,13 +4026,16 @@ body.resizing-agent .agent-panel { transition: none; }
 /* Auto-run toggle in the toolbar */
 .autorun-toggle {
   all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 8px;
-  padding: 4px 8px; border-radius: var(--r-sm);
+  padding: 4px 8px; border-radius: var(--r-sm); flex: none;
 }
 .autorun-toggle:hover { background: var(--surface-2); }
-.autorun-label { font-size: 12.5px; font-weight: 500; color: var(--text-2); }
+/* `nowrap`: the toolbar is a flex row that squeezes its items, so without it the
+   label breaks as "Auto-" / "run" and doubles the toolbar's height. */
+.autorun-label { font-size: 12.5px; font-weight: 500; color: var(--text-2); white-space: nowrap; }
 .autorun-switch {
   width: 34px; height: 20px; border-radius: 10px; background: var(--surface-3);
   display: inline-flex; align-items: center; padding: 2px; transition: background 0.15s;
+  flex: none;
 }
 .autorun-switch.on { background: var(--accent); }
 .autorun-knob {

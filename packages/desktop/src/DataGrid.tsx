@@ -79,7 +79,12 @@ export interface GridController {
   readonly canAddRow: boolean;
 
   // ── Toolbar slots (environment-specific extras) ────────────────────────
-  /** Local auto-run toggle; omit to hide (cloud has no auto-run). */
+  /**
+   * The Auto-run toggle: does a BILLED function column downstream of a change
+   * re-run by itself? Omit to hide the switch entirely (a read-only surface such
+   * as a shared table view). Free columns (formula/mapped/code) cascade either
+   * way, so the switch governs credit spend, not correctness.
+   */
   readonly autoRun?: { value: boolean; onToggle: () => void };
   /** Extra controls in the LEFT cluster, next to Auto-run (e.g. local Dedupe). */
   readonly toolbarLeftExtras?: ReactNode;
@@ -951,7 +956,12 @@ export function DataGrid({
           <button
             className="autorun-toggle"
             onClick={c.autoRun.onToggle}
-            title="Computed fields auto-run when inputs change"
+            aria-pressed={c.autoRun.value}
+            title={
+              c.autoRun.value
+                ? "Auto-run is ON — enrichment columns re-run themselves when their inputs change. Click to turn off."
+                : "Auto-run is OFF — enrichment columns only run when you run them (formula and mapped columns still update for free). Click to turn on."
+            }
           >
             <span className="autorun-label">Auto-run</span>
             <span className={`autorun-switch${c.autoRun.value ? " on" : ""}`}>

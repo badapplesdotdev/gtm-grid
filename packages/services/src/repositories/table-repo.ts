@@ -30,6 +30,12 @@ export interface Table {
   readonly folderId: string | null;
   /** Workspace-shared favourite/pin flag (any member's pin shows for all). */
   readonly favorite: boolean;
+  /**
+   * Workspace-shared auto-run flag: when off, a billed function column does NOT
+   * re-run on its own because an upstream input changed (the user runs it). ON
+   * by default — the historical behaviour.
+   */
+  readonly autoRun: boolean;
 }
 
 /** Fields a `createTable` insert supplies. */
@@ -98,6 +104,11 @@ export class TableRepo extends Context.Tag("TableRepo")<
       id: string,
       favorite: boolean,
     ) => Effect.Effect<void, TableRepoError>;
+    /** Turn a table's auto-run on/off (workspace-shared). */
+    readonly setAutoRun: (
+      id: string,
+      autoRun: boolean,
+    ) => Effect.Effect<void, TableRepoError>;
     /** Delete a table (FK cascade drops its columns/rows/cells/webhooks). */
     readonly remove: (id: string) => Effect.Effect<void, TableRepoError>;
     /** Set (or clear) a table's dedupe config. `column: null` disables it. */
@@ -134,6 +145,7 @@ export const TableRepoLive: Layer.Layer<TableRepo, never, DbClient> =
         dedupeKeep: schema.tables.dedupeKeep,
         folderId: schema.tables.folderId,
         favorite: schema.tables.favorite,
+        autoRun: schema.tables.autoRun,
       } as const;
       return {
         findById: (id) =>
@@ -214,6 +226,16 @@ export const TableRepoLive: Layer.Layer<TableRepo, never, DbClient> =
             },
             catch: fail("table set favorite"),
           }),
+        setAutoRun: (id, autoRun) =>
+          Effect.tryPromise({
+            try: async () => {
+              await db
+                .update(schema.tables)
+                .set({ autoRun })
+                .where(eq(schema.tables.id, id));
+            },
+            catch: fail("table set auto-run"),
+          }),
         remove: (id) =>
           Effect.tryPromise({
             try: async () => {
@@ -280,6 +302,7 @@ export const tableRepoLayer = (store: GridStore): Layer.Layer<TableRepo> =>
           dedupeKeep: null,
           folderId: values.folderId ?? null,
           favorite: false,
+          autoRun: true,
         });
         return id;
       }),
@@ -292,6 +315,11 @@ export const tableRepoLayer = (store: GridStore): Layer.Layer<TableRepo> =>
       Effect.sync(() => {
         const t = store.tables.find((x) => x.id === id);
         if (t) t.favorite = favorite;
+      }),
+    setAutoRun: (id, autoRun) =>
+      Effect.sync(() => {
+        const t = store.tables.find((x) => x.id === id);
+        if (t) t.autoRun = autoRun;
       }),
     remove: (id) => Effect.sync(() => cascadeDeleteTable(store, id)),
     setDedupe: (id, config) =>

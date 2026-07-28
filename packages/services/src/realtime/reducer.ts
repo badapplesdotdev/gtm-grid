@@ -247,5 +247,13 @@ export const applyGridEvent = (
       // A favourite/pin toggled — sidebar-only state, no `getTable` data, so
       // the grid is unaffected (the list view refetches + reorders).
       return snapshot;
+
+    case "table.autoRun":
+      // Auto-run IS `getTable` data — patch it in place (only for the viewed
+      // table) so every member's toolbar switch flips live and no one keeps
+      // cascading off a stale policy.
+      return event.tableId === snapshot.table._id
+        ? { ...snapshot, table: { ...snapshot.table, autoRun: event.autoRun } }
+        : snapshot;
   }
 };

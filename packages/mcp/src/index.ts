@@ -506,6 +506,22 @@ server.tool(
 );
 
 server.tool(
+  "set_auto_run",
+  "Turn a table's AUTO-RUN on or off. Auto-run ON (the default) means an enrichment column re-runs itself whenever an upstream column it reads changes — convenient, but it SPENDS CREDITS without anyone pressing run. Turn it OFF before you rewrite column configs, bulk-load rows you aren't ready to enrich, or experiment with a mapping, then turn it back ON when the table is set up. With it off, formula/mapped/code columns still update for free; only billed connector columns wait for an explicit run_column / run_table. This is the SAME switch as the Auto-run toggle in the grid toolbar, so the user sees whatever you set here.",
+  {
+    table: z.string(),
+    autoRun: z
+      .boolean()
+      .describe("true = enrichment columns re-run on input changes; false = only run when explicitly asked"),
+  },
+  async ({ table, autoRun }) => {
+    const blocked = planGuard("set_auto_run", "Set auto-run", table);
+    if (blocked) return blocked;
+    return ok(await cloudSource.setAutoRun(table, autoRun));
+  },
+);
+
+server.tool(
   "set_dedupe",
   "Turn deduplication on/off for a table. With it ON, the table stays unique on one column — add_rows skips incoming duplicates automatically (ideal for sourcing N unique rows across paginated searches). Pass column:null to turn it off. keep:'oldest' keeps the first row seen; keep:'newest' replaces it with the new one. Enabling also sweeps existing duplicates once. Match is EXACT (no URL/email normalization), and a blank or over-200-char key cell is never merged.",
   { table: z.string(), column: z.string().nullable().describe("Column NAME to dedupe on, or null to disable"), keep: z.enum(["oldest", "newest"]).optional() },

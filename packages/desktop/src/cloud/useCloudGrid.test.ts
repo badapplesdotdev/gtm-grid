@@ -29,7 +29,7 @@ type Snapshot = Parameters<typeof patchGridCache>[0];
 
 const baseSnapshot = (): NonNullable<Snapshot> =>
   ({
-    table: { _id: "t1", name: "Leads", dedupe: null },
+    table: { _id: "t1", name: "Leads", dedupe: null, autoRun: true },
     columns: [
       {
         _id: "c1",
@@ -338,7 +338,7 @@ describe("createIncrementalTableView — incremental derivation + row identity",
   /** A snapshot with `rows`×`cols` cells (every cell populated). */
   const grid = (rows: number, cols: number): NonNullable<Snapshot> =>
     ({
-      table: { _id: "t1", name: "Grid", dedupe: null },
+      table: { _id: "t1", name: "Grid", dedupe: null, autoRun: true },
       columns: Array.from({ length: cols }, (_, c) => ({
         _id: `c${c}`,
         name: `C${c}`,
@@ -432,7 +432,7 @@ const page = (
   nextCursor: Page["nextCursor"],
 ): Page =>
   ({
-    table: { _id: "t1", name: "Leads", dedupe: null },
+    table: { _id: "t1", name: "Leads", dedupe: null, autoRun: true },
     columns: [
       {
         _id: "c1",
@@ -474,7 +474,12 @@ describe("mergePagesToSnapshot — flatten loaded pages (TRI-3272)", () => {
     expect(snap?.rows.map((r) => r._id)).toEqual(["r1", "r2", "r3"]);
     expect(snap?.cells.map((c) => c.rowId)).toEqual(["r1", "r2", "r3"]);
     expect(snap?.columns.map((c) => c._id)).toEqual(["c1"]);
-    expect(snap?.table).toEqual({ _id: "t1", name: "Leads", dedupe: null });
+    expect(snap?.table).toEqual({
+      _id: "t1",
+      name: "Leads",
+      dedupe: null,
+      autoRun: true,
+    });
   });
 });
 

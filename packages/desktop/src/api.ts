@@ -75,6 +75,12 @@ export interface FullTable {
   columns: Column[];
   rows: Row[];
   dedupe?: { column: string; keep: "oldest" | "newest" } | null;
+  /**
+   * Auto-run policy (workspace-shared, persisted on the table). When off, a
+   * BILLED function column is not re-run just because an upstream input changed
+   * — the user presses play. Absent ⇒ on, the historical behaviour.
+   */
+  autoRun?: boolean;
 }
 /** A field whose value is picked from a live connector list (name → id). */
 export interface FieldOptionSource {

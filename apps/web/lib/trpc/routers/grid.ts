@@ -513,6 +513,24 @@ export const gridRouter = router({
     ),
 
   /**
+   * Turn a table's auto-run on/off — whether BILLED function columns downstream
+   * of a change re-run by themselves. WORKSPACE-SHARED (it governs shared credit
+   * spend). Members-only. Idempotent and NOT metered — setting a policy isn't a
+   * billable action. Returns the effective `autoRun` state.
+   */
+  setAutoRun: protectedProcedure
+    .input(z.object({ tableId: z.string().min(1), autoRun: z.boolean() }))
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* GridService;
+          return yield* svc.setTableAutoRun(input.tableId, input.autoRun);
+        }),
+      ),
+    ),
+
+  /**
    * Set (or clear) a table's row-dedup config and sweep duplicates immediately.
    * `column: null` disables dedupe. Members-only; the sweep is metered + live.
    */

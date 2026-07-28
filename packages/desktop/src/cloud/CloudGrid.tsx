@@ -44,7 +44,7 @@ import { DedupePopover } from "../DedupePopover";
 import { resolveRowHeight } from "../gridVirtual";
 import { buildPresenceView } from "../gridPresence";
 import { runCloudColumn, runCloudPreview, type CloudSession } from "./cloud-run";
-import { cascadeDependents, runColumnsInDepOrder } from "../gridRun";
+import { cascadeCandidates, cascadeDependents, runColumnsInDepOrder } from "../gridRun";
 import { WebhookModal } from "./WebhookModal";
 import { ShareModal } from "./ShareModal";
 import { CrmStatusStrip } from "./CrmStatusStrip";
@@ -344,6 +344,7 @@ export function CloudGrid({
     deleteColumn,
     setDedupe,
     dedupeTable,
+    setAutoRun,
   } = useCloudGridMutations();
 
   const [runningColId, setRunningColId] = useState<string | null>(null);
@@ -487,6 +488,14 @@ export function CloudGrid({
   const cascadeColumnsRef = useRef<Column[]>([]);
   cascadeColumnsRef.current = data?.columns ?? [];
 
+  // Auto-run policy, mirrored into a ref for the SAME reason as the columns above:
+  // the cascade closures are memoized (they feed DataGrid's `cellActions` bundle),
+  // so a closure that captured `data.table.autoRun` by value would keep cascading
+  // off the policy that was live when the cell last rendered. That exact bug —
+  // "Auto-run off was ignored" — is why the toggle reads through a ref.
+  const autoRunRef = useRef(true);
+  autoRunRef.current = data?.autoRun !== false;
+
   // Raw single-column run (sidecar call + header spinner), WITHOUT cascading — the
   // unit that the cascade and run-all compose over.
   const runColumnRaw = useCallback(
@@ -513,9 +522,17 @@ export function CloudGrid({
   // column DOWNSTREAM of them (force, because their input just changed) in
   // dependency order — independent siblings in parallel, chained ones serialized.
   // e.g. Get API data → map field in sibling → compute value in next sibling.
+  //
+  // AUTO-RUN OFF narrows the candidate pool to FREE columns — see
+  // `cascadeCandidates` for why narrowing the pool (not filtering the result) is
+  // what keeps the transitive walk honest.
   const cascadeFrom = useCallback(
     async (seedColumnIds: string[], rowIds?: string[]) => {
-      const fnCols = cascadeColumnsRef.current.filter((c) => c.kind === "function");
+      const fnCols = cascadeCandidates(
+        cascadeColumnsRef.current,
+        autoRunRef.current,
+        seedColumnIds,
+      );
       await cascadeDependents(seedColumnIds, fnCols, rowIds, CASCADE_CONCURRENCY, runColumnRaw);
     },
     [runColumnRaw],
@@ -889,6 +906,17 @@ export function CloudGrid({
     canRun: session !== null,
     runDisabledReason: session === null ? "Sign in to run cloud columns" : undefined,
     canAddRow: true,
+    // The toolbar's Auto-run switch. Persisted on the table (workspace-shared),
+    // so it survives reloads and every member — and any agent driving the grid
+    // over MCP — sees and honours the same policy.
+    autoRun: {
+      value: table.autoRun !== false,
+      onToggle: () =>
+        void guard(
+          () => setAutoRun(table.id as Id<"tables">, table.autoRun === false),
+          "change auto-run",
+        ),
+    },
     // LIVE is status, not an action — keep it always inline (never folded into
     // the overflow menu). Dedupe + Webhook are actions (see toolbarActions).
     toolbarExtras: (

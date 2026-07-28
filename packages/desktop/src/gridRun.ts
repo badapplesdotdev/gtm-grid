@@ -14,6 +14,7 @@
 
 import {
   buildColumnDeps,
+  isFreeColumn,
   type MinimalColumn,
   runColumnsWithDeps,
   transitiveDependents,
@@ -43,6 +44,44 @@ export function cellIsRunning(
   if (runningCells.has(`${rowId}:${colId}`)) return true;
   if (runningColId !== colId) return false;
   return cellStatus !== "done" && cellStatus !== "error";
+}
+
+/**
+ * The column set a cascade may walk, given the table's auto-run policy and the
+ * seeds it is cascading FROM.
+ *
+ * Auto-run ON: every function column. Auto-run OFF: the FREE ones
+ * (formula/mapped/code — no billable connector call) PLUS the seeds, because the
+ * point of the switch is "don't spend credits unless I asked", not "freeze the
+ * grid". The user asking for one billed column is exactly the case that should
+ * still fill in the free columns reading it.
+ *
+ * The seeds must stay in the set whatever the policy says about them — billed,
+ * or not even a function column: {@link cascadeDependents} builds its dependency
+ * graph from THIS set, so a missing seed has no outgoing edges and the whole
+ * cascade silently finds nothing. `transitiveDependents` excludes the seeds from
+ * the result on its own, so including them here grants graph edges, never a
+ * re-run.
+ *
+ * What this deliberately does NOT do is filter the RESULT: a free column
+ * downstream of a SKIPPED billed one stays unreachable, which is correct — the
+ * billed column never ran, so the free column's input never changed, and running
+ * it would recompute the same stale value (or, for a mapped column, overwrite a
+ * good result with an empty one).
+ *
+ * Pure.
+ */
+export function cascadeCandidates<T extends MinimalColumn>(
+  columns: readonly T[],
+  autoRun: boolean,
+  seedColumnIds: readonly string[] = [],
+): T[] {
+  const seeds = new Set(seedColumnIds);
+  return columns.filter(
+    (c) =>
+      seeds.has(c.id) ||
+      (c.kind === "function" && (autoRun || isFreeColumn(c))),
+  );
 }
 
 /**

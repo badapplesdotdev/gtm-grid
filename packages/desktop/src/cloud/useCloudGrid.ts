@@ -646,6 +646,7 @@ type GetTableData = {
     _id: string;
     name: string;
     dedupe?: { column: string; keep: "oldest" | "newest" } | null;
+    autoRun?: boolean;
   };
   columns: readonly {
     _id: string;
@@ -764,6 +765,8 @@ export function createIncrementalTableView(): {
       id: data.table._id,
       name: data.table.name,
       dedupe: data.table.dedupe ?? null,
+      // Absent (an older cached snapshot) means ON — the pre-toggle behaviour.
+      autoRun: data.table.autoRun !== false,
       columns,
       rows,
     };
@@ -1751,6 +1754,27 @@ export function useCloudGridMutations() {
     [beginOptimistic, currentColumn, refresh],
   );
 
+  /**
+   * Turn the table's auto-run on/off. Optimistic through the SAME reducer the
+   * realtime `table.autoRun` echo uses, so the toolbar switch flips instantly
+   * and the echo converges on it (no refetch — the patch IS the whole change).
+   * Rolls back if the mutation fails, so the switch never lies about the policy.
+   */
+  const setAutoRun = useCallback(
+    async (tableId: Id<"tables">, autoRun: boolean) => {
+      const rollback = beginOptimistic(tableId, [
+        { type: "table.autoRun", tableId, autoRun },
+      ]);
+      try {
+        return await apiClient!.grid.setAutoRun.mutate({ tableId, autoRun });
+      } catch (e) {
+        rollback();
+        throw e;
+      }
+    },
+    [beginOptimistic],
+  );
+
   /** Set (or clear) the table's dedupe config; the server sweeps immediately. */
   const setDedupe = useCallback(
     async (
@@ -1792,6 +1816,7 @@ export function useCloudGridMutations() {
     deleteColumn,
     setDedupe,
     dedupeTable,
+    setAutoRun,
   };
 }
 

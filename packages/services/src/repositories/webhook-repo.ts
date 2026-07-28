@@ -102,6 +102,13 @@ export interface GridTable {
   readonly name: string;
   readonly position: number;
   readonly createdAt: number;
+  /**
+   * The table's auto-run flag. Optional because this projection is also built by
+   * hand in fixtures; the Drizzle reads `select()` every column, so the real path
+   * always carries it. Callers MUST treat absent as ON (`autoRun !== false`) —
+   * the column is `NOT NULL DEFAULT true`, so absent can only mean "not supplied".
+   */
+  readonly autoRun?: boolean;
 }
 
 /** A grid column projection. */
