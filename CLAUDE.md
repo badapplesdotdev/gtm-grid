@@ -18,6 +18,11 @@ pnpm typecheck            # tsc -b (project refs) + web + desktop typecheck
 pnpm test                 # vitest run, all package suites in one pass
 pnpm lint                 # oxlint over packages/ (apps/ is excluded — see below)
 
+# Electron E2E is a required local, detached gate for user-facing features:
+pnpm e2e:background       # starts Playwright without blocking the active turn
+pnpm e2e:status           # check for running / passed / failed
+pnpm e2e:log              # last 60 log lines; inspect only when needed
+
 # Turbo-orchestrated variants (cached, dependency-aware):
 pnpm turbo:typecheck
 pnpm turbo:test
@@ -94,6 +99,7 @@ Drizzle over Postgres (`@gtmgrid/db`) + Better Auth (`@gtmgrid/auth`) + Effect-D
 
 - **All business logic / services use Effect-TS** with typed errors (`Data.TaggedError`) and `Layer`-based DI (`Effect.Service`). No thrown exceptions in service code, **no `as` casts** — model the types. DB/external access lives behind service methods, never raw in routers/handlers/UI. React components stay plain React — Effect is for logic only. Canonical reference: `packages/engine/src/sample-service.ts` (+ `.test.ts`). Full rules in `docs/effect-conventions.md`.
 - **Tests** — Vitest. Test outcomes (returned value or typed error `_tag`), not implementation. Use Effect test `Layer`s instead of mocks; assert typed failures with `Effect.runPromiseExit` + `Cause.failureOption`. Each package owns its `vitest.config.ts`; the root config discovers them via `projects`.
+- **Desktop E2E** — Every user-facing desktop feature needs a Playwright spec under `packages/desktop/e2e/`. Run the suite locally with `pnpm e2e:background` and require `pnpm e2e:status` to report `passed` before opening the PR. It is intentionally excluded from GitHub Actions so a multi-minute Electron run never blocks the feedback loop.
 - **TypeScript** — `typescript@^7` (native compiler). Root `tsconfig.json` is a solution file with project references to each composite package; `pnpm typecheck` runs `tsc -b`.
 - **Native deps** — `better-sqlite3` and `quickjs-emscripten` must stay external (not Vite-prebundled). `kysely` is pinned to `0.29.2` with a patch (`patches/`).
 

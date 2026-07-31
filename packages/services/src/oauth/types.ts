@@ -160,6 +160,20 @@ export interface OAuthCoreSpec<E extends OAuthNotConfiguredError> {
   readonly stateSecretEnv: string;
   /** Appended to SITE_URL to form the redirect URI. */
   readonly redirectPath: string;
+  /**
+   * Extra query params for the AUTHORIZE step only (never the token step).
+   *
+   * Exists because a provider can make refresh-token issuance conditional on the
+   * authorize request rather than on scopes: Google returns a `refresh_token`
+   * ONLY when `access_type=offline` is sent, and only on the FIRST consent
+   * unless `prompt=consent` forces the dialog again. Without both, a Google
+   * connection silently degrades to a 1-hour access token with nothing to
+   * refresh — and the failure surfaces an hour later, far from its cause.
+   *
+   * Omitted by every provider that predates this field, so their authorize URLs
+   * are byte-identical to before.
+   */
+  readonly extraAuthorizeParams?: Readonly<Record<string, string>>;
   /** Builds the provider's not-configured error for a missing env var name. */
   readonly notConfigured: (missing: string) => E;
   /**

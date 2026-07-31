@@ -48,6 +48,9 @@ const SCOPED_SPEC: OAuthCoreSpec<TestOAuthNotConfigured> = {
   scopeSeparator: " ",
 };
 
+/** The Google combination: without BOTH, no refresh token is ever issued. */
+const OFFLINE_CONSENT = { access_type: "offline", prompt: "consent" } as const;
+
 const run = <A, E>(effect: Effect.Effect<A, E, never>): Promise<A> => Effect.runPromise(effect);
 const runExit = <A, E>(effect: Effect.Effect<A, E, never>) => Effect.runPromiseExit(effect);
 
@@ -243,6 +246,66 @@ describe("authorizeUrl", () => {
   it("joins scopes with the spec's separator", async () => {
     const url = new URL(await run(authorizeUrl(SCOPED_SPEC, "S")));
     expect(url.searchParams.get("scope")).toBe("oauth crm.objects.contacts.read");
+  });
+
+  it("emits no extra params for a spec that declares none", async () => {
+    // The regression guard: every provider predating extraAuthorizeParams must
+    // produce a byte-identical authorize URL.
+    const url = new URL(await run(authorizeUrl(SPEC, "STATE_TOKEN")));
+    expect([...url.searchParams.keys()].sort()).toEqual(["client_id", "redirect_uri", "response_type", "state"]);
+  });
+
+  it("appends the spec's extra authorize params", async () => {
+    // Google issues no refresh_token without BOTH of these.
+    const url = new URL(
+      await run(authorizeUrl({ ...SPEC, extraAuthorizeParams: OFFLINE_CONSENT }, "STATE_TOKEN")),
+    );
+    expect(url.searchParams.get("access_type")).toBe("offline");
+    expect(url.searchParams.get("prompt")).toBe("consent");
+    // …without disturbing the protocol params.
+    expect(url.searchParams.get("state")).toBe("STATE_TOKEN");
+    expect(url.searchParams.get("response_type")).toBe("code");
+  });
+
+  it("refuses to let an extra param overwrite a protocol param", async () => {
+    // A spec that could set `state` or `redirect_uri` would defeat the CSRF gate
+    // or redirect the grant — those are not the spec's to choose.
+    const url = new URL(
+      await run(
+        authorizeUrl(
+          {
+            ...SPEC,
+            extraAuthorizeParams: {
+              state: "ATTACKER_STATE",
+              redirect_uri: "https://evil.example.com/cb",
+              client_id: "evil-client",
+              response_type: "token",
+            },
+          },
+          "STATE_TOKEN",
+        ),
+      ),
+    );
+    expect(url.searchParams.get("state")).toBe("STATE_TOKEN");
+    expect(url.searchParams.get("redirect_uri")).toBe("https://www.gtmgrid.dev/api/oauth/test/callback");
+    expect(url.searchParams.get("client_id")).toBe("client-123");
+    expect(url.searchParams.get("response_type")).toBe("code");
+  });
+
+  it("keeps extra params out of the TOKEN request", async () => {
+    // access_type/prompt are authorize-step only; sending them to the token
+    // endpoint is at best ignored and at worst a 400.
+    const bodies: string[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => {
+      bodies.push(String(init?.body ?? ""));
+      return new Response(JSON.stringify({ access_token: "at" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    await run(tokenRequest({ ...SPEC, extraAuthorizeParams: OFFLINE_CONSENT }, { code: "abc" }));
+    expect(bodies[0]).not.toContain("access_type");
+    expect(bodies[0]).not.toContain("prompt");
   });
 });
 

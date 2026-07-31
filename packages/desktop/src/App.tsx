@@ -123,6 +123,9 @@ const SkillPanel = lazy(() =>
 const SignalsModal = lazy(() =>
   import("./SignalsModal").then((m) => ({ default: m.SignalsModal })),
 );
+const SheetImportModal = lazy(() =>
+  import("./SheetImportModal").then((m) => ({ default: m.SheetImportModal })),
+);
 const ImportCsvModal = lazy(() =>
   import("./ImportCsvModal").then((m) => ({ default: m.ImportCsvModal })),
 );
@@ -1217,6 +1220,10 @@ export default function App() {
   // CSV import: whether the cloud import modal is open (null = closed). Cloud
   // writes go via the metered Convex mutations (writer built below).
   const [importMode, setImportMode] = useState<null | "cloud">(null);
+  // Google Sheet import is a DIALOG over the grid, not an inline pane like CSV:
+  // it binds an existing table rather than creating one, so replacing the grid
+  // would hide the very thing the user is mapping onto.
+  const [sheetImportOpen, setSheetImportOpen] = useState(false);
 
   // Window drag-and-drop CSV: a CSV dropped anywhere on the app opens the import
   // flow straight on the review stage. `fileDragging` toggles the drop overlay;
@@ -2557,6 +2564,7 @@ export default function App() {
         actions={[
           { id: "new-table", label: "New table", keywords: "create add", run: () => { setNewTableFolderId(null); setShowNewTableChooser(true); } },
           { id: "import-csv", label: "Import CSV", keywords: "upload file", run: () => setImportMode("cloud") },
+          { id: "import-google-sheet", label: "Import from Google Sheets", keywords: "google sheet spreadsheet sync import", run: () => setSheetImportOpen(true) },
           { id: "browse-tables", label: "Browse all tables", keywords: "search manage", run: () => setView({ kind: "tables" }) },
           { id: "browse-pipelines", label: "Browse pipelines", keywords: "automation workflow canvas", run: () => setView({ kind: "pipelines" }) },
           { id: "new-pipeline", label: "New pipeline", keywords: "automation workflow", run: () => setView({ kind: "pipelines" }) },
@@ -3004,6 +3012,30 @@ export default function App() {
                 setCloudTableId(id as Id<"tables">);
                 setImportMode(null);
                 setDroppedCsv(null);
+              }}
+            />
+          </Suspense>
+        )}
+
+        {/* Google Sheet import — a dialog, so the grid stays visible behind it.
+            Requires a table to bind to and a workspace to read the Google grant. */}
+        {sheetImportOpen && cloudTableId && activeWorkspace?._id && (
+          <Suspense fallback={null}>
+            <SheetImportModal
+              workspaceId={activeWorkspace._id}
+              tableId={cloudTableId}
+              existingColumns={(activeTableSource?.columns ?? []).map((c) => ({ id: c.id, name: c.name }))}
+              onClose={() => setSheetImportOpen(false)}
+              onImported={() => {
+                setSheetImportOpen(false);
+                // The import writes through raw tRPC calls, outside the grid's
+                // mutation hooks. Refresh both the sidebar count and the open
+                // paged snapshot so imported rows/columns appear immediately.
+                void invalidateCloudTables();
+                void invalidateCloudTable(cloudTableId);
+                void queryClient.invalidateQueries({
+                  queryKey: ["sheets", "bindings", String(cloudTableId)],
+                });
               }}
             />
           </Suspense>

@@ -141,6 +141,12 @@ export const authorizeUrl = <E extends OAuthNotConfiguredError>(spec: OAuthCoreS
     }
     url.searchParams.set("response_type", "code");
     url.searchParams.set("state", state);
+    // Provider extras go on LAST, but cannot overwrite the protocol params
+    // above: a spec that set `state` or `redirect_uri` here would defeat the
+    // CSRF gate or redirect the grant, so those are not the spec's to choose.
+    for (const [key, value] of Object.entries(spec.extraAuthorizeParams ?? {})) {
+      if (!url.searchParams.has(key)) url.searchParams.set(key, value);
+    }
     return url.toString();
   });
 

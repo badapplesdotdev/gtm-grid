@@ -27,6 +27,9 @@
     "lint": "oxlint packages",
     "test": "vitest run",
     "test:watch": "vitest",
+    "e2e:background": "node scripts/run-e2e-background.mjs start",
+    "e2e:status": "node scripts/run-e2e-background.mjs status",
+    "e2e:log": "node scripts/run-e2e-background.mjs log",
     "changeset": "changeset",
     "version-packages": "changeset version && node scripts/sync-app-version.mjs"
   },

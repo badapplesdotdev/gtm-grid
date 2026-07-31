@@ -26,6 +26,9 @@ import {
   CrmConnectionService,
   type CrmProvider,
   type CrmSession,
+  GOOGLE_ADAPTER,
+  GOOGLE_USERINFO_URL,
+  GoogleConnectionService,
   HUBSPOT_ADAPTER,
   HubspotClient,
   type OAuthAdapter,
@@ -232,6 +235,80 @@ export const SLACK_OAUTH: OAuthRouteAdapter = routeAdapter(SLACK_ADAPTER, {
 });
 
 /**
+ * Read the connected Google account's email.
+ *
+ * A best-effort side quest, deliberately: a failure returns "" and the
+ * connection still saves. The alternative — failing the callback — would throw
+ * away a successfully exchanged grant (and burn the one-time code) over a
+ * cosmetic label, forcing the user through consent again for nothing.
+ *
+ * `email` is not vanity. Users routinely have a personal and a work Google
+ * account signed in at once, and a card reading "Connected to Google" with no
+ * address gives them no way to notice they authorised the wrong one — which
+ * surfaces much later as "why can't it see my spreadsheet?".
+ */
+const googleAccountEmail = (accessToken: string): Effect.Effect<string> =>
+  Effect.tryPromise({
+    try: async () => {
+      const res = await fetch(GOOGLE_USERINFO_URL, {
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+      if (!res.ok) return "";
+      const body: unknown = await res.json();
+      const email = typeof body === "object" && body !== null ? Reflect.get(body, "email") : undefined;
+      return typeof email === "string" ? email : "";
+    },
+    catch: () => new CrmSyncError({ message: "google userinfo failed" }),
+  }).pipe(Effect.orElseSucceed(() => ""));
+
+/**
+ * Google. Smaller than a CRM for the same reasons as Slack, with one difference:
+ * the grant alone is not enough to DO anything.
+ *
+ * Under `drive.file` no spreadsheet is readable until the user selects it in the
+ * Google Picker, so a freshly connected workspace legitimately reaches zero
+ * files. Picking is therefore NOT chained onto this callback — it is a separate,
+ * repeatable action from the connect card, which also lets a user add sheets
+ * later without re-running consent.
+ *
+ * `pickedFiles` starts EMPTY on every fresh consent. A new grant does not
+ * guarantee the previous per-file authorisations carry across it, so restoring
+ * an old list would advertise access we may no longer hold.
+ */
+export const GOOGLE_OAUTH: OAuthRouteAdapter = routeAdapter(GOOGLE_ADAPTER, {
+  authorizePath: "/api/oauth/google/authorize",
+  // Focus the app; the connect card's poll converges on its own. Same reasoning
+  // as Slack — a bespoke deep-link target would need three allowlist entries to
+  // do nothing extra.
+  connectedDeepLink: "gtmgrid://open",
+  connectedFallbackHref: "/open",
+  persistConnection: (args) =>
+    Effect.gen(function* () {
+      const connection = yield* GoogleConnectionService;
+      const googleEmail = yield* googleAccountEmail(args.tokens.accessToken);
+      yield* connection.saveConnection({
+        workspaceId: args.workspaceId,
+        tokens: args.tokens,
+        meta: {
+          connectedByUserId: args.userId,
+          connectedByName: args.connectedByName,
+          googleEmail,
+          pickedFiles: [],
+        },
+      });
+      // The success page names the account, which is the only identity Google
+      // gives us without a second, more-privileged scope.
+      return googleEmail;
+    }),
+  captureConnected: ({ userId, workspaceId }) =>
+    captureServer("google_connected", {
+      distinctId: userId,
+      properties: { workspace_id: workspaceId },
+      groups: { workspace: workspaceId },
+    }),
+});
+
+/**
  * Provider → adapter. A `Record`, not a ternary.
  *
  * The previous `provider === "hubspot" ? HUBSPOT_OAUTH : ATTIO_OAUTH` routed
@@ -242,6 +319,7 @@ export const OAUTH_ADAPTERS: Readonly<Record<string, OAuthRouteAdapter>> = {
   attio: ATTIO_OAUTH,
   hubspot: HUBSPOT_OAUTH,
   slack: SLACK_OAUTH,
+  google: GOOGLE_OAUTH,
 };
 
 /** The CRM subset, for callers whose provider is a `CrmProvider`. */

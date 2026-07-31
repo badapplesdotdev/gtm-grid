@@ -14,6 +14,10 @@ import {
   processCrmBinding,
   warmUpCrmBinding,
 } from "../../../lib/inngest/functions/poll-crm-sync";
+import {
+  pollSheetBindings,
+  processSheetBinding,
+} from "../../../lib/inngest/functions/sync-sheet-binding";
 import { sendTrialReminders } from "../../../lib/inngest/functions/send-trial-reminders";
 import { sendWorkspaceWelcome } from "../../../lib/inngest/functions/send-workspace-welcome";
 import {
@@ -58,6 +62,9 @@ const handlers = serve({
     processCrmBinding,
     warmUpCrmBinding,
     enrichCrmRow,
+    // Google Sheet→grid import — hourly cron gates each binding's own schedule.
+    pollSheetBindings,
+    processSheetBinding,
     // Lifecycle emails (#10 #12 #13 #17 #19 #20) — event-driven sends.
     lifecycleTeammateJoined,
     lifecycleSubscriptionConfirmed,

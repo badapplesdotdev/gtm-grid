@@ -62,6 +62,18 @@ const authSchema = z.discriminatedUnion("type", [
      * This field is what ties the manifest to that provider's connection.
      */
     provider: z.string().min(1),
+    /**
+     * Which credential row this connector reads, when that is NOT its own id.
+     *
+     * The credential slot is normally the connector id, which is fine while one
+     * grant serves one connector. It breaks down for a provider FAMILY: Google
+     * issues a single OAuth grant that covers Sheets, Docs and Gmail, so
+     * `googlesheets`, `googledocs` and `gmail` must all read the one `google`
+     * connection — otherwise the user connects Google once per connector.
+     *
+     * Omitted ⇒ the connector id, so every existing manifest is unaffected.
+     */
+    credentialSlot: z.string().min(1).optional(),
     /** Header the access token rides in. Defaults to the OAuth 2.0 bearer norm. */
     header: z.string().default("Authorization"),
     /** Scheme prefix used when the header is Authorization. */

@@ -54,6 +54,25 @@ export function freshState() {
     crmBindings: [],
     crmRuns: [],
 
+    // ── Google Sheets sync ────────────────────────────────────────────────
+    // Files previously granted through Google Picker plus deterministic sheet
+    // contents. The second dataset represents an upstream edit before a later
+    // manual sync: one changed row, two unchanged rows, and one new row.
+    googlePickedFiles: [{ id: "sheet_1", name: "GTM Grid staging QA" }],
+    sheetHeaders: ["email", "company", "score"],
+    sheetRows: [
+      ["ada@example.com", "Analytical Engines", "10"],
+      ["grace@example.com", "US Navy", "20"],
+      ["linus@example.com", "Linux Foundation", "30"],
+    ],
+    sheetUpdatedRows: [
+      ["ada@example.com", "Analytical Engines Updated", "11"],
+      ["grace@example.com", "US Navy", "20"],
+      ["linus@example.com", "Linux Foundation", "30"],
+      ["katherine@example.com", "NASA", "40"],
+    ],
+    sheetBindings: [],
+
     user: {
       id: "user_1",
       _id: "user_1",
@@ -113,7 +132,7 @@ export function freshState() {
     pipelines: [],
 
     // monotonic id counters for created entities
-    seq: { table: 1, column: 2, row: 2, project: 1, folder: 0, pipeline: 0, version: 0 },
+    seq: { table: 1, column: 2, row: 2, project: 1, folder: 0, pipeline: 0, version: 0, sheetBinding: 0 },
     now: FIXED_NOW,
   };
 }

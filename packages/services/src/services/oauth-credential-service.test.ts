@@ -211,6 +211,69 @@ describe("freshSecrets", () => {
   });
 });
 
+/**
+ * Google's slot. The distinctive risk is NOT the token — it is the picked-file
+ * list riding in the same envelope.
+ *
+ * Under `drive.file` that list is the only record of which spreadsheets the
+ * grant can open. Google's access tokens live 1 hour, so a merge that dropped it
+ * would silently empty the user's sheet list every hour, leaving a perfectly
+ * valid token attached to a connection the UI believes can reach nothing — a
+ * failure that looks like data loss and is trivially caused by writing the
+ * obvious `merge: (_, tokens) => toSecrets(tokens, EMPTY)`.
+ */
+describe("the Google slot", () => {
+  const googleSecrets = (over: Partial<Record<string, string>> = {}): SecretMap => ({
+    accessToken: "ya29.stale",
+    refreshToken: "1//rt",
+    expiresAtMs: String(NOW + 60_000), // inside the 5-min skew ⇒ stale
+    connectedByUserId: "user_1",
+    connectedByName: "Morgan",
+    googleEmail: "morgan@trigify.io",
+    pickedFiles: JSON.stringify([{ id: "sheet_1", name: "Q3 Leads" }]),
+    ...over,
+  });
+
+  it("is keyed on 'google' so every Google connector resolves to it", () => {
+    expect(Object.keys(OAUTH_SLOTS)).toContain("google");
+  });
+
+  it("is Proactive, NOT Rotating — Google refresh tokens are reusable", () => {
+    // Rotating would take a per-connection advisory lock for no reason.
+    expect(OAUTH_SLOTS.google.policy._tag).toBe("Proactive");
+  });
+
+  it("PRESERVES picked files and account email across a refresh", () => {
+    const merged = OAUTH_SLOTS.google.merge(googleSecrets(), {
+      accessToken: "ya29.fresh",
+      refreshToken: "1//rt",
+      expiresAtMs: NOW + 3600_000,
+    });
+    expect(merged.accessToken).toBe("ya29.fresh");
+    expect(merged.googleEmail).toBe("morgan@trigify.io");
+    expect(JSON.parse(merged.pickedFiles ?? "[]")).toEqual([{ id: "sheet_1", name: "Q3 Leads" }]);
+    expect(merged.connectedByName).toBe("Morgan");
+  });
+
+  it("keeps the picked files even when the stored blob has no usable token", () => {
+    // The fallback path reconstructs meta field-by-field; it must not blank the
+    // list just because the token was missing.
+    const merged = OAUTH_SLOTS.google.merge({ googleEmail: "m@x.io" }, { accessToken: "ya29.fresh" });
+    expect(merged.googleEmail).toBe("m@x.io");
+    expect(merged.accessToken).toBe("ya29.fresh");
+  });
+
+  it("parses tokens out of a stored Google secret map", () => {
+    const parsed = OAUTH_SLOTS.google.parse(googleSecrets());
+    expect(parsed?.accessToken).toBe("ya29.stale");
+    expect(parsed?.refreshToken).toBe("1//rt");
+  });
+
+  it("parses null when there is no access token, so freshSecrets passes through", () => {
+    expect(OAUTH_SLOTS.google.parse({ pickedFiles: "[]" })).toBeNull();
+  });
+});
+
 // ── PER-ACCOUNT REFRESH ──────────────────────────────────────────────────────
 //
 // A workspace may hold several Slack teams, one credentials row each. Without

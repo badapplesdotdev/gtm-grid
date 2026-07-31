@@ -183,7 +183,14 @@ import {
   signalRepoLayer,
   type SignalBinding,
 } from "./repositories/signal-repo.js";
+import {
+  type SheetBinding,
+  SheetRepo,
+  SheetRepoLive,
+  sheetRepoLayer,
+} from "./repositories/sheet-repo.js";
 import { SignalService } from "./services/signal-service.js";
+import { SheetImportService } from "./services/sheet-import-service.js";
 import { AttioAuth } from "./services/attio-auth.js";
 import { AttioClient } from "./services/attio-client.js";
 import { CrmClientRegistry } from "./services/crm-client-registry.js";
@@ -191,6 +198,7 @@ import { CrmAuthRegistry } from "./services/crm-auth-registry.js";
 import { HubspotAuth } from "./services/hubspot-auth.js";
 import { HubspotClient } from "./services/hubspot-client.js";
 import { CrmConnectionService } from "./services/crm-connection-service.js";
+import { GoogleConnectionService } from "./services/google-connection-service.js";
 import { SlackConnectionService } from "./services/slack-connection-service.js";
 import { OAuthCredentialService } from "./services/oauth-credential-service.js";
 import { CrmSyncService } from "./services/crm-sync-service.js";
@@ -359,6 +367,7 @@ export const appLayer = (params: {
     Layer.provide(membershipService),
   );
   const signalRepo = SignalRepoLive.pipe(Layer.provide(dbLayer));
+  const sheetRepo = SheetRepoLive.pipe(Layer.provide(dbLayer));
   const crmBindingRepo = CrmBindingRepoLive.pipe(Layer.provide(dbLayer));
   const crmSyncedRowRepo = CrmSyncedRowRepoLive.pipe(Layer.provide(dbLayer));
   const crmSyncRunRepo = CrmSyncRunRepoLive.pipe(Layer.provide(dbLayer));
@@ -376,6 +385,12 @@ export const appLayer = (params: {
   );
   // Slack rides the GENERIC credential machinery — no CRM sync deps.
   const slackConnectionService = SlackConnectionService.Default.pipe(
+    Layer.provide(credentialService),
+    Layer.provide(credentialRepo),
+    Layer.provide(CryptoServiceLive),
+  );
+  // Google likewise — same three deps, same reason.
+  const googleConnectionService = GoogleConnectionService.Default.pipe(
     Layer.provide(credentialService),
     Layer.provide(credentialRepo),
     Layer.provide(CryptoServiceLive),
@@ -400,6 +415,16 @@ export const appLayer = (params: {
     Layer.provide(credentialCryptoLive),
     Layer.provide(membershipService),
     Layer.provide(entitlementService),
+  );
+  // Sheet import reuses WebhookRepo's grid primitives (rows/cells) and reads the
+  // Google grant through the same refresh path the engine uses.
+  const sheetImportService = SheetImportService.Default.pipe(
+    Layer.provide(sheetRepo),
+    Layer.provide(webhookRepo),
+    Layer.provide(membershipService),
+    Layer.provide(credentialRepo),
+    Layer.provide(CryptoServiceLive),
+    Layer.provide(oauthCredentialService),
   );
   const gridService = GridService.Default.pipe(
     Layer.provide(projectRepo),
@@ -439,6 +464,8 @@ export const appLayer = (params: {
     extensionService,
     signalService,
     signalRepo,
+    sheetImportService,
+    sheetRepo,
     crmBindingRepo,
     crmSyncedRowRepo,
     crmSyncRunRepo,
@@ -450,6 +477,7 @@ export const appLayer = (params: {
     crmAuthRegistry,
     crmConnectionService,
     slackConnectionService,
+    googleConnectionService,
     oauthCredentialService,
     crmSyncService,
     gridService,
@@ -536,6 +564,7 @@ export interface TestLayerFixtures {
   readonly webhooks?: Webhook[];
   /** Signal bindings visible to {@link SignalRepo} (MUTATED by insert/patch/delete). */
   readonly signalBindings?: SignalBinding[];
+  readonly sheetBindings?: SheetBinding[];
   /** CRM bindings visible to {@link CrmBindingRepo} (MUTATED by insert/patch/delete). */
   readonly crmBindings?: CrmBinding[];
   /** CRM record→row identity map for {@link CrmSyncedRowRepo} (MUTATED by upsert/stale). */
@@ -785,6 +814,11 @@ export const TestLayer = (
     Layer.provide(credentialRepo),
     Layer.provide(cryptoService),
   );
+  const googleConnectionService = GoogleConnectionService.Default.pipe(
+    Layer.provide(credentialService),
+    Layer.provide(credentialRepo),
+    Layer.provide(cryptoService),
+  );
   const entitlementService = EntitlementService.Default.pipe(
     Layer.provide(workspaceRepo),
   );
@@ -807,6 +841,7 @@ export const TestLayer = (
     Layer.provide(membershipService),
   );
   const signalRepo = signalRepoLayer({ bindings: fixtures.signalBindings });
+  const sheetRepo = sheetRepoLayer({ bindings: fixtures.sheetBindings });
   const crmBindingRepo = crmBindingRepoLayer({ bindings: fixtures.crmBindings });
   const crmSyncedRowRepo = crmSyncedRowRepoLayer({ entries: fixtures.crmSyncedRows });
   const crmSyncRunRepo = crmSyncRunRepoLayer({ runs: fixtures.crmSyncRuns });
@@ -836,6 +871,14 @@ export const TestLayer = (
     Layer.provide(fixtures.crypto ?? credentialCryptoTest()),
     Layer.provide(membershipService),
     Layer.provide(entitlementService),
+  );
+  const sheetImportService = SheetImportService.Default.pipe(
+    Layer.provide(sheetRepo),
+    Layer.provide(webhookRepo),
+    Layer.provide(membershipService),
+    Layer.provide(credentialRepo),
+    Layer.provide(cryptoService),
+    Layer.provide(oauthCredentialService),
   );
   const gridService = GridService.Default.pipe(
     Layer.provide(projectRepo),
@@ -879,6 +922,8 @@ export const TestLayer = (
     extensionService,
     signalService,
     signalRepo,
+    sheetImportService,
+    sheetRepo,
     crmBindingRepo,
     crmSyncedRowRepo,
     crmSyncRunRepo,
@@ -890,6 +935,7 @@ export const TestLayer = (
     crmAuthRegistry,
     crmConnectionService,
     slackConnectionService,
+    googleConnectionService,
     oauthCredentialService,
     crmSyncService,
     gridService,
@@ -941,6 +987,8 @@ export type AppServices =
   | WebhookDeliveryRepo
   | SignalService
   | SignalRepo
+  | SheetImportService
+  | SheetRepo
   | CrmBindingRepo
   | CrmSyncedRowRepo
   | CrmSyncRunRepo
@@ -952,6 +1000,7 @@ export type AppServices =
   | CrmAuthRegistry
   | CrmConnectionService
   | SlackConnectionService
+  | GoogleConnectionService
   | OAuthCredentialService
   | CrmSyncService
   | ExtensionService

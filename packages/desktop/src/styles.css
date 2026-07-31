@@ -3934,6 +3934,18 @@ body.resizing-agent .agent-panel { transition: none; }
 .signal-strip-row .btn { margin-left: auto; }
 @keyframes signal-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
+/* Google Sheet bindings share the compact signal strip shell. Rows wrap rather
+   than clip in a narrow grid pane, keeping Sync now reachable at every width. */
+.sheet-strip-entry { min-width: 0; }
+.sheet-strip-row { flex-wrap: wrap; }
+.sheet-strip-source { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sheet-strip-meta { white-space: nowrap; }
+.sheet-strip-result { padding-left: 15px; color: var(--success, #30a46c); font-size: 11.5px; line-height: 1.5; }
+@media (max-width: 760px) {
+  .sheet-strip-source { flex: 1 1 calc(100% - 90px); }
+  .sheet-strip-meta { order: 3; flex: 1 1 100%; padding-left: 15px; }
+}
+
 /* Boolean keyword builder (OR / AND / NOT) + live query preview */
 .sig-bool { border: 1px solid var(--border); border-radius: var(--r-md); padding: 14px; margin-bottom: 14px; background: var(--surface-2); }
 .sig-bool .sig-field:last-of-type { margin-bottom: 0; }

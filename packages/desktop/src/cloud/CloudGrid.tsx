@@ -48,6 +48,7 @@ import { cascadeCandidates, cascadeDependents, runColumnsInDepOrder } from "../g
 import { WebhookModal } from "./WebhookModal";
 import { ShareModal } from "./ShareModal";
 import { CrmStatusStrip } from "./CrmStatusStrip";
+import { SheetStatusStrip } from "./SheetStatusStrip";
 import { useMe } from "./auth";
 import { gridPresenceStore, useGridPresenceRoster } from "./presenceStore";
 import {
@@ -1005,6 +1006,7 @@ export function CloudGrid({
         </div>
       )}
       <SignalStatusStrip tableId={String(table.id)} />
+      {workspaceId && <SheetStatusStrip tableId={String(table.id)} workspaceId={workspaceId} />}
       {workspaceId && <CrmStatusStrip tableId={String(table.id)} workspaceId={workspaceId} onUpgrade={onUpgrade} />}
       <DataGrid controller={controller} agentViewCommand={agentViewCommand} />
 

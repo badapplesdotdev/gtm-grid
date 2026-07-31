@@ -12,6 +12,7 @@ import { BrandIcon } from "./BrandIcon";
 import { apiClient } from "./cloud/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { OAuthConnectCard, type OAuthCardStatus } from "./cloud/OAuthConnectCard";
+import { openExternalUrl } from "./cloud/open-external";
 
 /**
  * The scope a credential is saved under in the panels. Extends the local-only
@@ -677,6 +678,91 @@ export function SlackOAuthSection({ workspaceId }: { workspaceId: string }) {
   );
 }
 
+/**
+ * OAuth management for the GOOGLE connection.
+ *
+ * The one shape no other provider has: connecting is NOT the end of setup.
+ * `drive.file` grants access per-file, so a freshly connected workspace can open
+ * nothing until the user picks spreadsheets in Google's Picker — and can come
+ * back to pick more at any time. Hence the extra `connectedAction`, and hence a
+ * status line that reports the FILE COUNT rather than just "Connected": a card
+ * that said only "Connected" while every Sheets column failed would be actively
+ * misleading.
+ *
+ * ONE card for all of Google, not one per Google connector. The grant is shared
+ * (see `credentialSlot`), so a per-connector card would let a user "disconnect
+ * Sheets" while Docs kept working off the same credential row.
+ */
+export function GoogleOAuthSection({ workspaceId }: { workspaceId: string }) {
+  const [status, setStatus] = useState<OAuthCardStatus>({ kind: "loading" });
+  const [fileCount, setFileCount] = useState(0);
+  const queryClient = useQueryClient();
+  const wasConnected = useRef<boolean | null>(null);
+
+  const refresh = useCallback(async () => {
+    if (!apiClient) return;
+    try {
+      const s = await apiClient.google.connectionStatus.query({ workspaceId });
+      // Same reasoning as Slack: an OAuth connect is written SERVER-side, so the
+      // renderer's cached credential list is stale until we invalidate it — but
+      // only on a CHANGE, not on every 2s poll tick.
+      if (wasConnected.current !== null && wasConnected.current !== s.connected) {
+        void queryClient.invalidateQueries({ queryKey: ["credentials", "list", workspaceId] });
+      }
+      wasConnected.current = s.connected;
+      if (s.connected) {
+        setFileCount(s.pickedFileCount);
+        setStatus({
+          kind: "connected",
+          byName: s.connectedByName,
+          accountLabel: s.googleEmail || "Google",
+        });
+      } else setStatus({ kind: "disconnected", configured: s.configured });
+    } catch {
+      // NOT `{ disconnected, configured: false }` — see the Slack section.
+      setStatus({ kind: "error" });
+    }
+  }, [workspaceId, queryClient]);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  return (
+    <OAuthConnectCard
+      headText="Google · OAuth connection"
+      providerName="Google"
+      status={status}
+      refresh={refresh}
+      authorizeUrl={async () => {
+        if (!apiClient) throw new Error("Not signed in");
+        const { url } = await apiClient.google.authorizeUrl.query({ workspaceId });
+        return url;
+      }}
+      disconnect={async () => {
+        if (!apiClient) throw new Error("Not signed in");
+        const res = await apiClient.google.disconnect.mutate({ workspaceId });
+        return res.removed ? "Disconnected." : "Nothing to disconnect.";
+      }}
+      connectedAction={{
+        label: fileCount === 0 ? "Select spreadsheets" : "Add spreadsheets",
+        run: async () => {
+          if (!apiClient) throw new Error("Not signed in");
+          const { url } = await apiClient.google.pickerUrl.query({ workspaceId });
+          await openExternalUrl(url);
+        },
+      }}
+      connectedSub={
+        fileCount === 0
+          ? // The state that would otherwise be silent: a valid grant that can
+            // reach nothing. Say it plainly, next to the button that fixes it.
+            "no spreadsheets selected yet — Google Sheets columns will fail until you pick some"
+          : `${fileCount} spreadsheet${fileCount === 1 ? "" : "s"} available to columns`
+      }
+      disconnectedSub="Connect with OAuth to read and write Google Sheets from a column"
+      footerNote="GTM Grid can only open spreadsheets you explicitly select — it cannot browse your Drive."
+    />
+  );
+}
+
 export function ExtensionPanel({ id, onConnected, onBack, workspaceCreds, workspaceId }: { id: string; onConnected: () => void; onBack?: () => void; workspaceCreds?: WorkspaceCredSource; workspaceId?: string }) {
   const [detail, setDetail] = useState<ExtensionDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -730,6 +816,12 @@ export function ExtensionPanel({ id, onConnected, onBack, workspaceCreds, worksp
       ) : null}
 
       {detail.id === "slack" && workspaceId ? <SlackOAuthSection workspaceId={workspaceId} /> : null}
+      {/* Every Google connector shows the SAME card, because they share one
+          grant. `startsWith` rather than an equality check so `googledocs` and
+          `gmail` inherit it without another line here — and so a user opening
+          the Docs connector sees the connection they already made from Sheets,
+          rather than a Connect button that would re-run consent for nothing. */}
+      {detail.id.startsWith("google") && workspaceId ? <GoogleOAuthSection workspaceId={workspaceId} /> : null}
 
       {/*
         An OAUTH tool gets NO api-key section — and this is a data-loss guard, not

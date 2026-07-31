@@ -288,6 +288,11 @@ export type ConnectorAuth =
       type: "oauth";
       /** OAuth provider id the access token was minted for (e.g. "slack"). */
       provider: string;
+      /**
+       * Which credential row to read, when that is NOT this connector's id.
+       * Lets a provider family share ONE grant — see {@link credentialSlotFor}.
+       */
+      credentialSlot?: string;
       header?: string;
       /** Which decrypted secret holds the access token (default "accessToken"). */
       secretKey?: string;

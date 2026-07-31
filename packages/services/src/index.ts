@@ -515,6 +515,52 @@ export {
   SlackOAuthNotConfigured,
 } from "./services/slack-auth.js";
 export {
+  GoogleConnectionService,
+  GOOGLE_CONNECTION_SLOT,
+  MAX_PICKED_FILES,
+  mergePickedFiles,
+  parseConnection as parseGoogleConnection,
+  toSecrets as googleConnectionSecrets,
+  type GoogleConnection,
+  type GoogleConnectionMeta,
+  type GooglePickedFile,
+} from "./services/google-connection-service.js";
+export {
+  SheetImportService,
+  SheetImportError,
+  MAX_ROWS_PER_SYNC,
+  PREVIEW_ROWS,
+  isTransientImportError,
+  mapRows,
+  normalizeHeader,
+  pauseCopy,
+  pauseReasonFor,
+  rangeFor,
+  valuesHashOf,
+  type MappedRow,
+} from "./services/sheet-import-service.js";
+export {
+  SheetRepo,
+  SheetRepoLive,
+  sheetRepoLayer,
+  SheetRepoError,
+  type SheetBinding,
+  type SheetBindingColumn,
+  type SheetBindingInsert,
+  type SheetBindingPatch,
+  type SheetSyncedRow,
+  type SheetDueCursor,
+  type DueSheetBinding,
+} from "./repositories/sheet-repo.js";
+export {
+  GoogleAuth,
+  GOOGLE_ADAPTER,
+  GOOGLE_SPEC,
+  GOOGLE_SCOPES,
+  GOOGLE_USERINFO_URL,
+  GoogleOAuthNotConfigured,
+} from "./services/google-auth.js";
+export {
   verifySlackRequest,
   readSlackRequest,
   parseSlackBody,
