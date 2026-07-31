@@ -196,8 +196,7 @@ export function SheetImportModal(props: SheetImportModalProps) {
             type: "text",
             kind: "manual",
           });
-          const columnId = typeof created === "string" ? created : created.id;
-          columns.push({ header, columnId });
+          columns.push({ header, columnId: created });
         } else {
           columns.push({ header, columnId: target });
         }

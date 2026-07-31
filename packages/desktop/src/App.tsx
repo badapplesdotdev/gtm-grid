@@ -3026,7 +3026,17 @@ export default function App() {
               tableId={cloudTableId}
               existingColumns={(activeTableSource?.columns ?? []).map((c) => ({ id: c.id, name: c.name }))}
               onClose={() => setSheetImportOpen(false)}
-              onImported={() => setSheetImportOpen(false)}
+              onImported={() => {
+                setSheetImportOpen(false);
+                // The import writes through raw tRPC calls, outside the grid's
+                // mutation hooks. Refresh both the sidebar count and the open
+                // paged snapshot so imported rows/columns appear immediately.
+                void invalidateCloudTables();
+                void invalidateCloudTable(cloudTableId);
+                void queryClient.invalidateQueries({
+                  queryKey: ["sheets", "bindings", String(cloudTableId)],
+                });
+              }}
             />
           </Suspense>
         )}

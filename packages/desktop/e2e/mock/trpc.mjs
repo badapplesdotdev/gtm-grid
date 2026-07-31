@@ -188,7 +188,8 @@ export const procedures = {
       condition: input?.condition,
     });
     s.columns.push(c);
-    return c;
+    // The real GridService returns the persisted column id, not the full row.
+    return id;
   },
 
   "grid.updateColumn": (input, s) => {
@@ -272,6 +273,94 @@ export const procedures = {
     return { ok: true };
   },
   "grid.dedupe": () => ({ removed: 0 }),
+
+  // ── Google Sheets sync ─────────────────────────────────────────────────
+  "google.pickedFiles": (_input, s) => ({ files: s.googlePickedFiles }),
+  "google.pickerUrl": () => ({ url: "https://accounts.google.com/e2e-picker" }),
+  "sheets.listTabs": () => ({ tabs: ["Leads"] }),
+  "sheets.preview": (_input, s) => ({
+    headers: s.sheetHeaders,
+    rows: s.sheetRows.slice(0, 3),
+  }),
+  "sheets.create": (input, s) => {
+    const id = `sheetb_${++s.seq.sheetBinding}`;
+    s.sheetBindings.push({
+      id,
+      workspaceId: input?.workspaceId ?? s.workspaceId,
+      tableId: input?.tableId,
+      spreadsheetId: input?.spreadsheetId,
+      spreadsheetName: input?.spreadsheetName,
+      sheetTitle: input?.sheetTitle,
+      headerRow: input?.headerRow ?? 1,
+      columns: input?.columns ?? [],
+      keyHeader: input?.keyHeader ?? null,
+      schedule: input?.schedule ?? "daily",
+      enabled: true,
+      pausedReason: null,
+      lastSyncedAt: null,
+      lastError: null,
+      rowsSynced: 0,
+      createdAt: s.now,
+      syncCount: 0,
+    });
+    return { id };
+  },
+  "sheets.listForTable": (input, s) => ({
+    bindings: s.sheetBindings
+      .filter((binding) => binding.tableId === input?.tableId)
+      .map(({ syncCount: _syncCount, ...binding }) => binding),
+  }),
+  "sheets.syncNow": (input, s) => {
+    const binding = s.sheetBindings.find((candidate) => candidate.id === input?.bindingId);
+    if (!binding) throw new Error("Sheet binding not found");
+
+    const sourceRows = binding.syncCount === 0 ? s.sheetRows : s.sheetUpdatedRows;
+    const headerIndex = new Map(s.sheetHeaders.map((header, index) => [header, index]));
+    let rowsCreated = 0;
+    let rowsUpdated = 0;
+    let rowsSkipped = 0;
+
+    for (const source of sourceRows) {
+      const keyIndex = binding.keyHeader ? headerIndex.get(binding.keyHeader) : undefined;
+      const key = keyIndex === undefined ? String(rowsCreated + rowsUpdated + rowsSkipped) : String(source[keyIndex] ?? "");
+      let row = s.rows.find(
+        (candidate) => candidate.tableId === binding.tableId
+          && candidate.sheetBindingId === binding.id
+          && candidate.sheetKey === key,
+      );
+      const created = row === undefined;
+      if (!row) {
+        const rowId = `row_${++s.seq.row}`;
+        row = {
+          _id: rowId,
+          tableId: binding.tableId,
+          position: s.rows.filter((candidate) => candidate.tableId === binding.tableId).length + 1,
+          createdAt: s.now,
+          sheetBindingId: binding.id,
+          sheetKey: key,
+        };
+        s.rows.push(row);
+        s.cells[rowId] = {};
+      }
+
+      let changed = false;
+      for (const mapping of binding.columns) {
+        const index = headerIndex.get(mapping.header);
+        const value = index === undefined ? "" : source[index] ?? "";
+        const previous = s.cells[row._id]?.[mapping.columnId]?.value;
+        if (previous !== value) changed = true;
+        s.cells[row._id][mapping.columnId] = cell(value);
+      }
+      if (created) rowsCreated += 1;
+      else if (changed) rowsUpdated += 1;
+      else rowsSkipped += 1;
+    }
+    binding.syncCount += 1;
+    binding.rowsSynced = sourceRows.length;
+    binding.lastSyncedAt = Date.now();
+    binding.lastError = null;
+    return { rowsCreated, rowsUpdated, rowsSkipped, truncated: false };
+  },
 
   // ── CRM sync (Attio + HubSpot) ────────────────────────────────────────────
   // The wizard + status strip surface. Mirrors the real `crm` router closely
