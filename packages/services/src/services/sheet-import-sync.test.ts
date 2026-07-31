@@ -100,6 +100,9 @@ const fixturesWith = async (bindings: SheetBinding[]): Promise<TestLayerFixtures
       id: "cred-google",
       workspaceId: WS,
       extensionId: "google",
+      // Google is a single-account connector. Main's multi-Slack-account
+      // migration represents that sole account with the explicit default key.
+      accountId: "",
       scope: "workspace",
       name: "Google",
       ownerUserId: null,

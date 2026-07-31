@@ -96,7 +96,7 @@ describe("share.create (snapshot size cap)", () => {
     workspaces: [{ id: WS, name: "WS", ownerId: MEMBER, currentPlanId: "team" }],
     memberships,
     gridProjects: [{ id: PROJECT, workspaceId: WS, name: "P", createdAt: 1 }],
-    gridTables: [{ id: TABLE, workspaceId: WS, projectId: PROJECT, name: "Companies", position: 0, createdAt: 1, dedupeColumn: null, dedupeKeep: null, folderId: null, favorite: false }],
+    gridTables: [{ id: TABLE, workspaceId: WS, projectId: PROJECT, name: "Companies", position: 0, createdAt: 1, dedupeColumn: null, dedupeKeep: null, folderId: null, favorite: false, autoRun: true }],
     gridColumns: [{ id: COL, workspaceId: WS, tableId: TABLE, name: "Data", type: "text", kind: "manual", provider: null, method: null, code: null, params: {}, condition: null, position: 0, createdAt: 1 }],
     gridRows: [{ id: ROW, workspaceId: WS, tableId: TABLE, position: 0, createdAt: 1 }],
     gridCells: [{ id: "cell-1", workspaceId: WS, tableId: TABLE, rowId: ROW, columnId: COL, value: cellValue, status: "done", error: null, updatedAt: 1 }],

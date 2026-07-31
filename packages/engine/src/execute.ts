@@ -36,6 +36,20 @@ const aiRunTrace = new AsyncLocalStorage<string>();
 // dispatches have no row).
 const rowRunContext = new AsyncLocalStorage<{ rowId: string; tableId: string; columnId: string }>();
 
+// WHICH ACCOUNT on the connector the running column is bound to — Slack's team
+// id, when a workspace has installed the app into more than one Slack team.
+//
+// AsyncLocalStorage rather than a `dispatch` parameter because `dispatch` is the
+// SANDBOX boundary: its signature is `(provider, method, input)` and the guest
+// calls it as `sdk.slack.send(...)`. Widening it would put account selection
+// inside untrusted column JS, where a body could simply name another team's id
+// and post as it. Ambient host-side context cannot be reached from the guest at
+// all, which is the property that matters here.
+//
+// Undefined outside a column run (previews, standalone dispatches) and for every
+// single-account connector, in which case the store resolves the sole row.
+const columnAccount = new AsyncLocalStorage<string>();
+
 /** Stored on a cell's `error` (with status "empty") when a run condition gates the
  *  row off, so the grid can show a muted "Run condition not met" note instead of a dash. */
 export const CONDITION_SKIP_NOTE = "Run condition not met";
@@ -228,8 +242,12 @@ export class Engine {
         // The credential slot is the connector id UNLESS the connector declares
         // a shared one, which is how a provider family (Google: sheets, docs,
         // gmail) reads a single OAuth grant instead of demanding one connection
-        // per connector. Absent slot ⇒ unchanged behaviour for every connector.
-        const cred = yield* this.creds.getCredential(credentialSlotFor(this.registry.get(provider), provider));
+        // per connector. Account selection remains host-side ambient context so
+        // multi-account providers cannot be switched by untrusted sandbox code.
+        const cred = yield* this.creds.getCredential(
+          credentialSlotFor(this.registry.get(provider), provider),
+          columnAccount.getStore(),
+        );
         const aiProviders = this.config.aiProviders?.length
           ? this.config.aiProviders
           : this.config.ai
@@ -354,6 +372,13 @@ export class Engine {
     const col = await Effect.runPromise(reads.getColumn(columnId));
     if (!col) throw new Error(`column ${columnId} not found`);
     if (col.kind !== "function") return { ran: 0, errors: 0 };
+
+    // Bind this run to the column's account for every dispatch beneath it,
+    // including the sandbox ones the guest triggers. `enterWith` rather than
+    // `run(...)` to match `aiRunTrace` above: the rest of this method is a long
+    // async body that would otherwise need wrapping wholesale, and both stores
+    // share the same lifetime (this run).
+    if (col.accountId) columnAccount.enterWith(col.accountId);
 
     const providers = this.registry.providerMap();
 
@@ -622,7 +647,9 @@ export class Engine {
   private async runBatch(col: Column, inputs: Record<string, unknown>[]): Promise<unknown[]> {
     const m = this.registry.method(col.provider ?? "", col.method ?? "");
     if (!m?.runBatch) throw new Error(`Method ${col.provider}.${col.method} is not batchable`);
-    const cred = await Effect.runPromise(this.creds.getCredential(col.provider ?? ""));
+    const cred = await Effect.runPromise(
+      this.creds.getCredential(col.provider ?? "", col.accountId ?? columnAccount.getStore()),
+    );
     const aiProviders = this.config.aiProviders?.length
       ? this.config.aiProviders
       : this.config.ai

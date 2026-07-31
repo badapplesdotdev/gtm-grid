@@ -44,7 +44,7 @@ import { DedupePopover } from "../DedupePopover";
 import { resolveRowHeight } from "../gridVirtual";
 import { buildPresenceView } from "../gridPresence";
 import { runCloudColumn, runCloudPreview, type CloudSession } from "./cloud-run";
-import { cascadeDependents, runColumnsInDepOrder } from "../gridRun";
+import { cascadeCandidates, cascadeDependents, runColumnsInDepOrder } from "../gridRun";
 import { WebhookModal } from "./WebhookModal";
 import { ShareModal } from "./ShareModal";
 import { CrmStatusStrip } from "./CrmStatusStrip";
@@ -245,6 +245,34 @@ export function CloudGrid({
     (pipelineBindings.data ?? []).flatMap((binding) => Object.values(binding.outputMapping)),
   ), [pipelineBindings.data]);
 
+  // The workspace's connected SLACK TEAMS, for the column editor's account
+  // picker. A workspace may install the app into several, and a column that
+  // does not name one fails at run time once there is more than one — so the
+  // editor needs the list to make that choice available at authoring time.
+  //
+  // Keyed by connector id so the shape generalises: the day a second connector
+  // supports multiple accounts, it joins this map rather than growing a
+  // parallel prop.
+  const slackAccountsQ = useReactQuery({
+    queryKey: ["slack", "accounts", workspaceId],
+    enabled: apiClient !== null && Boolean(workspaceId),
+    queryFn: async () => {
+      const res = await apiClient.slack.connectionStatus.query({
+        workspaceId: String(workspaceId),
+      });
+      return res.connections.map(
+        (c: { teamId: string; teamName: string }) => ({
+          id: c.teamId,
+          label: c.teamName || c.teamId,
+        }),
+      );
+    },
+  });
+  const providerAccounts = useMemo(
+    () => ({ slack: slackAccountsQ.data ?? [] }),
+    [slackAccountsQ.data],
+  );
+
   // The table's CRM binding (if any) powers the add-column popover's
   // "From {CRM}" section — one more source field, server-backfilled by the
   // sync the mutation enqueues.
@@ -317,6 +345,7 @@ export function CloudGrid({
     deleteColumn,
     setDedupe,
     dedupeTable,
+    setAutoRun,
   } = useCloudGridMutations();
 
   const [runningColId, setRunningColId] = useState<string | null>(null);
@@ -460,6 +489,14 @@ export function CloudGrid({
   const cascadeColumnsRef = useRef<Column[]>([]);
   cascadeColumnsRef.current = data?.columns ?? [];
 
+  // Auto-run policy, mirrored into a ref for the SAME reason as the columns above:
+  // the cascade closures are memoized (they feed DataGrid's `cellActions` bundle),
+  // so a closure that captured `data.table.autoRun` by value would keep cascading
+  // off the policy that was live when the cell last rendered. That exact bug —
+  // "Auto-run off was ignored" — is why the toggle reads through a ref.
+  const autoRunRef = useRef(true);
+  autoRunRef.current = data?.autoRun !== false;
+
   // Raw single-column run (sidecar call + header spinner), WITHOUT cascading — the
   // unit that the cascade and run-all compose over.
   const runColumnRaw = useCallback(
@@ -486,9 +523,17 @@ export function CloudGrid({
   // column DOWNSTREAM of them (force, because their input just changed) in
   // dependency order — independent siblings in parallel, chained ones serialized.
   // e.g. Get API data → map field in sibling → compute value in next sibling.
+  //
+  // AUTO-RUN OFF narrows the candidate pool to FREE columns — see
+  // `cascadeCandidates` for why narrowing the pool (not filtering the result) is
+  // what keeps the transitive walk honest.
   const cascadeFrom = useCallback(
     async (seedColumnIds: string[], rowIds?: string[]) => {
-      const fnCols = cascadeColumnsRef.current.filter((c) => c.kind === "function");
+      const fnCols = cascadeCandidates(
+        cascadeColumnsRef.current,
+        autoRunRef.current,
+        seedColumnIds,
+      );
       await cascadeDependents(seedColumnIds, fnCols, rowIds, CASCADE_CONCURRENCY, runColumnRaw);
     },
     [runColumnRaw],
@@ -713,6 +758,7 @@ export function CloudGrid({
           kind: patch.kind as "manual" | "function" | undefined,
           provider: patch.provider,
           method: patch.method,
+          accountId: patch.accountId,
           code: patch.code,
           params: patch.params as Record<string, unknown> | undefined,
           condition: patch.condition,
@@ -861,6 +907,17 @@ export function CloudGrid({
     canRun: session !== null,
     runDisabledReason: session === null ? "Sign in to run cloud columns" : undefined,
     canAddRow: true,
+    // The toolbar's Auto-run switch. Persisted on the table (workspace-shared),
+    // so it survives reloads and every member — and any agent driving the grid
+    // over MCP — sees and honours the same policy.
+    autoRun: {
+      value: table.autoRun !== false,
+      onToggle: () =>
+        void guard(
+          () => setAutoRun(table.id as Id<"tables">, table.autoRun === false),
+          "change auto-run",
+        ),
+    },
     // LIVE is status, not an action — keep it always inline (never folded into
     // the overflow menu). Dedupe + Webhook are actions (see toolbarActions).
     toolbarExtras: (
@@ -1048,6 +1105,7 @@ export function CloudGrid({
           fetchTableColumns={session !== null ? fetchTableColumns : undefined}
           currentTableId={String(table.id)}
           cloudConnectedExtensionIds={cloudConnectedExtensionIds}
+          providerAccounts={providerAccounts}
           onClose={() => setEditCol(null)}
           onSaved={(run) => {
             const colId = editCol.id;

@@ -103,6 +103,7 @@ describe("credentials.list", () => {
     id: "c_shared",
     workspaceId: WS,
     extensionId: "ai:anthropic",
+    accountId: "",
     scope: "workspace",
     name: "Anthropic (team)",
     ownerUserId: null,
@@ -113,6 +114,7 @@ describe("credentials.list", () => {
     id: "c_alice",
     workspaceId: WS,
     extensionId: "ai:openai",
+    accountId: "",
     scope: "personal",
     name: "OpenAI (Alice)",
     ownerUserId: ALICE,
@@ -123,6 +125,7 @@ describe("credentials.list", () => {
     id: "c_bob",
     workspaceId: WS,
     extensionId: "ai:openai",
+    accountId: "",
     scope: "personal",
     name: "OpenAI (Bob)",
     ownerUserId: BOB,
@@ -163,6 +166,7 @@ describe("credentials personal-scope ownership at the procedure boundary", () =>
     id: "c_alice",
     workspaceId: WS,
     extensionId: "ai:openai",
+    accountId: "",
     scope: "personal",
     name: "OpenAI (Alice)",
     ownerUserId: ALICE,
@@ -184,5 +188,82 @@ describe("credentials personal-scope ownership at the procedure boundary", () =>
       scope: "personal",
     });
     expect(secrets).toBeNull();
+  });
+});
+
+describe("credentials.remove", () => {
+  const OWNER = "user_owner";
+  const roles: readonly Membership[] = [
+    ...memberships,
+    { workspaceId: WS, userId: OWNER, role: "owner" },
+  ];
+
+  it("removes a shared key for an owner, and getForRun then finds nothing", async () => {
+    const caller = callerFor({ memberships: roles, currentUserId: OWNER });
+    await caller.credentials.save({
+      workspaceId: WS,
+      extensionId: "ai:anthropic",
+      scope: "workspace",
+      name: "Anthropic",
+      secrets: { apiKey: "sk-ant-123" },
+    });
+    const res = await caller.credentials.remove({
+      workspaceId: WS,
+      extensionId: "ai:anthropic",
+      scope: "workspace",
+    });
+    expect(res).toEqual({ removed: true });
+    const after = await caller.credentials.getForRun({
+      workspaceId: WS,
+      extensionId: "ai:anthropic",
+      scope: "workspace",
+    });
+    expect(after).toBeNull();
+  });
+
+  it("rejects a plain member with FORBIDDEN", async () => {
+    const caller = callerFor({ memberships: roles, currentUserId: ALICE });
+    await expect(
+      caller.credentials.remove({
+        workspaceId: WS,
+        extensionId: "ai:anthropic",
+        scope: "workspace",
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("rejects a non-member with FORBIDDEN", async () => {
+    const caller = callerFor({
+      memberships: roles,
+      currentUserId: "user_stranger",
+    });
+    await expect(
+      caller.credentials.remove({
+        workspaceId: WS,
+        extensionId: "ai:anthropic",
+        scope: "workspace",
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("rejects a signed-out caller with UNAUTHORIZED", async () => {
+    const caller = callerFor({ memberships: roles, currentUserId: null });
+    await expect(
+      caller.credentials.remove({
+        workspaceId: WS,
+        extensionId: "ai:anthropic",
+        scope: "workspace",
+      }),
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  it("is idempotent — removing what isn't there is not an error", async () => {
+    const caller = callerFor({ memberships: roles, currentUserId: OWNER });
+    const res = await caller.credentials.remove({
+      workspaceId: WS,
+      extensionId: "ai:never-connected",
+      scope: "workspace",
+    });
+    expect(res).toEqual({ removed: false });
   });
 });

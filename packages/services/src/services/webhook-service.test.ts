@@ -103,10 +103,12 @@ function harness(opts: {
    * pass a failing layer to prove the worker's publish is best-effort.
    */
   realtime?: Layer.Layer<RealtimePublisher>;
+  /** The target table(s); defaults to `baseTable` (auto-run left at its default). */
+  tables?: GridTable[];
 }) {
   const webhookRepo = webhookRepoLayer({
     webhooks: opts.webhooks ?? [{ ...webhook }],
-    tables: [baseTable],
+    tables: opts.tables ?? [baseTable],
     columns,
     rows: opts.rows ?? [],
     cells: opts.cells ?? [],
@@ -199,6 +201,48 @@ describe("WebhookService.resolveToken", () => {
       svc.pipe(Effect.flatMap((s) => s.resolveToken("tok-123"))),
     );
     expect(Exit.isSuccess(exit) && exit.value).toBe(null);
+  });
+
+  // The table's Auto-run switch is the OUTER gate on the webhook's own auto-run:
+  // an inbound row is the one path that spends credits with nobody watching, so
+  // "nothing in this table enriches itself" has to hold there too.
+  describe("auto-run is the AND of the webhook's flag and the table's", () => {
+    const withAutoRun = (autoRun: boolean): GridTable[] => [{ ...baseTable, autoRun }];
+    const resolve = (opts: Parameters<typeof harness>[0]) =>
+      harness(opts).run(svc.pipe(Effect.flatMap((s) => s.resolveToken("tok-123"))));
+
+    it("webhook on + table on → auto-run", async () => {
+      const exit = await resolve({
+        webhooks: [{ ...webhook, autoRun: true }],
+        tables: withAutoRun(true),
+      });
+      expect(Exit.isSuccess(exit) && exit.value?.autoRun).toBe(true);
+    });
+
+    it("webhook on + table OFF → no auto-run (the switch wins)", async () => {
+      const exit = await resolve({
+        webhooks: [{ ...webhook, autoRun: true }],
+        tables: withAutoRun(false),
+      });
+      expect(Exit.isSuccess(exit) && exit.value?.autoRun).toBe(false);
+      // The row still LANDS — only the enrichment is withheld.
+      expect(Exit.isSuccess(exit) && exit.value?.tableId).toBe(TABLE);
+    });
+
+    it("webhook OFF + table on → no auto-run (the connection's own opt-out holds)", async () => {
+      const exit = await resolve({
+        webhooks: [{ ...webhook, autoRun: false }],
+        tables: withAutoRun(true),
+      });
+      expect(Exit.isSuccess(exit) && exit.value?.autoRun).toBe(false);
+    });
+
+    it("a table left at the default auto-runs exactly as it did before", async () => {
+      // `baseTable` carries no `autoRun` — the pre-migration payload shape. It
+      // must read as ON, or every existing webhook would silently stop enriching.
+      const exit = await resolve({ webhooks: [{ ...webhook, autoRun: true }] });
+      expect(Exit.isSuccess(exit) && exit.value?.autoRun).toBe(true);
+    });
   });
 });
 
@@ -886,6 +930,149 @@ describe("WebhookService.getCredential", () => {
       ),
     );
     expect(Exit.isSuccess(exit) && exit.value).toBe(null);
+  });
+});
+
+// A workspace may hold SEVERAL accounts on one connector — the motivating case
+// is installing the Slack app into more than one Slack team. This used to be a
+// `LIMIT 1` point read, so a two-team workspace silently served whichever row
+// the planner returned first. Choosing between them is policy, and the policy
+// is: name an account, or be told you have to.
+describe("WebhookService.getCredential with SEVERAL connected accounts", () => {
+  /** Two Slack teams' secrets, encrypted under the same test crypto layer. */
+  const twoTeams = async () => {
+    const crypto = credentialCryptoTest();
+    const enc = (secrets: Record<string, string>) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const c = yield* CredentialCryptoService;
+          return yield* c.encrypt(WS, secrets);
+        }).pipe(Effect.provide(crypto)),
+      );
+    const credentials = new Map<string, string>([
+      [`${WS}:slack:T_A`, await enc({ accessToken: "xoxb-A", teamId: "T_A" })],
+      [`${WS}:slack:T_B`, await enc({ accessToken: "xoxb-B", teamId: "T_B" })],
+    ]);
+    return { credentials, crypto };
+  };
+
+  it("FAILS CredentialAccountAmbiguous when the caller names no account", async () => {
+    // A failed cell naming the ambiguity is recoverable in one click; a message
+    // delivered into the wrong company's Slack is not.
+    const { credentials, crypto } = await twoTeams();
+    const { run } = harness({ rows: [], cells: [], credentials, crypto });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.getCredential({ workspaceId: WS, extensionId: "slack" }),
+        ),
+      ),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const error = Cause.failureOption(exit.cause);
+      expect(error._tag).toBe("Some");
+      if (error._tag === "Some") {
+        expect(error.value._tag).toBe("CredentialAccountAmbiguous");
+        if (error.value._tag === "CredentialAccountAmbiguous") {
+          // The connected accounts ride along so the caller can name one.
+          expect([...error.value.accountIds].sort()).toEqual(["T_A", "T_B"]);
+          expect(error.value.extensionId).toBe("slack");
+        }
+      }
+    }
+  });
+
+  it("returns THAT account's secrets when the caller names one", async () => {
+    const { credentials, crypto } = await twoTeams();
+    const { run } = harness({ rows: [], cells: [], credentials, crypto });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.getCredential({
+            workspaceId: WS,
+            extensionId: "slack",
+            accountId: "T_B",
+          }),
+        ),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value?.secrets).toEqual({
+        accessToken: "xoxb-B",
+        teamId: "T_B",
+      });
+      // The account comes back too, so the caller can pin the OAuth refresh to
+      // the same row it read from rather than to the sole-account key.
+      expect(exit.value?.accountId).toBe("T_B");
+    }
+  });
+
+  it("returns null for a named account this workspace has NOT connected", async () => {
+    const { credentials, crypto } = await twoTeams();
+    const { run } = harness({ rows: [], cells: [], credentials, crypto });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.getCredential({
+            workspaceId: WS,
+            extensionId: "slack",
+            accountId: "T_STRANGER",
+          }),
+        ),
+      ),
+    );
+    expect(Exit.isSuccess(exit) && exit.value).toBe(null);
+  });
+
+  it("does NOT fail when only ONE account is connected and none is named", async () => {
+    // The un-named read stays valid for every single-account connector, which
+    // is every connector but Slack — and for most Slack workspaces too.
+    const crypto = credentialCryptoTest();
+    const enc = await Effect.runPromise(
+      Effect.gen(function* () {
+        const c = yield* CredentialCryptoService;
+        return yield* c.encrypt(WS, { accessToken: "xoxb-A" });
+      }).pipe(Effect.provide(crypto)),
+    );
+    const credentials = new Map<string, string>([[`${WS}:slack:T_A`, enc]]);
+    const { run } = harness({ rows: [], cells: [], credentials, crypto });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.getCredential({ workspaceId: WS, extensionId: "slack" }),
+        ),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value?.secrets).toEqual({ accessToken: "xoxb-A" });
+      expect(exit.value?.accountId).toBe("T_A");
+    }
+  });
+
+  it("reports the sole-account key for a legacy single-account row", async () => {
+    // Seeded `workspace:extension` with no account suffix — the shape every
+    // pre-`account_id` row has. It answers as account `""`.
+    const crypto = credentialCryptoTest();
+    const enc = await Effect.runPromise(
+      Effect.gen(function* () {
+        const c = yield* CredentialCryptoService;
+        return yield* c.encrypt(WS, { apiKey: "sekret" });
+      }).pipe(Effect.provide(crypto)),
+    );
+    const credentials = new Map<string, string>([[`${WS}:apollo`, enc]]);
+    const { run } = harness({ rows: [], cells: [], credentials, crypto });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.getCredential({ workspaceId: WS, extensionId: "apollo" }),
+        ),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) expect(exit.value?.accountId).toBe("");
   });
 });
 

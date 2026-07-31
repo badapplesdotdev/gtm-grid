@@ -28,7 +28,7 @@ import { PlanGrid, BillingToggle } from "./onboarding/PlanGrid";
 import type { SelectablePlan } from "./onboarding/flow-logic";
 import type { Id } from "./ids";
 import { apiClient, cloudEnabled } from "./client";
-import { useAuthState, useMembers } from "./auth";
+import { useAuthState, useMe, useMembers, useUpdateMemberRole } from "./auth";
 import { runInvite, useInviteLayer } from "./invite";
 import {
   usePendingInvitations,
@@ -57,6 +57,19 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
   const { isAuthenticated } = useAuthState();
   const members = useMembers(workspaceId);
 
+  // The caller's own role in THIS workspace, from `me`. Only an owner may change
+  // roles (the server enforces it too), so this decides whether the roster
+  // renders role pickers or read-only labels.
+  const me = useMe();
+  const myUserId = me?.user._id ?? null;
+  const myRole =
+    me?.workspaces.find((w) => w._id === workspaceId)?.role ?? null;
+  const isOwner = myRole === "owner";
+  const updateMemberRole = useUpdateMemberRole(workspaceId);
+  // The member whose role change is in flight (disables just that row's picker).
+  const [roleBusyUserId, setRoleBusyUserId] = useState<string | null>(null);
+  const [roleError, setRoleError] = useState<string | null>(null);
+
   // The Live invite orchestration Layer, STRANGLER-branched on the cloud path
   // (tRPC `invitations.invite` on the NEW path, the Convex action on the legacy
   // path), composed with the shared system-browser opener. The
@@ -75,6 +88,10 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
   const checkoutLayer = useCheckoutLayer();
 
   const [inviteEmail, setInviteEmail] = useState("");
+  // The role the invite grants. Owner is deliberately NOT offered: ownership is
+  // single-holder and moves by transferring it to an existing member, so it is
+  // never something a pending invite can carry.
+  const [inviteRole, setInviteRole] = useState<"admin" | "member">("member");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // A brief, non-error confirmation under the invite row (e.g. "Invite sent…").
@@ -121,7 +138,7 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
     try {
       const outcome = await runInvite(
         isAuthenticated,
-        { workspaceId, email, role: "member" },
+        { workspaceId, email, role: inviteRole },
         inviteLayer,
       );
       if (outcome.status === "checkout") {
@@ -146,7 +163,47 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
     } finally {
       setBusy(false);
     }
-  }, [pendingInvite, busy, workspaceId, isAuthenticated, inviteLayer]);
+  }, [
+    pendingInvite,
+    busy,
+    workspaceId,
+    isAuthenticated,
+    inviteLayer,
+    inviteRole,
+  ]);
+
+  /**
+   * Apply a role change from the roster picker. Owner-only; the server rejects
+   * anyone else. Promoting to `owner` is a TRANSFER — it demotes the caller to
+   * admin — so it is confirmed before it runs.
+   */
+  const changeRole = useCallback(
+    async (userId: string, name: string, role: "owner" | "admin" | "member") => {
+      if (roleBusyUserId !== null) return;
+      if (
+        role === "owner" &&
+        !window.confirm(
+          `Make ${name} the owner of this workspace?\n\n` +
+            `They take over ownership and billing, and you become an admin. ` +
+            `Only the new owner can undo this.`,
+        )
+      ) {
+        return;
+      }
+      setRoleBusyUserId(userId);
+      setRoleError(null);
+      try {
+        await updateMemberRole(userId, role);
+      } catch (e) {
+        setRoleError(
+          e instanceof Error ? e.message : "Couldn't change that member's role.",
+        );
+      } finally {
+        setRoleBusyUserId(null);
+      }
+    },
+    [roleBusyUserId, updateMemberRole],
+  );
 
   // Copy an accept link to the clipboard (best-effort) for the pending list.
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -247,15 +304,48 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
               <div style={{ fontSize: 12, color: "var(--text-3)" }}>No members yet</div>
             ) : (
               <ul className="ws-member-list">
-                {members.members.map((m) => (
-                  <li key={m._id} className="ws-member-row">
-                    <span className="ws-member-name">
-                      {m.name ?? m.email ?? m.userId}
-                    </span>
-                    <span className="ws-member-role">{m.role}</span>
-                  </li>
-                ))}
+                {members.members.map((m) => {
+                  const label = m.name ?? m.email ?? m.userId;
+                  // The owner picks roles for everyone but themselves: their own
+                  // role changes only by transferring ownership to someone else
+                  // (which the other rows offer), never by self-demotion.
+                  const editable = isOwner && m.userId !== myUserId;
+                  return (
+                    <li key={m._id} className="ws-member-row">
+                      <span className="ws-member-name">{label}</span>
+                      {editable ? (
+                        <select
+                          className="form-input ws-member-role-select"
+                          aria-label={`Role for ${label}`}
+                          value={m.role}
+                          disabled={roleBusyUserId !== null}
+                          onChange={(e) => {
+                            const next = e.target.value;
+                            if (
+                              next === "owner" ||
+                              next === "admin" ||
+                              next === "member"
+                            ) {
+                              void changeRole(m.userId, label, next);
+                            }
+                          }}
+                        >
+                          <option value="member">member</option>
+                          <option value="admin">admin</option>
+                          <option value="owner">owner (transfer)</option>
+                        </select>
+                      ) : (
+                        <span className="ws-member-role">{m.role}</span>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
+            )}
+            {roleError && (
+              <div className="account-menu-error" role="alert">
+                {roleError}
+              </div>
             )}
           </div>
 
@@ -274,6 +364,26 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
                   if (e.key === "Enter") void submitInvite();
                 }}
               />
+              {/* Only an owner can invite an admin — matching the owner-only
+                  rule on role changes, so an invite is not a way for an admin to
+                  mint more admins. An admin sees no picker at all. */}
+              {isOwner && (
+                <select
+                  className="form-input ws-member-role-select"
+                  aria-label="Invite as"
+                  value={inviteRole}
+                  disabled={busy}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    if (next === "admin" || next === "member") {
+                      setInviteRole(next);
+                    }
+                  }}
+                >
+                  <option value="member">member</option>
+                  <option value="admin">admin</option>
+                </select>
+              )}
               <button
                 className="btn btn-primary"
                 onClick={submitInvite}

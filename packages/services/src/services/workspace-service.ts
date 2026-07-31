@@ -155,6 +155,40 @@ export type CreateWorkspaceError =
   | WorkspaceRepoError
   | WorkspaceMemberRepoError;
 
+/**
+ * Raised when the target of a role change is not a member of the workspace —
+ * a stale roster in an open settings panel, or a forged `userId`.
+ */
+export class MemberNotFoundError extends Data.TaggedError(
+  "MemberNotFoundError",
+)<{
+  readonly message: string;
+  readonly workspaceId: string;
+  readonly userId: string;
+}> {}
+
+/**
+ * Raised when a role change would leave the workspace without an owner — the
+ * owner demoting themselves. Ownership is single-holder and moves only by
+ * TRANSFER (promote someone else, which demotes you to admin), so there is no
+ * path to an owner-less workspace and none to an orphaned billing contact.
+ */
+export class LastOwnerError extends Data.TaggedError("LastOwnerError")<{
+  readonly message: string;
+  readonly workspaceId: string;
+  readonly userId: string;
+}> {}
+
+/** Error channel of {@link WorkspaceService.updateMemberRole}. */
+export type UpdateMemberRoleError =
+  | UnauthenticatedError
+  | NotAMemberError
+  | InsufficientRoleError
+  | MemberRepoError
+  | WorkspaceMemberRepoError
+  | MemberNotFoundError
+  | LastOwnerError;
+
 /** Error channel of {@link WorkspaceService.insertMember}. */
 export type InsertMemberError =
   | UnauthenticatedError
@@ -409,6 +443,77 @@ export class WorkspaceService extends Effect.Service<WorkspaceService>()(
           return { memberId, alreadyMember: false };
         });
 
+      /**
+       * Change an existing member's role — the owner's roster control in
+       * workspace settings.
+       *
+       * Authz: OWNER ONLY. Admins already invite, buy seats and run the grid, but
+       * they cannot escalate anyone (including themselves) — so an admin account
+       * that is compromised or simply mistaken cannot mint more admins.
+       *
+       * Ownership is single-holder, so `role: "owner"` is a TRANSFER, not an
+       * addition: the target becomes owner, the caller is demoted to admin, and
+       * `workspaces.ownerId` follows the new owner — atomically, in one repo
+       * transaction. The outgoing owner keeps admin rather than being dropped, so
+       * transferring never locks them out of the workspace they built.
+       *
+       * The two no-op-shaped edges are handled explicitly:
+       *   - Re-setting a member to the role they already hold succeeds and writes
+       *     nothing, so a double-click / retry is harmless.
+       *   - The owner demoting THEMSELVES fails with {@link LastOwnerError}: it is
+       *     the one change that would leave the workspace owner-less (and its
+       *     billing contact orphaned). Transfer first.
+       */
+      const updateMemberRole = (args: {
+        readonly workspaceId: string;
+        readonly userId: string;
+        readonly role: MemberRole;
+      }): Effect.Effect<void, UpdateMemberRoleError> =>
+        Effect.gen(function* () {
+          const caller = yield* membership.requireRole(args.workspaceId, [
+            "owner",
+          ]);
+          const target = yield* memberRepo.findByWorkspaceUser(
+            args.workspaceId,
+            args.userId,
+          );
+          if (target._tag === "None") {
+            return yield* Effect.fail(
+              new MemberNotFoundError({
+                message: `User ${args.userId} is not a member of workspace ${args.workspaceId}.`,
+                workspaceId: args.workspaceId,
+                userId: args.userId,
+              }),
+            );
+          }
+          if (target.value.role === args.role) return;
+          if (args.userId === caller.userId) {
+            // Reachable only as a demotion: the equal-role return above already
+            // covers owner -> owner.
+            return yield* Effect.fail(
+              new LastOwnerError({
+                message:
+                  "You are the workspace owner. Make another member the owner " +
+                  "first — that transfer moves you to admin.",
+                workspaceId: args.workspaceId,
+                userId: args.userId,
+              }),
+            );
+          }
+          if (args.role === "owner") {
+            return yield* memberRepo.transferOwnership({
+              workspaceId: args.workspaceId,
+              fromUserId: caller.userId,
+              toUserId: args.userId,
+            });
+          }
+          yield* memberRepo.updateRole(
+            args.workspaceId,
+            args.userId,
+            args.role,
+          );
+        });
+
       return {
         getWorkspace,
         requireWorkspaceRole,
@@ -416,6 +521,7 @@ export class WorkspaceService extends Effect.Service<WorkspaceService>()(
         listMembers,
         createWorkspace,
         insertMember,
+        updateMemberRole,
       } as const;
     }),
     // MembershipService + WorkspaceRepo must be provided before this service is

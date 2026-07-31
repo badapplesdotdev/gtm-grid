@@ -50,16 +50,33 @@ import { CryptoService } from "./crypto-service.js";
 export interface SaveCredentialInput {
   readonly workspaceId: string;
   readonly extensionId: string;
+  /** Which account on the connector; omit for single-account connectors. */
+  readonly accountId?: string;
   readonly scope: CredentialScope;
   readonly name: string;
   /** PLAINTEXT secret map (e.g. `{ apiKey: "..." }`). Encrypted before storage. */
   readonly secrets: SecretMap;
 }
 
+/** Input for {@link CredentialService.removeCredential}. */
+export interface RemoveCredentialInput {
+  readonly workspaceId: string;
+  readonly extensionId: string;
+  /** Which account on the connector; omit for single-account connectors. */
+  readonly accountId?: string;
+  readonly scope: CredentialScope;
+}
+
 /** Input for {@link CredentialService.getCredentialForRun}. */
 export interface GetForRunInput {
   readonly workspaceId: string;
   readonly extensionId: string;
+  /**
+   * Which account on the connector. Omit for the single-account connectors,
+   * which is every one except Slack — a workspace may install the Slack app
+   * into several teams and each install has its own token pair.
+   */
+  readonly accountId?: string;
   readonly scope: CredentialScope;
 }
 
@@ -82,6 +99,9 @@ export type GetForRunError =
   | CredentialAuthzError
   | CredentialRepoError
   | DecryptError;
+
+/** Full error channel of {@link CredentialService.removeCredential}. */
+export type RemoveCredentialError = CredentialAuthzError | CredentialRepoError;
 
 /** Full error channel of {@link CredentialService.listCredentials}. */
 export type ListCredentialsError =
@@ -126,6 +146,7 @@ export class CredentialService extends Effect.Service<CredentialService>()(
           const existing = yield* repo.findForAccess({
             workspaceId: input.workspaceId,
             extensionId: input.extensionId,
+            accountId: input.accountId,
             scope: input.scope,
             ownerUserId,
           });
@@ -145,6 +166,7 @@ export class CredentialService extends Effect.Service<CredentialService>()(
           return yield* repo.upsert({
             workspaceId: input.workspaceId,
             extensionId: input.extensionId,
+            accountId: input.accountId,
             scope: input.scope,
             ownerUserId,
             name: input.name,
@@ -168,6 +190,7 @@ export class CredentialService extends Effect.Service<CredentialService>()(
           const row = yield* repo.findForAccess({
             workspaceId: input.workspaceId,
             extensionId: input.extensionId,
+            accountId: input.accountId,
             scope: input.scope,
             ownerUserId,
           });
@@ -206,7 +229,67 @@ export class CredentialService extends Effect.Service<CredentialService>()(
           );
         });
 
-      return { saveCredential, getCredentialForRun, listCredentials } as const;
+      /**
+       * Delete a credential outright — the counterpart to `saveCredential`,
+       * which could only ever REPLACE a key. Returns whether a row was removed
+       * (`false` when nothing matched), so a double-click is harmless.
+       *
+       * Authz splits on scope, matching the Slack/CRM `disconnect` precedent:
+       *
+       *   - `workspace` rows are OWNER/ADMIN only. A shared key is what every
+       *     other member's columns run against, so one person's click silently
+       *     breaks everyone else's grids — and unlike a save, nothing can undo it
+       *     without the original secret. Saving stays member-level because
+       *     replacing a key leaves the workspace with a working one.
+       *   - `personal` rows resolve to the CALLER's own row via `ownerFor`, so a
+       *     member can always delete their own key and can never name another's.
+       *     `assertCanAccess` re-checks the stored owner before the delete as
+       *     defence in depth.
+       */
+      const removeCredential = (
+        input: RemoveCredentialInput,
+      ): Effect.Effect<boolean, RemoveCredentialError> =>
+        Effect.gen(function* () {
+          const member =
+            input.scope === "workspace"
+              ? yield* membership.requireRole(input.workspaceId, [
+                  "owner",
+                  "admin",
+                ])
+              : yield* membership.requireMember(input.workspaceId);
+          const ownerUserId = ownerFor(input.scope, member.userId);
+
+          const existing = yield* repo.findForAccess({
+            workspaceId: input.workspaceId,
+            extensionId: input.extensionId,
+            accountId: input.accountId,
+            scope: input.scope,
+            ownerUserId,
+          });
+          if (Option.isNone(existing)) return false;
+
+          yield* ownership.assertCanAccess({
+            scope: existing.value.scope,
+            extensionId: existing.value.extensionId,
+            currentUserId: member.userId,
+            storedOwnerUserId: Option.fromNullable(existing.value.ownerUserId),
+          });
+
+          return yield* repo.remove({
+            workspaceId: input.workspaceId,
+            extensionId: input.extensionId,
+            accountId: input.accountId,
+            scope: input.scope,
+            ownerUserId,
+          });
+        });
+
+      return {
+        saveCredential,
+        getCredentialForRun,
+        listCredentials,
+        removeCredential,
+      } as const;
     }),
     dependencies: [],
   },

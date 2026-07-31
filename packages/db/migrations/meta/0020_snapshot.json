@@ -1,5 +1,5 @@
 {
-  "id": "fcb25cb9-745f-44f2-9445-3cef1b829655",
+  "id": "3a7257c4-a54f-4b8f-9ec4-a5d514d492be",
   "prevId": "6b02c1d0-860b-4687-a07c-4e9f72af8a84",
   "version": "7",
   "dialect": "postgresql",
@@ -411,6 +411,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "code": {
           "name": "code",
           "type": "text",
@@ -537,6 +543,13 @@
           "primaryKey": false,
           "notNull": true
         },
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        },
         "scope": {
           "name": "scope",
           "type": "credential_scope",
@@ -606,8 +619,8 @@
           "method": "btree",
           "with": {}
         },
-        "credentials_by_workspace_extension_owner": {
-          "name": "credentials_by_workspace_extension_owner",
+        "credentials_shared_unique": {
+          "name": "credentials_shared_unique",
           "columns": [
             {
               "expression": "workspace_id",
@@ -617,6 +630,46 @@
             },
             {
               "expression": "extension_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "scope",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"credentials\".\"owner_user_id\" is null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "credentials_owned_unique": {
+          "name": "credentials_owned_unique",
+          "columns": [
+            {
+              "expression": "workspace_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "extension_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "account_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -634,7 +687,8 @@
               "nulls": "last"
             }
           ],
-          "isUnique": false,
+          "isUnique": true,
+          "where": "\"credentials\".\"owner_user_id\" is not null",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -4028,315 +4082,6 @@
           ]
         }
       },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.sheet_bindings": {
-      "name": "sheet_bindings",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "workspace_id": {
-          "name": "workspace_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "table_id": {
-          "name": "table_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "spreadsheet_id": {
-          "name": "spreadsheet_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "spreadsheet_name": {
-          "name": "spreadsheet_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "sheet_title": {
-          "name": "sheet_title",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "header_row": {
-          "name": "header_row",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "columns": {
-          "name": "columns",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "key_header": {
-          "name": "key_header",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "schedule": {
-          "name": "schedule",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "enabled": {
-          "name": "enabled",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "paused_reason": {
-          "name": "paused_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_synced_at": {
-          "name": "last_synced_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_error": {
-          "name": "last_error",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "rows_synced": {
-          "name": "rows_synced",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "sheet_bindings_by_workspace": {
-          "name": "sheet_bindings_by_workspace",
-          "columns": [
-            {
-              "expression": "workspace_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "sheet_bindings_by_table": {
-          "name": "sheet_bindings_by_table",
-          "columns": [
-            {
-              "expression": "table_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "sheet_bindings_by_table_source": {
-          "name": "sheet_bindings_by_table_source",
-          "columns": [
-            {
-              "expression": "table_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "spreadsheet_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "sheet_title",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "sheet_bindings_workspace_id_workspaces_id_fk": {
-          "name": "sheet_bindings_workspace_id_workspaces_id_fk",
-          "tableFrom": "sheet_bindings",
-          "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "sheet_bindings_table_id_tables_id_fk": {
-          "name": "sheet_bindings_table_id_tables_id_fk",
-          "tableFrom": "sheet_bindings",
-          "tableTo": "tables",
-          "columnsFrom": [
-            "table_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.sheet_synced_rows": {
-      "name": "sheet_synced_rows",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "binding_id": {
-          "name": "binding_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "row_id": {
-          "name": "row_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "external_key": {
-          "name": "external_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "values_hash": {
-          "name": "values_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "sheet_synced_rows_by_binding_key": {
-          "name": "sheet_synced_rows_by_binding_key",
-          "columns": [
-            {
-              "expression": "binding_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "external_key",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "sheet_synced_rows_by_row": {
-          "name": "sheet_synced_rows_by_row",
-          "columns": [
-            {
-              "expression": "row_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "sheet_synced_rows_binding_id_sheet_bindings_id_fk": {
-          "name": "sheet_synced_rows_binding_id_sheet_bindings_id_fk",
-          "tableFrom": "sheet_synced_rows",
-          "tableTo": "sheet_bindings",
-          "columnsFrom": [
-            "binding_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "sheet_synced_rows_row_id_rows_id_fk": {
-          "name": "sheet_synced_rows_row_id_rows_id_fk",
-          "tableFrom": "sheet_synced_rows",
-          "tableTo": "rows",
-          "columnsFrom": [
-            "row_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false

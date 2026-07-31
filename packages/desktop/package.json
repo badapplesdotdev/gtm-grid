@@ -1,6 +1,6 @@
 {
   "name": "@gtmgrid/desktop",
-  "version": "1.11.0",
+  "version": "1.13.1",
   "private": true,
   "description": "GTM Grid desktop app",
   "homepage": "https://www.gtmgrid.dev",
@@ -21,6 +21,7 @@
     "electron:publish": "pnpm build && pnpm electron:bundle && pnpm electron:main && electron-builder --publish always",
     "e2e": "playwright test",
     "e2e:fast": "SKIP_E2E_BUILD=1 playwright test",
+    "e2e:listing-shots": "cross-env GTMGRID_CAPTURE_LISTING_SHOTS=1 playwright test e2e/listing-shots.spec.ts",
     "e2e:report": "playwright show-report",
     "typecheck": "tsc --noEmit && tsc -p electron/tsconfig.json"
   },

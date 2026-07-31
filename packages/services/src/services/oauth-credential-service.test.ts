@@ -12,7 +12,7 @@
 import type { SecretMap } from "@gtmgrid/cloud";
 import { Effect, Layer } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { credentialRepoLayer, type CredentialRow } from "../repositories/credential-repo.js";
+import { CredentialRepo, credentialRepoLayer, type CredentialRow } from "../repositories/credential-repo.js";
 import { CryptoService, cryptoServiceLayer, TEST_MASTER_KEY } from "./crypto-service.js";
 import { OAuthCredentialService, OAUTH_SLOTS } from "./oauth-credential-service.js";
 import { SLACK_CONNECTION_SLOT } from "./slack-connection-service.js";
@@ -50,6 +50,7 @@ const layerWith = (secretsEnc: string | null) => {
             id: "cred_1",
             workspaceId: WS,
             extensionId: SLACK_CONNECTION_SLOT,
+            accountId: "",
             scope: "workspace",
             name: "Slack",
             ownerUserId: null,
@@ -270,5 +271,183 @@ describe("the Google slot", () => {
 
   it("parses null when there is no access token, so freshSecrets passes through", () => {
     expect(OAUTH_SLOTS.google.parse({ pickedFiles: "[]" })).toBeNull();
+  });
+});
+
+// ── PER-ACCOUNT REFRESH ──────────────────────────────────────────────────────
+//
+// A workspace may hold several Slack teams, one credentials row each. Without
+// an `accountId`, a refresh re-read and persisted the `""` row while the caller
+// was running team B: the fresh token got merged over the wrong secrets and
+// written to a row nothing reads, and team B's SINGLE-USE rotating refresh
+// token was burned in the process.
+
+/** A row per account, so a write can be shown to land on exactly one of them. */
+const layerWithAccounts = (
+  seeds: readonly { accountId: string; name: string; secretsEnc: string }[],
+) => {
+  const rows: CredentialRow[] = seeds.map((seed, i) => ({
+    id: `cred_${i}`,
+    workspaceId: WS,
+    extensionId: SLACK_CONNECTION_SLOT,
+    accountId: seed.accountId,
+    scope: "workspace",
+    name: seed.name,
+    ownerUserId: null,
+    secretsEnc: seed.secretsEnc,
+    createdAt: NOW + i,
+  }));
+  return Layer.provideMerge(
+    OAuthCredentialService.Default,
+    Layer.merge(credentialRepoLayer(rows), cryptoLayer),
+  );
+};
+
+/** Read every stored row back as PLAINTEXT, keyed by account. */
+const storedByAccount = Effect.gen(function* () {
+  const repo = yield* CredentialRepo;
+  const crypto = yield* CryptoService;
+  const rows = yield* repo.findSharedAccounts({
+    workspaceId: WS,
+    extensionId: SLACK_CONNECTION_SLOT,
+  });
+  const out: Record<string, { name: string; secrets: SecretMap }> = {};
+  for (const row of rows) {
+    out[row.accountId] = {
+      name: row.name,
+      secrets: yield* crypto.decrypt(WS, row.secretsEnc),
+    };
+  }
+  return out;
+});
+
+describe("freshSecrets targets ONE account", () => {
+  it("persists the refreshed token to the NAMED account's row, not the '' row", async () => {
+    stubSlack({ ok: true, access_token: "xoxe.xoxb-NEW", refresh_token: "xoxe-1-NEW", expires_in: 43_200 });
+    const teamB = slackSecrets({ teamId: "T_B", teamName: "Acme EU" });
+    const layer = layerWithAccounts([
+      // The sole-account row a single-account connector (or a not-yet-healed
+      // legacy Slack install) occupies. It must come out UNTOUCHED.
+      { accountId: "", name: "Slack", secretsEnc: await encrypt(slackSecrets({ accessToken: "xoxe.xoxb-DEFAULT" })) },
+      { accountId: "T_B", name: "Slack — Acme EU", secretsEnc: await encrypt(teamB) },
+    ]);
+    const stored = await Effect.runPromise(
+      Effect.gen(function* () {
+        const svc = yield* OAuthCredentialService;
+        yield* svc.freshSecrets(WS, SLACK_CONNECTION_SLOT, teamB, "T_B");
+        return yield* storedByAccount;
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(stored["T_B"].secrets.accessToken).toBe("xoxe.xoxb-NEW");
+    expect(stored["T_B"].secrets.refreshToken).toBe("xoxe-1-NEW");
+    // The row the un-accounted code path would have clobbered.
+    expect(stored[""].secrets.accessToken).toBe("xoxe.xoxb-DEFAULT");
+    expect(stored[""].secrets.refreshToken).toBe("xoxe-1-old");
+  });
+
+  it("writes exactly TWO rows back — a refresh never forks a third", async () => {
+    stubSlack({ ok: true, access_token: "xoxe.xoxb-NEW", refresh_token: "xoxe-1-NEW", expires_in: 43_200 });
+    const teamB = slackSecrets({ teamId: "T_B" });
+    const layer = layerWithAccounts([
+      { accountId: "T_A", name: "Slack — Acme", secretsEnc: await encrypt(slackSecrets({ teamId: "T_A" })) },
+      { accountId: "T_B", name: "Slack — Acme EU", secretsEnc: await encrypt(teamB) },
+    ]);
+    const stored = await Effect.runPromise(
+      Effect.gen(function* () {
+        const svc = yield* OAuthCredentialService;
+        yield* svc.freshSecrets(WS, SLACK_CONNECTION_SLOT, teamB, "T_B");
+        return yield* storedByAccount;
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(Object.keys(stored).sort()).toEqual(["T_A", "T_B"]);
+    // Team A never refreshed, so its stored token is still the seeded one.
+    expect(stored["T_A"].secrets.accessToken).toBe("xoxe.xoxb-stale");
+  });
+
+  it("PRESERVES the row's display name — a rotation is not a reconnect", async () => {
+    // Writing `slot.adapter.displayName` unconditionally renamed
+    // "Slack — Acme EU" back to "Slack" every twelve hours.
+    stubSlack({ ok: true, access_token: "xoxe.xoxb-NEW", refresh_token: "xoxe-1-NEW", expires_in: 43_200 });
+    const teamB = slackSecrets({ teamId: "T_B" });
+    const layer = layerWithAccounts([
+      { accountId: "T_B", name: "Slack — Acme EU", secretsEnc: await encrypt(teamB) },
+    ]);
+    const stored = await Effect.runPromise(
+      Effect.gen(function* () {
+        const svc = yield* OAuthCredentialService;
+        yield* svc.freshSecrets(WS, SLACK_CONNECTION_SLOT, teamB, "T_B");
+        return yield* storedByAccount;
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(stored["T_B"].name).toBe("Slack — Acme EU");
+  });
+
+  it("merges over the NAMED account's stored secrets, keeping ITS display meta", async () => {
+    // The re-read inside the lock must fetch team B's row. Fetching the `""`
+    // row instead would silently relabel B with the other install's meta.
+    stubSlack({ ok: true, access_token: "xoxe.xoxb-NEW", refresh_token: "xoxe-1-NEW", expires_in: 43_200 });
+    const teamB = slackSecrets({ teamId: "T_B", teamName: "Acme EU" });
+    const layer = layerWithAccounts([
+      { accountId: "", name: "Slack", secretsEnc: await encrypt(slackSecrets({ teamName: "Acme Classic" })) },
+      { accountId: "T_B", name: "Slack — Acme EU", secretsEnc: await encrypt(teamB) },
+    ]);
+    const out = await Effect.runPromise(
+      Effect.flatMap(OAuthCredentialService, (s) =>
+        s.freshSecrets(WS, SLACK_CONNECTION_SLOT, teamB, "T_B"),
+      ).pipe(Effect.provide(layer)),
+    );
+    expect(out.teamId).toBe("T_B");
+    expect(out.teamName).toBe("Acme EU");
+    expect(out.accessToken).toBe("xoxe.xoxb-NEW");
+  });
+
+  it("still refreshes the '' row when no account is named", async () => {
+    // Every single-account connector omits the argument; that must keep
+    // resolving to the sole-account row exactly as it always did.
+    stubSlack({ ok: true, access_token: "xoxe.xoxb-NEW", refresh_token: "xoxe-1-NEW", expires_in: 43_200 });
+    const layer = layerWithAccounts([
+      { accountId: "", name: "Slack", secretsEnc: await encrypt(slackSecrets()) },
+    ]);
+    const stored = await Effect.runPromise(
+      Effect.gen(function* () {
+        const svc = yield* OAuthCredentialService;
+        yield* svc.freshSecrets(WS, SLACK_CONNECTION_SLOT, slackSecrets());
+        return yield* storedByAccount;
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(stored[""].secrets.accessToken).toBe("xoxe.xoxb-NEW");
+  });
+
+  it("lets two DIFFERENT teams refresh concurrently — the lock is per account", async () => {
+    // Slack's refresh tokens are single-use PER INSTALL, so team A refreshing
+    // must not be serialized behind team B. One shared lock key would be safe
+    // but would convoy unrelated teams behind a network round-trip each.
+    let refreshes = 0;
+    stubSlack({ ok: true, access_token: "xoxe.xoxb-NEW", refresh_token: "xoxe-1-NEW", expires_in: 43_200 }, () => {
+      refreshes++;
+    });
+    const teamA = slackSecrets({ teamId: "T_A" });
+    const teamB = slackSecrets({ teamId: "T_B" });
+    const layer = layerWithAccounts([
+      { accountId: "T_A", name: "Slack — Acme", secretsEnc: await encrypt(teamA) },
+      { accountId: "T_B", name: "Slack — Acme EU", secretsEnc: await encrypt(teamB) },
+    ]);
+    const stored = await Effect.runPromise(
+      Effect.gen(function* () {
+        const svc = yield* OAuthCredentialService;
+        yield* Effect.all(
+          [
+            svc.freshSecrets(WS, SLACK_CONNECTION_SLOT, teamA, "T_A"),
+            svc.freshSecrets(WS, SLACK_CONNECTION_SLOT, teamB, "T_B"),
+          ],
+          { concurrency: 2 },
+        );
+        return yield* storedByAccount;
+      }).pipe(Effect.provide(layer)),
+    );
+    // BOTH refreshed: neither was mistaken for the other's in-flight rotation.
+    expect(refreshes).toBe(2);
+    expect(stored["T_A"].secrets.accessToken).toBe("xoxe.xoxb-NEW");
+    expect(stored["T_B"].secrets.accessToken).toBe("xoxe.xoxb-NEW");
   });
 });

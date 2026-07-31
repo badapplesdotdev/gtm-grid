@@ -65,6 +65,32 @@ export const workspacesRouter = router({
     ),
   ),
 
+  /**
+   * Change a member's role. OWNER-ONLY (enforced in the service). `role: "owner"`
+   * TRANSFERS ownership: the target becomes owner and the caller drops to admin.
+   */
+  updateMemberRole: workspaceProcedure
+    .input(
+      z.object({
+        userId: z.string().min(1),
+        role: z.enum(["owner", "admin", "member"]),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* WorkspaceService;
+          yield* svc.updateMemberRole({
+            workspaceId: input.workspaceId,
+            userId: input.userId,
+            role: input.role,
+          });
+          return { ok: true as const };
+        }),
+      ),
+    ),
+
   /** Create a workspace owned by the caller (with the owner membership). */
   createWorkspace: protectedProcedure
     .input(z.object({ name: z.string().min(1) }))

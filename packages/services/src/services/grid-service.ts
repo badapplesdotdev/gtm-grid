@@ -138,6 +138,12 @@ export interface GridColumn {
   readonly kind: ColumnKind;
   readonly provider: string | null;
   readonly method: string | null;
+  /**
+   * Which account on the provider (a Slack team id); null = the workspace's
+   * sole account on this connector. The desktop reads it to preselect the
+   * column's team in the editor.
+   */
+  readonly accountId: string | null;
   readonly code: string | null;
   readonly params: unknown;
   readonly condition: string | null;
@@ -163,6 +169,12 @@ export interface FullGrid {
     readonly _id: string;
     readonly name: string;
     readonly dedupe: GridDedupe | null;
+    /**
+     * Auto-run: do BILLED function columns downstream of a change re-run on
+     * their own? Workspace-shared, on by default. The desktop's toolbar toggle
+     * writes it; the cascade reads it.
+     */
+    readonly autoRun: boolean;
   };
   readonly columns: readonly GridColumn[];
   readonly rows: readonly { readonly _id: string }[];
@@ -186,6 +198,8 @@ export interface TablePage {
     readonly _id: string;
     readonly name: string;
     readonly dedupe: GridDedupe | null;
+    /** See {@link FullGrid.table.autoRun}. */
+    readonly autoRun: boolean;
   };
   readonly columns: readonly GridColumn[];
   readonly rows: readonly { readonly _id: string }[];
@@ -212,6 +226,7 @@ const toGridColumn = (c: Column): GridColumn => ({
   kind: c.kind,
   provider: c.provider,
   method: c.method,
+  accountId: c.accountId ?? null,
   code: c.code,
   params: c.params,
   condition: c.condition,
@@ -490,7 +505,12 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
           );
         }
         return {
-          table: { _id: table.id, name: table.name, dedupe: toDedupe(table) },
+          table: {
+            _id: table.id,
+            name: table.name,
+            dedupe: toDedupe(table),
+            autoRun: table.autoRun,
+          },
           columns: cols.map(toGridColumn),
           rows: rws.map((r) => ({ _id: r.id })),
           cells: cls.map(toGridCell),
@@ -535,7 +555,12 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
         // table's cells.
         const pageCells = yield* cells.listByRowIds(page.rows.map((r) => r.id));
         return {
-          table: { _id: table.id, name: table.name, dedupe: toDedupe(table) },
+          table: {
+            _id: table.id,
+            name: table.name,
+            dedupe: toDedupe(table),
+            autoRun: table.autoRun,
+          },
           columns: cols.map(toGridColumn),
           rows: page.rows.map((r) => ({ _id: r.id })),
           cells: pageCells.map(toGridCell),
@@ -600,6 +625,8 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       readonly kind: ColumnKind;
       readonly provider?: string | null;
       readonly method?: string | null;
+      /** Which account on the provider (Slack team id); null = the sole account. */
+      readonly accountId?: string | null;
       readonly code?: string | null;
       readonly params?: unknown;
       readonly condition?: string | null;
@@ -668,6 +695,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
             kind: args.kind,
             provider: args.provider ?? null,
             method: args.method ?? null,
+            accountId: args.accountId ?? null,
             code: args.code ?? null,
             params: args.params ?? {},
             condition: args.condition ?? null,
@@ -1060,6 +1088,26 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       });
 
     /**
+     * Turn a table's auto-run on/off — "when an input changes, do the billed
+     * columns downstream re-run by themselves?". WORKSPACE-SHARED (it governs
+     * shared credit spend, so it must mean the same thing for every member and
+     * for the server-side webhook enrichment, not just the tab that flipped it).
+     * Members-only + cloud-gated. Idempotent and NOT metered — changing a policy
+     * isn't a billable action. Broadcast on BOTH the table room (so an open grid
+     * flips its toggle live) and the workspace room. Returns the effective state.
+     */
+    const setTableAutoRun = (tableId: string, autoRun: boolean) =>
+      Effect.gen(function* () {
+        const table = yield* requireTable(tableId);
+        yield* requireCloudMember(table.workspaceId);
+        yield* tables.setAutoRun(tableId, autoRun);
+        const event = { type: "table.autoRun" as const, tableId, autoRun };
+        yield* publish(table.workspaceId, tableId, event);
+        yield* publishWorkspaceTablesChanged(table.workspaceId, event);
+        return { autoRun };
+      });
+
+    /**
      * Move a column to a new display index within its table (0-based, clamped to
      * the column count). Members-only. Metered ONE. Reindexes the affected
      * columns to a contiguous 0..N-1 order — writing ONLY the columns whose
@@ -1203,6 +1251,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
             kind: col.kind,
             provider: col.provider,
             method: col.method,
+            accountId: col.accountId ?? null,
             code: col.code,
             params: col.params,
             condition: col.condition,
@@ -1506,6 +1555,7 @@ export class GridService extends Effect.Service<GridService>()("GridService", {
       deleteTable,
       renameTable,
       setTableFavorite,
+      setTableAutoRun,
       reorderColumn,
       reorderRow,
       listFolders,

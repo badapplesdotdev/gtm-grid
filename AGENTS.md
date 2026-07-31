@@ -2,6 +2,25 @@
 
 Operational notes for AI agents (and humans) working in this repo.
 
+## Verification flow
+
+- **Every new user-facing desktop feature ships an Electron E2E test.** Add a
+  Playwright spec under `packages/desktop/e2e/` that drives the real built app.
+  Unit/component coverage is welcome, but it does not replace the E2E.
+- **Run Electron E2E locally in the background before opening a PR.** Use
+  `pnpm e2e:background`; it detaches the long run and writes its output under the
+  ignored `.gtmgrid/e2e/` directory, so the active agent turn and user are not
+  blocked by Playwright output. Continue useful work, then use
+  `pnpm e2e:status`. Only inspect `pnpm e2e:log` when progress or a failure needs
+  diagnosis. The launcher refuses to overlap two runs in one worktree.
+- `listing-shots.spec.ts` is an asset-generation task, not verification. It is
+  excluded from normal E2E because it overwrites tracked marketing images; run
+  it explicitly with `pnpm --filter @gtmgrid/desktop e2e:listing-shots`.
+- **Electron E2E is deliberately local-only, not a GitHub Actions gate.** CI
+  keeps the fast `pnpm lint`, `pnpm typecheck`, `pnpm test`, and web-build gates;
+  releases repeat the code checks. A PR containing a user-facing desktop feature
+  is not ready until its detached local E2E run reports `passed`.
+
 ## Running the desktop app against **staging** (Electron → staging backend)
 
 Use this for OAuth work. Staging has its **own database** (Supabase branch) and its

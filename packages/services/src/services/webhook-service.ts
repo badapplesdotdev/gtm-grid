@@ -100,6 +100,25 @@ export class CloudActionsLimitError extends Data.TaggedError(
 }> {}
 
 /** Raised when a worker (row, column) pair span different tables. */
+/**
+ * Raised when a run asked for a connector credential without naming an account
+ * and the workspace has connected more than one.
+ *
+ * Fails the cell instead of guessing. The alternative is what this replaced: an
+ * unordered `LIMIT 1`, which for a workspace with two Slack teams meant every
+ * `sdk.slack.*` call went to an arbitrary one — silently, and differently after
+ * the next connect. A failed cell naming the ambiguity is recoverable in one
+ * click; a message delivered to the wrong company's Slack is not.
+ */
+export class CredentialAccountAmbiguous extends Data.TaggedError(
+  "CredentialAccountAmbiguous",
+)<{
+  readonly workspaceId: string;
+  readonly extensionId: string;
+  /** The connected accounts, so the caller can name one. */
+  readonly accountIds: readonly string[];
+}> {}
+
 export class InvalidCellError extends Data.TaggedError("InvalidCellError")<{
   readonly message: string;
 }> {}
@@ -152,6 +171,8 @@ export interface WorkerGrid {
     readonly kind: string;
     readonly provider: string | null;
     readonly method: string | null;
+    /** Which account on the provider (Slack team id); null = the sole account. */
+    readonly accountId: string | null;
     readonly code: string | null;
     readonly params: Record<string, unknown>;
     readonly condition: string | null;
@@ -583,13 +604,22 @@ export class WebhookService extends Effect.Service<WebhookService>()(
             Effect.catchTag("PlanRequiredError", () => Effect.succeed(false)),
           );
           if (!hasAccess) return null;
+          // The TABLE's auto-run is the outer gate on this webhook's own. The
+          // toolbar switch means "nothing in this table enriches itself", and a
+          // row arriving over HTTP is the case where that matters most — it is
+          // the one path that spends credits with nobody watching. So the two
+          // AND: the connection opts in, the table permits it. A table left at
+          // the default (on) changes nothing.
+          const target = yield* repo.findTable(w.tableId);
+          const tableAutoRun =
+            target._tag === "Some" ? target.value.autoRun !== false : true;
           return {
             webhookId: w.id,
             workspaceId: w.workspaceId,
             tableId: w.tableId,
             mapping: w.mapping,
             signingSecret: w.signingSecret ?? null,
-            autoRun: w.autoRun ?? true,
+            autoRun: (w.autoRun ?? true) && tableAutoRun,
             mode: w.mode ?? "create",
             upsertKey: w.upsertKey ?? null,
           } satisfies ResolvedWebhook;
@@ -883,6 +913,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           kind: c.kind,
           provider: c.provider,
           method: c.method,
+          accountId: c.accountId ?? null,
           code: c.code,
           params: (c.params ?? {}) as Record<string, unknown>,
           condition: c.condition,
@@ -1245,9 +1276,15 @@ export class WebhookService extends Effect.Service<WebhookService>()(
       const getCredential = (args: {
         readonly workspaceId: string;
         readonly extensionId: string;
+        /**
+         * WHICH account on the connector. Omitted means "the workspace's only
+         * one" — see the ambiguity failure below.
+         */
+        readonly accountId?: string;
       }): Effect.Effect<
-        { readonly secrets: SecretMap } | null,
+        { readonly secrets: SecretMap; readonly accountId: string } | null,
         | WebhookRepoError
+        | CredentialAccountAmbiguous
         | import("@gtmgrid/cloud").DecryptError
         | import("@gtmgrid/cloud").NotAMemberError
         | import("@gtmgrid/cloud").MemberRepoError
@@ -1258,13 +1295,32 @@ export class WebhookService extends Effect.Service<WebhookService>()(
           // assertion is skipped. Especially important here — this returns
           // plaintext connector secrets for a run.
           yield* assertMemberIfIdentified(args.workspaceId);
-          const enc = yield* repo.findSharedCredentialEnc(
+          const rows = yield* repo.findSharedCredentialEnc(
             args.workspaceId,
             args.extensionId,
+            args.accountId,
           );
-          if (enc._tag === "None") return null;
-          const secrets = yield* crypto.decrypt(args.workspaceId, enc.value);
-          return { secrets };
+          if (rows.length === 0) return null;
+          // More than one connected account and the caller named none: there is
+          // no correct answer, so FAIL rather than serve an arbitrary row. The
+          // old `LIMIT 1` did exactly that silently, which for Slack meant a
+          // column posting into whichever team sorted first — and changing
+          // which one, invisibly, the next time someone connected a team.
+          if (rows.length > 1) {
+            return yield* Effect.fail(
+              new CredentialAccountAmbiguous({
+                workspaceId: args.workspaceId,
+                extensionId: args.extensionId,
+                accountIds: rows.map((r) => r.accountId),
+              }),
+            );
+          }
+          const row = rows[0];
+          const secrets = yield* crypto.decrypt(
+            args.workspaceId,
+            row.secretsEnc,
+          );
+          return { secrets, accountId: row.accountId };
         });
 
       // ── CROSS-TABLE ACTIONS (the table.push / table.lookup gateway paths) ──
@@ -1536,6 +1592,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
               kind: "manual",
               provider: null,
               method: null,
+              accountId: null,
               code: null,
               params: {},
               condition: null,
@@ -1594,6 +1651,7 @@ export class WebhookService extends Effect.Service<WebhookService>()(
               kind: "manual",
               provider: null,
               method: null,
+              accountId: null,
               code: null,
               params: {},
               condition: null,

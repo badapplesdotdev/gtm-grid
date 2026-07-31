@@ -30,11 +30,11 @@ permissions:
 
 jobs:
   # ── 0. Test gate: NOTHING is released unless lint + typecheck + the full unit
-  # suite AND the Electron E2E suite pass on main. Every other job depends on the
-  # version cut, which depends on this — so a failing test blocks the cut, the
-  # builds, and the publish.
+  # suite pass on main. Electron E2E is the required local pre-PR gate documented
+  # in AGENTS.md; keeping it out of Actions avoids repeating the multi-minute
+  # desktop run during both PR validation and release.
   gate:
-    name: Test gate (unit + Electron E2E)
+    name: Test gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -51,12 +51,6 @@ jobs:
           pnpm lint
           pnpm typecheck
           pnpm test
-      # Electron opens a real window, so the E2E suite runs under a virtual display;
-      # global-setup builds the renderer + main and starts the mock cloud/engine.
-      - name: Install Electron system deps
-        run: pnpm --filter @gtmgrid/desktop exec playwright install-deps chromium
-      - name: Desktop E2E (Electron)
-        run: xvfb-run -a pnpm --filter @gtmgrid/desktop e2e
 
   # ── 1. Version cut: consume changesets, bump, tag, push ──────────────────
   version:

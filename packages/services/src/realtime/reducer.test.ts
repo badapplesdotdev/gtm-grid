@@ -380,3 +380,40 @@ describe("applyGridEvent · table.rename", () => {
     }
   });
 });
+
+describe("applyGridEvent · table.autoRun", () => {
+  it("patches the policy in place when it is the viewed table", () => {
+    const next = applyGridEvent(snapshot(), {
+      type: "table.autoRun",
+      tableId: "t1",
+      autoRun: false,
+    });
+    expect(next?.table.autoRun).toBe(false);
+    // Policy-only: the grid data itself is untouched.
+    expect(next?.rows).toHaveLength(1);
+    expect(next?.columns).toHaveLength(1);
+    expect(next?.cells).toHaveLength(1);
+  });
+
+  it("turning it back on patches the other way", () => {
+    const off = applyGridEvent(snapshot(), { type: "table.autoRun", tableId: "t1", autoRun: false });
+    const on = applyGridEvent(off, { type: "table.autoRun", tableId: "t1", autoRun: true });
+    expect(on?.table.autoRun).toBe(true);
+  });
+
+  it("ignores the event for a DIFFERENT table (same reference back)", () => {
+    const snap = snapshot();
+    const next = applyGridEvent(snap, {
+      type: "table.autoRun",
+      tableId: "other",
+      autoRun: false,
+    });
+    expect(next).toBe(snap);
+  });
+
+  it("tolerates a missing snapshot", () => {
+    const event = { type: "table.autoRun", tableId: "t1", autoRun: false } as const;
+    expect(applyGridEvent(null, event)).toBeNull();
+    expect(applyGridEvent(undefined, event)).toBeNull();
+  });
+});

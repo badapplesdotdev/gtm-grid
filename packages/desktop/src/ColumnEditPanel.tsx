@@ -1131,6 +1131,7 @@ export function ColumnEditPanel({
   fetchTableColumns,
   currentTableId,
   cloudConnectedExtensionIds,
+  providerAccounts,
 }: {
   column: Column;
   /** All of the table's columns (the panel filters out the edited one). */
@@ -1156,6 +1157,16 @@ export function ColumnEditPanel({
    *  rejects self-push; self-lookup stays allowed). */
   currentTableId?: string;
   /**
+   * The connected ACCOUNTS per connector id, for connectors a workspace can
+   * hold several of (`{ slack: [{ id: "T_ACME", label: "Acme" }, …] }`).
+   *
+   * Absent or a single entry ⇒ no picker is rendered and the column stays
+   * unpinned, which is every connector but Slack. Two or more ⇒ the author MUST
+   * choose, because the engine refuses to guess (`CredentialAccountAmbiguous`)
+   * rather than post into an arbitrary team.
+   */
+  providerAccounts?: Readonly<Record<string, readonly { id: string; label: string }[]>>;
+  /**
    * Connector ids with a SHARED workspace (cloud) credential.
    *
    * `api.extensions()` reports `connected` from the LOCAL SQLite store only, so
@@ -1174,6 +1185,12 @@ export function ColumnEditPanel({
   const isFunction = !!column.provider || !!column.fn;
   const isEnrichment = isFunction && !isFormula && !isAi && !isHttp && !isCode && !isTable;
   const p: Record<string, unknown> = column.params ?? {};
+
+  // Only offered when the workspace actually has a choice to make. With one
+  // connected account the picker would be a select with a single option — noise
+  // that implies a decision the author does not have.
+  const accountOptions = (column.provider && providerAccounts?.[column.provider]) || [];
+  const needsAccountChoice = accountOptions.length > 1;
 
   // ── Identity: resolve the connector + method this column executes ──
   const connector = useMemo(
@@ -1214,6 +1231,12 @@ export function ColumnEditPanel({
 
   const [name, setName] = useState(column.name);
   const [type, setType] = useState(column.type ?? "text");
+  /**
+   * The provider account this column is pinned to. `""` means unpinned —
+   * "whichever account is the workspace's only one" — which is both the legacy
+   * behaviour and the right default for every single-account connector.
+   */
+  const [accountId, setAccountId] = useState(column.accountId ?? "");
   const [condition, setCondition] = useState(column.condition ?? "");
   // formula
   const [expression, setExpression] = useState(isFormula ? String(p.expression ?? "") : "");
@@ -1343,6 +1366,10 @@ export function ColumnEditPanel({
       name: name.trim(),
       condition: condition.trim() || null,
     };
+    // Sent only when this connector HAS a choice, so editing an ordinary column
+    // never writes a stray null over a field it knows nothing about. `""` maps
+    // to null: unpinned is the absence of a pin, not an account named "".
+    if (needsAccountChoice) patch.accountId = accountId || null;
     if (isFormula) {
       patch.params = { ...p, expression: expression.trim() };
       patch.type = type;
@@ -1467,6 +1494,36 @@ export function ColumnEditPanel({
               </button>
             )}
           </div>
+        )}
+
+        {/* ── Which connected account this column runs against ──
+            Rendered ONLY when the workspace has connected more than one (today:
+            several Slack teams). Leaving it unset is legal and means "the only
+            account" — but with two connected the engine fails the cell rather
+            than choosing, so the warning below is the difference between a
+            column that works and one that errors on every row. */}
+        {needsAccountChoice && (
+          <>
+            <label className="form-label">{identity.providerName} workspace</label>
+            <select
+              className="form-input"
+              value={accountId}
+              onChange={(e) => setAccountId(e.target.value)}
+            >
+              <option value="">Choose a workspace…</option>
+              {accountOptions.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.label}
+                </option>
+              ))}
+            </select>
+            {accountId === "" && (
+              <div className="cep-account-warn">
+                {accountOptions.length} {identity.providerName} workspaces are connected, so
+                this column can&rsquo;t tell which one to use — runs will fail until you pick one.
+              </div>
+            )}
+          </>
         )}
 
         <label className="form-label">Column name</label>

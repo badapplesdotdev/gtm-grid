@@ -35,6 +35,7 @@ import {
 } from "../../../lib/inngest/functions/lifecycle-crons";
 import { executePipelineBatch, planPipelinePage, planPipelineRun } from "../../../lib/inngest/functions/pipeline-runs";
 import { cleanupPipelineRuns } from "../../../lib/inngest/functions/pipeline-retention";
+import { shouldServeInngest } from "../../../lib/inngest/serve-policy";
 
 /**
  * The Inngest serve endpoint. Inngest invokes durable function steps by POSTing
@@ -44,7 +45,7 @@ import { cleanupPipelineRuns } from "../../../lib/inngest/functions/pipeline-ret
  */
 export const runtime = "nodejs";
 
-export const { GET, POST, PUT } = serve({
+const handlers = serve({
   client: inngest,
   functions: [
     processWebhookRecord,
@@ -81,3 +82,10 @@ export const { GET, POST, PUT } = serve({
     cleanupPipelineRuns,
   ],
 });
+
+const previewDisabled = () => new Response("Not Found", { status: 404 });
+const enabled = shouldServeInngest(process.env.VERCEL_TARGET_ENV, process.env.VERCEL_ENV);
+
+export const GET = enabled ? handlers.GET : previewDisabled;
+export const POST = enabled ? handlers.POST : previewDisabled;
+export const PUT = enabled ? handlers.PUT : previewDisabled;

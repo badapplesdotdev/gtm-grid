@@ -1,5 +1,30 @@
 # @gtmgrid/server
 
+## 1.13.1
+
+### Patch Changes
+
+- @gtmgrid/engine@1.13.1
+- @gtmgrid/observability@1.13.1
+- @gtmgrid/pipelines@1.13.1
+
+## 1.13.0
+
+### Patch Changes
+
+- @gtmgrid/engine@1.13.0
+- @gtmgrid/observability@1.13.0
+- @gtmgrid/pipelines@1.13.0
+
+## 1.12.0
+
+### Patch Changes
+
+- Updated dependencies [568bc03]
+  - @gtmgrid/engine@1.12.0
+  - @gtmgrid/observability@1.12.0
+  - @gtmgrid/pipelines@1.12.0
+
 ## 1.11.0
 
 ### Minor Changes

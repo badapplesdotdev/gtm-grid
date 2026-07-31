@@ -223,12 +223,15 @@ export {
   type GetWorkspaceError,
   type InsertMemberError,
   type InsertMemberResult,
+  LastOwnerError,
   type ListMembersError,
   type Me,
   type MeError,
+  MemberNotFoundError,
   type MeUser,
   type MeWorkspace,
   type SeatUsage,
+  type UpdateMemberRoleError,
   type WorkspaceMember,
   type WorkspaceMembersResult,
   WorkspaceNotFoundError,
@@ -243,6 +246,7 @@ export {
   type AcceptResult,
   acceptUrlFor,
   InvalidEmailError,
+  InvalidInviteRoleError,
   type InvitationPreview,
   InvitationService,
   type InviteByEmailResult,
@@ -273,6 +277,8 @@ export {
   type GetForRunError,
   type GetForRunInput,
   type ListCredentialsError,
+  type RemoveCredentialError,
+  type RemoveCredentialInput,
   type SaveCredentialError,
   type SaveCredentialInput,
 } from "./services/credential-service.js";
@@ -587,7 +593,7 @@ export {
 export { HubspotClient, HUBSPOT_PAGE_LIMIT } from "./services/hubspot-client.js";
 export { mapHubspotPropertyType, flattenHubspotValue, toHubspotSearchBody, type HubspotPropertyMeta } from "./crm/hubspot-attributes.js";
 export { CrmConnectionService, ATTIO_EXTENSION_ID, crmConnectionSlot, type CrmConnectionMeta } from "./services/crm-connection-service.js";
-export { CrmSyncService, planRowCap, parseBindingConfig, CRM_ROW_CAP_TEAM, CRM_ROW_CAP_SCALE, type CrmBindingConfig, type CrmDedupeMode, type CrmSyncOutcome, type CrmSourceSummary, type CrmSourceField, type CrmSourceDescription, type CrmEstimate, type CreateCrmBindingArgs, type CrmBindingWithRun } from "./services/crm-sync-service.js";
+export { CrmSyncService, planRowCap, parseBindingConfig, CRM_ROW_CAP_TEAM, CRM_ROW_CAP_SCALE, type CrmBindingConfig, type CrmDedupeMode, type CrmSyncOutcome, type CrmSyncPageState, type CrmSyncPageResult, type CrmSourceSummary, type CrmSourceField, type CrmSourceDescription, type CrmEstimate, type CreateCrmBindingArgs, type CrmBindingWithRun } from "./services/crm-sync-service.js";
 export { flattenAttrValue, toAttioFilter, toAttioFilterBody, type AttioAttrType, type AttioValueEntry } from "./crm/attio-attributes.js";
 export { matchesFilter, matchesAllFilters, isSupportedAttrType, SUPPORTED_ATTR_TYPES, FILTER_OPS, type CrmAttrType, type FlatValue, type CrmFilter, type FilterOp } from "./crm/crm-values.js";
 export { SignalService, SignalError } from "./services/signal-service.js";

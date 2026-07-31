@@ -122,6 +122,7 @@ export interface CrmSyncRun {
   readonly fieldsDropped: readonly string[] | null;
   readonly error: string | null;
   readonly startedAt: number;
+  readonly lastProgressAt: number;
   readonly finishedAt: number | null;
 }
 
@@ -234,14 +235,25 @@ export class CrmSyncRunRepo extends Context.Tag("CrmSyncRunRepo")<
       readonly startedAt: number;
     }) => Effect.Effect<string, CrmRepoError>;
     readonly finish: (runId: string, args: CrmSyncRunFinish) => Effect.Effect<void, CrmRepoError>;
+    /** Atomically finalize an orphan only if its heartbeat is still stale. */
+    readonly reapStale: (
+      runId: string,
+      staleBefore: number,
+      args: CrmSyncRunFinish,
+    ) => Effect.Effect<boolean, CrmRepoError>;
     /**
      * Update the live counters on a RUNNING run (called after each pulled
      * page) so the strip can show "Pulling records… N so far" during a sync.
      */
     readonly progress: (
       runId: string,
-      args: { readonly rowsCreated: number; readonly rowsUpdated: number; readonly rowsSkipped: number },
-    ) => Effect.Effect<void, CrmRepoError>;
+      args: {
+        readonly rowsCreated: number;
+        readonly rowsUpdated: number;
+        readonly rowsSkipped: number;
+        readonly progressedAt: number;
+      },
+    ) => Effect.Effect<boolean, CrmRepoError>;
     readonly findById: (runId: string) => Effect.Effect<Option.Option<CrmSyncRun>, CrmRepoError>;
     readonly listByBinding: (
       bindingId: string,
@@ -319,6 +331,7 @@ function rowToRun(r: typeof schema.crmSyncRuns.$inferSelect): CrmSyncRun {
     fieldsDropped: asStrings(r.fieldsDropped),
     error: r.error,
     startedAt: r.startedAt,
+    lastProgressAt: r.lastProgressAt,
     finishedAt: r.finishedAt,
   };
 }
@@ -620,6 +633,7 @@ export const CrmSyncRunRepoLive: Layer.Layer<CrmSyncRunRepo, never, DbClient> = 
                 rowsSkipped: 0,
                 rowsStaled: 0,
                 startedAt,
+                lastProgressAt: startedAt,
               })
               .returning({ id: runs.id });
             const first = inserted[0];
@@ -649,17 +663,42 @@ export const CrmSyncRunRepoLive: Layer.Layer<CrmSyncRunRepo, never, DbClient> = 
           catch: fail("crm sync run finish failed"),
         }),
 
+      reapStale: (runId, staleBefore, args) =>
+        Effect.tryPromise({
+          try: async () => {
+            const updated = await db
+              .update(runs)
+              .set({
+                status: args.status,
+                rowsCreated: args.rowsCreated,
+                rowsUpdated: args.rowsUpdated,
+                rowsSkipped: args.rowsSkipped,
+                rowsStaled: args.rowsStaled,
+                fieldsDropped: args.fieldsDropped,
+                error: args.error,
+                finishedAt: args.finishedAt,
+              })
+              .where(and(eq(runs.id, runId), eq(runs.status, "running"), lte(runs.lastProgressAt, staleBefore)))
+              .returning({ id: runs.id });
+            return updated.length > 0;
+          },
+          catch: fail("crm stale sync run finish failed"),
+        }),
+
       progress: (runId, args) =>
         Effect.tryPromise({
           try: async () => {
-            await db
+            const updated = await db
               .update(runs)
               .set({
                 rowsCreated: args.rowsCreated,
                 rowsUpdated: args.rowsUpdated,
                 rowsSkipped: args.rowsSkipped,
+                lastProgressAt: args.progressedAt,
               })
-              .where(eq(runs.id, runId));
+              .where(and(eq(runs.id, runId), eq(runs.status, "running")))
+              .returning({ id: runs.id });
+            return updated.length > 0;
           },
           catch: fail("crm sync run progress failed"),
         }),
@@ -869,6 +908,7 @@ export const crmSyncRunRepoLayer = (fixtures: { runs?: CrmSyncRun[] }): Layer.La
           fieldsDropped: null,
           error: null,
           startedAt,
+          lastProgressAt: startedAt,
           finishedAt: null,
         });
         return id;
@@ -878,10 +918,27 @@ export const crmSyncRunRepoLayer = (fixtures: { runs?: CrmSyncRun[] }): Layer.La
         const i = runs.findIndex((r) => r.id === runId);
         if (i >= 0) runs[i] = { ...runs[i], ...args };
       }),
+    reapStale: (runId, staleBefore, args) =>
+      Effect.sync(() => {
+        const i = runs.findIndex(
+          (r) => r.id === runId && r.status === "running" && r.lastProgressAt <= staleBefore,
+        );
+        if (i < 0) return false;
+        runs[i] = { ...runs[i], ...args };
+        return true;
+      }),
     progress: (runId, args) =>
       Effect.sync(() => {
-        const i = runs.findIndex((r) => r.id === runId);
-        if (i >= 0) runs[i] = { ...runs[i], ...args };
+        const i = runs.findIndex((r) => r.id === runId && r.status === "running");
+        if (i < 0) return false;
+        runs[i] = {
+          ...runs[i],
+          rowsCreated: args.rowsCreated,
+          rowsUpdated: args.rowsUpdated,
+          rowsSkipped: args.rowsSkipped,
+          lastProgressAt: args.progressedAt,
+        };
+        return true;
       }),
     findById: (runId) => Effect.succeed(Option.fromNullable(runs.find((r) => r.id === runId))),
     listByBinding: (bindingId, limit) =>

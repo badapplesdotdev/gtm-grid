@@ -2878,6 +2878,10 @@ body.resizing-agent .agent-panel { transition: none; }
 }
 
 /* Account / credential status strip */
+/* Inline warning under the provider-account picker when a multi-account
+   connector is left unpinned — runs will fail, so it reads as a warning rather
+   than a hint. */
+.cep-account-warn { margin: 6px 0 2px; font: 400 11.5px var(--font-sans); color: var(--warning, var(--text-2)); line-height: 1.45; }
 .cep-account {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 10px; margin-bottom: 12px;
@@ -4034,13 +4038,16 @@ body.resizing-agent .agent-panel { transition: none; }
 /* Auto-run toggle in the toolbar */
 .autorun-toggle {
   all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 8px;
-  padding: 4px 8px; border-radius: var(--r-sm);
+  padding: 4px 8px; border-radius: var(--r-sm); flex: none;
 }
 .autorun-toggle:hover { background: var(--surface-2); }
-.autorun-label { font-size: 12.5px; font-weight: 500; color: var(--text-2); }
+/* `nowrap`: the toolbar is a flex row that squeezes its items, so without it the
+   label breaks as "Auto-" / "run" and doubles the toolbar's height. */
+.autorun-label { font-size: 12.5px; font-weight: 500; color: var(--text-2); white-space: nowrap; }
 .autorun-switch {
   width: 34px; height: 20px; border-radius: 10px; background: var(--surface-3);
   display: inline-flex; align-items: center; padding: 2px; transition: background 0.15s;
+  flex: none;
 }
 .autorun-switch.on { background: var(--accent); }
 .autorun-knob {
@@ -4270,6 +4277,14 @@ body.resizing-agent .agent-panel { transition: none; }
 .ws-member-row { gap: 8px; }
 .ws-member-row .ws-member-name { flex: 1; }
 .ws-member-row .btn { padding: 2px 8px; font-size: 11px; }
+/* The owner's role picker (roster + invite row). Sized like the .ws-member-role
+   label it replaces, and pinned to its content width so it never takes the
+   flex:1 the invite row gives .form-input. */
+.ws-member-role-select {
+  flex: 0 0 auto; width: auto; padding: 2px 6px;
+  font-size: 11px; color: var(--text-3); text-transform: capitalize;
+}
+.ws-invite-row .ws-member-role-select { flex: 0 0 auto; }
 
 /* The plan-selection upgrade cards now reuse the shared onboarding PlanGrid
    (cloud/onboarding/onboarding.css), so the old .ws-plan-* card styles were
@@ -5350,6 +5365,10 @@ button.crmw-crm-card:hover { border-color: var(--accent); box-shadow: var(--shad
 .crm-oauth-dot.off { background: var(--border-2); }
 .crm-oauth-text { flex: 1; min-width: 0; display: flex; flex-direction: column; font: 500 13px var(--font-sans); color: var(--text); }
 .crm-oauth-sub { font: 400 11.5px var(--font-sans); color: var(--text-3); }
+/* One connected account row (multi-account providers, e.g. several Slack teams).
+   Indented and hairline-separated so the list reads as belonging to the card
+   above it rather than as a stack of sibling cards. */
+.crm-oauth-account { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
 .crm-oauth-note { margin-top: 10px; font: 400 12px var(--font-sans); color: var(--text-2); }
 .crm-oauth-note.subtle { color: var(--text-3); font-size: 11.5px; }
 .skill-btn.danger { border-color: var(--danger); color: var(--danger); }

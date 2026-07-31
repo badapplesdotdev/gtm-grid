@@ -20,6 +20,7 @@ import type { Id } from "./ids";
 import type { WorkspaceCredSource } from "../Panels";
 import type { CloudSession } from "./cloud-run";
 import { runSaveCredential, useCredentialLayer } from "./credentials";
+import { useMe } from "./auth";
 import { apiClient, cloudEnabled } from "./client";
 import { api } from "../api";
 
@@ -55,6 +56,18 @@ export function useWorkspaceCredentials(
   // forward the local key to the cloud; gate `copyLocalKey` on it.
   const hasSession = session !== null && session.token.trim() !== "";
 
+  // Deleting a SHARED key is owner/admin only (it stops every other member's
+  // columns and cannot be undone without the secret). Read the caller's role in
+  // this workspace from `me` so the panel offers the button only to someone the
+  // server will accept.
+  const me = useMe();
+  const canRemove =
+    active &&
+    (() => {
+      const role = me?.workspaces.find((w) => w._id === workspaceId)?.role;
+      return role === "owner" || role === "admin";
+    })();
+
   return useMemo<WorkspaceCredSource | undefined>(() => {
     if (!active || workspaceId === null) return undefined;
     const connectedExtensionIds = new Set(
@@ -82,9 +95,22 @@ export function useWorkspaceCredentials(
           queryKey: ["credentials", "list", workspaceId],
         });
       },
-      // Copy the local key up to the shared Cloud key via the sidecar (plaintext
-      // never enters the renderer), then refresh the connected listing so the
-      // panel flips to "connected". Only available with a live cloud session.
+      // Delete the shared key outright. Offered ONLY to an owner/admin — the
+      // role `credentials.remove` requires — so the panel never renders a button
+      // that would come back 403. The server gates it either way; this only
+      // keeps the affordance honest.
+      remove: canRemove
+        ? async (extensionId) => {
+            await apiClient.credentials.remove.mutate({
+              workspaceId,
+              extensionId,
+              scope: "workspace",
+            });
+            await queryClient.invalidateQueries({
+              queryKey: ["credentials", "list", workspaceId],
+            });
+          }
+        : undefined,
       copyLocalKey:
         hasSession && session !== null
           ? async (extensionId, name) => {
@@ -111,6 +137,7 @@ export function useWorkspaceCredentials(
     hasSession,
     session,
     queryClient,
+    canRemove,
   ]);
 }
 
@@ -125,9 +152,14 @@ function useCredentialMeta(
 ): readonly CredentialMeta[] | undefined {
   const q = useReactQuery({
     queryKey: ["credentials", "list", workspaceId],
-    enabled: apiClient !== null && workspaceId !== null,
+    // `apiClient` is a non-nullable module singleton (client.tsx:172) — the
+    // `apiClient !== null` this used to carry could never be false, and the `!`
+    // below asserted away a nullability that does not exist. Both are leftovers
+    // from when the client was built lazily; the workspace check is the only
+    // real gate.
+    enabled: workspaceId !== null,
     queryFn: () =>
-      apiClient!.credentials.list.query({
+      apiClient.credentials.list.query({
         workspaceId: workspaceId as string,
       }),
   });

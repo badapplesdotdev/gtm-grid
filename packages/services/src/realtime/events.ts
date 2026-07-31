@@ -41,6 +41,15 @@ export interface GridEventColumn {
   readonly kind: string;
   readonly provider: string | null;
   readonly method: string | null;
+  /**
+   * Which account on the provider (Slack team id); null/absent = the sole
+   * account.
+   *
+   * Optional so a producer that predates the field still type-checks, and
+   * because absent and null mean the same thing to the reducer — there is no
+   * third state to distinguish.
+   */
+  readonly accountId?: string | null;
   readonly code: string | null;
   readonly params: unknown;
   readonly condition: string | null;
@@ -180,6 +189,19 @@ export interface TableFavoriteEvent {
 }
 
 /**
+ * A table's auto-run policy was toggled. Unlike `table.favorite` this DOES carry
+ * `getTable` data (`table.autoRun` lives on the snapshot), so the reducer patches
+ * it — every member viewing the grid sees the toolbar switch flip live rather
+ * than acting on a stale policy until they refetch. Published on the table room
+ * AND the workspace room (the sidebar/list view refetches off the latter).
+ */
+export interface TableAutoRunEvent {
+  readonly type: "table.autoRun";
+  readonly tableId: string;
+  readonly autoRun: boolean;
+}
+
+/**
  * The discriminated union of every grid change the publisher emits and the
  * reducer applies. Discriminated on `type` so a `switch` is exhaustive.
  */
@@ -196,7 +218,8 @@ export type GridChangeEvent =
   | TableDeleteEvent
   | TableRenameEvent
   | FoldersChangedEvent
-  | TableFavoriteEvent;
+  | TableFavoriteEvent
+  | TableAutoRunEvent;
 
 /**
  * The `getTable`-shaped client cache the reducer patches. Identical in shape to
@@ -214,6 +237,8 @@ export interface GridSnapshot {
     readonly _id: string;
     readonly name: string;
     readonly dedupe?: GridDedupe | null;
+    /** Auto-run policy; absent on an older cached snapshot ⇒ treat as ON. */
+    readonly autoRun?: boolean;
   };
   readonly columns: readonly GridEventColumn[];
   readonly rows: readonly GridEventRow[];

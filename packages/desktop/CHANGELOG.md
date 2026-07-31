@@ -1,5 +1,150 @@
 # @gtmgrid/desktop
 
+## 1.13.1
+
+### Patch Changes
+
+- 2582c3a: Fix large CRM imports timing out or remaining stuck in a syncing state.
+
+  CRM pulls now checkpoint each provider page into a fresh durable Inngest run,
+  heartbeat active syncs so healthy long-running imports are not reaped, and stop
+  finalized or paused continuations before they can write duplicate rows. The
+  checkpoint carries the run schema, row budget, and actor cache so large Attio
+  and HubSpot sources avoid repeated metadata calls and unbounded Inngest state.
+
+- Updated dependencies [2582c3a]
+  - @gtmgrid/services@1.13.1
+  - @gtmgrid/analytics@1.13.1
+  - @gtmgrid/cloud@1.13.1
+  - @gtmgrid/pipelines@1.13.1
+
+## 1.13.0
+
+### Minor Changes
+
+- 6299102: Bring back the Auto-run toggle, and let agents drive it.
+
+  The toolbar's Auto-run switch disappeared in "remove the local paradigm" (#126).
+  That change deleted the local grid, which was the only thing that ever passed
+  `autoRun` into `DataGrid` — the switch itself, and its CSS, survived untouched,
+  so the control was rendered conditionally on a prop nobody supplied any more. The
+  gate it enforced went with it: since then every cloud cascade has run every
+  dependent column, billed connectors included, with no way to say no.
+
+  Auto-run is now a persisted, workspace-shared property of the table
+  (`tables.auto_run`, `NOT NULL DEFAULT true`) rather than a per-browser
+  `localStorage` flag, because it governs shared credit spend — it has to mean the
+  same thing for every member, for the server-side webhook worker, and for an agent
+  driving the grid.
+  - **The switch is back** in the grid toolbar, reading and writing the persisted
+    flag. Toggling is optimistic through the same reducer the realtime
+    `table.autoRun` event uses, so it flips instantly and every other member's grid
+    follows live.
+  - **Auto-run off stops billed cascades**, not the grid. Formula, mapped and code
+    columns still cascade for free; only columns that dispatch a billable connector
+    call wait for an explicit run. Running a billed column by hand still fills the
+    free columns downstream of it.
+  - **Inbound webhooks respect it too.** A table's auto-run ANDs with the
+    connection's own flag — an HTTP-delivered row is the one path that spends
+    credits with nobody watching, so "nothing in this table enriches itself" now
+    holds there as well. The row still lands; only the enrichment is withheld.
+  - **Agents can read and set it** via a new `set_auto_run` MCP tool (and `autoRun`
+    on `get_table`), so an agent can turn it off before rewriting column configs or
+    bulk-loading rows and turn it back on when the table is ready. It is the same
+    switch the user sees, so the two can never disagree.
+
+  Existing tables migrate to auto-run ON, which is exactly what they have been
+  doing, so nothing changes until someone turns it off.
+
+### Patch Changes
+
+- Updated dependencies [6299102]
+  - @gtmgrid/services@1.13.0
+  - @gtmgrid/analytics@1.13.0
+  - @gtmgrid/cloud@1.13.0
+  - @gtmgrid/pipelines@1.13.0
+
+## 1.12.0
+
+### Minor Changes
+
+- 5cebbb5: Delete a saved connector key, instead of only being able to replace it.
+
+  `credentials` exposed only list/save/getForRun, and `save` upserts — so a key
+  could be swapped for another but never removed, and the desktop's empty-value
+  guard meant it could not even be blanked. `CredentialRepo.remove` existed but was
+  wired solely to the OAuth disconnects, so a plain API key, once saved into a
+  workspace, stayed until the workspace itself was deleted.
+
+  That matters when a workspace was seeded with one person's keys and its members
+  now want to supply their own: any connector left un-replaced kept the old row,
+  which read as "connected" in the panel while failing at run time.
+  - `credentials.remove` deletes the row. Shared (`workspace`) keys are owner/admin
+    only, matching the Slack/CRM disconnect: deleting one stops every other
+    member's columns for that connector and cannot be undone without the secret.
+    Saving stays member-level, because a replace leaves a working key behind.
+  - `personal` keys always resolve to the caller's own row, so a member can delete
+    theirs and can never name someone else's.
+  - The desktop connection panel gains a Remove button beside Replace, behind a
+    confirmation, shown only to owner/admin.
+
+  Note that removing a shared key does not retract it: any member could read it in
+  plaintext while it was stored, so a key that has been shared should also be
+  rotated at the provider.
+
+- 5cebbb5: Let the workspace owner assign roles and transfer ownership.
+
+  Roles (`owner | admin | member`) were write-once: set at invite time and frozen,
+  with the desktop hardcoding `member` on every invite. There was no way to make an
+  existing teammate an admin, and no way to move ownership at all.
+  - `workspaces.updateMemberRole` (owner-only) changes any other member between
+    `admin` and `member`, and the roster in workspace settings gains a role picker.
+  - Setting someone to `owner` TRANSFERS ownership: they become owner, the caller
+    drops to admin, and `workspaces.ownerId` follows — one transaction, so `ownerId`
+    can never disagree with the member roles. That split would strand billing (the
+    Autumn customer profile and trial emails resolve from `ownerId`) and workspace
+    deletion. The outgoing owner keeps admin rather than being dropped.
+  - The owner cannot demote themselves (`LastOwnerError`), so a workspace is never
+    left owner-less; transferring is the only way out.
+  - Invites can no longer be used to sidestep that rule. Granting `admin` by
+    invitation now requires `owner` — an admin could otherwise mint fellow admins —
+    and `owner` is refused outright, since ownership is single-holder and moves only
+    by transfer.
+
+- 568bc03: Connect multiple Slack workspaces to one GTM Grid workspace.
+
+  A workspace can now install the Slack app into several Slack teams and pin each
+  column to the team it posts as. Previously the second connect silently
+  overwrote the first: every `sdk.slack.*` call across the grid switched team
+  without a word, and inbound events from the replaced team were dropped as a
+  tenant mismatch.
+  - `credentials` gains an `account_id` discriminator, so a connector holds one
+    row per connected account and each keeps its own OAuth refresh cycle and
+    rotation lock. Slack's refresh tokens are single-use, so sharing a row across
+    teams would have made one team's refresh revoke another's live token.
+  - Columns gain `account_id`. A column that names no account still resolves the
+    workspace's sole connection; with several connected it fails with
+    `CredentialAccountAmbiguous` rather than posting into an arbitrary team.
+  - The Slack Events tenant gate now tests membership of every connected team
+    instead of equality with one, and still fails closed.
+  - Fixes a pre-existing race in `CredentialRepo.upsert`: it was a
+    select-then-insert with no unique index behind it, so two concurrent connects
+    both inserted and every read (`LIMIT 1`) then served an arbitrary row. Now a
+    single `ON CONFLICT` statement against two partial unique indexes.
+  - `slack.disconnect` now requires the `admin` role. It deletes a shared
+    credential every teammate's columns run against, and the tokens cannot be
+    recovered without a fresh consent round-trip.
+
+### Patch Changes
+
+- Updated dependencies [5cebbb5]
+- Updated dependencies [5cebbb5]
+- Updated dependencies [568bc03]
+  - @gtmgrid/services@1.12.0
+  - @gtmgrid/analytics@1.12.0
+  - @gtmgrid/cloud@1.12.0
+  - @gtmgrid/pipelines@1.12.0
+
 ## 1.11.0
 
 ### Minor Changes

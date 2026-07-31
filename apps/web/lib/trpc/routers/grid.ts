@@ -463,6 +463,11 @@ export const gridRouter = router({
         kind: columnKind.optional(),
         provider: z.string().nullish(),
         method: z.string().nullish(),
+        /**
+         * Which account on the provider (a Slack team id). `null` clears the
+         * pin back to "the workspace's only account"; omitted leaves it alone.
+         */
+        accountId: z.string().nullish(),
         code: z.string().nullish(),
         params: z.unknown().optional(),
         condition: z.string().nullish(),
@@ -503,6 +508,24 @@ export const gridRouter = router({
           const svc = yield* GridService;
           yield* svc.deleteRow(input.rowId);
           return { ok: true as const };
+        }),
+      ),
+    ),
+
+  /**
+   * Turn a table's auto-run on/off — whether BILLED function columns downstream
+   * of a change re-run by themselves. WORKSPACE-SHARED (it governs shared credit
+   * spend). Members-only. Idempotent and NOT metered — setting a policy isn't a
+   * billable action. Returns the effective `autoRun` state.
+   */
+  setAutoRun: protectedProcedure
+    .input(z.object({ tableId: z.string().min(1), autoRun: z.boolean() }))
+    .mutation(({ ctx, input }) =>
+      runEffect(
+        ctx.runtime,
+        Effect.gen(function* () {
+          const svc = yield* GridService;
+          return yield* svc.setTableAutoRun(input.tableId, input.autoRun);
         }),
       ),
     ),

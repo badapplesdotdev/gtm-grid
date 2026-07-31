@@ -102,6 +102,13 @@ export interface GridTable {
   readonly name: string;
   readonly position: number;
   readonly createdAt: number;
+  /**
+   * The table's auto-run flag. Optional because this projection is also built by
+   * hand in fixtures; the Drizzle reads `select()` every column, so the real path
+   * always carries it. Callers MUST treat absent as ON (`autoRun !== false`) —
+   * the column is `NOT NULL DEFAULT true`, so absent can only mean "not supplied".
+   */
+  readonly autoRun?: boolean;
 }
 
 /** A grid column projection. */
@@ -449,15 +456,27 @@ export class WebhookRepo extends Context.Tag("WebhookRepo")<
 
     // --- worker credential fetch ---
     /**
-     * The ciphertext of a SHARED (workspace-scope, `ownerUserId IS NULL`)
-     * connector credential for (workspaceId, extensionId), or `None`. The worker
-     * can never reach a member's personal credential — only shared rows. The
-     * caller decrypts the returned envelope; this repo only reads ciphertext.
+     * The ciphertexts of every SHARED (workspace-scope, `ownerUserId IS NULL`)
+     * credential for (workspaceId, extensionId) — one per connected ACCOUNT,
+     * oldest first. The worker can never reach a member's personal credential
+     * — only shared rows. The caller decrypts; this repo only reads ciphertext.
+     *
+     * Returns a LIST, not `Option`, because a workspace may now hold several
+     * accounts on one connector (Slack teams). This used to be a `LIMIT 1`
+     * point read, which meant a two-team workspace silently served whichever
+     * row the planner returned first. Choosing between them is policy, so it
+     * belongs to `WebhookService.getCredential`, not here — passing
+     * `accountId` narrows to one, omitting it returns them all so the caller
+     * can tell "none" from "one" from "ambiguous".
      */
     readonly findSharedCredentialEnc: (
       workspaceId: string,
       extensionId: string,
-    ) => Effect.Effect<Option.Option<string>, WebhookRepoError>;
+      accountId?: string,
+    ) => Effect.Effect<
+      readonly { readonly accountId: string; readonly secretsEnc: string }[],
+      WebhookRepoError
+    >;
 
     // --- quota + metering ---
     /** A workspace's cloud-actions quota snapshot, or `None`. */
@@ -1246,24 +1265,32 @@ export const WebhookRepoLive: Layer.Layer<WebhookRepo, never, DbClient> =
             catch: fail("cell upsert failed"),
           }),
 
-        findSharedCredentialEnc: (workspaceId, extensionId) =>
+        findSharedCredentialEnc: (workspaceId, extensionId, accountId) =>
           !UUID_RE.test(workspaceId)
-            ? Effect.succeed(Option.none<string>())
+            ? Effect.succeed(
+                [] as readonly { accountId: string; secretsEnc: string }[],
+              )
             : Effect.tryPromise({
                 try: async () => {
                   const rows = await db
-                    .select({ secretsEnc: schema.credentials.secretsEnc })
+                    .select({
+                      accountId: schema.credentials.accountId,
+                      secretsEnc: schema.credentials.secretsEnc,
+                    })
                     .from(schema.credentials)
                     .where(
                       and(
                         eq(schema.credentials.workspaceId, workspaceId),
                         eq(schema.credentials.extensionId, extensionId),
+                        ...(accountId === undefined
+                          ? []
+                          : [eq(schema.credentials.accountId, accountId)]),
                         eq(schema.credentials.scope, "workspace"),
                         isNull(schema.credentials.ownerUserId),
                       ),
                     )
-                    .limit(1);
-                  return Option.fromNullable(rows[0]?.secretsEnc ?? null);
+                    .orderBy(asc(schema.credentials.createdAt));
+                  return rows;
                 },
                 catch: fail("shared credential lookup failed"),
               }),
@@ -1648,9 +1675,18 @@ export const webhookRepoLayer = (fixtures: {
         }
         return id;
       }),
-    findSharedCredentialEnc: (workspaceId, extensionId) =>
+    findSharedCredentialEnc: (workspaceId, extensionId, accountId) =>
       Effect.succeed(
-        Option.fromNullable(credentials.get(`${workspaceId}:${extensionId}`)),
+        [...credentials.entries()]
+          .flatMap(([key, secretsEnc]) => {
+            // Seed keys are `workspace:extension` (single-account, the shape
+            // every existing test uses) or `workspace:extension:account`.
+            const prefix = `${workspaceId}:${extensionId}`;
+            if (key !== prefix && !key.startsWith(`${prefix}:`)) return [];
+            const account = key === prefix ? "" : key.slice(prefix.length + 1);
+            return [{ accountId: account, secretsEnc }];
+          })
+          .filter((r) => accountId === undefined || r.accountId === accountId),
       ),
     findWorkspaceQuota: (workspaceId) =>
       Effect.succeed(Option.fromNullable(quotas.get(workspaceId))),

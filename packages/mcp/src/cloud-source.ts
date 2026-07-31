@@ -92,6 +92,7 @@ const RENAME_TABLE_REF = "/api/worker/renameTable";
 const REORDER_COLUMN_REF = "/api/worker/reorderColumn";
 const REORDER_ROW_REF = "/api/worker/reorderRow";
 const SET_DEDUPE_REF = "/api/worker/setDedupe";
+const SET_AUTO_RUN_REF = "/api/worker/setAutoRun";
 
 /** Raised when a cloud MCP tool needs a worker route that does not exist yet. */
 export class CloudToolUnsupportedError extends Error {
@@ -247,6 +248,12 @@ export interface CloudGridSource {
     returned: number;
     offset: number;
     truncated: boolean;
+    /**
+     * The table's auto-run policy. Reported so an agent can SEE whether its
+     * edits will trigger billed re-runs before it makes them, instead of
+     * inferring it from whether cells started moving.
+     */
+    autoRun: boolean;
   }>;
   /**
    * List ALL of the cloud PROJECT's tables (not just the active one) with their
@@ -368,6 +375,16 @@ export interface CloudGridSource {
     tableRef: string,
     name: string,
   ) => Promise<{ renamed: string }>;
+  /**
+   * Turn the table's auto-run on/off — whether BILLED function columns re-run by
+   * themselves when an upstream input changes. The SAME flag the desktop
+   * toolbar's Auto-run switch shows, so an agent turning it off is visible to
+   * the user (and vice versa). Returns the effective state.
+   */
+  readonly setAutoRun: (
+    tableRef: string,
+    autoRun: boolean,
+  ) => Promise<{ table: string; autoRun: boolean }>;
   /** Set or clear the table's dedup config (column NAME, or null to disable). */
   readonly setDedupe: (
     tableRef: string,
@@ -558,6 +575,24 @@ function readDedupeResult(payload: unknown): {
   };
 }
 
+/**
+ * Read `table.autoRun` off a `getTable`/`getTablePage` payload. Absent or
+ * non-boolean ⇒ `true`: the backing column is `NOT NULL DEFAULT true`, so the
+ * only way it goes missing is a payload predating the field — and ON is what
+ * that payload's server was doing.
+ */
+function readAutoRun(payload: unknown): boolean {
+  const o =
+    typeof payload === "object" && payload !== null
+      ? (payload as Record<string, unknown>)
+      : {};
+  const table =
+    typeof o.table === "object" && o.table !== null
+      ? (o.table as Record<string, unknown>)
+      : null;
+  return table && typeof table.autoRun === "boolean" ? table.autoRun : true;
+}
+
 /** Narrow a reorder worker payload to its id-order array under `key`. */
 function readIdOrder(payload: unknown, key: string): string[] {
   if (
@@ -716,6 +751,8 @@ export function makeCloudSource(
     cells: CloudCellDoc[];
     scanned: number;
     hasMore: boolean;
+    /** The table's auto-run policy, carried on every page's `table` projection. */
+    autoRun: boolean;
   }> => {
     const end = offset + limit;
     let columns: readonly CloudColumnDoc[] = [];
@@ -725,6 +762,9 @@ export function makeCloudSource(
     let cursor: unknown = null;
     let scanned = 0;
     let hasMore = false;
+    // Absent ⇒ ON: the column is NOT NULL DEFAULT true server-side, so the only
+    // way it goes missing is an older payload shape.
+    let autoRun = true;
     for (;;) {
       const payload = await client.query(CLOUD_REFS.getTablePage, {
         tableId,
@@ -735,6 +775,7 @@ export function makeCloudSource(
         throw new Error("getTablePage payload was not a grid");
       }
       columns = payload.columns;
+      autoRun = readAutoRun(payload);
       for (const r of payload.rows) {
         const idx = scanned++;
         if (idx >= offset && idx < end) {
@@ -754,7 +795,7 @@ export function makeCloudSource(
         break;
       }
     }
-    return { columns, rows, cells, scanned, hasMore };
+    return { columns, rows, cells, scanned, hasMore, autoRun };
   };
 
   /** Resolve a table ref to its id + grid in one step — the common method head. */
@@ -835,6 +876,7 @@ export function makeCloudSource(
       // the true row count, and `truncated` tells the agent to narrow its query.
       return {
         table: await tableName(tableId),
+        autoRun: window.autoRun,
         columns: window.columns.map((c) => ({
           name: c.name,
           kind: c.kind,
@@ -1135,6 +1177,25 @@ export function makeCloudSource(
           ? payload.name
           : name;
       return { renamed };
+    },
+
+    setAutoRun: async (tableRef, autoRun) => {
+      // No grid fetch: this touches the TABLE row, not its columns/cells, so
+      // resolving the id is all the work the write needs.
+      const tableId = await resolveTableId(tableRef);
+      const payload = await client.mutation(SET_AUTO_RUN_REF, {
+        tableId,
+        autoRun,
+      });
+      // Report what the SERVER settled on, not what we asked for.
+      const effective =
+        typeof payload === "object" &&
+        payload !== null &&
+        "autoRun" in payload &&
+        typeof payload.autoRun === "boolean"
+          ? payload.autoRun
+          : autoRun;
+      return { table: await tableName(tableId), autoRun: effective };
     },
 
     setDedupe: async (tableRef, column, keep) => {

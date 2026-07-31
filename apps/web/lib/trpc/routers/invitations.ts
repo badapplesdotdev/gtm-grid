@@ -30,7 +30,12 @@ import {
   workspaceProcedure,
 } from "../trpc";
 
-/** The three workspace member roles an invite may grant. */
+/**
+ * The roles an invite may grant. `owner` is accepted by the schema but rejected
+ * by the service (`InvalidInviteRoleError` -> BAD_REQUEST) rather than dropped
+ * here, so an older client that still sends it gets the explanation — invite as
+ * admin, then transfer ownership — instead of an opaque validation failure.
+ */
 const roleInput = z.enum(["owner", "admin", "member"]);
 
 export const invitationsRouter = router({

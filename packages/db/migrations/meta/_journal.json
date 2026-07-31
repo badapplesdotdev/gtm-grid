@@ -145,8 +145,29 @@
     {
       "idx": 20,
       "version": "7",
-      "when": 1784457015784,
-      "tag": "0020_tricky_xavin",
+      "when": 1784550815005,
+      "tag": "0020_smart_talkback",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1785168930476,
+      "tag": "0021_keen_meteorite",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1785243143254,
+      "tag": "0022_furry_warpath",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1785498840267,
+      "tag": "0023_colossal_ma_gnuci",
       "breakpoints": true
     }
   ]

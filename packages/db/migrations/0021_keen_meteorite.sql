@@ -1,0 +1,1 @@
+ALTER TABLE "tables" ADD COLUMN "auto_run" boolean DEFAULT true NOT NULL;

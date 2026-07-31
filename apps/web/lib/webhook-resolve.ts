@@ -57,7 +57,12 @@ export async function resolveToken(token: string): Promise<ResolvedWebhook | nul
 /**
  * The Slack team a workspace is connected to, or `null`.
  *
- * The Events receiver's TENANT GATE. Slack delivers every installation of an app
+ * The Events receiver's TENANT GATE. Returns EVERY Slack team this workspace
+ * has connected — a workspace may install the app into several — so the caller
+ * tests MEMBERSHIP rather than equality. An empty list (no connection, or an
+ * unreadable one) matches nothing, which is the fail-closed direction.
+ *
+ * The Events receiver's original contract: Slack delivers every installation of an app
  * to ONE app-global Request URL, signed with ONE app-global signing secret, so a
  * valid v0 signature proves only that Slack sent the request on behalf of this
  * APP — never that it came from the workspace whose webhook the URL names.
@@ -66,9 +71,10 @@ export async function resolveToken(token: string): Promise<ResolvedWebhook | nul
  * auto-run, spend that tenant's cloud actions enriching attacker-controlled
  * input).
  */
-export async function slackTeamForWorkspace(workspaceId: string): Promise<string | null> {
+export async function slackTeamsForWorkspace(workspaceId: string): Promise<readonly string[]> {
   const parsed = await callWorker("/api/worker/slackTeam", { workspaceId });
-  if (typeof parsed !== "object" || parsed === null) return null;
-  const teamId = Reflect.get(parsed, "teamId");
-  return typeof teamId === "string" && teamId !== "" ? teamId : null;
+  if (typeof parsed !== "object" || parsed === null) return [];
+  const teamIds = Reflect.get(parsed, "teamIds");
+  if (!Array.isArray(teamIds)) return [];
+  return teamIds.filter((t): t is string => typeof t === "string" && t !== "");
 }

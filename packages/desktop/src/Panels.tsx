@@ -46,6 +46,13 @@ export interface WorkspaceCredContext {
    * Throws on failure so the form can surface the message.
    */
   readonly copyLocalKey?: () => Promise<void>;
+  /**
+   * DELETE the shared workspace key, leaving the workspace with none — the
+   * "hand this workspace back without my keys" case that a replace-only form
+   * could not express. `undefined` when the caller is not owner/admin, which is
+   * what the server requires; the server gates it regardless.
+   */
+  readonly onRemoveWorkspace?: () => Promise<void>;
 }
 
 /**
@@ -72,6 +79,12 @@ export interface WorkspaceCredSource {
    * signed-in cloud session exists; `undefined` otherwise.
    */
   readonly copyLocalKey?: (extensionId: string, name: string) => Promise<void>;
+  /**
+   * Delete a connector's SHARED workspace key. `undefined` when the signed-in
+   * member is not owner/admin — the role the server requires — so the panel
+   * never offers a button that would 403.
+   */
+  readonly remove?: (extensionId: string) => Promise<void>;
 }
 
 /** Narrow an app-level {@link WorkspaceCredSource} to one connector's context. */
@@ -86,6 +99,9 @@ function workspaceCtxFor(
     onSaveWorkspace: (apiKey) => source.save(extensionId, name, apiKey),
     copyLocalKey: source.copyLocalKey
       ? () => source.copyLocalKey!(extensionId, name)
+      : undefined,
+    onRemoveWorkspace: source.remove
+      ? () => source.remove!(extensionId)
       : undefined,
   };
 }
@@ -324,6 +340,7 @@ function ConnectionsSection({
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
   const [copying, setCopying] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
   const isWorkspace = scope === "workspace";
   // A LOCAL key exists for this connector (any machine-local scope, incl. legacy
@@ -372,6 +389,32 @@ function ConnectionsSection({
     }
   };
 
+  // Delete the shared Cloud key outright. Confirmed first: it stops every other
+  // member's columns for this connector, and nothing here can put the secret
+  // back — only whoever holds it can.
+  const removeShared = async () => {
+    if (!workspace?.onRemoveWorkspace) return;
+    if (
+      !window.confirm(
+        `Remove the shared ${name} ${credentialLabel} from this workspace?\n\n` +
+          `Every member's ${name} columns stop working until someone adds a new one. ` +
+          `You'll need the key itself to put it back.`,
+      )
+    ) {
+      return;
+    }
+    setRemoving(true);
+    setErr("");
+    try {
+      await workspace.onRemoveWorkspace();
+      reset();
+    } catch (e: any) {
+      setErr(e?.message ?? `Failed to remove the ${name} ${credentialLabel}`);
+    } finally {
+      setRemoving(false);
+    }
+  };
+
   return (
     <div className="detail-section">
       <ScopeTabs scope={scope} showWorkspace={showWorkspace} onScope={(s) => { setScope(s); reset(); }} />
@@ -411,9 +454,25 @@ function ConnectionsSection({
                 )}
               </span>
             </div>
-            <button className="btn btn-outline btn-sm" onClick={() => setAdding(true)}>
+            <button className="btn btn-outline btn-sm" onClick={() => setAdding(true)} disabled={removing}>
               {/key/i.test(credentialLabel) ? "Replace key" : "Replace token"}
             </button>
+            {/* Removal is Cloud-tab only and owner/admin only — `onRemoveWorkspace`
+                is undefined for anyone the server would reject. */}
+            {isWorkspace && workspace?.onRemoveWorkspace && (
+              <button
+                className="btn btn-outline btn-sm"
+                onClick={removeShared}
+                disabled={removing}
+                title={`Remove the shared ${name} ${credentialLabel} from this workspace`}
+              >
+                {removing ? "Removing…" : "Remove"}
+              </button>
+            )}
+            {/* The connected row had nowhere to report a failure — the other two
+                branches own the only `err` slots — so a rejected remove would
+                have vanished silently. */}
+            {err && <div className="conn-err">{err}</div>}
           </div>
         ) : (
           <div className="conn-empty">
@@ -521,6 +580,19 @@ function CrmOAuthSection({ workspaceId, provider }: { workspaceId: string; provi
  */
 export function SlackOAuthSection({ workspaceId }: { workspaceId: string }) {
   const [status, setStatus] = useState<OAuthCardStatus>({ kind: "loading" });
+  /** Every connected Slack team — a workspace may install the app into several. */
+  const [accounts, setAccounts] = useState<
+    readonly { id: string; label: string; byName: string }[]
+  >([]);
+  /**
+   * Whether the signed-in member may disconnect (owner/admin). Read from the
+   * SERVER's answer rather than a locally-held role, so the button and the
+   * mutation's own gate can never disagree.
+   *
+   * Defaults false: until the status read lands we do not know, and briefly
+   * hiding a control the user does have beats briefly offering one they don't.
+   */
+  const [canDisconnect, setCanDisconnect] = useState(false);
   const queryClient = useQueryClient();
   // Whether the LAST poll saw a connection, so we only invalidate on a CHANGE
   // rather than on every 2s tick.
@@ -542,8 +614,29 @@ export function SlackOAuthSection({ workspaceId }: { workspaceId: string }) {
         void queryClient.invalidateQueries({ queryKey: ["credentials", "list", workspaceId] });
       }
       wasConnected.current = s.connected;
+      // `?? false` / `?? []`, not a bare read. The desktop ships independently
+      // of the server, so a client on this build can talk to a deployment whose
+      // `connectionStatus` predates these fields. A bare `s.connections.map`
+      // throws on undefined, and the throw lands in the catch below — turning a
+      // perfectly healthy connection into "Couldn't check Slack" with no way
+      // back. Absent means "no extra accounts, and assume no rights".
+      setCanDisconnect(s.canDisconnect ?? false);
+      setAccounts(
+        (s.connections ?? []).map((c: { teamId: string; teamName: string; connectedByName: string }) => ({
+          id: c.teamId,
+          // A team with no stored name still needs an identity in the list, or
+          // two unnamed connections render as an indistinguishable pair with
+          // two Disconnect buttons.
+          label: c.teamName || c.teamId || "Slack workspace",
+          byName: c.connectedByName,
+        })),
+      );
       if (s.connected) {
-        setStatus({ kind: "connected", byName: s.connectedByName, accountLabel: s.teamName || "Slack" });
+        setStatus({
+          kind: "connected",
+          byName: s.connectedByName ?? "",
+          accountLabel: s.teamName || "Slack",
+        });
       } else setStatus({ kind: "disconnected", configured: s.configured });
     } catch {
       // NOT `{ disconnected, configured: false }`. A failed read tells us nothing
@@ -567,9 +660,16 @@ export function SlackOAuthSection({ workspaceId }: { workspaceId: string }) {
         const { url } = await apiClient.slack.authorizeUrl.query({ workspaceId });
         return url;
       }}
-      disconnect={async () => {
+      accounts={accounts}
+      canDisconnect={canDisconnect}
+      disconnect={async (teamId) => {
         if (!apiClient) throw new Error("Not signed in");
-        const res = await apiClient.slack.disconnect.mutate({ workspaceId });
+        // `teamId` undefined only from the single-connection card, where
+        // "disconnect everything" and "disconnect the one" are the same act.
+        const res = await apiClient.slack.disconnect.mutate({
+          workspaceId,
+          ...(teamId === undefined ? {} : { teamId }),
+        });
         return res.removed ? "Disconnected." : "Nothing to disconnect.";
       }}
       connectedSub="powers Slack columns (post a message, look up a user)"

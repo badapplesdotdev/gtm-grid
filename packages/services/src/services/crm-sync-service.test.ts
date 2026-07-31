@@ -11,14 +11,26 @@
  *   6. mid-pull failures — page 1 lands, NO false-stale, auth revocation pauses
  */
 
-import { Effect, Exit } from "effect";
+import { Cause, Effect, Exit, Option } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TestLayer, type TestLayerFixtures } from "../layers.js";
 import type { RecordedGridEvent } from "../services/realtime-publisher.js";
-import { CrmBindingRepo, type CrmBinding, type CrmSyncedRow, type CrmSyncRun } from "../repositories/crm-repo.js";
+import {
+  CrmBindingRepo,
+  CrmSyncRunRepo,
+  type CrmBinding,
+  type CrmSyncedRow,
+  type CrmSyncRun,
+} from "../repositories/crm-repo.js";
 import type { GridCell, GridRow } from "../repositories/webhook-repo.js";
 import { CrmConnectionService } from "./crm-connection-service.js";
-import { CrmSyncService, planRowCap, type CrmSyncOutcome } from "./crm-sync-service.js";
+import {
+  CRM_ROW_CAP_SCALE,
+  CrmSyncService,
+  planRowCap,
+  type CrmSyncOutcome,
+  type CrmSyncPageResult,
+} from "./crm-sync-service.js";
 
 const WS = "11111111-1111-1111-1111-111111111111";
 const TABLE = "22222222-2222-2222-2222-222222222222";
@@ -534,6 +546,285 @@ describe("disconnect", () => {
 const fullPage = Array.from({ length: 500 }, (_x, i) => rec(`bulk_${i}`, `Person ${i}`, `p${i}@x.com`));
 
 describe("mid-pull failures", () => {
+  it("checkpoints after one provider page and resumes the same run", async () => {
+    const w = world();
+    scriptFetch([
+      () => json(ATTRS),
+      () => json({ data: fullPage }),
+      () => json({ data: [rec("rec_500", "Person 500", "p500@x.com")] }),
+    ]);
+
+    const [first, second] = await Effect.runPromise(
+      Effect.gen(function* () {
+        const connections = yield* CrmConnectionService;
+        yield* connections.saveConnection({
+          workspaceId: WS,
+          provider: "attio",
+          tokens: { accessToken: "at_test" },
+          meta: {
+            connectedByUserId: "user_m",
+            connectedByName: "Morgan",
+            crmWorkspaceId: "attio_ws",
+            crmWorkspaceName: "Acme",
+          },
+        });
+        const sync = yield* CrmSyncService;
+        const page1 = yield* sync.syncPageForWorker(w.binding.id, "cron", null);
+        const page2 = yield* sync.syncPageForWorker(w.binding.id, "cron", page1.next);
+        return [page1, page2] as const;
+      }).pipe(Effect.provide(TestLayer(w.fixtures))) as Effect.Effect<
+        readonly [CrmSyncPageResult, CrmSyncPageResult],
+        never,
+        never
+      >,
+    );
+
+    expect(first.outcome).toBeNull();
+    expect(first.next?.pages).toBe(1);
+    expect(first.next?.rowsCreated).toBe(500);
+    expect(first.newRowIds).toHaveLength(500);
+    expect(second.outcome?.runId).toBe(first.next?.runId);
+    expect(second.outcome?.rowsCreated).toBe(501);
+    expect(w.runs).toHaveLength(1);
+    expect(w.runs[0]?.status).toBe("ok");
+  });
+
+  it("finalizes cumulative counters as partial when a checkpoint exhausts the page budget", async () => {
+    const w = world();
+    const calls = scriptFetch([() => json(ATTRS), () => json({ data: fullPage })]);
+
+    const [first, exhausted] = await Effect.runPromise(
+      Effect.gen(function* () {
+        const connections = yield* CrmConnectionService;
+        yield* connections.saveConnection({
+          workspaceId: WS,
+          provider: "attio",
+          tokens: { accessToken: "at_test" },
+          meta: {
+            connectedByUserId: "user_m",
+            connectedByName: "Morgan",
+            crmWorkspaceId: "attio_ws",
+            crmWorkspaceName: "Acme",
+          },
+        });
+        const sync = yield* CrmSyncService;
+        const page1 = yield* sync.syncPageForWorker(w.binding.id, "cron", null);
+        if (page1.next === null) {
+          return yield* Effect.fail(new Error("expected a continuation checkpoint"));
+        }
+        const pageBudget = CRM_ROW_CAP_SCALE / fullPage.length + 40;
+        const finalPage = yield* sync.syncPageForWorker(w.binding.id, "cron", {
+          ...page1.next,
+          pages: pageBudget,
+        });
+        return [page1, finalPage] as const;
+      }).pipe(Effect.provide(TestLayer(w.fixtures))) as Effect.Effect<
+        readonly [CrmSyncPageResult, CrmSyncPageResult],
+        never,
+        never
+      >,
+    );
+
+    expect(first.next?.rowsCreated).toBe(500);
+    expect(exhausted.outcome).toMatchObject({
+      runId: first.next?.runId,
+      status: "partial",
+      rowsCreated: 500,
+      rowsUpdated: 0,
+      rowsSkipped: 0,
+    });
+    expect(exhausted.outcome?.error).toContain("source is very large");
+    expect(w.runs[0]?.status).toBe("partial");
+    expect(calls).toHaveLength(2);
+  });
+
+  it("rejects a checkpoint whose binding id does not match", async () => {
+    const w = world();
+    scriptFetch([() => json(ATTRS), () => json({ data: fullPage })]);
+
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const connections = yield* CrmConnectionService;
+        yield* connections.saveConnection({
+          workspaceId: WS,
+          provider: "attio",
+          tokens: { accessToken: "at_test" },
+          meta: {
+            connectedByUserId: "user_m",
+            connectedByName: "Morgan",
+            crmWorkspaceId: "attio_ws",
+            crmWorkspaceName: "Acme",
+          },
+        });
+        const sync = yield* CrmSyncService;
+        const first = yield* sync.syncPageForWorker(w.binding.id, "cron", null);
+        if (first.next === null) {
+          return yield* Effect.fail(new Error("expected a continuation checkpoint"));
+        }
+        return yield* sync.syncPageForWorker(w.binding.id, "cron", {
+          ...first.next,
+          bindingId: "different-binding",
+        });
+      }).pipe(Effect.provide(TestLayer(w.fixtures))),
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const failure = Cause.failureOption(exit.cause);
+      expect(Option.isSome(failure)).toBe(true);
+      if (Option.isSome(failure)) {
+        expect(failure.value).toMatchObject({
+          _tag: "CrmSyncError",
+          message: "CRM sync checkpoint does not match binding",
+        });
+      }
+    }
+  });
+
+  it("finalizes cumulative counters when the connection disappears between pages", async () => {
+    const w = world();
+    const calls = scriptFetch([() => json(ATTRS), () => json({ data: fullPage })]);
+
+    const [first, stopped] = await Effect.runPromise(
+      Effect.gen(function* () {
+        const connections = yield* CrmConnectionService;
+        yield* connections.saveConnection({
+          workspaceId: WS,
+          provider: "attio",
+          tokens: { accessToken: "at_test" },
+          meta: {
+            connectedByUserId: "user_m",
+            connectedByName: "Morgan",
+            crmWorkspaceId: "attio_ws",
+            crmWorkspaceName: "Acme",
+          },
+        });
+        const sync = yield* CrmSyncService;
+        const page1 = yield* sync.syncPageForWorker(w.binding.id, "cron", null);
+        if (page1.next === null) {
+          return yield* Effect.fail(new Error("expected a continuation checkpoint"));
+        }
+        yield* connections.removeConnection(WS, "attio");
+        const page2 = yield* sync.syncPageForWorker(w.binding.id, "cron", page1.next);
+        return [page1, page2] as const;
+      }).pipe(Effect.provide(TestLayer(w.fixtures))) as Effect.Effect<
+        readonly [CrmSyncPageResult, CrmSyncPageResult],
+        never,
+        never
+      >,
+    );
+
+    expect(stopped.outcome).toMatchObject({
+      runId: first.next?.runId,
+      status: "failed",
+      errorTag: "CrmConnectionMissing",
+      rowsCreated: 500,
+      rowsUpdated: 0,
+      rowsSkipped: 0,
+    });
+    expect(w.runs[0]).toMatchObject({ status: "failed", rowsCreated: 500 });
+    expect(calls).toHaveLength(2);
+  });
+
+  it("finalizes cumulative counters when a binding is paused between pages", async () => {
+    const w = world();
+    const calls = scriptFetch([() => json(ATTRS), () => json({ data: fullPage })]);
+
+    const [first, stopped] = await Effect.runPromise(
+      Effect.gen(function* () {
+        const connections = yield* CrmConnectionService;
+        yield* connections.saveConnection({
+          workspaceId: WS,
+          provider: "attio",
+          tokens: { accessToken: "at_test" },
+          meta: {
+            connectedByUserId: "user_m",
+            connectedByName: "Morgan",
+            crmWorkspaceId: "attio_ws",
+            crmWorkspaceName: "Acme",
+          },
+        });
+        const sync = yield* CrmSyncService;
+        const page1 = yield* sync.syncPageForWorker(w.binding.id, "cron", null);
+        if (page1.next === null) {
+          return yield* Effect.fail(new Error("expected a continuation checkpoint"));
+        }
+        const bindings = yield* CrmBindingRepo;
+        yield* bindings.patch(w.binding.id, {
+          pausedReason: "auth_revoked",
+          lastError: "Attio was disconnected. Reconnect Attio to resume syncing.",
+        });
+        const page2 = yield* sync.syncPageForWorker(w.binding.id, "cron", page1.next);
+        return [page1, page2] as const;
+      }).pipe(Effect.provide(TestLayer(w.fixtures))) as Effect.Effect<
+        readonly [CrmSyncPageResult, CrmSyncPageResult],
+        never,
+        never
+      >,
+    );
+
+    expect(stopped.outcome).toMatchObject({
+      runId: first.next?.runId,
+      status: "failed",
+      errorTag: "SyncBindingInactive",
+      rowsCreated: 500,
+      rowsUpdated: 0,
+      rowsSkipped: 0,
+    });
+    expect(stopped.outcome?.error).toContain("Reconnect Attio");
+    expect(w.runs[0]).toMatchObject({ status: "failed", rowsCreated: 500 });
+    expect(calls).toHaveLength(2);
+  });
+
+  it("reuses the run schema and actor map instead of refetching them per page", async () => {
+    const w = world();
+    const binding: CrmBinding = {
+      ...w.binding,
+      columns: [
+        ...w.binding.columns,
+        { attrSlug: "owner", attrType: "actor-reference", columnId: "col_owner", title: "Owner" },
+      ],
+    };
+    if (w.fixtures.crmBindings !== undefined) w.fixtures.crmBindings[0] = binding;
+    const actorRec = (id: string) => ({
+      ...rec(id, id, `${id}@x.com`),
+      values: {
+        ...rec(id, id, `${id}@x.com`).values,
+        owner: [{ referenced_actor_id: "member_1" }],
+      },
+    });
+    const fullPage = Array.from({ length: 500 }, (_x, i) => actorRec(`rec_${i}`));
+    const calls = scriptFetch([
+      () =>
+        json({
+          data: [
+            ...ATTRS.data,
+            { api_slug: "owner", title: "Owner", type: "actor-reference" },
+          ],
+        }),
+      () => json({ data: fullPage }),
+      () =>
+        json({
+          data: [
+            {
+              id: { workspace_member_id: "member_1" },
+              first_name: "Morgan",
+              last_name: "Parry",
+            },
+          ],
+        }),
+      () => json({ data: [actorRec("rec_500")] }),
+    ]);
+
+    const outcome = await syncOnce(w);
+
+    expect(outcome.rowsCreated).toBe(501);
+    expect(calls.filter((call) => call.url.includes("/attributes"))).toHaveLength(1);
+    expect(calls.filter((call) => call.url.includes("/workspace_members"))).toHaveLength(1);
+    const lastRow = w.syncedRows.find((entry) => entry.externalId === "rec_500");
+    expect(lastRow === undefined ? "" : cellText(w, lastRow.rowId, "col_owner")).toBe("Morgan Parry");
+  });
+
   it("a hard failure on page 2 keeps page 1's rows, fails the run, and skips stale", async () => {
     const w = world();
     scriptFetch([
@@ -569,7 +860,7 @@ describe("mid-pull failures", () => {
 
   it("overlap guard: a run already in flight makes a second sync a no-op", async () => {
     const w = world();
-    // Another worker started a run for this binding seconds ago and is mid-pull.
+    // The durable chain may be old overall; its recent heartbeat makes it live.
     w.runs.push({
       id: "run_inflight",
       workspaceId: WS,
@@ -583,7 +874,8 @@ describe("mid-pull failures", () => {
       rowsStaled: 0,
       fieldsDropped: null,
       error: null,
-      startedAt: Date.now() - 5_000,
+      startedAt: Date.now() - 2 * 60 * 60 * 1000,
+      lastProgressAt: Date.now() - 5_000,
       finishedAt: null,
     });
     scriptFetch(syncScript([rec("rec_1", "Sarah", "sarah@vercel.com")]));
@@ -596,9 +888,56 @@ describe("mid-pull failures", () => {
     expect(w.runs).toHaveLength(1); // no second run row
   });
 
+  it("a continuation stops before pulling when its run was already finalized", async () => {
+    const w = world();
+    scriptFetch([
+      () => json(ATTRS),
+      () => json({ data: fullPage }),
+      () => json({ data: [rec("rec_500", "Person 500", "p500@x.com")] }),
+    ]);
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const connections = yield* CrmConnectionService;
+        yield* connections.saveConnection({
+          workspaceId: WS,
+          provider: "attio",
+          tokens: { accessToken: "at_test" },
+          meta: {
+            connectedByUserId: "user_m",
+            connectedByName: "Morgan",
+            crmWorkspaceId: "attio_ws",
+            crmWorkspaceName: "Acme",
+          },
+        });
+        const sync = yield* CrmSyncService;
+        const first = yield* sync.syncPageForWorker(w.binding.id, "cron", null);
+        if (first.next === null) {
+          return yield* Effect.fail(new Error("expected a continuation checkpoint"));
+        }
+        const runs = yield* CrmSyncRunRepo;
+        yield* runs.finish(first.next.runId, {
+          status: "failed",
+          rowsCreated: first.next.rowsCreated,
+          rowsUpdated: first.next.rowsUpdated,
+          rowsSkipped: first.next.rowsSkipped,
+          rowsStaled: 0,
+          fieldsDropped: null,
+          error: "reaped",
+          finishedAt: Date.now(),
+        });
+        return yield* sync.syncPageForWorker(w.binding.id, "cron", first.next);
+      }).pipe(Effect.provide(TestLayer(w.fixtures))) as Effect.Effect<CrmSyncPageResult, never, never>,
+    );
+
+    expect(result.outcome?.errorTag).toBe("SyncRunNotRunning");
+    expect(result.outcome?.error).toBe("reaped");
+    expect(w.rows).toHaveLength(500);
+  });
+
   it("overlap guard: a crashed leftover run (stale) does NOT block the next sync", async () => {
     const w = world();
-    w.runs.push({
+    const crashedRun: CrmSyncRun = {
       id: "run_crashed",
       workspaceId: WS,
       bindingId: w.binding.id,
@@ -611,14 +950,20 @@ describe("mid-pull failures", () => {
       rowsStaled: 0,
       fieldsDropped: null,
       error: null,
-      startedAt: Date.now() - 11 * 60 * 1000, // older than SYNC_STALE_RUN_MS
+      startedAt: Date.now() - 31 * 60 * 1000, // older than SYNC_STALE_RUN_MS
+      lastProgressAt: Date.now() - 31 * 60 * 1000,
       finishedAt: null,
-    });
+    };
+    w.runs.push(crashedRun);
     scriptFetch(syncScript([rec("rec_1", "Sarah", "sarah@vercel.com")]));
     const outcome = await syncOnce(w);
 
     expect(outcome.runId).not.toBe("");
     expect(outcome.rowsCreated).toBe(1);
+    const reconciled = w.runs.find((run) => run.id === crashedRun.id);
+    expect(reconciled?.status).toBe("failed");
+    expect(reconciled?.finishedAt).not.toBeNull();
+    expect(reconciled?.error).toContain("stopped before it could finish");
   });
 
   it("a paused binding refuses to sync until reconnected", async () => {

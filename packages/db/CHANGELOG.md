@@ -1,5 +1,83 @@
 # @gtmgrid/db
 
+## 1.13.1
+
+### Patch Changes
+
+- 2582c3a: Fix large CRM imports timing out or remaining stuck in a syncing state.
+
+  CRM pulls now checkpoint each provider page into a fresh durable Inngest run,
+  heartbeat active syncs so healthy long-running imports are not reaped, and stop
+  finalized or paused continuations before they can write duplicate rows. The
+  checkpoint carries the run schema, row budget, and actor cache so large Attio
+  and HubSpot sources avoid repeated metadata calls and unbounded Inngest state.
+
+## 1.13.0
+
+### Minor Changes
+
+- 6299102: Bring back the Auto-run toggle, and let agents drive it.
+
+  The toolbar's Auto-run switch disappeared in "remove the local paradigm" (#126).
+  That change deleted the local grid, which was the only thing that ever passed
+  `autoRun` into `DataGrid` — the switch itself, and its CSS, survived untouched,
+  so the control was rendered conditionally on a prop nobody supplied any more. The
+  gate it enforced went with it: since then every cloud cascade has run every
+  dependent column, billed connectors included, with no way to say no.
+
+  Auto-run is now a persisted, workspace-shared property of the table
+  (`tables.auto_run`, `NOT NULL DEFAULT true`) rather than a per-browser
+  `localStorage` flag, because it governs shared credit spend — it has to mean the
+  same thing for every member, for the server-side webhook worker, and for an agent
+  driving the grid.
+  - **The switch is back** in the grid toolbar, reading and writing the persisted
+    flag. Toggling is optimistic through the same reducer the realtime
+    `table.autoRun` event uses, so it flips instantly and every other member's grid
+    follows live.
+  - **Auto-run off stops billed cascades**, not the grid. Formula, mapped and code
+    columns still cascade for free; only columns that dispatch a billable connector
+    call wait for an explicit run. Running a billed column by hand still fills the
+    free columns downstream of it.
+  - **Inbound webhooks respect it too.** A table's auto-run ANDs with the
+    connection's own flag — an HTTP-delivered row is the one path that spends
+    credits with nobody watching, so "nothing in this table enriches itself" now
+    holds there as well. The row still lands; only the enrichment is withheld.
+  - **Agents can read and set it** via a new `set_auto_run` MCP tool (and `autoRun`
+    on `get_table`), so an agent can turn it off before rewriting column configs or
+    bulk-loading rows and turn it back on when the table is ready. It is the same
+    switch the user sees, so the two can never disagree.
+
+  Existing tables migrate to auto-run ON, which is exactly what they have been
+  doing, so nothing changes until someone turns it off.
+
+## 1.12.0
+
+### Minor Changes
+
+- 568bc03: Connect multiple Slack workspaces to one GTM Grid workspace.
+
+  A workspace can now install the Slack app into several Slack teams and pin each
+  column to the team it posts as. Previously the second connect silently
+  overwrote the first: every `sdk.slack.*` call across the grid switched team
+  without a word, and inbound events from the replaced team were dropped as a
+  tenant mismatch.
+  - `credentials` gains an `account_id` discriminator, so a connector holds one
+    row per connected account and each keeps its own OAuth refresh cycle and
+    rotation lock. Slack's refresh tokens are single-use, so sharing a row across
+    teams would have made one team's refresh revoke another's live token.
+  - Columns gain `account_id`. A column that names no account still resolves the
+    workspace's sole connection; with several connected it fails with
+    `CredentialAccountAmbiguous` rather than posting into an arbitrary team.
+  - The Slack Events tenant gate now tests membership of every connected team
+    instead of equality with one, and still fails closed.
+  - Fixes a pre-existing race in `CredentialRepo.upsert`: it was a
+    select-then-insert with no unique index behind it, so two concurrent connects
+    both inserted and every read (`LIMIT 1`) then served an arbitrary row. Now a
+    single `ON CONFLICT` statement against two partial unique indexes.
+  - `slack.disconnect` now requires the `admin` role. It deletes a shared
+    credential every teammate's columns run against, and the tokens cannot be
+    recovered without a fresh consent round-trip.
+
 ## 1.11.0
 
 ## 1.10.0

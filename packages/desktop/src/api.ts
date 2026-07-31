@@ -27,6 +27,13 @@ export interface Column {
   kind: "manual" | "function";
   provider: string | null;
   method: string | null;
+  /**
+   * Which account on the provider this column runs against — a Slack team id
+   * when the workspace has connected several. Null/absent = the workspace's
+   * only account on this connector, which is every other connector and every
+   * column authored before multi-team Slack.
+   */
+  accountId?: string | null;
   fn: string | null;
   /** Custom QuickJS body for code columns (fn === "code"); null otherwise. */
   code?: string | null;
@@ -68,6 +75,12 @@ export interface FullTable {
   columns: Column[];
   rows: Row[];
   dedupe?: { column: string; keep: "oldest" | "newest" } | null;
+  /**
+   * Auto-run policy (workspace-shared, persisted on the table). When off, a
+   * BILLED function column is not re-run just because an upstream input changed
+   * — the user presses play. Absent ⇒ on, the historical behaviour.
+   */
+  autoRun?: boolean;
 }
 /** A field whose value is picked from a live connector list (name → id). */
 export interface FieldOptionSource {

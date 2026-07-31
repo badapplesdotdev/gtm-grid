@@ -11,6 +11,11 @@ import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "./e2e",
   testMatch: /.*\.spec\.ts/,
+  // These tests intentionally overwrite tracked App Store assets. Keep them out
+  // of the verification suite unless the dedicated capture command opts in.
+  testIgnore: process.env.GTMGRID_CAPTURE_LISTING_SHOTS
+    ? []
+    : [/listing-shots\.spec\.ts/],
   globalSetup: "./e2e/global-setup.ts",
   globalTeardown: "./e2e/global-teardown.ts",
   fullyParallel: false,

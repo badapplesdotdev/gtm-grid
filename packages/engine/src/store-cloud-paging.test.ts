@@ -218,6 +218,20 @@ describe("cloud store — row-scoped run (getTableForRows)", () => {
   });
 });
 
+/**
+ * CONTENTION-BOUND, not slow. These two run a real multi-page column over a
+ * large fake grid: ~1.5s in isolation, but ~9s when vitest runs the whole suite
+ * in parallel on a loaded machine — already two-thirds of the way through a 30s
+ * budget before any growth. Adding tests elsewhere in the repo was enough to tip
+ * it over, which made an unrelated PR look like it had broken paging.
+ *
+ * Raised rather than making the fixture smaller: the page count IS the thing
+ * under test (that the engine streams instead of loading the whole grid), so
+ * shrinking it would weaken the assertion to buy time the machine, not the
+ * code, is spending.
+ */
+const HEAVY_TIMEOUT_MS = 120_000;
+
 describe("cloud store — full-column run (keyset getTablePage)", () => {
   it("STREAMS the grid one keyset page at a time, never the full getTable", async () => {
     // 450 rows at page size 200 → 3 pages (200 / 200 / 50).
@@ -235,7 +249,7 @@ describe("cloud store — full-column run (keyset getTablePage)", () => {
     // Generous timeout: runs the QuickJS sandbox per row (×450) and can exceed
     // the 5s default under full-suite concurrency — the assertions are about the
     // read SHAPE (page count, no full getTable), not speed.
-  }, 30000);
+  }, HEAVY_TIMEOUT_MS);
 
   it("matches the legacy full-snapshot values (golden equivalence)", async () => {
     // Paged path.
@@ -253,7 +267,7 @@ describe("cloud store — full-column run (keyset getTablePage)", () => {
     expect([...paged.written.entries()].sort()).toEqual(
       [...legacy.written.entries()].sort(),
     );
-  }, 30000);
+  }, HEAVY_TIMEOUT_MS);
 
   it("falls back to a single getTable snapshot when getTablePage is not wired", async () => {
     const refs: CloudFunctionRefs = { ...REFS, getTablePage: undefined };

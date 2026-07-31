@@ -36,6 +36,7 @@ import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { bearer, emailOTP } from "better-auth/plugins";
 import { captureUserSignedUp } from "./analytics.js";
+import { sendNewUserWebhook } from "./new-user-webhook.js";
 import { generateOtp, OTP_EXPIRY_SECONDS, OTP_LENGTH } from "./otp.js";
 import { githubEnabled, googleEnabled } from "./providers.js";
 
@@ -163,21 +164,25 @@ export function createAuth(db: Db): ReturnType<typeof betterAuth> {
     },
     socialProviders: socialProviders(),
     trustedOrigins: trustedOrigins(),
-    // Record every new account as an identified PostHog person, server-side.
+    // Record every new account as an identified PostHog person, server-side,
+    // and push the new user's details to the outbound webhook (CRM/onboarding).
     // `user.create.after` fires exactly once per new user (password OR OAuth),
     // and the `user.id` here is the same distinct id the desktop later identifies
     // with — so signups are captured with name/email even if the client identify
     // never runs. Awaited so the serverless function doesn't suspend before the
-    // event flushes; the helper guards itself so this can't break sign-up.
+    // event flushes; both helpers guard themselves so this can't break sign-up.
     databaseHooks: {
       user: {
         create: {
           after: async (user) => {
-            await captureUserSignedUp({
-              id: user.id,
-              email: user.email,
-              name: user.name,
-            });
+            await Promise.all([
+              captureUserSignedUp({
+                id: user.id,
+                email: user.email,
+                name: user.name,
+              }),
+              sendNewUserWebhook(user),
+            ]);
           },
         },
       },

@@ -646,6 +646,7 @@ type GetTableData = {
     _id: string;
     name: string;
     dedupe?: { column: string; keep: "oldest" | "newest" } | null;
+    autoRun?: boolean;
   };
   columns: readonly {
     _id: string;
@@ -764,6 +765,8 @@ export function createIncrementalTableView(): {
       id: data.table._id,
       name: data.table.name,
       dedupe: data.table.dedupe ?? null,
+      // Absent (an older cached snapshot) means ON — the pre-toggle behaviour.
+      autoRun: data.table.autoRun !== false,
       columns,
       rows,
     };
@@ -1387,6 +1390,10 @@ function isNotFoundError(e: unknown): boolean {
 
 export function useCloudGridMutations() {
   const qc = useQueryClient();
+  // Concurrency control for the auto-run toggle — see `setAutoRun`. Refs so they
+  // survive re-renders; their identities never change, so they need no dep entry.
+  const autoRunSeq = useRef(makeLatestWins());
+  const autoRunQueue = useRef(makeSerialQueue());
   // Invalidate BOTH the unpaged (`grid.getTable`) and the paged
   // (`grid.getTablePage`) caches for a table. The live grid renders the PAGED
   // query, so invalidating only `table` (the old behavior) left structural
@@ -1615,6 +1622,10 @@ export function useCloudGridMutations() {
             kind,
             provider,
             method,
+            // A newly inserted column names no account: it resolves the
+            // workspace's sole one, which is right for every connector but a
+            // multi-team Slack, where the editor's picker sets it afterwards.
+            accountId: null,
             code: body.code ?? null,
             params: body.params ?? {},
             condition: null,
@@ -1697,6 +1708,8 @@ export function useCloudGridMutations() {
         kind?: "manual" | "function";
         provider?: string | null;
         method?: string | null;
+        /** Which account on the provider (Slack team id); null clears the pin. */
+        accountId?: string | null;
         code?: string | null;
         params?: Record<string, unknown>;
         condition?: string | null;
@@ -1718,6 +1731,8 @@ export function useCloudGridMutations() {
                 provider:
                   patch.provider !== undefined ? patch.provider : current.provider,
                 method: patch.method !== undefined ? patch.method : current.method,
+                accountId:
+                  patch.accountId !== undefined ? patch.accountId : (current.accountId ?? null),
                 code: patch.code !== undefined ? patch.code : current.code,
                 params: patch.params !== undefined ? patch.params : current.params,
                 condition:
@@ -1741,6 +1756,48 @@ export function useCloudGridMutations() {
       }
     },
     [beginOptimistic, currentColumn, refresh],
+  );
+
+  /**
+   * Turn the table's auto-run on/off. Optimistic through the SAME reducer the
+   * realtime `table.autoRun` echo uses, so the toolbar switch flips instantly
+   * and the echo converges on it.
+   *
+   * Rapid toggling is the whole difficulty here, and it needs BOTH guards below.
+   * This flag gates credit spend, so the cost of the cache and the server
+   * disagreeing is not a cosmetic glitch — it is billing against a policy the
+   * user cannot see, or a teammate seeing a policy nobody chose.
+   *
+   * 1. SERIALIZED per table. Requests never overlap, so the last toggle CLICKED
+   *    is the last one PERSISTED. Without this, "last write wins" is decided by
+   *    the transport: a superseded request can land after the winner, leaving the
+   *    server holding a value nobody chose — and no client-side bookkeeping can
+   *    undo a write that already happened.
+   *
+   * 2. Only the LATEST toggle reconciles on failure. A failure REFETCHES rather
+   *    than restoring `beginOptimistic`'s whole-snapshot rollback: that snapshot
+   *    predates its own toggle, so replaying it reverts newer policy changes (and
+   *    any cell edits that landed in between), and after a failure the server's
+   *    value is not something we can guess anyway. Superseded attempts stay quiet
+   *    so they cannot yank the value out from under the toggle that won.
+   *
+   * A successful latest toggle needs no reconciliation — the optimistic patch IS
+   * what the server stored, and the realtime echo converges on the same value.
+   */
+  const setAutoRun = useCallback(
+    async (tableId: Id<"tables">, autoRun: boolean) => {
+      const ticket = autoRunSeq.current.claim(tableId);
+      beginOptimistic(tableId, [{ type: "table.autoRun", tableId, autoRun }]);
+      return autoRunQueue.current(String(tableId), async () => {
+        try {
+          return await apiClient!.grid.setAutoRun.mutate({ tableId, autoRun });
+        } catch (e) {
+          if (autoRunSeq.current.isLatest(tableId, ticket)) await refresh(tableId);
+          throw e;
+        }
+      });
+    },
+    [beginOptimistic, refresh],
   );
 
   /** Set (or clear) the table's dedupe config; the server sweeps immediately. */
@@ -1784,6 +1841,71 @@ export function useCloudGridMutations() {
     deleteColumn,
     setDedupe,
     dedupeTable,
+    setAutoRun,
+  };
+}
+
+/**
+ * A per-key serial queue: `run(key, task)` starts `task` only once every task
+ * previously queued for that key has SETTLED, so two writes to the same key can
+ * never be in flight together.
+ *
+ * This is what makes "last click wins" actually true. Without it, overlapping
+ * requests race in the transport and the last one ISSUED is not necessarily the
+ * last one PERSISTED — so a superseded write can land after the winner and leave
+ * the server holding a value nobody chose.
+ *
+ * A rejected task does NOT break the chain (the next task still runs); its error
+ * is delivered to its own caller and nobody else's. Chains are dropped once
+ * drained, so the map does not grow with every click. Pure; unit-tested directly.
+ */
+export function makeSerialQueue(): <T>(
+  key: string,
+  task: () => Promise<T>,
+) => Promise<T> {
+  const tails = new Map<string, Promise<unknown>>();
+  return <T>(key: string, task: () => Promise<T>): Promise<T> => {
+    const prev = tails.get(key) ?? Promise.resolve();
+    // `then(task, task)` — run next whether the predecessor resolved or rejected.
+    const result = prev.then(task, task);
+    const settled = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    tails.set(key, settled);
+    void settled.then(() => {
+      // Only the CURRENT tail may clear the entry; a later task already chained
+      // onto it must keep the chain alive.
+      if (tails.get(key) === settled) tails.delete(key);
+    });
+    return result;
+  };
+}
+
+/**
+ * A per-key "only the newest attempt may reconcile" guard.
+ *
+ * Each `claim(key)` supersedes the previous one for that key and hands back a
+ * ticket; `isLatest(key, ticket)` answers whether that attempt is still the
+ * newest. Used so a LATE-failing request cannot undo, or refetch over, a newer
+ * one that is still in flight — the newer request owns the final state and
+ * settles it when it completes.
+ *
+ * Keyed by table id, so toggling two different tables never interferes. Pure
+ * (no React, no cache) and unit-tested directly.
+ */
+export function makeLatestWins(): {
+  claim: (key: string) => number;
+  isLatest: (key: string, ticket: number) => boolean;
+} {
+  const seq = new Map<string, number>();
+  return {
+    claim: (key) => {
+      const next = (seq.get(key) ?? 0) + 1;
+      seq.set(key, next);
+      return next;
+    },
+    isLatest: (key, ticket) => seq.get(key) === ticket,
   };
 }
 

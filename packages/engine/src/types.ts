@@ -38,6 +38,16 @@ export interface Column {
   provider: string | null;
   /** Connector method, e.g. "generate" or "enrichPerson". */
   method: string | null;
+  /**
+   * WHICH ACCOUNT on the provider this column runs against — Slack's team id
+   * when a workspace has connected more than one Slack team.
+   *
+   * Null/undefined means "the workspace's only account on this connector",
+   * which is every connector but Slack and every column authored before
+   * multiple Slack teams were supported. The credential store resolves that to
+   * the sole stored row, and FAILS rather than guessing if there are several.
+   */
+  accountId?: string | null;
   /** JS body executed inside the QuickJS sandbox: `async function(inputs, sdk) { ... }`. */
   code: string | null;
   /** Input mapping. String values are templated with {{Column Name}} against the row. */

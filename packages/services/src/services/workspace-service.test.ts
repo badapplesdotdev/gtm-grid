@@ -125,3 +125,171 @@ describe("WorkspaceService.requireWorkspaceRole", () => {
     expect(failureTag(exit)).toBe("InsufficientRoleError");
   });
 });
+
+describe("WorkspaceService.updateMemberRole", () => {
+  const ADMIN_MEMBERSHIPS: readonly Membership[] = [
+    ...memberships,
+    { workspaceId: WS_ID, userId: "user_admin", role: "admin" },
+  ];
+
+  /**
+   * Run `updateMemberRole` and then read back the roster + the workspace row, so
+   * every assertion is about OUTCOME (who holds which role, who owns the
+   * workspace) rather than which repo call was made.
+   */
+  const runUpdate = (
+    fixtures: TestLayerFixtures,
+    args: {
+      readonly userId: string;
+      readonly role: "owner" | "admin" | "member";
+    },
+  ) =>
+    Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const svc = yield* WorkspaceService;
+        yield* svc.updateMemberRole({ workspaceId: WS_ID, ...args });
+        const roster = yield* svc.listMembers(WS_ID);
+        const workspace = yield* svc.getWorkspace(WS_ID);
+        return {
+          roles: new Map(roster.members.map((m) => [m.userId, m.role])),
+          ownerId: workspace.ownerId,
+        };
+      }).pipe(Effect.provide(TestLayer(fixtures))),
+    );
+
+  it("lets the owner promote a member to admin", async () => {
+    const exit = await runUpdate(
+      { workspaces, memberships, currentUserId: "user_owner" },
+      { userId: "user_member", role: "admin" },
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.roles.get("user_member")).toBe("admin");
+      expect(exit.value.roles.get("user_owner")).toBe("owner");
+      expect(exit.value.ownerId).toBe("user_owner");
+    }
+  });
+
+  it("lets the owner demote an admin back to member", async () => {
+    const exit = await runUpdate(
+      {
+        workspaces,
+        memberships: ADMIN_MEMBERSHIPS,
+        currentUserId: "user_owner",
+      },
+      { userId: "user_admin", role: "member" },
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.roles.get("user_admin")).toBe("member");
+    }
+  });
+
+  it("transfers ownership: the target owns it, the caller becomes admin", async () => {
+    const exit = await runUpdate(
+      { workspaces, memberships, currentUserId: "user_owner" },
+      { userId: "user_member", role: "owner" },
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.roles.get("user_member")).toBe("owner");
+      expect(exit.value.roles.get("user_owner")).toBe("admin");
+      // The workspace row follows the new owner — billing contact and the
+      // owner-only actions must not be left pointing at the previous owner.
+      expect(exit.value.ownerId).toBe("user_member");
+    }
+  });
+
+  it("leaves exactly one owner after a transfer", async () => {
+    const exit = await runUpdate(
+      {
+        workspaces,
+        memberships: ADMIN_MEMBERSHIPS,
+        currentUserId: "user_owner",
+      },
+      { userId: "user_admin", role: "owner" },
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      const owners = [...exit.value.roles.values()].filter(
+        (r) => r === "owner",
+      );
+      expect(owners).toEqual(["owner"]);
+    }
+  });
+
+  it("rejects an admin trying to promote someone with InsufficientRoleError", async () => {
+    const exit = await runUpdate(
+      {
+        workspaces,
+        memberships: ADMIN_MEMBERSHIPS,
+        currentUserId: "user_admin",
+      },
+      { userId: "user_member", role: "admin" },
+    );
+    expect(failureTag(exit)).toBe("InsufficientRoleError");
+  });
+
+  it("rejects a plain member trying to promote themselves", async () => {
+    const exit = await runUpdate(
+      { workspaces, memberships, currentUserId: "user_member" },
+      { userId: "user_member", role: "owner" },
+    );
+    expect(failureTag(exit)).toBe("InsufficientRoleError");
+  });
+
+  it("rejects a non-member caller with NotAMemberError", async () => {
+    const exit = await runUpdate(
+      { workspaces, memberships, currentUserId: "user_stranger" },
+      { userId: "user_member", role: "admin" },
+    );
+    expect(failureTag(exit)).toBe("NotAMemberError");
+  });
+
+  it("rejects an unauthenticated caller with UnauthenticatedError", async () => {
+    const exit = await runUpdate(
+      { workspaces, memberships, currentUserId: null },
+      { userId: "user_member", role: "admin" },
+    );
+    expect(failureTag(exit)).toBe("UnauthenticatedError");
+  });
+
+  it("404s when the target is not a member of the workspace", async () => {
+    const exit = await runUpdate(
+      { workspaces, memberships, currentUserId: "user_owner" },
+      { userId: "user_stranger", role: "admin" },
+    );
+    expect(failureTag(exit)).toBe("MemberNotFoundError");
+  });
+
+  it("refuses to let the owner demote themselves (LastOwnerError)", async () => {
+    const exit = await runUpdate(
+      { workspaces, memberships, currentUserId: "user_owner" },
+      { userId: "user_owner", role: "admin" },
+    );
+    expect(failureTag(exit)).toBe("LastOwnerError");
+  });
+
+  it("is a no-op when the member already holds the role", async () => {
+    const exit = await runUpdate(
+      { workspaces, memberships, currentUserId: "user_owner" },
+      { userId: "user_member", role: "member" },
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.roles.get("user_member")).toBe("member");
+      expect(exit.value.ownerId).toBe("user_owner");
+    }
+  });
+
+  it("treats the owner re-asserting their own role as a no-op, not LastOwnerError", async () => {
+    const exit = await runUpdate(
+      { workspaces, memberships, currentUserId: "user_owner" },
+      { userId: "user_owner", role: "owner" },
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.roles.get("user_owner")).toBe("owner");
+    }
+  });
+});
