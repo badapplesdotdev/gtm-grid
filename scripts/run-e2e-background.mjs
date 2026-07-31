@@ -18,6 +18,12 @@ const runDir = join(repoRoot, ".gtmgrid", "e2e");
 const statusPath = join(runDir, "status.json");
 const logPath = join(runDir, "latest.log");
 
+const quietEnvironment = () => {
+  const env = { ...process.env, NO_COLOR: "1" };
+  delete env.FORCE_COLOR;
+  return env;
+};
+
 const readStatus = () => {
   if (!existsSync(statusPath)) return undefined;
 
@@ -72,7 +78,7 @@ const start = () => {
   const worker = spawn(process.execPath, [scriptPath, "worker", startedAt], {
     cwd: repoRoot,
     detached: true,
-    env: { ...process.env, FORCE_COLOR: "0" },
+    env: quietEnvironment(),
     stdio: ["ignore", log, log],
   });
   closeSync(log);
@@ -89,7 +95,7 @@ const worker = (startedAt) => {
   const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
   const run = spawn(pnpm, ["--filter", "@gtmgrid/desktop", "e2e"], {
     cwd: repoRoot,
-    env: { ...process.env, FORCE_COLOR: "0" },
+    env: quietEnvironment(),
     stdio: "inherit",
   });
 
