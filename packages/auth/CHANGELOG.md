@@ -1,5 +1,14 @@
 # @gtmgrid/auth
 
+## 1.14.0
+
+### Patch Changes
+
+- Updated dependencies [a5bb8fc]
+  - @gtmgrid/analytics@1.14.0
+  - @gtmgrid/db@1.14.0
+  - @gtmgrid/email@1.14.0
+
 ## 1.13.1
 
 ### Patch Changes
