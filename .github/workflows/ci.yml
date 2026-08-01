@@ -2,9 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # main = PRODUCTION, staging = the persistent pre-production branch (it has
+    # its own Supabase branch database). Both are long-lived and both deploy
+    # somewhere real, so both must be gated.
+    branches: [main, staging]
   pull_request:
-    branches: [main]
+    branches: [main, staging]
 
 permissions:
   contents: read

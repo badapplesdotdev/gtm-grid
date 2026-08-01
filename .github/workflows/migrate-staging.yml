@@ -1,0 +1,63 @@
+name: Migrate staging DB
+
+# Apply pending Drizzle migrations to the STAGING database on every push to the
+# `staging` branch. The twin of migrate-prod.yml, which stays on `main`
+# (= production).
+#
+# WHY THIS EXISTS AT ALL: staging is a Supabase PERSISTENT BRANCH. Supabase
+# branching replays `supabase/migrations/` — a directory this repo does not have,
+# because the schema is built by Drizzle migrations in packages/db/migrations.
+# A fresh Supabase branch therefore comes up with an EMPTY database, and this
+# workflow is what populates it. Without it, staging has no tables.
+#
+# THE GIT BRANCH NAME IS LOAD-BEARING: the Supabase branch is git-linked by NAME
+# to `staging`. Rename the git branch and the two silently stop corresponding —
+# migrations would run against nothing while staging drifts.
+#
+# Migrations MUST stay backward-compatible (expand-contract), same rule as prod:
+# the previous code keeps working before this runs, and the new code works after.
+#
+# Requires the `STAGING_DATABASE_URL` repository secret (the Supabase BRANCH's
+# pooled connection string — Supavisor transaction mode, port 6543). NOT the
+# production string: the whole point is that staging cannot touch prod data.
+
+on:
+  push:
+    branches: [staging]
+    # Only run when migrations (or the schema/config that generates them) change,
+    # so unrelated pushes don't re-run drizzle-kit needlessly.
+    paths:
+      - "packages/db/migrations/**"
+      - "packages/db/src/schema.ts"
+      - "packages/db/drizzle.config.ts"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never run two staging migrations at once.
+  group: migrate-staging
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: Apply pending migrations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: drizzle-kit migrate (staging)
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        run: |
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "::error::STAGING_DATABASE_URL secret is not set — add the staging Supabase branch pooled connection string in repo Settings → Secrets."
+            exit 1
+          fi
+          pnpm --filter @gtmgrid/db db:migrate
