@@ -95730,6 +95730,7 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
         "verb": "POST",
         "path": "/v1/profile/enrich",
         "credits": 1,
+        "emptyWhenNotFound": true,
         "input": {
           "type": "object",
           "required": [
@@ -95894,6 +95895,7 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
         "verb": "POST",
         "path": "/v1/company/enrich",
         "credits": 1,
+        "emptyWhenNotFound": true,
         "input": {
           "type": "object",
           "required": [
