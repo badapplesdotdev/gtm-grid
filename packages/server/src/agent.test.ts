@@ -8,6 +8,8 @@ import {
   codexSandboxFlags,
   codexModelOptions,
   codexUserModelDefaults,
+  claudeModelOptions,
+  claudeUserModelDefault,
   claudePermissionMode,
   claudeTaskMessage,
   contextPreamble,
@@ -234,6 +236,39 @@ describe("codexModelOptions — live Codex CLI model discovery", () => {
         defaultModel: "gpt-default",
         source: "default",
       });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("claudeModelOptions — always-latest family aliases", () => {
+  it("offers family aliases and reports the configured default from settings.json", () => {
+    const home = mkdtempSync(join(tmpdir(), "claude-models-"));
+    try {
+      writeFileSync(join(home, "settings.json"), JSON.stringify({ model: "opus" }));
+      expect(claudeModelOptions(home)).toEqual({
+        models: [
+          { value: "opus", label: "Opus (latest)" },
+          { value: "sonnet", label: "Sonnet (latest)" },
+          { value: "haiku", label: "Haiku (latest)" },
+          { value: "fable", label: "Fable (latest)" },
+        ],
+        defaultModel: "opus",
+        source: "aliases",
+      });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("omits defaultModel when settings.json is absent or sets no model", () => {
+    const home = mkdtempSync(join(tmpdir(), "claude-models-empty-"));
+    try {
+      expect(claudeModelOptions(home).defaultModel).toBeUndefined();
+      expect(claudeModelOptions(home).source).toBe("aliases");
+      writeFileSync(join(home, "settings.json"), JSON.stringify({ theme: "dark" }));
+      expect(claudeUserModelDefault(home)).toBeUndefined();
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

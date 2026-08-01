@@ -1412,6 +1412,55 @@ export function codexModelOptions(
   };
 }
 
+export interface ClaudeModelOptions {
+  models: AgentModelOption[];
+  defaultModel?: string;
+  source: "aliases";
+}
+
+/**
+ * The user's default Claude model from `~/.claude/settings.json` (`model` key).
+ *
+ * Claude Code accepts a family *alias* there (`opus`, `sonnet`, `fable`,
+ * `haiku`) or a pinned slug; either is returned verbatim. Returns undefined when
+ * the file is absent/unreadable or sets no model. `CLAUDE_CONFIG_DIR` overrides
+ * the config home, matching the CLI.
+ */
+export function claudeUserModelDefault(
+  home = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"),
+): string | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(join(home, "settings.json"), "utf8")) as { model?: unknown };
+    return typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Models offered for the embedded Claude Code CLI.
+ *
+ * Unlike Codex, Claude Code exposes no `models_cache.json` to read — but its CLI
+ * resolves family *aliases* (`opus`, `sonnet`, `haiku`, `fable`) to the LATEST
+ * model in each family at run time (`claude --model opus`). Offering aliases
+ * keeps the picker current forever without pinning version strings that go stale
+ * on every release — the original bug, where a hardcoded list topped out at Opus
+ * 4.8 and never surfaced Opus 5. The user's configured default is read from
+ * `~/.claude/settings.json` so the picker can label it.
+ */
+export function claudeModelOptions(
+  home = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"),
+): ClaudeModelOptions {
+  const models: AgentModelOption[] = [
+    { value: "opus", label: "Opus (latest)" },
+    { value: "sonnet", label: "Sonnet (latest)" },
+    { value: "haiku", label: "Haiku (latest)" },
+    { value: "fable", label: "Fable (latest)" },
+  ];
+  const defaultModel = claudeUserModelDefault(home);
+  return { models, ...(defaultModel ? { defaultModel } : {}), source: "aliases" };
+}
+
 export function streamCodex(
   res: ServerResponse,
   opts: { message: string; project: string; repoRoot: string; threadId?: string; newChat?: boolean; context?: AgentContext; origin?: string; model?: string; mode?: string; cloud?: AgentCloud; providerEnv?: Record<string, string>; approval?: AgentApproval },

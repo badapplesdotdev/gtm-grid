@@ -263,7 +263,7 @@ export const api = {
     http<{ ok: boolean }>(`/api/extensions/${extId}/connect`, { method: "POST", body: JSON.stringify({ secrets, scope }) }),
   agents: () =>
     http<{ claude: AgentStatus; codex: AgentStatus; cursor: AgentStatus }>("/api/agents"),
-  agentModels: (agent: "codex") =>
+  agentModels: (agent: "codex" | "claude") =>
     http<AgentModelsResponse>(`/api/agent/models/${agent}`),
   connectAgent: (agent: "claude" | "codex" | "cursor", path?: string) =>
     http<{ claude: AgentStatus; codex: AgentStatus; cursor: AgentStatus }>("/api/agents/connect", {
@@ -285,7 +285,7 @@ export interface AgentModelOption {
 export interface AgentModelsResponse {
   models: AgentModelOption[];
   defaultModel?: string;
-  source: "cache" | "default";
+  source: "cache" | "default" | "aliases";
   fetchedAt?: string;
 }
 
