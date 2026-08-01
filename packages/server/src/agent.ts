@@ -1578,7 +1578,7 @@ function runClaudeOneShot(bin: string, prompt: string, system: string): Promise<
       ...CLAUDE_ISOLATION_ARGS,
     ];
     // shell:true for a Windows .cmd/.bat shim (EINVAL otherwise); native .exe runs direct.
-    execFile(bin, args, { env: agentSpawnEnv(bin), timeout: 90_000, maxBuffer: 8 << 20, shell: needsShell(bin), windowsHide: true }, (err, stdout, stderr) => {
+    const child = execFile(bin, args, { env: agentSpawnEnv(bin), timeout: 90_000, maxBuffer: 8 << 20, shell: needsShell(bin), windowsHide: true }, (err, stdout, stderr) => {
       const out = (stdout || "").trim();
       if (!out) {
         resolve({ error: `claude: ${(stderr || err?.message || "no output").trim().slice(0, 300)}` });
@@ -1596,6 +1596,7 @@ function runClaudeOneShot(bin: string, prompt: string, system: string): Promise<
         resolve({ text: out });
       }
     });
+    child.stdin?.end(); // we pass the prompt via `-p`; close stdin so claude doesn't wait on it (the "no stdin data in 3s" warning)
   });
 }
 
