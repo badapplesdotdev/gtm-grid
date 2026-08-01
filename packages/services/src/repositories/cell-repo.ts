@@ -13,9 +13,65 @@ import { and, eq, inArray } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
 import { chunk } from "./_chunk.js";
+import { describeDbError } from "./_db-error.js";
 import type { GridStore } from "./grid-store.js";
 
 export { chunk } from "./_chunk.js";
+
+/**
+ * Characters Postgres' `jsonb` type rejects. `jsonb` stores Unicode text, and
+ * the backend refuses a NUL (`\u0000`, "unsupported Unicode escape sequence",
+ * SQLSTATE 22P05) and any UNPAIRED UTF-16 surrogate ("invalid byte sequence for
+ * encoding UTF8"). Valid surrogate PAIRS (real emoji/astral chars) are fine, so
+ * the fast-path test excludes them via lookarounds.
+ */
+// Matching NUL (\u0000) is the point here — it is the char jsonb rejects.
+// eslint-disable-next-line no-control-regex
+const JSONB_REJECTS = /\u0000|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/** Drop NUL and replace lone surrogates with U+FFFD; leave valid text intact. */
+const sanitizeString = (s: string): string => {
+  if (!JSONB_REJECTS.test(s)) return s;
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code === 0) continue; // drop NUL
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = s.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        out += s[i]! + s[i + 1]!; // valid pair — keep both units
+        i++;
+      } else {
+        out += "\uFFFD"; // lone high surrogate
+      }
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      out += "\uFFFD"; // lone low surrogate
+    } else {
+      out += s[i]!;
+    }
+  }
+  return out;
+};
+
+/**
+ * Strip characters Postgres' `jsonb` type rejects from a cell value before it
+ * is written. Imported CSV data can carry a NUL byte or invalid UTF-8 (which
+ * surfaces as a lone UTF-16 surrogate in a JS string); either aborts the whole
+ * `insert into cells` with a `jsonb` error. Recurses into arrays and objects
+ * (keys included) and leaves numbers/booleans/null untouched.
+ */
+export const sanitizeCellValue = (value: unknown): unknown => {
+  if (typeof value === "string") return sanitizeString(value);
+  if (Array.isArray(value)) return value.map(sanitizeCellValue);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[sanitizeString(k)] = sanitizeCellValue(v);
+    }
+    return out;
+  }
+  return value;
+};
 
 /** A cell row projection the grid domain uses (the getTable cell shape). */
 export interface Cell {
@@ -68,10 +124,7 @@ const UUID_RE =
 export const CELL_INSERT_CHUNK_SIZE = 1000;
 
 const fail = (op: string) => (cause: unknown) =>
-  new CellRepoError({
-    message: cause instanceof Error ? cause.message : `${op} failed`,
-    cause,
-  });
+  new CellRepoError({ message: describeDbError(op, cause), cause });
 
 /** Reads/writes the `cells` table. */
 export class CellRepo extends Context.Tag("CellRepo")<
@@ -208,7 +261,7 @@ export const CellRepoLive: Layer.Layer<CellRepo, never, DbClient> =
                   tableId: values.tableId,
                   rowId: values.rowId,
                   columnId: values.columnId,
-                  value: values.value,
+                  value: sanitizeCellValue(values.value),
                   status: values.status as never,
                   error: values.error,
                   updatedAt: values.updatedAt,
@@ -238,7 +291,7 @@ export const CellRepoLive: Layer.Layer<CellRepo, never, DbClient> =
                         tableId: v.tableId,
                         rowId: v.rowId,
                         columnId: v.columnId,
-                        value: v.value,
+                        value: sanitizeCellValue(v.value),
                         status: v.status as never,
                         error: v.error,
                         updatedAt: v.updatedAt,
@@ -254,7 +307,7 @@ export const CellRepoLive: Layer.Layer<CellRepo, never, DbClient> =
               await db
                 .update(schema.cells)
                 .set({
-                  value: values.value,
+                  value: sanitizeCellValue(values.value),
                   status: values.status as never,
                   error: values.error,
                   updatedAt: values.updatedAt,

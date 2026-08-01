@@ -12,8 +12,10 @@ import { and, asc, count, eq, gt, inArray, max, or } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
 import { chunk } from "./_chunk.js";
+import { describeDbError } from "./_db-error.js";
 import {
   CELL_INSERT_CHUNK_SIZE,
+  sanitizeCellValue,
   type NewCell,
 } from "./cell-repo.js";
 import { cascadeDeleteRow, type GridStore } from "./grid-store.js";
@@ -100,10 +102,7 @@ const UUID_RE =
 export const ROW_INSERT_CHUNK_SIZE = 1000;
 
 const fail = (op: string) => (cause: unknown) =>
-  new RowRepoError({
-    message: cause instanceof Error ? cause.message : `${op} failed`,
-    cause,
-  });
+  new RowRepoError({ message: describeDbError(op, cause), cause });
 
 /** The `cell_status` enum union, narrowed from a free `string` with no cast. */
 type CellStatus = (typeof schema.cellStatus.enumValues)[number];
@@ -371,7 +370,10 @@ export const RowRepoLive: Layer.Layer<RowRepo, never, DbClient> = Layer.effect(
                         tableId: c.tableId,
                         rowId: c.rowId,
                         columnId: c.columnId,
-                        value: c.value,
+                        // Strip characters `jsonb` rejects (NUL / lone
+                        // surrogates from imported CSV data) so one bad cell
+                        // value can't abort the whole import.
+                        value: sanitizeCellValue(c.value),
                         status: toCellStatus(c.status),
                         error: c.error,
                         updatedAt: c.updatedAt,
