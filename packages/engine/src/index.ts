@@ -20,7 +20,9 @@ export {
   fetchWithRetry,
   isRetryableStatus,
   isFatalStopStatus,
+  isAbortError,
   parseRetryAfter,
+  HttpTimeoutError,
   type RetryOptions,
 } from "./http-retry.js";
 export { parseManifest, connectorFromManifest, manifestSchema, extractOptions, type ExtensionManifest, type FieldOption } from "./connectors/manifest.js";

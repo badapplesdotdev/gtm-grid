@@ -6,6 +6,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchWithRetry,
+  HttpTimeoutError,
+  isAbortError,
   isFatalStopStatus,
   isRetryableStatus,
   parseRetryAfter,
@@ -160,5 +162,56 @@ describe("fetchWithRetry", () => {
         { ...fast, maxAttempts: 1, timeoutMs: 5 },
       ),
     ).rejects.toThrow();
+  });
+
+  it("throws a typed HttpTimeoutError (not the raw abort) when aborts exhaust retries", async () => {
+    // Every attempt aborts (the timeout fires). Rather than leaking the opaque
+    // `DOMException: This operation was aborted`, the helper must give up with a
+    // clear, dedup-friendly HttpTimeoutError.
+    scriptFetch([
+      new DOMException("This operation was aborted", "AbortError"),
+      new DOMException("This operation was aborted", "AbortError"),
+    ]);
+    const err = await fetchWithRetry(
+      "https://x.test",
+      {},
+      { ...fast, maxAttempts: 2, timeoutMs: 30_000 },
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpTimeoutError);
+    expect((err as HttpTimeoutError).message).toBe(
+      "worker request timed out after 2 attempt(s) (per-attempt timeout 30000ms)",
+    );
+    expect((err as HttpTimeoutError).attempts).toBe(2);
+    expect((err as HttpTimeoutError).timeoutMs).toBe(30_000);
+    // The original abort is preserved for debugging.
+    expect((err as HttpTimeoutError).cause).toBeInstanceOf(DOMException);
+  });
+
+  it("re-throws a genuine network error (not a timeout) as-is", async () => {
+    // A non-abort network error that exhausts retries must NOT be reclassified
+    // as a timeout — it stays the original error.
+    scriptFetch([new Error("ECONNRESET"), new Error("ECONNRESET")]);
+    const err = await fetchWithRetry(
+      "https://x.test",
+      {},
+      { ...fast, maxAttempts: 2 },
+    ).catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(HttpTimeoutError);
+    expect((err as Error).message).toBe("ECONNRESET");
+  });
+});
+
+describe("isAbortError", () => {
+  it("recognises AbortError / TimeoutError DOMExceptions and the raw message", () => {
+    expect(isAbortError(new DOMException("This operation was aborted", "AbortError"))).toBe(true);
+    expect(isAbortError(new DOMException("timed out", "TimeoutError"))).toBe(true);
+    const raw = new Error("This operation was aborted");
+    expect(isAbortError(raw)).toBe(true);
+  });
+
+  it("does NOT flag ordinary network errors or non-errors", () => {
+    expect(isAbortError(new Error("ECONNRESET"))).toBe(false);
+    expect(isAbortError("aborted")).toBe(false);
+    expect(isAbortError(undefined)).toBe(false);
   });
 });

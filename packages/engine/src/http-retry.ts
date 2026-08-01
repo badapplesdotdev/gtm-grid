@@ -32,6 +32,51 @@ export interface RetryOptions {
   readonly random?: () => number;
 }
 
+/**
+ * Thrown when {@link fetchWithRetry} gives up because every attempt was aborted
+ * by the per-attempt timeout. A dedicated typed error with a STABLE, value-free
+ * message so error tracking classifies a transient worker timeout distinctly and
+ * dedups it, instead of leaking the raw `DOMException: This operation was
+ * aborted` (which reads like a mysterious internal crash). The original abort is
+ * preserved on `cause`.
+ */
+export class HttpTimeoutError extends Error {
+  override readonly name = "HttpTimeoutError";
+  /** How many attempts were made before giving up. */
+  readonly attempts: number;
+  /** The per-attempt timeout (ms) that aborted each attempt. */
+  readonly timeoutMs: number;
+
+  constructor(
+    attempts: number,
+    timeoutMs: number,
+    options?: { readonly cause?: unknown },
+  ) {
+    super(
+      `worker request timed out after ${attempts} attempt(s) (per-attempt timeout ${timeoutMs}ms)`,
+      options,
+    );
+    this.attempts = attempts;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+/**
+ * Was this rejection an abort/timeout? Our per-attempt {@link AbortController}
+ * fires `abort()` on timeout, which rejects the in-flight `fetch` with an
+ * `AbortError` `DOMException` (message `"This operation was aborted"`). We match
+ * on the error name (and the well-known message as a fallback) so both the
+ * standard `AbortError`/`TimeoutError` and the raw message are caught.
+ */
+export function isAbortError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return (
+    err.name === "AbortError" ||
+    err.name === "TimeoutError" ||
+    err.message === "This operation was aborted"
+  );
+}
+
 /** Status codes that are safe to retry (transient upstream failures). */
 export function isRetryableStatus(status: number): boolean {
   return status === 429 || status === 503 || (status >= 500 && status <= 599);
@@ -92,7 +137,9 @@ function backoffMs(
  * is returned to the caller; the helper never throws for a non-2xx that exhausted
  * retries — it returns the last Response so the caller raises its own typed error.
  *
- * Network/abort errors that exhaust retries are re-thrown (no Response to return).
+ * Network errors that exhaust retries are re-thrown (no Response to return);
+ * abort/timeout errors that exhaust retries surface as a typed
+ * {@link HttpTimeoutError} rather than the raw `DOMException`.
  */
 export async function fetchWithRetry(
   url: string | URL,
@@ -143,6 +190,11 @@ export async function fetchWithRetry(
     }
   }
 
+  // A timeout that exhausted retries surfaces as a clear, dedup-friendly typed
+  // error instead of the opaque raw `DOMException: This operation was aborted`.
+  if (isAbortError(lastError)) {
+    throw new HttpTimeoutError(maxAttempts, timeoutMs, { cause: lastError });
+  }
   throw lastError instanceof Error
     ? lastError
     : new Error(`fetch failed after ${maxAttempts} attempts: ${String(lastError)}`);
