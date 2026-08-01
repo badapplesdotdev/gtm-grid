@@ -397,6 +397,15 @@ async function httpCall(
     if (resp.status === 401 && man.auth) {
       throw new Error(invalidCredentialMessage(man, man.auth));
     }
+    // HeyReach rejects "add leads" into a not-yet-activated campaign with a
+    // business-rule 400 ("You cannot add new leads to a draft campaign."). This is
+    // a predictable, user-fixable condition — not a backend fault — so map it to
+    // actionable guidance instead of re-throwing the raw upstream body (which
+    // otherwise lands in error tracking as an unhandled exception).
+    const upstreamMessage = extractUpstreamMessage(data);
+    if (resp.status === 400 && upstreamMessage && /draft campaign/i.test(upstreamMessage)) {
+      throw new Error(draftCampaignMessage(man));
+    }
     const detail = typeof data === "string" ? data.slice(0, 300) : JSON.stringify(data).slice(0, 300);
     throw new Error(`${man.name} ${m.id} HTTP ${resp.status}: ${detail}`);
   }
@@ -445,6 +454,26 @@ function invalidCredentialMessage(man: ExtensionManifest, auth: ManifestAuth | n
   }
   const label = auth?.credentialLabel ?? "API key";
   return `${man.name} ${label} invalid or expired (HTTP 401) — check the ${man.name} credential and update it.`;
+}
+
+/** Actionable message for pushing leads into a campaign that is still a draft. */
+function draftCampaignMessage(man: ExtensionManifest): string {
+  return `${man.name} campaign is still a draft — activate the campaign in ${man.name} before adding leads to it.`;
+}
+
+/**
+ * Pull the human-readable error string out of an upstream error body. Tolerant of
+ * the common shapes (`errorMessage`/`message`/`error`) and a bare string body.
+ */
+function extractUpstreamMessage(data: unknown): string | undefined {
+  if (typeof data === "string") return data;
+  if (data && typeof data === "object") {
+    for (const k of ["errorMessage", "message", "error"]) {
+      const v = (data as Record<string, unknown>)[k];
+      if (typeof v === "string" && v !== "") return v;
+    }
+  }
+  return undefined;
 }
 
 /** One resolved choice for a pick-field dropdown. */
