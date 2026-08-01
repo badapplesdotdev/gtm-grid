@@ -18,10 +18,15 @@
  */
 
 import { getAuth, getSessionUserId } from "@gtmgrid/auth";
-import { type AppServices, appLayer, isAuthorizedWorker } from "@gtmgrid/services";
+import {
+  type AppServices,
+  appLayer,
+  isAuthorizedWorker,
+} from "@gtmgrid/services";
 import { Cause, type Effect, Exit, ManagedRuntime } from "effect";
 import { z } from "zod";
 import { captureServerException } from "../../../lib/posthog-server";
+import { randomUUID } from "node:crypto";
 
 /** The member-attribution header the spawned MCP forwards (the agent's bearer). */
 const MEMBER_HEADER = "X-Gtmgrid-Member";
@@ -110,10 +115,33 @@ async function parseBody<T>(
 }
 
 /**
+ * Structured audit log for worker-secret calls. Extracts route/workspace/table
+ * identifiers from the parsed body (using optional chaining for generic access
+ * across different route schemas) and writes a structured log line prefixed with
+ * `[WORKER-AUDIT]`. Never logs the secret itself.
+ */
+function auditWorkerAccess(url: string, body: unknown): void {
+  const bodyRecord = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+  const workspaceId = "workspaceId" in bodyRecord ? bodyRecord.workspaceId : undefined;
+  const tableId = "tableId" in bodyRecord ? bodyRecord.tableId : undefined;
+  console.log(
+    JSON.stringify({
+      type: "WORKER-AUDIT",
+      timestamp: new Date().toISOString(),
+      route: url,
+      workspaceId: workspaceId ?? null,
+      tableId: tableId ?? null,
+    }),
+  );
+}
+
+/**
  * Guard + run a worker handler: reject unauthorized callers with 401, VALIDATE the
  * JSON body against `schema` (400 on malformed/invalid), build a runtime (no member
  * identity) and run the supplied Effect, returning its result as 200 JSON. A typed
- * service failure becomes a 4xx/500 with the message; a defect is a 500.
+ * service failure becomes a 4xx/500 with the message; a defect is a 500 with a
+ * generic message (internal details are captured to PostHog but not leaked to the
+ * caller).
  */
 export async function runWorker<T, A, E>(
   req: Request,
@@ -123,6 +151,9 @@ export async function runWorker<T, A, E>(
   if (!isAuthorizedWorker(req)) return unauthorized();
   const parsed = await parseBody(req, schema);
   if (!parsed.ok) return parsed.response;
+
+  // Audit log for all worker-secret calls (structured, no secret leaked).
+  auditWorkerAccess(req.url, parsed.data);
 
   // Reuse the module-scoped runtime (built once) instead of constructing +
   // disposing a fresh one per POST (M5). The pool it wraps is already shared, so
@@ -171,11 +202,13 @@ export function exitToResponse<A, E>(exit: Exit.Exit<A, E>): Response {
     );
   }
   // A defect (non-typed crash) is a genuine 500 — report it to PostHog Error
-  // Tracking before returning (typed failures above are expected control flow).
+  // Tracking before returning (typed failures above are expected control flow),
+  // but return only a generic message so internal details aren't leaked.
   const detail = Cause.pretty(exit.cause);
   captureServerException(new Error(detail), { properties: { source: "worker" } });
+  const requestId = randomUUID().slice(0, 8);
   return new Response(
-    JSON.stringify({ error: detail }),
+    JSON.stringify({ error: "Internal server error", requestId }),
     { status: 500, headers: { "Content-Type": "application/json" } },
   );
 }
@@ -267,6 +300,8 @@ export async function runWorkerSecretOrMember<T, A, E>(
 
   // Path 1 — headless worker secret: full trust, shared runtime (userId: null).
   if (isAuthorizedWorker(req)) {
+    // Audit log for every worker-secret call (structured, no secret leaked).
+    auditWorkerAccess(req.url, parsed.data);
     const runtime = await workerRuntime();
     const exit = await runtime.runPromiseExit(build(parsed.data));
     return exitToResponse(exit);
