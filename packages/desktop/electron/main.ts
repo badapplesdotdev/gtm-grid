@@ -25,6 +25,26 @@ const runtime = makeRuntime();
 const run = <A>(effect: Effect.Effect<A, never, EngineService | UpdaterService | ObservabilityService>): Promise<A> =>
   runtime.runPromise(effect);
 
+// Transient Chromium network codes that just mean the OS suspended/changed the
+// network (laptop sleep, offline, VPN flip). These escape as rejections from the
+// auto-updater's background download and net.fetch — they're environmental noise,
+// not defects, so we drop them before they reach error tracking as ElectronMainError.
+const TRANSIENT_NET_CODES = [
+  "ERR_NETWORK_IO_SUSPENDED",
+  "ERR_INTERNET_DISCONNECTED",
+  "ERR_NETWORK_CHANGED",
+  "ERR_NAME_NOT_RESOLVED",
+  "ERR_CONNECTION_RESET",
+  "ERR_CONNECTION_CLOSED",
+  "ERR_CONNECTION_ABORTED",
+  "ERR_CONNECTION_TIMED_OUT",
+  "ERR_TIMED_OUT",
+  "ERR_ADDRESS_UNREACHABLE",
+  "ERR_NETWORK_ACCESS_DENIED",
+  "ERR_PROXY_CONNECTION_FAILED",
+];
+const isTransientNetworkError = (message: string): boolean => TRANSIENT_NET_CODES.some((code) => message.includes(code));
+
 let win: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
@@ -184,10 +204,13 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   process.on("uncaughtException", (err) => {
-    void run(Effect.flatMap(ObservabilityService, (o) => o.reportException(err.message, err.stack?.split("\n")[1]?.trim() ?? "")));
     console.error("[electron] uncaughtException", err);
+    if (isTransientNetworkError(err.message)) return;
+    void run(Effect.flatMap(ObservabilityService, (o) => o.reportException(err.message, err.stack?.split("\n")[1]?.trim() ?? "")));
   });
   process.on("unhandledRejection", (reason) => {
-    void run(Effect.flatMap(ObservabilityService, (o) => o.reportException(`unhandledRejection: ${String(reason)}`)));
+    const value = `unhandledRejection: ${String(reason)}`;
+    if (isTransientNetworkError(value)) return;
+    void run(Effect.flatMap(ObservabilityService, (o) => o.reportException(value)));
   });
 }
