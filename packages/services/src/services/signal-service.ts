@@ -64,6 +64,14 @@ const isTransientSignalError = (e: SignalError): boolean =>
   e.status !== undefined && (e.status === 0 || e.status === 429 || e.status >= 500);
 
 /**
+ * User-facing `lastError` for a binding whose Trigify search returned 404. The
+ * search no longer exists on Trigify's side, so no future poll can succeed —
+ * the user must recreate the binding.
+ */
+const SEARCH_GONE_MESSAGE =
+  "This Trigify search no longer exists. It was deleted, or your Trigify API key now points to a different account. Delete and recreate this Social Signals binding to resume.";
+
+/**
  * Retry transient Trigify failures with capped exponential backoff + jitter
  * (mirrors the engine's resilience policy; Trigify documents no `Retry-After`, so
  * jittered backoff is the right shape). This is in-process resilience under the
@@ -280,9 +288,25 @@ export class SignalService extends Effect.Service<SignalService>()("SignalServic
           workspaceId: binding.workspaceId,
         };
       }).pipe(
-        Effect.catchTag("SignalError", (e) =>
-          repo.patch(binding.id, { lastError: e.message }).pipe(Effect.flatMap(() => Effect.fail(e))),
-        ),
+        Effect.catchTag("SignalError", (e) => {
+          // A results-404 is terminal: the Trigify search no longer exists, so
+          // no future poll can succeed. Disable the binding and write a human
+          // message, then resolve to an empty pull instead of failing. Failing
+          // would refile an Error Tracking exception on every hourly tick — the
+          // binding stays enabled and, with its NULL lastSyncedAt, permanently
+          // due. Mirrors PR #208's engine-side enrichProfile 404 handling.
+          if (e.status === 404) {
+            return repo.patch(binding.id, { enabled: false, lastError: SEARCH_GONE_MESSAGE }).pipe(
+              Effect.as({
+                added: 0,
+                rowIds: [] as readonly string[],
+                tableId: binding.tableId,
+                workspaceId: binding.workspaceId,
+              }),
+            );
+          }
+          return repo.patch(binding.id, { lastError: e.message }).pipe(Effect.flatMap(() => Effect.fail(e)));
+        }),
       );
 
     const create = (args: CreateArgs) =>
