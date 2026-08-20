@@ -442,3 +442,32 @@ describe("SignalService.syncForWorker — Trigify transient retry (backoff + jit
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+// A results-404 means the Trigify search no longer exists (deleted, or the API
+// key now points at a different account). The binding can never fill again, so
+// the sync disables it and writes a human message rather than failing — a
+// failure would refile an Error Tracking exception every hourly tick while the
+// binding, with its NULL lastSyncedAt, stayed permanently due.
+describe("SignalService.syncForWorker — Trigify search-gone 404 (terminal)", () => {
+  const workerFixtures = async (bindings: SignalBinding[]) => ({
+    currentUserId: null,
+    workspaces: [{ id: WS, name: "WS", ownerId: "owner", currentPlanId: "team" }],
+    signalBindings: bindings,
+    tables: [table(WS)],
+    webhookCredentials: new Map([[`${WS}:trigify`, await encryptedKey(WS, "tk_live")]]),
+  });
+
+  it("disables the binding, writes a human message, and resolves empty (no failure to capture)", async () => {
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ code: "NOT_FOUND", message: "Search 'srch-1' not found" }), { status: 404 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const bindings = [binding()];
+    const exit = await run(await workerFixtures(bindings), (s) => s.syncForWorker("sig-1"));
+    // Resolves (does NOT fail), so the worker files no Error Tracking exception.
+    expect(Exit.isSuccess(exit) && exit.value.added).toBe(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // permanent — not retried
+    expect(bindings[0].enabled).toBe(false);
+    expect(bindings[0].lastError).toContain("no longer exists");
+  });
+});
