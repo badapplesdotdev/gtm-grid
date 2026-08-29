@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ServerResponse } from "node:http";
 import {
   appendCapped,
+  closeSseWithError,
   codexEnvToml,
   codexSandboxFlags,
   codexModelOptions,
@@ -31,6 +33,33 @@ const CLOUD: AgentCloud = {
   tableId: "tbl_1",
   pipelineId: "pipe_1",
 };
+
+describe("closeSseWithError — end an open agent-chat stream after setup fails", () => {
+  it("writes an error then end frame and closes the stream, without re-sending headers", () => {
+    const writes: string[] = [];
+    let ended = false;
+    const res = {
+      write: (chunk: string) => {
+        writes.push(chunk);
+        return true;
+      },
+      writeHead: () => {
+        throw new Error("writeHead must not run — headers are already on the wire");
+      },
+      end: () => {
+        ended = true;
+      },
+    } as unknown as ServerResponse;
+
+    closeSseWithError(res, "boom");
+
+    expect(writes).toEqual([
+      `data: ${JSON.stringify({ type: "error", message: "boom" })}\n\n`,
+      `data: ${JSON.stringify({ type: "end" })}\n\n`,
+    ]);
+    expect(ended).toBe(true);
+  });
+});
 
 describe("parseAgentCloud — validate the chat body's cloud block (TRI-3296)", () => {
   it("parses a complete block", () => {

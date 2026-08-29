@@ -820,6 +820,20 @@ function sseClient(res: ServerResponse, origin?: string): SseClient {
 export const __sseClientForTest = sseClient;
 
 /**
+ * Emit a terminal `error` + `end` SSE frame on an ALREADY-open stream, then close
+ * it. Used when agent-chat setup throws AFTER {@link sseClient} has written the
+ * 200 headers (mcpConfig, latestSessionId, resolveAgentPath, a sync spawn
+ * failure). A second `res.writeHead` would throw ERR_HTTP_HEADERS_SENT and leave
+ * the stream open, so the chat hangs with nothing shown; this shows the error and
+ * closes the stream instead. Frame shape matches {@link sseClient}'s `write`.
+ */
+export function closeSseWithError(res: ServerResponse, message: string): void {
+  res.write(`data: ${JSON.stringify({ type: "error", message })}\n\n`);
+  res.write(`data: ${JSON.stringify({ type: "end" })}\n\n`);
+  res.end();
+}
+
+/**
  * How to launch the gtmgrid MCP server for a spawned agent CLI: the bundled
  * `node` binary run directly with `mcp.mjs` as a script argument.
  *

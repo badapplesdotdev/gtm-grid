@@ -38,7 +38,7 @@ import {
 import { Effect } from "effect";
 import type { RunErrorContext, AiGenerationEvent } from "@gtmgrid/engine";
 import { randomUUID } from "node:crypto";
-import { codexModelOptions, detectAgents, streamClaude, streamCodex, streamCursor, setAgentPath, rescanAgents, generateWithAgent, parseAgentCloud, type AgentKind } from "./agent.js";
+import { codexModelOptions, detectAgents, streamClaude, streamCodex, streamCursor, setAgentPath, rescanAgents, generateWithAgent, parseAgentCloud, closeSseWithError, type AgentKind } from "./agent.js";
 import { localProviderEnv, resolveCloudProviderEnv } from "./provider-env.js";
 import { listAgentSessions, readAgentSession } from "./agent-history.js";
 import { runCloudColumn, previewCloudColumn, dispatchCloudOptions, defaultCloudRunDeps } from "./cloud-run.js";
@@ -1139,7 +1139,17 @@ const server = createServer(async (req, res) => {
       else if (agent === "codex") streamCodex(res, { message, project: PROJECT_NAME, repoRoot: REPO_ROOT, threadId: body?.sessionId, newChat, context, origin, model, mode, cloud, providerEnv, approval });
       else streamClaude(res, { message, project: PROJECT_NAME, repoRoot: REPO_ROOT, sessionId: body?.sessionId, newChat, context, origin, model, mode, cloud, providerEnv, approval });
     } catch (e) {
-      send(res, 500, { error: e instanceof Error ? e.message : String(e) }, origin);
+      // The stream dispatch calls sseClient() first, which writes the 200 SSE
+      // headers before the fallible setup (mcpConfig, latestSessionId,
+      // resolveAgentPath, a sync spawn failure) runs. So a throw here often lands
+      // with headers already on the wire: `send` would writeHead a SECOND time
+      // (ERR_HTTP_HEADERS_SENT) and leave the stream open, hanging the chat with
+      // nothing shown. Record the real cause — this path used to swallow it — then
+      // close the live stream with an error frame instead of re-sending headers.
+      captureException(e, { source: "sidecar-agent-chat" });
+      const message = e instanceof Error ? e.message : String(e);
+      if (res.headersSent) closeSseWithError(res, message);
+      else send(res, 500, { error: message }, origin);
     }
     return;
   }
