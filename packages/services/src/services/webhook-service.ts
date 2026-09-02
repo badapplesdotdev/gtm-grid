@@ -1247,8 +1247,13 @@ export class WebhookService extends Effect.Service<WebhookService>()(
        * each through the same {@link setCell} path (resolve + single
        * upsert-and-meter statement). The cloud store buffers terminal writes and
        * POSTs them here in chunks, so a large column run is one request per chunk
-       * instead of one per cell. Writes are applied in order; the count of cells
-       * written is returned.
+       * instead of one per cell. Writes are applied in order.
+       *
+       * A cell whose (row, column) no longer resolves is SKIPPED, not fatal:
+       * deleting a row or column mid-run is normal, and one such cell must not
+       * fail the whole chunk (which would drop every already-computed write in it
+       * and abort the run). The count of cells written and the count skipped are
+       * returned, so the caller can tell a partial write from a total one.
        */
       const setCells = (args: {
         readonly cells: ReadonlyArray<{
@@ -1261,10 +1266,17 @@ export class WebhookService extends Effect.Service<WebhookService>()(
         }>;
       }) =>
         Effect.gen(function* () {
+          let written = 0;
+          let skipped = 0;
           for (const cell of args.cells) {
-            yield* setCell(cell);
+            const applied = yield* setCell(cell).pipe(
+              Effect.as(true),
+              Effect.catchTag("WebhookNotFoundError", () => Effect.succeed(false)),
+            );
+            if (applied) written += 1;
+            else skipped += 1;
           }
-          return { written: args.cells.length };
+          return { written, skipped };
         });
 
       /**
