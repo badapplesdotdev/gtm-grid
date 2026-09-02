@@ -893,6 +893,48 @@ describe("WebhookService.setCells (batched)", () => {
     // Two terminal writes => metered twice.
     expect(quotas.get(WS)?.cloudActionsUsed).toBe(2);
   });
+
+  // Deleting a row or column mid-run is normal. The cell for the deleted target
+  // no longer resolves, but that must not fail the whole chunk — every other
+  // write in it still lands, the run finishes, and the skip is only counted.
+  it("skips a cell whose row was deleted mid-run and writes the rest", async () => {
+    const quotas = new Map<string, WorkspaceQuota>();
+    const cells: GridCell[] = [];
+    // Only row-1 exists; "row-gone" was deleted after the chunk was buffered.
+    const { run } = harness({ rows: [rows[0]], cells, quotas });
+    const exit = await run(
+      svc.pipe(
+        Effect.flatMap((s) =>
+          s.setCells({
+            cells: [
+              {
+                rowId: "row-gone",
+                columnId: COL_EMAIL,
+                hasValue: true,
+                value: "a",
+                status: "done",
+              },
+              {
+                rowId: "row-1",
+                columnId: COL_EMAIL,
+                hasValue: true,
+                value: "b",
+                status: "done",
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.written).toBe(1);
+      expect(exit.value.skipped).toBe(1);
+    }
+    // The surviving cell landed; only it was metered.
+    expect(cells.map((c) => c.value)).toEqual(["b"]);
+    expect(quotas.get(WS)?.cloudActionsUsed).toBe(1);
+  });
 });
 
 describe("WebhookService.getCredential", () => {
