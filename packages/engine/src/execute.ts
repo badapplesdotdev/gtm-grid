@@ -161,6 +161,22 @@ export interface EngineStores {
   readonly creds: GridStoreShape;
 }
 
+/**
+ * Raised when {@link Engine.runColumn} cannot resolve its target column. This is
+ * normal: a run is fanned out per column from a snapshot, so a queued run can
+ * reach a column the user has since deleted. The message is value-free — the id
+ * rides the {@link columnId} field, not the text — so a caller that reports it
+ * does not put a raw UUID in an error title. The cloud sidecar treats it as a
+ * benign no-op rather than a reported exception.
+ */
+export class ColumnNotFoundError extends Error {
+  readonly _tag = "ColumnNotFoundError";
+  constructor(readonly columnId: string) {
+    super("column not found");
+    this.name = "ColumnNotFoundError";
+  }
+}
+
 export class Engine {
   readonly registry: Registry;
   config: EngineConfig;
@@ -370,7 +386,7 @@ export class Engine {
     }
 
     const col = await Effect.runPromise(reads.getColumn(columnId));
-    if (!col) throw new Error(`column ${columnId} not found`);
+    if (!col) throw new ColumnNotFoundError(columnId);
     if (col.kind !== "function") return { ran: 0, errors: 0 };
 
     // Bind this run to the column's account for every dispatch beneath it,

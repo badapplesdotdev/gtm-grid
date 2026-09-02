@@ -332,6 +332,28 @@ describe("runCloudColumn", () => {
     expect(grid.cells.find((c) => c.rowId === "r1" && c.columnId === "c_x")?.value).toBe("x");
     expect(grid.cells.find((c) => c.rowId === "r2" && c.columnId === "c_x")).toBeUndefined();
   });
+
+  it("treats a column deleted mid-run as a benign no-op, not an error", async () => {
+    // A run is fanned out per column from the desktop's snapshot, so a queued run
+    // can reach a column the user has since deleted: the grid no longer holds it.
+    // The run must resolve to a no-op, never throw a raw exception the sidecar
+    // reports with the column id in its title.
+    const grid = {
+      columns: [] as Array<Record<string, unknown>>,
+      rows: [{ _id: "r1", tableId: "t1", position: 0, createdAt: 1 }],
+      cells: [] as Array<{ rowId: string; columnId: string; value: unknown; status: string; error: string | null; updatedAt: number | null }>,
+    };
+    const { client, mutations } = fakeConvex(grid);
+
+    const res = await runCloudColumn(
+      { apiUrl: "https://app.gtmgrid.dev", token: "jwt", tableId: "t1", columnId: "c_deleted" },
+      depsFor(client, upperRegistry()),
+    );
+
+    expect(res).toEqual({ ran: 0, errors: 0 });
+    // Nothing was written: the deleted column produced no cell writes.
+    expect(mutations.filter((m) => m.name === "/api/worker/setCells")).toHaveLength(0);
+  });
 });
 
 /** A connector whose `run` echoes back the secret it was given, to prove wiring. */
